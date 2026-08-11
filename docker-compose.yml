@@ -1,0 +1,20 @@
+services:
+  codedeck-bridge:
+    build: .
+    container_name: codedeck-bridge
+    restart: unless-stopped
+    networks:
+      - codedeck-net
+    environment:
+      - NODE_ENV=production
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GIT_USER=${GIT_USER:-}
+      - GIT_EMAIL=${GIT_EMAIL:-}
+      - GIT_REPO=${GIT_REPO:-}
+    volumes:
+      - ./data:/data
+
+networks:
+  codedeck-net:
+    driver: bridge
