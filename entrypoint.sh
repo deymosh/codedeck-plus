@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -e
 
-# 1. Setup Git credentials if GITHUB_TOKEN is provided
+# 1. Install gsd-core globally for Claude integration
+npx --yes @opengsd/gsd-core@latest --claude --global
+
+# 2. Setup Git credentials if GITHUB_TOKEN is provided
 if [ -n "$GITHUB_TOKEN" ]; then
   echo "Configuring Git credential helper for GitHub..."
   git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
 fi
 
-# 2. Setup Git user identity
+# 3. Setup Git user identity
 if [ -n "$GIT_USER" ]; then
   git config --global user.name "$GIT_USER"
 fi
@@ -16,7 +19,7 @@ if [ -n "$GIT_EMAIL" ]; then
   git config --global user.email "$GIT_EMAIL"
 fi
 
-# 3. Manage the repository if GIT_REPO is provided
+# 4. Manage the repository if GIT_REPO is provided
 if [ -n "$GIT_REPO" ]; then
   # Extract the repository name from the URL (e.g., https://github.com/user/repo.git -> repo)
   REPO_NAME=$(basename "$GIT_REPO" .git)
@@ -36,6 +39,6 @@ else
   cd "/data"
 fi
 
-# 4. Start the CodeDeck bridge
+# 5. Start the CodeDeck bridge
 echo "Starting CodeDeck bridge..."
 exec node /app/main.js run
