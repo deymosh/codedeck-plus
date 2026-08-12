@@ -1,5 +1,9 @@
 FROM node:22-slim
 
+# Set the user and group IDs to match the host system
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+
 # 1. System packages installation (APT): git, curl, gnupg, ca-certificates, and GitHub CLI
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl gnupg ca-certificates git \
@@ -14,8 +18,11 @@ RUN apt-get update \
 # 2. Global Node tools installation (npm): pnpm, @anthropic-ai/claude-code, and ws
 RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code ws
 
-# 3. Create user and prepare folders FIRST (before cloning/installing)
-RUN groupadd -r codedeck && useradd -r -g codedeck -m -d /home/codedeck codedeck \
+# 3. Create user safely (handling pre-existing UID/GID 1000 from node base image)
+RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROUP_ID} | cut -d: -f1); \
+    else groupadd -g ${GROUP_ID} codedeck; fi \
+    && if getent passwd ${USER_ID}; then usermod -l codedeck -d /home/codedeck -m $(getent passwd ${USER_ID} | cut -d: -f1); \
+    else useradd -u ${USER_ID} -g codedeck -m -d /home/codedeck codedeck; fi \
     && mkdir -p /app /data \
     && chown -R codedeck:codedeck /app /data /home/codedeck \
     && rm -rf /home/codedeck/.codedeck \
@@ -34,19 +41,17 @@ RUN git clone --branch v0.9.3 https://github.com/JeroenOnNostr/codedeck-next-bri
     && pnpm --filter @codedeck/bridge add ws \
     && pnpm build
 
-# Copy entrypoint and main files (ensuring they have proper permissions or letting Docker handle them)
+# Copy entrypoint and main files (ensuring they have proper permissions)
 USER root
-COPY entrypoint.sh /app/entrypoint.sh
+COPY --chown=codedeck:codedeck entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
-COPY main.js /app/main.js
+COPY --chown=codedeck:codedeck main.js /app/main.js
 
-# Quick ownership fix just for these two script files
-RUN chown codedeck:codedeck /app/entrypoint.sh /app/main.js
+# Switch back to the non-root user for running the application
 USER codedeck
 
 # Set the working directory and volume for persistent data storage
 WORKDIR /data
 VOLUME /data
 
-# Set the entrypoint script to be executed when the container starts
 CMD ["/app/entrypoint.sh"]
