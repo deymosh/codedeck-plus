@@ -4,10 +4,13 @@ set -e
 # 1. Install gsd-core globally for Claude integration
 npx --yes @opengsd/gsd-core@latest --claude --global
 
-# 2. Setup Git credentials if GITHUB_TOKEN is provided
+# 2. Setup Git credentials via secure HTTP extraheader if GITHUB_TOKEN is provided
 if [ -n "$GITHUB_TOKEN" ]; then
-  echo "Configuring Git credential helper for GitHub..."
-  git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+  echo "Configuring Git authentication via secure HTTP header..."
+
+  # Encode credentials to Base64 (Format required by Git: x-access-token:TOKEN)
+  TOKEN_B64=$(echo -n "x-access-token:$GITHUB_TOKEN" | base64 | tr -d '\n')
+  git config --global http.extraheader "Authorization: Basic ${TOKEN_B64}"
 fi
 
 # 3. Setup Git user identity
