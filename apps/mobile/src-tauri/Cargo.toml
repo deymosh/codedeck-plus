@@ -17,7 +17,16 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # Minimal by design (Phase 3b): no custom commands yet — the webview core does
 # the work; Rust only hosts the plugins. Marmot/MDK lands here in Phase 6.
-tauri = { version = "2", features = [] }
+#
+# "devtools" (local fork addition): wry only calls
+# setWebContentsDebuggingEnabled under #[cfg(any(debug_assertions,
+# feature = "devtools"))] (see wry's android/main_pipe.rs) — without it, a
+# --release build's WebView is NEVER remote-inspectable via
+# chrome://inspect#devices, no matter how the device/adb connection is set
+# up. Enabled unconditionally (debug builds already had it via
+# debug_assertions) so the release-optimized "benchmark" apk
+# (docker/build-apk.sh) stays inspectable for on-device debugging.
+tauri = { version = "2", features = ["devtools"] }
 # NOTE (CDX-012): tauri-plugin-sql was REMOVED — its sqlx dependency pins
 # libsqlite3-sys 0.28 while MDK's rusqlite pins 0.35, and both `links =
 # "sqlite3"` (cargo allows only one). src/sqlstore.rs serves the same
