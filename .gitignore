@@ -15,4 +15,11 @@ apps/mobile/dist/
 
 # NOTE: apps/mobile/src-tauri/gen/ is intentionally NOT ignored — upstream
 # commits the generated Android project scaffold (Gradle needs it present;
-# `**/target/` above already covers Rust's own build output).
+# `**/target/` above already covers Rust's own build output; the Gradle
+# `build/` dir under gen/android is already covered by that project's own
+# gen/android/.gitignore).
+
+# APKs/AABs built via apps/mobile/docker/build-debug-apk.sh land at the repo
+# root — never commit a built binary.
+/*.apk
+/*.aab
