@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Mobile-only permissions: the in-app QR camera scan for pairing (CDX-011). Desktop never registers the barcode-scanner plugin, so these live in a platform-scoped capability instead of default.json.",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": [
+    "barcode-scanner:allow-scan",
+    "barcode-scanner:allow-cancel",
+    "barcode-scanner:allow-check-permissions",
+    "barcode-scanner:allow-request-permissions",
+    "barcode-scanner:allow-open-app-settings"
+  ]
+}

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-recognize-speech"
+description = "Enables the recognize_speech command without any pre-configured scope."
+commands.allow = ["recognize_speech"]
+
+[[permission]]
+identifier = "deny-recognize-speech"
+description = "Denies the recognize_speech command without any pre-configured scope."
+commands.deny = ["recognize_speech"]

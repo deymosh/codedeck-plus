@@ -1,0 +1,38 @@
+/**
+ * Global reset + document shell — the ONLY unscoped CSS in the app.
+ * Everything component-shaped lives in co-located *.module.css files on the
+ * tokens (plan §5: the CSS-module migration IS the UX pass).
+ */
+@import './tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+body {
+  /* The app owns scrolling per-region; the document never scrolls. */
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: var(--text-md);
+}

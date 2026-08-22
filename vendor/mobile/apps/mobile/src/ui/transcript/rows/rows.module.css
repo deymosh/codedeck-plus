@@ -1,0 +1,497 @@
+/**
+ * Transcript row styles — user/assistant/plan/tool-group/thinking/error/
+ * system/lifecycle/sync-gap/outbox. Shared by the row components in this
+ * directory; the interaction cards live in cards.module.css.
+ */
+
+/* --- User bubble --- */
+
+.user {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-1) var(--space-3);
+}
+
+.userBubble {
+  max-width: 85%;
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3);
+  word-break: break-word;
+  /* CDX-088: was unset, so it inherited the root (16px × --ui-scale = 20.8px on
+   * a Fold's inner display) instead of the old app's 14px. */
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+/* --- Assistant markdown --- */
+
+.assistant {
+  padding: var(--space-1) var(--space-3);
+  word-break: break-word;
+  font-size: var(--text-md);
+  line-height: 1.6;
+}
+
+/* --- Markdown element rules (CDX-088) ---------------------------------------
+ * react-markdown is given no `components` override and no class, so before this
+ * block every element here fell through to the browser's UA stylesheet. That is
+ * the primary cause of "kinda bloated", and it was device-independent:
+ *
+ *  - UA `h1` is 2em with 0.67em margins. Against a 20.8px body that is a 41.6px
+ *    heading; the old app's was 18px against 14px.
+ *  - UA `p` margin is 1em TOP AND BOTTOM. The old app deleted every UA margin
+ *    globally and put back `0 0 8px`. Worse, .assistant/.userBubble have
+ *    non-zero padding, so those margins cannot collapse out of the row — every
+ *    entry carried ~26px of dead air at each end instead of 8px.
+ *  - UA `ul` indent is a flat 40px against the old app's 24px.
+ *
+ * Values are the old app's (codedeck/src/styles/output.css:69-133), expressed in
+ * `em` so they track the text they belong to rather than --ui-scale.
+ * ------------------------------------------------------------------------- */
+
+.assistant p {
+  margin: 0 0 0.571em; /* 8px at 14px */
+}
+
+.assistant p:last-child {
+  margin: 0;
+}
+
+/* A one-line user message was ~42px taller than its text on a Fold. The old app
+ * zeroed this explicitly; there was no equivalent rule here. */
+.userBubble p {
+  margin: 0;
+}
+
+.assistant h1,
+.assistant h2,
+.assistant h3,
+.assistant h4,
+.assistant h5,
+.assistant h6 {
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.assistant h1 {
+  font-size: var(--text-lg); /* 16px; the old app's 18px against a 14px body */
+  margin: 0.75em 0 0.375em;
+}
+
+.assistant h2 {
+  font-size: var(--text-md);
+  margin: 0.714em 0 0.286em;
+}
+
+.assistant h3 {
+  font-size: var(--text-md);
+  margin: 0.571em 0 0.286em;
+}
+
+.assistant h4,
+.assistant h5,
+.assistant h6 {
+  font-size: var(--text-md);
+  margin: 0.429em 0 0.286em;
+  color: var(--text-muted);
+}
+
+.assistant ul {
+  list-style: disc;
+  margin: 0.286em 0 0.571em;
+  padding-left: 1.714em; /* 24px, not the UA's flat 40px */
+}
+
+.assistant ol {
+  list-style: decimal;
+  margin: 0.286em 0 0.571em;
+  padding-left: 1.714em;
+}
+
+.assistant li {
+  margin: 0.143em 0;
+  line-height: 1.5;
+}
+
+.assistant li > ul,
+.assistant li > ol {
+  margin: 0.143em 0;
+}
+
+.assistant blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.857em;
+  margin: 0.571em 0;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.assistant hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.857em 0;
+}
+
+.assistant table {
+  border-collapse: collapse;
+  margin: 0.571em 0;
+  font-size: var(--text-sm);
+  width: 100%;
+}
+
+.assistant th,
+.assistant td {
+  border: 1px solid var(--border);
+  padding: 0.308em 0.615em;
+  text-align: left;
+}
+
+.assistant th {
+  background: var(--surface);
+  font-weight: 700;
+}
+
+.assistant strong,
+.userBubble strong {
+  color: var(--text);
+}
+
+.assistant a,
+.userBubble a {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.assistant pre,
+.userBubble pre {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font-size: var(--text-sm);
+  /* CDX-088: was unset → UA `margin-block: 1em` OF THE PRE'S OWN SIZE. */
+  margin: 0.615em 0;
+}
+
+/* Inline code was 0.9em of an inherited 20.8px. The old app gave it an explicit
+ * 13px plus a chip (background/padding/radius) that never came across. */
+.assistant code,
+.userBubble code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--surface);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+}
+
+/* …but a fenced block is already a chip; its code must not double up. */
+.assistant pre code,
+.userBubble pre code {
+  background: none;
+  padding: 0;
+}
+
+/* --- Syntax highlighting (rehype-highlight / highlight.js classes; CDX-011).
+   Scoped under .assistant so the global hljs class names can't leak styling
+   anywhere else. Theme = the app's terminal monochrome: grays carry structure,
+   the three semantic accents carry meaning (strings green, numbers amber,
+   errors/deletions red) — matching the tokens.css palette. --- */
+
+.assistant :global(.hljs) {
+  color: var(--text);
+  background: transparent; /* the pre already draws --surface */
+}
+
+.assistant :global(.hljs-comment),
+.assistant :global(.hljs-quote) {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.assistant :global(.hljs-keyword),
+.assistant :global(.hljs-selector-tag),
+.assistant :global(.hljs-section),
+.assistant :global(.hljs-name),
+.assistant :global(.hljs-tag) {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.assistant :global(.hljs-title),
+.assistant :global(.hljs-title.function_),
+.assistant :global(.hljs-title.class_) {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.assistant :global(.hljs-string),
+.assistant :global(.hljs-regexp),
+.assistant :global(.hljs-addition) {
+  color: var(--success);
+}
+
+.assistant :global(.hljs-number),
+.assistant :global(.hljs-literal),
+.assistant :global(.hljs-symbol),
+.assistant :global(.hljs-bullet),
+.assistant :global(.hljs-link),
+.assistant :global(.hljs-meta) {
+  color: var(--warn);
+}
+
+.assistant :global(.hljs-deletion) {
+  color: var(--danger);
+}
+
+.assistant :global(.hljs-attr),
+.assistant :global(.hljs-attribute),
+.assistant :global(.hljs-variable),
+.assistant :global(.hljs-template-variable),
+.assistant :global(.hljs-type),
+.assistant :global(.hljs-selector-class),
+.assistant :global(.hljs-selector-id),
+.assistant :global(.hljs-built_in),
+.assistant :global(.hljs-params) {
+  color: var(--text-muted);
+}
+
+.assistant :global(.hljs-emphasis) {
+  font-style: italic;
+}
+
+.assistant :global(.hljs-strong) {
+  font-weight: 600;
+}
+
+/* --- Plan document framing --- */
+
+.plan {
+  composes: assistant;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.planLabel {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* --- Collapsible groups (tool activity / thinking) --- */
+
+.toolgroup {
+  padding: var(--space-1) var(--space-3);
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  /* CDX-088: the old app's header was 12px MONO (output.css:152-153). This one
+   * silently inherited the sans face when it was ported. */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  min-height: var(--tap-min);
+  padding: 0;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.chevron {
+  display: inline-block;
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.chevronOpen {
+  composes: chevron;
+  transform: rotate(90deg);
+}
+
+.groupBody {
+  border-left: 2px solid var(--border-strong);
+  margin-left: var(--space-2);
+  padding-left: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.toolItem {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* CDX-085: thinking lives INSIDE the group body now (it used to own a row).
+ * Reasoning is prose, not a command, so it drops the mono face and takes the
+ * italic the old standalone row had — that is what keeps it distinguishable
+ * from the tool_use lines it sits between. */
+.toolItem[data-kind='thinking'] {
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+/* --- Diff card (CDX-050) --- */
+
+.diff {
+  margin: var(--space-1) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.diffHeader {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.diffTruncated {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.diffBody {
+  padding: var(--space-1) var(--space-2);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.diffBody > div {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diffLineAdd {
+  color: var(--success);
+}
+
+.diffLineDel {
+  color: var(--danger);
+}
+
+.diffLineContext {
+  color: var(--text-dim);
+}
+
+.diffExpander {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  min-height: var(--tap-min);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  text-align: center;
+}
+
+/* --- Status-ish rows --- */
+
+.error {
+  margin: var(--space-1) var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.errorLabel {
+  font-weight: 600;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.system {
+  padding: var(--space-1) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lifecycle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.lifecycle::before,
+.lifecycle::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.syncgap {
+  margin: var(--space-2) var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/* --- Outbox (unconfirmed sends) --- */
+
+.outbox {
+  margin: var(--space-1) var(--space-3);
+  margin-left: auto;
+  max-width: 85%;
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.outboxFailed {
+  composes: outbox;
+  border-color: var(--danger);
+}
+
+.outboxStatus {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: var(--space-1);
+}
+
+.outboxFailed .outboxStatus {
+  color: var(--danger);
+}

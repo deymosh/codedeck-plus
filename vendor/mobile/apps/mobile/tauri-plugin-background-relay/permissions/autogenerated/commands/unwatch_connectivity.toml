@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-unwatch-connectivity"
+description = "Enables the unwatch_connectivity command without any pre-configured scope."
+commands.allow = ["unwatch_connectivity"]
+
+[[permission]]
+identifier = "deny-unwatch-connectivity"
+description = "Denies the unwatch_connectivity command without any pre-configured scope."
+commands.deny = ["unwatch_connectivity"]

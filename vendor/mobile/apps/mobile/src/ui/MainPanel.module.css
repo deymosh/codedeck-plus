@@ -1,0 +1,69 @@
+/* Right pane of the one-screen shell — switches on panelMode. */
+
+.panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Phase 8 swipe carousel: the sliding chat container (DM/Marmot slide whole;
+ * sessions slide their own region inside SessionScreen). The hook writes
+ * transform/transition imperatively, so neither is set here. */
+.slide {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Slim bar above DM/Marmot chats: drawer access on narrow (the session screen
+ * carries its own ☰ in its header; chats get this until Phase 2b). */
+.chatBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.menuBtn {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--text-lg);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+}
+
+.menuBtn:active {
+  background: var(--surface-hover);
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  padding: var(--space-4);
+  text-align: center;
+}

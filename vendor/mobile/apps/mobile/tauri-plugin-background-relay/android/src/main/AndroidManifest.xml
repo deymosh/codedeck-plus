@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Foreground-service type rationale (Android 14+ requires a declared
+         type): CodeDeck is a network-sync app — the service exists to keep
+         the process + radio alive so the WebView's relay sockets keep
+         syncing session data. That is the textbook `dataSync` use case.
+         `connectedDevice` is for interacting with EXTERNAL devices
+         (BT/USB/companion) and does not apply. Known constraint, accepted:
+         Android 15 caps dataSync foreground time (~6h/day); the design
+         degrades gracefully — cheap resync-on-resume makes service death
+         invisible next time the app opens. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Partial WakeLock + WifiLock while the stay-connected toggle is on. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- CDX-027: native connectivity source — ConnectivityManager default-
+         network callback + snapshot feed the JS connection FSM (WebView never
+         fires online/offline on Android). Normal (install-time) permission. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 13+ runtime permission for the persistent notification
+         (requested from JS via the notification plugin before starting). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <service
+            android:name=".StayConnectedService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>

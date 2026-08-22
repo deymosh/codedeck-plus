@@ -1,0 +1,471 @@
+/* Session screen — header bars, pending-permission mirror bar, input bar.
+ * Safe-area/keyboard padding is the app frame's job (App.module.css). */
+
+/* Phase 8 swipe carousel: the region MainPanel's hook translates — header
+ * rows + GsdStrip + TranscriptView. The bars below it stay static. The hook
+ * writes transform/transition imperatively, so neither is set here. */
+.slide {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  position: relative; /* anchors the ‹/› attention chevrons */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap; /* CDX-025: never collapse a child at high --ui-scale */
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-size: var(--text-sm);
+  min-height: 2rem;
+  flex-shrink: 0;
+}
+
+/* ☰ drawer trigger (narrow one-screen shell, Phase 2a). */
+.menuBtn {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm); /* CDX-045: square, like the rest of the bar */
+  color: var(--text);
+  font-size: var(--text-md);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+}
+
+.menuBtn:active {
+  background: var(--surface-hover);
+}
+
+.cwd {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the tail (project dir) visible */
+  text-align: left;
+}
+
+/* CDX-059(b): the stored session title, IN FULL. Deliberately wrapping (never
+ * nowrap-ellipsized like .cwd): the stored value is already capped at 80 chars
+ * by titleFromFirstMessage / the bridge runner (`slice(0,77)+'...'`), and the
+ * trailing stored `...` at exactly the 80-char boundary is the on-device
+ * observable for that rule — CSS truncation here would hide it again. Clamped
+ * to 3 lines so a crowded row 2 stays bounded; 80 chars fit within 3 lines at
+ * text-xs on the narrowest supported width. */
+.fullTitle {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.select {
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+  max-width: 40%;
+  min-width: 0;
+  min-height: 2rem;
+}
+
+.stopBtn {
+  composes: btnSmallDanger from '../shared.module.css';
+  min-height: 2.25rem; /* header is compact; still comfortably tappable */
+  border-radius: var(--radius-sm); /* CDX-045: square, like the rest of the bar */
+}
+
+/* --- CDX-045: the session top bar speaks in RECTANGULAR BOXES, not pills ---
+ *
+ * Ported from the old app's header.css (`.header-model-badge` /
+ * `.header-usage-badge`): ~3px corners, a hairline border, a barely-there
+ * white fill, bold compact type, worst-window severity coloring the WHOLE
+ * usage box (warning ≥75, critical ≥90). The shared `.badge` primitive stays
+ * a pill everywhere else in the app (sidebar, DM list, transcript cards) —
+ * every rule here is scoped under `.header`, whose 0,2,0 specificity beats
+ * the shared 0,1,0 regardless of stylesheet order, so ONLY this bar squares
+ * off. Nothing in the bar is tappable, so --tap-min does not apply; the Stop
+ * button (which is) keeps its own 2.25rem floor above.
+ */
+
+/* Squares off a shared badge (state, connection, permission-mode, send-failed)
+ * without touching its semantic color. */
+.header .boxed {
+  border-radius: var(--radius-sm);
+  padding: 0.125rem 0.375rem;
+  font-weight: 700;
+  line-height: 1.25;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Context window — the old `.header-model-badge` rectangle that carried the
+ * context %. Single row: "ctx 42% · 84k/200k". */
+.header .ctxBox {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.125rem 0.375rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  /* Old app used a flat 10px here. */
+  font-size: calc(var(--text-xs) * 0.9);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  flex-shrink: 0;
+  /* Right-aligned so the model tag and the usage box below line up into a tidy
+   * block, as they did in the old app's stretched meta column. */
+  text-align: right;
+}
+
+/* CDX-087: the model leads the badge and carries the emphasis; the context
+ * figure is secondary. Same split the old app used (header.css:141-157:
+ * accent + weight 700 for the model, weight 500 + opacity for the percentage). */
+.header .ctxBox .modelTag {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.header .ctxBox .ctxPct {
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+/* Subscription usage — ONE box, the reported windows stacked as rows, exactly
+ * the old two-row chip ("5h 42%" / "7d 61%"). Reset countdowns stay on each
+ * row's tooltip, as before: usageFormat.ts is untouched. */
+/* (Not `composes: ctxBox` — CSS Modules only allows composition from a bare
+ * single-class selector, and these rules must stay under .header to outrank
+ * the shared pill.) */
+.header .usageBox {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.125rem 0.375rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: calc(var(--text-xs) * 0.9);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.header .usageBox[data-severity='warn'] {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.header .usageBox[data-severity='critical'] {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.usageRow {
+  display: block;
+}
+
+/* --- CDX-046: mode cycle button (PLAN → YOLO → EDITS) ---
+ * A tappable version of the squared-off mode badge (CDX-045 language): same
+ * box, but it's a <button>, so reset the UA chrome and keep it comfortably
+ * hittable in the compact header. */
+.header .modeBtn {
+  background: rgba(255, 255, 255, 0.03);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  min-height: 2rem;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.header .modeBtn:active {
+  background: var(--surface-hover);
+}
+
+/* Awaiting mode-confirmed: the legacy `setting-pending` pulse. */
+.header .modePending {
+  animation: mode-pending-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mode-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header .modePending {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+.pendingBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--warn);
+  background: var(--surface-raised);
+  color: var(--warn);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+}
+
+.pendingLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.allowBtn {
+  composes: btnSmall from '../shared.module.css';
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.denyBtn {
+  composes: btnSmall from '../shared.module.css';
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --- Quick prompts (CDX-049): tappable shortcut boxes above the composer ---
+ * Ported from the legacy .quick-prompt-bar/.quick-prompt-pill, but speaking
+ * this rebuild's rectangular language (CDX-045) — squared boxes, hairline
+ * border, faint fill. Horizontal scroll instead of wrapping keeps the bar one
+ * row tall however many prompts exist. */
+.quickPromptBar {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.quickPromptBtn {
+  flex-shrink: 0;
+  min-height: 2rem;
+  padding: 0.125rem var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.quickPromptBtn:active {
+  background: var(--surface-hover);
+}
+
+.inputbar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+}
+
+.textarea {
+  composes: input from '../shared.module.css';
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 8rem;
+  line-height: 1.4;
+  /* Past max-height, scroll — never clip. */
+  overflow-y: auto;
+}
+
+/* CDX-025 — the composer must never slice off a wrapped line.
+ *
+ * The shared `.input` sets `min-height: var(--tap-min)`, a FLAT floor that
+ * fits exactly one line and does not move when the text wraps. At
+ * `wm size 720x1280` + `wm density 320` + UI scale 140% the box was 120 dp
+ * tall with two lines of content in it and the second one was cut in half by
+ * the rounded bottom border.
+ *
+ * The floor is derived from the metrics the box actually renders with —
+ * `1.4em` is this rule's own `line-height` against `.input`'s
+ * `font-size: var(--text-md)`, so it tracks --ui-scale at every setting
+ * instead of being a magic px — plus the field's own vertical padding
+ * (`.input`'s `var(--space-2)` top and bottom) and its 1px borders, which
+ * `box-sizing: border-box` (styles/global.css) folds into the height.
+ *
+ * NOT written as a plain `.textarea` declaration: `composes` emits both class
+ * names and the winner would come down to stylesheet order between two
+ * equal-specificity `min-height`s. Scoped under the parent instead, the same
+ * way CDX-045's `.header .ctxBox` outranks the shared pill. */
+.inputbar .textarea {
+  min-height: calc(2 * 1.4em + 2 * var(--space-2) + 2px);
+}
+
+/* A wrapped PLACEHOLDER is invisible to the auto-grow measurement (it is not
+ * content, so it never reaches scrollHeight), and at 140% on a narrow phone
+ * "Message the session…" wrapped to more lines than any floor can cover. One
+ * line, ellipsized — the same treatment the other truncated labels on this
+ * screen get. */
+.textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Image attach (Phase 5, CDX-029) — staged-attachment strip above the
+ * composer, adapted from dm.module.css; CDX-025: min-width:0 + ellipsis on
+ * the filename, nothing collapses at high --ui-scale. */
+.attachStrip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+}
+
+.attachThumb {
+  height: 3rem;
+  width: 3rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.attachName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachSize {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Mic (5c): square ghost target next to Send; full tap height.
+ * CDX-084: inline-flex centres the inline SVG icons — a baseline-aligned
+ * inline svg sits a couple of px low inside a padding-0 button. */
+.micBtn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-input);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.micBtn:active {
+  background: var(--surface-hover);
+}
+
+/* The attach button IS disabled while an upload is in flight, so it needs the
+ * dim treatment the DM bar already had (CDX-084). */
+.micBtn:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* Attach: same square ghost target as the mic (Phase 5, CDX-029). */
+.attachBtn {
+  composes: micBtn;
+}
+
+/* ‹/› attention chevrons (Phase 8) — old .session-nav-hint translated to the
+ * module system: a session needing attention lies left/right in carousel
+ * order. Waiting = white in this identity (the sidebar's data-state border). */
+.navHint {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  pointer-events: none;
+  z-index: 1;
+  animation: nav-hint-pulse 2s ease-in-out infinite;
+}
+
+.navHint[data-side='left'] {
+  left: 0.25rem;
+}
+
+.navHint[data-side='right'] {
+  right: 0.25rem;
+}
+
+@keyframes nav-hint-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navHint {
+    animation: none;
+    opacity: 0.8;
+  }
+}

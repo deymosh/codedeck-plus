@@ -1,0 +1,130 @@
+# CDX-013: CodeDeck mobile (Tauri v2 Android) release APK.
+#
+# - A `mobile-vX.Y.Z` tag (or manual dispatch) builds a RELEASE aarch64 APK
+#   (minified, stripped .so) and uploads it as a CI artifact.
+# - Signing: if the four ANDROID_* secrets are set, a keystore is materialized
+#   and the APK comes out signed; otherwise the artifact is UNSIGNED (still
+#   useful for size checks and manual signing). Publishing to Zapstore is a
+#   separate HUMAN step (see docs/RELEASE.md — signer proof is mandatory).
+# - Size gate (CDX-013 watch-item: the debug arm64 .so was 226MB): the release
+#   .so measured 24.3MB stripped + minified, the whole APK 45.6MB (incl. the
+#   20.2MB mesh engine .so) — the gate fails the build when the app .so
+#   exceeds 50MB or the APK exceeds 100MB.
+#
+# NOTE the mesh engine: tauri-plugin-mesh's gradle task cross-compiles
+# libnostr_vpn_app_core.so from a nostr-vpn checkout at the workspace root and
+# SKIPS (with a warning) when the checkout is absent. Set the repository
+# variable NVPN_REPO (owner/repo) + secret NVPN_REPO_TOKEN to include the mesh
+# engine in CI builds; without them the APK ships without mesh support.
+name: release-android
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout nostr-vpn (mesh engine, optional)
+        if: vars.NVPN_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.NVPN_REPO }}
+          token: ${{ secrets.NVPN_REPO_TOKEN }}
+          path: ../nostr-vpn
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Rust (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mobile/src-tauri
+
+      - name: Install NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" >/dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Materialize signing keystore (only when secrets are set)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret — building an UNSIGNED release APK."
+            exit 0
+          fi
+          GEN=apps/mobile/src-tauri/gen/android
+          echo "$KEYSTORE_B64" | base64 -d > "$GEN/release.keystore"
+          {
+            echo "storeFile=release.keystore"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > "$GEN/keystore.properties"
+
+      - name: Build release APK (aarch64)
+        env:
+          ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
+        run: |
+          # openssl-src's Makefile calls `<triple>-ranlib`/`-ar` — GNU names
+          # gone from NDK r23+. Point the cc-crate env at the llvm tools
+          # (same fix as gen/android BuildTask.kt, needed on the tauri-CLI
+          # direct cargo path too).
+          TOOLBIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export RANLIB_aarch64_linux_android="$TOOLBIN/llvm-ranlib"
+          export AR_aarch64_linux_android="$TOOLBIN/llvm-ar"
+          cd apps/mobile
+          pnpm dlx @tauri-apps/cli@^2 android build --target aarch64
+
+      - name: Size gate (release must stay small — debug .so was 226MB)
+        run: |
+          APK=$(find apps/mobile/src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          test -n "$APK" || { echo "no release APK found" >&2; exit 1; }
+          APK_BYTES=$(stat -c%s "$APK")
+          echo "APK: $APK ($((APK_BYTES / 1024 / 1024))MB)"
+          # The stripped native lib inside the APK:
+          SO_BYTES=$(unzip -l "$APK" | awk '/libcodedeck_mobile_lib\.so/ {print $1}' | head -1)
+          echo ".so (uncompressed): $((SO_BYTES / 1024 / 1024))MB"
+          if [ "$SO_BYTES" -gt $((50 * 1024 * 1024)) ]; then
+            echo "FAIL: .so exceeds 50MB — symbols are probably not stripped" >&2
+            exit 1
+          fi
+          if [ "$APK_BYTES" -gt $((100 * 1024 * 1024)) ]; then
+            echo "FAIL: APK exceeds 100MB" >&2
+            exit 1
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codedeck-mobile-release-apk
+          path: apps/mobile/src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk
+          if-no-files-found: error

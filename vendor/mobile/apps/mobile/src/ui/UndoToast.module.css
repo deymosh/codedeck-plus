@@ -1,0 +1,60 @@
+/* Undo toast — the old app's .undo-toast translated to tokens + rem. Fixed
+ * above everything (--z-toast beats the drawer/scrim/modal), offset by the
+ * keyboard inset so it never hides behind the on-screen keyboard. */
+
+.toast {
+  position: fixed;
+  bottom: calc(var(--space-4) + var(--keyboard-inset, 0px) + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: calc(100vw - 2rem);
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  z-index: var(--z-toast);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.4);
+  animation: undo-slide-up 0.2s ease-out;
+}
+
+.label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 14rem;
+}
+
+.btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  min-height: var(--tap-min);
+  flex-shrink: 0;
+}
+
+@keyframes undo-slide-up {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(0.75rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

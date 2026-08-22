@@ -1,0 +1,13 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Default permissions for the background-relay plugin: start/stop the stay-connected foreground service, query it, push connection-state text into its notification, and read/watch native connectivity (CDX-027)"
+permissions = [
+    "allow-start-service",
+    "allow-stop-service",
+    "allow-is-running",
+    "allow-update-state",
+    "allow-get-connectivity",
+    "allow-watch-connectivity",
+    "allow-unwatch-connectivity",
+]

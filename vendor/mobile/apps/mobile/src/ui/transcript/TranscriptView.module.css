@@ -1,0 +1,38 @@
+/* TranscriptView container + jump-to-bottom pill. */
+
+.view {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.emptyView {
+  composes: view;
+  padding: var(--space-4);
+}
+
+.emptyText {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+}
+
+.jumpPill {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-bar);
+  min-height: var(--tap-min);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent);
+  background: var(--surface-raised);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}

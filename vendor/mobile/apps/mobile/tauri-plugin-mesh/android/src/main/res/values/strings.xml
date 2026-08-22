@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification strings for the mesh VpnService foreground notification.
+         (App name / channel title is set to the literal "CodeDeck mesh" in MeshVpnService.) -->
+    <string name="vpn_notification_connected">Mesh connected</string>
+    <string name="vpn_notification_disconnect">Disconnect</string>
+</resources>

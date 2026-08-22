@@ -1,0 +1,257 @@
+/**
+ * Shared UI primitives — buttons, cards, badges, banners, fields. The common
+ * vocabulary every screen composes; anything screen-specific lives in that
+ * screen's co-located module. All dims rem/tokens; tap targets ≥ --tap-min.
+ */
+
+/* --- Screen scaffold (the scrollable content column below the top bar) --- */
+
+.screen {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  line-height: 1.5;
+}
+
+/* --- Buttons --- */
+
+.btn {
+  min-height: var(--tap-min);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-input);
+  color: var(--text);
+  font-size: var(--text-md);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn:active {
+  background: var(--surface-hover);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The old app's signature emphasis: white inversion. */
+.btnPrimary {
+  composes: btn;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.btnPrimary:active {
+  background: var(--text-muted);
+}
+
+/* Visually compact but still a full-height touch target. */
+.btnSmall {
+  composes: btn;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.btnDanger {
+  composes: btn;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.btnSmallDanger {
+  composes: btnSmall;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --- Cards (machine / session list items) --- */
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: left;
+  color: var(--text);
+  font-size: var(--text-md);
+  cursor: pointer;
+  width: 100%;
+  min-height: var(--tap-min);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.card:active {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cardName {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Secondary line on a card: truncate long paths, keep one line. */
+.cardMeta {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* --- Badges --- */
+
+.badge {
+  font-size: var(--text-xs);
+  padding: 0.125rem var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badgeLive {
+  composes: badge;
+  color: var(--presence-live);
+  border-color: var(--presence-live);
+}
+
+.badgeStale {
+  composes: badge;
+  color: var(--presence-stale);
+  border-color: var(--presence-stale);
+}
+
+.badgeOffline {
+  composes: badge;
+  color: var(--presence-offline);
+  border-color: var(--border-strong);
+}
+
+.badgeRunning {
+  composes: badge;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.badgeWaiting {
+  composes: badge;
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badgeDanger {
+  composes: badge;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --- Banners --- */
+
+.banner {
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--warn);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.bannerError {
+  composes: banner;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.bannerOk {
+  composes: banner;
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* --- Form fields --- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.field label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.input {
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--text-md);
+  padding: var(--space-2) var(--space-3);
+  min-height: var(--tap-min);
+  width: 100%;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* --- Layout helpers --- */
+
+.row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  word-break: break-all;
+}

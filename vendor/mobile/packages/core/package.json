@@ -1,0 +1,26 @@
+{
+  "name": "@codedeck/core",
+  "version": "0.9.3",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
+    "@codedeck/protocol": "workspace:*",
+    "nostr-tools": "^2.23.1",
+    "pngjs": "^7.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@codedeck/testkit": "workspace:*",
+    "@types/node": "^22.10.0",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
