@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No permissions needed: ProxyController only configures the WebView's
+         own outbound routing — it does not create a VpnService or touch
+         system networking (that's Orbot's job; this plugin assumes Orbot is
+         already running with its SOCKS proxy listening). -->
+</manifest>

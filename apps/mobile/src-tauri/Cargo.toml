@@ -1,0 +1,79 @@
+[package]
+name = "codedeck-mobile"
+# Semver per package (plan: the padded/unpadded calendar-version Cargo footgun
+# is dead). Keep in lockstep with tauri.conf.json `version`.
+version = "0.9.5"
+description = "CodeDeck — remote-control Claude Code over Nostr (mobile/desktop shell)"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "codedeck_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Minimal by design (Phase 3b): no custom commands yet — the webview core does
+# the work; Rust only hosts the plugins. Marmot/MDK lands here in Phase 6.
+tauri = { version = "2", features = [] }
+# NOTE (CDX-012): tauri-plugin-sql was REMOVED — its sqlx dependency pins
+# libsqlite3-sys 0.28 while MDK's rusqlite pins 0.35, and both `links =
+# "sqlite3"` (cargo allows only one). src/sqlstore.rs serves the same
+# SqlExecutor seam over the rusqlite build below instead.
+tauri-plugin-deep-link = "2"
+# CDX-029: Blossom's CORS preflight for PUT /upload returns 204 with no
+# access-control-allow-* headers, so the Android WebView blocks the authorized
+# upload. plugin-http fetches from Rust — no CORS — and is the designed escape
+# hatch (platform/dmImages.ts resolves its fetch when running under Tauri).
+tauri-plugin-http = "2"
+# Phase 5c: OS notifications + the two local plugins (mic STT, stay-connected
+# foreground service — both no-ops on desktop).
+tauri-plugin-notification = "2"
+tauri-plugin-codedeck-stt = { path = "../tauri-plugin-codedeck-stt" }
+tauri-plugin-background-relay = { path = "../tauri-plugin-background-relay" }
+# Routes the WebView's relay traffic through Orbot's SOCKS5 proxy on Android
+# (androidx.webkit.ProxyController) — no-op on desktop. Off by default; the
+# user opts in via a settings toggle (main.tsx wires it before the transport
+# opens its first socket).
+tauri-plugin-tor-proxy = { path = "../tauri-plugin-tor-proxy" }
+# Phase 5d: embedded nostr-vpn FIPS mesh as CodeDeck's own Android VpnService
+# (one app on the phone). The mesh engine (nostr-vpn-app-core) is NOT a direct
+# dep of this crate — it is cross-compiled for arm64 and packaged by
+# tauri-plugin-mesh's gradle cargo-ndk task, then loaded via JNI. Desktop is a
+# no-op (the laptop joins via the `nvpn` CLI instead).
+tauri-plugin-mesh = { path = "../tauri-plugin-mesh" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Phase 6 (CDX-012): Marmot (MLS) DMs. MDK does the crypto + group state in
+# Rust (its own SQLite file in the app data dir); JS owns transport — events
+# in/out as JSON over the marmot_* commands (plan §5b). Same stack as the
+# local yenn reference (MDK 0.8 / nostr 0.44 — White Noise-compatible).
+mdk-core = "0.8"
+mdk-sqlite-storage = "0.8"
+# Direct dep for `groups::Pagination` (the cached-rumor re-feed fallback pages
+# `MDK::get_messages`); mdk_core::prelude does not re-export it (yenn note).
+mdk-storage-traits = "0.8"
+nostr = { version = "0.44", features = ["std", "nip44", "nip59"] }
+# mdk-sqlite-storage pins rusqlite's "bundled-sqlcipher", whose C build
+# #includes OpenSSL headers that don't exist for Android targets. This direct
+# dep upgrades the feature (via unification) to the vendored-OpenSSL variant so
+# SQLCipher cross-compiles self-contained (yenn's proven workaround). Keep the
+# version in lockstep with mdk's rusqlite.
+rusqlite = { version = "0.37", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
+# MDK store key derivation (domain-separated hash of the identity secret —
+# the host app owns key derivation; no platform keyring on Android).
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+# The gift-wrap path is async (nostr 0.44) — loopback tests need a runtime.
+tokio = { version = "1", features = ["rt", "macros"] }
+tempfile = "3"
+
+# CDX-011: in-app QR camera scan for pairing. Mobile-only (the plugin has no
+# desktop implementation; desktop pairing uses paste / deep-link).
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"

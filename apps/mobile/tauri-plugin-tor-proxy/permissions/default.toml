@@ -1,0 +1,8 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Default permissions for the tor-proxy plugin: enable/disable routing the WebView's relay traffic through a local SOCKS5 proxy (Orbot)"
+permissions = [
+    "allow-enable",
+    "allow-disable",
+]
