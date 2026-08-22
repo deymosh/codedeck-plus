@@ -263,7 +263,7 @@ export function MeshSection() {
 
           {/* Per-device opt-in: only a designated TEST TARGET exposes adb over the mesh. */}
           <div className={styles.scaleRow}>
-            <label className={styles.toggleRow}>
+            <label className={cx(styles.toggleRow, s.grow)}>
               <input
                 type="checkbox"
                 checked={testTarget}

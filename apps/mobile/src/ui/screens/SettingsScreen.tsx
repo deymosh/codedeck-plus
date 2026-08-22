@@ -222,7 +222,7 @@ export function SettingsScreen() {
 
       <div className={styles.sectionTitle}>Stay connected</div>
       <div className={styles.scaleRow}>
-        <label className={styles.toggleRow}>
+        <label className={cx(styles.toggleRow, s.grow)}>
           <input
             type="checkbox"
             checked={stayConnected}

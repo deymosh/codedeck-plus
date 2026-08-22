@@ -62,13 +62,17 @@
   border: none;
 }
 
-/* Stay-connected toggle (5c): full-height touch row, checkbox scaled up. */
+/* Stay-connected toggle (5c): full-height touch row, checkbox scaled up.
+ * `flex: 1`/`min-width: 0` are NOT baked in here — most callers use this as a
+ * standalone block inside the flex-COLUMN .screen, where flex:1 would make it
+ * compete for the column's leftover vertical space (huge, uneven gaps between
+ * unrelated rows on any screen taller than the content, e.g. a Fold's big
+ * inner display). The two callers that pair it with a badge inside a flex
+ * ROW (.scaleRow) opt into growth explicitly via shared's `s.grow`. */
 .toggleRow {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 1;
-  min-width: 0;
   min-height: var(--tap-min);
   cursor: pointer;
   font-size: var(--text-sm);
