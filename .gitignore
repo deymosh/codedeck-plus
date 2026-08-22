@@ -1,2 +1,18 @@
 .env*
 !.env.example
+
+# Node / pnpm workspace
+node_modules/
+**/node_modules/
+pnpm-debug.log*
+.pnpm-store/
+
+# Build outputs
+apps/bridge/out/
+apps/mobile/dist/
+**/target/
+**/*.tsbuildinfo
+
+# NOTE: apps/mobile/src-tauri/gen/ is intentionally NOT ignored — upstream
+# commits the generated Android project scaffold (Gradle needs it present;
+# `**/target/` above already covers Rust's own build output).
