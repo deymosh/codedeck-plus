@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# codedeck — one entrypoint for managing this fork: the bridge container,
+# the optional Tor daemon, mobile APK builds, and workspace checks.
+#
+# Everything here just wraps commands already established elsewhere in the
+# repo (docker compose, apps/mobile/docker/build-apk.sh,
+# scripts/sync-upstream.sh) — this script adds no new mechanism, only a
+# short memorable surface over them.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+# Git Bash (MSYS) on Windows rewrites leading-/ arguments as if they were
+# Windows paths before docker.exe sees them — breaks `docker exec -w /path`.
+# Scoped (not exported globally): doing that also breaks docker cp's HOST-side
+# path resolution. No-op on real Linux/macOS. Same fix as build-apk.sh.
+dexec() { MSYS_NO_PATHCONV=1 docker exec "$@"; }
+
+usage() {
+  cat <<'EOF'
+codedeck — manage this CodeDeck fork
+
+Usage: ./codedeck <command> [args]
+
+Bridge (the deployed Docker service):
+  bridge up               Build (if needed) and start the bridge
+  bridge down             Stop the bridge (and codedeck-tor, if running)
+  bridge restart          Rebuild the image and restart the bridge
+  bridge build            Rebuild the bridge image only
+  bridge logs             Follow the bridge's logs (Ctrl-C to stop)
+  bridge status           Show what's running
+  bridge pair             Print the most recent pairing QR/URL from the logs
+  bridge shell            Open a shell inside the running bridge container
+
+Tor (optional codedeck-tor service, Compose `tor` profile):
+  tor up                  Start codedeck-tor (also (re)starts the bridge,
+                           since Compose profiles apply per `up` invocation)
+  tor down                Stop codedeck-tor
+
+Mobile APK (apps/mobile/docker/build-apk.sh — see that file for details):
+  apk debug                Full symbols, ~300MB, Android's own debug keystore
+  apk release              Minified+stripped, UNSIGNED — Android won't install it
+  apk benchmark            Same build as release, but signed so it installs
+
+Workspace checks (run in a throwaway Node container — nothing installed
+locally is required):
+  check                    typecheck + test, every package
+  typecheck                typecheck only
+  test                     test only
+
+Upstream sync:
+  sync                     Refresh vendor/* from upstream (scripts/sync-upstream.sh)
+
+  help                     Show this
+EOF
+}
+
+require_running_bridge() {
+  if ! docker ps --filter "name=codedeck-bridge" --filter "status=running" --format '{{.Names}}' | grep -q codedeck-bridge; then
+    echo "codedeck-bridge is not running — try: ./codedeck bridge up" >&2
+    exit 1
+  fi
+}
+
+cmd_bridge() {
+  case "${1:-}" in
+    up)
+      docker compose up -d --build codedeck-bridge
+      ;;
+    down)
+      docker compose down
+      ;;
+    restart)
+      docker compose build codedeck-bridge
+      docker compose up -d codedeck-bridge
+      ;;
+    build)
+      docker compose build codedeck-bridge
+      ;;
+    logs)
+      docker compose logs -f codedeck-bridge
+      ;;
+    status)
+      docker compose ps
+      ;;
+    pair)
+      require_running_bridge
+      # The bridge process itself owns bridge.lock (CDX-033) — a second
+      # `pair` invocation inside the same container would just fail to
+      # acquire it, so this reads the QR the running `run` command already
+      # printed (it opens a pairing window on its own whenever nothing's
+      # paired) rather than trying to trigger a new one.
+      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL:"; then
+        echo "No pairing QR found in the logs yet. If the window already" >&2
+        echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
+        exit 1
+      fi
+      docker compose logs codedeck-bridge 2>&1 | grep -A 25 "Pairing URL:" | tail -27
+      ;;
+    shell)
+      require_running_bridge
+      dexec -it codedeck-bridge bash
+      ;;
+    *)
+      echo "usage: $0 bridge {up|down|restart|build|logs|status|pair|shell}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cmd_tor() {
+  case "${1:-}" in
+    up)
+      docker compose --profile tor up -d --build
+      echo
+      echo "codedeck-tor is up. Point the bridge at it with, in .env:"
+      echo "  CODEDECK_TOR_PROXY_URL=socks5h://codedeck-tor:9050"
+      echo "then: ./codedeck bridge restart"
+      ;;
+    down)
+      docker compose stop codedeck-tor
+      docker compose rm -f codedeck-tor
+      ;;
+    *)
+      echo "usage: $0 tor {up|down}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cmd_apk() {
+  case "${1:-}" in
+    debug|release|benchmark)
+      exec ./apps/mobile/docker/build-apk.sh "$1"
+      ;;
+    *)
+      echo "usage: $0 apk {debug|release|benchmark}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# --- Workspace checks: run in a throwaway node:22-slim container, same
+# pattern used throughout development here — nothing needs to be installed
+# on the host. `git` is installed on the fly (packages/core's folders.test.ts
+# needs it); the container is removed on exit either way. ---
+run_in_workspace_container() {
+  local name="codedeck-check-$$"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker create --name "$name" node:22-slim sleep infinity >/dev/null
+  docker start "$name" >/dev/null
+  # Double-quoted so $name is baked in NOW, as a literal — the trap fires
+  # after this function has already returned (local vars gone by then), so a
+  # single-quoted trap referencing $name would fail under `set -u`.
+  trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+
+  local tarball
+  tarball="$(mktemp).tar.gz"
+  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
+      --exclude='node_modules' --exclude='*/node_modules' -czf "$tarball" .
+  docker cp "$tarball" "$name":/repo.tar.gz
+  rm -f "$tarball"
+
+  dexec "$name" mkdir -p /app
+  dexec -w /app "$name" tar -xzf /repo.tar.gz
+  echo "==> Installing dependencies"
+  dexec -w /app "$name" npm install -g pnpm@10.8.0 >/dev/null
+  dexec -w /app "$name" pnpm install --frozen-lockfile
+  if [ "$1" != "typecheck" ]; then
+    echo "==> Installing git (packages/core's folders.test.ts shells out to it)"
+    dexec "$name" bash -c "apt-get update -qq && apt-get install -y -qq git" >/dev/null 2>&1
+  fi
+
+  case "$1" in
+    typecheck)
+      dexec -w /app "$name" pnpm -r --no-bail run typecheck
+      ;;
+    test)
+      dexec -w /app "$name" pnpm -r --no-bail run test
+      ;;
+    check)
+      dexec -w /app "$name" pnpm -r --no-bail run typecheck
+      dexec -w /app "$name" pnpm -r --no-bail run test
+      ;;
+  esac
+}
+
+cmd_sync() {
+  exec ./scripts/sync-upstream.sh
+}
+
+case "${1:-help}" in
+  bridge) shift; cmd_bridge "$@" ;;
+  tor) shift; cmd_tor "$@" ;;
+  apk) shift; cmd_apk "$@" ;;
+  check) run_in_workspace_container check ;;
+  typecheck) run_in_workspace_container typecheck ;;
+  test) run_in_workspace_container test ;;
+  sync) cmd_sync ;;
+  help|-h|--help) usage ;;
+  *)
+    echo "unknown command: $1" >&2
+    echo >&2
+    usage >&2
+    exit 1
+    ;;
+esac
