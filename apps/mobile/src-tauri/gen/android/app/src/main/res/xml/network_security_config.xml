@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Scoped exception to the app's own cleartext-traffic policy
+  (usesCleartextTraffic="false" in release builds — see build.gradle.kts):
+  allow PLAIN ws:// (no TLS) but ONLY to .onion hosts. A Tor hidden service
+  is already end-to-end encrypted and authenticated by the onion routing
+  circuit itself — TLS on top is redundant, which is why relays like Haven
+  commonly serve plain ws:// on their .onion address. Everything that
+  ISN'T .onion still falls through to the base config (cleartext blocked),
+  so this does not weaken the app's posture for ordinary clearnet relays.
+-->
+<network-security-config>
+    <!-- Explicit, so this doesn't depend on how a present
+         networkSecurityConfig interacts with the manifest's own
+         usesCleartextTraffic attribute (that attribute is a release-vs-debug
+         toggle in build.gradle.kts; this base-config makes the "release"
+         side of it unambiguous regardless). -->
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">onion</domain>
+    </domain-config>
+</network-security-config>
