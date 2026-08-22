@@ -27,7 +27,7 @@
  * the device-test phases.
  */
 import { SimplePool } from 'nostr-tools/pool';
-import type { NostrEvent } from 'nostr-tools/core';
+import type { EventTemplate, NostrEvent, VerifiedEvent } from 'nostr-tools/core';
 import type { Filter } from 'nostr-tools/filter';
 import { createRelayAuthSigner } from '@codedeck/protocol';
 import type {
@@ -143,6 +143,10 @@ export interface PoolLike {
       onevent: (event: NostrEvent) => void;
       oneose?: () => void;
       onclose?: (reasons: Array<{ url: string; reason: string }>) => void;
+      /** See the `onauth` derivation in createRelayTransport for why this
+       *  needs to be passed to EVERY subscribe call, not just supplied at
+       *  pool construction. */
+      onauth?: (event: EventTemplate) => Promise<VerifiedEvent>;
     },
   ): { close(reason?: string): void };
   publish(relays: string[], event: NostrEvent): Promise<string>[];
@@ -172,6 +176,21 @@ export function createRelayTransport(deps: RelayTransportDeps): PhoneTransport &
   const automaticallyAuth = deps.secretKey ? createRelayAuthSigner(deps.secretKey) : undefined;
   const pool: PoolLike = deps.pool ?? new SimplePool(transportPoolOptions(automaticallyAuth));
   const log = deps.log;
+
+  // `automaticallyAuth` above only makes ensureRelay() set relay.onauth,
+  // which fires REACTIVELY on an ["AUTH", challenge] message. It does NOT
+  // make nostr-tools retry a REQ a relay rejected with `auth-required: ...`
+  // — that retry ("await the full AUTH round-trip, then re-send the SAME
+  // REQ on the now-authed connection") is a separate path gated on
+  // `params.onauth` being passed to the specific subscribe/subscribeMany
+  // call (see abstract-pool.ts). Without it, a NIP-42 relay's `auth-required`
+  // just looks like a dropped subscription — the FSM reconnects into a
+  // brand-new, again-unauthenticated socket forever. Flat signer: our
+  // createRelayAuthSigner ignores its relayUrl argument (same identity
+  // regardless of which relay asks), so any URL derives the same function.
+  const flatAuth: ((event: EventTemplate) => Promise<VerifiedEvent>) | undefined = automaticallyAuth
+    ? (automaticallyAuth('') ?? undefined)
+    : undefined;
 
   let relays = [...deps.relays];
   let closed = false;
@@ -217,6 +236,7 @@ export function createRelayTransport(deps: RelayTransportDeps): PhoneTransport &
       const state = { closed: false };
       open.add(state);
       const sub = pool.subscribe([...relays], filter, {
+        ...(flatAuth ? { onauth: flatAuth } : {}),
         onevent: (event) => {
           if (state.closed || closed) return;
           params.onEvent(event);

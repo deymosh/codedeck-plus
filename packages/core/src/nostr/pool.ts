@@ -131,6 +131,37 @@ export class BridgePool {
     this.automaticallyAuth = options.automaticallyAuth;
   }
 
+  /**
+   * `automaticallyAuth` (pool-constructor option, per relay URL) only makes
+   * `ensureRelay()` set `relay.onauth` — which fires REACTIVELY whenever an
+   * `["AUTH", challenge]` message arrives, independent of any REQ. It does
+   * NOT get `subscribeMany` to retry a REQ that a relay rejected with
+   * `auth-required: ...`: that retry ("sign the challenge, await the full
+   * AUTH round-trip, THEN re-send the exact same REQ on the now-authed
+   * connection") is a SEPARATE code path in nostr-tools' subscribeMany,
+   * gated on `params.onauth` being passed to that specific call — see
+   * abstract-pool.ts's subscribeMany, the `onclose` branch that checks
+   * `reason.startsWith('auth-required: ') && params.onauth`.
+   *
+   * Without this, a relay that requires auth (e.g. Haven) sends
+   * `auth-required` on the REQ, which surfaces to us as a plain dropped
+   * subscription — BridgePool's own onclose handler tears the WHOLE pool
+   * down and reconnects from scratch (a brand-new, again-unauthenticated
+   * WebSocket), so the client never gets past the wall: it keeps opening
+   * fresh connections that each hit `auth-required` again, forever. Passing
+   * `onauth` here (not just `automaticallyAuth` at construction) is what
+   * actually lets a NIP-42-gated relay's subscription succeed.
+   *
+   * `SubscribeManyParams.onauth` is a single flat signer (no per-relay-URL
+   * indirection) — fine here because @codedeck/protocol#createRelayAuthSigner's
+   * returned signer ignores its relayUrl argument (same identity keypair
+   * regardless of which relay is asking), so any URL can be used to derive it.
+   */
+  private flatAuthSigner(): ((event: EventTemplate) => Promise<VerifiedEvent>) | undefined {
+    if (!this.automaticallyAuth) { return undefined; }
+    return this.automaticallyAuth(this.relayUrls[0] ?? '') ?? undefined;
+  }
+
   get relays(): readonly string[] {
     return this.relayUrls;
   }
@@ -157,6 +188,7 @@ export class BridgePool {
 
     try {
       this.subscription = this.pool.subscribeMany(this.relayUrls, filter, {
+        ...(this.flatAuthSigner() ? { onauth: this.flatAuthSigner() } : {}),
         onevent: (event) => {
           if (epoch !== this.connectionEpoch) { return; } // superseded subscription
           this.cb.onEvent(event);
@@ -311,7 +343,10 @@ export class BridgePool {
     if (!this.pool) {
       this.pool = new SimplePool(this.poolOptions());
     }
-    return this.pool.subscribeMany(this.relayUrls, filter, params);
+    return this.pool.subscribeMany(this.relayUrls, filter, {
+      ...(this.flatAuthSigner() ? { onauth: this.flatAuthSigner() } : {}),
+      ...params,
+    });
   }
 
   private log(msg: string): void {
