@@ -1,0 +1,121 @@
+# CDX-013: Zapstore listing for the REBUILT app (protocol v10, appId
+# com.codedeck.next). This is a NEW listing — the old com.codedeck.app listing
+# stays untouched so old + new installs coexist during the transition (clean
+# break, fresh pairing; see docs/RELEASE.md).
+#
+# Publish flow (HUMAN GATE — see docs/RELEASE.md "Zapstore"):
+#   1. Build the signed release APK (release-android workflow or locally).
+#   2. Temp-inject `release_source` / `version` / `release_notes` here (revert
+#      after publishing — the kubo/docs/zapstore-publish.md runbook).
+#   3. MANDATORY signer proof BEFORE publishing:
+#        zsp publish -q zapstore.yaml --offline
+#      Every signed event must carry the CodeDeck publishing identity
+#      f07e0b1af066b483…c367 (npub17plqkxhsv66g8quxxc9p5t9mxazzn20m426exqnl8lxnh5a4cdns7jezx0),
+#      the owner of the existing com.codedeck.app listing. Note the pubkey in
+#      the .env.zapstore bunker:// URL is the per-app NIP-46 *signer* key and
+#      deliberately differs from it (it rotates; harmless) — never proof
+#      against the bunker URL, only against the events zsp emits.
+#      On this FIRST publish a mismatch does not fork an existing listing, it
+#      mints com.codedeck.next under the wrong owner permanently — and the
+#      wrong owner has no kind-30509 NIP-C1 proof for the signing cert.
+#      `-q` is required (the interactive prompt hangs non-interactive shells)
+#      and it mutes success output, so never trust silence — check the events.
+#   4. zsp publish -q  (credentials come from the gitignored .env.zapstore —
+#      a bunker:// NIP-46 URL with an embedded secret; never commit it, and
+#      remember rotation backups: .env.zapstore.* is gitignored too).
+#      Present in apps/mobile since the 0.9.0 publish (copied from the old
+#      codedeck/ repo); gitignored, so a fresh clone must re-supply it.
+#   5. Fetch the CDN blob back and `cmp` it byte-identical to the local APK.
+#
+# KNOWN GAPS at the 0.9.0 first publish (2026-08-07), accepted by the owner —
+# status as of the 0.9.3 publish (2026-08-10):
+#   - RESOLVED: `repository:` now points at the app's own public repo
+#     (JeroenOnNostr/codedeck-next-mobile). NOT the old `codedeck` repo — that
+#     is a different codebase — and not the development monorepo, which is
+#     private.
+#   - RESOLVED: `license: MIT`, backed by a real LICENSE file in-tree.
+#   - STILL OPEN: `images:` is empty — screenshots require a physical device.
+#   - STILL OPEN: the published build has not been verified on a physical
+#     device. 0.9.2 was device-verified on the Fold, but ~10 commits landed
+#     after that run, so the 0.9.3 binary is host-proven only. Supersede via a
+#     higher versionCode if a device run finds it broken.
+#
+# `release_notes` for the 0.9.0 publish came from ./RELEASE_NOTES_0.9.0.md,
+# which is kept in-tree as the provenance record of what users were shown.
+#
+# `icon:` below is the real CodeDeck brand mark (shared with the old app, which
+# is the same product line) — it replaced a generated flat-blue placeholder.
+
+# Matches the shipped artifact: tauri.conf.json productName and the APK's
+# `application-label` are both "CodeDeck Next". The old listing is already
+# named "CodeDeck"; two identically-named listings would be indistinguishable
+# in the store while both apps coexist.
+name: CodeDeck Next
+
+summary: Control Claude Code sessions on your laptop from your phone over encrypted Nostr.
+
+# CDX-019, resolved 2026-08-10: the app's source is public now, so the listing
+# carries a real source link instead of the deliberate 0.9.0 omission. This is
+# the app's OWN repo, not the old `codedeck` one (different codebase — pointing
+# there would misrepresent the source) and not the development monorepo, which
+# stays private.
+repository: https://github.com/JeroenOnNostr/codedeck-next-mobile
+
+# Backed by a real LICENSE file as of 0.9.3; both bridge packages had declared
+# MIT all along with nothing in-tree to back it.
+license: MIT
+
+description: |
+  CodeDeck is a multi-session agentic coding interface for your phone.
+
+  Run Claude Code on your laptop or VPS and drive it from anywhere: review
+  plans, approve tool permissions, switch models and effort levels, and chat
+  with multiple coding sessions at once — all from your Android device.
+
+  CodeDeck talks to a companion bridge (VSCode extension or headless CLI) over
+  end-to-end encrypted Nostr relays (NIP-44). No accounts, no central server:
+  your phone and laptop pair directly by scanning a QR code.
+
+  Features:
+  - Multiple concurrent Claude Code sessions, switchable from one app
+  - Plan approval, permission cards, and AskUserQuestion prompts on your phone
+  - Transcripts that survive restarts, offline gaps, and reinstalls (ranged sync)
+  - Per-session model selection and effort levels
+  - Encrypted Nostr DMs — NIP-17 and Marmot (MLS) side by side
+  - Project/folder management on every bridge host, incl. VPS
+  - Auto + manual UI scale (phone through tablet)
+
+  This is the protocol-v10 rebuild (new Android appId): it pairs with the new
+  bridge only and can be installed alongside the old CodeDeck app.
+
+  Bridges (both free, install one on the machine running Claude Code):
+  - VSCode extension: github.com/JeroenOnNostr/codedeck-next-bridge-vscode
+  - Headless CLI / VPS: github.com/JeroenOnNostr/codedeck-next-bridge
+
+tags:
+  - nostr
+  - developer-tools
+  - claude
+  - ai
+  - coding
+
+icon: ./src-tauri/icons/icon.png
+
+# Screenshots owed: capture from the new app before the first publish
+# (the old listing's shots show the old UI). docs/RELEASE.md tracks this.
+images: []
+
+# Release APK (aarch64, signed) — the release-android workflow artifact or:
+#   cargo tauri android build --target aarch64
+# → src-tauri/gen/android/app/build/outputs/apk/universal/release/
+#
+# The "universal" path name is misleading: the artifact carries lib/arm64-v8a
+# only, so zsp tags it `f: android-arm64-v8a` (same as the old app).
+#
+# 0.9.0 (published 2026-08-07) was built from this tree with
+# `pnpm dlx @tauri-apps/cli@^2 android build --target aarch64`, signing picked
+# up automatically from gen/android/keystore.properties → `app-universal-release.apk`
+# (45MB, cert c5d0cba4…bbfbc5). NOTE: building via the tauri CLI directly needs
+# RANLIB_<triple>/AR_<triple> exported to the NDK's llvm-ranlib/llvm-ar — the
+# gen/android BuildTask.kt fix only applies when Gradle drives the CLI.
+# Ignore any stale `app-universal-release-unsigned.apk` beside it.

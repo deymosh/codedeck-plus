@@ -1,0 +1,55 @@
+/* NewSessionModal (Phase 2b, CDX-031) — folder radio list + model/effort
+ * selects. CDX-025: rows wrap-capable, paths carry min-width: 0. */
+
+.sectionTitle {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-top: var(--space-2);
+}
+
+.folderList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  min-width: 0;
+}
+
+.folderRow input {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.folderPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select {
+  min-height: var(--tap-min);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+  max-width: 100%;
+  min-width: 0;
+}

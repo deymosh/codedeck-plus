@@ -1,0 +1,12 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Default permissions for the mesh plugin"
+permissions = [
+    "allow-join-mesh",
+    "allow-leave-mesh",
+    "allow-mesh-status",
+    "allow-mesh-action",
+    "allow-open-wireless-debugging",
+    "allow-prepare-adb",
+]

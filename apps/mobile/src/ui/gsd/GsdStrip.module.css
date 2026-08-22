@@ -1,0 +1,173 @@
+/**
+ * GsdStrip — the collapsed stage strip + inline phase list, on the 5a tokens.
+ * Ported look from the old styles/gsd.css (near-black bar, white-on-black
+ * emphasis, semantic color only for waiting/running states).
+ */
+
+.wrap {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  /* CDX-058: chips are flex-shrink:0, so on a phone a long action chip used
+     to squeeze the summary to "v1.0 · Pha…" — the % readout was always the
+     first thing cut. Wrapping drops a chip that does not fit onto its own
+     row instead, so the summary keeps its intrinsic width down to the
+     percentage. Wide layouts still fit on one line and never wrap. */
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  min-height: var(--tap-min);
+}
+
+.barWaiting {
+  box-shadow: inset 0.2rem 0 0 var(--warn);
+}
+
+.barRunning {
+  box-shadow: inset 0.2rem 0 0 var(--accent);
+}
+
+.main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  min-height: var(--tap-min);
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chevron {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  flex-shrink: 0;
+}
+
+.barWaiting .chevron {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.summary {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.barWaiting .summary {
+  color: var(--text);
+}
+
+.meter {
+  flex-shrink: 0;
+  width: 3rem;
+  height: 0.25rem;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  overflow: hidden;
+}
+
+.meterFill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--transition);
+}
+
+.chip {
+  flex-shrink: 0;
+  min-height: calc(var(--tap-min) - var(--space-2));
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  /* CDX-058: on its own wrapped row a chip may still exceed the strip width
+     (long phase names at high --ui-scale) — cap and ellipsize the chip, never
+     the summary; the full command stays readable via title=. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--transition-fast);
+}
+
+.chip:disabled {
+  color: var(--text-dim);
+  border-color: var(--border);
+  cursor: default;
+}
+
+.chipRecovery {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.chipRecovery:disabled {
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.phases {
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  display: flex;
+  flex-direction: column;
+}
+
+.phase {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.phaseCurrent {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.phaseMarks {
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  letter-spacing: 0.1em;
+}
+
+.phaseCurrent .phaseMarks {
+  color: var(--accent);
+}
+
+.phaseName {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.phaseLabel {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.phaseCurrent .phaseLabel {
+  color: var(--text-muted);
+}

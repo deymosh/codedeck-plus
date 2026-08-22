@@ -1,0 +1,401 @@
+/**
+ * DM screens (Phase 5b) — conversation list + chat, all on tokens. The bottom
+ * bar has its own module (DmBottomBar.module.css); safe-area handling is the
+ * app frame's (App.module.css).
+ */
+
+/* --- Avatar --- */
+
+.avatar {
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  background: var(--surface-hover);
+  flex-shrink: 0;
+}
+
+.avatarFallback {
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  font-weight: 700;
+  text-transform: uppercase;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* --- Conversation list --- */
+
+/**
+ * Conversation tile. Deliberately NOT `composes: card from shared` — same
+ * hazard the DmBottomBar autopsy names ("`composes` order must not decide
+ * which declaration wins"), and here it did: this module is emitted BEFORE
+ * shared.module.css in the bundle, so `.card`'s `flex-direction: column`
+ * beat the local `row` at equal specificity. The tile stacked, the local
+ * `align-items: center` then centred the avatar over the name/preview, and
+ * `.card`'s `min-height` + the non-shrink-proofed list squashed the text out
+ * of the box — a list of anonymous letter circles. Standalone rules only.
+ */
+.convRow {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  /* .dmList is a height-capped column flex container, so a shrinkable tile
+   * gets squashed to min-height once the list fills. Tiles keep their size;
+   * the list scrolls. */
+  flex-shrink: 0;
+  min-height: var(--tap-min);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.convRow:active {
+  background: var(--surface-hover);
+}
+
+/* Sidebar DM section (Phase 2b): the conversation open in the main panel. */
+.convRowSelected {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.convInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.convTop {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The identity line. Shrinks (and ellipsises) before the badge does, so the
+ * protocol tag never pushes the name out of view. */
+.convName {
+  font-size: var(--text-md);
+  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An unresolved peer falls back to a truncated npub — mono so the key reads
+ * as a key, dimmer so a real display name still wins the eye. */
+.convNameKey {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.convNameLoading {
+  animation: dm-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes dm-shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* Right rail: time over unread badge. Off the name line on purpose — the
+ * name gets the full width it needs to identify the peer. */
+.convMeta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.convTime {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.convPreview {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.unreadBadge {
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.profileRetry {
+  composes: btnSmall from '../shared.module.css';
+  flex-shrink: 0;
+}
+
+/* --- Protocol tag (Phase 6: unified NIP-17 + Marmot list) --- */
+
+.protocolBadge {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.protocolBadgeMls {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Pending Marmot welcome (invite) cards --- */
+
+.welcomeCard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  /* Same reason as .convRow: a capped column list must scroll, not squash. */
+  flex-shrink: 0;
+}
+
+.welcomeInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.welcomeTitle {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcomeSub {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+
+/* --- New-conversation input --- */
+
+.newDm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* --- Chat screen --- */
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+  min-height: var(--tap-min);
+}
+
+.chatHeaderName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.profileRetryText {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bubbleWrap {
+  display: flex;
+  flex-direction: column;
+  max-width: 80%;
+}
+
+.bubbleWrapSent {
+  composes: bubbleWrap;
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.bubbleWrapReceived {
+  composes: bubbleWrap;
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.bubble {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-width: 100%;
+}
+
+.bubbleReceived {
+  composes: bubble;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.bubbleSent {
+  composes: bubble;
+  background: var(--surface-hover);
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.bubbleFailed {
+  opacity: 0.6;
+  border: 1px solid var(--danger);
+}
+
+.bubbleTime {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: var(--space-1);
+}
+
+.sendFailed {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.retryBtn {
+  composes: btnSmallDanger from '../shared.module.css';
+  margin-top: var(--space-1);
+  min-height: 2rem;
+}
+
+/* --- Image attachments (CDX-011) --- */
+
+.inlineImage {
+  display: block;
+  max-width: 100%;
+  max-height: 16rem;
+  border-radius: var(--radius-sm);
+  margin: var(--space-1) 0;
+  cursor: pointer;
+}
+
+.imageLoading {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  padding: var(--space-2) 0;
+}
+
+.imageLink {
+  color: var(--text-muted);
+  word-break: break-all;
+  text-decoration: underline;
+}
+
+.imageOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+}
+
+.imageOverlayImg {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.attachStrip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.attachThumb {
+  height: 3rem;
+  width: 3rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.attachName {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

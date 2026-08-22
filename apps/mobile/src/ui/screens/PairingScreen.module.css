@@ -1,0 +1,23 @@
+/* Pairing screen — the "— or manually —" divider between the two entry paths. */
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.pairTextarea {
+  composes: input from '../shared.module.css';
+  resize: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}

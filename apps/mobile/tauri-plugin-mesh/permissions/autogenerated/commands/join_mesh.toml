@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-join-mesh"
+description = "Enables the join_mesh command without any pre-configured scope."
+commands.allow = ["join_mesh"]
+
+[[permission]]
+identifier = "deny-join-mesh"
+description = "Denies the join_mesh command without any pre-configured scope."
+commands.deny = ["join_mesh"]

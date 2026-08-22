@@ -1,0 +1,82 @@
+/**
+ * The rebuilt DM bottom bar (plan §5: "DM bottom bar: rebuilt as one flex
+ * layout component on tokens inside safe-area") — the fix for the old app's
+ * broken icon layout, which was three shared session-composer classes
+ * (.attach-btn width:100% sized for a 60px control column, a .dm-attach-btn
+ * specificity override, a nested .right-controls flex) fighting each other.
+ *
+ * Here: ONE flex row, tokens only, no nested control columns, no overrides.
+ * Safe-area + keyboard insets are the app frame's job (App.module.css pads
+ * the column ONCE) — this bar just sits at the bottom of the flex column.
+ */
+
+.bar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+}
+
+.textarea {
+  composes: input from '../shared.module.css';
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 8rem;
+  line-height: 1.4;
+  /* Past max-height, scroll — never clip. */
+  overflow-y: auto;
+}
+
+/* CDX-025 — identical defect, identical fix: the shared `.input`'s flat
+ * `min-height: var(--tap-min)` fits one line only, so a wrapped line was
+ * sliced by the bottom border at high --ui-scale. The session composer's
+ * module carries the full autopsy; scoped under `.bar` for the same reason
+ * (`composes` order must not decide which min-height wins). */
+.bar .textarea {
+  min-height: calc(2 * 1.4em + 2 * var(--space-2) + 2px);
+}
+
+.textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sendBtn {
+  composes: btnPrimary from '../shared.module.css';
+  flex-shrink: 0;
+  min-width: var(--tap-min);
+}
+
+/* Mic (5c): square ghost target, a DIRECT child of the one flex row.
+ * CDX-084: inline-flex centres the inline SVG icons — a baseline-aligned
+ * inline svg sits a couple of px low inside a padding-0 button. */
+.micBtn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-input);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.micBtn:active {
+  background: var(--surface-hover);
+}
+
+.micBtn:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}

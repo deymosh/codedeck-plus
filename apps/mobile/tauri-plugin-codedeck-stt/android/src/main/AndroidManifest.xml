@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- NO RECORD_AUDIO here, deliberately: ACTION_RECOGNIZE_SPEECH launches
+         the SYSTEM recognizer activity (Gboard / Google voice input), which
+         records audio under ITS OWN permission and hands back only text. The
+         app never touches the mic. -->
+
+    <!-- Android 11+ package visibility: without this <queries> entry,
+         resolveActivity()/startActivityForResult cannot see the system
+         recognizer and the intent silently fails. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+</manifest>

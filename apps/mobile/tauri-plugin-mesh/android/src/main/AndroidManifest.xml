@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Foreground service + VPN. specialUse because this is a developer/mesh VPN, not a
+         general-purpose consumer VPN; declared so the foreground service is allowed on
+         Android 14+. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Re-establish the tunnel after reboot / app update (boot receiver). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Underlying-network change callbacks (wifi<->cellular handoff) + LAN multicast lock for
+         nearby-peer discovery, both used by MeshVpnService. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Toggle Wireless Debugging (adb_wifi_enabled, a Settings.Global key) so the laptop can reach
+         this device over the mesh without a USB cable or a manual tap. Protection level is
+         signature|privileged|development: NOT auto-granted, but the `development` flag means it can
+         be granted ONCE over adb (`pm grant com.codedeck.app android.permission.WRITE_SECURE_SETTINGS`),
+         after which prepare_adb works forever. Must be declared here to be grantable at all.
+         DISTRIBUTION NOTE: this permission is fine for Zapstore / direct-APK (CodeDeck's channels) but
+         is a Google Play restricted-permission BLOCKER. If CodeDeck ever targets Play, strip this via a
+         store build flavor (tools:node="remove") together with the prepare_adb code path. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <application>
+        <!-- The VpnService MUST be guarded by BIND_VPN_SERVICE and advertise the
+             android.net.VpnService intent so the OS recognizes it as a VPN provider
+             (also enables Always-on VPN). -->
+        <service
+            android:name="com.codedeck.mesh.vpn.MeshVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Encrypted mesh VPN for remote device testing" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="com.codedeck.mesh.vpn.MeshVpnBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

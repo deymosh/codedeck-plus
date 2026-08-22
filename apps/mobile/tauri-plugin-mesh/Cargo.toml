@@ -1,0 +1,19 @@
+[package]
+name = "tauri-plugin-mesh"
+version = "0.1.0"
+edition = "2021"
+links = "tauri-plugin-mesh"
+
+# Embeds the nostr-vpn FIPS mesh (Martti Malmi / Iris, MIT) as CodeDeck's own VpnService so the
+# phone joins the mesh with no separate app. Structural clone of tauri-plugin-background-relay,
+# swapping the dataSync foreground service for a BIND_VPN_SERVICE-protected VpnService that pumps
+# packets through libnostr_vpn_app_core via JNI. Desktop is a no-op (the laptop joins via the
+# `nvpn` CLI instead).
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

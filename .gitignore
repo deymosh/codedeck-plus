@@ -1,0 +1,63 @@
+# deps / build output
+node_modules/
+dist/
+out/
+*.tsbuildinfo
+
+# never commit release artifacts (the old repos carried 2.4GB of these)
+*.apk
+*.aab
+*.vsix
+*.tgz
+
+# Tauri / Rust / Android
+apps/mobile/src-tauri/target/
+# gen/android (the `tauri android init` project) IS committed — its own
+# .gitignore excludes build outputs, .gradle, local.properties and keystores
+# (same split the old repo used: sources in, app/build out). Other gen/
+# artifacts (schemas) stay generated.
+apps/mobile/src-tauri/gen/*
+!apps/mobile/src-tauri/gen/android/
+target/
+.gradle/
+local.properties
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# secrets
+.env
+.env.*
+!.env.example
+*.key
+*service-account*.json
+
+# misc
+.DS_Store
+coverage/
+# local editor config — the workspace one pins relays to primal-only, which
+# silently narrows any bridge launched from that VSCode window to ONE relay.
+.vscode/
+
+# CDX-018 device batch: the full screenshot set is 20MB and stays local.
+# Tracked: every uiautomator dump + the screenshots the results doc cites.
+docs/evidence/cdx-018-device-batch/*.png
+!docs/evidence/cdx-018-device-batch/s3b-*.png
+!docs/evidence/cdx-018-device-batch/s5-pill-30-new.png
+!docs/evidence/cdx-018-device-batch/s5-after-pill-repin.png
+!docs/evidence/cdx-018-device-batch/s5-permission-card.png
+!docs/evidence/cdx-018-device-batch/s5-perm-prompt.png
+!docs/evidence/cdx-018-device-batch/s5-askuserquestion.png
+!docs/evidence/cdx-018-device-batch/s5-auq-answered.png
+!docs/evidence/cdx-018-device-batch/s5-group-expanded2.png
+!docs/evidence/cdx-018-device-batch/s5-switch-back.png
+!docs/evidence/cdx-018-device-batch/s6-*.png
+!docs/evidence/cdx-018-device-batch/s7-reply-received.png
+!docs/evidence/cdx-018-device-batch/s7-bar-stock-kbopen.png
+!docs/evidence/cdx-018-device-batch/s8-gsd-strip.png
+!docs/evidence/cdx-018-device-batch/s10-attach-strip.png
+!docs/evidence/cdx-018-device-batch/s10-credentials-ack.png
+!docs/evidence/cdx-018-device-batch/section-1-transcript-offline-after-forcekill.png
+!docs/evidence/cdx-018-device-batch/section-2-chooser.png
+!docs/evidence/cdx-018-device-batch/section-3-restart-inbound-dead.png

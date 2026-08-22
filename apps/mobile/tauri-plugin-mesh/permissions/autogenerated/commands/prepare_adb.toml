@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-prepare-adb"
+description = "Enables the prepare_adb command without any pre-configured scope."
+commands.allow = ["prepare_adb"]
+
+[[permission]]
+identifier = "deny-prepare-adb"
+description = "Denies the prepare_adb command without any pre-configured scope."
+commands.deny = ["prepare_adb"]

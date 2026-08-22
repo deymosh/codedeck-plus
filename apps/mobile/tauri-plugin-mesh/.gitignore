@@ -1,0 +1,7 @@
+/target
+/android/build
+/android/.gradle
+/android/.tauri
+# Cross-compiled mesh engine (produced by the gradle cargo-ndk task from the
+# workspace-root nostr-vpn checkout) — a build artifact, never committed.
+/android/src/main/jniLibs

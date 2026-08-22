@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-watch-connectivity"
+description = "Enables the watch_connectivity command without any pre-configured scope."
+commands.allow = ["watch_connectivity"]
+
+[[permission]]
+identifier = "deny-watch-connectivity"
+description = "Denies the watch_connectivity command without any pre-configured scope."
+commands.deny = ["watch_connectivity"]

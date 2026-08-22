@@ -1,0 +1,124 @@
+/**
+ * CodeDeck design tokens — the ONE source of dimensions, type, color, and
+ * z-order (plan §5 "UI scale tokens"). Every component uses rem + these
+ * variables; nothing hardcodes px for layout, so the whole interface scales
+ * coherently with --ui-scale (the "buttons too small on tablets" fix).
+ *
+ * --ui-scale = auto factor (viewport shortest side) × user multiplier
+ * (settings slider 0.85–1.4, persisted); computed in ui/scale.ts and applied
+ * by useUiScale(). Root font-size multiplies it into every rem below.
+ *
+ * --text-scale (CDX-088) = the USER MULTIPLIER ONLY, no auto factor. Type is
+ * deliberately decoupled from --ui-scale: the auto factor exists to keep tap
+ * targets reachable on big screens, and on a Pro Fold's inner display it pins
+ * at AUTO_MAX, which was inflating every glyph ~30% on top of a type ramp
+ * already 14% larger than the old app's. Spacing, radii and --tap-min still
+ * ride --ui-scale (they should grow with the screen); text does not.
+ * CONSEQUENCE: a type size must come from a --text-* token. A bare rem
+ * font-size is silently still coupled to --ui-scale.
+ *
+ * Visual identity ported from the old app (codedeck/src/styles/global.css):
+ * near-black terminal monochrome — pure-black bg, layered near-black
+ * surfaces, white as the accent/emphasis color, gray text ramp, color used
+ * ONLY for semantics (green success, amber warn, red danger). Dark-only by
+ * design, like the old app.
+ */
+:root {
+  /* Set by the scale controller at runtime: clamp(auto × user, 0.75, 1.6) */
+  --ui-scale: 1;
+  /* Also set by the scale controller: the slider alone, clamped 0.85–1.4. */
+  --text-scale: 1;
+  font-size: calc(16px * var(--ui-scale));
+
+  /* Spacing scale (rem = scales with --ui-scale) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-8: 3rem;
+
+  /* Type scale — the old app's ramp (codedeck/src/styles: a hard 14px root with
+   * 13/12px for secondary and mono text). PX × --text-scale, not rem, so the
+   * auto factor cannot reach it. The ramp is COMPRESSED like the old app's, not
+   * a rebase of the wide 16/14/12 one: rebasing alone would have dragged
+   * --text-xs down to 10.5px, below the old app's 12px. */
+  --text-xs: calc(12px * var(--text-scale));
+  --text-sm: calc(13px * var(--text-scale));
+  --text-md: calc(14px * var(--text-scale));
+  --text-lg: calc(16px * var(--text-scale));
+  --text-xl: calc(20px * var(--text-scale));
+
+  /* Fonts (old app: JetBrains Mono for code, system sans for prose).
+   * NOTE (CDX-090): no webfont is bundled, so 'JetBrains Mono' only resolves if
+   * the platform happens to have it — on Android it never does, and mono text
+   * lands on ui-monospace (Roboto Mono). The old app pulled it from Google
+   * Fonts, which this app cannot do: the Tauri CSP blocks external hosts. The
+   * fix is to self-host (@fontsource/jetbrains-mono); it is filed rather than
+   * done because it needs a dependency install. The names stay as the declared
+   * preference — an unavailable family is skipped, so this costs nothing. */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Fira Code',
+    'Source Code Pro', monospace;
+
+  /* Tap targets never shrink below the platform minimum */
+  --tap-min: max(44px, 2.75rem);
+
+  /* Session sidebar rail — the old app's fixed 260px
+   * (codedeck/src/styles/global.css `--sidebar-width`). Deliberately PX and
+   * NOT rem (CDX-043): rem would be multiplied by --ui-scale (auto × user, up
+   * to 1.6) and the rail would swell past a phone's whole width at 140%. The
+   * rail's CONTENTS still scale with --ui-scale; the rail itself does not. */
+  --sidebar-width: 260px;
+
+  /* Radii (old app proportions 4/8/16px, in rem so they scale) */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 1rem;
+  --radius-pill: 999px;
+
+  /* Z-layers */
+  --z-bar: 10;
+  --z-sheet: 20;
+  --z-modal: 30;
+  --z-toast: 40;
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition: 200ms ease;
+
+  /* Color — the old app's near-black monochrome ramp */
+  --bg: #000000;
+  --surface: #0a0a0a;        /* cards */
+  --surface-raised: #111111; /* bars, headers */
+  --surface-input: #0d0d0d;
+  --surface-hover: #1a1a1a;
+  --border: #1a1a1a;         /* subtle — default hairlines */
+  --border-strong: #333333;  /* medium — inputs, emphasized edges */
+  --text: #ffffff;
+  --text-muted: #999999;
+  --text-dim: #555555;
+
+  /* Accent IS white in this identity (old app: emphasis = inversion) */
+  --accent: #ffffff;
+  --accent-contrast: #000000;
+
+  /* Semantic color — the only color in the app */
+  --success: #22c55e;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+
+  /* Presence (machine/session heartbeat states) */
+  --presence-live: var(--success);
+  --presence-stale: var(--warn);
+  --presence-offline: var(--text-dim);
+
+  /* Safe areas — consumed ONCE by the app frame (App.module.css) */
+  --inset-top: env(safe-area-inset-top, 0px);
+  --inset-bottom: env(safe-area-inset-bottom, 0px);
+  --inset-left: env(safe-area-inset-left, 0px);
+  --inset-right: env(safe-area-inset-right, 0px);
+  /* Keyboard height above the layout viewport bottom, set by useKeyboardInset */
+  --keyboard-inset: 0px;
+}

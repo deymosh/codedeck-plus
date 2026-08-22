@@ -1,0 +1,125 @@
+/* Settings — UI scale slider + relay management. */
+
+.sectionTitle {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-top: var(--space-2);
+}
+
+.scaleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.scaleValue {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  min-width: 3.5rem;
+  text-align: right;
+}
+
+.slider {
+  flex: 1;
+  min-width: 0;
+  height: var(--tap-min); /* full-height touch strip */
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 0.25rem;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  margin-top: -0.625rem;
+}
+
+.slider::-moz-range-track {
+  height: 0.25rem;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+.slider::-moz-range-thumb {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+}
+
+/* Stay-connected toggle (5c): full-height touch row, checkbox scaled up. */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.toggleRow input {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Preferences (CDX-047): label + select rows. */
+.prefRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--tap-min);
+}
+
+.prefLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.select {
+  min-height: var(--tap-min);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+  max-width: 60%;
+  min-width: 0;
+}
+
+.relayRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap-min);
+}
+
+.relayUrl {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

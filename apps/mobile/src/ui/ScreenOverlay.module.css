@@ -1,0 +1,62 @@
+/* Full-screen overlay for Settings / Pairing (Phase 2b extraction). Fixed
+ * elements escape the app frame's safe-area padding, so the overlay consumes
+ * the insets (and the keyboard inset) itself — the ONE exception to
+ * App.module.css owning them. CDX-025: header wraps, title carries min-width:0. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-top: var(--inset-top);
+  padding-left: var(--inset-left);
+  padding-right: var(--inset-right);
+  padding-bottom: calc(var(--inset-bottom) + var(--keyboard-inset));
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  min-height: var(--tap-min);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.close {
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--text-lg);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: calc(-1 * var(--space-2));
+  transition: background var(--transition-fast);
+}
+
+.close:active {
+  background: var(--surface-hover);
+}
