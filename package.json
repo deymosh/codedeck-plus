@@ -11,6 +11,9 @@
   "engines": {
     "node": ">=22"
   },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "packageManager": "pnpm@10.8.0",
   "pnpm": {
     "onlyBuiltDependencies": [

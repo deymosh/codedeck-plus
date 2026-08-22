@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.3
 
   apps/bridge:
     dependencies:
