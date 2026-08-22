@@ -1,0 +1,42 @@
+{
+  "name": "@codedeck/bridge",
+  "version": "0.9.3",
+  "type": "module",
+  "bin": {
+    "codedeck-bridge": "./out/main.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.220"
+  },
+  "devDependencies": {
+    "@codedeck/core": "workspace:*",
+    "@codedeck/protocol": "workspace:*",
+    "@codedeck/testkit": "workspace:^",
+    "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.6",
+    "esbuild": "^0.25.0",
+    "qrcode": "^1.5.4",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "description": "CodeDeck bridge \u2014 run Claude Code sessions on a laptop/VPS and drive them from your phone over encrypted Nostr (npx CLI / systemd connector)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JeroenOnNostr/codedeck-next-bridge.git",
+    "directory": "apps/bridge-cli"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "out/",
+    "deploy/",
+    "README.md"
+  ]
+}

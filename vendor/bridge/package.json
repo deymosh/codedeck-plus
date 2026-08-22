@@ -1,0 +1,36 @@
+{
+  "name": "codedeck-next-bridge",
+  "private": true,
+  "version": "0.9.5",
+  "description": "CodeDeck Next bridge — headless CLI / systemd connector that runs Claude Code sessions and exposes them to the CodeDeck phone app over Nostr.",
+  "scripts": {
+    "typecheck": "pnpm -r --no-bail run typecheck",
+    "test": "pnpm -r --no-bail run test",
+    "lint": "pnpm -r --no-bail run lint",
+    "build": "pnpm -r --no-bail run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.8.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "workerd"
+    ],
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "@anthropic-ai/sdk": "*"
+      },
+      "ignoreMissing": [
+        "@anthropic-ai/sdk"
+      ]
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JeroenOnNostr/codedeck-next-bridge.git"
+  }
+}
