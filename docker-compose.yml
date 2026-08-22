@@ -1,6 +1,8 @@
 services:
   codedeck-bridge:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: codedeck-bridge
     restart: unless-stopped
     networks:
@@ -12,8 +14,36 @@ services:
       - GIT_USER=${GIT_USER:-}
       - GIT_EMAIL=${GIT_EMAIL:-}
       - GIT_REPO=${GIT_REPO:-}
+      - CODEDECK_RELAYS=${CODEDECK_RELAYS:-}
+      - CODEDECK_TOR_PROXY_URL=${CODEDECK_TOR_PROXY_URL:-}
     volumes:
       - ./data:/data
+
+  # Optional bundled Tor daemon — OFF by default. Enable with:
+  #   docker compose --profile tor up -d
+  # or COMPOSE_PROFILES=tor in .env. If you'd rather point the bridge at an
+  # existing Tor daemon (e.g. the one already running next to your CLN node)
+  # instead, leave this profile disabled and set CODEDECK_TOR_PROXY_URL to
+  # that daemon's reachable SocksPort — the two are mutually exclusive by
+  # whatever CODEDECK_TOR_PROXY_URL points at.
+  codedeck-tor:
+    image: lncm/tor:latest
+    container_name: codedeck-tor
+    restart: unless-stopped
+    profiles:
+      - tor
+    networks:
+      - codedeck-net
+    volumes:
+      - ./data/tor:/var/lib/tor
+    # SocksPort bound to all interfaces (the image's default torrc binds
+    # 127.0.0.1, reachable only from the host) so codedeck-bridge can reach it
+    # by service name on codedeck-net. No torrc file needed — Tor accepts
+    # these as CLI overrides via the image's `ENTRYPOINT ["tor"]`. Tor logs a
+    # "public address" warning for 0.0.0.0 — expected and safe here: this port
+    # is only reachable from other containers on the codedeck-net bridge
+    # network, never published to the host or the internet (no `ports:` entry).
+    command: ["--SocksPort", "0.0.0.0:9050", "--Log", "notice stdout"]
 
 networks:
   codedeck-net:

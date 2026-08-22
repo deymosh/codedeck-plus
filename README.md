@@ -1,40 +1,106 @@
-# CodeDeck CLI Bridge Docker
+# CodeDeck Docker — personal monorepo fork
 
-A lightweight Docker setup to run the CodeDeck CLI bridge with automated GitHub authentication, Git identity configuration, and automatic repository cloning.
+A personal fork of [JeroenOnNostr](https://github.com/JeroenOnNostr)'s
+CodeDeck ([codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge)
++ [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile)),
+unified into a single monorepo so the two repos' duplicated
+`packages/{core,protocol,testkit}` become one shared copy, with local patches
+for infrastructure the upstream author didn't design for:
 
-## Features
+- a Nostr relay that requires **NIP-42 `AUTH`** (e.g. a self-hosted
+  [Haven](https://github.com/bitvora/haven) relay),
+- a bridge that only reaches the network over **Tor** (SOCKS5),
+- the phone routing through **Orbot** instead (Android's Tor app).
 
-* **Automated Git Auth:** Seamlessly injects `GITHUB_TOKEN` to handle private and public repositories without interactive prompts.
-* **Persistent Workspaces:** Automatically clones or pulls your target `GIT_REPO` into the data volume on startup.
-* **Pre-configured Identity:** Sets up Git `user.name` and `user.email` automatically inside the container.
-* **Ready-to-Run:** Designed for seamless pairing with the CodeDeck mobile app via Nostr relays.
+Docker only builds and runs the **bridge** service — the mobile app lives
+here too (for the shared packages, and because it needed its own Tor/Orbot
+patch) but is built separately with its own Android/Rust toolchain.
+
+## Repository layout
+
+```
+codedeck-docker/
+├── vendor/              # pristine git-subtree mirrors of upstream — never hand-edited
+│   ├── bridge/           #   codedeck-next-bridge @ main
+│   └── mobile/           #   codedeck-next-mobile @ main
+├── packages/             # shared workspace packages (the actual, editable code)
+│   ├── protocol/          #   wire format + NIP-42 signer, used by both apps
+│   ├── core/               #   bridge engine (Node-only: Tor/SOCKS5 transport lives here)
+│   └── testkit/
+├── apps/
+│   ├── bridge/            # the headless CLI/systemd bridge — what Docker builds
+│   └── mobile/             # Tauri v2 + React Android app (not built by Docker)
+├── docker/
+│   ├── Dockerfile
+│   └── entrypoint.sh
+├── scripts/
+│   └── sync-upstream.sh  # pulls upstream into vendor/*, for hand-merging
+├── docker-compose.yml
+├── pnpm-workspace.yaml
+└── data/                 # runtime volume (bridge identity, paired phones, sessions)
+```
+
+See `scripts/sync-upstream.sh` for how to pull future upstream changes —
+`vendor/*` stays a real `git subtree`, so pulling in new fixes is a real
+`git subtree pull`, not a manual re-diff against a tarball. What lands in
+`packages/*` and `apps/bridge`/`apps/mobile` after that is still a deliberate,
+reviewed merge (they've diverged from `vendor/*` on purpose).
+
+## Local patches on top of upstream
+
+- **NIP-42 relay auth** (`packages/protocol/src/nip42.ts`): the bridge and
+  the phone each answer a relay's `AUTH` challenge with their own existing
+  identity keypair — no new secret to configure. Just allowlist the bridge's
+  pairing npub (and the phone's, if your relay gates reads too) in your
+  relay's ACL.
+- **Tor/SOCKS5 for the bridge** (`packages/core/src/nostr/transport.ts`):
+  set `CODEDECK_TOR_PROXY_URL` and every relay connection routes through it.
+  See the optional `codedeck-tor` Compose service below.
+- **Orbot for the phone** (`apps/mobile/tauri-plugin-tor-proxy`): a settings
+  toggle routes the WebView's relay traffic through Orbot's SOCKS5 proxy via
+  `androidx.webkit.ProxyController` — Android-only, off by default.
+- Relay reconnection (`BridgePool` / the phone's connection FSM) was already
+  solid upstream (epoch-guarded reconnects, exponential backoff) — see the
+  code comments in `packages/core/src/nostr/pool.ts` for what's original vs.
+  new.
 
 ## Environment Variables
 
-Create a `.env` file in the root directory with the following variables:
+Create a `.env` file in the root directory:
 
-`Use your own values for the placeholders below`
 ```env
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
 GITHUB_TOKEN=ghp_...
 GIT_USER=your_username
 GIT_EMAIL=your_email@example.com
 GIT_REPO=https://github.com/your-username/your-repo.git
+
+# Optional — see .env.example for the full explanation of each:
+CODEDECK_RELAYS=
+CODEDECK_TOR_PROXY_URL=
 ```
 
 ## Quick Start
 
-1. Build and start the container using Docker Compose:
+1. Build and start the container:
 ```bash
 docker compose up -d --build
 ```
 
-2. Check the logs to scan the pairing QR code with your CodeDeck app:
+2. **Optional** — also run the bundled Tor daemon (`lncm/tor`), instead of
+   pointing `CODEDECK_TOR_PROXY_URL` at a Tor daemon you already run
+   elsewhere:
+```bash
+docker compose --profile tor up -d --build
+# then set CODEDECK_TOR_PROXY_URL=socks5h://codedeck-tor:9050 in .env
+```
+
+3. Check the logs to scan the pairing QR code with your CodeDeck app:
 ```bash
 docker compose logs -f codedeck-bridge
 ```
 
 ## Related repos
 
-- [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile) — Android app
-- [codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge) — headless CLI / VPS bridge
+- [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile) — upstream Android app
+- [codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge) — upstream headless CLI / VPS bridge

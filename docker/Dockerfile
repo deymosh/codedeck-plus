@@ -15,8 +15,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Global Node tools installation (npm): pnpm, @anthropic-ai/claude-code, and ws
-RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code ws
+# 2. Global Node tools installation (npm): pnpm and @anthropic-ai/claude-code.
+#    ("ws" used to be force-installed here as a workaround — it is now a
+#    proper dependency of @codedeck/core, declared in packages/core/package.json.)
+RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code
 
 # 3. Create user safely (handling pre-existing UID/GID 1000 from node base image)
 RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROUP_ID} | cut -d: -f1); \
@@ -34,16 +36,20 @@ WORKDIR /app
 # Switch to the non-root user early so everything created from here is owned by 'codedeck'
 USER codedeck
 
-# 4. Clone repo and install dependencies as the final user (avoids massive chown later)
-RUN git clone --branch v0.9.3 https://github.com/JeroenOnNostr/codedeck-next-bridge.git . \
-    && pnpm install \
-    && pnpm add -w ws \
-    && pnpm --filter @codedeck/bridge add ws \
-    && pnpm build
+# 4. Copy just what the bridge build needs (workspace manifests + packages/*
+#    + apps/bridge — NOT apps/mobile or vendor/, which need Android/Rust
+#    toolchains this image has no reason to carry) and build it as the final
+#    user (avoids massive chown later).
+COPY --chown=codedeck:codedeck pnpm-workspace.yaml package.json pnpm-lock.yaml* tsconfig.base.json ./
+COPY --chown=codedeck:codedeck packages ./packages
+COPY --chown=codedeck:codedeck apps/bridge ./apps/bridge
+
+RUN pnpm install --frozen-lockfile \
+    && pnpm --filter @codedeck/bridge... run build
 
 # Copy entrypoint and main files (ensuring they have proper permissions)
 USER root
-COPY --chown=codedeck:codedeck entrypoint.sh /app/entrypoint.sh
+COPY --chown=codedeck:codedeck docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 COPY --chown=codedeck:codedeck main.js /app/main.js
 

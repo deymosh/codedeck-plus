@@ -1,0 +1,18 @@
+# Keep the build context to what docker/Dockerfile actually COPYs: root
+# workspace manifests, packages/*, apps/bridge. Everything below either needs
+# a toolchain this image has no reason to carry (Rust/Android for
+# apps/mobile), is a pristine subtree mirror never built directly (vendor/),
+# is runtime state (data/), or is dependency/VCS churn Docker should never
+# need to hash.
+.git
+vendor/
+apps/mobile/
+data/
+node_modules/
+**/node_modules/
+**/dist/
+**/out/
+**/target/
+.env
+.env.*
+!.env.example
