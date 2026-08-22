@@ -71,11 +71,18 @@ async function boot(): Promise<PhoneCore> {
   // plugin command is a no-op, so this is safe to call unconditionally under
   // Tauri; plain-browser dev has no plugin to call at all.
   if (isTauri && settings.torProxyEnabled) {
+    log('[TorProxy] enabled in settings — calling plugin:tor-proxy|enable before opening any relay socket');
     const { tauriTorProxyApi, ORBOT_DEFAULT_HOST, ORBOT_DEFAULT_PORT } = await import(
       './platform/torProxy'
     );
     const supported = await tauriTorProxyApi(log).enable(ORBOT_DEFAULT_HOST, ORBOT_DEFAULT_PORT);
-    if (!supported) log('[TorProxy] enabled in settings, but this WebView does not support PROXY_OVERRIDE');
+    log(
+      supported
+        ? '[TorProxy] setProxyOverride applied — relay sockets should now route through Orbot'
+        : '[TorProxy] enabled in settings, but this WebView does not support PROXY_OVERRIDE',
+    );
+  } else if (isTauri) {
+    log('[TorProxy] disabled in settings — relay sockets will connect directly');
   }
 
   const transport = createRelayTransport({ relays: settings.relays, log, secretKey: identity.secretKey });
