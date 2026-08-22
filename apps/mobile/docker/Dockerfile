@@ -1,13 +1,15 @@
 # Dev-only Android build environment for apps/mobile — NOT part of the
 # codedeck-bridge deployment (root docker-compose.yml never touches this).
-# Produces a DEBUG apk (Android auto-generates a debug keystore — no signing
-# setup needed) so a local checkout can be built and side-loaded onto a test
-# device without installing Android Studio/NDK/Rust on the host.
+# Builds a local checkout into an installable apk (debug, release-unsigned,
+# or release-but-debug-signed "benchmark" — see build-apk.sh) without
+# installing Android Studio/NDK/Rust on the host.
 #
-# For a signed RELEASE build you'd additionally need a real keystore at
+# For a signed RELEASE build (one a store or update mechanism would trust)
+# you'd need a real keystore at
 # apps/mobile/src-tauri/gen/android/keystore.properties (see
 # vendor/mobile/scripts/build-release-apk.sh for that path) — out of scope
-# here since nobody has generated one yet.
+# here since nobody has generated one yet. The debug keystore baked in below
+# is NOT that — it's only for locally sideloading a benchmark build.
 FROM eclipse-temurin:21-jdk-jammy
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -65,6 +67,20 @@ RUN cargo install tauri-cli --version "^2" --locked
 ENV TOOLBIN=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin
 ENV RANLIB_aarch64_linux_android=${TOOLBIN}/llvm-ranlib
 ENV AR_aarch64_linux_android=${TOOLBIN}/llvm-ar
+
+# --- Debug keystore, for signing "benchmark" (release-optimized, debug-
+# signed) builds so they can actually be installed — Android refuses to
+# install an unsigned APK at all. Standard Android debug-keystore parameters
+# (alias/password "androiddebugkey"/"android"), matching what `tauri android
+# build --debug` would generate automatically for a real debug build; a
+# release build skips that step entirely, so build-apk.sh's `benchmark` mode
+# signs the unsigned release APK with this one after the fact via apksigner.
+ENV DEBUG_KEYSTORE=/opt/debug.keystore
+RUN keytool -genkeypair -v \
+    -keystore ${DEBUG_KEYSTORE} -storepass android \
+    -alias androiddebugkey -keypass android \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -dname "CN=Android Debug,O=Android,C=US"
 
 WORKDIR /workspace
 CMD ["bash"]

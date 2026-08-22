@@ -1,22 +1,35 @@
 #!/usr/bin/env bash
-# Build a debug OR release apk for apps/mobile inside Docker — no Android
-# Studio/Rust/NDK needed on the host. Output lands in dist/.
+# Build an apk for apps/mobile inside Docker — no Android Studio/Rust/NDK
+# needed on the host. Output lands in dist/.
 #
-# Usage: apps/mobile/docker/build-apk.sh [debug|release]   (default: debug)
+# Usage: apps/mobile/docker/build-apk.sh [debug|release|benchmark]
+#   (default: debug)
 #
-# debug   — fast, unstripped, Android's auto debug keystore (no setup). Only
-#           good for sideloading onto a test device: upstream measured the
-#           debug arm64 .so at 226MB (see .github/workflows/release.yml in
-#           codedeck-next-mobile) — that's most of what makes the APK huge.
-# release — minified + stripped .so via a real `cargo` release profile (just
-#           dropping --debug from the CLI call, same as upstream's release
-#           workflow). Upstream's own numbers: .so 24.3MB, whole APK 45.6MB
-#           (that includes a 20.2MB mesh engine .so from a nostr-vpn
-#           checkout we don't have here, so ours should land smaller still).
-#           UNSIGNED — no keystore exists in this repo yet (see
-#           vendor/mobile/scripts/build-release-apk.sh for what a signed
-#           build additionally needs). Fine to sideload for testing; not
-#           fine to publish anywhere that checks a signature.
+# debug     — fast, unstripped, Android's auto debug keystore (no setup).
+#             Only good for sideloading onto a test device: upstream
+#             measured the debug arm64 .so at 226MB (see
+#             .github/workflows/release.yml in codedeck-next-mobile) —
+#             that's most of what makes this build huge.
+# release   — minified + stripped .so via a real `cargo` release profile
+#             (just dropping --debug from the CLI call, same as upstream's
+#             release workflow). Upstream's own numbers: .so 24.3MB, whole
+#             APK 45.6MB (that includes a 20.2MB mesh engine .so from a
+#             nostr-vpn checkout we don't have here, so ours lands smaller
+#             still — measured 34.8MB/31.5MB .so). UNSIGNED — Android
+#             refuses to INSTALL an unsigned APK at all, so this is only
+#             useful for inspecting size/build output, not for a phone.
+# benchmark — the SAME release build (same .so, same minification/
+#             stripping — nothing about the app's performance differs from
+#             `release`), but re-signed with a debug keystore afterwards
+#             (zipalign + apksigner, baked into the image) so it actually
+#             installs on a device. This is what you want to test real
+#             performance/size on a phone without a real signing identity.
+#             The debug keystore here is NOT the one `debug` mode's build
+#             auto-generates and is NOT a real release identity — it exists
+#             solely so a release-optimized build can be sideloaded. For an
+#             actually signed release (one an update mechanism/store would
+#             trust) see vendor/mobile/scripts/build-release-apk.sh, which
+#             needs a real keystore nobody has generated yet.
 #
 # First run builds the toolchain image (Android SDK/NDK 28 + Rust +
 # cargo-tauri) — several GB, several minutes. Reruns reuse Docker's layer
@@ -32,10 +45,13 @@ set -euo pipefail
 dexec() { MSYS_NO_PATHCONV=1 docker exec "$@"; }
 
 MODE="${1:-debug}"
-if [ "$MODE" != "debug" ] && [ "$MODE" != "release" ]; then
-  echo "usage: $0 [debug|release]" >&2
-  exit 1
-fi
+case "$MODE" in
+  debug|release|benchmark) ;;
+  *) echo "usage: $0 [debug|release|benchmark]" >&2; exit 1 ;;
+esac
+# benchmark builds the exact same artifact as release; only the post-build
+# signing step differs.
+GRADLE_MODE="release"; [ "$MODE" = "debug" ] && GRADLE_MODE="debug"
 
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p dist
@@ -62,8 +78,8 @@ dexec -w /workspace "$CONTAINER" tar -xzf repo.tar.gz
 echo "==> Installing workspace deps"
 dexec -w /workspace "$CONTAINER" pnpm install --frozen-lockfile
 
-echo "==> Building ($MODE): Vite web assets, then cargo + Gradle"
-if [ "$MODE" = "debug" ]; then
+echo "==> Building ($GRADLE_MODE): Vite web assets, then cargo + Gradle"
+if [ "$GRADLE_MODE" = "debug" ]; then
   dexec -w /workspace/apps/mobile "$CONTAINER" \
     pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64 --debug
 else
@@ -71,20 +87,42 @@ else
     pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64
 fi
 
-OUT_DIR="apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/$MODE"
-if [ "$MODE" = "release" ]; then
+OUT_DIR="apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/$GRADLE_MODE"
+if [ "$GRADLE_MODE" = "release" ]; then
   APK_NAME="app-universal-release-unsigned.apk"  # no keystore configured — see the header comment
 else
   APK_NAME="app-universal-debug.apk"
 fi
 DEST="dist/codedeck-$MODE.apk"
-docker cp "$CONTAINER":/workspace/"$OUT_DIR"/"$APK_NAME" "$DEST"
+
+if [ "$MODE" = "benchmark" ]; then
+  echo "==> Re-signing with the baked-in debug keystore (zipalign + apksigner)"
+  BUILD_TOOLS=/opt/android-sdk/build-tools/36.0.0
+  IN="/workspace/$OUT_DIR/$APK_NAME"
+  ALIGNED="/workspace/$OUT_DIR/app-benchmark-aligned.apk"
+  SIGNED="/workspace/$OUT_DIR/app-benchmark-signed.apk"
+  dexec "$CONTAINER" "$BUILD_TOOLS/zipalign" -f -p 4 "$IN" "$ALIGNED"
+  dexec "$CONTAINER" "$BUILD_TOOLS/apksigner" sign \
+    --ks /opt/debug.keystore --ks-pass pass:android \
+    --key-pass pass:android --ks-key-alias androiddebugkey \
+    --out "$SIGNED" "$ALIGNED"
+  docker cp "$CONTAINER":"$SIGNED" "$DEST"
+else
+  docker cp "$CONTAINER":/workspace/"$OUT_DIR"/"$APK_NAME" "$DEST"
+fi
 
 echo
 echo "==> Done: $DEST ($(du -h "$DEST" | cut -f1))"
-if [ "$MODE" = "release" ]; then
-  echo "    UNSIGNED — fine to sideload for testing, not to publish."
-fi
+case "$MODE" in
+  release)
+    echo "    UNSIGNED — Android will refuse to install this. Use 'benchmark'"
+    echo "    for a release-optimized build you can actually sideload."
+    ;;
+  benchmark)
+    echo "    Signed with a throwaway debug keystore (not a real release"
+    echo "    identity) — fine to sideload for testing, not to publish."
+    ;;
+esac
 echo "    Install: adb install $DEST"
 echo "    (or copy the file to the phone and open it — needs \"install"
 echo "    unknown apps\" allowed for whatever app you open it with)"
