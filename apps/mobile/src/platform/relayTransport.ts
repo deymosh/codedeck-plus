@@ -149,7 +149,11 @@ export interface PoolLike {
       onauth?: (event: EventTemplate) => Promise<VerifiedEvent>;
     },
   ): { close(reason?: string): void };
-  publish(relays: string[], event: NostrEvent): Promise<string>[];
+  publish(
+    relays: string[],
+    event: NostrEvent,
+    params?: { onauth?: (event: EventTemplate) => Promise<VerifiedEvent> },
+  ): Promise<string>[];
   destroy(): void;
 }
 
@@ -212,7 +216,7 @@ export function createRelayTransport(deps: RelayTransportDeps): PhoneTransport &
       if (attempt > 0 && remainingBudget(startedAt, budgetMs, Date.now) <= 0) break;
 
       // The SAME signed event every time — see PublishConfirmOptions.attempts.
-      const attempts = pool.publish([...relays], event);
+      const attempts = pool.publish([...relays], event, flatAuth ? { onauth: flatAuth } : undefined);
       if (attempts.length === 0) return last;
       last = await raceForAcceptance(attempts, remainingBudget(startedAt, budgetMs, Date.now));
       // Both of these mean the bridge has it (or almost certainly does).

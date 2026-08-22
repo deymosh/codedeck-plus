@@ -314,10 +314,18 @@ export class BridgePool {
 
   // --- Publishing / extra subscriptions (used by publisher.ts and the pairing window) ---
 
-  /** Publish an event to every relay. One promise per relay, in relay-list order. */
+  /**
+   * Publish an event to every relay. One promise per relay, in relay-list
+   * order. `onauth` matters here too, not just on subscribe: a relay that
+   * requires auth to WRITE rejects the first publish with `auth-required:
+   * ...`, and nostr-tools only retries that publish (after completing the
+   * AUTH round-trip) when `onauth` is passed to THIS call — see the
+   * `flatAuthSigner()` doc comment above for the general mechanism.
+   */
   publish(event: NostrEvent): Promise<string>[] {
     if (!this.pool) { return []; }
-    return this.pool.publish(this.relayUrls, event);
+    const auth = this.flatAuthSigner();
+    return this.pool.publish(this.relayUrls, event, auth ? { onauth: auth } : undefined);
   }
 
   /** A publish landed on at least one relay — the link works, reset backoff. */
