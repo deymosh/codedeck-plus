@@ -34,6 +34,7 @@ export function SettingsScreen() {
   const relays = useSettings((st) => st.relays);
   const uiScale = useSettings((st) => st.uiScale);
   const stayConnected = useSettings((st) => st.stayConnected);
+  const torProxyEnabled = useSettings((st) => st.torProxyEnabled);
   const blossomServer = useSettings((st) => st.blossomServer);
   const defaultMode = useSettings((st) => st.defaultMode);
   const defaultEffort = useSettings((st) => st.defaultEffort);
@@ -240,6 +241,22 @@ export function SettingsScreen() {
         (persistent notification shows the live connection state). It asks for
         notification permission on first start. Off = the OS may pause CodeDeck
         in the background; it resyncs when you return.
+      </div>
+
+      <div className={styles.sectionTitle}>Route through Orbot</div>
+      <label className={styles.toggleRow}>
+        <input
+          type="checkbox"
+          checked={torProxyEnabled}
+          onChange={(e) => core.settings.getState().setTorProxyEnabled(e.target.checked)}
+        />
+        <span>Route relay traffic through Orbot (SOCKS5)</span>
+      </label>
+      <div className={s.muted}>
+        Android only. Requires Orbot installed and running with its SOCKS
+        proxy enabled (127.0.0.1:9050 by default) — this does not launch or
+        manage Orbot itself. Fully applied on the next app restart; toggling
+        while running only affects NEW connections, not ones already open.
       </div>
 
       <MeshSection />
