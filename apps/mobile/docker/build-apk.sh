@@ -67,6 +67,10 @@ echo "    issues with pnpm/cargo/gradle's many small-file writes)"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 docker create --name "$CONTAINER" "$IMAGE" sleep infinity
 docker start "$CONTAINER" >/dev/null
+# Removed on exit either way (success, build failure, or Ctrl-C) — same
+# pattern as codedeck's run_in_workspace_container. Without this the
+# container (sleep infinity) was left running forever after every build.
+trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 
 TARBALL="$(mktemp).tar.gz"
 tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
