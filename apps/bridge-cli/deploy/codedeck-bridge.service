@@ -1,0 +1,47 @@
+# CodeDeck bridge as a systemd service (ported from codedeck-bridge-standalone).
+#
+# Install:
+#   sudo useradd -r -m -s /usr/sbin/nologin codedeck   # once
+#   sudo cp codedeck-bridge.service /etc/systemd/system/
+#   sudo mkdir -p /etc/codedeck-bridge && sudo touch /etc/codedeck-bridge/env
+#   sudo systemctl daemon-reload && sudo systemctl enable --now codedeck-bridge
+# Pair:
+#   sudo -u codedeck env CODEDECK_HOME=/home/codedeck/.codedeck \
+#     npx --yes @codedeck/bridge pair
+#   (stop the service first — the state-file lock refuses a double run)
+#
+# /etc/codedeck-bridge/env takes CODEDECK_* overrides, e.g.:
+#   CODEDECK_MACHINE_NAME=my-vps
+#   CODEDECK_RELAYS=wss://relay2.descendant.io,wss://relay.primal.net
+#   CODEDECK_WORKSPACE_ROOTS=/home/codedeck/projects
+#   CODEDECK_CLAUDE_PATH=/home/codedeck/.local/bin/claude
+
+[Unit]
+Description=CodeDeck Bridge (CLI connector)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codedeck
+Group=codedeck
+WorkingDirectory=/home/codedeck
+# npx resolves the published package; for a from-source install use:
+#   ExecStart=/usr/bin/node /opt/codedeck-bridge/out/main.js run
+# The unit's INVOCATION_ID makes the bridge advertise host:"service" automatically.
+ExecStart=/usr/bin/npx --yes @codedeck/bridge run --workspace /home/codedeck/projects
+Environment=CODEDECK_HOME=/home/codedeck/.codedeck
+EnvironmentFile=-/etc/codedeck-bridge/env
+Restart=always
+RestartSec=5
+# SIGTERM → graceful shutdown: the bridge publishes its session list with
+# state:"offline" + machineOffline:true before exiting. Give it time.
+TimeoutStopSec=20
+
+# Security hardening (ported)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/codedeck
+
+[Install]
+WantedBy=multi-user.target

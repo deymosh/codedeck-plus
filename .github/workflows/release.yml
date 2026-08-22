@@ -1,0 +1,78 @@
+# CDX-013: @codedeck/bridge (npx CLI / VPS connector) release.
+#
+# - A `bridge-vX.Y.Z` tag builds + tests and uploads the npm tarball as a CI
+#   artifact. NOTHING is published from a tag push.
+# - Publishing to npm is a HUMAN GATE: re-run via workflow_dispatch with
+#   confirm_publish = "publish-npm" AND the repository NPM_TOKEN secret set.
+name: release-bridge
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: 'Type "publish-npm" to actually publish to npm (needs NPM_TOKEN secret)'
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck + test (CLI + its workspace deps)
+        run: |
+          pnpm --filter @codedeck/protocol --filter @codedeck/core --filter @codedeck/bridge run typecheck
+          pnpm --filter @codedeck/protocol --filter @codedeck/core --filter @codedeck/bridge run test
+
+      - name: Build bundle
+        run: pnpm --filter @codedeck/bridge run build
+
+      - name: Smoke-test the artifact
+        run: |
+          node apps/bridge-cli/out/main.js version
+          node apps/bridge-cli/out/main.js doctor || true
+
+      - name: npm pack
+        working-directory: apps/bridge-cli
+        run: npm pack
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codedeck-bridge-npm-tarball
+          path: apps/bridge-cli/codedeck-bridge-*.tgz
+          if-no-files-found: error
+
+      # --- HUMAN GATE: never runs on tag push; requires the dispatch phrase
+      #     AND the NPM_TOKEN secret. ---
+      - name: Publish to npm (gated)
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.confirm_publish == 'publish-npm'
+        working-directory: apps/bridge-cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "NPM_TOKEN secret is not set — refusing to publish." >&2
+            exit 1
+          fi
+          npm publish --access public
