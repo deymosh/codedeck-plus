@@ -19,7 +19,6 @@ apps/mobile/dist/
 # `build/` dir under gen/android is already covered by that project's own
 # gen/android/.gitignore).
 
-# APKs/AABs built via apps/mobile/docker/build-debug-apk.sh land at the repo
-# root — never commit a built binary.
-/*.apk
-/*.aab
+# APKs built via apps/mobile/docker/build-apk.sh land here — never commit a
+# built binary.
+/dist/
