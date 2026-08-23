@@ -1,8 +1,7 @@
 # CodeDeck Docker — personal monorepo fork
 
 A personal fork of [JeroenOnNostr](https://github.com/JeroenOnNostr)'s
-CodeDeck ([codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge)
-+ [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile)),
+CodeDeck ([codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge) && [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile)),
 unified into a single monorepo so the two repos' duplicated
 `packages/{core,protocol,testkit}` become one shared copy, with local patches
 for infrastructure the upstream author didn't design for:
