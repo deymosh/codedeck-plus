@@ -8,7 +8,12 @@
  * transport, visibility/network/resume event sources) on top of exactly this.
  */
 import type { NostrEvent } from 'nostr-tools/core';
-import { createConnectionStore, type ConnectionStore } from './stores/connection';
+import {
+  createConnectionStore,
+  type ConnectionStore,
+  DEFAULT_RECONNECT_CONFIG,
+  TOR_RECONNECT_CONFIG,
+} from './stores/connection';
 import {
   createMachinesStore,
   loadPersistedMachines,
@@ -625,6 +630,10 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
     now,
     random,
     ...(log ? { log } : {}),
+    // Tor circuit builds (and every round-trip after) routinely add several
+    // seconds over a direct connection — the direct-connection backoff/stale
+    // timing was flapping "connecting" → "waiting-retry" under Orbot.
+    reconnectConfig: settingsData.torProxyEnabled ? TOR_RECONNECT_CONFIG : DEFAULT_RECONNECT_CONFIG,
     handlers: {
       // The DM 1059 subscription shares the socket lifecycle: every
       // (re)connect starts a fresh epoch with a fresh catch-up window, every

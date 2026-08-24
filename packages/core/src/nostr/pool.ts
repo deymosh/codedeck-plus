@@ -42,6 +42,11 @@ export interface BridgePoolOptions {
    *  relay). See @codedeck/protocol#createRelayAuthSigner — a relay that
    *  never challenges (any public relay) never calls this. */
   automaticallyAuth?: (relayUrl: string) => null | ((event: EventTemplate) => Promise<VerifiedEvent>);
+  /** Reconnect backoff base/cap in ms (default 2s→30s). Tor's circuit build
+   *  time routinely exceeds a 2s retry, so callers passing
+   *  `websocketImplementation` for a Tor/SOCKS5 transport should widen this. */
+  reconnectBaseMs?: number;
+  reconnectMaxMs?: number;
 }
 
 export class BridgePool {
@@ -73,6 +78,9 @@ export class BridgePool {
   /** Backoff jitter: up to +25% of the base delay, so a fleet of bridges that
    *  lost the same relay doesn't stampede it in lockstep. */
   private static readonly RECONNECT_JITTER_FRACTION = 0.25;
+
+  private readonly reconnectBaseMs: number;
+  private readonly reconnectMaxMs: number;
 
   /**
    * CDX-055: effectively disable SimplePool's per-relay idle-close. Two
@@ -129,6 +137,8 @@ export class BridgePool {
     this.random = options.random ?? Math.random;
     this.websocketImplementation = options.websocketImplementation;
     this.automaticallyAuth = options.automaticallyAuth;
+    this.reconnectBaseMs = options.reconnectBaseMs ?? BridgePool.RECONNECT_BASE_MS;
+    this.reconnectMaxMs = options.reconnectMaxMs ?? BridgePool.RECONNECT_MAX_MS;
   }
 
   /**
@@ -220,8 +230,8 @@ export class BridgePool {
   private scheduleReconnect(): void {
     if (this.disposed || this.reconnectTimer) { return; }
     const base = Math.min(
-      BridgePool.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt),
-      BridgePool.RECONNECT_MAX_MS,
+      this.reconnectBaseMs * Math.pow(2, this.reconnectAttempt),
+      this.reconnectMaxMs,
     );
     const delay = base + Math.floor(this.random() * base * BridgePool.RECONNECT_JITTER_FRACTION);
     this.reconnectAttempt++;

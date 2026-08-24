@@ -92,6 +92,10 @@ export interface PublisherOptions {
   log?: (msg: string) => void;
   /** Clock in ms — injectable for tests. */
   now?: () => number;
+  /** Per-relay publish timeout in ms (default 5s). Tor's extra circuit/relay
+   *  round-trip time can exceed the direct-connection default, so callers
+   *  routing through a SOCKS proxy should pass a larger budget. */
+  publishTimeoutMs?: number;
 }
 
 export class Publisher {
@@ -107,7 +111,9 @@ export class Publisher {
   // are published in the same second.
   private lastTimestamp = 0;
 
-  private static readonly RELAY_PUBLISH_TIMEOUT_MS = 5_000;
+  static readonly DEFAULT_RELAY_PUBLISH_TIMEOUT_MS = 5_000;
+
+  private readonly publishTimeoutMs: number;
 
   constructor(options: PublisherOptions) {
     this.secretKey = options.secretKey;
@@ -115,6 +121,7 @@ export class Publisher {
     this.transport = options.transport;
     this.logFn = options.log;
     this.now = options.now ?? Date.now;
+    this.publishTimeoutMs = options.publishTimeoutMs ?? Publisher.DEFAULT_RELAY_PUBLISH_TIMEOUT_MS;
   }
 
   /** Get a monotonically increasing created_at (ported getNextTimestamp). */
@@ -201,7 +208,7 @@ export class Publisher {
     return tags;
   }
 
-  /** Settle all per-relay publishes, treating anything past 5s as rejected. */
+  /** Settle all per-relay publishes, treating anything past the timeout as rejected. */
   private async settleWithTimeout(
     results: Promise<string>[],
   ): Promise<PromiseSettledResult<string>[]> {
@@ -212,7 +219,7 @@ export class Publisher {
           status: 'rejected' as const,
           reason: new Error('relay publish timeout'),
         })));
-      }, Publisher.RELAY_PUBLISH_TIMEOUT_MS);
+      }, this.publishTimeoutMs);
     });
     try {
       return await Promise.race([Promise.allSettled(results), timeout]);

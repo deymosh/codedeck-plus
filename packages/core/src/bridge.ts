@@ -409,6 +409,18 @@ export interface PairingWindowInfo {
  *  relays dropped. Matches BridgePool's reconnect floor. */
 const PAIRING_RESUBSCRIBE_MS = 2_000;
 
+/** Per-relay publish timeout when routed through torProxyUrl — Tor's circuit
+ *  build + extra hops routinely exceed Publisher's 5s direct-connection
+ *  default (see Publisher.DEFAULT_RELAY_PUBLISH_TIMEOUT_MS). */
+const TOR_RELAY_PUBLISH_TIMEOUT_MS = 10_000;
+
+/** BridgePool reconnect backoff when routed through torProxyUrl — a fresh
+ *  Tor circuit routinely takes longer than the 2s direct-connection retry
+ *  floor, so retrying that fast just burns attempts before a circuit can
+ *  finish building. */
+const TOR_RECONNECT_BASE_MS = 8_000;
+const TOR_RECONNECT_MAX_MS = 60_000;
+
 interface PairingWindowState {
   token: string;
   /** CDX-039: generation guard, same idea as BridgePool's connectionEpoch — a
@@ -647,7 +659,13 @@ export class BridgeCore {
           // Harmless to hand out unconditionally: a relay that never
           // challenges never calls this.
           automaticallyAuth: createRelayAuthSigner(this.keypair.secretKey),
-          ...(torProxyUrl ? { websocketImplementation: createTorWebSocket(torProxyUrl) } : {}),
+          ...(torProxyUrl
+            ? {
+                websocketImplementation: createTorWebSocket(torProxyUrl),
+                reconnectBaseMs: TOR_RECONNECT_BASE_MS,
+                reconnectMaxMs: TOR_RECONNECT_MAX_MS,
+              }
+            : {}),
         },
         {
           buildFilter: () => {
@@ -683,6 +701,10 @@ export class BridgeCore {
       transport: this.pool,
       log,
       now: this.now,
+      // Tor's circuit build + extra hops routinely exceed the 5s
+      // direct-connection default, causing publishes to be declared failed
+      // (and retried) well before the relay actually replies.
+      ...(torProxyUrl ? { publishTimeoutMs: TOR_RELAY_PUBLISH_TIMEOUT_MS } : {}),
     });
 
     this.syncServer = new SyncServer({

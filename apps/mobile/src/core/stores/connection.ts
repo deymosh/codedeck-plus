@@ -88,6 +88,36 @@ export const DECRYPT_FAILURE_THRESHOLD = 3;
 /** 30515 older than this (2.5× the bridge's 60s heartbeat interval) = stale. */
 export const HEARTBEAT_STALE_AFTER_MS = 150_000;
 
+/**
+ * Tor circuit builds (and every round-trip after) routinely add several
+ * seconds over a direct connection. The direct-connection backoff/stale
+ * constants above were flapping "connecting" → "waiting-retry" under Orbot
+ * because attempt 0 retried after only 2s — not enough time for a circuit —
+ * and heartbeats were declared stale before a slower relay round-trip could
+ * land. When `settings.torProxyEnabled` is on, callers should pass this
+ * config instead so the FSM gives Tor the extra time it actually needs.
+ */
+export interface ReconnectConfig {
+  baseMs: number;
+  maxMs: number;
+  jitterFraction: number;
+  heartbeatStaleAfterMs: number;
+}
+
+export const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
+  baseMs: RECONNECT_BASE_MS,
+  maxMs: RECONNECT_MAX_MS,
+  jitterFraction: RECONNECT_JITTER_FRACTION,
+  heartbeatStaleAfterMs: HEARTBEAT_STALE_AFTER_MS,
+};
+
+export const TOR_RECONNECT_CONFIG: ReconnectConfig = {
+  baseMs: 8_000,
+  maxMs: 60_000,
+  jitterFraction: RECONNECT_JITTER_FRACTION,
+  heartbeatStaleAfterMs: 240_000,
+};
+
 export const initialConnectionState: ConnectionState = {
   status: 'idle',
   attempt: 0,
@@ -105,10 +135,14 @@ export interface ReducerResult {
   effects: ConnectionEffect[];
 }
 
-/** Backoff delay for the given attempt: exp(2s→30s cap) + jitter (0..25%). */
-export function backoffDelayMs(attempt: number, random = 0): number {
-  const base = Math.min(RECONNECT_BASE_MS * Math.pow(2, attempt), RECONNECT_MAX_MS);
-  const jitter = Math.floor(Math.max(0, Math.min(1, random)) * base * RECONNECT_JITTER_FRACTION);
+/** Backoff delay for the given attempt: exp(base→max cap) + jitter. */
+export function backoffDelayMs(
+  attempt: number,
+  random = 0,
+  config: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
+): number {
+  const base = Math.min(config.baseMs * Math.pow(2, attempt), config.maxMs);
+  const jitter = Math.floor(Math.max(0, Math.min(1, random)) * base * config.jitterFraction);
   return base + jitter;
 }
 
@@ -120,6 +154,7 @@ const connectEffects: ConnectionEffect[] = [
 export function connectionReducer(
   state: ConnectionState,
   event: ConnectionEvent,
+  reconnectConfig: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
 ): ReducerResult {
   switch (event.type) {
     case 'connect-requested': {
@@ -227,7 +262,7 @@ export function connectionReducer(
       if (!state.online) {
         return { state: { ...state, status: 'offline', attempt: 0 }, effects: [{ effect: 'cancel-retry' }] };
       }
-      const delayMs = backoffDelayMs(state.attempt, event.random ?? 0);
+      const delayMs = backoffDelayMs(state.attempt, event.random ?? 0, reconnectConfig);
       return {
         state: { ...state, status: 'waiting-retry', attempt: state.attempt + 1 },
         effects: [{ effect: 'schedule-retry', delayMs }],
@@ -330,6 +365,9 @@ export interface ConnectionStoreDeps {
   random(): number;
   handlers: ConnectionEffectHandlers;
   log?: Logger;
+  /** Reconnect backoff + heartbeat-stale timing. Defaults to direct-connection
+   *  timing; pass TOR_RECONNECT_CONFIG when settings.torProxyEnabled is on. */
+  reconnectConfig?: ReconnectConfig;
 }
 
 export interface ConnectionStoreState extends ConnectionState {
@@ -346,6 +384,7 @@ export type ConnectionStore = StoreApi<ConnectionStoreState>;
 export function createConnectionStore(deps: ConnectionStoreDeps): ConnectionStore {
   let retryTimer: unknown = null;
   let visibilityTimer: unknown = null;
+  const reconnectConfig = deps.reconnectConfig ?? DEFAULT_RECONNECT_CONFIG;
 
   const store = createStore<ConnectionStoreState>()((set, get) => ({
     ...initialConnectionState,
@@ -356,16 +395,16 @@ export function createConnectionStore(deps: ConnectionStoreDeps): ConnectionStor
         event.type === 'socket-close' && event.random === undefined
           ? { ...event, random: deps.random() }
           : event;
-      const { state, effects } = connectionReducer(get(), enriched);
+      const { state, effects } = connectionReducer(get(), enriched, reconnectConfig);
       set(state);
       for (const effect of effects) run(effect);
     },
 
     presence: (machinePubkey: string): Presence =>
-      presenceOf(get(), machinePubkey, deps.now()),
+      presenceOf(get(), machinePubkey, deps.now(), reconnectConfig.heartbeatStaleAfterMs),
 
     checkHeartbeats: (): void => {
-      if (!heartbeatsAllStale(get(), deps.now())) return;
+      if (!heartbeatsAllStale(get(), deps.now(), reconnectConfig.heartbeatStaleAfterMs)) return;
       deps.log?.('[Connection] every machine heartbeat is stale while connected — treating the subscription as dead');
       get().dispatch({ type: 'socket-close' });
     },
