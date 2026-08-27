@@ -171,16 +171,6 @@ export function TranscriptView({
   );
   const display = useMemo(() => buildDisplayEntries(entries), [entries]);
 
-  // CDX-063: the input-ack only proves the bridge RECEIVED the input — the
-  // user's transcript entry is authored later by the SDK echo on ephemeral
-  // 24515 and can drop. A row therefore stays until the transcript CONTAINS a
-  // covering user entry (live echo or sync backfill); coverage pairing keeps
-  // the row and its own echo from ever rendering together.
-  const pendingOutbox = useMemo(
-    () => visibleOutboxItems(outboxItems, machinePubkey, sessionId, entries),
-    [outboxItems, machinePubkey, sessionId, entries],
-  );
-
   // Sync-gap placeholder: a cycle is (re)filling ranges we know we miss.
   const syncState = transcript?.sync.state ?? 'idle';
   const hasKnownGap =
@@ -188,6 +178,22 @@ export function TranscriptView({
     (transcript?.haveRanges.length ?? 0) > 1;
   const showSyncGap =
     hasKnownGap && (syncState === 'requested' || syncState === 'syncing' || syncState === 'failed');
+
+  // CDX-063: the input-ack only proves the bridge RECEIVED the input — the
+  // user's transcript entry is authored later by the SDK echo on ephemeral
+  // 24515 and can drop. A row therefore stays until the transcript CONTAINS a
+  // covering user entry (live echo or sync backfill); coverage pairing keeps
+  // the row and its own echo from ever rendering together. An aged-out
+  // confirmed row is dropped once the transcript is contiguous — the ack is
+  // proof enough and there is no echo left to wait for (see outboxCoverage).
+  const pendingOutbox = useMemo(
+    () =>
+      visibleOutboxItems(outboxItems, machinePubkey, sessionId, entries, {
+        now: Date.now(),
+        transcriptContiguous: !hasKnownGap,
+      }),
+    [outboxItems, machinePubkey, sessionId, entries, hasKnownGap],
+  );
 
   const itemCount = display.length + pendingOutbox.length + (showSyncGap ? 1 : 0);
   const pin = useTranscriptPin({ listRef, itemCount, sessionKey });

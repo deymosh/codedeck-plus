@@ -31,7 +31,12 @@ import { encryptTo, generateKeypair, type Keypair } from '../../../core/crypto';
 import { memoryKV, type PhoneTransport } from '../../../core/ports';
 import type { OutboxItem } from '../../../core/stores/outbox';
 import { buildDisplayEntries } from '../displayEntries';
-import { coveredOutboxIds, entryCovers, visibleOutboxItems } from '../outboxCoverage';
+import {
+  coveredOutboxIds,
+  entryCovers,
+  OUTBOX_ECHO_GRACE_MS,
+  visibleOutboxItems,
+} from '../outboxCoverage';
 import { OutboxRow } from '../rows/OutboxRow';
 
 afterEach(cleanup);
@@ -100,6 +105,70 @@ describe('coveredOutboxIds — chronological pairing, one entry per item', () =>
       { seq: 2, content: 'fix the bug entirely' }, // longer, not a comment → covers nothing
     ];
     expect([...coveredOutboxIds(items, entries)]).toEqual(['a']);
+  });
+});
+
+describe('visibleOutboxItems — aging out stranded "delivered" rows', () => {
+  const confirmed = (id: string, createdAt: number, confirmedAt: number): OutboxItem => ({
+    ...item(id, `msg ${id}`, createdAt, 'confirmed'),
+    confirmedAt,
+  });
+
+  it('without opts, every uncovered item is returned (unchanged legacy behaviour)', () => {
+    const items = { a: confirmed('a', 0, 0) };
+    expect(visibleOutboxItems(items, 'm', 's1', []).map((i) => i.id)).toEqual(['a']);
+  });
+
+  it('an aged-out confirmed row is dropped once the transcript is contiguous', () => {
+    const items = { a: confirmed('a', 0, 1_000) };
+    const out = visibleOutboxItems(items, 'm', 's1', [], {
+      now: 1_000 + OUTBOX_ECHO_GRACE_MS,
+      transcriptContiguous: true,
+    });
+    expect(out).toEqual([]);
+  });
+
+  it('a recently-confirmed row is still shown (CDX-063 window not elapsed)', () => {
+    const items = { a: confirmed('a', 0, 1_000) };
+    const out = visibleOutboxItems(items, 'm', 's1', [], {
+      now: 1_000 + OUTBOX_ECHO_GRACE_MS - 1,
+      transcriptContiguous: true,
+    });
+    expect(out.map((i) => i.id)).toEqual(['a']);
+  });
+
+  it('an aged confirmed row is KEPT while the transcript still has a gap (sync may deliver the echo)', () => {
+    const items = { a: confirmed('a', 0, 1_000) };
+    const out = visibleOutboxItems(items, 'm', 's1', [], {
+      now: 1_000 + OUTBOX_ECHO_GRACE_MS * 10,
+      transcriptContiguous: false,
+    });
+    expect(out.map((i) => i.id)).toEqual(['a']);
+  });
+
+  it('pending / published / failed rows are never aged out', () => {
+    const old = 1_000;
+    const now = old + OUTBOX_ECHO_GRACE_MS * 100;
+    for (const state of ['pending', 'published', 'failed'] as const) {
+      const items = { a: { ...item('a', 'still here', 0, state), confirmedAt: null } };
+      const out = visibleOutboxItems(items, 'm', 's1', [], { now, transcriptContiguous: true });
+      expect(out.map((i) => i.id), state).toEqual(['a']);
+    }
+  });
+
+  it('a covered row is gone regardless of age or opts', () => {
+    const items = { a: confirmed('a', 0, 1_000) };
+    const echo: OutputEntry = {
+      entryType: 'text',
+      content: 'msg a',
+      timestamp: new Date(0).toISOString(),
+      metadata: { role: 'user' },
+    };
+    const out = visibleOutboxItems(items, 'm', 's1', [{ seq: 3, entry: echo }], {
+      now: 1_000 + OUTBOX_ECHO_GRACE_MS,
+      transcriptContiguous: false,
+    });
+    expect(out).toEqual([]);
   });
 });
 

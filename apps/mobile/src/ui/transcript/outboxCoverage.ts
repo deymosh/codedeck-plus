@@ -29,6 +29,18 @@
  *   question's ANSWER (runner.sendInput's first branch) — it surfaces in the
  *   answered question card, not as a user entry, so its row stays visible
  *   as delivered-but-unechoed. Rare, and honest about where the text went.
+ *
+ * Aging (the "old sends pile up at the bottom as delivered" fix): CDX-063's
+ * "keep the row until an entry covers it" is about the SECONDS between the
+ * input-ack and the SDK echo. A `confirmed` item that is still uncovered long
+ * after that — and whose session transcript we now hold CONTIGUOUSLY, i.e. we
+ * have everything the bridge has and the echo is not among it (bridge retention
+ * pruned the early seqs, the echo was a lost ephemeral a completed sync could
+ * not backfill, or the text was transformed so no entry can ever match) — has
+ * nothing left to wait for. The ack already proved delivery, so past
+ * OUTBOX_ECHO_GRACE_MS such a row is dropped instead of floating below the whole
+ * transcript forever. Rows still shown regardless of age: pending / published /
+ * failed, and confirmed rows while a sync gap could still deliver the echo.
  */
 import type { OutputEntry } from '@codedeck/protocol';
 import type { OutboxItem } from '../../core/stores/outbox';
@@ -114,21 +126,50 @@ export function coveredOutboxIds(
 }
 
 /**
+ * How long after the input-ack a still-uncovered `confirmed` row is kept
+ * visible. Comfortably past the outbox confirm timeout (30s) so a confirmed
+ * item has had a full sweep cycle plus margin to receive its echo.
+ */
+export const OUTBOX_ECHO_GRACE_MS = 45_000;
+
+export interface VisibleOutboxOptions {
+  /** Current time (ms). */
+  now: number;
+  /** True when the session transcript covers 1..seqHigh with no known gaps —
+   *  i.e. a sync could no longer backfill a missing echo. */
+  transcriptContiguous: boolean;
+}
+
+/**
  * The outbox rows TranscriptView renders after the transcript: every one of
  * the session's items — whatever its ack state — that no transcript user
  * entry covers yet, oldest first. (Pre-CDX-063 this was `state !==
  * 'confirmed'`, which made the ack hide the row before the entry existed.)
+ *
+ * With `opts`, an aged-out `confirmed`-but-uncovered row is also dropped once
+ * the transcript is contiguous (see the aging note in the file header) — this
+ * is what stops old sends from stacking below the whole transcript as
+ * "delivered". Without `opts` the behaviour is unchanged (every uncovered item
+ * is returned), so existing callers keep working.
  */
 export function visibleOutboxItems(
   items: Record<string, OutboxItem>,
   machine: string,
   sessionId: string,
   entries: readonly SeqEntryLite[],
+  opts?: VisibleOutboxOptions,
 ): OutboxItem[] {
   const sessionItems = Object.values(items)
     .filter((i) => i.machine === machine && i.sessionId === sessionId)
     .sort((a, b) => a.createdAt - b.createdAt);
   if (sessionItems.length === 0) return [];
   const covered = coveredOutboxIds(sessionItems, userEntriesOf(entries));
-  return sessionItems.filter((i) => !covered.has(i.id));
+  return sessionItems.filter((i) => {
+    if (covered.has(i.id)) return false;
+    if (opts && i.state === 'confirmed' && opts.transcriptContiguous) {
+      const confirmedAt = i.confirmedAt ?? i.createdAt;
+      if (opts.now - confirmedAt >= OUTBOX_ECHO_GRACE_MS) return false;
+    }
+    return true;
+  });
 }
