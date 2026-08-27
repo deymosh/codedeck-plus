@@ -47,7 +47,7 @@ export class InMemoryRelayPool implements BridgeCorePool {
     return [
       accepted
         ? Promise.resolve('ok')
-        : Promise.reject(new Error('relay refused event (expired)')),
+        : Promise.reject(new Error('relay refused event (expired or content too large)')),
     ];
   }
 

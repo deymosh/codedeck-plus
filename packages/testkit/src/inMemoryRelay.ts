@@ -57,9 +57,30 @@ function matches(filter: RelayFilter, event: RelayEvent): boolean {
   return true;
 }
 
+/** UTF-8 byte length without TextEncoder (kept dependency-free like the app). */
+function utf8Len(str: string): number {
+  let bytes = 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) { bytes += 4; i++; }
+    else bytes += 3;
+  }
+  return bytes;
+}
+
 export interface InMemoryRelayOptions {
   /** Injectable clock (seconds) so tests control NIP-40 expiry deterministically. */
   now?: () => number;
+  /**
+   * Max `event.content` bytes the relay will accept, mirroring HAVEN / the
+   * Fiatjaf eventstore (`MaxContentSize = math.MaxUint16 = 65535`). An event
+   * over this is REFUSED (`publish` returns false, nothing stored/broadcast),
+   * exactly as the real relay does — so the oversize-output regression is
+   * exercised end to end. Set 0 to disable the check.
+   */
+  maxContentBytes?: number;
 }
 
 export class InMemoryRelay {
@@ -67,17 +88,26 @@ export class InMemoryRelay {
   #subs = new Map<number, { filters: RelayFilter[]; listener: Listener }>();
   #nextSubId = 1;
   #now: () => number;
+  #maxContentBytes: number;
   /** Counters tests can assert on (e.g. "no full refetch happened"). */
   publishCount = 0;
+  /** How many publishes were refused for exceeding `maxContentBytes`. */
+  refusedOversize = 0;
 
   constructor(options: InMemoryRelayOptions = {}) {
     this.#now = options.now ?? (() => Math.floor(Date.now() / 1000));
+    this.#maxContentBytes = options.maxContentBytes ?? 65535;
   }
 
   /** Publish as a client would. Returns false when the relay refuses the event
-   *  (already expired on arrival — mirrors the real relay's NIP-40 handling). */
+   *  (already expired on arrival — mirrors the real relay's NIP-40 handling —
+   *  or `content` over the eventstore's `MaxContentSize`). */
   publish(event: RelayEvent): boolean {
     this.publishCount++;
+    if (this.#maxContentBytes > 0 && utf8Len(event.content) > this.#maxContentBytes) {
+      this.refusedOversize++;
+      return false;
+    }
     const exp = expiration(event);
     if (exp !== null && exp <= this.#now()) return false;
 

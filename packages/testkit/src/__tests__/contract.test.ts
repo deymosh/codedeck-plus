@@ -818,4 +818,69 @@ describe('contract: custom provider profiles (CDX-062)', () => {
     expect(world.sim.receivedOfType('session-pending').some((m) => m.pendingId === failed.pendingId)).toBe(true);
     expect(facade.sessions.size).toBe(0);
   });
+
+  it(
+    'Scenario F: an oversize output (the "content is too large: 65628" bug) rides N chunks — one seq, exact reassembly, ordering + catch-up intact',
+    async () => {
+      const world = await makeWorld();
+      const facade = new FakeSdkFacade();
+      const core = await world.start(facade);
+      world.sim.connect();
+      const sessionId = await createReadySession(world, facade); // seq 1 = init
+
+      // A large model reply: one assistant text block that, whole, would encrypt
+      // to a `content` past the relay's 65535-byte cap (the InMemoryRelay now
+      // refuses those, exactly like HAVEN).
+      const huge = 'Z'.repeat(120_000);
+      facade.emit(sessionId, assistantMsg(`sdk-${sessionId}`, huge));
+      await world.sim.until(
+        () => world.sim.transcriptSeqs(sessionId).includes(2),
+        { label: 'oversize output reassembled to seq 2' },
+      );
+
+      // ONE logical output → ONE seq, and the entry is byte-identical to what
+      // the bridge persisted (fragmentation is invisible above the transport).
+      expect(world.sim.transcriptSeqs(sessionId)).toEqual([1, 2]);
+      const [bridgeLine] = await core.transcript.readRange(sessionId, [2, 2]);
+      expect(world.sim.transcriptEntries(sessionId).find((e) => e.seq === 2)).toEqual(bridgeLine);
+      expect(world.sim.transcriptEntries(sessionId).find((e) => e.seq === 2)!.entry.content).toBe(huge);
+
+      // Nothing oversize ever reached the relay, and no fragment failed to decode.
+      expect(world.relay.refusedOversize).toBe(0);
+      expect(world.sim.receivedInvalid).toEqual([]);
+      expect(world.sim.seqConflicts).toEqual([]);
+
+      // Consecutive outputs after the big one keep their order and seq.
+      facade.emit(sessionId, assistantMsg(`sdk-${sessionId}`, 'small A'));
+      facade.emit(sessionId, assistantMsg(`sdk-${sessionId}`, 'small B'));
+      await world.sim.until(
+        () => world.sim.hasContiguousTranscript(sessionId, 4),
+        { label: 'consecutive small outputs' },
+      );
+      expect(world.sim.transcriptEntries(sessionId).map((e) => e.entry.content)).toEqual([
+        expect.any(String), // init banner
+        huge,
+        'small A',
+        'small B',
+      ]);
+
+      // Catch-up: a fresh phone with NOTHING recovers the oversize entry via a
+      // chunked sync-chunk on the STORED kind (fragments inherit RESPONSE_KIND).
+      const fresh = new PhoneSimulator({
+        secretKey: world.phoneKeys.secretKey,
+        bridgePubkey: world.bridgeKeys.pubkeyHex,
+        relay: world.relay,
+      });
+      fresh.connect();
+      fresh.syncNow(sessionId); // haveRanges: [] — a cold catch-up
+      await fresh.until(
+        () => fresh.hasContiguousTranscript(sessionId, 4),
+        { label: 'catch-up sync rebuilt the oversize entry' },
+      );
+      expect(fresh.transcriptEntries(sessionId).find((e) => e.seq === 2)!.entry.content).toBe(huge);
+      expect(fresh.receivedInvalid).toEqual([]);
+      expect(world.relay.refusedOversize).toBe(0);
+    },
+    15000,
+  );
 });

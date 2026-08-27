@@ -16,6 +16,7 @@ import { finalizeEvent } from 'nostr-tools/pure';
 import type { NostrEvent } from 'nostr-tools/core';
 import {
   ALL_PHONE_CAPABILITIES,
+  ChunkAssembler,
   COMMAND_EXPIRY_SECONDS,
   COMMAND_KIND,
   PROTOCOL_VERSION,
@@ -121,7 +122,13 @@ export class BridgeApi {
   >();
   private folderRequestCounter = 0;
 
-  constructor(private readonly deps: BridgeApiDeps) {}
+  /** Reassembles oversize bridge→phone messages the bridge split into `chunk`
+   *  events (chunking.ts). Sits between decrypt and decode in `ingest`. */
+  private readonly reassembler: ChunkAssembler;
+
+  constructor(private readonly deps: BridgeApiDeps) {
+    this.reassembler = new ChunkAssembler({ now: deps.now });
+  }
 
   // --- Outbound ---
 
@@ -400,6 +407,24 @@ export class BridgeApi {
       this.deps.onDecryptFailure?.(machine);
       return;
     }
+
+    // Oversize-message reassembly (chunking.ts). A plaintext that is not a
+    // `chunk` envelope passes straight through; a fragment is buffered until its
+    // group completes, then the reassembled JSON takes `plaintext`'s place.
+    const assembled = this.reassembler.offer(plaintext);
+    if (assembled.kind === 'buffered') { return; }
+    if (assembled.kind === 'invalid') {
+      this.recordInvalid({
+        eventId: event.id,
+        machine,
+        kind: event.kind,
+        stage: 'decode',
+        error: `chunk: ${assembled.error}`,
+      });
+      this.diagnostics.decodeFailures++;
+      return;
+    }
+    if (assembled.kind === 'assembled') { plaintext = assembled.json; }
 
     const decoded = decodeBridgeToPhone(plaintext);
     if (!decoded.ok) {

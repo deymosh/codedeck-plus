@@ -30,6 +30,7 @@
  */
 import { finalizeEvent } from 'nostr-tools/pure';
 import {
+  ChunkAssembler,
   COMMAND_KIND,
   COMMAND_EXPIRY_SECONDS,
   LIVE_KIND,
@@ -158,6 +159,9 @@ export class PhoneSimulator {
   private readonly sessions = new Map<string, SessionView>();
   private readonly transcripts = new Map<string, Map<number, OutputEntry>>();
   private readonly resyncAttempts = new Map<string, number>();
+  /** Reassembles oversize messages the bridge split into `chunk` events — the
+   *  same client contract the real phone's BridgeApi runs. */
+  private readonly reassembler: ChunkAssembler;
 
   constructor(options: PhoneSimulatorOptions) {
     this.keypair = keypairFromSecret(options.secretKey);
@@ -167,6 +171,7 @@ export class PhoneSimulator {
     this.autoResync = options.autoResync ?? true;
     this.maxResyncAttempts = options.maxResyncAttempts ?? 3;
     this.logFn = options.log;
+    this.reassembler = new ChunkAssembler({ now: this.now });
   }
 
   get connected(): boolean {
@@ -230,6 +235,18 @@ export class PhoneSimulator {
       });
       return;
     }
+
+    // Oversize-message reassembly (chunking.ts): buffer fragments until the
+    // group completes, then decode/apply the whole message as usual.
+    const assembled = this.reassembler.offer(plaintext);
+    if (assembled.kind === 'buffered') return;
+    if (assembled.kind === 'invalid') {
+      this.receivedInvalid.push({
+        eventId: event.id, kind: event.kind, stage: 'decode', error: `chunk: ${assembled.error}`,
+      });
+      return;
+    }
+    if (assembled.kind === 'assembled') plaintext = assembled.json;
 
     const decoded = decodeBridgeToPhone(plaintext);
     if (!decoded.ok) {

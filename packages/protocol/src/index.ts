@@ -5,5 +5,6 @@ export * from './schemas/common';
 export * from './schemas/commands';
 export * from './schemas/events';
 export * from './codec';
+export * from './chunking';
 export * from './ranges';
 export * from './nip42';

@@ -50,6 +50,18 @@ export const CAPABILITIES = {
    * Anthropic (wrong provider, wrong account's bill).
    */
   customProviders: 'custom-providers',
+  /**
+   * Oversize-event fragmentation (`chunk` envelopes). A bridge→phone message
+   * whose encoded JSON would exceed one Nostr event's `content` cap (65535 B —
+   * HAVEN/eventstore `MaxContentSize`) is split into N independently
+   * NIP-44-encrypted `chunk` events and reassembled by the receiver before
+   * decode (see chunking.ts). Advisory only: the bridge fragments whenever it
+   * must (a large model reply would otherwise fail to publish at all), and the
+   * phone reassembles whenever it sees `chunk` events — neither side gates on
+   * the other advertising this. Present on both the heartbeat `capabilities`
+   * and the phone command `caps` purely so the pair is observable.
+   */
+  chunked: 'chunked',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -60,7 +72,7 @@ export const ALL_BRIDGE_CAPABILITIES: readonly Capability[] =
 
 /** Capabilities the reference PHONE implementation stamps on outgoing command
  *  `caps` (feature strings the phone can RENDER — see `diff` above). */
-export const ALL_PHONE_CAPABILITIES: readonly Capability[] = [CAPABILITIES.diff];
+export const ALL_PHONE_CAPABILITIES: readonly Capability[] = [CAPABILITIES.diff, CAPABILITIES.chunked];
 
 /** Which host binary a bridge is running as (disambiguates two bridges on one
  *  machine — identity is the keypair, this is only a UI badge). */
