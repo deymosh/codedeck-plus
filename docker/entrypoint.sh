@@ -17,7 +17,7 @@ GITHUB_TOKEN=$(read_secret github_token GITHUB_TOKEN)
 export CLAUDE_CODE_OAUTH_TOKEN
 
 # 1. Install gsd-core globally for Claude integration
-npx --yes @opengsd/gsd-core@latest --claude --global
+npx --yes @opengsd/gsd-core@1.12.0 --claude --global
 
 # 2. Make Git authentication available to Claude and interactive shells via a
 # helper that reads the runtime secret without persisting the token.

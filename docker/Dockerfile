@@ -18,7 +18,7 @@ RUN apt-get update \
 # 2. Global Node tools installation (npm): pnpm and @anthropic-ai/claude-code.
 #    ("ws" used to be force-installed here as a workaround — it is now a
 #    proper dependency of @codedeck/core, declared in packages/core/package.json.)
-RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code
+RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code@2.1.258
 
 # 3. Create user safely (handling pre-existing UID/GID 1000 from node base image)
 RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROUP_ID} | cut -d: -f1); \
