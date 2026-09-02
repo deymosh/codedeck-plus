@@ -72,12 +72,18 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
 GITHUB_TOKEN=ghp_...
 GIT_USER=your_username
 GIT_EMAIL=your_email@example.com
+# Comma-separated repositories; cloned under /data/workspaces/<repo-name>
 GIT_REPO=https://github.com/your-username/your-repo.git
 
 # Optional — see .env.example for the full explanation of each:
 CODEDECK_RELAYS=
 CODEDECK_TOR_PROXY_URL=
 ```
+
+`CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_TOKEN` are supplied to the container as
+Docker secrets by Compose. Keep the real values only in your untracked `.env`
+file, use least-privilege tokens, and rotate them if they appear in logs or
+source control.
 
 ## Quick Start
 

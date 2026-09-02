@@ -7,15 +7,28 @@ services:
     restart: unless-stopped
     networks:
       - codedeck-net
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       - NODE_ENV=production
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GIT_USER=${GIT_USER:-}
       - GIT_EMAIL=${GIT_EMAIL:-}
       - GIT_REPO=${GIT_REPO:-}
       - CODEDECK_RELAYS=${CODEDECK_RELAYS:-}
       - CODEDECK_TOR_PROXY_URL=${CODEDECK_TOR_PROXY_URL:-}
+    secrets:
+      - source: claude_code_oauth_token
+        target: claude_code_oauth_token
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - source: github_token
+        target: github_token
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
     volumes:
       - ./data:/data
 
@@ -44,6 +57,12 @@ services:
     # is only reachable from other containers on the codedeck-net bridge
     # network, never published to the host or the internet (no `ports:` entry).
     command: ["--SocksPort", "0.0.0.0:9050", "--Log", "notice stdout"]
+
+secrets:
+  claude_code_oauth_token:
+    environment: CLAUDE_CODE_OAUTH_TOKEN
+  github_token:
+    environment: GITHUB_TOKEN
 
 networks:
   codedeck-net:
