@@ -6,7 +6,7 @@ ARG GROUP_ID=1000
 
 # 1. System packages installation (APT): git, curl, gnupg, ca-certificates, and GitHub CLI
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl gnupg ca-certificates git \
+    && apt-get install -y --no-install-recommends curl gnupg ca-certificates git python3 \
     && mkdir -p -m 0755 /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
