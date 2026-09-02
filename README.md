@@ -1,10 +1,20 @@
-# CodeDeck Docker — personal monorepo fork
+# CodeDeck+
 
-A personal fork of [JeroenOnNostr](https://github.com/JeroenOnNostr)'s
-CodeDeck ([codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge) && [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile)),
-unified into a single monorepo so the two repos' duplicated
-`packages/{core,protocol,testkit}` become one shared copy, with local patches
-for infrastructure the upstream author didn't design for:
+CodeDeck+ is a community-maintained continuation of CodeDeck Next. The
+original work belongs to [JeroenOnNostr](https://github.com/JeroenOnNostr),
+whose two upstream projects are:
+
+- [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile)
+- [codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge)
+
+This repository, [deymosh/codedeck-plus](https://github.com/deymosh/codedeck-plus),
+consolidates both projects into one monorepo. It keeps one shared copy of
+`packages/{core,protocol,testkit}` alongside the mobile app, bridge, and
+pristine upstream mirrors in `vendor/`, making the combined project easier to
+maintain while preserving the original MIT license and attribution.
+
+CodeDeck+ also carries local patches for infrastructure the upstream projects
+didn't design for:
 
 - a Nostr relay that requires **NIP-42 `AUTH`** (e.g. a self-hosted
   [Haven](https://github.com/bitvora/haven) relay),
@@ -18,7 +28,7 @@ patch) but is built separately with its own Android/Rust toolchain.
 ## Repository layout
 
 ```
-codedeck-docker/
+codedeck-plus/
 ├── vendor/              # pristine git-subtree mirrors of upstream — never hand-edited
 │   ├── bridge/           #   codedeck-next-bridge @ main
 │   └── mobile/           #   codedeck-next-mobile @ main
@@ -80,10 +90,19 @@ CODEDECK_RELAYS=
 CODEDECK_TOR_PROXY_URL=
 ```
 
-`CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_TOKEN` are supplied to the container as
-Docker secrets by Compose. Keep the real values only in your untracked `.env`
-file, use least-privilege tokens, and rotate them if they appear in logs or
-source control.
+Docker Compose reads the root `.env` file as its environment configuration. It
+maps `CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_TOKEN` from that environment into
+Docker secrets, mounted in the container at:
+
+- `/run/secrets/claude_code_oauth_token`
+- `/run/secrets/github_token`
+
+The bridge exports `CLAUDE_CODE_OAUTH_TOKEN` because Claude Code needs it. It
+does not export `GITHUB_TOKEN` into the bridge or Claude environment: Git reads
+the GitHub credential through `git-credential-codedeck-secret`, and `gh` reads
+it through `gh-codedeck-secret`. Keep real values only in your untracked
+`.env` file, use least-privilege tokens, and rotate them if they appear in
+logs or source control.
 
 ## Quick Start
 
