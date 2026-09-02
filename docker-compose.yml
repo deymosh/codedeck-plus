@@ -40,7 +40,7 @@ services:
   # that daemon's reachable SocksPort — the two are mutually exclusive by
   # whatever CODEDECK_TOR_PROXY_URL points at.
   codedeck-tor:
-    image: lncm/tor:latest
+    image: lncm/tor:0.4.7.13@sha256:5a3cfb478d978feb1426ce6dca8e10906bbdd72cff94d7c0c589339f717b2503
     container_name: codedeck-tor
     restart: unless-stopped
     profiles:
