@@ -1,6 +1,6 @@
 {
   "name": "@codedeck/bridge",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "type": "module",
   "bin": {
     "codedeck-bridge": "./out/main.js"
