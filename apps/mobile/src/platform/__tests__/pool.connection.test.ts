@@ -2,27 +2,32 @@
  * CDX-020 regression tests — the phone counterpart of the bridge's
  * `packages/core/src/__tests__/pool.connection.test.ts` (CDX-055).
  *
- * The bug is in nostr-tools 2.24.1 itself and it is WORSE on the phone than on
- * the bridge, because the phone opens more subscriptions on one pool:
+ * The historical bug (nostr-tools <= 2.24.1) hit the phone HARDER than the
+ * bridge, because the phone opens more subscriptions on one pool:
  *
  * - `AbstractRelay.pingpong()` chooses its keepalive by feature-detecting the
  *   socket — `this.ws.ping && this.ws.once ? waitForPingPong() : waitForDummyReq()`.
  *   Only Node's `ws` package has those; the Android WebView's `WebSocket` is the
  *   browser API and has NEITHER, so the phone always takes the dummy-REQ path.
  *   The "no .ping()/.once()" case below pins exactly that.
- * - Each `<forced-ping>` REQ is excluded from `ongoingOperations` on the way in
- *   but decrements it on the way out, so every 29s ping silently drops the count
- *   while the real REQs are live. At 0 the 20s `idleTimeout` arms and
- *   `relay.close()` kills every subscription with "relay connection closed by
- *   us" — inbound dead, while `publish()` keeps working because `ensureRelay`
+ * - Each `<forced-ping>` REQ was excluded from `ongoingOperations` on the way in
+ *   but decremented it on the way out, so every 29s ping silently dropped the
+ *   count while the real REQs were live. At 0 the 20s `idleTimeout` armed and
+ *   `relay.close()` killed every subscription with "relay connection closed by
+ *   us" — inbound dead, while `publish()` kept working because `ensureRelay`
  *   rebuilds a socket that carries no REQ.
  *
- * These tests drive the REAL nostr-tools against a browser-shaped socket on
- * fake timers, so they measure the mechanism rather than restating it: pre-fix
- * the relay self-destructs at 107s (3 command subs), post-fix it and its REQs
- * survive an hour of pure idle. They fail if the `idleTimeout` pin is removed
- * from `poolOptions.ts`, and the source scan fails if a new pool site is added
- * that bypasses it.
+ * nostr-tools FIXED the `<forced-ping>` accounting mismatch in 2.24.2
+ * (nbd-wtf/nostr-tools#539); this workspace's lockfile is on 2.24.3, so a live
+ * REQ now keeps `ongoingOperations > 0` and the idle close never arms for a
+ * subscription we still want. The `idleTimeout: 0x7fffffff` pin in
+ * `poolOptions.ts` therefore stands as regression insurance against an upstream
+ * re-break (and still matters for the profile pool, which runs without
+ * `enablePing` for unrelated reasons). These tests drive the REAL nostr-tools
+ * against a browser-shaped socket on fake timers: the first proves the upstream
+ * fix holds for our pinned version, the rest prove the pin itself works and a
+ * genuine drop still surfaces. The source scan fails if a new pool site is
+ * added that bypasses `poolOptions.ts`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -187,16 +192,19 @@ describe('nostr-tools idle-close on a WebView socket (CDX-020)', () => {
     expect((socket as unknown as { once?: unknown }).once).toBeUndefined();
   });
 
-  it('PRE-FIX: the phone-shaped pool closes its own relays ~107s after connecting', async () => {
-    // 3 command subscriptions × one silent decrement per 29s ping = 87s to
-    // reach ongoingOperations 0, + the 20s idleTimeout = 107s. Every REQ dies
-    // with "relay connection closed by us" and the relays leave the pool map —
-    // the exact "inbound dead while publishes still land" shape CDX-020 saw.
-    const before = await runIdleSoak({ enablePing: true, enableReconnect: false }, 107_000);
-    expect(before.closes).toBe(COMMAND_FILTERS.length);
-    expect(before.liveSockets).toBe(0);
-    expect(before.openReqs).toBe(0);
-    expect(before.relaysInPool).toBe(0);
+  it('nostr-tools 2.24.2+ no longer idle-closes a WebView-socket pool that holds live REQs', async () => {
+    // The <=2.24.1 bug: 3 command subscriptions × one silent ongoingOperations
+    // decrement per 29s <forced-ping> = 87s to reach 0, + the 20s idleTimeout =
+    // the relay self-destructing 107s after connecting ("inbound dead while
+    // publishes still land"). nbd-wtf/nostr-tools#539 fixed the accounting in
+    // 2.24.2, so with `enablePing` on but WITHOUT the idleTimeout sentinel,
+    // nothing dies across that same 107s window. A downgrade below 2.24.2 flips
+    // every assertion here back and fails loudly.
+    const soak = await runIdleSoak({ enablePing: true, enableReconnect: false }, 107_000);
+    expect(soak.closes).toBe(0);
+    expect(soak.liveSockets).toBe(RELAYS.length);
+    expect(soak.openReqs).toBe(RELAYS.length * COMMAND_FILTERS.length);
+    expect(soak.relaysInPool).toBe(RELAYS.length);
   });
 
   it('POST-FIX: the same pool holds every REQ through an hour of pure idle', async () => {
