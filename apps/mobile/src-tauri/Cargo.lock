@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "codedeck-mobile"
-version = "0.9.5"
+version = "0.10.0"
 dependencies = [
  "hex",
  "mdk-core",
@@ -685,6 +685,7 @@ dependencies = [
  "tauri-plugin-http",
  "tauri-plugin-mesh",
  "tauri-plugin-notification",
+ "tauri-plugin-tor-proxy",
  "tempfile",
  "tokio",
 ]
@@ -5518,6 +5519,16 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-tor-proxy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

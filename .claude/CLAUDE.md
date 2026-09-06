@@ -171,8 +171,9 @@ packages/protocol   wire contract: schemas, codec (total), kinds, chunking,
   wiped from component state immediately after send.
 - Do not downgrade Node / TypeScript / Rust / NDK versions to work around a build
   failure; fix the root cause.
-- The root `main.js` shim and `docker/Dockerfile` both assume the bridge builds
-  to `apps/bridge/out/main.js` — keep them consistent if that changes.
+- The `docker/main.js` shim (copied to `/app/main.js` in the image) and
+  `docker/Dockerfile` both assume the bridge builds to `apps/bridge/out/main.js`
+  — keep them consistent if that changes.
 
 ## Vendored history note
 

@@ -8,10 +8,10 @@ extension — same engine (`@codedeck/core`), no editor required.
 ## Quickstart
 
 This package is **not on the npm registry** — install it from the release
-tarball:
+tarball attached to each CodeDeck+ GitHub release:
 
 ```sh
-npm i -g https://github.com/JeroenOnNostr/codedeck-next-bridge/releases/download/v0.9.3/codedeck-bridge-0.9.3.tgz
+npm i -g https://github.com/deymosh/codedeck-plus/releases/download/v0.10.0/codedeck-bridge-0.10.0.tgz
 
 codedeck-bridge run     # run the bridge, serving pairing (Ctrl-C to stop)
 codedeck-bridge pair    # pairing window only: terminal QR + pairing URL
