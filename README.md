@@ -1,5 +1,7 @@
 # CodeDeck+
 
+[![CI](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml)
+
 CodeDeck+ is a community-maintained continuation of CodeDeck Next. The
 original work belongs to [JeroenOnNostr](https://github.com/JeroenOnNostr),
 whose two upstream projects are:
@@ -30,8 +32,8 @@ patch) but is built separately with its own Android/Rust toolchain.
 ```
 codedeck-plus/
 ├── vendor/              # pristine git-subtree mirrors of upstream — never hand-edited
-│   ├── bridge/           #   codedeck-next-bridge @ main
-│   └── mobile/           #   codedeck-next-mobile @ main
+│   ├── bridge/           #   codedeck-next-bridge @ main (carries its own package.json / pnpm-*,
+│   └── mobile/           #   codedeck-next-mobile @ main   inert — not in the workspace glob)
 ├── packages/             # shared workspace packages (the actual, editable code)
 │   ├── protocol/          #   wire format + NIP-42 signer, used by both apps
 │   ├── core/               #   bridge engine (Node-only: Tor/SOCKS5 transport lives here)
@@ -41,9 +43,15 @@ codedeck-plus/
 │   └── mobile/             # Tauri v2 + React Android app (not built by Docker)
 ├── docker/
 │   ├── Dockerfile
-│   └── entrypoint.sh
+│   ├── entrypoint.sh
+│   └── main.js          # container entry shim (WebSocket global → built bridge CLI)
+├── docs/
+│   └── PROTOCOL.md      # the wire contract (packages/protocol/src/ is authoritative)
 ├── scripts/
 │   └── sync-upstream.sh  # pulls upstream into vendor/*, for hand-merging
+├── .github/workflows/   # ci.yml (typecheck + test + build + cargo) · release.yml (tag → release)
+├── .claude/             # CLAUDE.md + skills for Claude Code
+├── codedeck             # ./codedeck — bridge / Tor / APK / test wrapper (Docker, no host toolchain)
 ├── docker-compose.yml
 ├── pnpm-workspace.yaml
 └── data/                 # runtime volume (bridge identity, paired phones, sessions)
@@ -123,6 +131,26 @@ docker compose --profile tor up -d --build
 ```bash
 docker compose logs -f codedeck-bridge
 ```
+
+## Releases
+
+Pushing a `vMAJOR.MINOR.PATCH` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which publishes one GitHub Release with every artifact of that version:
+
+| Component | Artifact |
+|---|---|
+| Android app | `codedeck-vX.Y.Z.apk` — release aarch64 build, signed |
+| Bridge CLI (`npx` / global install) | `codedeck-bridge-X.Y.Z.tgz` |
+| Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
+
+A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
+`:latest`. The tag's version is stamped into the bridge and mobile manifests at
+build time. `workflow_dispatch` runs the same pipeline for a dry run.
+
+APK signing needs four repository secrets — `SIGNING_KEY` (base64 keystore),
+`KEY_ALIAS`, `KEY_STORE_PASSWORD`, `KEY_PASSWORD`. See
+[`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) for
+the full runbook.
 
 ## Related repos
 
