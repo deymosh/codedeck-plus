@@ -157,6 +157,11 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.list }}
           provenance: false
+        env:
+          # Don't emit the auto ".dockerbuild" run artifact — the release job
+          # downloads artifacts by name, and an unnamed extra one is just noise.
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
 
   android-apk:
     name: Android — signed release APK
@@ -289,10 +294,18 @@ jobs:
     needs: [meta, bridge-npm, bridge-image, android-apk]
     runs-on: ubuntu-latest
     steps:
+      # Download by explicit name — a blanket download also pulls the auto
+      # ".dockerbuild" run-artifact from build-push-action, and one flaky fetch
+      # in that set fails the whole step.
       - uses: actions/download-artifact@v4
         with:
+          name: android-apk
           path: dist
-          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridge-npm
+          path: dist
 
       - run: ls -la dist
 
@@ -317,4 +330,5 @@ jobs:
             Auto-generated changelog below.
           files: |
             dist/*.apk
+            dist/*.tgz
             dist/*.tgz
