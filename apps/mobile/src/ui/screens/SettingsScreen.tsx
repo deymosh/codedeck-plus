@@ -259,7 +259,9 @@ export function SettingsScreen() {
         while running only affects NEW connections, not ones already open.
       </div>
 
-      <MeshSection />
+      <section className={styles.section}>
+        <MeshSection />
+      </section>
 
       {/* Quick prompts (CDX-049): the entries render as tappable shortcut
           boxes above the session input bar; a tap inserts the text into the
@@ -415,12 +417,12 @@ export function SettingsScreen() {
           summary, per-machine credentials, and the confirm-gated local
           removal (core.removeMachine cleans transcripts/unread/selection). */}
       {Object.keys(machines).length > 0 && (
-        <>
+        <section className={styles.section}>
           <div className={styles.sectionTitle}>Machines</div>
           {Object.values(machines)
             .sort((a, b) => a.name.localeCompare(b.name))
             .map((machine) => (
-              <div key={machine.pubkeyHex} className={s.card} data-testid="machine-block">
+              <div key={machine.pubkeyHex} className={s.cardStatic} data-testid="machine-block">
                 <div className={s.cardTitleRow}>
                   <span className={s.cardName}>{machine.name}</span>
                   {machine.host && <span className={s.badge}>{machine.host}</span>}
@@ -467,7 +469,7 @@ export function SettingsScreen() {
                 )}
               </div>
             ))}
-        </>
+        </section>
       )}
     </div>
   );

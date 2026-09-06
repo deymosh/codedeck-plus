@@ -9,6 +9,17 @@
   margin-top: var(--space-2);
 }
 
+/* A self-contained settings section: its own rows stack here instead of becoming
+ * loose siblings of every other screen row in the `.screen` flex column. Keeps a
+ * multi-row block (Mesh, the per-machine list) from interleaving with unrelated
+ * rows under layout pressure. Same inter-row gap as `.screen` so spacing is
+ * unchanged. */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .scaleRow {
   display: flex;
   align-items: center;
