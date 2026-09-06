@@ -71,6 +71,11 @@ the Rust `aarch64-linux-android` target.
 with the repository keystore secrets, and attaches it to the GitHub release.
 See `.claude/skills/cut-release/SKILL.md`.
 
+The Android `versionName` and `versionCode` both come from `tauri.conf.json`
+`version` — Tauri derives `versionCode` as `major·1_000_000 + minor·1_000 +
+patch`. Do not pin `bundle.android.versionCode`; bumping `version` is the whole
+job.
+
 The mesh engine (`libnostr_vpn_app_core.so`) is cross-compiled from a
 `nostr-vpn` checkout beside the repo; without it the Gradle task logs a warning
 and the APK ships without mesh support (mesh is a dev/QA remote-testing feature,

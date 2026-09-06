@@ -1,7 +1,7 @@
 {
   "name": "codedeck-plus",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "CodeDeck+ community continuation of CodeDeck Next — unified bridge + mobile monorepo with Tor/SOCKS5 transport and NIP-42 relay auth.",
   "scripts": {
     "typecheck": "pnpm -r --no-bail run typecheck",
