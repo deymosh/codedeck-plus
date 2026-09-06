@@ -2,7 +2,7 @@
 name = "codedeck-mobile"
 # Semver per package (plan: the padded/unpadded calendar-version Cargo footgun
 # is dead). Keep in lockstep with tauri.conf.json `version`.
-version = "0.10.0"
+version = "0.11.0"
 description = "CodeDeck — remote-control Claude Code over Nostr (mobile/desktop shell)"
 edition = "2021"
 rust-version = "1.77.2"

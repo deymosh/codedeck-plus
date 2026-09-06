@@ -39,15 +39,29 @@ Packages write enabled for Actions in repo settings.
    tagged commit; `ci.yml` does not run on tags, so `master` must already be
    green. Merge the open PRs that belong in this version.
 
-2. **Pick the version.** Semver. A pre-release gets a hyphen suffix
-   (`v1.2.0-rc1`) — the workflow publishes it as a GitHub *prerelease* and does
-   **not** move the `:latest` image tag.
+2. **Bump the version in the tree — in a commit, before tagging.** One number
+   for the whole monorepo (unified versioning: every artifact of release N is
+   version N, even a component unchanged since N-1 — the version is a
+   compatibility snapshot, not a per-component changelog; wire compatibility is
+   `protocolVersion`, tracked separately). Set `X.Y.Z` in:
+   - `package.json` (root), every `apps/*/package.json` and `packages/*/package.json`
+   - `apps/mobile/src-tauri/tauri.conf.json` `version`
+   - `apps/mobile/src-tauri/Cargo.toml` `version` + the `codedeck-mobile` entry
+     in `Cargo.lock` (one line; CI's `cargo test --locked` fails if they disagree)
 
-   Version fields in the tree (`apps/bridge/package.json`,
-   `apps/mobile/src-tauri/tauri.conf.json`) do **not** need a manual bump — the
-   workflow stamps the tag's number into both before building so the artifacts
-   self-describe. Bump them in a normal commit only if you want `master` itself
-   to carry the new number between releases.
+   The Android `versionCode` is **derived** from `version`
+   (`major·1_000_000 + minor·1_000 + patch`), so bumping `version` is enough — do
+   not pin `bundle.android.versionCode` in `tauri.conf.json` (a pin turns the
+   monotonic-integer guarantee into manual bookkeeping).
+
+   Land this bump on `master` (a small dedicated PR is fine) so the repo always
+   states its own current version. `release.yml` re-stamps the same number at
+   build time with `--allow-same-version`, so the CI stamp is a **no-op safety
+   net** — it only does real work for a `workflow_dispatch` run given an
+   arbitrary version input, never the mechanism a real tag relies on.
+
+   Semver. A pre-release gets a hyphen suffix (`v1.2.0-rc1`) — published as a
+   GitHub *prerelease*, and `:latest` does not move.
 
 3. **Verify locally** (see the `verify-changes` skill):
 
