@@ -39,7 +39,7 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /** One-time USB grant that makes the test-target toggle zero-touch (the
  *  permission is `development`-flagged: grantable via adb, never via a tap). */
-const WD_GRANT_CMD = 'adb shell pm grant com.codedeck.next android.permission.WRITE_SECURE_SETTINGS';
+const WD_GRANT_CMD = 'adb shell pm grant com.codedeck.plus android.permission.WRITE_SECURE_SETTINGS';
 
 let defaultApi: MeshApi | null = null;
 function api(): MeshApi {
