@@ -55,7 +55,7 @@ COPY --chown=root:root docker/git-credential-codedeck-secret /usr/local/bin/git-
 RUN chmod 0755 /usr/local/bin/git-credential-codedeck-secret
 COPY --chown=root:root docker/gh-codedeck-secret /usr/local/bin/gh
 RUN chmod 0755 /usr/local/bin/gh
-COPY --chown=codedeck:codedeck main.js /app/main.js
+COPY --chown=codedeck:codedeck docker/main.js /app/main.js
 
 # Switch back to the non-root user for running the application
 USER codedeck
