@@ -222,6 +222,16 @@ jobs:
           cd apps/mobile
           pnpm dlx @tauri-apps/cli@^2 android build --target aarch64
 
+      - name: Locate the unsigned APK
+        run: |
+          DIR=apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          if [ ! -d "$DIR" ] || [ -z "$(ls -A "$DIR"/*.apk 2>/dev/null)" ]; then
+            echo "::error::no APK under $DIR — Tauri output layout may have changed" >&2
+            find apps/mobile/src-tauri/gen/android/app/build/outputs -name '*.apk' -print || true
+            exit 1
+          fi
+          ls -la "$DIR"
+
       - name: Sign the APK
         id: sign
         uses: r0adkll/sign-android-release@v1
