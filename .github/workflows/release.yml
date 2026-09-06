@@ -118,7 +118,7 @@ jobs:
           mv "$GITHUB_WORKSPACE"/dist/codedeck-bridge-*.tgz \
              "$GITHUB_WORKSPACE/dist/codedeck-bridge-${{ needs.meta.outputs.version }}.tgz"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: bridge-npm
           path: dist/*.tgz
@@ -291,7 +291,7 @@ jobs:
           cp "$APK" "dist/codedeck-${{ needs.meta.outputs.version }}.apk"
           ls -la dist
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: android-apk
           path: dist/*.apk
@@ -305,12 +305,12 @@ jobs:
       # Download by explicit name — a blanket download also pulls the auto
       # ".dockerbuild" run-artifact from build-push-action, and one flaky fetch
       # in that set fails the whole step.
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: android-apk
           path: dist
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: bridge-npm
           path: dist
@@ -318,7 +318,7 @@ jobs:
       - run: ls -la dist
 
       - name: Create the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.meta.outputs.version }}
           name: ${{ needs.meta.outputs.version }}
