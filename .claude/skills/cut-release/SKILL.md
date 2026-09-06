@@ -80,10 +80,10 @@ Packages write enabled for Actions in repo settings.
    `generate_release_notes: true`, so the changelog is the merged-PR list since
    the previous tag — another reason to land work as PRs, not direct pushes.
 
-8. **Confirm the release** has all three artifacts referenced: `codedeck-vX.Y.Z.apk`
-   and `codedeck-bridge-X.Y.Z.tgz` attached, and the
-   `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+ `:latest` for a
-   non-prerelease).
+8. **Confirm the release** has all three artifacts, each on the `vX.Y.Z`
+   convention: `codedeck-vX.Y.Z.apk` and `codedeck-bridge-vX.Y.Z.tgz` attached,
+   and the `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+
+   `:latest` for a non-prerelease).
 
 ## Dry run without tagging
 

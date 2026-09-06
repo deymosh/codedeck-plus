@@ -13,7 +13,7 @@ the npm registry**: install from the tarball attached to each
 ## Quickstart
 
 ```sh
-npm i -g https://github.com/deymosh/codedeck-plus/releases/download/v0.10.0/codedeck-bridge-0.10.0.tgz
+npm i -g https://github.com/deymosh/codedeck-plus/releases/download/v0.10.0/codedeck-bridge-v0.10.0.tgz
 
 codedeck-bridge run     # run the bridge, serving pairing (Ctrl-C to stop)
 codedeck-bridge pair    # pairing window only: terminal QR + pairing URL

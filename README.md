@@ -140,7 +140,7 @@ which publishes one GitHub Release with every artifact of that version:
 | Component | Artifact |
 |---|---|
 | Android app | `codedeck-vX.Y.Z.apk` — release aarch64 build, signed |
-| Bridge CLI (`npx` / global install) | `codedeck-bridge-X.Y.Z.tgz` |
+| Bridge CLI (`npx` / global install) | `codedeck-bridge-vX.Y.Z.tgz` |
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
