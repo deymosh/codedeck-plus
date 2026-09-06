@@ -1,31 +1,61 @@
+<div align="center">
+
+<img src="docs/logo.png" alt="CodeDeck+" width="112" height="112">
+
 # CodeDeck+
 
+**Control Claude Code sessions running on your laptop or VPS from your Android
+phone, over end-to-end encrypted Nostr.** No accounts and no central server —
+the phone and the bridge pair directly by scanning a QR code.
+
 [![CI](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml)
+[![latest release](https://img.shields.io/github/v/release/deymosh/codedeck-plus?sort=semver&label=release)](https://github.com/deymosh/codedeck-plus/releases/latest)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CodeDeck+ is a community-maintained continuation of CodeDeck Next. The
-original work belongs to [JeroenOnNostr](https://github.com/JeroenOnNostr),
-whose two upstream projects are:
+</div>
 
-- [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile)
-- [codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge)
+---
 
-This repository, [deymosh/codedeck-plus](https://github.com/deymosh/codedeck-plus),
-consolidates both projects into one monorepo. It keeps one shared copy of
-`packages/{core,protocol,testkit}` alongside the mobile app, bridge, and
-pristine upstream mirrors in `vendor/`, making the combined project easier to
-maintain while preserving the original MIT license and attribution.
+## What it does
 
-CodeDeck+ also carries local patches for infrastructure the upstream projects
-didn't design for:
+Two halves pair directly over Nostr (NIP-44) — no accounts, no server between
+them:
 
-- a Nostr relay that requires **NIP-42 `AUTH`** (e.g. a self-hosted
-  [Haven](https://github.com/bitvora/haven) relay),
-- a bridge that only reaches the network over **Tor** (SOCKS5),
-- the phone routing through **Orbot** instead (Android's Tor app).
+- **The bridge** — a headless CLI / systemd connector that runs Claude Code
+  sessions on the machine where your code lives and exposes them over encrypted
+  Nostr. This repo ships it as a Docker image and an `npx`-installable tarball.
+- **The Android app** — drives those sessions from your phone: review plans,
+  approve tool permissions, switch models, and chat with several sessions at
+  once.
 
-Docker only builds and runs the **bridge** service — the mobile app lives
-here too (for the shared packages, and because it needed its own Tor/Orbot
-patch) but is built separately with its own Android/Rust toolchain.
+Pairing is a one-time QR scan; it survives restarts and reinstalls on both ends.
+
+- Multiple concurrent Claude Code sessions, switchable from one screen
+- Plan approval, permission cards and AskUserQuestion prompts on the phone
+- Transcripts that survive restarts, offline gaps and reinstalls (ranged sync)
+- Per-session model and effort, plus custom AI provider profiles (Kimi K3,
+  OpenRouter, any Anthropic-compatible endpoint)
+- Encrypted Nostr DMs — NIP-17 and Marmot (MLS) side by side
+- Project/folder management on every paired bridge host
+
+## About this fork
+
+CodeDeck+ is a community-maintained continuation of **CodeDeck Next** by
+[JeroenOnNostr](https://github.com/JeroenOnNostr)
+([mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile) ·
+[bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge)), consolidated
+into one pnpm monorepo. It adds infrastructure the upstream projects didn't
+design for:
+
+- **NIP-42 `AUTH`** relays — e.g. a self-hosted
+  [Haven](https://github.com/bitvora/haven) relay
+- the bridge reaching the network only over **Tor** (SOCKS5)
+- the phone routing through **Orbot** (Android's Tor app)
+
+The original MIT license and attribution are preserved; `vendor/` keeps
+pristine `git subtree` mirrors of both upstreams. Docker builds and runs only
+the **bridge**; the Android app lives here too (for the shared packages and its
+own Tor/Orbot patch) but builds with its own Android/Rust toolchain.
 
 ## Repository layout
 
@@ -81,7 +111,7 @@ reviewed merge (they've diverged from `vendor/*` on purpose).
   code comments in `packages/core/src/nostr/pool.ts` for what's original vs.
   new.
 
-## Environment Variables
+## Environment variables
 
 Create a `.env` file in the root directory:
 
@@ -112,7 +142,7 @@ it through `gh-codedeck-secret`. Keep real values only in your untracked
 `.env` file, use least-privilege tokens, and rotate them if they appear in
 logs or source control.
 
-## Quick Start
+## Quick start
 
 1. Build and start the container:
 ```bash
@@ -127,7 +157,7 @@ docker compose --profile tor up -d --build
 # then set CODEDECK_TOR_PROXY_URL=socks5h://codedeck-tor:9050 in .env
 ```
 
-3. Check the logs to scan the pairing QR code with your CodeDeck app:
+3. Check the logs to scan the pairing QR code with the CodeDeck+ Android app:
 ```bash
 docker compose logs -f codedeck-bridge
 ```
@@ -144,15 +174,23 @@ which publishes one GitHub Release with every artifact of that version:
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
-`:latest`. The tag's version is stamped into the bridge and mobile manifests at
-build time. `workflow_dispatch` runs the same pipeline for a dry run.
+`:latest`. The version is bumped in the tree in the commit that gets tagged (one
+number for the whole monorepo); `workflow_dispatch` runs the same pipeline for a
+dry run.
 
 APK signing needs four repository secrets — `SIGNING_KEY` (base64 keystore),
 `KEY_ALIAS`, `KEY_STORE_PASSWORD`, `KEY_PASSWORD`. See
 [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) for
 the full runbook.
 
-## Related repos
+## More docs
+
+- [`apps/bridge/README.md`](apps/bridge/README.md) — the bridge CLI: commands, config, systemd
+- [`apps/mobile/README.md`](apps/mobile/README.md) — the Android app: stack, layout, building an APK
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v10 wire contract
+- [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
+
+## Upstream
 
 - [codedeck-next-mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile) — upstream Android app
 - [codedeck-next-bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge) — upstream headless CLI / VPS bridge
