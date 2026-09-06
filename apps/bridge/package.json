@@ -28,8 +28,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JeroenOnNostr/codedeck-next-bridge.git",
-    "directory": "apps/bridge-cli"
+    "url": "git+https://github.com/deymosh/codedeck-plus.git",
+    "directory": "apps/bridge"
   },
   "engines": {
     "node": ">=20"
