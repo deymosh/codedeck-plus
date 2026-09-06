@@ -1,9 +1,29 @@
 name: CI
 
+# Skip CI for changes that cannot affect typecheck / test / build or the cargo
+# job — prose, the Claude Code config, licence/ignore files. Everything else
+# (source, package.json, lockfiles, tsconfig, docker/, scripts/, the workflows
+# themselves) still runs. Safe because no branch protection makes `CI` a
+# required status check; if that changes, a required check that never runs on a
+# docs-only PR would block the merge — revisit then.
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
 
 concurrency:
   group: ci-${{ github.ref }}
