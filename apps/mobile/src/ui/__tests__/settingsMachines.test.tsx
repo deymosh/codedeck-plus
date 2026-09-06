@@ -14,6 +14,7 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 afterEach(cleanup);
 
 const MACHINE = 'a'.repeat(64);
+const MACHINE_2 = 'b'.repeat(64);
 
 const nullTransport: PhoneTransport = {
   subscribe: () => ({ close: () => {} }),
@@ -67,5 +68,35 @@ describe('Settings — Machines section (Phase 2b)', () => {
     fireEvent.click(screen.getByText('Remove machine'));
     expect(core.machines.getState().machines[MACHINE]).toBeUndefined();
     expect(screen.queryByTestId('machine-block')).toBeNull();
+  });
+
+  // Multi-bridge layout regression (the overlapping-Settings screenshot): the
+  // per-machine list and the Mesh block each render inside their own <section>
+  // wrapper so their rows are one non-shrinking unit in the `.screen` scroll
+  // column instead of loose siblings that collapse under content pressure.
+  // jsdom applies no real flex layout, so this guards the structure; the
+  // `.screen > * { flex-shrink: 0 }` rule itself is checked manually.
+  it('renders one block per machine, each inside the Machines <section>', async () => {
+    const core = await makeCore();
+    core.machines
+      .getState()
+      .registerMachine({ pubkeyHex: MACHINE_2, name: 'server', host: 'cli' });
+    renderSettings(core);
+
+    const blocks = screen.getAllByTestId('machine-block');
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      const section = block.closest('section');
+      expect(section).not.toBeNull();
+      expect(section!.textContent).toContain('Machines');
+    }
+  });
+
+  it('wraps the Mesh section in its own <section>', async () => {
+    const core = await makeCore();
+    renderSettings(core);
+
+    const meshTitle = screen.getByText('Mesh (remote testing)');
+    expect(meshTitle.closest('section')).not.toBeNull();
   });
 });

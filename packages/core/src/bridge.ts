@@ -506,7 +506,9 @@ export class BridgeCore {
   /**
    * CDX-050: capability strings each phone advertised on its most recent
    * command this boot (`caps`; `[]` for pre-CDX-050 phones, which omit the
-   * field). Gates diff-entry emission — see phonesSupportDiff().
+   * field). `diff` is the ONLY string consulted here — see phonesSupportDiff();
+   * `chunked` is stored but never read (transport beacon, see capabilities.ts).
+   * In-memory, per-boot, keyed by phone pubkey hex; never persisted or pruned.
    */
   private readonly phoneCaps = new Map<string, readonly string[]>();
   private paired: PairedPhone[] = [];
@@ -1171,6 +1173,9 @@ export class BridgeCore {
       host: this.host.config.host,
       sessions: this.remoteSessions(),
       protocolVersion: PROTOCOL_VERSION,
+      // The full set. Only `images` and `custom-providers` are read by the phone
+      // as gates; the rest are presence markers the phone detects via payload
+      // data instead (see the tier note in capabilities.ts).
       capabilities: [...ALL_BRIDGE_CAPABILITIES],
       folders: this.workspaceFolders(),
       // CDX-031: `folders` lists what is INSIDE the roots, so with several

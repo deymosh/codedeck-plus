@@ -1,0 +1,312 @@
+name: Release
+
+# A single `vMAJOR.MINOR.PATCH` tag publishes ONE GitHub Release carrying every
+# artifact of that version:
+#   - the signed Android APK               (codedeck-vX.Y.Z.apk)
+#   - the bridge npm tarball               (codedeck-bridge-X.Y.Z.tgz, for `npx`)
+#   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
+#
+# A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
+# move the `:latest` image tag. `workflow_dispatch` runs the same pipeline for a
+# dry run / manual cut without pushing a tag.
+#
+# Required repository secrets for APK signing (same names as the maintainer's
+# other Android project):
+#   SIGNING_KEY          base64 of the release keystore (.jks/.keystore)
+#   KEY_ALIAS            key alias inside that keystore
+#   KEY_STORE_PASSWORD   keystore password
+#   KEY_PASSWORD         key password
+# Optional, to bundle the nostr-vpn mesh engine into the APK (otherwise the app
+# ships without mesh support, exactly as a local build without the checkout):
+#   vars.NVPN_REPO       owner/repo of the nostr-vpn source
+#   secrets.NVPN_REPO_TOKEN   PAT that can read it
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build and announce, e.g. v1.2.3 (defaults to the pushed tag)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark the GitHub Release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      number: ${{ steps.v.outputs.number }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          RAW="${{ github.event.inputs.version }}"
+          [ -n "$RAW" ] || RAW="${GITHUB_REF_NAME}"
+          NUM="${RAW#v}"
+          if ! printf '%s' "$NUM" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$RAW' is not a vMAJOR.MINOR.PATCH[-prerelease] tag" >&2
+            exit 1
+          fi
+          echo "version=v${NUM}" >> "$GITHUB_OUTPUT"
+          echo "number=${NUM}" >> "$GITHUB_OUTPUT"
+          if [[ "$NUM" == *-* || "${{ github.event.inputs.prerelease }}" == "true" ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  bridge-npm:
+    name: Bridge — npm tarball
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stamp the release version
+        run: |
+          cd apps/bridge
+          npm version "${{ needs.meta.outputs.number }}" --no-git-tag-version --allow-same-version
+
+      - name: Typecheck + test (bridge and its workspace deps)
+        run: |
+          pnpm --filter @codedeck/protocol --filter @codedeck/core --filter @codedeck/bridge run typecheck
+          pnpm --filter @codedeck/protocol --filter @codedeck/core --filter @codedeck/bridge run test
+
+      - name: Build the bundle
+        run: pnpm --filter @codedeck/bridge run build
+
+      - name: Smoke-test the artifact
+        run: |
+          node apps/bridge/out/main.js version
+          node apps/bridge/out/main.js doctor || true
+
+      - name: npm pack
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cd apps/bridge
+          npm pack --pack-destination "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-npm
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  bridge-image:
+    name: Bridge — container image
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        shell: bash
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-bridge"
+          TAGS="${IMAGE}:${{ needs.meta.outputs.version }}"
+          if [ "${{ needs.meta.outputs.prerelease }}" != "true" ]; then
+            TAGS="${TAGS}"$'\n'"${IMAGE}:latest"
+          fi
+          {
+            echo "list<<EOF"
+            echo "${TAGS}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          provenance: false
+
+  android-apk:
+    name: Android — signed release APK
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout nostr-vpn (mesh engine, optional)
+        if: vars.NVPN_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.NVPN_REPO }}
+          token: ${{ secrets.NVPN_REPO_TOKEN }}
+          path: ../nostr-vpn
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Rust (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mobile/src-tauri
+
+      - name: Install NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" >/dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stamp the release version into tauri.conf.json
+        run: |
+          cd apps/mobile
+          node -e "const fs=require('fs'),f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f));c.version='${{ needs.meta.outputs.number }}';fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
+          # Tauri v2 derives the Android versionCode from this string
+          # (major*1000000 + minor*1000 + patch), so no separate bump is needed.
+
+      - name: Build release APK (aarch64)
+        env:
+          ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
+        run: |
+          # openssl-src's Makefile calls `<triple>-ranlib`/`-ar` — GNU names
+          # gone from NDK r23+. Point the cc-crate env at the llvm tools.
+          TOOLBIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export RANLIB_aarch64_linux_android="$TOOLBIN/llvm-ranlib"
+          export AR_aarch64_linux_android="$TOOLBIN/llvm-ar"
+          cd apps/mobile
+          pnpm dlx @tauri-apps/cli@^2 android build --target aarch64
+
+      - name: Locate the unsigned APK
+        run: |
+          DIR=apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          if [ ! -d "$DIR" ] || [ -z "$(ls -A "$DIR"/*.apk 2>/dev/null)" ]; then
+            echo "::error::no APK under $DIR — Tauri output layout may have changed" >&2
+            find apps/mobile/src-tauri/gen/android/app/build/outputs -name '*.apk' -print || true
+            exit 1
+          fi
+          ls -la "$DIR"
+
+      - name: Sign the APK
+        id: sign
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "36.0.0"
+
+      - name: Size gate (a release .so was 226MB when symbols leaked)
+        env:
+          APK: ${{ steps.sign.outputs.signedReleaseFile }}
+        run: |
+          test -n "$APK" && test -f "$APK" || { echo "no signed APK from the sign step" >&2; exit 1; }
+          APK_BYTES=$(stat -c%s "$APK")
+          echo "APK: $APK ($((APK_BYTES / 1024 / 1024))MB)"
+          SO_BYTES=$(unzip -l "$APK" | awk '/libcodedeck_mobile_lib\.so/ {print $1}' | head -1)
+          echo ".so (uncompressed): $((SO_BYTES / 1024 / 1024))MB"
+          if [ "${SO_BYTES:-0}" -gt $((50 * 1024 * 1024)) ]; then
+            echo "FAIL: .so exceeds 50MB — symbols are probably not stripped" >&2
+            exit 1
+          fi
+          if [ "$APK_BYTES" -gt $((100 * 1024 * 1024)) ]; then
+            echo "FAIL: APK exceeds 100MB" >&2
+            exit 1
+          fi
+
+      - name: Collect and rename
+        env:
+          APK: ${{ steps.sign.outputs.signedReleaseFile }}
+        run: |
+          mkdir -p dist
+          cp "$APK" "dist/codedeck-${{ needs.meta.outputs.version }}.apk"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [meta, bridge-npm, bridge-image, android-apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -la dist
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.version }}
+          name: ${{ needs.meta.outputs.version }}
+          draft: false
+          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Artifacts
+
+            | Component | File |
+            |---|---|
+            | Android app (signed, aarch64) | `codedeck-${{ needs.meta.outputs.version }}.apk` |
+            | Bridge CLI (`npx`) | `codedeck-bridge-${{ needs.meta.outputs.number }}.tgz` |
+            | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
+
+            Auto-generated changelog below.
+          files: |
+            dist/*.apk
+            dist/*.tgz

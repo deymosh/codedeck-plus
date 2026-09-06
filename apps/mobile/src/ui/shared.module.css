@@ -16,6 +16,18 @@
   gap: var(--space-4);
 }
 
+/* The screen is a SCROLL column: its direct children keep their natural height
+ * and the column scrolls. Without this a child that sets an explicit small
+ * `min-height` (`.card`, `.relayRow`, `.prefRow`, `.toggleRow`, `.btn`) loses the
+ * default `min-height: auto` content floor, so once the stacked content overflows
+ * the viewport the browser shrinks those children toward that small min-height
+ * and their contents paint outside the box, over the following siblings — the
+ * multi-machine Settings overlap. `7c4128a` fixed the mirror-image GROW case;
+ * this is the SHRINK case. */
+.screen > * {
+  flex-shrink: 0;
+}
+
 .empty {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -103,6 +115,19 @@
 .card:active {
   background: var(--surface-hover);
   border-color: var(--border-strong);
+}
+
+/* A `.card` used as a static container (no onClick) — e.g. the per-machine block
+ * in Settings. Drops the tappable affordances so it doesn't lie about being
+ * interactive, and lets its content set the height. */
+.cardStatic {
+  composes: card;
+  cursor: default;
+}
+
+.cardStatic:active {
+  background: var(--surface);
+  border-color: var(--border);
 }
 
 .cardTitleRow {

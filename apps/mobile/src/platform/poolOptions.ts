@@ -2,9 +2,9 @@
  * SimplePool constructor options for EVERY pool the phone creates — one place,
  * so the transport pool and the profile-fetch pool can never drift apart.
  *
- * CDX-020 (phone) / CDX-055 (bridge): nostr-tools 2.24.1 tears its own relay
- * down on a timer, and the phone is hit HARDER than the bridge because it opens
- * more subscriptions per relay.
+ * CDX-020 (phone) / CDX-055 (bridge). The historical defect (nostr-tools
+ * <= 2.24.1): the pool tore its own relay down on a timer, and the phone was
+ * hit HARDER than the bridge because it opens more subscriptions per relay.
  *
  * 1. With `enablePing`, `AbstractRelay.pingpong()` picks its keepalive by
  *    feature-detecting the socket:
@@ -13,20 +13,25 @@
  *    global `WebSocket` is the browser API — no ping frame, no emitter — so the
  *    phone ALWAYS takes `waitForDummyReq()`, exactly like the bridge.
  * 2. `waitForDummyReq()` opens a `<forced-ping>` REQ every 29s. `subscribe()`
- *    EXCLUDES that label from the relay's `ongoingOperations` counter, but
- *    `Subscription.close()` decrements it unconditionally. So every ping
- *    silently drops the count by one while our real REQs are still live.
- * 3. When the count reaches 0, `scheduleIdleClose()` arms `idleTimeout` and
- *    `relay.close()` fires: every subscription dies with "relay connection
- *    closed by us", and the relay is dropped from the pool's map.
+ *    EXCLUDED that label from the relay's `ongoingOperations` counter, but
+ *    `Subscription.close()` decremented it unconditionally — so every ping
+ *    silently dropped the count by one while the real REQs were still live.
+ * 3. When the count reached 0, `scheduleIdleClose()` armed `idleTimeout` and
+ *    `relay.close()` fired: every subscription died with "relay connection
+ *    closed by us", and the relay left the pool's map. On the phone that was a
+ *    HARD deadline after every (re)connect — measured at 107s for the three
+ *    command subs (30515/4516/24515) alone — while `publish()` kept working
+ *    (`ensureRelay` rebuilds a socket that carries NO REQ): the "outbound fine,
+ *    inbound dead" shape CDX-020 reported.
  *
- * On the phone that lands as a HARD deadline after every (re)connect: the
- * client opens 3 command subscriptions (30515/4516/24515) plus the DM (1059)
- * and Marmot subscriptions on the SAME pool, so the relay self-destructs
- * `subscriptions × 29s + 20s` after connecting — measured at 107s for the three
- * command subs alone, ~165s with DM + Marmot. Publishing keeps working
- * throughout (`publish` → `ensureRelay` rebuilds a socket that carries NO REQ),
- * which is precisely the "outbound fine, inbound dead" shape CDX-020 reported.
+ * nostr-tools FIXED the `<forced-ping>` accounting in 2.24.2
+ * (nbd-wtf/nostr-tools#539); this workspace is pinned to 2.24.3, so step 2 no
+ * longer decrements and the idle close no longer arms for a live subscription.
+ * The `idleTimeout` pin below is kept as regression insurance against an
+ * upstream re-break AND because `profilePoolOptions()` runs without
+ * `enablePing` and wants the same guarantee regardless (see its own note).
+ * `pool.connection.test.ts` runs the real nostr-tools and fails loudly if a
+ * downgrade below 2.24.2 brings the bug back.
  *
  * `idleTimeout: 0` cannot disable it — `AbstractSimplePool`'s constructor does
  * `if (opts.idleTimeout) this.idleTimeout = opts.idleTimeout`, so 0 is falsy and
@@ -37,7 +42,7 @@
  * by `enablePing`'s 20s pong timeout → `ws.close()` → the FSM's reconnect.
  *
  * Identical constant and reasoning as `packages/core/src/nostr/pool.ts`'s
- * `IDLE_CLOSE_DISABLED_MS` — the two are deliberately the same fix.
+ * `IDLE_CLOSE_DISABLED_MS` — the two are deliberately the same pin.
  */
 import type { SimplePool } from 'nostr-tools/pool';
 import type { EventTemplate, VerifiedEvent } from 'nostr-tools/core';
