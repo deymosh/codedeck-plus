@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "pnpm -r --no-bail run typecheck",
     "test": "pnpm -r --no-bail run test",
-    "build": "pnpm --filter @codedeck/bridge... run build"
+    "build": "pnpm -r --no-bail run build",
+    "build:bridge": "pnpm --filter @codedeck/bridge... run build"
   },
   "engines": {
     "node": ">=22"
