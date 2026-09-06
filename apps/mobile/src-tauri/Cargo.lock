@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "codedeck-mobile"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "hex",
  "mdk-core",
