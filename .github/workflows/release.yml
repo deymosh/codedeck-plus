@@ -195,6 +195,14 @@ jobs:
         with:
           workspaces: apps/mobile/src-tauri
 
+      - name: Install cargo-tauri
+        # gen/android's `:app:rustBuild*` Gradle task shells out to
+        # `cargo tauri android android-studio-script` — a CARGO SUBCOMMAND from
+        # the tauri-cli crate, separate from the `@tauri-apps/cli` npm package
+        # used to kick off the build below. Without it the Gradle task dies with
+        # "error: no such command: `tauri`". Mirrors apps/mobile/docker/Dockerfile.
+        run: cargo install tauri-cli --version "^2" --locked
+
       - name: Install NDK
         run: |
           echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" >/dev/null
