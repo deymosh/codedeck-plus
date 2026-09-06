@@ -17,7 +17,7 @@
     <!-- Toggle Wireless Debugging (adb_wifi_enabled, a Settings.Global key) so the laptop can reach
          this device over the mesh without a USB cable or a manual tap. Protection level is
          signature|privileged|development: NOT auto-granted, but the `development` flag means it can
-         be granted ONCE over adb (`pm grant com.codedeck.app android.permission.WRITE_SECURE_SETTINGS`),
+         be granted ONCE over adb (`pm grant com.codedeck.plus android.permission.WRITE_SECURE_SETTINGS`),
          after which prepare_adb works forever. Must be declared here to be grantable at all.
          DISTRIBUTION NOTE: this permission is fine for Zapstore / direct-APK (CodeDeck's channels) but
          is a Google Play restricted-permission BLOCKER. If CodeDeck ever targets Play, strip this via a

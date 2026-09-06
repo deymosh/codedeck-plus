@@ -5,7 +5,7 @@ phone, over end-to-end encrypted Nostr. No accounts and no central server: the
 phone and the bridge pair directly by scanning a QR code.
 
 `@codedeck/mobile` is the Tauri v2 Android shell — a React + TypeScript webview
-over a small Rust host. Android appId `com.codedeck.next`; signed
+over a small Rust host. Android appId `com.codedeck.plus`; signed
 `codedeck-vX.Y.Z.apk` builds are attached to each
 [GitHub release](https://github.com/deymosh/codedeck-plus/releases).
 
@@ -32,8 +32,9 @@ CodeDeck+ additions on top of upstream:
 The app is one half of a pair. Run [`@codedeck/bridge`](../bridge/README.md) —
 the headless CLI / systemd connector — on the machine where Claude Code lives
 (installed from a release tarball; it is not on npm). Both sides speak protocol
-**v10 only**. This is a clean break from the original CodeDeck
-(`com.codedeck.app`): different Android appId, so the two install side by side,
+**v10 only**. CodeDeck+ has its own Android appId (`com.codedeck.plus`),
+distinct from both the original CodeDeck (`com.codedeck.app`) and upstream
+CodeDeck Next (`com.codedeck.next`), so it installs side by side with either —
 but pairings, history and settings do not carry over.
 
 ## Build from source

@@ -1,4 +1,4 @@
-package com.codedeck.next
+package com.codedeck.plus
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
