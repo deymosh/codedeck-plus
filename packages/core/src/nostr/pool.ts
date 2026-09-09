@@ -121,7 +121,23 @@ export class BridgePool {
     automaticallyAuth?: BridgePoolOptions['automaticallyAuth'];
   } {
     return {
-      enableReconnect: true,
+      // enableReconnect is deliberately OFF: BridgePool already owns 100% of
+      // reconnect responsibility (the connectionEpoch guard + scheduleReconnect
+      // backoff below, plus the pairing window's own resubscribe timer in
+      // bridge.ts). Leaving nostr-tools' own auto-reconnect on lets its Relay
+      // object independently reconnect the same underlying socket the moment
+      // it closes, racing our own reconnect/resubscribe attempts, which act on
+      // the same relay around the same few seconds. Observed effect:
+      // nostr-tools' auto-reconnect picks the socket back up and starts a
+      // fresh NIP-42 AUTH handshake, while our own reconnect tears the pool
+      // down mid-handshake — producing a "send on a closed connection"
+      // immediately followed by an "auth timed out" (the OK response can now
+      // never arrive), repeating on every drop since the connection never
+      // finishes authenticating. subscribeMany's onclose (which both our
+      // reconnect paths depend on) still fires normally with this off — it
+      // comes from the relay's own close handling, not from its auto-reconnect
+      // timer.
+      enableReconnect: false,
       // enablePing is supported by the installed nostr-tools (>=2.23): keeps
       // idle relay sockets alive so drops are detected instead of silently hung.
       enablePing: true,

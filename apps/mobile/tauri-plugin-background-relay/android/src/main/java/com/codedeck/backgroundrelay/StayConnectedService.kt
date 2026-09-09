@@ -96,14 +96,27 @@ class StayConnectedService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.getStringExtra(EXTRA_STATE_TEXT)?.let { lastStateText = it }
         val notification = buildNotification(this, lastStateText)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (_: Exception) {
+            // Android 15+ caps dataSync foreground time at ~6h/24h (see the
+            // AndroidManifest.xml rationale comment). Once exhausted, this
+            // throws ForegroundServiceStartNotAllowedException — synchronously,
+            // so an uncaught throw here kills the whole app process, not just
+            // this service. The degradation this manifest already promises
+            // ("cheap resync-on-resume makes service death invisible next time
+            // the app opens") only holds if we actually decline gracefully
+            // instead of crashing.
+            stopSelf()
+            return START_NOT_STICKY
         }
         acquireLocks()
         isRunning = true

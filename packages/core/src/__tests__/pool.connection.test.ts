@@ -251,7 +251,7 @@ describe('BridgePool connection status (CDB-036/CDB-037)', () => {
     expect(hoisted.ctorOpts.length).toBeGreaterThanOrEqual(3);
     for (const opts of hoisted.ctorOpts) {
       expect(opts?.enablePing).toBe(true);
-      expect(opts?.enableReconnect).toBe(true);
+      expect(opts?.enableReconnect).toBe(false);
       expect(opts?.idleTimeout).toBe(0x7fffffff);
     }
   });
