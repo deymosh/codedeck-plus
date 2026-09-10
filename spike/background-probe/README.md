@@ -2,16 +2,29 @@
 
 > **THROWAWAY.** Delete once the verdict is folded into the plan (or an ADR).
 
-## Status: **networking core GO · on-device run BLOCKED (roomy AVD / device needed)**
+## Status: **GO on the emulator** · real-OEM pass still required before F1 commits
 
 The plan's central thesis is "sockets in a Rust core inside the foreground
 service keep delivering while the app is backgrounded / Dozed, where WebView
-sockets do not". This probe has two halves:
+sockets do not". Both halves now pass:
 
 | Half | State |
 |---|---|
 | **Networking core** (Rust relay client: subscribe kind-30515, count deliveries, reconnect with backoff) | ✅ **GO** — host tests green |
-| **On-device** (that core, hosted by a real Android `dataSync` foreground service, survives HOME / screen-off / forced Doze / airplane blips on the emulator) | ⛔ **not run** — the only installed AVD is 96% full (`/data` 262 MB free; Android blocks installs under ~594 MB free) and it is the maintainer's populated test AVD, not safe to wipe |
+| **On-device** (that core, hosted by a real Android `dataSync` foreground service, on a wiped API-36 emulator) | ✅ **GO** — full matrix DELIVERING (`artifacts/emulator-matrix.log`) |
+
+### Emulator matrix result (pulse every 15 s)
+
+| phase | heartbeats received | reconnects | verdict |
+|---|---|---|---|
+| foreground baseline | 2 → 4 | 0 | DELIVERING |
+| backgrounded (HOME) | 4 → 7 | 0 | DELIVERING |
+| screen off | 7 → 10 | 0 | DELIVERING |
+| **forced Doze** (`dumpsys deviceidle force-idle`) | 10 → 15 | 0 | DELIVERING — socket survived Doze, zero reconnects |
+| after airplane-mode blip | 15 → 17 | 4 → 5 | DELIVERING — dropped, backoff-reconnected, resumed |
+
+The FGS `dataSync` exemption + the persistent socket held through Doze with no
+teardown; airplane toggles exercised the reconnect FSM and it recovered.
 
 ## What is proven (networking core)
 
@@ -42,15 +55,13 @@ sockets do not". This probe has two halves:
   forced Doze (dumpsys deviceidle force-idle) → airplane blip`, printing
   `DELIVERING` / `!! STALLED` per phase from logcat.
 
-## To finish the on-device run
+## Still required before F1 fully commits
 
-Need an AVD with room (or a device). Fastest:
-
-```
-# fresh throwaway AVD in Android Studio (Device Manager → Create), API 34+,
-# then:
-AVD=<name> ./spike/background-probe/run-emulator.sh
-```
+A pass on a **real Samsung/OneUI + a real Xiaomi/MIUI** device (see the emulator
+caveat below). Run `./spike/background-probe/run-emulator.sh` after
+`adb connect`-ing the device, or drive the matrix by hand:
+`am start -n …/.MainActivity --ez auto true`, then HOME / power / leave 30+ min /
+toggle wifi+data, watching `adb logcat -s bgprobe`.
 
 ## Findings so far
 
@@ -75,7 +86,9 @@ real Samsung + a real Xiaomi pass remain a hard gate before F1 fully commits.
 
 - core only: `docker run --rm -v .../background-probe:/s -w /s/rust/heartbeat-core rust:1-bookworm cargo test`
 - APK: `./spike/background-probe/build.sh`
-- on-device: `AVD=<roomy_avd> ./spike/background-probe/run-emulator.sh`
+- emulator matrix: `./spike/background-probe/run-emulator.sh` (wipe/roomy AVD;
+  `AVD=<name>` to override). The API-36 AVD used here was factory-reset first
+  (`emulator -avd <name> -wipe-data`).
 
 ## Delete criteria
 
