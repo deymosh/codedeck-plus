@@ -17,6 +17,7 @@ pub mod mode_cycle;
 pub mod nip42;
 pub mod notifications;
 pub mod nostr_event;
+pub mod presentation;
 pub mod ranges;
 pub mod selection_persistence;
 pub mod session_needs_attention;
