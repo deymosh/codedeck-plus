@@ -20,6 +20,8 @@ import { parsePairingUrl } from './core/stores/pairing';
 import { loadPersistedSettings } from './core/stores/settings';
 import { attachConnectivity, tauriNativeConnectivity, type TauriListen } from './platform/connectivity';
 import { createRelayTransport } from './platform/relayTransport';
+import { createNativeCore } from './platform/nativeCore';
+import type { NativeCoreControl } from './core/nativeCore';
 import { App } from './ui/App';
 import { PhoneCoreProvider } from './ui/coreContext';
 import { PHONE_LABEL } from './ui/label';
@@ -87,6 +89,28 @@ async function boot(): Promise<PhoneCore> {
 
   const transport = createRelayTransport({ relays: settings.relays, log, secretKey: identity.secretKey });
 
+  // F1: the in-process Rust runtime. `null` unless this APK was built with the
+  // `native-core` feature (the probe command is absent otherwise). When
+  // present, createPhoneCore routes the BRIDGE protocol through it; `transport`
+  // above still serves DM (1059) + Marmot (445). Inbound is wired after the
+  // core exists (below).
+  const nativeSeam = await createNativeCore(log);
+  const nativeCore: NativeCoreControl | undefined = nativeSeam
+    ? {
+        init: (c) => nativeSeam.init(c),
+        start: () => nativeSeam.start(),
+        stop: () => nativeSeam.stop(),
+        setMachines: (m) => nativeSeam.setMachines(m),
+        setRelays: (r) => nativeSeam.setRelays(r),
+        send: async (machine, msg) => {
+          await nativeSeam.send(machine, msg);
+          return true;
+        },
+        publish: async (machine, msg) => ({ verdict: await nativeSeam.publish(machine, msg) }),
+      }
+    : undefined;
+  if (nativeCore) log('[Boot] native-core present — bridge protocol runs in-process (Rust)');
+
   // DM peer profiles (kind 0) resolve over their own one-shot pool (lazy —
   // no sockets until the first conversation needs a name).
   const { createProfileFetcher } = await import('./platform/profileFetch');
@@ -114,6 +138,7 @@ async function boot(): Promise<PhoneCore> {
   const core = await createPhoneCore({
     kv,
     transport,
+    ...(nativeCore ? { nativeCore, nativeCoreProxy: '127.0.0.1:9050' } : {}),
     transcriptStorage,
     profileFetcher,
     notifier,
@@ -134,6 +159,26 @@ async function boot(): Promise<PhoneCore> {
     },
     log,
   });
+
+  // F1 inbound: the runtime's decoded bridge→phone messages and connection
+  // snapshots feed the SAME handlers / FSM the WebView transport would have.
+  if (nativeSeam) {
+    void nativeSeam.onMessage((machine, msg) => core.api.dispatchDecoded(msg, machine));
+    void nativeSeam.onConnection(({ status }) => {
+      // The runtime owns the socket + reconnect; mirror its status onto the
+      // WebView FSM so the connection chip and resync-on-reconnect stay honest.
+      if (status === 'connected') {
+        core.connection.getState().dispatch({ type: 'socket-open', at: Date.now() });
+      } else if (status === 'waiting-retry' || status === 'offline') {
+        core.connection.getState().dispatch({ type: 'socket-close' });
+      }
+    });
+    void nativeSeam.onActionFailed((kind) => {
+      if (kind === 'decrypt-failed') {
+        core.connection.getState().dispatch({ type: 'decrypt-failure' });
+      }
+    });
+  }
 
   // Stay-connected foreground service (5c): settings toggle → start/stop,
   // connection FSM status → notification text. Android does the real work;
@@ -183,8 +228,9 @@ async function boot(): Promise<PhoneCore> {
       void core.transcript.getState().retrySweep();
       // CDX-020: a subscription can die without the socket ever closing — the
       // sweep notices "connected but every heartbeat stale" and forces the
-      // FSM's normal socket-close → backoff → reconnect path.
-      core.connection.getState().checkHeartbeats();
+      // FSM's normal socket-close → backoff → reconnect path. In native mode
+      // the runtime runs its own CDX-020 watchdog — don't double it.
+      if (!nativeCore) core.connection.getState().checkHeartbeats();
     },
     ...(prune ? { onDaily: () => void prune?.() } : {}),
   });
