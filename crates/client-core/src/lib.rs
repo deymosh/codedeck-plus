@@ -10,12 +10,15 @@
 pub mod bridge_api;
 pub mod chunking;
 pub mod connection;
-pub mod default_session_mode;
-pub mod mode_cycle;
 pub mod crypto;
+pub mod default_session_mode;
+pub mod delete_controller;
+pub mod mode_cycle;
 pub mod nip42;
 pub mod notifications;
 pub mod nostr_event;
 pub mod ranges;
+pub mod selection_persistence;
+pub mod session_needs_attention;
 pub mod stores;
 pub mod wire;
