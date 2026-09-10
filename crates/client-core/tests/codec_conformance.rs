@@ -7,7 +7,8 @@
 use client_core::wire::{decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone, encode_phone_to_bridge};
 use serde_json::Value;
 
-const CORPUS: &str = include_str!("../../../packages/protocol/fixtures/corpus.json");
+// Absolute path resolved by build.rs (no `../../..` literal here).
+const CORPUS: &str = include_str!(env!("CODEDECK_PROTOCOL_CORPUS"));
 
 fn corpus() -> Value {
     serde_json::from_str(CORPUS).expect("corpus.json is valid JSON")
@@ -60,6 +61,23 @@ fn bridge_to_phone_rejected_are_errors() {
             "bridgeToPhone.rejected[{i}] {json} decoded but should not have"
         );
     }
+}
+
+#[test]
+fn corpus_covers_every_message_type() {
+    // The TS side (fixtures.test.ts) does the AUTHORITATIVE, zod-schema-driven
+    // completeness check. This is a cheap drift tripwire on the Rust side.
+    let c = corpus();
+    let distinct = |arr: &Value| {
+        arr.as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["type"].as_str().unwrap().to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
+    assert_eq!(distinct(&c["phoneToBridge"]["valid"]), 23, "phone->bridge message types");
+    assert_eq!(distinct(&c["bridgeToPhone"]["valid"]), 24, "bridge->phone message types");
 }
 
 #[test]

@@ -7,12 +7,31 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { z } from 'zod';
 import {
   decodeBridgeToPhone,
   decodePhoneToBridge,
   encodeBridgeToPhone,
   encodePhoneToBridge,
 } from '../codec';
+import { phoneToBridgeSchema } from '../schemas/commands';
+import { bridgeToPhoneSchema } from '../schemas/events';
+
+/** Every `type` literal a discriminated-union schema accepts — the spec's own
+ *  list of message types, so the corpus completeness check is driven by zod,
+ *  not a hand-kept count. */
+function messageTypesOf(union: z.ZodTypeAny): Set<string> {
+  const opts = (union as unknown as { _def: { options: z.ZodTypeAny[] } })._def.options;
+  const out = new Set<string>();
+  for (const opt of opts) {
+    const shape =
+      (opt as unknown as { _def?: { shape?: () => Record<string, z.ZodTypeAny> } })._def?.shape?.() ??
+      (opt as unknown as { shape?: Record<string, z.ZodTypeAny> }).shape;
+    const value = (shape?.type as unknown as { _def?: { value?: unknown } })?._def?.value;
+    if (typeof value === 'string') out.add(value);
+  }
+  return out;
+}
 
 const corpusPath = fileURLToPath(new URL('../../fixtures/corpus.json', import.meta.url));
 const corpus = JSON.parse(readFileSync(corpusPath, 'utf8')) as {
@@ -57,6 +76,25 @@ describe('codec conformance corpus — bridgeToPhone', () => {
       expect(decodeBridgeToPhone(JSON.stringify(msg)).ok).toBe(false);
     });
   });
+});
+
+describe('codec conformance corpus — completeness (driven by the zod schemas)', () => {
+  const cases: [string, z.ZodTypeAny, unknown[]][] = [
+    ['phoneToBridge', phoneToBridgeSchema, corpus.phoneToBridge.valid],
+    ['bridgeToPhone', bridgeToPhoneSchema, corpus.bridgeToPhone.valid],
+  ];
+  for (const [name, schema, valid] of cases) {
+    it(`${name}: every message type in the union has at least one valid fixture`, () => {
+      const expected = messageTypesOf(schema);
+      expect(expected.size).toBeGreaterThan(10); // sanity: introspection worked
+      const covered = new Set(valid.map((m) => (m as { type: string }).type));
+      const missing = [...expected].filter((t) => !covered.has(t)).sort();
+      expect(missing).toEqual([]);
+      // and no fixture names a type the schema doesn't know
+      const stray = [...covered].filter((t) => !expected.has(t)).sort();
+      expect(stray).toEqual([]);
+    });
+  }
 });
 
 describe('codec conformance corpus — forward compatibility (extra fields ignored)', () => {
