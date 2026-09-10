@@ -8,17 +8,26 @@
 //! `BeginPairing` and `UploadImage` need the outbox lifecycle / timers /
 //! transport and land with the loop integration.
 
+use client_core::stores::outbox::OutboxState;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::UiEffect;
 use client_core::wire::commands::{
-    BareMsg, CreateSessionMsg, EffortChangeMsg, KeypressContext, KeypressMsg, ModeChangeMsg,
-    ModelChangeMsg, PermissionModifier, PermissionResMsg, PhoneToBridge, QuestionInputMsg,
-    SessionIdMsg, VersionFields,
+    BareMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext, KeypressMsg,
+    ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg, PhoneToBridge,
+    QuestionInputMsg, SessionIdMsg, VersionFields,
 };
 use client_core::wire::common::{EffortLevel, PermissionMode};
 
 use crate::dispatch::{Send, StoreId};
 use crate::stores::CoreStores;
+
+/// A send whose publish outcome must settle an outbox item.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutboxSend {
+    pub id: String,
+    pub machine: String,
+    pub msg: PhoneToBridge,
+}
 
 /// Ambient inputs `apply` needs.
 #[derive(Debug, Clone, Copy)]
@@ -40,6 +49,9 @@ pub struct IntentResult {
     pub tor_changed: Option<bool>,
     /// CDX-026c: surfaces so the loop can cancel a surface's notifications.
     pub ui_effects: Vec<UiEffect>,
+    /// A `send` whose publish outcome settles an outbox item (`SendInput` /
+    /// `RetryOutboxItem`).
+    pub outbox_send: Option<OutboxSend>,
 }
 
 impl IntentResult {
@@ -59,6 +71,21 @@ impl IntentResult {
 /// The user action. Serializable so a binding can pass it across the FFI.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
+    // --- the outbox path ---
+    /// Send session input. `input_id` is the runtime's generated id — it keys
+    /// the outbox item and the `input-ack` correlation.
+    SendInput {
+        machine: String,
+        session_id: String,
+        text: String,
+        input_id: String,
+    },
+    /// Re-send a `Failed` outbox item (same id + text, `attempts` bumped).
+    RetryOutboxItem {
+        machine: String,
+        id: String,
+    },
+
     // --- session commands ---
     RespondPermission {
         machine: String,
@@ -168,6 +195,52 @@ pub fn apply(stores: &mut CoreStores, intent: Intent, ctx: IntentCtx) -> IntentR
     let mut r = IntentResult::default();
     let v = VersionFields::default;
     match intent {
+        Intent::SendInput {
+            machine,
+            session_id,
+            text,
+            input_id,
+        } => {
+            let item =
+                OutboxState::new_input(&input_id, &machine, &session_id, &text, ctx.now);
+            stores.outbox.begin_publish(item);
+            r.persist(StoreId::Outbox);
+            // Replying to a session means the user saw it — clear its dot; and
+            // an untitled session takes its first user message as a stopgap
+            // title until the bridge authors a topical one.
+            stores.ui.clear_session_unread(&machine, &session_id);
+            stores
+                .machines
+                .note_first_user_message(&machine, &session_id, &text);
+            r.persist(StoreId::Machines);
+            r.outbox_send = Some(OutboxSend {
+                id: input_id.clone(),
+                machine,
+                msg: PhoneToBridge::Input(InputMsg {
+                    version: v(),
+                    session_id,
+                    text,
+                    input_id: Some(input_id),
+                }),
+            });
+        }
+        Intent::RetryOutboxItem { machine, id } => {
+            // `mark_retry` re-queues the item itself (Pending, attempts+1) and
+            // returns it — only for a `Failed` item, else `None`.
+            if let Some(item) = stores.outbox.mark_retry(&id) {
+                r.persist(StoreId::Outbox);
+                r.outbox_send = Some(OutboxSend {
+                    id,
+                    machine,
+                    msg: PhoneToBridge::Input(InputMsg {
+                        version: v(),
+                        session_id: item.session_id,
+                        text: item.text,
+                        input_id: Some(item.id),
+                    }),
+                });
+            }
+        }
         Intent::RespondPermission {
             machine,
             session_id,
@@ -417,6 +490,57 @@ mod tests {
             now: 1_000,
             visible: true,
         }
+    }
+
+    #[tokio::test]
+    async fn send_input_queues_an_outbox_item_clears_unread_and_stamps_a_stopgap_title() {
+        use client_core::stores::outbox::OutboxItemState;
+        let mut s = stores().await;
+        s.machines.register_machine("m", "laptop", None, None);
+        s.ui.mark_session_unread("m", "s1");
+
+        let out = apply(
+            &mut s,
+            Intent::SendInput {
+                machine: "m".into(),
+                session_id: "s1".into(),
+                text: "fix the build\nplease".into(),
+                input_id: "in-1".into(),
+            },
+            ctx(),
+        );
+
+        assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Pending);
+        assert!(!s.ui.is_session_unread("m", "s1"));
+        assert!(out.persist.contains(&StoreId::Outbox));
+        let o = out.outbox_send.unwrap();
+        assert_eq!(o.id, "in-1");
+        assert!(matches!(
+            o.msg,
+            PhoneToBridge::Input(m) if m.input_id.as_deref() == Some("in-1") && m.text == "fix the build\nplease"
+        ));
+    }
+
+    #[tokio::test]
+    async fn retry_outbox_item_only_fires_for_a_failed_item() {
+        use client_core::stores::outbox::OutboxState;
+        let mut s = stores().await;
+        let item = OutboxState::new_input("in-1", "m", "s1", "hi", 100);
+        s.outbox.begin_publish(item);
+        // still Pending → retry is a no-op
+        assert_eq!(
+            apply(&mut s, Intent::RetryOutboxItem { machine: "m".into(), id: "in-1".into() }, ctx()),
+            IntentResult::default()
+        );
+        // fail it, then retry re-queues
+        s.outbox.fail("in-1", "boom", 200);
+        let out = apply(
+            &mut s,
+            Intent::RetryOutboxItem { machine: "m".into(), id: "in-1".into() },
+            ctx(),
+        );
+        assert!(out.outbox_send.is_some());
+        assert_eq!(s.outbox.items["in-1"].attempts, 2);
     }
 
     #[tokio::test]

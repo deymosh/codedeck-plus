@@ -406,6 +406,11 @@ enum Msg {
         reply: oneshot::Sender<()>,
     },
     View(ViewQuery),
+    /// The off-loop publish of an outbox item settled.
+    PublishSettled {
+        id: String,
+        result: PublishResult,
+    },
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -541,6 +546,7 @@ impl Loop {
                     let _ = reply.send(());
                 }
                 Msg::View(query) => self.answer_view(query),
+                Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
             }
         }
     }
@@ -775,6 +781,9 @@ impl Loop {
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
         }
+        if let Some(o) = r.outbox_send {
+            self.on_send_tracked(o.id, o.machine, o.msg);
+        }
         if let Some(relays) = r.relays_changed {
             self.nostr.set_relays(&relays);
         }
@@ -834,16 +843,35 @@ impl Loop {
         msg: PhoneToBridge,
         reply: Option<oneshot::Sender<PublishResult>>,
     ) {
+        self.publish_command(machine, msg, reply, None);
+    }
+
+    /// Like [`Self::on_send`] but the publish outcome comes back as
+    /// [`Msg::PublishSettled`] so the loop can settle an outbox item.
+    fn on_send_tracked(&mut self, id: String, machine: String, msg: PhoneToBridge) {
+        self.publish_command(machine, msg, None, Some(id));
+    }
+
+    fn publish_command(
+        &mut self,
+        machine: String,
+        msg: PhoneToBridge,
+        reply: Option<oneshot::Sender<PublishResult>>,
+        outbox_id: Option<String>,
+    ) {
         let now = self.clock.now_ms();
         let event = match build_command(&self.identity, &machine, &msg, now) {
             Ok(event) => event,
             Err(err) => {
                 self.observer.action_failed(ActionFailed::PublishRejected);
+                let result = PublishResult {
+                    verdict: PublishVerdict::Rejected,
+                    detail: Some(egress_detail(&err)),
+                };
                 if let Some(reply) = reply {
-                    let _ = reply.send(PublishResult {
-                        verdict: PublishVerdict::Rejected,
-                        detail: Some(egress_detail(&err)),
-                    });
+                    let _ = reply.send(result);
+                } else if let Some(id) = outbox_id {
+                    let _ = self.self_tx.send(Msg::PublishSettled { id, result });
                 }
                 return;
             }
@@ -853,6 +881,7 @@ impl Loop {
         // socket-close / lifecycle handling.
         let ws = self.ws.clone();
         let observer = Rc::clone(&self.observer);
+        let self_tx = self.self_tx.clone();
         tokio::task::spawn_local(async move {
             let result = ws
                 .publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
@@ -868,7 +897,28 @@ impl Loop {
             }
             if let Some(reply) = reply {
                 let _ = reply.send(result);
+            } else if let Some(id) = outbox_id {
+                let _ = self_tx.send(Msg::PublishSettled { id, result });
             }
+        });
+    }
+
+    /// The publish of an outbox item settled — record it and emit `OutboxSettled`.
+    async fn on_publish_settled(&mut self, id: String, result: PublishResult) {
+        let accepted = matches!(
+            result.verdict,
+            PublishVerdict::Accepted | PublishVerdict::Unconfirmed
+        );
+        self.stores
+            .outbox
+            .settle_publish(&id, accepted, result.detail, self.clock.now_ms());
+        self.persist_store(StoreId::Outbox).await;
+        self.state_changed(SliceId::Outbox);
+        // `delivered` here means "published" — the bridge `input-ack` is the
+        // real confirmation and fires a second `OutboxSettled` via the router.
+        self.emit(CoreEvent::OutboxSettled {
+            id,
+            delivered: accepted,
         });
     }
 }
