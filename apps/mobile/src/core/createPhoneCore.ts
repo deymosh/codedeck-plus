@@ -65,6 +65,8 @@ import {
 import { createSettingsStore, loadPersistedSettings, type SettingsStore } from './stores/settings';
 import { createUiStore, sessionKeyOf, type UiStore } from './stores/ui';
 import type { SessionState } from '@codedeck/protocol';
+import { bytesToHex } from './crypto';
+import type { NativeCoreControl } from './nativeCore';
 import { BridgeApi } from './services/bridgeApi';
 import { PhoneNostrClient } from './services/nostrClient';
 import {
@@ -83,6 +85,15 @@ export const LAST_STORED_SEEN_KEY = 'client.lastStoredSeen';
 export interface PhoneCoreDeps {
   kv: KV;
   transport: PhoneTransport;
+  /** F1: when present, the bridge protocol (30515/4515/4516/24515) rides the
+   *  in-process Rust runtime instead of `transport` + the WebView crypto —
+   *  `transport` is still used for DM (1059) + Marmot (445). Inbound decoded
+   *  messages + connection snapshots are fed by the boot layer onto
+   *  `api.dispatchDecoded` / `connection`. */
+  nativeCore?: NativeCoreControl;
+  /** SOCKS5 `host:port` handed to `nativeCore.init` when Tor is on (the Orbot
+   *  address; a platform-layer concern the core does not resolve itself). */
+  nativeCoreProxy?: string;
   /** Defaults to the in-memory port (SQLite lands in Phase 3b). */
   transcriptStorage?: TranscriptStorage;
   timers?: Timers;
@@ -171,6 +182,20 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
   const marmotInit = await loadPersistedMarmot(deps.kv);
   let lastStoredSeen = Number((await deps.kv.get(LAST_STORED_SEEN_KEY)) ?? '0') || 0;
 
+  // F1: hand the in-process runtime its relays + identity + proxy once. The
+  // secret is passed here and nowhere else, and never logged. `start()` /
+  // `stop()` below flow through the connection FSM's openSocket / closeSocket
+  // effects — the runtime owns the actual sockets + reconnect.
+  const native = deps.nativeCore;
+  if (native) {
+    await native.init({
+      relays: settingsData.relays,
+      identitySecretHex: bytesToHex(keypair.secretKey),
+      proxy: settingsData.torProxyEnabled ? (deps.nativeCoreProxy ?? null) : null,
+      tor: settingsData.torProxyEnabled,
+    });
+  }
+
   // Mutual references are wired through closures; everything below is
   // assigned before start() can run.
   let client!: PhoneNostrClient;
@@ -235,7 +260,8 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
     {
       kv: deps.kv,
       onRelaysChanged: (relays) => {
-        client.setRelays(relays);
+        if (native) void native.setRelays([...relays]);
+        else client.setRelays(relays);
         // The DM subscription still points at the old relay set — restart it
         // (fresh epoch) and let it republish the kind-10050 advertisement.
         if (dm.getState().subscribed) dm.getState().start();
@@ -382,7 +408,7 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
   const pairing: PairingStore = createPairingStore({
     onCandidate: () => {
       // The candidate must pass the authors filter before its pair-ack arrives.
-      client.resubscribe();
+      refreshSubscriptionAuthors();
     },
     send: (machine, msg) => void api.send(machine, msg),
     onPaired: (candidate, machineName, host) => {
@@ -404,7 +430,7 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
       if (candidate.meshAdmin && candidate.netid) {
         deps.onMeshJoin?.(candidate.meshAdmin, candidate.netid);
       }
-      client.resubscribe();
+      refreshSubscriptionAuthors();
     },
     identity: () => ({ npub: keypair.npub, pubkeyHex: keypair.pubkeyHex }),
     timers, // CDX-040: the pair-ack deadline runs on the injected seam
@@ -418,6 +444,24 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
     defaultMode: () => settings.getState().defaultMode,
     sendMode: (machine, sessionId, mode) => void api.modeChange(machine, sessionId, mode),
   });
+
+  /** Relay subscription authors: paired machines + any pairing candidate (its
+   *  pair-ack must pass the filter before it arrives). */
+  const currentAuthors = (): string[] => {
+    const authors = machines.getState().machinePubkeys();
+    const candidate = pairing.getState().candidate;
+    if (candidate && !authors.includes(candidate.pubkeyHex)) {
+      authors.push(candidate.pubkeyHex);
+    }
+    return authors;
+  };
+
+  /** "The authors filter changed" — resubscribe. In native mode the runtime
+   *  re-REQs; otherwise the WebView nostr client does. */
+  const refreshSubscriptionAuthors = (): void => {
+    if (native) void native.setMachines(currentAuthors());
+    else client.resubscribe();
+  };
 
   /** Reconcile one machine's transcripts against its advertised seqHighs. */
   const reconcileMachine = (machinePubkey: string): void => {
@@ -438,6 +482,12 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
       pairing.getState().candidate?.pubkeyHex === pubkeyHex,
     publish: (event: NostrEvent) => client.publish(event),
     publishConfirmed: (event, opts) => client.publishConfirmed(event, opts),
+    ...(native
+      ? {
+          nativeSend: (machine, msg) => native.send(machine, msg),
+          nativePublishConfirmed: (machine, msg, opts) => native.publish(machine, msg, opts),
+        }
+      : {}),
     now,
     timers,
     ...(log ? { log } : {}),
@@ -604,14 +654,7 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
   client = new PhoneNostrClient({
     transport: deps.transport,
     phonePubkey: keypair.pubkeyHex,
-    authors: () => {
-      const authors = machines.getState().machinePubkeys();
-      const candidate = pairing.getState().candidate;
-      if (candidate && !authors.includes(candidate.pubkeyHex)) {
-        authors.push(candidate.pubkeyHex);
-      }
-      return authors;
-    },
+    authors: currentAuthors,
     onEvent: (event) => api.ingest(event),
     onSocketOpen: () => connection.getState().dispatch({ type: 'socket-open', at: now() }),
     onSocketClose: () => connection.getState().dispatch({ type: 'socket-close' }),
@@ -639,12 +682,16 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
       // (re)connect starts a fresh epoch with a fresh catch-up window, every
       // deliberate teardown closes it silently (its own epoch guard).
       openSocket: () => {
-        client.connect();
+        // F1: the runtime owns the bridge socket + its reconnect; `start()` is
+        // idempotent. DM (1059) + Marmot (445) stay on the WebView transport.
+        if (native) void native.start();
+        else client.connect();
         dm.getState().start();
         marmot.getState().start();
       },
       closeSocket: () => {
-        client.disconnect();
+        if (native) void native.stop();
+        else client.disconnect();
         dm.getState().stop();
         marmot.getState().stop();
       },
@@ -753,7 +800,7 @@ export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {
         ui.getState().selectMachine(null);
       }
       // Drop the machine from the relay subscription's authors filter.
-      client.resubscribe();
+      refreshSubscriptionAuthors();
       await transcript.getState().flush();
     },
 
