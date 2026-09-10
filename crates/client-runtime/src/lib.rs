@@ -12,10 +12,12 @@ pub mod core;
 pub mod deadline;
 pub mod nostr_client;
 pub mod ports;
+pub mod stores;
 pub mod transport;
 
 pub use core::{Core, CoreConfig, CoreObserver};
 pub use ports::{Kv, Notifier, TranscriptStore};
+pub use stores::{CoreStores, HydratedCore};
 
 /// Re-export the pure core so hosts have one dependency edge.
 pub use client_core;
