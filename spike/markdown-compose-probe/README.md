@@ -2,62 +2,65 @@
 
 > **THROWAWAY.** Delete once the verdict is folded into the plan (or an ADR).
 
-## Verdict: **CONDITIONAL GO** — parity is reachable but **not trivial**
+## Verdict: **GO — with a scoped renderer decision required in F3**
+
+Compose transcript rendering can reach parity, but a Markdown renderer is **not
+a library drop-in** for CodeDeck's corpus: tables, task-list checkboxes and
+syntax highlighting all need explicit work, and there is a real
+Kotlin/AGP/Paparazzi/Compose/renderer version matrix to lock.
 
 | Question | Answer |
 |---|---|
-| Can we screenshot-test Compose transcript rendering off-device (the F3 fidelity guardrail)? | ✅ **Yes.** Paparazzi runs in Docker on the JVM (no emulator), `:ui:recordPaparazziDebug` → golden PNGs. This is the tooling F3 should adopt. |
-| Do the **bespoke** rows (diff card, tool group, cards) port to Compose with matching fidelity? | ✅ **Yes.** `DiffCard` / `ToolGroup` goldens match CodeDeck's near-black monochrome (`+` green / `-` red / dim filename, monospace) — near-verbatim ports of `DiffRow.tsx` etc. |
-| Does a Compose-native **Markdown renderer** drop in for parity with `react-markdown` + `remark-gfm` + `rehype-highlight`? | ⚠️ **No — it needs real integration work** (details below). |
+| Screenshot-test Compose rendering off-device (the F3 fidelity guardrail)? | ✅ **Yes** — Paparazzi runs in Docker on the JVM (no emulator); `:ui:recordPaparazziDebug` → golden PNGs. |
+| Do the **bespoke** rows (diff card, tool group, cards) port with matching fidelity? | ✅ **Yes** — `diff_card` / `tool_group` goldens match the near-black monochrome (`+` green / `-` red / dim mono). Near-verbatim ports of `DiffRow.tsx` etc. |
+| Does a Compose Markdown renderer cover the corpus out of the box? | ⚠️ **Partly** — see the table below. |
 
-## Evidence
+## What the Markdown renderer (mikepenz 0.27, synchronous) does / doesn't
 
-`artifacts/*.png` (from `ui/src/test/snapshots/images/`):
+`artifacts/probe_ParityTest_assistant_markdown_gfm_and_code.png`:
 
-| golden | result |
+| feature | result |
 |---|---|
-| `diff_card` | ✅ faithful — filename dim, `-` red, `+` green, context gray, monospace, near-black card |
-| `tool_group` | ✅ faithful — "N actions" + bullet list on a near-black card |
-| `user_message` | ✅ plain white text |
-| `assistant_markdown_gfm_and_code` | ❌ **blank** — the `mikepenz` `Markdown(content=…)` composable rendered nothing in a static Paparazzi snapshot |
+| headings, paragraphs | ✅ render, white on black |
+| ordered / unordered / **nested** lists | ✅ |
+| inline code | ✅ monospace on `#0D0D0D` |
+| **5 fenced code blocks** (bash / ts / rust / json / diff) | ✅ render as monospace blocks |
+| **GFM table** | ❌ renders as **stacked plain lines**, not a grid — even with `GFMFlavourDescriptor()`. Needs a custom `markdownComponents(table = …)` or a newer renderer version. |
+| **task-list checkboxes** (`- [x]` / `- [ ]`) | ❌ render as plain `•` bullets |
+| **syntax highlighting** | ❌ absent (monochrome). Needs the `-code` module (version-locked) or Rust/`syntect` spans emitted from `client-core`. |
+| blockquote | ⚠️ not visibly distinct from a paragraph |
+| link | renders inline, styling minimal |
 
-## The Markdown-renderer findings (the "not trivial" part)
+## The version treadmill (must be locked for F3)
 
-Using `com.mikepenz:multiplatform-markdown-renderer` 0.35 (the leading
-Compose-native option):
-
-1. **Async parse vs screenshot tests.** `Markdown(content = …)` parses the
-   source asynchronously; Paparazzi's static `snapshot {}` captures the
-   pre-parse (empty) frame → blank golden. The fix is `rememberMarkdownState(…,
-   immediate = true)` / a synchronous parse path — see #2.
-2. **Version alignment.** Switching to `rememberMarkdownState(immediate = true)`
-   threw `NoSuchMethodError` at runtime — the `-android` / `-m3` / `-code`
-   artifacts drift apart transitively. All mikepenz modules must be pinned to
-   one exact version (and probably a newer one than 0.35 for `immediate`).
-3. **Colour plumbing.** Text colour no longer comes from `markdownColor(text=…)`
-   (deprecated) — it comes from `markdownTypography(...)` per-slot `TextStyle`s
-   and/or `LocalContentColor`. For CodeDeck's dark-only theme every slot needs
-   an explicit white/gray `TextStyle`; the defaults render dark-on-dark.
-4. **Syntax highlighting is a separate module** (`-code`, backed by
-   `dev.snipme:highlights`) covering ~a dozen languages with coarser tokens
-   than highlight.js's ~190 grammars. Exact colour-per-token parity with the
-   current hand-written hljs theme (`rows.module.css` `:global(.hljs*)`) will
-   **not** be free — it's the single biggest fidelity gap. Options: accept
-   coarser highlighting, theme `highlights` to approximate, or parse in
-   Rust/`syntect` in `client-core` and emit spans (plan already notes this).
-5. GFM tables / task lists / nested lists / blockquotes **are** supported by the
-   renderer — once #1–#3 are solved they should render; not verified here
-   because of #1.
+- `Markdown(content = …)` in mikepenz **≥ ~0.30 parses asynchronously** →
+  Paparazzi's static snapshot catches the empty frame (blank golden). Needs a
+  synchronous path.
+- The synchronous `Markdown(content)` exists in **0.27**, but 0.27 predates
+  built-in table rendering.
+- **0.39.x requires Kotlin 2.2** (`kotlin-stdlib 2.3`); this probe is on Kotlin
+  2.0.21 (Paparazzi 1.3.5 / AGP 8.7.3 constraint) → 0.39 fails to compile
+  (`incompatible metadata version 2.2.0`).
+- Intermediate versions drift the `-android` / `-m3` / `-code` modules apart
+  transitively → runtime `NoSuchMethodError` unless every module is pinned.
+- Colour: text colour comes from `markdownTypography(...)` per-slot `TextStyle`s
+  and `LocalContentColor` (via a `Surface`), **not** `markdownColor(text=…)`
+  (deprecated). The dark-only theme needs every slot set explicitly.
 
 ## Recommendation for F3
 
-- Adopt **Paparazzi** (proven here) as the transcript-fidelity guardrail.
-- **First F3 task is a transcript-screen spike**: pin a single mikepenz version,
-  wire synchronous parse + the full dark `markdownTypography`, capture goldens
-  for the whole corpus, and diff against a **reference capture from the running
-  React app** (`apps/mobile` on `pnpm dev` in a browser at a fixed width).
-- Budget explicit effort for syntax-highlight parity — treat it as its own
-  decision, not a checkbox.
+1. Adopt **Paparazzi** (proven here) as the transcript-fidelity guardrail.
+2. **First F3 task = a transcript-screen spike**: lock one
+   Kotlin/AGP/Paparazzi/Compose/renderer version set; get tables + task lists +
+   blockquotes rendering (custom components if needed); capture goldens for the
+   whole corpus; diff against a **reference capture from the running React app**
+   (`apps/mobile` on `pnpm dev`, fixed width).
+3. **Syntax highlighting is its own decision** — accept coarse `highlights`,
+   theme it toward the current hljs palette, or emit spans from Rust
+   (`syntect`/`tree-sitter`) in `client-core`. Budget explicit effort; it is the
+   single biggest fidelity gap.
+4. This widens the F3/F4 UI scope but does **not** threaten stopping at F2b — the
+   work is bounded and known.
 
 ## Reproduce
 

@@ -25,12 +25,23 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview:$compose")
     implementation("androidx.compose.ui:ui-tooling:$compose")
 
-    // Compose-native Markdown: GFM tables / task lists / nested lists / code,
-    // Material3 typography. (The -code syntax-highlight module is left out of
-    // this probe iteration — it dragged in a version-skewed transitive renderer;
-    // highlighting is called out in the README as integration work.)
-    implementation("com.mikepenz:multiplatform-markdown-renderer-android:0.35.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.35.0")
+    // Compose-native Markdown. 0.27.0 = Kotlin 1.9 era (reads fine in a K2
+    // project) and still has the SYNCHRONOUS `Markdown(content)` — the async
+    // MarkdownState split came later and breaks static screenshot tests.
+    val md = "0.27.0"
+    implementation("com.mikepenz:multiplatform-markdown-renderer:$md")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-android:$md")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:$md")
 
     testImplementation("junit:junit:4.13.2")
+}
+
+// keep every mikepenz markdown module on the exact same version (transitive
+// pulls otherwise skew and cause runtime NoSuchMethodError)
+configurations.all {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "com.mikepenz" && requested.name.startsWith("multiplatform-markdown-renderer")) {
+            useVersion("0.27.0")
+        }
+    }
 }

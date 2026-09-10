@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 
 // CodeDeck is dark-only, near-black monochrome (src/styles/tokens.css).
 private val bg = Color(0xFF000000)
@@ -52,8 +53,11 @@ fun CodeDeckDark(content: @Composable () -> Unit) {
 fun AssistantMarkdown(md: String) {
     val white = Color(0xFFFFFFFF)
     val mono = TextStyle(color = Color(0xFFE0E0E0), fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+    // 0.27's Markdown(content) parses synchronously in composition — fine for a
+    // static Paparazzi snapshot (newer versions moved to an async MarkdownState).
     Markdown(
         content = md,
+        flavour = GFMFlavourDescriptor(),   // tables + task lists (default is CommonMark)
         colors = markdownColor(
             codeBackground = Color(0xFF0D0D0D),
             inlineCodeBackground = Color(0xFF0D0D0D),
