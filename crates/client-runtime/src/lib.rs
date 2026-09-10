@@ -15,6 +15,7 @@ pub mod nostr_client;
 pub mod ports;
 pub mod stores;
 pub mod transport;
+pub mod view;
 
 pub use core::{Core, CoreConfig, CoreObserver};
 pub use ports::{Kv, Notifier, TranscriptStore};
