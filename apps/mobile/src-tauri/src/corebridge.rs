@@ -118,6 +118,15 @@ pub struct InitConfig {
     pub tor: bool,
 }
 
+/// Cheap presence probe: succeeds iff this APK was built with `native-core`
+/// (the command is otherwise absent and `invoke` rejects). Needs no state, so
+/// the WebView can call it BEFORE `core_init` to decide whether to use the
+/// in-process path at all.
+#[tauri::command]
+pub fn core_available() -> bool {
+    true
+}
+
 /// Spin the bridge thread + `Core`. Idempotent — a second call is a no-op.
 #[tauri::command]
 pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConfig) -> Result<(), String> {

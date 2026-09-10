@@ -163,10 +163,11 @@ export async function createNativeCore(log?: Logger): Promise<NativeCore | null>
       import('@tauri-apps/api/core'),
       import('@tauri-apps/api/event'),
     ]);
-    const core = nativeCoreOver(invoke as TauriInvoke, listen as unknown as TauriListen, log);
-    // Probe: a build without `native-core` has no such command.
-    await core.connectionStatus();
-    return core;
+    // Probe: `core_available` needs no state and returns true — a build without
+    // `native-core` has no such command, so `invoke` rejects and we fall back.
+    // (`core_connection_status` would reject here too, before `core_init`.)
+    if ((await (invoke as TauriInvoke)<boolean>('core_available')) !== true) return null;
+    return nativeCoreOver(invoke as TauriInvoke, listen as unknown as TauriListen, log);
   } catch (err) {
     log?.(`[nativeCore] unavailable (${err}) — using the WebView transport`);
     return null;

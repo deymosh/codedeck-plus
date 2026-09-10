@@ -35,6 +35,8 @@ pub fn run() {
             sqlstore::sql_execute,
             sqlstore::sql_select,
             #[cfg(feature = "native-core")]
+            corebridge::core_available,
+            #[cfg(feature = "native-core")]
             corebridge::core_init,
             #[cfg(feature = "native-core")]
             corebridge::core_start,
