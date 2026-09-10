@@ -135,7 +135,19 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | `dm` store (state machine) | `apps/mobile/src/core/stores/dm.ts` | `client_core::stores::dm` | ✅ F2a — `DmState`: structural dedup (`id` then sender+content window), conversation upsert + unread accounting (active conversation never counts), `ingest_dm_rumor` (self-copy peer via `p` tag, status), `dm_since_cursor` (newest − 48 h), `parse_peer_input` / `truncate_peer_label` / `ordered_conversations` / `build_dm_filter`, profile cache TTL, `hydrate_dm` tolerant. The `nip59` unwrap, transport sub + epoch guard, 10050 publish and profile fetch stay in `client-runtime` (that layer carries the `dm` feature gate — the pure state machine is dep-free). 14 tests. |
 | `marmot` store (state machine) | `apps/mobile/src/core/stores/marmot.ts` | `client_core::stores::marmot` | ✅ F2a — `MarmotState`: id-only dedup with the Failed→Sent promotion on the relay echo, conversation upsert (known-peer / prior-activity preference), unread gating, `apply_welcome` (stage + CDX-030 KP-consumed flag), `on_welcome_accepted` (join + welcomer backfill + returns the h tag), the VEIL-029 bounded unjoined-445 buffer + `take_buffered_for`, `should_mint_key_package` (CDX-030 mint-once), `unified_conversations` (Phase 6 list), `marmot_since_cursor`, `peer_of_group`, tolerant `hydrate_marmot`. The MDK/MLS engine calls, transport sub + epoch guard, KP + 10051 publish stay in `client-runtime` (that layer carries the `marmot` feature gate). 13 tests. |
 | `dmAttachments` crypto/upload | `apps/mobile/src/core/dmAttachments.ts` | `rt::` (needs `aes-gcm` + `HttpFetch`) | ⏳ F2b |
-| MDK/MLS engine | `apps/mobile/src-tauri/src/marmot.rs` | `client_core::marmot` (feat) | ⏳ F2a |
+| `deadline` (cancel/budget/withDeadline) | `apps/mobile/src/core/deadline.ts` | `rt::` (AbortSignal + timers) | ⏳ F2b |
+| ports traits (`Kv`/`SecureStore`/`Transport`/`TranscriptStore`/`Timers`/`Clock`/`Entropy`/`Notifier`/`HttpFetch`) | `apps/mobile/src/core/ports.ts` | `client_core::ports` + impls in `rt::` | ⏳ F2b (partial: `Clock`/`Entropy` live in `rt::core`) |
+| MDK/MLS engine relocation | `apps/mobile/src-tauri/src/marmot.rs` + `sqlstore.rs` | `client_runtime` workspace member (feat `marmot`, SQLCipher) | ⏳ F2b |
+| runtime `Core`: compose all stores + View/Intent/CoreEvent surface, re-point `apps/mobile`, `tools/contract-harness/`, delete `src/core` | `apps/mobile/src/core/createPhoneCore.ts` | `client_runtime::core` | ⏳ F2b |
+
+**F2a status: the pure `client-core` layer is complete.** Every domain state
+machine, reducer, codec, controller and presentation model from
+`apps/mobile/src/core` (plus the consumed `ui/` pure models) is ported, pure
+(no `tokio`/sockets/threads/I/O), and covered by vector tests — 364 workspace
+tests, `clippy -D warnings` clean. What remains is F2b: the async runtime
+(`deadline`, the `aes-gcm`/`HttpFetch` DM-attachment path, the MDK engine
+relocation), composing it all into `Core`'s View/Intent/CoreEvent surface, the
+contract harness, and re-pointing `apps/mobile`.
 
 Verify: `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D
 warnings` (CI `cargo` job, `core` filter). No host toolchain needed — run in
