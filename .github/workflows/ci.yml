@@ -84,6 +84,8 @@ jobs:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              # the shared codec conformance corpus (also consumed by pnpm test)
+              - 'packages/protocol/fixtures/**'
 
       - name: Install Tauri Linux system deps
         if: steps.filter.outputs.rust == 'true'

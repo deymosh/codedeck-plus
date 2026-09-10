@@ -65,9 +65,14 @@ pickers, tray/menus.
 
 ## Anti-drift with `packages/protocol`
 
-`packages/protocol` stays the **normative spec** (zod). The Rust codec is a
-mirror. `packages/protocol/fixtures/` (generated from the schemas) is consumed by
-both `codec.test.ts` and a Rust `codec_conformance`; CI fails on any mismatch.
+`packages/protocol` stays the **normative spec** (zod). The Rust `wire` codec
+is a mirror. `packages/protocol/fixtures/corpus.json` is the executable
+contract: `packages/protocol/src/__tests__/fixtures.test.ts` (vitest) and
+`crates/client-core/tests/codec_conformance.rs` (cargo) run the identical
+assertions — decode every `valid` entry + semantic round-trip, reject every
+`rejected` entry, ignore extra fields on `forwardCompatible` — on the identical
+bytes. A schema change mirrored on only one side fails CI there. The `cargo`
+job's `core` path filter includes `packages/protocol/fixtures/**`.
 
 ## Port-tracking
 
@@ -78,7 +83,7 @@ both `codec.test.ts` and a Rust `codec_conformance`; CI fails on any mismatch.
 | capabilities | `packages/protocol/src/capabilities.ts` | `client_core::wire::capabilities` | ✅ F1 |
 | `ranges` | `packages/protocol/src/ranges.ts` | `client_core::ranges` | ✅ F1 |
 | wire codec + schemas | `packages/protocol/src/{codec,schemas}.ts` | `client_core::wire::{codec,common,commands,events,tristate}` | ✅ F1 |
-| `fixtures/` corpus + cross-lang conformance | `packages/protocol/fixtures/` (new) | `client_core` `codec_conformance` + `codec.test.ts` | ⏳ next |
+| `fixtures/` corpus + cross-lang conformance | `packages/protocol/fixtures/corpus.json` | `codec_conformance.rs` + `fixtures.test.ts` | ✅ F1 |
 | chunking (framing + assembler) | `packages/protocol/src/chunking.ts` | `client_core::chunking` | ✅ F1 |
 | connection reducer + presence/stale helpers | `apps/mobile/src/core/stores/connection.ts` (pure half) | `client_core::connection` | ✅ F1 |
 | nostr client | `apps/mobile/src/core/services/nostrClient.ts` + `platform/poolOptions.ts` | `client_runtime::nostr_client` | ⏳ |
