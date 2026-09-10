@@ -13,6 +13,7 @@ pub mod connection;
 pub mod crypto;
 pub mod default_session_mode;
 pub mod delete_controller;
+pub mod image_chunks;
 pub mod mode_cycle;
 pub mod nip42;
 pub mod notifications;

@@ -184,6 +184,7 @@ dependencies = [
 name = "client-core"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "hex",
  "nostr",
  "serde",
