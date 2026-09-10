@@ -37,13 +37,17 @@ pub struct Filter {
     pub since: Option<i64>,
 }
 
-/// A Nostr event (the fields the client's routing / dedup / cursor need).
+/// A Nostr event. The client itself only routes / dedups / advances the cursor
+/// on `id` / `kind` / `created_at` / `pubkey`; `content` is carried through
+/// untouched for the layer above (`bridge_api::ingest` — decrypt + decode).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NostrEvent {
     pub id: String,
     pub kind: u16,
     pub created_at: i64,
     pub pubkey: String,
+    /// `event.content`: `base64(NIP-44(json))`, or a `chunk` fragment.
+    pub content: String,
 }
 
 /// Callbacks a `Transport` invokes for one subscription. Mirrors the TS
@@ -392,7 +396,7 @@ mod tests {
     }
 
     fn evt(id: &str, kind: u16, created_at: i64) -> NostrEvent {
-        NostrEvent { id: id.into(), kind, created_at, pubkey: "b1".into() }
+        NostrEvent { id: id.into(), kind, created_at, pubkey: "b1".into(), content: String::new() }
     }
 
     fn harness(authors: &[&str]) -> (FakeTransport, Rc<Host>, NostrClient<FakeTransport, Host>) {

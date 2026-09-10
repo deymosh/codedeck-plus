@@ -488,6 +488,7 @@ fn project_event(raw: &Value) -> Option<NostrEvent> {
         kind: ev.kind.as_u16(),
         created_at: ev.created_at.as_secs() as i64,
         pubkey: ev.pubkey.to_hex(),
+        content: ev.content.clone(),
     })
 }
 
@@ -527,65 +528,17 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::mock::{mock_relay, MockRelay};
     use client_core::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
     use client_core::wire::codec::decode_phone_to_bridge;
     use nostr::JsonUtil;
     use std::cell::RefCell;
-    use tokio::net::TcpListener;
     use tokio::task::LocalSet;
 
     const SEC_PHONE: &str =
         "0000000000000000000000000000000000000000000000000000000000000001";
 
-    /// A scriptable one-connection mock relay on loopback.
-    struct Mock {
-        url: String,
-        inbound: mpsc::UnboundedReceiver<String>,
-        /// frames to push to the client; `"__CLOSE__"` drops the socket.
-        outbound: mpsc::UnboundedSender<String>,
-    }
-
-    impl Mock {
-        async fn next_frame(&mut self) -> String {
-            tokio::time::timeout(Duration::from_secs(2), self.inbound.recv())
-                .await
-                .expect("client sent a frame within 2s")
-                .expect("mock channel open")
-        }
-    }
-
-    async fn start_mock() -> Mock {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (in_tx, inbound) = mpsc::unbounded_channel::<String>();
-        let (outbound, mut out_rx) = mpsc::unbounded_channel::<String>();
-        tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
-            loop {
-                tokio::select! {
-                    msg = ws.next() => match msg {
-                        Some(Ok(Message::Text(t))) => { let _ = in_tx.send(t); }
-                        Some(Ok(Message::Ping(p))) => { let _ = ws.send(Message::Pong(p)).await; }
-                        Some(Ok(_)) => {}
-                        _ => break,
-                    },
-                    cmd = out_rx.recv() => match cmd {
-                        Some(c) if c == "__CLOSE__" => { let _ = ws.close(None).await; break; }
-                        Some(c) => { let _ = ws.send(Message::Text(c)).await; }
-                        None => break,
-                    }
-                }
-            }
-        });
-        Mock {
-            url: format!("ws://127.0.0.1:{port}"),
-            inbound,
-            outbound,
-        }
-    }
-
-    fn transport(mock: &Mock, phone: &Keypair) -> WsTransport {
+    fn transport(mock: &MockRelay, phone: &Keypair) -> WsTransport {
         WsTransport::new(WsConfig {
             relays: vec![mock.url.clone()],
             identity: phone.clone(),
@@ -614,7 +567,7 @@ mod tests {
     async fn subscribe_sends_req_then_delivers_events_and_eose() {
         LocalSet::new()
             .run_until(async {
-                let mut mock = start_mock().await;
+                let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = transport(&mock, &phone);
                 t.ensure_connected();
@@ -635,10 +588,8 @@ mod tests {
                 assert!(req.starts_with(r#"["REQ","cd-1",{"#), "got {req}");
                 assert!(req.contains("\"#p\":["), "filter carries #p: {req}");
 
-                mock.outbound
-                    .send(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "hi")))
-                    .unwrap();
-                mock.outbound.send(r#"["EOSE","cd-1"]"#.to_string()).unwrap();
+                mock.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "hi")));
+                mock.push(r#"["EOSE","cd-1"]"#.to_string());
                 tokio::time::sleep(Duration::from_millis(120)).await;
 
                 assert_eq!(events.borrow().len(), 1);
@@ -653,7 +604,7 @@ mod tests {
     async fn answers_nip42_auth_with_an_identity_signed_event() {
         LocalSet::new()
             .run_until(async {
-                let mut mock = start_mock().await;
+                let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = transport(&mock, &phone);
                 t.ensure_connected();
@@ -667,7 +618,7 @@ mod tests {
                 );
                 let _req = mock.next_frame().await;
 
-                mock.outbound.send(r#"["AUTH","chal-42"]"#.to_string()).unwrap();
+                mock.push(r#"["AUTH","chal-42"]"#.to_string());
                 let auth = mock.next_frame().await;
                 let v: Vec<Value> = serde_json::from_str(&auth).unwrap();
                 assert_eq!(v[0], "AUTH");
@@ -686,7 +637,7 @@ mod tests {
     async fn publish_confirmed_maps_the_relay_ok_verdict() {
         LocalSet::new()
             .run_until(async {
-                let mut mock = start_mock().await;
+                let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let t = transport(&mock, &phone);
@@ -716,9 +667,7 @@ mod tests {
                 let v: Vec<Value> = serde_json::from_str(&sent).unwrap();
                 assert_eq!(v[0], "EVENT");
                 let id = v[1]["id"].as_str().unwrap().to_string();
-                mock.outbound
-                    .send(format!(r#"["OK","{id}",false,"blocked: not allowed"]"#))
-                    .unwrap();
+                mock.push(format!(r#"["OK","{id}",false,"blocked: not allowed"]"#));
 
                 let result = handle.await.unwrap();
                 assert_eq!(result.verdict, PublishVerdict::Rejected);
@@ -730,7 +679,7 @@ mod tests {
     async fn a_socket_drop_fires_on_close_once() {
         LocalSet::new()
             .run_until(async {
-                let mut mock = start_mock().await;
+                let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = transport(&mock, &phone);
                 t.ensure_connected();
@@ -747,7 +696,7 @@ mod tests {
                 );
                 let _req = mock.next_frame().await;
 
-                mock.outbound.send("__CLOSE__".to_string()).unwrap();
+                mock.close();
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 assert_eq!(*closes.borrow(), 1);
             })
@@ -758,7 +707,7 @@ mod tests {
     async fn dropping_a_sub_sends_close_and_silences_it() {
         LocalSet::new()
             .run_until(async {
-                let mut mock = start_mock().await;
+                let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = transport(&mock, &phone);
                 t.ensure_connected();
@@ -779,9 +728,7 @@ mod tests {
                 assert_eq!(mock.next_frame().await, r#"["CLOSE","cd-1"]"#);
 
                 // a late EVENT for the dropped sub must not reach the callback
-                mock.outbound
-                    .send(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "late")))
-                    .unwrap();
+                mock.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "late")));
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 assert!(events.borrow().is_empty());
             })

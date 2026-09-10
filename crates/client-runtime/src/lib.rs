@@ -3,12 +3,16 @@
 //! (`start`/`stop`/`pause`/`resume`) and the platform ports. The UniFFI
 //! (Android) and `#[tauri::command]` (Desktop) bindings attach to this crate.
 //!
-//! F1: `nostr_client` (the epoch-guarded per-class subscription state machine)
-//! is ported first, behind a `Transport` port. The real `tokio-tungstenite` +
-//! SOCKS5 transport and the lifecycle handle land next.
+//! F1 layering: `nostr_client` (epoch-guarded per-class subscription FSM) sits
+//! behind a `Transport` port; `transport::ws` is the real WebSocket + SOCKS5
+//! driver; `core::Core` composes them with the connection FSM and `bridge_api`
+//! behind one tokio event loop — the handle the bindings attach to.
 
+pub mod core;
 pub mod nostr_client;
 pub mod transport;
+
+pub use core::{Core, CoreConfig, CoreObserver};
 
 /// Re-export the pure core so hosts have one dependency edge.
 pub use client_core;

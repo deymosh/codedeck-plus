@@ -17,4 +17,7 @@ pub mod frames;
 pub mod router;
 pub mod ws;
 
+#[cfg(test)]
+pub(crate) mod mock;
+
 pub use ws::{WsConfig, WsTransport};
