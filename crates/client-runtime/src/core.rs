@@ -203,6 +203,23 @@ impl Core {
         let _ = self.tx.send(Msg::SetMachines(machines));
     }
 
+    /// Replace the relay list (settings changed). The transport re-dials the
+    /// diff and, if connected, the subscription client re-REQs.
+    pub fn set_relays(&self, relays: Vec<String>) {
+        let _ = self.tx.send(Msg::SetRelays(relays));
+    }
+
+    /// Current connection status + the `needs pairing check` diagnostic. A
+    /// fresh read for a UI that just attached (the observer only reports
+    /// changes).
+    pub async fn connection_status(&self) -> (ConnectionStatus, bool) {
+        let (rtx, rrx) = oneshot::channel();
+        if self.tx.send(Msg::QueryStatus(rtx)).is_err() {
+            return (ConnectionStatus::Stopped, false);
+        }
+        rrx.await.unwrap_or((ConnectionStatus::Stopped, false))
+    }
+
     /// Fire-and-forget send of a phone→bridge command.
     pub fn send(&self, machine: impl Into<String>, msg: PhoneToBridge) {
         let _ = self.tx.send(Msg::Send {
@@ -249,6 +266,8 @@ enum Msg {
     Resume,
     SetOnline(bool),
     SetMachines(Vec<String>),
+    SetRelays(Vec<String>),
+    QueryStatus(oneshot::Sender<(ConnectionStatus, bool)>),
     RelayEvent(NostrEvent),
     SocketOpen,
     SocketClose,
@@ -343,6 +362,10 @@ impl Loop {
                     ) {
                         self.nostr.resubscribe();
                     }
+                }
+                Msg::SetRelays(relays) => self.nostr.set_relays(&relays),
+                Msg::QueryStatus(reply) => {
+                    let _ = reply.send((self.conn.status, self.conn.needs_pairing_check));
                 }
                 Msg::RetryDue => self.dispatch(ConnectionEvent::RetryDue),
                 Msg::VisibilitySettled => self.dispatch(ConnectionEvent::VisibilitySettled),
@@ -733,6 +756,50 @@ mod tests {
                     .skip_while(|(s, _)| *s != ConnectionStatus::Stopped)
                     .count();
                 assert_eq!(after_stop, 1, "status changed after Stop: {statuses:?}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn connection_status_query_reflects_the_live_fsm() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default()));
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+
+                assert_eq!(core.connection_status().await.0, ConnectionStatus::Idle);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+                assert_eq!(core.connection_status().await.0, ConnectionStatus::Connected);
+                core.stop();
+                settle().await;
+                assert_eq!(core.connection_status().await.0, ConnectionStatus::Stopped);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn set_relays_repoints_the_transport_to_the_new_relay() {
+        LocalSet::new()
+            .run_until(async {
+                let mut first = mock_relay().await;
+                let mut second = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&first, &phone, Rc::new(Spy::default()));
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                eose_all(&mut first).await;
+                settle().await;
+
+                core.set_relays(vec![second.url.clone()]);
+                // the new relay gets the three REQs; drain them
+                for _ in 0..3 {
+                    let req = second.next_frame().await;
+                    assert!(req.starts_with(r#"["REQ""#), "got {req}");
+                }
             })
             .await;
     }

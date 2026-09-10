@@ -464,7 +464,10 @@ impl TransportSub for WsSub {
         let mut st = self.state.borrow_mut();
         st.subs.remove(&self.sub_id);
         st.router.drop_sub(&self.sub_id);
-        for c in st.conns.values() {
+        // Only `up` relays ever got this sub's REQ; a CLOSE to a still-dialling
+        // relay would sit in its queue ahead of the REQs `on_relay_up` replays
+        // and arrive out of order.
+        for c in st.conns.values().filter(|c| c.up) {
             let _ = c.tx.send(Out::Text(frame.clone()));
         }
     }
