@@ -120,3 +120,31 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 Verify: `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D
 warnings` (CI `cargo` job, `core` filter). No host toolchain needed — run in
 `rust:1-bookworm` via Docker like the rest of the repo.
+
+## F1 status
+
+| Gate | State |
+|---|---|
+| Layer 1 native vector tests (codec corpus, chunking, ranges, connection reducer, `nostr_client`, `bridge_api`, `nip42`, transport `frames`/`router`, `Core` on a mock relay) | ✅ 167 Rust tests, `clippy -D warnings` clean |
+| `./codedeck check` (TS unaffected) | ✅ |
+| `.so` ≤ 50 MB | ✅ 34.1 MB (`./codedeck apk benchmark --features native-core`) |
+| Real-device basic parity (benchmark APK, `native-core`): app opens, pair to a bridge, send + receive over the in-process runtime | ✅ |
+| Background matrix (screen-off 1h · forced Doze · WiFi↔cell · airplane blip · reconnection) on real Samsung/Xiaomi, with the complete transport | ⏳ owner's manual real-device test |
+| Transport parity checklist (plan §8) | ✅ — see below |
+| Delete the TS network path | ⏳ after the background matrix |
+
+### Transport parity checklist (plan §8)
+
+| # | Requirement | Rust | Covered by |
+|---|---|---|---|
+| 1 | 3 filters by traffic class: 30515 no-`since`; 4516 `since = cursor − 60s` (omitted on first run); 24515 no-`since`; `authors` = paired + candidate, `#p` = phone | `nostr_client::build_phone_filters` | `builds_exactly_three_filters`, `heartbeat_and_live_never_carry_since`, `response_filter_resumes_from_cursor_minus_grace_and_omits_on_first_run` |
+| 2 | Epoch guard (CDB-037): (re)connect bumps `epoch`; superseded callbacks ignored; teardown bumps `epoch` **before** closing; a deliberate teardown never emits `socket-close` | `nostr_client::{teardown_inner, connect}` + per-sub epoch check | `epoch_guard_deliberate_teardown_never_surfaces_as_close`, `events_from_a_superseded_epoch_are_dropped`, `real_subscription_death_reports_exactly_one_close_and_tears_the_epoch_down` |
+| 3 | EOSE = socket-open only when **every** current-epoch sub has EOSEd | `nostr_client` `on_eose` (`eose_count == filter_count`) | `connect_opens_three_subs_and_reports_open_after_all_eose`, `with_no_machines_connect_reports_a_vacuous_open` |
+| 4 | Dedup: `seenIds` cap 2000 FIFO; relays replay stored on reconnect | `nostr_client::SeenIds` | `dedups_replayed_event_ids_across_resubscribes` |
+| 5 | Cursor: `lastStoredSeen` = max `created_at` over 4516 + 30515; persisted | `nostr_client::handle_event` → `host.note_stored_seen` | `tracks_stored_cursor_and_ignores_ephemeral`, `reconnect_resumes_response_filter_from_the_persisted_cursor`. ⚠️ F1 keeps it in memory (`HostBridge.cursor`); the `Kv`-backed persist is F2 |
+| 6 | Backoff `2s→30s` +25% jitter; Tor variant `8s→60s`; `online` after offline/waiting-retry = reconnect now, `attempt=0`; visibility debounce 500 ms never tears a healthy socket; `resume` with a live socket → refresh only | `connection::{connection_reducer, backoff_delay_ms, DEFAULT_RECONNECT_CONFIG, TOR_RECONNECT_CONFIG}`; `Core` picks the config from `tor` | `reconnect_storm_backs_off_monotonically_and_converges_at_the_cap`, `jitter_adds_at_most_25pct_never_negative`, `offline_closes_and_cancels_online_reconnects_fresh`, `visibility_flip_storm_produces_no_socket_churn`, `resume_while_connected_is_cheap_refresh_no_churn` |
+| 7 | CDX-020 dead-sub: `connected` + every machine heartbeat + `last_connected_at` older than 150 s → force `socket-close` | `connection::heartbeats_all_stale`; `Core` `StaleWatchdog` (30 s tick) | `all_stale_while_connected_past_grace_is_true`, `one_fresh_heartbeat_keeps_it_false`, `fresh_reconnect_gets_a_full_stale_window_of_grace`, `never_true_in_any_non_connected_status` |
+| 8 | `idleTimeout` neutralised / `enablePing` / `enableReconnect:false` | `WsTransport` has **no** idle timer (hand-rolled — the nostr-tools bug does not exist); `PING_EVERY 30s` + `DEAD_AFTER 75s` liveness; `ensure_connected` only redials, the FSM owns reconnect | `ws` loopback tests |
+| 9 | `publishConfirmed` 4-way: `accepted` / `unconfirmed` (frame written, no OK in the timeout — **not** failure) / `rejected` (`rate-limited:`/`blocked:`/`pow:`) / `unreachable` (`connection failure:` string); retry the **same** signed event within a budget | `bridge_api::{classify_publish, combine_publish}`; `transport::router` (settle on first `accepted`); `WsTransport::publish_confirmed` | `classify_publish_decodes_each_relay_outcome`, `combine_publish_takes_the_softest_verdict`, `publish_settles_immediately_on_first_acceptance`, `publish_timeout_settles_unconfirmed_for_the_silent_relays`, `publish_confirmed_maps_the_relay_ok_verdict`. Note: F1 retries only on `unreachable` (a `rejected` from every relay rejects the identical event identically) — deliberate |
+| 10 | NIP-42 AUTH answered with the identity key; one allowlisted pubkey per side | `nip42::build_auth_event`; `WsTransport` `answer_auth` on `AUTH`, `ResubAfterAuth` on `CLOSED: auth-required` | `nip42::*` (3), `router::auth_challenge_is_surfaced`, `router::auth_required_closed_asks_for_a_resub_not_a_close`, `ws::answers_nip42_auth_with_an_identity_signed_event` |
+| 11 | SOCKS5 per connection (`tokio-socks`); cleartext `ws://` only for `.onion` | `WsTransport::dial` — `proxy` set → `Socks5Stream::connect` (DNS at the proxy, so `.onion` resolves); `wss://` → rustls | ⚠️ the `ws://`-only-for-`.onion` **rejection** is an app-level settings check (as today), not enforced in the transport |
