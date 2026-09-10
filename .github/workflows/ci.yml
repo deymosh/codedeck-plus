@@ -109,7 +109,11 @@ jobs:
         working-directory: apps/mobile/src-tauri
         env:
           CARGO_BUILD_JOBS: "4"
-        run: cargo test --locked
+        run: |
+          cargo test --locked
+          # F1: the in-process client-runtime binding (off by default). Build it
+          # so a broken `corebridge` fails CI, not a test APK.
+          cargo build --locked --features native-core
 
       # --- client-core / client-runtime workspace (pure Rust, no system deps) ---
       - name: Install Rust (client-core)

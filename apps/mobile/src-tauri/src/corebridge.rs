@@ -1,0 +1,252 @@
+//! F1: the Rust `client-runtime` hosted IN the app process, behind the
+//! `native-core` Cargo feature.
+//!
+//! With the feature off, this module is not compiled and the crate builds
+//! byte-identical to before — the WebView `src/core` keeps owning the Nostr
+//! sockets. With it on and the WebView opting in (`core_init`), the sockets +
+//! crypto + connection FSM run here, on a dedicated thread inside the
+//! stay-connected foreground service; the WebView receives already-decoded
+//! bridge→phone messages over Tauri events and stops running its own transport.
+//! The two paths run in parallel until the native one is field-tested; then the
+//! TS network path is deleted (last step of F1).
+//!
+//! Threading: `client_runtime::Core` drives a `!Send` event loop
+//! (`Rc`-based, mirroring the TS `this` model), so it lives on this thread's
+//! `LocalSet`. The `Core` *handle* is `Send` (its only field is an mpsc sender
+//! of `Send` messages) and is handed back to Tauri's `State` for the commands
+//! to call.
+
+use std::rc::Rc;
+use std::sync::Mutex;
+use std::thread;
+
+use client_runtime::client_core::bridge_api::PublishVerdict;
+use client_runtime::client_core::connection::ConnectionStatus;
+use client_runtime::client_core::crypto::keypair_from_secret_hex;
+use client_runtime::client_core::wire::codec::decode_phone_to_bridge;
+use client_runtime::client_core::wire::events::BridgeToPhone;
+use client_runtime::core::{
+    ActionFailed, Clock, CoreObserver, Entropy, SystemClock, TimeEntropy,
+};
+use client_runtime::{Core, CoreConfig};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
+
+/// Managed Tauri state: `Some` once `core_init` has spun the bridge thread.
+#[derive(Default)]
+pub struct CoreBridge(Mutex<Option<Core>>);
+
+const EV_CONNECTION: &str = "core://connection";
+const EV_MESSAGE: &str = "core://message";
+const EV_ACTION_FAILED: &str = "core://action-failed";
+
+fn status_str(status: ConnectionStatus) -> &'static str {
+    match status {
+        ConnectionStatus::Idle => "idle",
+        ConnectionStatus::Connecting => "connecting",
+        ConnectionStatus::Connected => "connected",
+        ConnectionStatus::WaitingRetry => "waiting-retry",
+        ConnectionStatus::Offline => "offline",
+        ConnectionStatus::Stopped => "stopped",
+    }
+}
+
+fn action_str(kind: ActionFailed) -> &'static str {
+    match kind {
+        ActionFailed::DecryptFailed => "decrypt-failed",
+        ActionFailed::DecodeFailed => "decode-failed",
+        ActionFailed::PublishRejected => "publish-rejected",
+        ActionFailed::PublishUnreachable => "publish-unreachable",
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct ConnectionPayload {
+    status: &'static str,
+    needs_pairing_check: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct MessagePayload {
+    machine: String,
+    /// The decoded bridge→phone message, in its wire JSON shape — the WebView
+    /// feeds it straight to the same handlers its TS decoder produced.
+    message: BridgeToPhone,
+}
+
+/// `CoreObserver` that fans the semantic events out as Tauri events. No UI
+/// strings — the WebView writes copy.
+struct TauriObserver {
+    app: AppHandle,
+}
+
+impl CoreObserver for TauriObserver {
+    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool) {
+        let _ = self.app.emit(
+            EV_CONNECTION,
+            ConnectionPayload {
+                status: status_str(status),
+                needs_pairing_check,
+            },
+        );
+    }
+
+    fn bridge_message(&self, machine: String, msg: BridgeToPhone) {
+        let _ = self.app.emit(
+            EV_MESSAGE,
+            MessagePayload {
+                machine,
+                message: msg,
+            },
+        );
+    }
+
+    fn action_failed(&self, kind: ActionFailed) {
+        let _ = self.app.emit(EV_ACTION_FAILED, action_str(kind));
+    }
+}
+
+/// `core_init` argument. `identity_secret_hex` is the phone's persisted nsec —
+/// a secret: it is consumed into the keypair here and never logged or echoed.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitConfig {
+    pub relays: Vec<String>,
+    pub identity_secret_hex: String,
+    /// SOCKS5 `host:port` (Orbot). `None` = direct.
+    pub proxy: Option<String>,
+    pub tor: bool,
+}
+
+/// Spin the bridge thread + `Core`. Idempotent — a second call is a no-op.
+#[tauri::command]
+pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConfig) -> Result<(), String> {
+    let mut slot = bridge.0.lock().map_err(|_| "core bridge lock poisoned")?;
+    if slot.is_some() {
+        return Ok(());
+    }
+
+    let identity = keypair_from_secret_hex(&config.identity_secret_hex)
+        .map_err(|e| format!("identity secret: {e}"))?;
+    let core_config = CoreConfig::new(config.relays, identity, config.proxy, config.tor);
+    let observer_app = app.clone();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Core>();
+    thread::Builder::new()
+        .name("codedeck-core".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current-thread runtime");
+            let local = tokio::task::LocalSet::new();
+            local.block_on(&runtime, async move {
+                let observer: Rc<dyn CoreObserver> = Rc::new(TauriObserver { app: observer_app });
+                let clock: Rc<dyn Clock> = Rc::new(SystemClock);
+                let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
+                let core = Core::spawn(core_config, observer, clock, entropy);
+                let _ = ready_tx.send(core);
+                // Keep the LocalSet alive: it drives the Core loop, its timers,
+                // and the per-relay socket tasks.
+                std::future::pending::<()>().await;
+            });
+        })
+        .map_err(|e| format!("spawn core thread: {e}"))?;
+
+    let core = ready_rx
+        .recv()
+        .map_err(|_| "core thread exited before init".to_string())?;
+    *slot = Some(core);
+    Ok(())
+}
+
+fn with_core<R>(
+    bridge: &State<'_, CoreBridge>,
+    f: impl FnOnce(&Core) -> R,
+) -> Result<R, String> {
+    let slot = bridge.0.lock().map_err(|_| "core bridge lock poisoned")?;
+    let core = slot.as_ref().ok_or("core not initialised (call core_init)")?;
+    Ok(f(core))
+}
+
+#[tauri::command]
+pub fn core_start(bridge: State<'_, CoreBridge>) -> Result<(), String> {
+    with_core(&bridge, Core::start)
+}
+
+#[tauri::command]
+pub fn core_stop(bridge: State<'_, CoreBridge>) -> Result<(), String> {
+    with_core(&bridge, Core::stop)
+}
+
+#[tauri::command]
+pub fn core_pause(bridge: State<'_, CoreBridge>) -> Result<(), String> {
+    with_core(&bridge, Core::pause)
+}
+
+#[tauri::command]
+pub fn core_resume(bridge: State<'_, CoreBridge>) -> Result<(), String> {
+    with_core(&bridge, Core::resume)
+}
+
+#[tauri::command]
+pub fn core_set_online(bridge: State<'_, CoreBridge>, online: bool) -> Result<(), String> {
+    with_core(&bridge, |c| c.set_online(online))
+}
+
+#[tauri::command]
+pub fn core_set_machines(bridge: State<'_, CoreBridge>, machines: Vec<String>) -> Result<(), String> {
+    with_core(&bridge, |c| c.set_machines(machines))
+}
+
+#[tauri::command]
+pub fn core_set_relays(bridge: State<'_, CoreBridge>, relays: Vec<String>) -> Result<(), String> {
+    with_core(&bridge, |c| c.set_relays(relays))
+}
+
+/// Fire-and-forget send. `message` is a phone→bridge command in wire JSON — the
+/// same object the WebView's TS encoder builds.
+#[tauri::command]
+pub fn core_send(
+    bridge: State<'_, CoreBridge>,
+    machine: String,
+    message: serde_json::Value,
+) -> Result<(), String> {
+    let msg = decode_phone_to_bridge(&message.to_string())?;
+    with_core(&bridge, |c| c.send(machine, msg))
+}
+
+fn verdict_str(verdict: PublishVerdict) -> &'static str {
+    match verdict {
+        PublishVerdict::Accepted => "accepted",
+        PublishVerdict::Unconfirmed => "unconfirmed",
+        PublishVerdict::Rejected => "rejected",
+        PublishVerdict::Unreachable => "unreachable",
+    }
+}
+
+/// Send and await the CDX-086 publish verdict (`accepted` / `unconfirmed` /
+/// `rejected` / `unreachable`).
+#[tauri::command]
+pub async fn core_publish(
+    bridge: State<'_, CoreBridge>,
+    machine: String,
+    message: serde_json::Value,
+) -> Result<String, String> {
+    let msg = decode_phone_to_bridge(&message.to_string())?;
+    let core = with_core(&bridge, |c| c.clone())?;
+    let result = core.publish_confirmed(machine, msg).await;
+    Ok(verdict_str(result.verdict).to_string())
+}
+
+#[tauri::command]
+pub async fn core_connection_status(
+    bridge: State<'_, CoreBridge>,
+) -> Result<ConnectionPayload, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    let (status, needs_pairing_check) = core.connection_status().await;
+    Ok(ConnectionPayload {
+        status: status_str(status),
+        needs_pairing_check,
+    })
+}
