@@ -97,6 +97,17 @@ export interface BridgeApiDeps {
   /** Verdict-capable publish (CDX-086). OPTIONAL so hand-built test deps keep
    *  working; `sendConfirmed` maps the boolean when it is absent. */
   publishConfirmed?(event: NostrEvent, opts?: PublishConfirmOptions): Promise<PublishResult>;
+  /** F1 in-process runtime: when set, `send` hands the UNSTAMPED command to the
+   *  native core (Rust stamps `v`/`caps`, encrypts, signs, publishes) instead
+   *  of building + publishing the event here. `nativePublishConfirmed` is the
+   *  verdict-capable form (the image path). Inbound in this mode arrives
+   *  already decoded via `dispatchDecoded`, so `ingest` is unused. */
+  nativeSend?(machinePubkey: string, msg: PhoneToBridgeMessage): Promise<boolean>;
+  nativePublishConfirmed?(
+    machinePubkey: string,
+    msg: PhoneToBridgeMessage,
+    opts?: PublishConfirmOptions,
+  ): Promise<PublishResult>;
   handlers: PhoneMessageHandlers;
   /** A payload from a known machine failed NIP-44 decrypt (→ FSM diagnostics /
    *  needsPairingCheck — NEVER a disconnect). */
@@ -168,6 +179,14 @@ export class BridgeApi {
   /** Encode, encrypt, sign and publish one phone→bridge command. Resolves true
    *  when at least one relay accepted the event. */
   async send(machinePubkey: string, msg: PhoneToBridgeMessage): Promise<boolean> {
+    if (this.deps.nativeSend) {
+      try {
+        return await this.deps.nativeSend(machinePubkey, msg);
+      } catch (err) {
+        this.deps.log?.(`[BridgeApi] native send of ${msg.type} failed: ${err}`);
+        return false;
+      }
+    }
     try {
       return await this.deps.publish(this.buildCommand(machinePubkey, msg));
     } catch (err) {
@@ -186,6 +205,14 @@ export class BridgeApi {
     msg: PhoneToBridgeMessage,
     opts?: PublishConfirmOptions,
   ): Promise<PublishResult> {
+    if (this.deps.nativePublishConfirmed) {
+      try {
+        return await this.deps.nativePublishConfirmed(machinePubkey, msg, opts);
+      } catch (err) {
+        this.deps.log?.(`[BridgeApi] native publish of ${msg.type} failed: ${err}`);
+        return { verdict: 'rejected', detail: String(err) };
+      }
+    }
     let event: NostrEvent;
     try {
       event = this.buildCommand(machinePubkey, msg);
@@ -440,6 +467,13 @@ export class BridgeApi {
     }
 
     this.dispatch(decoded.msg, machine);
+  }
+
+  /** Route a message the native core already decrypted + decoded (F1
+   *  in-process runtime): straight into `dispatch`, skipping the
+   *  decrypt→reassemble→decode pipeline `ingest` runs. */
+  dispatchDecoded(msg: BridgeToPhoneMessage, machinePubkeyHex: string): void {
+    this.dispatch(msg, machinePubkeyHex);
   }
 
   /** Exhaustive over the union — an unrouted message type is a compile error. */
