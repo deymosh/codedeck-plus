@@ -22,3 +22,6 @@ apps/mobile/dist/
 # APKs built via apps/mobile/docker/build-apk.sh land here — never commit a
 # built binary.
 /dist/
+# Rust client workspace (migration F1)
+/target
+/crates/**/target

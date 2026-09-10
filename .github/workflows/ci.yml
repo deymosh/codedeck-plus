@@ -62,16 +62,17 @@ jobs:
           node apps/bridge/out/main.js version
           node apps/bridge/out/main.js doctor || true
 
-  # Rust coverage for src-tauri (Marmot loopback tests + sqlstore) and the
-  # tauri-plugin-* crates. Path-filtered so JS-only pushes stay fast.
+  # Rust coverage for src-tauri (Marmot loopback tests + sqlstore), the
+  # tauri-plugin-* crates, and the client-core / client-runtime workspace
+  # (migration F1). Path-filtered so JS-only pushes stay fast.
   cargo:
-    name: cargo test (src-tauri, desktop target)
+    name: cargo test (src-tauri + crates, desktop target)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
 
-      - name: Detect src-tauri changes
+      - name: Detect Rust changes
         id: filter
         uses: dorny/paths-filter@v4
         with:
@@ -79,6 +80,10 @@ jobs:
             rust:
               - 'apps/mobile/src-tauri/**'
               - 'apps/mobile/tauri-plugin-*/**'
+            core:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
 
       - name: Install Tauri Linux system deps
         if: steps.filter.outputs.rust == 'true'
@@ -104,6 +109,26 @@ jobs:
           CARGO_BUILD_JOBS: "4"
         run: cargo test --locked
 
+      # --- client-core / client-runtime workspace (pure Rust, no system deps) ---
+      - name: Install Rust (client-core)
+        if: steps.filter.outputs.core == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.core == 'true'
+        with:
+          workspaces: .
+
+      - name: cargo test + clippy (crates)
+        if: steps.filter.outputs.core == 'true'
+        env:
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: No Rust changes — skipped
-        if: steps.filter.outputs.rust != 'true'
-        run: echo "src-tauri unchanged; cargo job skipped."
+        if: steps.filter.outputs.rust != 'true' && steps.filter.outputs.core != 'true'
+        run: echo "no Rust changes; cargo job skipped."

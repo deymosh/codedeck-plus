@@ -1,0 +1,28 @@
+# The Rust client workspace (migration plan F1). Node/TS packages under
+# packages/* and apps/bridge are unaffected — this only governs crates/*.
+#
+# client-core   = pure logic (protocol codec, crypto, reducers, stores as state
+#                 machines, sync, merge, pairing FSM, presentation). No tokio,
+#                 no sockets, no I/O. Deterministic. The part that is never
+#                 duplicated.
+# client-runtime = the async host (tokio reactor, Transport driver, lifecycle,
+#                 ports wiring). Bindings (UniFFI / tauri::command) attach here.
+#
+# apps/mobile/src-tauri and its tauri-plugin-* crates keep their own build and
+# are deliberately NOT members yet (apps/mobile is frozen; they join when
+# apps/android is built).
+[workspace]
+resolver = "2"
+members = ["crates/client-core", "crates/client-runtime"]
+exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.87"
+version = "0.0.0"
+license = "MIT"
+publish = false
+
+[workspace.lints.clippy]
+# keep the pure core honest
+all = { level = "warn", priority = -1 }

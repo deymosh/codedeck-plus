@@ -1,0 +1,14 @@
+[package]
+name = "client-runtime"
+description = "CodeDeck+ client async host — tokio reactor, Transport driver, lifecycle, ports. Bindings attach here."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "client_runtime"
+
+[dependencies]
+client-core = { path = "../client-core" }
