@@ -12,7 +12,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use client_core::notifications::{NotifyEffect, NotifyEvent};
+use client_core::notifications::{
+    classify_output_entry, is_agent_activity_entry, NotifyEffect, NotifyEvent,
+};
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
 use client_core::wire::commands::{
@@ -186,6 +188,27 @@ impl<'a> Router<'a> {
                 let entry = to_value(&m.entry);
                 self.apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
                     .await;
+                // Unread + notify on LIVE entries only (sync catch-up takes the
+                // SyncChunk path, so replayed history never marks dots or fires
+                // a notification storm). A card / stream_end / failure marks the
+                // session unless the user is watching it; a live entry showing
+                // the agent actively WORKING clears the dot. CDX-053: the clear
+                // is gated on is_agent_activity_entry so the trailing
+                // system/result/usage entries after stream_end can't wipe a
+                // just-set dot.
+                match classify_output_entry(machine, &m.session_id, &m.entry) {
+                    Some(event) => {
+                        if !self.viewing_session(machine, &m.session_id) {
+                            self.stores.ui.mark_session_unread(machine, &m.session_id);
+                        }
+                        let fx = self.emit_notify(&event);
+                        r.notifies.extend(fx);
+                    }
+                    None if is_agent_activity_entry(&m.entry) => {
+                        self.stores.ui.clear_session_unread(machine, &m.session_id);
+                    }
+                    None => {}
+                }
             }
             BridgeToPhone::SyncBegin(m) => {
                 self.stores.transcript.apply_sync_begin(
@@ -615,6 +638,47 @@ mod tests {
         assert_eq!(out, RouteResult::default());
         assert_eq!(ts.seqs(MACHINE, "s1").await, vec![1]);
         assert!(s.transcript.has_contiguous(MACHINE, "s1", Some(1)));
+    }
+
+    #[tokio::test]
+    async fn a_live_permission_card_marks_unread_and_notifies_then_agent_activity_clears_it() {
+        let (mut s, ts) = stores().await;
+        let card = OutputEntry {
+            entry_type: OutputEntryType::System,
+            content: String::new(),
+            timestamp: "t".into(),
+            metadata: Some(json!({ "special": "permission_request", "tool_name": "Bash" })),
+            diff: None,
+        };
+        {
+            let mut r = Router::new(&mut s, &ts, ME, 1_000);
+            r.visible = false; // backgrounded → OS notify
+            let out = r
+                .route(
+                    MACHINE,
+                    &BridgeToPhone::Output(OutputMsg {
+                        session_id: "s1".into(),
+                        seq: 1,
+                        entry: card,
+                    }),
+                )
+                .await;
+            assert!(matches!(out.notifies.as_slice(), [NotifyEffect::Notify { .. }]));
+        }
+        assert!(s.ui.is_session_unread(MACHINE, "s1"));
+
+        // a plain assistant text entry = the agent working → clears the dot
+        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        r.route(
+            MACHINE,
+            &BridgeToPhone::Output(OutputMsg {
+                session_id: "s1".into(),
+                seq: 2,
+                entry: text_entry("working on it"),
+            }),
+        )
+        .await;
+        assert!(!s.ui.is_session_unread(MACHINE, "s1"));
     }
 
     #[tokio::test]
