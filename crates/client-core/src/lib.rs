@@ -10,6 +10,8 @@
 pub mod bridge_api;
 pub mod chunking;
 pub mod connection;
+pub mod default_session_mode;
+pub mod mode_cycle;
 pub mod crypto;
 pub mod nip42;
 pub mod notifications;
