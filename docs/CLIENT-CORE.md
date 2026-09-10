@@ -127,7 +127,8 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | `selectionPersistence` (CDX-054) | `apps/mobile/src/core/selectionPersistence.ts` | `client_core::selection_persistence` | ✅ F2a — `encode`/`decode_selection` tolerant, `is_restorable` bounded both sides (a future-stamped record from a backward RTC correction is not fresh). Runtime owns the KV + timestamp refresh. 3 tests. |
 | `sessionNeedsAttention` | `apps/mobile/src/core/sessionNeedsAttention.ts` | `client_core::session_needs_attention` | ✅ F2a — the one attention predicate (waiting-on-user OR unread), waiting branch independent of unread. 3 tests. |
 | `ui` store | `apps/mobile/src/core/stores/ui.ts` | `client_core::stores::ui` | ✅ F2a — `UiState`: selection + `panel_mode`, `unread_sessions` (visible-gated clear on select), `responded_cards`/`plan_approval_choices` (optimistic), the credentials / device-config / provider-profile ack slices, `undo_toast`. CDX-026c `onSessionViewed`/`onDmOpened` are `UiEffect`s; `visible` passed per call. All transient. 9 tests. |
-| stores (`identity`), `presentation` (`displayEntries`, `gsdStages`), `dmAttachments`, dm/marmot | `apps/mobile/src/core/**` | `client_core::**` | ⏳ F2a |
+| `identity` store | `apps/mobile/src/core/stores/identity.ts` | `client_core::stores::identity` | ✅ F2a — `load_or_create_identity` (reuse a valid stored hex secret / regenerate on absent or corrupt, `needs_persist` flag for the runtime) + `IdentityState` holder. KV read/write is the runtime's. 3 tests. |
+| `presentation` (`displayEntries`, `gsdStages`), `dmAttachments`, dm/marmot | `apps/mobile/src/{core,ui}/**` | `client_core::**` | ⏳ F2a |
 | MDK/MLS engine | `apps/mobile/src-tauri/src/marmot.rs` | `client_core::marmot` (feat) | ⏳ F2a |
 
 Verify: `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D
