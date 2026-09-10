@@ -2,3 +2,4 @@
 //! I/O; the runtime owns wiring + persistence.
 
 pub mod machines;
+pub mod outbox;
