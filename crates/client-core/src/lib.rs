@@ -14,4 +14,5 @@ pub mod crypto;
 pub mod nip42;
 pub mod nostr_event;
 pub mod ranges;
+pub mod stores;
 pub mod wire;
