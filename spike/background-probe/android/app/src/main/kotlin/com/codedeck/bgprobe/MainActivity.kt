@@ -52,6 +52,15 @@ class MainActivity : AppCompatActivity() {
             startService(Intent(this, RelayService::class.java).putExtra(RelayService.EXTRA_WAKELOCK, true))
         }
         b.stop.setOnClickListener { stopService(Intent(this, RelayService::class.java)) }
+
+        // adb-drivable: `am start -n .../.MainActivity --ez auto true [--ez wl true]`
+        if (intent?.getBooleanExtra("auto", false) == true) {
+            maybeAskNotifications()
+            startForegroundService(
+                Intent(this, RelayService::class.java)
+                    .putExtra(RelayService.EXTRA_WAKELOCK, intent.getBooleanExtra("wl", false))
+            )
+        }
         render()
     }
 

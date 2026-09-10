@@ -48,10 +48,9 @@ until [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 
 log "install + launch"
 "$ADB" install -r -g "$APK"
 "$ADB" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null
-"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null
-sleep 2
-"$ADB" shell am start-foreground-service -n "$PKG/.RelayService" >/dev/null
-sleep 8
+# service is not exported; MainActivity starts it when launched with --ez auto true
+"$ADB" shell am start -n "$PKG/.MainActivity" --ez auto true >/dev/null
+sleep 10
 
 log "background matrix (pulse every 15s)"
 phase "foreground baseline"   45
