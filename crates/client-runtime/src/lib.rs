@@ -9,6 +9,7 @@
 //! behind one tokio event loop — the handle the bindings attach to.
 
 pub mod core;
+pub mod deadline;
 pub mod nostr_client;
 pub mod transport;
 
