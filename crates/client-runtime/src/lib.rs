@@ -11,6 +11,7 @@
 pub mod core;
 pub mod deadline;
 pub mod dispatch;
+pub mod intent;
 pub mod nostr_client;
 pub mod ports;
 pub mod stores;
