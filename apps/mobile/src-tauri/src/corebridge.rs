@@ -26,7 +26,7 @@ use client_runtime::client_core::crypto::keypair_from_secret_hex;
 use client_runtime::client_core::wire::codec::decode_phone_to_bridge;
 use client_runtime::client_core::wire::events::BridgeToPhone;
 use client_runtime::core::{
-    ActionFailed, Clock, CoreObserver, Entropy, SystemClock, TimeEntropy,
+    ActionFailed, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
 };
 use client_runtime::{Core, CoreConfig};
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,11 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
                 let observer: Rc<dyn CoreObserver> = Rc::new(TauriObserver { app: observer_app });
                 let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                 let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
-                let core = Core::spawn(core_config, observer, clock, entropy);
+                // F2b transitional: the composed store layer runs with
+                // in-memory ports here — the WebView still owns persistence
+                // until `apps/mobile` is re-pointed at the Rust `Core`.
+                let core =
+                    Core::spawn(core_config, CorePorts::default(), observer, clock, entropy).await;
                 let _ = ready_tx.send(core);
                 // Keep the LocalSet alive: it drives the Core loop, its timers,
                 // and the per-relay socket tasks.

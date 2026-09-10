@@ -25,13 +25,17 @@ use client_core::connection::{
     TOR_RECONNECT_CONFIG,
 };
 use client_core::crypto::Keypair;
+use client_core::notifications::NotifyEffect;
 use client_core::wire::commands::PhoneToBridge;
 use client_core::wire::events::BridgeToPhone;
 use client_core::wire::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
+use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
+use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
+use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
@@ -106,6 +110,25 @@ pub struct CoreConfig {
     pub reconnect: ReconnectConfig,
 }
 
+/// The platform I/O seams the composed `Core` needs. [`Default`] wires
+/// in-memory implementations (tests, and the transitional native-core seam
+/// where the WebView still owns persistence).
+pub struct CorePorts {
+    pub kv: Rc<dyn Kv>,
+    pub transcript_store: Rc<dyn TranscriptStore>,
+    pub notifier: Rc<dyn Notifier>,
+}
+
+impl Default for CorePorts {
+    fn default() -> Self {
+        Self {
+            kv: Rc::new(MemoryKv::new()),
+            transcript_store: Rc::new(MemoryTranscriptStore::new()),
+            notifier: Rc::new(NullNotifier),
+        }
+    }
+}
+
 impl CoreConfig {
     pub fn new(
         relays: Vec<String>,
@@ -137,17 +160,32 @@ pub struct Core {
 impl Core {
     /// Build the runtime and spawn its event loop. MUST be called from inside a
     /// `tokio::task::LocalSet` (the `SubCallbacks` closures are `!Send`).
-    pub fn spawn(
+    /// Hydrates the [`CoreStores`] from the [`CorePorts::kv`] before starting.
+    pub async fn spawn(
         config: CoreConfig,
+        ports: CorePorts,
         observer: Rc<dyn CoreObserver>,
         clock: Rc<dyn Clock>,
         entropy: Rc<dyn Entropy>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<Msg>();
+
+        let hydrated = hydrate(
+            ports.kv.as_ref(),
+            ports.transcript_store.as_ref(),
+            &StoresConfig::default(),
+        )
+        .await;
+        if hydrated.identity_needs_persist {
+            Persister::new(ports.kv.as_ref())
+                .save_identity_secret(&config.identity)
+                .await;
+        }
+
         let host = Rc::new(HostBridge {
             tx: tx.clone(),
             machines: RefCell::new(Vec::new()),
-            cursor: RefCell::new(0),
+            cursor: RefCell::new(hydrated.last_stored_seen),
         });
         let ws = WsTransport::new(WsConfig {
             relays: config.relays.clone(),
@@ -174,7 +212,12 @@ impl Core {
             retry_timer: None,
             vis_timer: None,
             stale_timer: None,
+            pair_timer: None,
             self_tx: tx.clone(),
+            stores: hydrated.stores,
+            kv: ports.kv,
+            transcript_store: ports.transcript_store,
+            notifier: ports.notifier,
         };
         tokio::task::spawn_local(event_loop.run(rx));
         Self { tx }
@@ -274,6 +317,7 @@ enum Msg {
     RetryDue,
     VisibilitySettled,
     StaleWatchdog,
+    PairDeadline,
     Send {
         machine: String,
         msg: Box<PhoneToBridge>,
@@ -331,7 +375,14 @@ struct Loop {
     retry_timer: Option<AbortHandle>,
     vis_timer: Option<AbortHandle>,
     stale_timer: Option<AbortHandle>,
+    /// CDX-040 pair-ack deadline.
+    pair_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
+    // --- F2b: the composed store layer ---
+    stores: CoreStores,
+    kv: Rc<dyn Kv>,
+    transcript_store: Rc<dyn TranscriptStore>,
+    notifier: Rc<dyn Notifier>,
 }
 
 impl Loop {
@@ -390,8 +441,9 @@ impl Loop {
                         self.arm_stale_watchdog();
                     }
                 }
-                Msg::RelayEvent(event) => self.on_relay_event(event),
+                Msg::RelayEvent(event) => self.on_relay_event(event).await,
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
+                Msg::PairDeadline => self.on_pair_deadline(),
             }
         }
     }
@@ -456,11 +508,12 @@ impl Loop {
         );
     }
 
-    fn on_relay_event(&mut self, event: NostrEvent) {
+    async fn on_relay_event(&mut self, event: NostrEvent) {
         let known = self.machines.iter().any(|m| m == &event.pubkey);
 
         // A 30515 from a PAIRED machine IS a heartbeat — feed the FSM for
-        // presence + CDX-020 whether or not the payload decodes. Gate on
+        // presence + CDX-020 whether or not the payload decodes (a chunked
+        // list is `Buffered`, not `Message`, yet the machine is alive). Gate on
         // `known`: the subscription filter already scopes authors, but a
         // misbehaving relay must not be able to seed a stranger's heartbeat.
         if known && event.kind == SESSION_LIST_KIND {
@@ -477,12 +530,30 @@ impl Loop {
             kind: event.kind,
             content: &event.content,
         };
-        match self
+        let ingested = self
             .api
-            .ingest(&incoming, &self.identity, known, self.clock.now_ms())
-        {
+            .ingest(&incoming, &self.identity, known, self.clock.now_ms());
+        match ingested {
             Ingested::Message(msg) => {
-                self.observer.bridge_message(event.pubkey.clone(), *msg);
+                // F2b: fold the decoded message into the composed store layer,
+                // then carry out its effects. The observer callback stays for
+                // the transitional native-core seam (the WebView still consumes
+                // decoded messages until `apps/mobile` is re-pointed).
+                let machine = event.pubkey.clone();
+                let now = self.clock.now_ms();
+                let visible = self.conn.visible;
+                let notify_enabled = self.stores.settings.data.notifications_enabled;
+                let mut router = Router::new(
+                    &mut self.stores,
+                    self.transcript_store.as_ref(),
+                    &self.identity,
+                    now,
+                );
+                router.visible = visible;
+                router.notify_enabled = notify_enabled;
+                let result = router.route(&machine, &msg).await;
+                self.interpret_route(result).await;
+                self.observer.bridge_message(machine, *msg);
             }
             Ingested::DecryptFailed => {
                 self.dispatch(ConnectionEvent::DecryptFailure);
@@ -491,6 +562,82 @@ impl Loop {
             Ingested::DecodeFailed => self.observer.action_failed(ActionFailed::DecodeFailed),
             Ingested::Buffered | Ingested::UnknownMachine => {}
         }
+    }
+
+    /// Carry out the side effects a [`Router`] / intent produced.
+    async fn interpret_route(&mut self, r: RouteResult) {
+        for id in r.persist {
+            self.persist_store(id).await;
+        }
+        for RouteSend { machine, msg } in r.sends {
+            self.on_send(machine, msg, None);
+        }
+        for effect in r.notifies {
+            if let NotifyEffect::Notify { content, tag } = effect {
+                self.notifier.notify(&content.title, &content.body, Some(&tag));
+            }
+            // Ping seam not wired yet (F2b: the chime is a platform port).
+        }
+        for (machine, session) in r.transcript_removed {
+            self.transcript_store.remove(&machine, &session).await;
+        }
+        if r.resubscribe {
+            self.refresh_authors();
+        }
+        match r.pair_deadline {
+            Some(PairDeadline::Arm { ms }) => {
+                abort(&mut self.pair_timer);
+                self.pair_timer = Some(self.arm(ms, Msg::PairDeadline));
+            }
+            Some(PairDeadline::Clear) => abort(&mut self.pair_timer),
+            None => {}
+        }
+        // `r.heartbeat` is already covered by the pre-decode path above;
+        // `r.mesh_join` needs a platform seam (F2b).
+    }
+
+    async fn persist_store(&self, id: StoreId) {
+        let p = Persister::new(self.kv.as_ref());
+        match id {
+            StoreId::Machines => p.save_machines(&self.stores.machines).await,
+            StoreId::Outbox => p.save_outbox(&self.stores.outbox).await,
+            StoreId::Settings => p.save_settings(&self.stores.settings).await,
+            StoreId::QuickPrompts => p.save_quick_prompts(&self.stores.quick_prompts).await,
+            StoreId::Dm => p.save_dm(&self.stores.dm).await,
+            StoreId::Marmot => p.save_marmot(&self.stores.marmot).await,
+        }
+    }
+
+    /// Subscription authors = registered machines + the pairing candidate (its
+    /// pair-ack must pass the filter). Push them to the `HostBridge` and, if
+    /// connected, re-REQ.
+    fn refresh_authors(&mut self) {
+        let mut authors = self.stores.machines.machine_pubkeys();
+        if let Some(candidate) = &self.stores.pairing.candidate {
+            if !authors.contains(&candidate.pubkey_hex) {
+                authors.push(candidate.pubkey_hex.clone());
+            }
+        }
+        *self.host.machines.borrow_mut() = authors.clone();
+        self.machines = authors;
+        if matches!(
+            self.conn.status,
+            ConnectionStatus::Connected | ConnectionStatus::Connecting
+        ) {
+            self.nostr.resubscribe();
+        }
+    }
+
+    /// CDX-040: the pair-ack deadline elapsed.
+    fn on_pair_deadline(&mut self) {
+        use client_core::stores::pairing::{pairing_reducer, PairingEvent, PAIR_ACK_TIMEOUT_MS};
+        let result = pairing_reducer(
+            &self.stores.pairing,
+            PairingEvent::DeadlineFired,
+            PAIR_ACK_TIMEOUT_MS,
+        );
+        self.stores.pairing = result.state;
+        abort(&mut self.pair_timer);
     }
 
     fn on_send(
@@ -607,7 +754,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(120)).await;
     }
 
-    fn core_for(mock: &MockRelay, phone: &Keypair, spy: Rc<Spy>) -> Core {
+    async fn core_for(mock: &MockRelay, phone: &Keypair, spy: Rc<Spy>) -> Core {
         Core::spawn(
             CoreConfig {
                 relays: vec![mock.url.clone()],
@@ -615,10 +762,12 @@ mod tests {
                 proxy: None,
                 reconnect: fast_reconnect(),
             },
+            CorePorts::default(),
             spy,
             Rc::new(FixedClock(RefCell::new(1_000_000))),
             Rc::new(ZeroEntropy),
         )
+        .await
     }
 
     async fn eose_all(mock: &mut MockRelay) {
@@ -640,7 +789,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let spy = Rc::new(Spy::default());
-                let core = core_for(&mock, &phone, Rc::clone(&spy));
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
 
                 core.set_machines(vec![machine.pubkey_hex.clone()]);
                 core.start();
@@ -666,7 +815,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let spy = Rc::new(Spy::default());
-                let core = core_for(&mock, &phone, Rc::clone(&spy));
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
                 core.set_machines(vec![machine.pubkey_hex.clone()]);
                 core.start();
                 eose_all(&mut mock).await;
@@ -707,7 +856,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let spy = Rc::new(Spy::default());
-                let core = core_for(&mock, &phone, Rc::clone(&spy));
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
                 core.set_machines(vec![machine.pubkey_hex.clone()]);
                 core.start();
                 eose_all(&mut mock).await;
@@ -737,7 +886,7 @@ mod tests {
                 let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let spy = Rc::new(Spy::default());
-                let core = core_for(&mock, &phone, Rc::clone(&spy));
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
                 core.set_machines(vec![generate_keypair().pubkey_hex]);
                 core.start();
                 eose_all(&mut mock).await;
@@ -766,7 +915,7 @@ mod tests {
             .run_until(async {
                 let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let core = core_for(&mock, &phone, Rc::new(Spy::default()));
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
                 core.set_machines(vec![generate_keypair().pubkey_hex]);
 
                 assert_eq!(core.connection_status().await.0, ConnectionStatus::Idle);
@@ -788,7 +937,7 @@ mod tests {
                 let mut first = mock_relay().await;
                 let mut second = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let core = core_for(&first, &phone, Rc::new(Spy::default()));
+                let core = core_for(&first, &phone, Rc::new(Spy::default())).await;
                 core.set_machines(vec![generate_keypair().pubkey_hex]);
                 core.start();
                 eose_all(&mut first).await;
@@ -811,7 +960,7 @@ mod tests {
                 let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let spy = Rc::new(Spy::default());
-                let core = core_for(&mock, &phone, Rc::clone(&spy));
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
                 core.set_machines(vec![generate_keypair().pubkey_hex]);
                 core.start();
                 eose_all(&mut mock).await;
