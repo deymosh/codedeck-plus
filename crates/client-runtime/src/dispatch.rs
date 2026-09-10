@@ -12,9 +12,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use client_core::notifications::{NotifyEffect, NotifyEvent};
 use client_core::stores::transcript::SyncEffect;
-use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
-use client_core::wire::commands::{PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields};
+use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
+use client_core::wire::commands::{
+    ModeChangeMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
+};
+use client_core::wire::common::SessionState;
 use client_core::wire::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
@@ -40,6 +44,12 @@ pub struct RouteResult {
     pub persist: Vec<StoreId>,
     /// Commands to build + publish to the routed machine.
     pub sends: Vec<PhoneToBridge>,
+    /// Notification effects (ping / OS notify) from the coordinator.
+    pub notifies: Vec<NotifyEffect>,
+    /// A heartbeat to feed the connection FSM: `(machine, at_ms)`.
+    pub heartbeat: Option<(String, u64)>,
+    /// `(machine, session)` rows to drop from the transcript row store.
+    pub transcript_removed: Vec<(String, String)>,
 }
 
 impl RouteResult {
@@ -56,9 +66,17 @@ pub struct Router<'a> {
     /// Phone pubkey (self-copy / viewing checks in later slices).
     pub me: &'a str,
     pub now: u64,
+    /// App visibility (debounced) — the unread/notify gate.
+    pub visible: bool,
+    /// CDX-048 master toggle.
+    pub notify_enabled: bool,
+    /// A build with an in-app chime seam.
+    pub ping_available: bool,
 }
 
 impl<'a> Router<'a> {
+    /// A minimal router: visible, notifications on, no ping seam. Callers that
+    /// care set the fields directly.
     pub fn new(
         stores: &'a mut CoreStores,
         transcript_store: &'a dyn TranscriptStore,
@@ -70,12 +88,100 @@ impl<'a> Router<'a> {
             transcript_store,
             me,
             now,
+            visible: true,
+            notify_enabled: true,
+            ping_available: false,
         }
+    }
+
+    /// The user is looking at exactly this session right now (visible app,
+    /// session panel, this machine+session selected) — such a session never
+    /// gets an unread mark or a notification.
+    fn viewing_session(&self, machine: &str, session_id: &str) -> bool {
+        self.visible
+            && self.stores.ui.panel_mode == PanelMode::Session
+            && self.stores.ui.selected_machine.as_deref() == Some(machine)
+            && self.stores.ui.selected_session.as_deref() == Some(session_id)
+    }
+
+    /// `session_key_of(selected)` when a session panel is in view, else `None`.
+    fn active_session_key(&self) -> Option<String> {
+        let ui = &self.stores.ui;
+        if ui.panel_mode == PanelMode::Session {
+            if let (Some(m), Some(s)) = (&ui.selected_machine, &ui.selected_session) {
+                return Some(client_core::notifications::session_key_of(m, s));
+            }
+        }
+        None
+    }
+
+    fn emit_notify(&mut self, event: &NotifyEvent) -> Vec<NotifyEffect> {
+        let key = self.active_session_key();
+        self.stores.notifications.emit(
+            event,
+            self.visible,
+            self.notify_enabled,
+            self.ping_available,
+            key.as_deref(),
+            self.now,
+        )
     }
 
     pub async fn route(&mut self, machine: &str, msg: &BridgeToPhone) -> RouteResult {
         let mut r = RouteResult::default();
         match msg {
+            // --- slice B: the heartbeat + session lifecycle ---
+            BridgeToPhone::Sessions(m) => self.on_sessions(machine, m, &mut r).await,
+            BridgeToPhone::SessionPending(m) => {
+                self.stores.pending_sessions.apply_pending(
+                    machine,
+                    &m.pending_id,
+                    &m.machine,
+                    &m.created_at,
+                    self.now,
+                );
+            }
+            BridgeToPhone::SessionFailed(m) => {
+                self.stores
+                    .pending_sessions
+                    .apply_failed(&m.pending_id, &m.reason, self.now);
+                let fx = self.emit_notify(&NotifyEvent::SessionFailed {
+                    machine: machine.to_string(),
+                    session_id: m.pending_id.clone(),
+                    reason: Some(m.reason.clone()).filter(|s| !s.is_empty()),
+                });
+                r.notifies.extend(fx);
+            }
+            BridgeToPhone::SessionReady(m) => {
+                self.stores.pending_sessions.resolve(&m.pending_id);
+                self.stores
+                    .machines
+                    .apply_session_upsert(machine, &m.session, self.now);
+                r.persist(StoreId::Machines);
+                // CDX-047: apply the "default mode for new sessions" preference
+                // once, only when it differs from the mode it came up in.
+                let want = self.stores.settings.data.default_mode;
+                if let Some(mode) = self.stores.default_mode.apply(
+                    machine,
+                    &m.session.id,
+                    m.session.permission_mode,
+                    want,
+                ) {
+                    r.sends.push(PhoneToBridge::Mode(ModeChangeMsg {
+                        version: VersionFields::default(),
+                        session_id: m.session.id.clone(),
+                        mode,
+                    }));
+                }
+            }
+            BridgeToPhone::CloseSessionAck(m) => {
+                self.stores.machines.user_remove_session(machine, &m.session_id);
+                self.stores.transcript.remove_session(machine, &m.session_id);
+                r.transcript_removed
+                    .push((machine.to_string(), m.session_id.clone()));
+                r.persist(StoreId::Machines);
+            }
+
             BridgeToPhone::Output(m) => {
                 let entry = to_value(&m.entry);
                 self.apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
@@ -279,6 +385,122 @@ impl<'a> Router<'a> {
             .transcript
             .integrate_rows(machine, session, &inserted, &conflicts);
     }
+
+    /// The heartbeat. Port of `createPhoneCore`'s `onSessions` handler.
+    async fn on_sessions(
+        &mut self,
+        machine: &str,
+        m: &client_core::wire::events::SessionListMsg,
+        r: &mut RouteResult,
+    ) {
+        // CDX-013: only a PAIRED machine may create/update its entry. The
+        // pairing candidate is let through the ingest gate (its pair-ack must
+        // arrive) but must not self-register by sending a session list.
+        if self.stores.machines.machine(machine).is_none() {
+            return;
+        }
+
+        // CDX-026b: capture the pre-merge session states — a backgrounded phone
+        // catching up over sync never sees live cards, so the heartbeat
+        // TRANSITION into a waiting state is the truthful attention signal.
+        let prev: HashMap<String, Option<SessionState>> = self
+            .stores
+            .machines
+            .machine(machine)
+            .map(|mv| {
+                mv.sessions
+                    .iter()
+                    .map(|(id, v)| (id.clone(), v.info.state))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        self.stores.machines.apply_session_list(machine, m, self.now);
+        r.persist(StoreId::Machines);
+        r.heartbeat = Some((machine.to_string(), self.now));
+
+        let is_waiting = |s: Option<SessionState>| {
+            matches!(
+                s,
+                Some(SessionState::WaitingPermission) | Some(SessionState::WaitingQuestion)
+            )
+        };
+        for info in &m.sessions {
+            if self.stores.machines.dismissed_sessions.contains_key(&info.id) {
+                continue;
+            }
+            let prev_state = prev.get(&info.id).copied().flatten();
+            let entered_waiting = is_waiting(info.state) && !is_waiting(prev_state);
+            // running → idle is the truthful "Claude finished" signal for a
+            // backgrounded phone (sync catch-up never replays live stream_end).
+            let turn_finished =
+                info.state == Some(SessionState::Idle) && prev_state == Some(SessionState::Running);
+            if !entered_waiting && !turn_finished {
+                continue;
+            }
+            if self.viewing_session(machine, &info.id) {
+                continue;
+            }
+            self.stores.ui.mark_session_unread(machine, &info.id);
+            let event = if turn_finished {
+                NotifyEvent::SessionFinished {
+                    machine: machine.to_string(),
+                    session_id: info.id.clone(),
+                }
+            } else if info.state == Some(SessionState::WaitingPermission) {
+                NotifyEvent::PermissionRequest {
+                    machine: machine.to_string(),
+                    session_id: info.id.clone(),
+                    tool_name: None,
+                }
+            } else {
+                NotifyEvent::Question {
+                    machine: machine.to_string(),
+                    session_id: info.id.clone(),
+                }
+            };
+            let fx = self.emit_notify(&event);
+            r.notifies.extend(fx);
+        }
+
+        for id in m.removed_sessions.iter().flatten() {
+            self.stores.transcript.remove_session(machine, id);
+            r.transcript_removed.push((machine.to_string(), id.clone()));
+        }
+
+        // A pending placeholder whose session shows up in the list is resolved
+        // (the bridge reuses the sessionId as the pendingId).
+        for info in &m.sessions {
+            self.stores.pending_sessions.resolve(&info.id);
+        }
+        self.stores.pending_sessions.sweep(self.now);
+
+        // Self-healing transcripts: any advertised seqHigh above local coverage
+        // starts (or backoff-gates) a sync cycle.
+        let targets: Vec<(String, u64)> = self
+            .stores
+            .machines
+            .machine(machine)
+            .map(|mv| {
+                mv.sessions
+                    .iter()
+                    .filter_map(|(id, v)| v.info.seq_high.map(|h| (id.clone(), h)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (session_id, target) in targets {
+            if target > 0 {
+                let fx =
+                    self.stores
+                        .transcript
+                        .ensure_synced(machine, &session_id, target, self.now);
+                r.sends.extend(fx.into_iter().map(sync_effect_to_cmd));
+            }
+        }
+
+        self.stores.outbox.sweep(self.now);
+        r.persist(StoreId::Outbox);
+    }
 }
 
 fn to_value<T: serde::Serialize>(value: &T) -> serde_json::Value {
@@ -311,13 +533,53 @@ mod tests {
     use crate::ports::MemoryKv;
     use client_core::stores::outbox::{OutboxItemState, OutboxState};
     use client_core::wire::events::{
-        InputAckMsg, InputFailedMsg, OutputMsg, SyncChunkMsg, SyncEndMsg,
+        InputAckMsg, InputFailedMsg, OutputMsg, SessionListMsg, SessionReadyMsg, SyncChunkMsg,
+        SyncEndMsg,
     };
-    use client_core::wire::common::{OutputEntry, OutputEntryType};
+    use client_core::wire::common::{
+        OutputEntry, OutputEntryType, PermissionMode, RemoteSessionInfo, SessionState,
+    };
     use serde_json::json;
 
     const ME: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const MACHINE: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    fn info(id: &str, state: Option<SessionState>, seq_high: Option<u64>) -> RemoteSessionInfo {
+        RemoteSessionInfo {
+            id: id.into(),
+            slug: format!("slug-{id}"),
+            cwd: "/w".into(),
+            last_activity: "t".into(),
+            line_count: 0,
+            title: None,
+            project: "p".into(),
+            permission_mode: None,
+            effort_level: None,
+            model: None,
+            context_window: None,
+            context_percentage: None,
+            committed: None,
+            state,
+            seq_high,
+            provider_id: None,
+            provider_label: None,
+        }
+    }
+
+    fn sessions_msg(sessions: Vec<RemoteSessionInfo>) -> SessionListMsg {
+        SessionListMsg {
+            machine: "laptop".into(),
+            host: None,
+            sessions,
+            auth_status: None,
+            protocol_version: 10,
+            capabilities: None,
+            folders: None,
+            roots: None,
+            removed_sessions: None,
+            machine_offline: None,
+        }
+    }
 
     async fn stores() -> (CoreStores, MemoryTranscriptStore) {
         let kv = MemoryKv::new();
@@ -475,6 +737,151 @@ mod tests {
             .await;
         assert_eq!(out.persist, vec![StoreId::Outbox]);
         assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Confirmed);
+    }
+
+    #[tokio::test]
+    async fn a_session_list_from_an_unpaired_machine_is_dropped() {
+        let (mut s, ts) = stores().await;
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Sessions(sessions_msg(vec![info("s1", None, None)])),
+            )
+            .await;
+        assert_eq!(out, RouteResult::default());
+        assert!(s.machines.machine(MACHINE).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_heartbeat_transition_into_waiting_marks_unread_notifies_and_feeds_the_fsm() {
+        let (mut s, ts) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+        // first sight: running — no transition
+        {
+            let mut r = Router::new(&mut s, &ts, ME, 1_000);
+            let out = r
+                .route(
+                    MACHINE,
+                    &BridgeToPhone::Sessions(sessions_msg(vec![info(
+                        "s1",
+                        Some(SessionState::Running),
+                        None,
+                    )])),
+                )
+                .await;
+            assert!(out.notifies.is_empty());
+            assert_eq!(out.heartbeat, Some((MACHINE.to_string(), 1_000)));
+            assert!(!s.ui.is_session_unread(MACHINE, "s1"));
+        }
+        // now it enters waiting_permission while the phone is backgrounded →
+        // mark + OS notify
+        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        r.visible = false;
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Sessions(sessions_msg(vec![info(
+                    "s1",
+                    Some(SessionState::WaitingPermission),
+                    None,
+                )])),
+            )
+            .await;
+        assert!(s.ui.is_session_unread(MACHINE, "s1"));
+        assert!(matches!(
+            out.notifies.as_slice(),
+            [NotifyEffect::Notify { .. }]
+        ));
+        assert!(out.persist.contains(&StoreId::Machines));
+    }
+
+    #[tokio::test]
+    async fn the_foreground_watched_session_is_never_marked_or_notified() {
+        let (mut s, ts) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.ui.select_session(MACHINE, Some("s1"), true);
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Sessions(sessions_msg(vec![info(
+                    "s1",
+                    Some(SessionState::WaitingPermission),
+                    None,
+                )])),
+            )
+            .await;
+        assert!(!s.ui.is_session_unread(MACHINE, "s1"));
+        assert!(out.notifies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_ready_upserts_the_session_and_applies_the_default_mode_once() {
+        let (mut s, ts) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.settings.data.default_mode = PermissionMode::AcceptEdits;
+
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        // session came up in plan (bridge default) → a differing preference sends a mode
+        let mut ready = info("s1", Some(SessionState::Idle), None);
+        ready.permission_mode = Some(PermissionMode::Plan);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::SessionReady(SessionReadyMsg {
+                    pending_id: "s1".into(),
+                    session: ready.clone(),
+                }),
+            )
+            .await;
+        assert!(s.machines.session(MACHINE, "s1").is_some());
+        assert!(matches!(
+            out.sends.as_slice(),
+            [PhoneToBridge::Mode(m)] if m.mode == PermissionMode::AcceptEdits && m.session_id == "s1"
+        ));
+
+        // a replayed session-ready never re-sends
+        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::SessionReady(SessionReadyMsg {
+                    pending_id: "s1".into(),
+                    session: ready,
+                }),
+            )
+            .await;
+        assert!(out.sends.is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_session_ack_removes_the_session_locally() {
+        let (mut s, ts) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.apply_session_upsert(MACHINE, &info("s1", None, None), 0);
+        ts.insert_ignore(
+            MACHINE,
+            "s1",
+            &[TranscriptRow { seq: 1, entry: json!({}) }],
+        )
+        .await;
+
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::CloseSessionAck(client_core::wire::events::CloseSessionAckMsg {
+                    session_id: "s1".into(),
+                    success: true,
+                }),
+            )
+            .await;
+        assert!(s.machines.session(MACHINE, "s1").is_none());
+        assert_eq!(
+            out.transcript_removed,
+            vec![(MACHINE.to_string(), "s1".to_string())]
+        );
     }
 
     #[tokio::test]
