@@ -33,10 +33,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
+use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
+use crate::view::{ConnectionView, MachinesView, OutboxView, PairingView, SettingsView};
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
@@ -298,6 +300,50 @@ impl Core {
             detail: Some("core dropped the publish".to_string()),
         })
     }
+
+    /// Apply a user action. Resolves once the loop has folded it into the
+    /// stores and queued its effects.
+    pub async fn dispatch(&self, intent: Intent) {
+        let (rtx, rrx) = oneshot::channel();
+        if self
+            .tx
+            .send(Msg::Intent {
+                intent: Box::new(intent),
+                reply: rtx,
+            })
+            .is_ok()
+        {
+            let _ = rrx.await;
+        }
+    }
+
+    /// Read-projection snapshots (plan §2.1). Each answers off the loop's own
+    /// store state, so a reader that just attached gets a consistent view.
+    pub async fn machines_view(&self) -> MachinesView {
+        self.query(ViewQuery::Machines).await.unwrap_or(MachinesView {
+            machines: Default::default(),
+        })
+    }
+    pub async fn settings_view(&self) -> Option<SettingsView> {
+        self.query(ViewQuery::Settings).await
+    }
+    pub async fn outbox_view(&self) -> OutboxView {
+        self.query(ViewQuery::Outbox)
+            .await
+            .unwrap_or(OutboxView { items: Vec::new() })
+    }
+    pub async fn pairing_view(&self) -> Option<PairingView> {
+        self.query(ViewQuery::Pairing).await
+    }
+    pub async fn connection_view(&self) -> Option<ConnectionView> {
+        self.query(ViewQuery::Connection).await
+    }
+
+    async fn query<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> ViewQuery) -> Option<T> {
+        let (rtx, rrx) = oneshot::channel();
+        self.tx.send(Msg::View(make(rtx))).ok()?;
+        rrx.await.ok()
+    }
 }
 
 // --- loop internals -------------------------------------------------
@@ -323,6 +369,20 @@ enum Msg {
         msg: Box<PhoneToBridge>,
         reply: Option<oneshot::Sender<PublishResult>>,
     },
+    Intent {
+        intent: Box<Intent>,
+        reply: oneshot::Sender<()>,
+    },
+    View(ViewQuery),
+}
+
+/// A read-projection request answered off the loop's own store snapshot.
+enum ViewQuery {
+    Machines(oneshot::Sender<MachinesView>),
+    Settings(oneshot::Sender<SettingsView>),
+    Outbox(oneshot::Sender<OutboxView>),
+    Pairing(oneshot::Sender<PairingView>),
+    Connection(oneshot::Sender<ConnectionView>),
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -444,6 +504,11 @@ impl Loop {
                 Msg::RelayEvent(event) => self.on_relay_event(event).await,
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
                 Msg::PairDeadline => self.on_pair_deadline(),
+                Msg::Intent { intent, reply } => {
+                    self.on_intent(*intent).await;
+                    let _ = reply.send(());
+                }
+                Msg::View(query) => self.answer_view(query),
             }
         }
     }
@@ -625,6 +690,56 @@ impl Loop {
             ConnectionStatus::Connected | ConnectionStatus::Connecting
         ) {
             self.nostr.resubscribe();
+        }
+    }
+
+    /// Fold a user action into the stores and carry out its effects.
+    async fn on_intent(&mut self, intent: Intent) {
+        let ctx = IntentCtx {
+            now: self.clock.now_ms(),
+            visible: self.conn.visible,
+        };
+        let result = apply_intent(&mut self.stores, intent, ctx);
+        self.interpret_intent(result).await;
+    }
+
+    async fn interpret_intent(&mut self, r: IntentResult) {
+        for id in r.persist {
+            self.persist_store(id).await;
+        }
+        for RouteSend { machine, msg } in r.sends {
+            self.on_send(machine, msg, None);
+        }
+        if let Some(relays) = r.relays_changed {
+            self.nostr.set_relays(&relays);
+        }
+        if r.resubscribe {
+            self.refresh_authors();
+        }
+        // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
+        // notification-cancel seam (F2b — platform ports).
+    }
+
+    fn answer_view(&self, query: ViewQuery) {
+        match query {
+            ViewQuery::Machines(reply) => {
+                let _ = reply.send(MachinesView::from_stores(&self.stores));
+            }
+            ViewQuery::Settings(reply) => {
+                let _ = reply.send(SettingsView::from_stores(&self.stores));
+            }
+            ViewQuery::Outbox(reply) => {
+                let _ = reply.send(OutboxView::from_stores(&self.stores));
+            }
+            ViewQuery::Pairing(reply) => {
+                let _ = reply.send(PairingView::from_stores(&self.stores));
+            }
+            ViewQuery::Connection(reply) => {
+                let _ = reply.send(ConnectionView::new(
+                    self.conn.status,
+                    self.conn.needs_pairing_check,
+                ));
+            }
         }
     }
 
@@ -979,6 +1094,79 @@ mod tests {
                 settle().await;
 
                 assert!(spy.messages.lock().unwrap().is_empty());
+            })
+            .await;
+    }
+
+    // --- F2b: the composed store layer ---
+
+    #[tokio::test]
+    async fn connection_view_query_reflects_the_live_status() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+
+                assert_eq!(core.connection_view().await.unwrap().status, "idle");
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+                assert_eq!(core.connection_view().await.unwrap().status, "connected");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_intent_becomes_a_signed_command_on_the_wire() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                core.dispatch(Intent::Interrupt {
+                    machine: machine.pubkey_hex.clone(),
+                    session_id: "s1".into(),
+                })
+                .await;
+                settle().await;
+
+                // the loop published one EVENT — a kind-COMMAND wrap for the machine
+                let frame = mock.next_frame().await;
+                let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                assert_eq!(v[0], "EVENT");
+                let ev = &v[1];
+                assert_eq!(ev["pubkey"], phone.pubkey_hex);
+                assert!(ev["tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t[0] == "p" && t[1] == machine.pubkey_hex));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn add_relay_intent_persists_and_repoints_the_transport() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+
+                core.dispatch(Intent::AddRelay {
+                    url: "wss://added.example".into(),
+                })
+                .await;
+
+                let sv = core.settings_view().await.unwrap();
+                assert!(sv.0.relays.iter().any(|r| r == "wss://added.example"));
             })
             .await;
     }
