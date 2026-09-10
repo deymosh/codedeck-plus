@@ -4,5 +4,7 @@
 pub mod machines;
 pub mod outbox;
 pub mod pairing;
+pub mod pending_sessions;
+pub mod quick_prompts;
 pub mod settings;
 pub mod transcript;
