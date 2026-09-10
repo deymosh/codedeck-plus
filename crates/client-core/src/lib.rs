@@ -8,6 +8,7 @@
 //! `packages/protocol`; each port keeps the TS behaviour as its contract.
 
 pub mod chunking;
+pub mod connection;
 pub mod crypto;
 pub mod ranges;
 pub mod wire;

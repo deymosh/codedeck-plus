@@ -79,7 +79,7 @@ both `codec.test.ts` and a Rust `codec_conformance`; CI fails on any mismatch.
 | `ranges` | `packages/protocol/src/ranges.ts` | `client_core::ranges` | ✅ F1 |
 | wire codec + schemas + `fixtures/` | `packages/protocol/src/{codec,schemas}.ts` | `client_core::wire` | ⏳ |
 | chunking (framing + assembler) | `packages/protocol/src/chunking.ts` | `client_core::chunking` | ✅ F1 |
-| connection reducer | `apps/mobile/src/core/stores/connection.ts` | `client_core::connection` | ⏳ |
+| connection reducer + presence/stale helpers | `apps/mobile/src/core/stores/connection.ts` (pure half) | `client_core::connection` | ✅ F1 |
 | nostr client | `apps/mobile/src/core/services/nostrClient.ts` + `platform/poolOptions.ts` | `client_runtime::nostr_client` | ⏳ |
 | bridge API (transport) | `apps/mobile/src/core/services/bridgeApi.ts` | `client_core::bridge_api` (policy) + `client_runtime` (I/O) | ⏳ |
 | stores, sync, outbox, pairing, notifications, presentation, dm/marmot | `apps/mobile/src/core/**` | `client_core::**` | ⏳ F2a |
