@@ -60,8 +60,16 @@ pickers, tray/menus.
   the message.
 - `Tristate<T> { Keep, Clear, Set(T) }` for the wire's absent/null/value cases
   (e.g. `set-provider-profile`).
-- Leaning on the `nostr` crate (0.44, minimal features) for NIP-44 is fine — the
-  only heavy transitive is `secp256k1` (C), unavoidable.
+- Leaning on the `nostr` crate (0.44, minimal features) for NIP-44 / NIP-42 /
+  event signing is fine — the only heavy transitive is `secp256k1` (C),
+  unavoidable.
+- The relay transport is **hand-rolled** on `tokio-tungstenite` + `tokio-socks`,
+  not `nostr-sdk` / `nostr-relay-pool`. The port's shape is a thin transport
+  *under* the connection FSM; a pool re-introduces the self-timed idle close
+  (CDX-020) and the "pool fires its own onclose" trap (CDB-037) the TS spent
+  effort defeating, and its publish result collapses `unconfirmed` vs
+  `unreachable` — the one distinction CDX-086 exists to keep. The client Nostr
+  wire is ~10 frame shapes (`client_runtime::transport::frames`).
 
 ## Anti-drift with `packages/protocol`
 
@@ -89,6 +97,8 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | nostr client (epoch guard, filters, dedup, cursor) | `nostrClient.ts` + `poolOptions.ts` | `client_runtime::nostr_client` | ✅ F1 (real tokio-tungstenite + SOCKS5 transport = next) |
 | bridge API — policy + ingest pipeline | `apps/mobile/src/core/services/bridgeApi.ts` | `client_core::bridge_api` | ✅ F1 — `kind_for_message`, egress-validated `build_command` (stamp `v`/`caps`, NIP-44, sign, expiry tag), `ingest` (decrypt → `ChunkAssembler` → decode, total), `classify_publish`/`combine_publish` verdicts, folder-ack id tracking |
 | bridge API — socket I/O | same | `client_runtime` | ⏳ publish + `publishConfirmed` retry loop, folder-ack timers, handler dispatch — lands with the real `Transport` |
+| NIP-42 relay AUTH signer | `packages/protocol/src/nip42.ts` | `client_core::nip42` | ✅ F1 — `build_auth_event` (kind-22242, identity-signed) |
+| relay wire frames (REQ/CLOSE/EVENT/AUTH ↔ EVENT/EOSE/CLOSED/OK/NOTICE/AUTH) | nostr-tools SimplePool internals + `platform/relayTransport.ts` | `client_runtime::transport::frames` | ✅ F1 (pure codec); socket driver ⏳ |
 | stores, sync, outbox, pairing, notifications, presentation, dm/marmot | `apps/mobile/src/core/**` | `client_core::**` | ⏳ F2a |
 | MDK/MLS engine | `apps/mobile/src-tauri/src/marmot.rs` | `client_core::marmot` (feat) | ⏳ F2a |
 

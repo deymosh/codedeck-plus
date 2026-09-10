@@ -8,6 +8,7 @@
 //! SOCKS5 transport and the lifecycle handle land next.
 
 pub mod nostr_client;
+pub mod transport;
 
 /// Re-export the pure core so hosts have one dependency edge.
 pub use client_core;

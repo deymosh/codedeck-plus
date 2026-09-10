@@ -12,3 +12,4 @@ name = "client_runtime"
 
 [dependencies]
 client-core = { path = "../client-core" }
+serde_json = "1"
