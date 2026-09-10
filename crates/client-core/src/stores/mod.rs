@@ -4,6 +4,7 @@
 pub mod dm;
 pub mod identity;
 pub mod machines;
+pub mod marmot;
 pub mod outbox;
 pub mod pairing;
 pub mod pending_sessions;
