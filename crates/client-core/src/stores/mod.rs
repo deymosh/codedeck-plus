@@ -8,3 +8,4 @@ pub mod pending_sessions;
 pub mod quick_prompts;
 pub mod settings;
 pub mod transcript;
+pub mod ui;
