@@ -47,8 +47,23 @@ dexec() { MSYS_NO_PATHCONV=1 docker exec "$@"; }
 MODE="${1:-debug}"
 case "$MODE" in
   debug|release|benchmark) ;;
-  *) echo "usage: $0 [debug|release|benchmark]" >&2; exit 1 ;;
+  *) echo "usage: $0 [debug|release|benchmark] [--features <list>]" >&2; exit 1 ;;
 esac
+shift || true
+
+# Optional cargo features for src-tauri, e.g. `--features native-core` to build
+# a test APK that hosts the in-process Rust client-runtime (migration F1). The
+# default build passes nothing, so it is byte-identical to before.
+CARGO_FEATURES=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --features) CARGO_FEATURES="$2"; shift 2 ;;
+    --features=*) CARGO_FEATURES="${1#--features=}"; shift ;;
+    *) echo "usage: $0 [debug|release|benchmark] [--features <list>]" >&2; exit 1 ;;
+  esac
+done
+FEATURE_ARGS=()
+[ -n "$CARGO_FEATURES" ] && FEATURE_ARGS=(--features "$CARGO_FEATURES")
 # benchmark builds the exact same artifact as release; only the post-build
 # signing step differs.
 GRADLE_MODE="release"; [ "$MODE" = "debug" ] && GRADLE_MODE="debug"
@@ -83,12 +98,13 @@ echo "==> Installing workspace deps"
 dexec -w /workspace "$CONTAINER" pnpm install --frozen-lockfile
 
 echo "==> Building ($GRADLE_MODE): Vite web assets, then cargo + Gradle"
+[ -n "$CARGO_FEATURES" ] && echo "    src-tauri cargo features: $CARGO_FEATURES"
 if [ "$GRADLE_MODE" = "debug" ]; then
   dexec -w /workspace/apps/mobile "$CONTAINER" \
-    pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64 --debug
+    pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64 --debug "${FEATURE_ARGS[@]+${FEATURE_ARGS[@]}}"
 else
   dexec -w /workspace/apps/mobile "$CONTAINER" \
-    pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64
+    pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64 "${FEATURE_ARGS[@]+${FEATURE_ARGS[@]}}"
 fi
 
 OUT_DIR="apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/$GRADLE_MODE"
@@ -97,7 +113,7 @@ if [ "$GRADLE_MODE" = "release" ]; then
 else
   APK_NAME="app-universal-debug.apk"
 fi
-DEST="dist/codedeck-$MODE.apk"
+DEST="dist/codedeck-$MODE${CARGO_FEATURES:+-$(echo "$CARGO_FEATURES" | tr ', ' '--')}.apk"
 
 if [ "$MODE" = "benchmark" ]; then
   echo "==> Re-signing with the baked-in debug keystore (zipalign + apksigner)"
