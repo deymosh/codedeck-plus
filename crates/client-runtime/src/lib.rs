@@ -18,7 +18,7 @@ pub mod stores;
 pub mod transport;
 pub mod view;
 
-pub use core::{Core, CoreConfig, CoreObserver};
+pub use core::{Core, CoreConfig, CoreEvent, CoreObserver, SliceId};
 pub use ports::{Kv, Notifier, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 

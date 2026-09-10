@@ -98,6 +98,38 @@ pub trait CoreObserver {
     /// A decoded bridge→phone message for the given machine.
     fn bridge_message(&self, machine: String, msg: BridgeToPhone);
     fn action_failed(&self, _kind: ActionFailed) {}
+    /// The semantic event stream (plan §2.3). No UI strings — the consumer
+    /// decides how to surface each one and re-reads the named view slice.
+    fn on_event(&self, _event: CoreEvent) {}
+}
+
+/// A read-projection slice (plan §2.1) — the granularity a consumer
+/// re-subscribes to on a [`CoreEvent::StateChanged`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceId {
+    Connection,
+    Machines,
+    Transcript,
+    Outbox,
+    Cards,
+    Settings,
+    Pairing,
+    Dm,
+    Marmot,
+}
+
+/// The closed, semantic event set (plan §2.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreEvent {
+    /// The named view slice changed — re-read it.
+    StateChanged { slice: SliceId },
+    /// An outbox item reached a terminal state (`delivered` = bridge ack'd, not
+    /// just published).
+    OutboxSettled { id: String, delivered: bool },
+    /// The pair flow ended: `paired` true on success, false on nack / timeout.
+    PairingSettled { paired: bool },
+    /// A user-visible action did not land. Semantic — the UI writes the copy.
+    ActionFailed { kind: ActionFailed },
 }
 
 // --- config ---------------------------------------------------------------
@@ -524,6 +556,7 @@ impl Loop {
         if after != before {
             self.observer
                 .connection_changed(self.conn.status, self.conn.needs_pairing_check);
+            self.state_changed(SliceId::Connection);
         }
     }
 
@@ -623,19 +656,39 @@ impl Loop {
             Ingested::DecryptFailed => {
                 self.dispatch(ConnectionEvent::DecryptFailure);
                 self.observer.action_failed(ActionFailed::DecryptFailed);
+                self.emit(CoreEvent::ActionFailed {
+                    kind: ActionFailed::DecryptFailed,
+                });
             }
-            Ingested::DecodeFailed => self.observer.action_failed(ActionFailed::DecodeFailed),
+            Ingested::DecodeFailed => {
+                self.observer.action_failed(ActionFailed::DecodeFailed);
+                self.emit(CoreEvent::ActionFailed {
+                    kind: ActionFailed::DecodeFailed,
+                });
+            }
             Ingested::Buffered | Ingested::UnknownMachine => {}
         }
     }
 
+    fn emit(&self, event: CoreEvent) {
+        self.observer.on_event(event);
+    }
+
+    fn state_changed(&self, slice: SliceId) {
+        self.emit(CoreEvent::StateChanged { slice });
+    }
+
     /// Carry out the side effects a [`Router`] / intent produced.
     async fn interpret_route(&mut self, r: RouteResult) {
-        for id in r.persist {
+        for &id in &r.persist {
             self.persist_store(id).await;
+            self.state_changed(slice_of(id));
         }
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
+        }
+        if !r.notifies.is_empty() {
+            self.state_changed(SliceId::Cards);
         }
         for effect in r.notifies {
             if let NotifyEffect::Notify { content, tag } = effect {
@@ -643,11 +696,22 @@ impl Loop {
             }
             // Ping seam not wired yet (F2b: the chime is a platform port).
         }
+        if !r.transcript_removed.is_empty() {
+            self.state_changed(SliceId::Transcript);
+        }
         for (machine, session) in r.transcript_removed {
             self.transcript_store.remove(&machine, &session).await;
         }
+        for (id, delivered) in r.outbox_settled {
+            self.emit(CoreEvent::OutboxSettled { id, delivered });
+        }
+        if let Some(paired) = r.pairing_settled {
+            self.emit(CoreEvent::PairingSettled { paired });
+            self.state_changed(SliceId::Pairing);
+        }
         if r.resubscribe {
             self.refresh_authors();
+            self.state_changed(SliceId::Machines);
         }
         match r.pair_deadline {
             Some(PairDeadline::Arm { ms }) => {
@@ -704,8 +768,9 @@ impl Loop {
     }
 
     async fn interpret_intent(&mut self, r: IntentResult) {
-        for id in r.persist {
+        for &id in &r.persist {
             self.persist_store(id).await;
+            self.state_changed(slice_of(id));
         }
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
@@ -715,6 +780,7 @@ impl Loop {
         }
         if r.resubscribe {
             self.refresh_authors();
+            self.state_changed(SliceId::Machines);
         }
         // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
         // notification-cancel seam (F2b — platform ports).
@@ -745,14 +811,21 @@ impl Loop {
 
     /// CDX-040: the pair-ack deadline elapsed.
     fn on_pair_deadline(&mut self) {
-        use client_core::stores::pairing::{pairing_reducer, PairingEvent, PAIR_ACK_TIMEOUT_MS};
+        use client_core::stores::pairing::{
+            pairing_reducer, PairingEvent, PairingPhase, PAIR_ACK_TIMEOUT_MS,
+        };
         let result = pairing_reducer(
             &self.stores.pairing,
             PairingEvent::DeadlineFired,
             PAIR_ACK_TIMEOUT_MS,
         );
+        let settled = matches!(result.state.phase, PairingPhase::Failed);
         self.stores.pairing = result.state;
         abort(&mut self.pair_timer);
+        if settled {
+            self.emit(CoreEvent::PairingSettled { paired: false });
+            self.state_changed(SliceId::Pairing);
+        }
     }
 
     fn on_send(
@@ -784,12 +857,14 @@ impl Loop {
             let result = ws
                 .publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
                 .await;
-            match result.verdict {
-                PublishVerdict::Rejected => observer.action_failed(ActionFailed::PublishRejected),
-                PublishVerdict::Unreachable => {
-                    observer.action_failed(ActionFailed::PublishUnreachable)
-                }
-                PublishVerdict::Accepted | PublishVerdict::Unconfirmed => {}
+            let failed = match result.verdict {
+                PublishVerdict::Rejected => Some(ActionFailed::PublishRejected),
+                PublishVerdict::Unreachable => Some(ActionFailed::PublishUnreachable),
+                PublishVerdict::Accepted | PublishVerdict::Unconfirmed => None,
+            };
+            if let Some(kind) = failed {
+                observer.action_failed(kind);
+                observer.on_event(CoreEvent::ActionFailed { kind });
             }
             if let Some(reply) = reply {
                 let _ = reply.send(result);
@@ -801,6 +876,16 @@ impl Loop {
 fn abort(slot: &mut Option<AbortHandle>) {
     if let Some(handle) = slot.take() {
         handle.abort();
+    }
+}
+
+fn slice_of(id: StoreId) -> SliceId {
+    match id {
+        StoreId::Machines => SliceId::Machines,
+        StoreId::Outbox => SliceId::Outbox,
+        StoreId::Settings | StoreId::QuickPrompts => SliceId::Settings,
+        StoreId::Dm => SliceId::Dm,
+        StoreId::Marmot => SliceId::Marmot,
     }
 }
 
@@ -830,6 +915,7 @@ mod tests {
         statuses: Mutex<Vec<(ConnectionStatus, bool)>>,
         messages: Mutex<Vec<(String, BridgeToPhone)>>,
         failures: Mutex<Vec<ActionFailed>>,
+        events: Mutex<Vec<CoreEvent>>,
     }
     impl CoreObserver for Spy {
         fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool) {
@@ -840,6 +926,9 @@ mod tests {
         }
         fn action_failed(&self, kind: ActionFailed) {
             self.failures.lock().unwrap().push(kind);
+        }
+        fn on_event(&self, event: CoreEvent) {
+            self.events.lock().unwrap().push(event);
         }
     }
 
@@ -1158,7 +1247,8 @@ mod tests {
             .run_until(async {
                 let mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
 
                 core.dispatch(Intent::AddRelay {
                     url: "wss://added.example".into(),
@@ -1167,6 +1257,32 @@ mod tests {
 
                 let sv = core.settings_view().await.unwrap();
                 assert!(sv.0.relays.iter().any(|r| r == "wss://added.example"));
+                // the intent emits a Settings + a Machines (resubscribe) slice change
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::StateChanged {
+                    slice: SliceId::Settings
+                }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_connection_status_change_emits_a_state_changed_event() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::StateChanged {
+                    slice: SliceId::Connection
+                }));
             })
             .await;
     }

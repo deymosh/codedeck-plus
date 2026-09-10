@@ -76,6 +76,10 @@ pub struct RouteResult {
     pub pair_deadline: Option<PairDeadline>,
     /// CDX-028 one-QR mesh join: `(admin_npub, network_id)`.
     pub mesh_join: Option<(String, String)>,
+    /// Outbox items settled this route: `(id, delivered)`.
+    pub outbox_settled: Vec<(String, bool)>,
+    /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
+    pub pairing_settled: Option<bool>,
 }
 
 impl RouteResult {
@@ -285,6 +289,7 @@ impl<'a> Router<'a> {
             BridgeToPhone::InputAck(m) => {
                 self.stores.outbox.confirm(&m.input_id, self.now);
                 r.persist(StoreId::Outbox);
+                r.outbox_settled.push((m.input_id.clone(), true));
             }
             BridgeToPhone::InputFailed(m) => {
                 if let Some(id) = &m.input_id {
@@ -294,6 +299,7 @@ impl<'a> Router<'a> {
                         .unwrap_or_default();
                     self.stores.outbox.fail(id, reason, self.now);
                     r.persist(StoreId::Outbox);
+                    r.outbox_settled.push((id.clone(), false));
                 }
             }
 
@@ -587,6 +593,11 @@ impl<'a> Router<'a> {
             PAIR_ACK_TIMEOUT_MS,
         );
         self.stores.pairing = result.state;
+        r.pairing_settled = match self.stores.pairing.phase {
+            client_core::stores::pairing::PairingPhase::Paired => Some(true),
+            client_core::stores::pairing::PairingPhase::Failed => Some(false),
+            _ => None,
+        };
 
         for effect in result.effects {
             match effect {
