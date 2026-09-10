@@ -3,8 +3,11 @@
 //! (`start`/`stop`/`pause`/`resume`) and the platform ports. The UniFFI
 //! (Android) and `#[tauri::command]` (Desktop) bindings attach to this crate.
 //!
-//! Skeleton only in F1 increment 1 — modules land as the transport/crypto port
-//! progresses.
+//! F1: `nostr_client` (the epoch-guarded per-class subscription state machine)
+//! is ported first, behind a `Transport` port. The real `tokio-tungstenite` +
+//! SOCKS5 transport and the lifecycle handle land next.
+
+pub mod nostr_client;
 
 /// Re-export the pure core so hosts have one dependency edge.
 pub use client_core;
