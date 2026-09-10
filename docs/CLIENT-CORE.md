@@ -74,8 +74,10 @@ both `codec.test.ts` and a Rust `codec_conformance`; CI fails on any mismatch.
 | Module | From (TS) | To | Status |
 |---|---|---|---|
 | `crypto` | `packages/core/src/nostr/crypto.ts` | `client_core::crypto` | ✅ F1 |
-| wire codec + schemas | `packages/protocol/src/{codec,schemas,kinds,capabilities,chunking}.ts` | `client_core::wire` | ⏳ |
-| `ranges` | `packages/protocol/src/ranges.ts` | `client_core::ranges` | ⏳ |
+| kinds | `packages/protocol/src/kinds.ts` | `client_core::wire::kinds` | ✅ F1 |
+| capabilities | `packages/protocol/src/capabilities.ts` | `client_core::wire::capabilities` | ✅ F1 |
+| `ranges` | `packages/protocol/src/ranges.ts` | `client_core::ranges` | ✅ F1 |
+| wire codec + schemas + `fixtures/` | `packages/protocol/src/{codec,schemas}.ts` | `client_core::wire` | ⏳ |
 | chunking (framing) | `packages/protocol/src/chunking.ts` | `client_core::chunking` | ⏳ |
 | connection reducer | `apps/mobile/src/core/stores/connection.ts` | `client_core::connection` | ⏳ |
 | nostr client | `apps/mobile/src/core/services/nostrClient.ts` + `platform/poolOptions.ts` | `client_runtime::nostr_client` | ⏳ |
