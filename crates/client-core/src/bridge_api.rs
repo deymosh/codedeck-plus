@@ -22,10 +22,10 @@ use std::collections::HashSet;
 
 use nostr::key::{Keys, PublicKey};
 use nostr::{EventBuilder, Kind, Tag, Timestamp};
-use serde::Serialize;
 
 use crate::chunking::{AssemblerResult, ChunkAssembler};
 use crate::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
+use crate::nostr_event::SignedEvent;
 use crate::wire::capabilities::{ALL_PHONE_CAPABILITIES, PROTOCOL_VERSION};
 use crate::wire::codec::encode_phone_to_bridge;
 use crate::wire::commands::PhoneToBridge;
@@ -67,20 +67,6 @@ fn stamp_command(encoded: &str) -> String {
     serde_json::to_string(&value).expect("stamped command re-serializes")
 }
 
-/// A signed phone→bridge command event, ready for a relay `["EVENT", …]` frame.
-/// Serializes to exactly the Nostr event JSON. Held by the caller so a retry
-/// re-publishes THIS value unchanged (CDX-086 — see the module docs).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SignedCommand {
-    pub id: String,
-    pub pubkey: String,
-    pub created_at: u64,
-    pub kind: u16,
-    pub tags: Vec<Vec<String>>,
-    pub content: String,
-    pub sig: String,
-}
-
 /// Why a command could not be built. Every variant is a caller error surfaced at
 /// the sender rather than a silent bad publish.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -101,6 +87,9 @@ pub enum EgressError {
 /// phone→bridge command as a [`COMMAND_KIND`] event carrying `["p", machine]`
 /// and a NIP-40 `["expiration", …]` tag.
 ///
+/// The returned [`SignedEvent`] is what the caller must re-publish verbatim on
+/// retry — see the module docs (CDX-086).
+///
 /// `now_ms` is injected wall-clock in milliseconds; `created_at` is
 /// `now_ms / 1000`, matching the TS `Math.floor(now() / 1000)`.
 pub fn build_command(
@@ -108,7 +97,7 @@ pub fn build_command(
     machine_pubkey_hex: &str,
     msg: &PhoneToBridge,
     now_ms: u64,
-) -> Result<SignedCommand, EgressError> {
+) -> Result<SignedEvent, EgressError> {
     let encoded = encode_phone_to_bridge(msg).map_err(EgressError::Invalid)?;
     let stamped = stamp_command(&encoded);
 
@@ -129,19 +118,7 @@ pub fn build_command(
         .sign_with_keys(&keys)
         .map_err(|e| EgressError::Sign(e.to_string()))?;
 
-    Ok(SignedCommand {
-        id: event.id.to_hex(),
-        pubkey: event.pubkey.to_hex(),
-        created_at: event.created_at.as_secs(),
-        kind: event.kind.as_u16(),
-        tags: event
-            .tags
-            .iter()
-            .map(|t| t.as_slice().to_vec())
-            .collect(),
-        content: event.content.clone(),
-        sig: event.sig.to_string(),
-    })
+    Ok(SignedEvent::from_nostr(&event))
 }
 
 // --- Outbound: publish verdict (CDX-086) -------------------------------------
