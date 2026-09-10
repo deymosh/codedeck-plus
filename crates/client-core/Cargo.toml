@@ -12,9 +12,11 @@ name = "client_core"
 
 [features]
 default = []
-# Marmot / MLS DM support (MDK + SQLCipher) — off for the pure-logic tests.
+# These gate the heavy runtime pieces (MDK / SQLCipher for Marmot, nip59
+# gift-wrap crypto for NIP-17) which live in `client-runtime`. The pure
+# `stores::dm` / `stores::marmot` state machines here add no dependencies and
+# are always compiled.
 marmot = []
-# NIP-17 gift-wrapped DMs.
 dm = []
 
 [dependencies]
