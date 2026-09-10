@@ -13,6 +13,7 @@
 use std::collections::{HashMap, HashSet};
 
 use client_core::stores::transcript::SyncEffect;
+use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use client_core::wire::commands::{PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields};
 use client_core::wire::events::BridgeToPhone;
 
@@ -124,6 +125,95 @@ impl<'a> Router<'a> {
                     r.persist(StoreId::Outbox);
                 }
             }
+
+            // --- slice C: machines-slice updates + fire-and-answer acks ---
+            BridgeToPhone::Models(m) => {
+                self.stores.machines.apply_models(machine, m);
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::Usage(m) => {
+                self.stores
+                    .machines
+                    .apply_usage(machine, &m.session_id, m.usage.clone());
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::GsdState(m) => {
+                self.stores
+                    .machines
+                    .apply_gsd(machine, &m.session_id, m.gsd.clone());
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::SessionReplaced(m) => {
+                self.stores.machines.apply_session_replaced(
+                    machine,
+                    &m.old_session_id,
+                    &m.new_session,
+                    self.now,
+                );
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::ModeConfirmed(m) => {
+                let mode = m.mode;
+                self.stores
+                    .machines
+                    .update_session_info(machine, &m.session_id, |info| {
+                        info.permission_mode = Some(mode);
+                    });
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::EffortConfirmed(m) => {
+                let level = m.level;
+                self.stores
+                    .machines
+                    .update_session_info(machine, &m.session_id, |info| {
+                        info.effort_level = Some(level);
+                    });
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::ModelConfirmed(m) => {
+                let model = m.model.clone();
+                self.stores
+                    .machines
+                    .update_session_info(machine, &m.session_id, |info| {
+                        info.model = Some(model.clone());
+                    });
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::ProviderProfiles(m) => {
+                self.stores.machines.apply_provider_profiles(machine, m);
+                // CDX-062: provider profiles are never persisted.
+            }
+            BridgeToPhone::CredentialsAck(m) => {
+                self.stores.ui.apply_credentials_ack(
+                    machine,
+                    CredentialsAckInput {
+                        success: m.success,
+                        has_anthropic_key: m.has_anthropic_key,
+                        has_github_pat: m.has_github_pat,
+                        key_valid: m.key_valid,
+                        error: m.error.clone(),
+                    },
+                    self.now,
+                );
+            }
+            BridgeToPhone::DeviceConfigAck(m) => {
+                self.stores
+                    .ui
+                    .apply_device_config_ack(machine, m.success, m.error.clone(), self.now);
+            }
+            BridgeToPhone::ProviderProfileAck(m) => {
+                self.stores.ui.apply_provider_profile_ack(
+                    machine,
+                    ProviderProfileAckInput {
+                        profile_id: m.profile_id.clone(),
+                        success: m.success,
+                        token_valid: m.token_valid,
+                        error: m.error.clone(),
+                    },
+                    self.now,
+                );
+            }
+
             // Remaining families land in later slices.
             _ => {}
         }
@@ -385,6 +475,99 @@ mod tests {
             .await;
         assert_eq!(out.persist, vec![StoreId::Outbox]);
         assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Confirmed);
+    }
+
+    #[tokio::test]
+    async fn credentials_ack_lands_in_the_ui_slice_transiently() {
+        let (mut s, ts) = stores().await;
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::CredentialsAck(
+                    client_core::wire::events::CredentialsAckMsg {
+                        machine: "laptop".into(),
+                        success: true,
+                        has_anthropic_key: true,
+                        has_github_pat: false,
+                        key_valid: Some(true),
+                        error: None,
+                    },
+                ),
+            )
+            .await;
+        assert!(out.persist.is_empty()); // acks are transient
+        let ack = &s.ui.credentials_status[MACHINE];
+        assert_eq!(ack.state, client_core::stores::ui::AckState::Saved);
+        assert_eq!(ack.key_valid, Some(true));
+    }
+
+    #[tokio::test]
+    async fn models_updates_the_machine_and_asks_for_a_persist() {
+        let (mut s, ts) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Models(client_core::wire::events::ModelsMsg {
+                    models: vec![client_core::wire::events::ModelEntry {
+                        id: "sonnet".into(),
+                        label: Some("Sonnet".into()),
+                    }],
+                    default_model: Some("sonnet".into()),
+                    error: None,
+                }),
+            )
+            .await;
+        assert_eq!(out.persist, vec![StoreId::Machines]);
+        assert_eq!(
+            s.machines.machine(MACHINE).unwrap().models.as_ref().unwrap()[0].id,
+            "sonnet"
+        );
+    }
+
+    #[tokio::test]
+    async fn mode_confirmed_writes_through_to_the_session_info() {
+        use client_core::wire::common::{PermissionMode, RemoteSessionInfo};
+        let (mut s, ts) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.apply_session_upsert(
+            MACHINE,
+            &RemoteSessionInfo {
+                id: "s1".into(),
+                slug: "s".into(),
+                cwd: "/w".into(),
+                last_activity: "t".into(),
+                line_count: 0,
+                title: None,
+                project: "p".into(),
+                permission_mode: None,
+                effort_level: None,
+                model: None,
+                context_window: None,
+                context_percentage: None,
+                committed: None,
+                state: None,
+                seq_high: None,
+                provider_id: None,
+                provider_label: None,
+            },
+            0,
+        );
+        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        r.route(
+            MACHINE,
+            &BridgeToPhone::ModeConfirmed(client_core::wire::events::ModeConfirmedMsg {
+                session_id: "s1".into(),
+                mode: PermissionMode::AcceptEdits,
+            }),
+        )
+        .await;
+        assert_eq!(
+            s.machines.session(MACHINE, "s1").unwrap().info.permission_mode,
+            Some(PermissionMode::AcceptEdits)
+        );
     }
 
     #[tokio::test]
