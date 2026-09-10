@@ -7,6 +7,7 @@
 //! Ported module-by-module from `apps/mobile/src/core` + the consumed parts of
 //! `packages/protocol`; each port keeps the TS behaviour as its contract.
 
+pub mod chunking;
 pub mod crypto;
 pub mod ranges;
 pub mod wire;
