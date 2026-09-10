@@ -10,6 +10,7 @@ pub mod commands;
 pub mod common;
 pub mod events;
 pub mod kinds;
+pub mod relays;
 pub mod tristate;
 
 pub use codec::{
