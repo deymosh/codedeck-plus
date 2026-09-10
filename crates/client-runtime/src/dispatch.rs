@@ -12,13 +12,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+use client_core::crypto::Keypair;
 use client_core::notifications::{
     classify_output_entry, is_agent_activity_entry, NotifyEffect, NotifyEvent,
+};
+use client_core::stores::pairing::{
+    pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
 use client_core::wire::commands::{
-    ModeChangeMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
+    ModeChangeMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
 use client_core::wire::common::SessionState;
 use client_core::wire::events::BridgeToPhone;
@@ -38,20 +42,40 @@ pub enum StoreId {
     QuickPrompts,
 }
 
+/// A phone→bridge command the loop must sign and publish.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Send {
+    pub machine: String,
+    pub msg: PhoneToBridge,
+}
+
+/// What the CDX-040 pair-ack deadline timer should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairDeadline {
+    Arm { ms: u64 },
+    Clear,
+}
+
 /// What a routed message asks the event loop to do beyond the in-memory store
 /// mutation `route` already applied.
 #[derive(Debug, Default, PartialEq)]
 pub struct RouteResult {
     /// Stores to re-serialize to the `Kv`.
     pub persist: Vec<StoreId>,
-    /// Commands to build + publish to the routed machine.
-    pub sends: Vec<PhoneToBridge>,
+    /// Commands to build + publish.
+    pub sends: Vec<Send>,
     /// Notification effects (ping / OS notify) from the coordinator.
     pub notifies: Vec<NotifyEffect>,
     /// A heartbeat to feed the connection FSM: `(machine, at_ms)`.
     pub heartbeat: Option<(String, u64)>,
     /// `(machine, session)` rows to drop from the transcript row store.
     pub transcript_removed: Vec<(String, String)>,
+    /// The relay subscription authors filter changed — resubscribe.
+    pub resubscribe: bool,
+    /// Arm / clear the pair-ack deadline timer.
+    pub pair_deadline: Option<PairDeadline>,
+    /// CDX-028 one-QR mesh join: `(admin_npub, network_id)`.
+    pub mesh_join: Option<(String, String)>,
 }
 
 impl RouteResult {
@@ -60,13 +84,20 @@ impl RouteResult {
             self.persist.push(id);
         }
     }
+
+    fn send(&mut self, machine: &str, msg: PhoneToBridge) {
+        self.sends.push(Send {
+            machine: machine.to_string(),
+            msg,
+        });
+    }
 }
 
 pub struct Router<'a> {
     pub stores: &'a mut CoreStores,
     pub transcript_store: &'a dyn TranscriptStore,
-    /// Phone pubkey (self-copy / viewing checks in later slices).
-    pub me: &'a str,
+    /// Phone identity — stamps the `pair-request`, decides self vs incoming.
+    pub identity: &'a Keypair,
     pub now: u64,
     /// App visibility (debounced) — the unread/notify gate.
     pub visible: bool,
@@ -82,13 +113,13 @@ impl<'a> Router<'a> {
     pub fn new(
         stores: &'a mut CoreStores,
         transcript_store: &'a dyn TranscriptStore,
-        me: &'a str,
+        identity: &'a Keypair,
         now: u64,
     ) -> Self {
         Self {
             stores,
             transcript_store,
-            me,
+            identity,
             now,
             visible: true,
             notify_enabled: true,
@@ -169,11 +200,14 @@ impl<'a> Router<'a> {
                     m.session.permission_mode,
                     want,
                 ) {
-                    r.sends.push(PhoneToBridge::Mode(ModeChangeMsg {
-                        version: VersionFields::default(),
-                        session_id: m.session.id.clone(),
-                        mode,
-                    }));
+                    r.send(
+                        machine,
+                        PhoneToBridge::Mode(ModeChangeMsg {
+                            version: VersionFields::default(),
+                            session_id: m.session.id.clone(),
+                            mode,
+                        }),
+                    );
                 }
             }
             BridgeToPhone::CloseSessionAck(m) => {
@@ -183,6 +217,9 @@ impl<'a> Router<'a> {
                     .push((machine.to_string(), m.session_id.clone()));
                 r.persist(StoreId::Machines);
             }
+
+            // --- slice D: the pair-ack (CDX-040/041/028) ---
+            BridgeToPhone::PairAck(m) => self.on_pair_ack(machine, m, &mut r),
 
             BridgeToPhone::Output(m) => {
                 let entry = to_value(&m.entry);
@@ -227,18 +264,23 @@ impl<'a> Router<'a> {
                 self.apply_rows(machine, &m.session_id, rows).await;
                 // Ack AFTER the entries are durably stored — an ack must never
                 // claim data we could still lose.
-                r.sends.push(PhoneToBridge::SyncAck(SyncAckMsg {
-                    version: VersionFields::default(),
-                    sync_id: m.sync_id.clone(),
-                    range: m.range,
-                }));
+                r.send(
+                    machine,
+                    PhoneToBridge::SyncAck(SyncAckMsg {
+                        version: VersionFields::default(),
+                        sync_id: m.sync_id.clone(),
+                        range: m.range,
+                    }),
+                );
             }
             BridgeToPhone::SyncEnd(m) => {
                 let effects = self
                     .stores
                     .transcript
                     .apply_sync_end(machine, &m.session_id, self.now);
-                r.sends.extend(effects.into_iter().map(sync_effect_to_cmd));
+                for e in effects {
+                    r.send(machine, sync_effect_to_cmd(e));
+                }
             }
             BridgeToPhone::InputAck(m) => {
                 self.stores.outbox.confirm(&m.input_id, self.now);
@@ -517,12 +559,79 @@ impl<'a> Router<'a> {
                     self.stores
                         .transcript
                         .ensure_synced(machine, &session_id, target, self.now);
-                r.sends.extend(fx.into_iter().map(sync_effect_to_cmd));
+                for e in fx {
+                    r.send(machine, sync_effect_to_cmd(e));
+                }
             }
         }
 
         self.stores.outbox.sweep(self.now);
         r.persist(StoreId::Outbox);
+    }
+
+    /// The `pair-ack`. Runs the pairing reducer and interprets its effects:
+    /// register the machine, learn its relays, disarm the CDX-040 deadline,
+    /// refresh the subscription authors, and hand off a bundled mesh join.
+    fn on_pair_ack(
+        &mut self,
+        machine: &str,
+        m: &client_core::wire::events::PairAckMsg,
+        r: &mut RouteResult,
+    ) {
+        let result = pairing_reducer(
+            &self.stores.pairing,
+            PairingEvent::PairAck {
+                machine_pubkey: machine.to_string(),
+                msg: m.clone(),
+            },
+            PAIR_ACK_TIMEOUT_MS,
+        );
+        self.stores.pairing = result.state;
+
+        for effect in result.effects {
+            match effect {
+                PairingEffect::DisarmDeadline => r.pair_deadline = Some(PairDeadline::Clear),
+                PairingEffect::ArmDeadline { ms } => {
+                    r.pair_deadline = Some(PairDeadline::Arm { ms })
+                }
+                PairingEffect::NotifyCandidate(_) => r.resubscribe = true,
+                PairingEffect::SendPairRequest { to, label, token } => {
+                    r.send(
+                        &to,
+                        PhoneToBridge::PairRequest(PairRequestMsg {
+                            version: VersionFields::default(),
+                            npub: self.identity.npub.clone(),
+                            pubkey_hex: self.identity.pubkey_hex.clone(),
+                            label,
+                            token,
+                        }),
+                    );
+                }
+                PairingEffect::OnPaired {
+                    candidate,
+                    machine_name,
+                    host,
+                } => {
+                    self.stores.machines.register_machine(
+                        &candidate.pubkey_hex,
+                        &machine_name,
+                        Some(candidate.machine.clone()),
+                        host,
+                    );
+                    if !candidate.relays.is_empty() {
+                        self.stores.settings.add_relays(&candidate.relays);
+                        r.persist(StoreId::Settings);
+                    }
+                    if let (Some(admin), Some(netid)) =
+                        (candidate.mesh_admin.clone(), candidate.netid.clone())
+                    {
+                        r.mesh_join = Some((admin, netid));
+                    }
+                    r.persist(StoreId::Machines);
+                    r.resubscribe = true;
+                }
+            }
+        }
     }
 }
 
@@ -564,7 +673,6 @@ mod tests {
     };
     use serde_json::json;
 
-    const ME: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const MACHINE: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
     fn info(id: &str, state: Option<SessionState>, seq_high: Option<u64>) -> RemoteSessionInfo {
@@ -604,11 +712,11 @@ mod tests {
         }
     }
 
-    async fn stores() -> (CoreStores, MemoryTranscriptStore) {
+    async fn stores() -> (CoreStores, MemoryTranscriptStore, Keypair) {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
-        (h.stores, ts)
+        (h.stores, ts, h.keypair)
     }
 
     fn text_entry(content: &str) -> OutputEntry {
@@ -623,8 +731,8 @@ mod tests {
 
     #[tokio::test]
     async fn output_stores_the_row_and_advances_coverage() {
-        let (mut s, ts) = stores().await;
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let (mut s, ts, kp) = stores().await;
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -642,7 +750,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_live_permission_card_marks_unread_and_notifies_then_agent_activity_clears_it() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         let card = OutputEntry {
             entry_type: OutputEntryType::System,
             content: String::new(),
@@ -651,7 +759,7 @@ mod tests {
             diff: None,
         };
         {
-            let mut r = Router::new(&mut s, &ts, ME, 1_000);
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             r.visible = false; // backgrounded → OS notify
             let out = r
                 .route(
@@ -668,7 +776,7 @@ mod tests {
         assert!(s.ui.is_session_unread(MACHINE, "s1"));
 
         // a plain assistant text entry = the agent working → clears the dot
-        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
         r.route(
             MACHINE,
             &BridgeToPhone::Output(OutputMsg {
@@ -683,9 +791,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_re_delivered_seq_with_different_content_is_a_recorded_conflict() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         {
-            let mut r = Router::new(&mut s, &ts, ME, 1_000);
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             r.route(
                 MACHINE,
                 &BridgeToPhone::Output(OutputMsg {
@@ -697,7 +805,7 @@ mod tests {
             .await;
         }
         {
-            let mut r = Router::new(&mut s, &ts, ME, 2_000);
+            let mut r = Router::new(&mut s, &ts, &kp, 2_000);
             r.route(
                 MACHINE,
                 &BridgeToPhone::Output(OutputMsg {
@@ -717,8 +825,8 @@ mod tests {
 
     #[tokio::test]
     async fn sync_chunk_stores_then_acks_after_the_write() {
-        let (mut s, ts) = stores().await;
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let (mut s, ts, kp) = stores().await;
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -736,21 +844,24 @@ mod tests {
         assert_eq!(ts.seqs(MACHINE, "s1").await, vec![1, 2]);
         assert_eq!(
             out.sends,
-            vec![PhoneToBridge::SyncAck(SyncAckMsg {
-                version: VersionFields::default(),
-                sync_id: "sy1".into(),
-                range: (1, 2),
-            })]
+            vec![Send {
+                machine: MACHINE.to_string(),
+                msg: PhoneToBridge::SyncAck(SyncAckMsg {
+                    version: VersionFields::default(),
+                    sync_id: "sy1".into(),
+                    range: (1, 2),
+                }),
+            }]
         );
     }
 
     #[tokio::test]
     async fn sync_end_with_a_gap_re_requests() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         // seq 5 is advertised but only 1..=2 are covered
         s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 5);
         {
-            let mut r = Router::new(&mut s, &ts, ME, 1_000);
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             r.route(
                 MACHINE,
                 &BridgeToPhone::SyncChunk(SyncChunkMsg {
@@ -765,7 +876,7 @@ mod tests {
             )
             .await;
         }
-        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
         let out = r
             .route(
                 MACHINE,
@@ -778,18 +889,18 @@ mod tests {
             .await;
         assert!(matches!(
             out.sends.as_slice(),
-            [PhoneToBridge::SyncRequest(m)] if m.session_id == "s1"
+            [Send { msg: PhoneToBridge::SyncRequest(m), .. }] if m.session_id == "s1"
         ));
     }
 
     #[tokio::test]
     async fn input_ack_confirms_the_outbox_item_and_asks_for_a_persist() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         let item = OutboxState::new_input("in-1", MACHINE, "s1", "hi", 500);
         s.outbox.begin_publish(item);
         s.outbox.settle_publish("in-1", true, None, 600);
 
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -805,8 +916,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_session_list_from_an_unpaired_machine_is_dropped() {
-        let (mut s, ts) = stores().await;
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let (mut s, ts, kp) = stores().await;
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -819,11 +930,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_heartbeat_transition_into_waiting_marks_unread_notifies_and_feeds_the_fsm() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         // first sight: running — no transition
         {
-            let mut r = Router::new(&mut s, &ts, ME, 1_000);
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             let out = r
                 .route(
                     MACHINE,
@@ -840,7 +951,7 @@ mod tests {
         }
         // now it enters waiting_permission while the phone is backgrounded →
         // mark + OS notify
-        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
         r.visible = false;
         let out = r
             .route(
@@ -862,10 +973,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_foreground_watched_session_is_never_marked_or_notified() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         s.ui.select_session(MACHINE, Some("s1"), true);
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -882,11 +993,11 @@ mod tests {
 
     #[tokio::test]
     async fn session_ready_upserts_the_session_and_applies_the_default_mode_once() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         s.settings.data.default_mode = PermissionMode::AcceptEdits;
 
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         // session came up in plan (bridge default) → a differing preference sends a mode
         let mut ready = info("s1", Some(SessionState::Idle), None);
         ready.permission_mode = Some(PermissionMode::Plan);
@@ -902,11 +1013,12 @@ mod tests {
         assert!(s.machines.session(MACHINE, "s1").is_some());
         assert!(matches!(
             out.sends.as_slice(),
-            [PhoneToBridge::Mode(m)] if m.mode == PermissionMode::AcceptEdits && m.session_id == "s1"
+            [Send { msg: PhoneToBridge::Mode(m), .. }]
+                if m.mode == PermissionMode::AcceptEdits && m.session_id == "s1"
         ));
 
         // a replayed session-ready never re-sends
-        let mut r = Router::new(&mut s, &ts, ME, 2_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
         let out = r
             .route(
                 MACHINE,
@@ -921,7 +1033,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_session_ack_removes_the_session_locally() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         s.machines.apply_session_upsert(MACHINE, &info("s1", None, None), 0);
         ts.insert_ignore(
@@ -931,7 +1043,7 @@ mod tests {
         )
         .await;
 
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -949,9 +1061,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pair_ack_registers_the_machine_learns_its_relays_and_disarms_the_deadline() {
+        use client_core::stores::pairing::{PairingCandidate, PairingPhase, PairingState};
+        use client_core::wire::capabilities::BridgeHostKind;
+        use client_core::wire::events::PairAckMsg;
+
+        let (mut s, ts, kp) = stores().await;
+        s.pairing = PairingState {
+            phase: PairingPhase::AwaitingAck,
+            candidate: Some(PairingCandidate {
+                pubkey_hex: MACHINE.into(),
+                npub: "npub1candidate".into(),
+                machine: "(manual)".into(),
+                relays: vec!["wss://learned.example".into()],
+                token: "tok".into(),
+                netid: None,
+                mesh_admin: None,
+            }),
+            error: None,
+            timed_out: false,
+            staged: None,
+        };
+
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::PairAck(PairAckMsg {
+                    machine: "laptop".into(),
+                    ok: true,
+                    reason: None,
+                    relays: None,
+                    host: Some(BridgeHostKind::Cli),
+                }),
+            )
+            .await;
+
+        assert_eq!(s.pairing.phase, PairingPhase::Paired);
+        let mv = s.machines.machine(MACHINE).expect("registered");
+        assert_eq!(mv.name, "laptop");
+        assert!(s
+            .settings
+            .data
+            .relays
+            .iter()
+            .any(|r| r == "wss://learned.example"));
+        assert_eq!(out.pair_deadline, Some(PairDeadline::Clear));
+        assert!(out.resubscribe);
+        assert!(out.persist.contains(&StoreId::Machines));
+        assert!(out.persist.contains(&StoreId::Settings));
+    }
+
+    #[tokio::test]
     async fn credentials_ack_lands_in_the_ui_slice_transiently() {
-        let (mut s, ts) = stores().await;
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let (mut s, ts, kp) = stores().await;
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -975,9 +1139,9 @@ mod tests {
 
     #[tokio::test]
     async fn models_updates_the_machine_and_asks_for_a_persist() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
@@ -1001,7 +1165,7 @@ mod tests {
     #[tokio::test]
     async fn mode_confirmed_writes_through_to_the_session_info() {
         use client_core::wire::common::{PermissionMode, RemoteSessionInfo};
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         s.machines.apply_session_upsert(
             MACHINE,
@@ -1026,7 +1190,7 @@ mod tests {
             },
             0,
         );
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         r.route(
             MACHINE,
             &BridgeToPhone::ModeConfirmed(client_core::wire::events::ModeConfirmedMsg {
@@ -1043,12 +1207,12 @@ mod tests {
 
     #[tokio::test]
     async fn input_failed_marks_the_item_failed_with_the_wire_reason() {
-        let (mut s, ts) = stores().await;
+        let (mut s, ts, kp) = stores().await;
         let item = OutboxState::new_input("in-1", MACHINE, "s1", "hi", 500);
         s.outbox.begin_publish(item);
         s.outbox.settle_publish("in-1", true, None, 600);
 
-        let mut r = Router::new(&mut s, &ts, ME, 1_000);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
