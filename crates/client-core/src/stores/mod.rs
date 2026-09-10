@@ -4,3 +4,4 @@
 pub mod machines;
 pub mod outbox;
 pub mod pairing;
+pub mod transcript;
