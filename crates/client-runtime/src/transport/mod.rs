@@ -15,3 +15,6 @@
 
 pub mod frames;
 pub mod router;
+pub mod ws;
+
+pub use ws::{WsConfig, WsTransport};

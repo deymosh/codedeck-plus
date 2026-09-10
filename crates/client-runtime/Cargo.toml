@@ -13,3 +13,18 @@ name = "client_runtime"
 [dependencies]
 client-core = { path = "../client-core" }
 serde_json = "1"
+
+# Real relay transport (F1). Hand-rolled on these rather than a relay-pool crate
+# — see docs/CLIENT-CORE.md. rustls (not native-tls) so wss:// cross-compiles
+# for Android without OpenSSL.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-socks = "0.5"
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+url = "2"
+# Inbound event parse + signature verification only (same version as client-core).
+nostr = { version = "0.44", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }

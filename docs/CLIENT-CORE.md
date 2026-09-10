@@ -70,6 +70,17 @@ pickers, tray/menus.
   effort defeating, and its publish result collapses `unconfirmed` vs
   `unreachable` — the one distinction CDX-086 exists to keep. The client Nostr
   wire is ~10 frame shapes (`client_runtime::transport::frames`).
+- `wss://` uses `rustls` (webpki roots), not `native-tls`, so it cross-compiles
+  for Android without OpenSSL. That pulls `ring` (C/asm) — one more heavy
+  transitive alongside `secp256k1`; the F1 `.so`-size gate (≤ 50 MB) covers it.
+- `WsTransport` is single-threaded: the `SubCallbacks` closures are `!Send`, so
+  it runs on a current-thread runtime inside a `LocalSet` (the FG service's
+  client thread), every task `spawn_local`. Mirrors the TS `this`-bound model.
+- The transport never reconnects on its own (`enableReconnect: false`) — a dead
+  socket is ONE `on_close`; the FSM owns backoff and calls
+  `WsTransport::ensure_connected`. `publish_confirmed` retries the SAME signed
+  event only on `unreachable` (transient); `rejected` from every relay will
+  reject it identically, `accepted`/`unconfirmed` mean the bridge has it.
 
 ## Anti-drift with `packages/protocol`
 
@@ -99,7 +110,8 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | bridge API — socket I/O | same | `client_runtime` | ⏳ publish + `publishConfirmed` retry loop, folder-ack timers, handler dispatch — lands with the real `Transport` |
 | NIP-42 relay AUTH signer | `packages/protocol/src/nip42.ts` | `client_core::nip42` | ✅ F1 — `build_auth_event` (kind-22242, identity-signed) |
 | relay wire frames (REQ/CLOSE/EVENT/AUTH ↔ EVENT/EOSE/CLOSED/OK/NOTICE/AUTH) | nostr-tools SimplePool internals + `platform/relayTransport.ts` | `client_runtime::transport::frames` | ✅ F1 (pure codec) |
-| relay read-loop routing (fan-out EOSE/close, AUTH, publish verdict aggregation) | nostr-tools `subscribeMany` + `raceForAcceptance` | `client_runtime::transport::router` | ✅ F1 (pure); `tokio` socket driver ⏳ |
+| relay read-loop routing (fan-out EOSE/close, AUTH, publish verdict aggregation) | nostr-tools `subscribeMany` + `raceForAcceptance` | `client_runtime::transport::router` | ✅ F1 (pure) |
+| relay socket driver (connect + SOCKS5 + wss, read loop, ping liveness, AUTH, `publish_confirmed`) | `platform/relayTransport.ts` + `poolOptions.ts` | `client_runtime::transport::ws` (`WsTransport`) | ✅ F1 — `tokio-tungstenite` + `tokio-socks`; loopback mock-relay integration tests. `nostr_client` FSM wiring + lifecycle handle ⏳ |
 | stores, sync, outbox, pairing, notifications, presentation, dm/marmot | `apps/mobile/src/core/**` | `client_core::**` | ⏳ F2a |
 | MDK/MLS engine | `apps/mobile/src-tauri/src/marmot.rs` | `client_core::marmot` (feat) | ⏳ F2a |
 

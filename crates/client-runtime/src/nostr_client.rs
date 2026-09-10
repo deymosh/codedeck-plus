@@ -47,13 +47,15 @@ pub struct NostrEvent {
 }
 
 /// Callbacks a `Transport` invokes for one subscription. Mirrors the TS
-/// `TransportSubscriptionParams`.
+/// `TransportSubscriptionParams`. `Rc` (not `Box`) so a transport can clone one
+/// callback out from under a `RefCell` borrow and invoke it after dropping the
+/// borrow — a user callback may re-enter `subscribe` / `TransportSub::close`.
 pub struct SubCallbacks {
-    pub on_event: Box<dyn Fn(&NostrEvent)>,
+    pub on_event: Rc<dyn Fn(&NostrEvent)>,
     /// end of stored events for this subscription.
-    pub on_eose: Box<dyn Fn()>,
+    pub on_eose: Rc<dyn Fn()>,
     /// the underlying subscription died (NOT a deliberate `close()`).
-    pub on_close: Box<dyn Fn(Option<String>)>,
+    pub on_close: Rc<dyn Fn(Option<String>)>,
 }
 
 pub trait TransportSub {
@@ -229,13 +231,13 @@ impl<T: Transport, H: NostrClientHost + 'static> NostrClient<T, H> {
             let sub = self.transport.subscribe(
                 filter,
                 SubCallbacks {
-                    on_event: Box::new(move |ev| {
+                    on_event: Rc::new(move |ev| {
                         if i_ev.borrow().epoch != epoch {
                             return; // superseded subscription
                         }
                         handle_event(&i_ev, &*h_ev, ev);
                     }),
-                    on_eose: Box::new(move || {
+                    on_eose: Rc::new(move || {
                         let all_in = {
                             let mut i = i_eo.borrow_mut();
                             if i.epoch != epoch {
@@ -253,7 +255,7 @@ impl<T: Transport, H: NostrClientHost + 'static> NostrClient<T, H> {
                             h_eo.on_socket_open();
                         }
                     }),
-                    on_close: Box::new(move |reason| {
+                    on_close: Rc::new(move |reason| {
                         if i_cl.borrow().epoch != epoch {
                             h_cl.log("[NostrClient] ignoring close of superseded subscription");
                             return;
