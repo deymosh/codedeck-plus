@@ -7,6 +7,7 @@
 //! Ported module-by-module from `apps/mobile/src/core` + the consumed parts of
 //! `packages/protocol`; each port keeps the TS behaviour as its contract.
 
+pub mod bridge_api;
 pub mod chunking;
 pub mod connection;
 pub mod crypto;

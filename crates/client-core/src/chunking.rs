@@ -161,6 +161,7 @@ pub enum AssemblerResult {
     Invalid { error: String },
 }
 
+#[derive(Debug)]
 struct OpenBuffer {
     n: u64,
     parts: BTreeMap<u64, String>,
@@ -181,6 +182,7 @@ struct OpenBuffer {
 ///
 /// `now_ms` is passed in per call — the runtime supplies real time, tests a
 /// fake clock (the `Clock` port lives one layer up).
+#[derive(Debug)]
 pub struct ChunkAssembler {
     ttl_ms: u64,
     max_open: usize,

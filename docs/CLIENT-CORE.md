@@ -87,7 +87,8 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | chunking (framing + assembler) | `packages/protocol/src/chunking.ts` | `client_core::chunking` | ✅ F1 |
 | connection reducer + presence/stale helpers | `apps/mobile/src/core/stores/connection.ts` (pure half) | `client_core::connection` | ✅ F1 |
 | nostr client (epoch guard, filters, dedup, cursor) | `nostrClient.ts` + `poolOptions.ts` | `client_runtime::nostr_client` | ✅ F1 (real tokio-tungstenite + SOCKS5 transport = next) |
-| bridge API (transport) | `apps/mobile/src/core/services/bridgeApi.ts` | `client_core::bridge_api` (policy) + `client_runtime` (I/O) | ⏳ |
+| bridge API — policy + ingest pipeline | `apps/mobile/src/core/services/bridgeApi.ts` | `client_core::bridge_api` | ✅ F1 — `kind_for_message`, egress-validated `build_command` (stamp `v`/`caps`, NIP-44, sign, expiry tag), `ingest` (decrypt → `ChunkAssembler` → decode, total), `classify_publish`/`combine_publish` verdicts, folder-ack id tracking |
+| bridge API — socket I/O | same | `client_runtime` | ⏳ publish + `publishConfirmed` retry loop, folder-ack timers, handler dispatch — lands with the real `Transport` |
 | stores, sync, outbox, pairing, notifications, presentation, dm/marmot | `apps/mobile/src/core/**` | `client_core::**` | ⏳ F2a |
 | MDK/MLS engine | `apps/mobile/src-tauri/src/marmot.rs` | `client_core::marmot` (feat) | ⏳ F2a |
 
