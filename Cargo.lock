@@ -199,6 +199,7 @@ dependencies = [
  "client-core",
  "futures-util",
  "nostr",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-socks",

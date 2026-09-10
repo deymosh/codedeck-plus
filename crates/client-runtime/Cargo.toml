@@ -12,6 +12,7 @@ name = "client_runtime"
 
 [dependencies]
 client-core = { path = "../client-core" }
+serde = "1"
 serde_json = "1"
 
 # Real relay transport (F1). Hand-rolled on these rather than a relay-pool crate
