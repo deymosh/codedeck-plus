@@ -73,6 +73,15 @@ pub fn npub_from_hex(pubkey_hex: &str) -> Result<String, CryptoError> {
         .map_err(|_| CryptoError::InvalidKey)
 }
 
+/// hex pubkey for an `npub…` (pairing URL / manual-pair input). `Err` on a
+/// non-`npub` bech32 (e.g. an `nsec`) or garbage — never a panic.
+pub fn hex_from_npub(npub: &str) -> Result<String, CryptoError> {
+    use nostr::nips::nip19::FromBech32;
+    Ok(PublicKey::from_bech32(npub)
+        .map_err(|_| CryptoError::InvalidKey)?
+        .to_hex())
+}
+
 /// Hex → bytes, with the same strictness as the TS helper (even length, only
 /// `0-9a-fA-F`).
 pub fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, CryptoError> {
@@ -133,6 +142,18 @@ mod tests {
         let kp = generate_keypair();
         assert_eq!(npub_from_hex(&kp.pubkey_hex).unwrap(), kp.npub);
         assert_eq!(npub_from_hex("nothex"), Err(CryptoError::InvalidKey));
+    }
+
+    #[test]
+    fn hex_from_npub_round_trips_and_rejects_non_npub() {
+        let kp = generate_keypair();
+        assert_eq!(hex_from_npub(&kp.npub).unwrap(), kp.pubkey_hex);
+        assert_eq!(hex_from_npub("npub1garbage"), Err(CryptoError::InvalidKey));
+        // an nsec is valid bech32 but not a public key
+        assert_eq!(
+            hex_from_npub("nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"),
+            Err(CryptoError::InvalidKey)
+        );
     }
 
     #[test]
