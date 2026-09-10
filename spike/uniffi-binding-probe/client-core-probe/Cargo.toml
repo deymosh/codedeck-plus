@@ -1,0 +1,35 @@
+# THROWAWAY F0 spike crate. Its only job is to answer, with running code, the
+# Go/No-Go question in the migration plan §7 F0-probe-1: is a UniFFI-generated
+# API for the future Rust `client-core` ergonomic from Kotlin/Compose and
+# reasonable from Tauri? Delete this whole `spike/` tree once
+# `spike/uniffi-binding-probe/README.md` records the verdict.
+[package]
+name = "client-core-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+name = "client_core_probe"
+# cdylib: the artifact Kotlin (JNA) and a Tauri host load at runtime.
+# lib:    so the native `tests/` and a Tauri crate can link it directly.
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+uniffi = { version = "0.28", features = ["tokio", "cli"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+# NIP-44 v2: reuse the vetted implementation already in this repo's tree (MDK
+# pulls `nostr` 0.44). The plan's risk #13 — hand-roll vs `nostr` crate — is
+# decided "con datos" here: `cargo tree` output goes in the README.
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
+
+# Generates the language bindings: `cargo run --bin uniffi-bindgen -- ...`
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"

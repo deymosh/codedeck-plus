@@ -1,0 +1,12 @@
+target/
+client-core-probe/target/
+tauri-consumer/target/
+kotlin/.gradle/
+kotlin/build/
+kotlin/bindings/
+kotlin/lib/
+kotlin/gradle/wrapper/gradle-wrapper.jar
+Cargo.lock
+*.so
+*.dll
+*.dylib
