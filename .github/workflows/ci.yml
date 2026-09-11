@@ -87,8 +87,11 @@ jobs:
               # the shared codec conformance corpus (also consumed by pnpm test)
               - 'packages/protocol/fixtures/**'
 
+      # `core` (crates/**) is included here too: a View/Intent/CoreEvent field
+      # change under crates/client-runtime with no apps/mobile/src-tauri edit
+      # still needs the TS-bindings drift check below, which builds src-tauri.
       - name: Install Tauri Linux system deps
-        if: steps.filter.outputs.rust == 'true'
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -96,11 +99,11 @@ jobs:
             librsvg2-dev patchelf
 
       - name: Install Rust
-        if: steps.filter.outputs.rust == 'true'
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-        if: steps.filter.outputs.rust == 'true'
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
         with:
           workspaces: apps/mobile/src-tauri
 
@@ -117,6 +120,23 @@ jobs:
           # kept buildable (see [features] in Cargo.toml) — build it too so a
           # break there fails CI, not a future opt-out build.
           cargo build --locked --no-default-features
+
+      # Rust is the source of truth for apps/mobile/src/core/
+      # nativeCoreTypes.generated.ts (see gen_ts_bindings.rs's own doc
+      # comment) — regenerate it and fail if the committed copy drifted.
+      # Runs whenever src-tauri OR crates/** changed, since either can move
+      # the exported View/Intent/CoreEvent shapes.
+      - name: TS bindings drift check
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
+        working-directory: apps/mobile/src-tauri
+        env:
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          cargo test --locked --features native-core --test gen_ts_bindings -- --ignored
+          git diff --exit-code -- ../src/core/nativeCoreTypes.generated.ts || {
+            echo "::error::apps/mobile/src/core/nativeCoreTypes.generated.ts is stale — a Rust type changed without regenerating it. Run: cargo test -p codedeck-mobile --features native-core --test gen_ts_bindings -- --ignored" >&2
+            exit 1
+          }
 
       # --- client-core / client-runtime workspace (pure Rust, no system deps) ---
       - name: Install Rust (client-core)
