@@ -712,6 +712,7 @@ dependencies = [
  "client-core",
  "client-runtime",
  "nostr",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

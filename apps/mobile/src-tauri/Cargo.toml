@@ -76,6 +76,17 @@ tokio = { version = "1", default-features = false, features = ["rt", "time", "sy
 # uses its types in its signatures.
 client-core = { path = "../../../crates/client-core", features = ["marmot"] }
 nostr = { version = "0.44", features = ["std", "nip44", "nip59"] }
+# `client-core`'s `marmot` feature pulls the SAME rusqlite build MDK needs, but
+# `src/sqlstore.rs` uses `rusqlite` directly for its OWN generic SQL executor
+# (CDX-012, unrelated to MDK) — Cargo requires a crate you `use` by name to be
+# a direct dependency of THIS crate too, whatever a transitive dep also pulls.
+# Same version + feature as `client-core`'s so Cargo unifies to one linked
+# copy: two would violate the `links = "sqlite3"` uniqueness Cargo enforces
+# (see the CDX-012 note above `tauri-plugin-sql`'s removal). The
+# vendored-OpenSSL variant is required because the plain `bundled-sqlcipher`
+# feature's C build `#include`s OpenSSL headers that don't exist for Android
+# targets.
+rusqlite = { version = "0.37", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
 # The gift-wrap path is async (nostr 0.44) — loopback tests need a runtime.
