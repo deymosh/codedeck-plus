@@ -136,6 +136,17 @@ export interface SessionView {
   gsd?: GsdState;
 }
 
+/** Mirrors `client-core`'s `ProviderProfileInfo` (CDX-062, redacted — never a
+ *  token). */
+export interface ProviderProfileInfo {
+  id: string;
+  label: string;
+  baseUrl: string;
+  models: Array<{ id: string; label?: string }>;
+  defaultModel?: string;
+  hasToken: boolean;
+}
+
 export interface MachineView {
   pubkeyHex: string;
   name: string;
@@ -148,6 +159,14 @@ export interface MachineView {
   machineOffline: boolean;
   lastHeartbeatAt?: number;
   sessions: Record<string, SessionView>;
+  models?: Array<{ id: string; label?: string }>;
+  defaultModel?: string;
+  modelsError?: string;
+  /** Bridge-authoritative, in-memory only (CDX-062) — present in this LIVE
+   *  view, but `client-core`'s `serialize_machines` strips it before writing
+   *  to disk, so `undefined` here also means "not fetched this boot" after a
+   *  fresh hydration, same as the TS store's own semantics. */
+  providerProfiles?: ProviderProfileInfo[];
 }
 
 export interface MachinesView {
