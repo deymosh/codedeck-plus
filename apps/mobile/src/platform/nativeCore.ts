@@ -1,18 +1,23 @@
 /**
- * nativeCore — the seam to the in-process Rust `client-runtime` (migration F1).
+ * nativeCore — the seam to the in-process Rust `client-runtime` (migration
+ * F1 transport, F2b the full plan §2 View/Intent/CoreEvent surface).
  *
  * When the APK is built with `native-core` (apps/mobile/src-tauri, the
  * `corebridge` module) and the user opts in, the Nostr sockets + NIP-44 crypto
- * + connection FSM run in the app process (inside the stay-connected foreground
- * service), NOT in this WebView. This module wraps the `core_*` commands and
- * the `core://{connection,message,action-failed}` events; the phone core
- * (createPhoneCore) uses it in place of its own transport + BridgeApi + nostr
- * client when it is present.
+ * + connection FSM + every store (F2b: over real SQLite persistence) run in
+ * the app process (inside the stay-connected foreground service), NOT in
+ * this WebView. `dispatch` + the `*View()` queries + `onCoreEvent` are the
+ * full re-point surface (plan §2); the earlier `send`/`publish`/`onMessage`
+ * F1 methods stay for the transport-only path until `apps/mobile` actually
+ * switches over to them.
  *
  * Every command result / event payload crosses the boundary as untyped JSON —
- * `decodeBridgeToPhone` re-validates each inbound message so a Rust/JS drift
- * fails loudly at the seam, not deep in a store. The identity secret passes
- * through `init` exactly once per run and is never logged.
+ * `decodeBridgeToPhone` re-validates each inbound F1 message so a Rust/JS
+ * drift fails loudly at the seam, not deep in a store; `Intent`/`CoreEvent`/
+ * the `*View` types (`nativeCoreTypes.ts`) are hand-mirrored from the Rust
+ * side (each carries its own round-trip test there) rather than re-validated
+ * here — there is no phone-side zod schema for them (yet). The identity
+ * secret passes through `init` exactly once per run and is never logged.
  *
  * Kept isTauri-guarded with lazy imports (house style) so plain-browser dev and
  * the node test suite never touch `@tauri-apps/api`.
@@ -23,6 +28,16 @@ import {
   type PhoneToBridgeMessage,
 } from '@codedeck/protocol';
 import type { Logger } from '../core/ports';
+import type {
+  CoreEvent,
+  DmView,
+  Intent,
+  MachinesView,
+  MarmotView,
+  OutboxView,
+  PairingView,
+  SettingsView,
+} from '../core/nativeCoreTypes';
 
 export type NativeConnectionStatus =
   | 'idle'
@@ -72,6 +87,19 @@ export interface NativeCore {
   ): Promise<() => void>;
   onConnection(cb: (snapshot: NativeConnectionSnapshot) => void): Promise<() => void>;
   onActionFailed(cb: (kind: NativeActionFailed) => void): Promise<() => void>;
+
+  // --- F2b: the plan §2 View/Intent/CoreEvent surface ---
+
+  /** Dispatch one user action (plan §2.2). */
+  dispatch(intent: Intent): Promise<void>;
+  machinesView(): Promise<MachinesView>;
+  settingsView(): Promise<SettingsView | null>;
+  outboxView(): Promise<OutboxView>;
+  pairingView(): Promise<PairingView | null>;
+  dmView(): Promise<DmView | null>;
+  marmotView(): Promise<MarmotView | null>;
+  /** The full semantic event stream (plan §2.3). Resolves an unlisten. */
+  onCoreEvent(cb: (event: CoreEvent) => void): Promise<() => void>;
 }
 
 /** Minimal `@tauri-apps/api/core#invoke` shape (injected for tests). */
@@ -85,6 +113,7 @@ export type TauriListen = <T>(
 const EV_CONNECTION = 'core://connection';
 const EV_MESSAGE = 'core://message';
 const EV_ACTION_FAILED = 'core://action-failed';
+const EV_CORE_EVENT = 'core://event';
 
 const CONNECTION_STATUSES: readonly NativeConnectionStatus[] = [
   'idle',
@@ -145,6 +174,15 @@ export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: L
 
     onActionFailed: (cb) =>
       listen<NativeActionFailed>(EV_ACTION_FAILED, ({ payload }) => cb(payload)),
+
+    dispatch: (intent) => invoke<void>('core_dispatch', { intent }),
+    machinesView: () => invoke<MachinesView>('core_machines_view'),
+    settingsView: () => invoke<SettingsView | null>('core_settings_view'),
+    outboxView: () => invoke<OutboxView>('core_outbox_view'),
+    pairingView: () => invoke<PairingView | null>('core_pairing_view'),
+    dmView: () => invoke<DmView | null>('core_dm_view'),
+    marmotView: () => invoke<MarmotView | null>('core_marmot_view'),
+    onCoreEvent: (cb) => listen<CoreEvent>(EV_CORE_EVENT, ({ payload }) => cb(payload)),
   };
 }
 

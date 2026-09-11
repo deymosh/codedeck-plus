@@ -102,4 +102,46 @@ describe('nativeCoreOver', () => {
     listeners.get('core://connection')!({ payload: { status: 'waiting-retry', needsPairingCheck: false } });
     expect(snapshots).toEqual([{ status: 'waiting-retry', needsPairingCheck: false }]);
   });
+
+  it('dispatch sends the Intent verbatim to core_dispatch', async () => {
+    const { calls, invoke, listen } = fakes();
+    const core = nativeCoreOver(invoke, listen);
+    await core.dispatch({ sendInput: { machine: 'm1', sessionId: 's1', text: 'hi', inputId: 'in-1' } });
+    expect(calls).toEqual([
+      { cmd: 'core_dispatch', args: { intent: { sendInput: { machine: 'm1', sessionId: 's1', text: 'hi', inputId: 'in-1' } } } },
+    ]);
+  });
+
+  it('each *View method calls its own core_*_view command', async () => {
+    const { calls, invoke, listen } = fakes();
+    const core = nativeCoreOver(invoke, listen);
+    await core.machinesView();
+    await core.settingsView();
+    await core.outboxView();
+    await core.pairingView();
+    await core.dmView();
+    await core.marmotView();
+    expect(calls.map((c) => c.cmd)).toEqual([
+      'core_machines_view',
+      'core_settings_view',
+      'core_outbox_view',
+      'core_pairing_view',
+      'core_dm_view',
+      'core_marmot_view',
+    ]);
+  });
+
+  it('onCoreEvent forwards the raw CoreEvent payload untouched', async () => {
+    const { listeners, invoke, listen } = fakes();
+    const core = nativeCoreOver(invoke, listen);
+    const seen: unknown[] = [];
+    await core.onCoreEvent((e) => seen.push(e));
+
+    listeners.get('core://event')!({ payload: { stateChanged: { slice: 'machines' } } });
+    listeners.get('core://event')!({ payload: { pairingSettled: { paired: true } } });
+    expect(seen).toEqual([
+      { stateChanged: { slice: 'machines' } },
+      { pairingSettled: { paired: true } },
+    ]);
+  });
 });
