@@ -42,6 +42,7 @@ function fakeCore(initialView: OutboxView = { items: [] }) {
     dmView: () => Promise.reject(new Error('unused')),
     marmotView: () => Promise.reject(new Error('unused')),
     quickPromptsView: () => Promise.reject(new Error('unused')),
+    pendingSessionsView: () => Promise.reject(new Error('unused')),
     onCoreEvent: vi.fn(async (cb: (e: CoreEvent) => void) => {
       coreEventListener = cb;
       return () => {

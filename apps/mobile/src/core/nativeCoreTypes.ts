@@ -124,7 +124,8 @@ export type Intent =
   | { setShowCommitBadge: boolean }
   | { addQuickPrompt: { id: string; label: string; text: string } }
   | { updateQuickPrompt: { id: string; label: string; text: string } }
-  | { removeQuickPrompt: { id: string } };
+  | { removeQuickPrompt: { id: string } }
+  | { dismissPendingSession: { pendingId: string } };
 
 // --- Views (plan §2.1) ---
 
@@ -312,6 +313,27 @@ export interface QuickPromptsView {
   prompts: QuickPrompt[];
 }
 
+export type PendingSessionState = 'pending' | 'failed';
+
+/** Mirrors `client-core`'s `PendingSessionView`. */
+export interface PendingSessionView {
+  pendingId: string;
+  /** Machine pubkey hex (`""` for a failure with no matching `session-pending`). */
+  machine: string;
+  machineName: string;
+  createdAt: string;
+  state: PendingSessionState;
+  reason?: string;
+  seenAt: number;
+}
+
+/** Not persisted on the Rust side (a placeholder is meaningless after a
+ *  restart) — the `pendingSessions` slice's `stateChanged` is the only signal
+ *  that this view is worth re-fetching. */
+export interface PendingSessionsView {
+  pending: Record<string, PendingSessionView>;
+}
+
 // --- CoreEvent (plan §2.3) ---
 
 export type SliceId =
@@ -324,7 +346,8 @@ export type SliceId =
   | 'pairing'
   | 'dm'
   | 'marmot'
-  | 'quickPrompts';
+  | 'quickPrompts'
+  | 'pendingSessions';
 
 export type ActionFailedKind =
   | 'decryptFailed'

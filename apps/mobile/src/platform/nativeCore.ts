@@ -36,6 +36,7 @@ import type {
   MarmotView,
   OutboxView,
   PairingView,
+  PendingSessionsView,
   QuickPromptsView,
   SettingsView,
 } from '../core/nativeCoreTypes';
@@ -100,6 +101,7 @@ export interface NativeCore {
   dmView(): Promise<DmView | null>;
   marmotView(): Promise<MarmotView | null>;
   quickPromptsView(): Promise<QuickPromptsView>;
+  pendingSessionsView(): Promise<PendingSessionsView>;
   /** The full semantic event stream (plan §2.3). Resolves an unlisten. */
   onCoreEvent(cb: (event: CoreEvent) => void): Promise<() => void>;
 }
@@ -185,6 +187,7 @@ export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: L
     dmView: () => invoke<DmView | null>('core_dm_view'),
     marmotView: () => invoke<MarmotView | null>('core_marmot_view'),
     quickPromptsView: () => invoke<QuickPromptsView>('core_quick_prompts_view'),
+    pendingSessionsView: () => invoke<PendingSessionsView>('core_pending_sessions_view'),
     onCoreEvent: (cb) => listen<CoreEvent>(EV_CORE_EVENT, ({ payload }) => cb(payload)),
   };
 }
