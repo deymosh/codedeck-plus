@@ -1,5 +1,5 @@
 /**
- * The stdin/stdout control protocol (F2b plan §4 Capa 2) — pure request →
+ * The stdin/stdout control protocol (F2b plan §4 Layer 2) — pure request →
  * response dispatch over a `Harness`, deliberately separated from process
  * I/O (`main.ts`) so it is unit-testable without a subprocess.
  *

@@ -1,6 +1,6 @@
 /**
  * A real `ws://` relay in front of `@codedeck/testkit`'s `InMemoryRelay` —
- * the socket half the F2b plan (§4 Capa 2) calls for: the relay's storage and
+ * the socket half the F2b plan (§4 Layer 2) calls for: the relay's storage and
  * filter semantics stay the well-exercised in-memory implementation, but a
  * client now reaches it over a genuine TCP socket, so serialization/framing/
  * timing bugs that only show up on a real wire surface here instead of only

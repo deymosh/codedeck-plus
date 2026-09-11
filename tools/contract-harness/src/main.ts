@@ -1,5 +1,5 @@
 /**
- * Process entry point (F2b plan §4 Capa 2): starts one harness world and
+ * Process entry point (F2b plan §4 Layer 2): starts one harness world and
  * drives it from stdin/stdout JSON lines. See `README.md` for the protocol.
  *
  * The first line on stdout is always `{"type":"ready",...}` — a driver must

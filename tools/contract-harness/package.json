@@ -24,7 +24,7 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
-  "description": "Standalone process a native client (or a TS test) drives over a real ws:// socket against a real BridgeCore + FakeSdkFacade — the F2b migration plan's Capa 2 contract-test harness.",
+  "description": "Standalone process a native client (or a TS test) drives over a real ws:// socket against a real BridgeCore + FakeSdkFacade — the F2b migration plan's Layer 2 contract-test harness.",
   "license": "MIT",
   "repository": {
     "type": "git",

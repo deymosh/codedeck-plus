@@ -1,4 +1,4 @@
-//! F2b Capa 2 Go/No-Go gate (migration plan §4): drives the REAL
+//! F2b Layer 2 Go/No-Go gate (migration plan §4): drives the REAL
 //! `client_runtime::Core` against `tools/contract-harness` — a real
 //! `BridgeCore` + `FakeSdkFacade` reachable over a genuine `ws://` socket.
 //! Process + socket, no FFI shim.
@@ -409,7 +409,7 @@ async fn scenario_a_pair_session_output_input_ack_restart_reconnect_sync_gap_ref
             }
 
             // The phone's transcript is byte-identical to the bridge's own,
-            // seq for seq — the F2b Capa 2 gate's own oracle.
+            // seq for seq — the F2b Layer 2 gate's own oracle.
             let bridge_rows = harness
                 .call("get-bridge-transcript", serde_json::json!({ "sessionId": session_id }))
                 .await;

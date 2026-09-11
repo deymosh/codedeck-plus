@@ -5,7 +5,7 @@ behind a scriptable `FakeSdkFacade` (from `@codedeck/testkit`), fronted by a
 real `ws://127.0.0.1:<port>` relay. It exists so a client that is **not**
 JavaScript — the Rust `client-runtime`, today; any future native client —
 can be tested against the real bridge protocol over a genuine socket,
-without a language-specific FFI shim. See the migration plan §4 "Capa 2".
+without a language-specific FFI shim. See the migration plan §4 "Layer 2".
 
 This is a devtool: it is never published, never shipped, and carries no
 production code path. `packages/testkit` stays a pure library; this package
@@ -56,7 +56,7 @@ responses may be correlated even if a future version answers out of order.
 | `emit-sdk-message` | `sessionId`, `message` (an `SdkMessage`) | `null`. Pushes `message` into that session's stream, as if the Claude Code subprocess had emitted it. The session must already exist (created via a real phone `create-session` command over the socket) or this throws. |
 | `list-sdk-sessions` | — | An array of session ids, in creation order — the same ids the phone sees on the wire. A driver that just sent `create-session` can safely take the last one. |
 | `get-bridge-transcript` | `sessionId` | An array of `{ seq, entry }` — every row the bridge has stored for that session, in order. `[]` for an unknown session. |
-| `restart-bridge` | — | `null`. Shuts the current `BridgeCore` down and starts a fresh one — same secret key, same storage, same on-disk transcripts. The relay server and its socket are untouched, so a connected client sees a real disconnect/reconnect, not a torn-down world. |
+| `restart-bridge` | — | `null`. Shuts the current `BridgeCore` down and starts a fresh one — same secret key, same storage, same on-disk transcripts, but a FRESH `FakeSdkFacade` (a real bridge restart kills the underlying Claude Code subprocess too). `BridgeCore`'s own resume-on-boot re-spawns any still-tracked session under the same id on the new facade. The relay server and its socket are untouched, so a connected client sees a real disconnect/reconnect, not a torn-down world. |
 | `drain-logs` | — | An array of `{ level, message }` — every host log line since the last drain (own or the previous command's). Logs are queued regardless of whether anything reads them. |
 | `shutdown` | — | `null`, then the process exits. Also triggered by stdin closing (the driver process died) — the harness never lingers as an orphan. |
 
@@ -85,7 +85,7 @@ that failed to parse as JSON at all answers with `id: "unknown"`.
 7. `restart-bridge`; assert the client's reconnect + sync-gap-refill path.
 8. `shutdown` when done.
 
-This is scenario A of the migration plan's Capa 2 gate (pair → session in a
+This is scenario A of the migration plan's Layer 2 gate (pair → session in a
 folder → live output lands in the transcript → input reaches confirmed →
 bridge restart → reconnect → refresh + sync gap-refill → contiguous
 transcript identical to the bridge's own).
