@@ -134,20 +134,31 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | `dmAttachments` parse/build half | `apps/mobile/src/core/dmAttachments.ts` | `client_core::dm_attachments` | ✅ F2a — `parse_dm_content` (line-based text / `image` / `imageUrl` split, malformed refs stay text), `build_image_ref`, `preview_text`. The AES-256-GCM crypto + BUD-02 signed upload + download stay for `client-runtime` (need `aes-gcm` + `HttpFetch` port + deadline/abort). 6 tests. |
 | `dm` store (state machine) | `apps/mobile/src/core/stores/dm.ts` | `client_core::stores::dm` | ✅ F2a — `DmState`: structural dedup (`id` then sender+content window), conversation upsert + unread accounting (active conversation never counts), `ingest_dm_rumor` (self-copy peer via `p` tag, status), `dm_since_cursor` (newest − 48 h), `parse_peer_input` / `truncate_peer_label` / `ordered_conversations` / `build_dm_filter`, profile cache TTL, `hydrate_dm` tolerant. The `nip59` unwrap, transport sub + epoch guard, 10050 publish and profile fetch stay in `client-runtime` (that layer carries the `dm` feature gate — the pure state machine is dep-free). 14 tests. |
 | `marmot` store (state machine) | `apps/mobile/src/core/stores/marmot.ts` | `client_core::stores::marmot` | ✅ F2a — `MarmotState`: id-only dedup with the Failed→Sent promotion on the relay echo, conversation upsert (known-peer / prior-activity preference), unread gating, `apply_welcome` (stage + CDX-030 KP-consumed flag), `on_welcome_accepted` (join + welcomer backfill + returns the h tag), the VEIL-029 bounded unjoined-445 buffer + `take_buffered_for`, `should_mint_key_package` (CDX-030 mint-once), `unified_conversations` (Phase 6 list), `marmot_since_cursor`, `peer_of_group`, tolerant `hydrate_marmot`. The MDK/MLS engine calls, transport sub + epoch guard, KP + 10051 publish stay in `client-runtime` (that layer carries the `marmot` feature gate). 13 tests. |
-| `dmAttachments` crypto/upload | `apps/mobile/src/core/dmAttachments.ts` | `rt::` (needs `aes-gcm` + `HttpFetch`) | ⏳ F2b |
-| `deadline` (cancel/budget/withDeadline) | `apps/mobile/src/core/deadline.ts` | `rt::` (AbortSignal + timers) | ⏳ F2b |
-| ports traits (`Kv`/`SecureStore`/`Transport`/`TranscriptStore`/`Timers`/`Clock`/`Entropy`/`Notifier`/`HttpFetch`) | `apps/mobile/src/core/ports.ts` | `client_core::ports` + impls in `rt::` | ⏳ F2b (partial: `Clock`/`Entropy` live in `rt::core`) |
+| `deadline` (cancel / budget / with_deadline) | `apps/mobile/src/core/deadline.ts` | `client_runtime::deadline` | ✅ F2b — `remaining_budget`, `with_deadline` (tokio timeout), `CancellationToken` cancel, `StageError` taxonomy. |
+| runtime ports | `apps/mobile/src/core/ports.ts` | `client_runtime::ports` | ✅ F2b — `Kv` / `TranscriptStore` / `Notifier` traits + `MemoryKv` / `MemoryTranscriptStore` / `RecordingNotifier`. `Clock` / `Entropy` in `rt::core`. `HttpFetch` in `rt::attachments`. |
+| store bundle + persistence | `apps/mobile/src/core/createPhoneCore.ts` (hydrate) | `client_runtime::stores` | ✅ F2b — `CoreStores` (every `client_core` state machine), `hydrate` (KV + transcript-coverage rehydrate + identity), `Persister`. |
+| message routing (`bridgeApi.handlers`) | `apps/mobile/src/core/createPhoneCore.ts` handlers | `client_runtime::dispatch::Router` | ✅ F2b — every `BridgeToPhone` family → `RouteResult` (persist / sends / notifies / heartbeat / pair-deadline / resubscribe). |
+| read projections | `apps/mobile/src/core` selectors | `client_runtime::view` | ✅ F2b — `Connection` / `Machines` / `Outbox` / `Settings` / `Pairing` / `Dm` / `TranscriptSync` + `Core::*_view()`. |
+| user actions | scattered store methods | `client_runtime::intent` | ✅ F2b — `Intent` enum + `apply` (session cmds, outbox send/retry lifecycle, delete + undo, full pairing flow, DM send/start, settings). `Core::dispatch(Intent)`. |
+| semantic event stream | store subscriptions | `client_runtime::core::CoreEvent` | ✅ F2b — `StateChanged{slice}` / `OutboxSettled` / `PairingSettled` / `ActionFailed` via `CoreObserver::on_event`. |
+| composed `Core` loop | `createPhoneCore.ts` | `client_runtime::core::Core` | ✅ F2b — async `spawn` (hydrate), Router + Intent + View + CoreEvent on one event loop; retry / vis / stale / pair / undo timers. |
+| NIP-17 DM runtime | `nostrService` DM path + `dmStore` I/O | `client_runtime::core` (1059 sub) + `client_runtime::giftwrap` | ✅ F2b — kind-1059 subscription (epoch + catch-up cursor + kind-10050 publish), `wrap_dm` / `unwrap_gift_parts` (NIP-59), `Intent::SendDm`, `DmReceived` notification. |
+| `dmAttachments` crypto / upload | `apps/mobile/src/core/dmAttachments.ts` | `client_runtime::attachments` | ✅ F2b — AES-256-GCM blob + SHA-256 id, `HttpFetch` port, BUD-02 signed upload with a retry budget, download+decrypt. The `UploadImage` intent wiring (needs `HttpFetch` in `CorePorts`) ⏳. |
+| Marmot runtime (445 sub, 444-welcome route, MDK seam) | `dmStore`/`marmotStore` I/O | `client_runtime::core` | ⏳ F2b |
 | MDK/MLS engine relocation | `apps/mobile/src-tauri/src/marmot.rs` + `sqlstore.rs` | `client_runtime` workspace member (feat `marmot`, SQLCipher) | ⏳ F2b |
-| runtime `Core`: compose all stores + View/Intent/CoreEvent surface, re-point `apps/mobile`, `tools/contract-harness/`, delete `src/core` | `apps/mobile/src/core/createPhoneCore.ts` | `client_runtime::core` | ⏳ F2b |
+| `tools/contract-harness/` + re-point `apps/mobile` + delete `src/core` | `createPhoneCore.ts` consumers | `client_runtime` bindings | ⏳ F2b |
 
-**F2a status: the pure `client-core` layer is complete.** Every domain state
-machine, reducer, codec, controller and presentation model from
-`apps/mobile/src/core` (plus the consumed `ui/` pure models) is ported, pure
-(no `tokio`/sockets/threads/I/O), and covered by vector tests — 364 workspace
-tests, `clippy -D warnings` clean. What remains is F2b: the async runtime
-(`deadline`, the `aes-gcm`/`HttpFetch` DM-attachment path, the MDK engine
-relocation), composing it all into `Core`'s View/Intent/CoreEvent surface, the
-contract harness, and re-pointing `apps/mobile`.
+**F2a status: complete** — the whole pure `client-core` layer.
+
+**F2b status: the composed `Core` runs the full bridge protocol + NIP-17 DMs
+in Rust.** `client_runtime::Core` hydrates the store bundle from the `Kv`
+port, folds every decoded `BridgeToPhone` through the `Router`, exposes the
+`View` / `Intent` / `CoreEvent` surface (plan §2), and drives the 1059 DM
+subscription — proven end-to-end against the mock relay. ~414 workspace tests,
+`clippy -D warnings` clean. Remaining: the Marmot runtime (gated on the MDK
+engine relocation — a SQLCipher-dep move), the `UploadImage` / DM-attachment
+`HttpFetch` wiring, `tools/contract-harness/`, and re-pointing `apps/mobile`
+at the Rust `Core` (then deleting `src/core`).
 
 Verify: `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D
 warnings` (CI `cargo` job, `core` filter). No host toolchain needed — run in
