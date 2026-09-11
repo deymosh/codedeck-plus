@@ -1,16 +1,17 @@
 //! NIP-59 gift-wrap for the NIP-17 DM path. `client-core` stays crypto-pure for
-//! the codec; the seal / wrap / unwrap themselves use the `nostr` crate's
-//! `nip59` (async because the signer trait is, but it does no I/O — every
-//! `.await` here resolves inline on a local `Keys`).
+//! the codec; the wrap uses the `nostr` crate's `nip59` builder (async only
+//! because its signer trait is — no I/O, every `.await` resolves inline on a
+//! local `Keys`), and the unwrap is a hand-rolled NIP-44 double-decrypt so it
+//! runs off the transport's `NostrEvent` (`pubkey` + `content`), sync.
 //!
 //! Send: build the kind-14 rumor ONCE (its id is the stable message id across
 //! every copy), then wrap it for the recipient AND for ourselves (the self-copy
 //! is what makes our own sends survive a reinstall via relay catch-up).
 
-use client_core::crypto::Keypair;
+use client_core::crypto::{decrypt_from, Keypair};
 use client_core::nostr_event::SignedEvent;
 use client_core::stores::dm::{DmRumor, DM_RUMOR_KIND};
-use nostr::{EventBuilder, JsonUtil, Keys, Kind, PublicKey, Tag, UnsignedEvent};
+use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, PublicKey, Tag, UnsignedEvent};
 
 #[derive(Debug)]
 pub enum GiftwrapError {
@@ -82,32 +83,53 @@ pub async fn wrap_dm(
     })
 }
 
-/// Unwrap an incoming kind-1059 gift wrap addressed to us. `raw` is the relay's
-/// event JSON. On success returns the inner rumor (any kind — the caller
-/// decides if it is a DM or routes a non-14 rumor to Marmot).
-pub async fn unwrap_gift(identity: &Keypair, raw: &str) -> Result<DmRumor, GiftwrapError> {
-    let event = nostr::Event::from_json(raw).map_err(|e| GiftwrapError::Unwrap(e.to_string()))?;
-    let me = keys_of(identity);
-    let gift = nostr::nips::nip59::UnwrappedGift::from_gift_wrap(&me, &event)
-        .await
-        .map_err(|e| GiftwrapError::Unwrap(e.to_string()))?;
+/// Unwrap a kind-1059 gift wrap from its `(pubkey, content)` — the two fields
+/// the transport's `NostrEvent` carries. Sync: NIP-44 decrypt twice (wrap →
+/// seal → rumor), verify the seal's signature, check the rumor author matches
+/// the seal. On success returns the inner rumor (ANY kind — the caller decides
+/// DM vs the Marmot-welcome route).
+pub fn unwrap_gift_parts(
+    identity: &Keypair,
+    wrap_pubkey_hex: &str,
+    wrap_content: &str,
+) -> Result<DmRumor, GiftwrapError> {
+    let sk = &identity.secret_key;
 
-    let rumor = gift.rumor;
+    let seal_json = decrypt_from(sk, wrap_pubkey_hex, wrap_content)
+        .map_err(|e| GiftwrapError::Unwrap(e.to_string()))?;
+    let seal: Event = Event::from_json(&seal_json)
+        .map_err(|e| GiftwrapError::Unwrap(format!("seal parse: {e}")))?;
+    seal.verify()
+        .map_err(|e| GiftwrapError::Unwrap(format!("seal verify: {e}")))?;
+
+    let rumor_json = decrypt_from(sk, &seal.pubkey.to_hex(), &seal.content)
+        .map_err(|e| GiftwrapError::Unwrap(e.to_string()))?;
+    let rumor: UnsignedEvent = UnsignedEvent::from_json(&rumor_json)
+        .map_err(|e| GiftwrapError::Unwrap(format!("rumor parse: {e}")))?;
+    if rumor.pubkey != seal.pubkey {
+        return Err(GiftwrapError::Unwrap("rumor author != seal author".into()));
+    }
+
     Ok(DmRumor {
         id: rumor
             .id
             .map(|id| id.to_hex())
             .ok_or_else(|| GiftwrapError::Unwrap("rumor has no id".into()))?,
         pubkey: rumor.pubkey.to_hex(),
-        kind: rumor.kind.as_u16() as i64,
+        kind: i64::from(rumor.kind.as_u16()),
         content: rumor.content.clone(),
         created_at: rumor.created_at.as_secs(),
-        tags: rumor
-            .tags
-            .iter()
-            .map(|t| t.as_slice().to_vec())
-            .collect(),
+        tags: rumor.tags.iter().map(|t| t.as_slice().to_vec()).collect(),
     })
+}
+
+/// Unwrap from a full relay event JSON (test / non-transport callers).
+pub fn unwrap_gift(identity: &Keypair, raw: &str) -> Result<DmRumor, GiftwrapError> {
+    let event = Event::from_json(raw).map_err(|e| GiftwrapError::Unwrap(e.to_string()))?;
+    if event.kind != Kind::GiftWrap {
+        return Err(GiftwrapError::Unwrap("not a kind-1059 gift wrap".into()));
+    }
+    unwrap_gift_parts(identity, &event.pubkey.to_hex(), &event.content)
 }
 
 #[cfg(test)]
@@ -129,7 +151,7 @@ mod tests {
 
         // B unwraps the recipient copy
         let recipient_json = serde_json::to_string(&w.for_recipient).unwrap();
-        let seen_by_b = unwrap_gift(&b, &recipient_json).await.unwrap();
+        let seen_by_b = unwrap_gift(&b, &recipient_json).unwrap();
         assert_eq!(seen_by_b.id, w.rumor_id);
         assert_eq!(seen_by_b.kind, 14);
         assert_eq!(seen_by_b.content, "hi over nostr");
@@ -141,7 +163,7 @@ mod tests {
 
         // A unwraps its own self-copy — same rumor id
         let self_json = serde_json::to_string(&w.for_self).unwrap();
-        let seen_by_a = unwrap_gift(&a, &self_json).await.unwrap();
+        let seen_by_a = unwrap_gift(&a, &self_json).unwrap();
         assert_eq!(seen_by_a.id, w.rumor_id);
         assert_eq!(seen_by_a.pubkey, a.pubkey_hex);
     }
@@ -153,13 +175,13 @@ mod tests {
         let c = generate_keypair();
         let w = wrap_dm(&a, &b.pubkey_hex, "not for C").await.unwrap();
         let json = serde_json::to_string(&w.for_recipient).unwrap();
-        assert!(unwrap_gift(&c, &json).await.is_err());
+        assert!(unwrap_gift(&c, &json).is_err());
     }
 
     #[tokio::test]
     async fn garbage_is_an_error_not_a_panic() {
         let a = generate_keypair();
-        assert!(unwrap_gift(&a, "not json").await.is_err());
-        assert!(unwrap_gift(&a, r#"{"kind":1,"content":"x"}"#).await.is_err());
+        assert!(unwrap_gift(&a, "not json").is_err());
+        assert!(unwrap_gift(&a, r#"{"kind":1,"content":"x"}"#).is_err());
     }
 }
