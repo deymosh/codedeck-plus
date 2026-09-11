@@ -32,10 +32,11 @@ use client_core::wire::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
-use client_core::notifications::NotifyEvent;
+use client_core::notifications::{dm_notify_tag, session_notify_tag, NotifyEvent};
 use client_core::stores::dm::{
     AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
 };
+use client_core::stores::ui::UiEffect;
 use client_core::stores::marmot::{
     should_mint_key_package, AddOutcome as MarmotAddOutcome, MarmotIngested, PublishedKeyPackage,
     GROUP_MESSAGE_KIND, KEY_PACKAGE_ROTATION_MS, KP_RELAY_LIST_KIND, WELCOME_RUMOR_KIND,
@@ -1041,8 +1042,20 @@ impl Loop {
         for (machine, session) in r.transcript_removed {
             self.transcript_store.remove(&machine, &session).await;
         }
-        // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
-        // notification-cancel seam; `r.mesh_join` a mesh seam (F2b ports).
+        // CDX-026c: opening a session/DM the user was notified about clears
+        // every notification filed under its (coarser-than-delivery) tag.
+        for effect in r.ui_effects {
+            match effect {
+                UiEffect::SessionViewed { machine, session_id } => {
+                    self.notifier.cancel(&session_notify_tag(&machine, &session_id));
+                }
+                UiEffect::DmOpened { peer } => {
+                    self.notifier.cancel(&dm_notify_tag(&peer));
+                }
+            }
+        }
+        // `r.tor_changed` needs a transport-proxy seam; `r.mesh_join` a mesh
+        // seam (F2b ports).
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
@@ -2003,6 +2016,7 @@ fn egress_detail(err: &EgressError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::RecordingNotifier;
     use crate::transport::mock::{mock_relay, MockRelay};
     use client_core::crypto::{generate_keypair, keypair_from_secret_hex};
     use client_core::wire::codec::encode_bridge_to_phone;
@@ -2532,6 +2546,45 @@ mod tests {
                     let events = spy.events.lock().unwrap();
                     assert!(events.contains(&CoreEvent::StateChanged { slice: SliceId::Ui }));
                 }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn selecting_a_session_or_dm_peer_cancels_its_notification_tag() {
+        // CDX-026c: opening a session/DM the user was notified about clears
+        // every notification filed under its tag — `IntentResult::ui_effects`
+        // was already populated correctly by `SelectSession`/`SelectDmPeer`
+        // (see the `intent` module's own tests), but nothing in the runtime
+        // ever acted on it.
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let notifier = RecordingNotifier::new();
+                let ports = CorePorts {
+                    notifier: Rc::new(notifier.clone()),
+                    ..CorePorts::default()
+                };
+                let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+
+                core.dispatch(Intent::SelectSession {
+                    machine: "m1".into(),
+                    session_id: Some("s1".into()),
+                })
+                .await;
+                core.dispatch(Intent::SelectDmPeer {
+                    peer: Some("peer1".into()),
+                })
+                .await;
+
+                assert_eq!(
+                    notifier.cancelled(),
+                    vec![
+                        client_core::notifications::session_notify_tag("m1", "s1"),
+                        client_core::notifications::dm_notify_tag("peer1"),
+                    ]
+                );
             })
             .await;
     }
