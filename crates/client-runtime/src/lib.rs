@@ -8,6 +8,7 @@
 //! driver; `core::Core` composes them with the connection FSM and `bridge_api`
 //! behind one tokio event loop — the handle the bindings attach to.
 
+pub mod attachments;
 pub mod core;
 pub mod deadline;
 pub mod dispatch;

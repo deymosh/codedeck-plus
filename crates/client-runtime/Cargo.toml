@@ -24,6 +24,10 @@ tokio-socks = "0.5"
 tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 url = "2"
+# DM image attachments: AES-256-GCM blob + SHA-256 blob id + BUD-02 auth b64.
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
 # Inbound event parse + signature verification only (same version as client-core).
 # std for parse/verify; nip44 + nip59 for the NIP-17 DM gift-wrap path.
 nostr = { version = "0.44", default-features = false, features = ["std", "nip44", "nip59"] }
