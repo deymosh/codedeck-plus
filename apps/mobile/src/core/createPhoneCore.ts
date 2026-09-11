@@ -67,7 +67,7 @@ import { createUiStore, sessionKeyOf, type UiStore } from './stores/ui';
 import type { SessionState } from '@codedeck/protocol';
 import { bytesToHex } from './crypto';
 import type { NativeCoreControl } from './nativeCore';
-import { BridgeApi } from './services/bridgeApi';
+import { BridgeApi, type BridgeApiLike } from './services/bridgeApi';
 import { PhoneNostrClient } from './services/nostrClient';
 import {
   memoryTranscriptStorage,
@@ -142,8 +142,17 @@ export interface PhoneCore {
   settings: SettingsStore;
   quickPrompts: QuickPromptsStore;
   ui: UiStore;
-  api: BridgeApi;
-  client: PhoneNostrClient;
+  /** Typed as the interface (F2b), not the concrete class, so
+   *  `createPhoneCoreNative` can hand back `createNativeBridgeApi`'s
+   *  Intent-dispatching implementation instead — `BridgeApi` itself declares
+   *  `implements BridgeApiLike`, so nothing here changes for the existing
+   *  WebView-transport path. */
+  api: BridgeApiLike;
+  /** Absent in native mode: nothing in production UI reads `core.client`
+   *  directly (confirmed by search) — it only ever backed the `api`/
+   *  `connection`/`dm`/`marmot` closures inside this file, which the native
+   *  composition wires differently. */
+  client?: PhoneNostrClient;
 
   /** Begin connecting (idempotent). */
   start(): void;

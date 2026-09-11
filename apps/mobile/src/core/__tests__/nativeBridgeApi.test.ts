@@ -144,6 +144,17 @@ describe('createNativeBridgeApi', () => {
     expect(ack.success).toBe(false);
   });
 
+  it('diagnostics/input/ingest/dispatchDecoded are inert — Rust owns inbound routing under full native mode', async () => {
+    const { core, dispatched } = fakeCore();
+    const api = createNativeBridgeApi({ core });
+
+    expect(api.diagnostics).toEqual({ decryptFailures: 0, decodeFailures: 0, invalid: [] });
+    expect(await api.input('m', 's1', 'hi', 'in-1')).toBe(false);
+    expect(() => api.ingest({} as never)).not.toThrow();
+    expect(() => api.dispatchDecoded({} as never, 'm')).not.toThrow();
+    expect(dispatched).toEqual([]);
+  });
+
   it('uploadImageBlossom and uploadImageChunk both reject with an explanatory error', async () => {
     const { core } = fakeCore();
     const api = createNativeBridgeApi({ core });

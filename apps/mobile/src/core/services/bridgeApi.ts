@@ -118,23 +118,44 @@ export interface BridgeApiDeps {
 }
 
 /**
- * The subset of `BridgeApi`'s public surface production UI actually calls
- * (confirmed by search across `src/ui`) — extracted so `PhoneCore.api` can be
+ * `BridgeApi`'s full public surface, extracted so `PhoneCore.api` can be
  * typed against an interface instead of the concrete class. `BridgeApi`
  * satisfies this structurally, unmodified; `createNativeBridgeApi.ts` (F2b)
  * is the other implementation, dispatching the matching `Intent` instead of
  * building/signing/publishing the wire command itself.
  *
- * Deliberately excludes `input`, `sendConfirmed`, `ingest`, `dispatchDecoded`
- * (never called directly by UI) and `uploadImageBlossom`/`uploadImageChunk`/
- * `createFolder` (real gaps for the native side — see `createNativeBridgeApi`'s
- * module doc for why each needs more than a like-for-like shim).
+ * Only `sendConfirmed` is left out (confirmed by search: it is called only
+ * from inside `bridgeApi.ts` itself, by `uploadImageBlossom`/
+ * `uploadImageChunk`'s own bodies, never from outside the class). Everything
+ * else stays, including methods production UI never calls directly
+ * (`input`, `ingest`, `diagnostics`, `dispatchDecoded`) — tests and the F1
+ * in-process-runtime branch in `main.tsx` still reach them through
+ * `PhoneCore.api`, so narrowing the interface to "only what a screen calls"
+ * would have broken code this refactor does not intend to touch.
+ * `createNativeBridgeApi`'s implementations of the never-called-in-native-
+ * mode ones (`input`, `ingest`, `dispatchDecoded`, `diagnostics`) are no-ops:
+ * Rust's own `Router` owns every inbound message and the outbox lifecycle
+ * `input` used to drive under full F2b native mode.
+ *
+ * `createFolder`/`uploadImageBlossom`/`uploadImageChunk` are the three
+ * genuine gaps — see each one's own doc below for why `createNativeBridgeApi`
+ * rejects rather than shims them.
  */
 export interface BridgeApiLike {
+  readonly diagnostics: BridgeApiDiagnostics;
   /** The one generic escape hatch UI still uses directly (permission/plan/
    *  question cards) — every real call site sends `permission-res`,
    *  `keypress`, or `question-input`, each with its own `Intent` already. */
   send(machinePubkey: string, msg: PhoneToBridgeMessage): Promise<boolean>;
+  input(machine: string, sessionId: string, text: string, inputId: string): Promise<boolean>;
+  /** Decrypt + decode one relay event and dispatch it — the WebView
+   *  transport's own inbound path. Not called under full F2b native mode
+   *  (Rust decrypts/decodes/dispatches internally); tests still call it
+   *  directly to simulate an incoming event. */
+  ingest(event: NostrEvent): void;
+  /** F1 in-process-runtime inbound routing (`main.tsx`) — a no-op under full
+   *  F2b native mode, where Rust's `Router` never hands anything back here. */
+  dispatchDecoded(msg: BridgeToPhoneMessage, machinePubkeyHex: string): void;
   createSession(
     machine: string,
     opts?: Omit<CreateSessionMessage, 'type' | 'v' | 'caps'>,

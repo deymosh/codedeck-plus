@@ -89,7 +89,9 @@ describe('createPhoneCore — native core wiring', () => {
 
   it('start / stop flow through the FSM to native.start / native.stop, not the WebView client', async () => {
     const { phone, f } = await core();
-    const clientConnect = vi.spyOn(phone.client, 'connect');
+    // createPhoneCore() (unlike the future native composition) always
+    // constructs a real client, even in F1 mode — non-null by construction.
+    const clientConnect = vi.spyOn(phone.client!, 'connect');
     phone.start();
     await Promise.resolve();
     expect(f.names()).toContain('start');
