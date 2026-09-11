@@ -1,38 +1,23 @@
 /**
- * createPhoneCoreNative — the F2b composition root: assembles the eleven
- * native-backed store adapters (`apps/mobile/src/core/stores/native*.ts`)
- * plus `createNativeBridgeApi` into the SAME `PhoneCore` shape
- * `createPhoneCore.ts` builds over the WebView transport, so `usePhoneCore()`
- * and every screen that already consumes `PhoneCore` need no changes to run
- * against the Rust core instead.
+ * createPhoneCoreNative — the sole `PhoneCore` composition root: assembles
+ * the eleven native-backed store adapters (`apps/mobile/src/core/stores/
+ * native*.ts`) plus `createNativeBridgeApi` into the `PhoneCore` shape
+ * `phoneCore.ts` declares, so `usePhoneCore()` and every screen just consume
+ * it without knowing a Rust core sits behind it.
  *
- * Deliberately much smaller than `createPhoneCore.ts`: almost everything
- * that file's composition root does by hand — the connection FSM, the
- * message router, the notification coordinator, the delete controller with
- * its undo timer, cross-store cleanup on pairing/removal — is now owned
- * entirely by `client_runtime::Core` (proven this session by the F2b
- * `Intent`/`CoreEvent`/`*View` surface and the Layer 2 contract-harness
- * gate). This function's job is just: load the identity secret + seed
- * relays (still a TS responsibility — see the module doc on
+ * Deliberately small: the connection FSM, the message router, the
+ * notification coordinator, the delete controller with its undo timer, and
+ * cross-store cleanup on pairing/removal all live in `client_runtime::Core`
+ * (the F2b `Intent`/`CoreEvent`/`*View` surface, proven by the Layer 2
+ * contract-harness gate). This function's job is just: load the identity
+ * secret + seed relays (still a TS responsibility — see the module doc on
  * `stores/identity.ts`), call `core.init`, construct the eleven adapters
  * against the SAME `NativeCore` handle, and hydrate transcripts for the
  * sessions already known at boot.
  *
- * `client` is omitted from the returned `PhoneCore` (now optional): nothing
- * in production UI reads it directly (confirmed by search), and there is no
- * `PhoneNostrClient` in native mode — Rust owns the socket.
- *
- * `sendSessionImageNative` is the one `PhoneCore` method this composition
- * defines that `createPhoneCore.ts` does not (it is optional on the
- * interface): `SessionScreen.tsx` checks for its presence to route a session
- * image attachment through a single `Intent::SendSessionImage` dispatch
- * instead of the local composition's own upload-then-send orchestration —
- * see `createNativeBridgeApi`'s module doc for why those two cannot be
- * shimmed 1:1 through `BridgeApiLike`.
- *
- * `main.tsx` picks this composition over `createPhoneCore` via a single
- * capability probe (`createNativeCore()` — non-null only when this APK was
- * built with the `native-core` feature); see that module's doc.
+ * `main.tsx` reaches this via a single capability probe (`createNativeCore()`
+ * — non-null only when this APK was built with the `native-core` Cargo
+ * feature); see that module's doc.
  */
 import { bytesToHex } from './crypto';
 import { createNativeBridgeApi } from './services/nativeBridgeApi';
@@ -52,18 +37,17 @@ import { createNativeUiStore } from './stores/nativeUi';
 import type { NativeCore } from '../platform/nativeCore';
 import type { KV, Logger } from './ports';
 import type { ProfileFetcher } from './stores/dm';
-import type { PhoneCore } from './createPhoneCore';
+import type { PhoneCore } from './phoneCore';
 
 export interface PhoneCoreNativeDeps {
   core: NativeCore;
   kv: KV;
   /** SOCKS5 `host:port` handed to `core.init` when Tor is on (the Orbot
    *  address; a platform-layer concern this function does not resolve
-   *  itself) — same contract as `PhoneCoreDeps.nativeCoreProxy`. */
+   *  itself). */
   nativeCoreProxy?: string;
-  /** One-shot kind-0 profile resolution for DM peers — same seam
-   *  `PhoneCoreDeps.profileFetcher` is. Absent → DM peers show truncated
-   *  npubs only. */
+  /** One-shot kind-0 profile resolution for DM peers. Absent → DM peers show
+   *  truncated npubs only. */
   profileFetcher?: ProfileFetcher;
   log?: Logger;
 }

@@ -1,31 +1,19 @@
 /**
- * Session image attachment helpers (Phase 5, CDX-029) — DOM-bound file
- * processing (arrayBuffer/object-URL first, FileReader only as a fallback
- * since CDX-064; canvas for oversize resizes — so it lives in ui/) plus the
- * headless send orchestrator: Blossom first, legacy relay chunks as the
- * fallback, a throw on total failure (the screen keeps the draft + staged
- * image).
+ * Session image attachment helpers — DOM-bound file processing
+ * (arrayBuffer/object-URL first, FileReader only as a fallback since
+ * CDX-064; canvas for oversize resizes — so it lives in ui/).
  *
- * Ported from the old app's imageUtils.processImageFile +
- * bridgeService.sendRemoteImage. Screenshots stay PNG (lossless — text must
- * survive); only images exceeding 3840px on a side are resized via canvas.
+ * Ported from the old app's imageUtils.processImageFile. Screenshots stay
+ * PNG (lossless — text must survive); only images exceeding 3840px on a
+ * side are resized via canvas.
+ *
+ * The send orchestration this module used to also host (Blossom-first,
+ * legacy relay-chunk fallback) is Rust's job now
+ * (`Intent::SendSessionImage`, dispatched directly by
+ * `SessionScreen.tsx` via `PhoneCore.sendSessionImageNative` — see git
+ * history for the retired local orchestrator).
  */
-import type { EncryptedImageRef } from '../core/dmAttachments';
-import {
-  describeError,
-  isCancelled,
-  remainingBudget,
-  throwIfCancelled,
-  timeoutError,
-  withDeadline,
-} from '../core/deadline';
-import type { PublishResult } from '../core/ports';
-import {
-  IMAGE_CHUNK_DELAY_MS,
-  base64ToBytes,
-  blossomHashFromUrl,
-  chunkBase64,
-} from '../core/imageChunks';
+import { describeError, remainingBudget, withDeadline } from '../core/deadline';
 
 const MAX_DIMENSION = 3840;
 
@@ -126,185 +114,9 @@ export async function processImageFile(file: File): Promise<ProcessedImage> {
   return { base64, mimeType, filename, sizeBytes: Math.round(base64.length * 0.75) };
 }
 
-// --- Send orchestration (headless; deps injected for tests) ---
-
-/** Overall wall clock for a send, all stages together. */
+/** Overall wall clock for a send — the outer backstop `SessionScreen.tsx`
+ *  races the single `sendSessionImageNative` dispatch against. */
 export const SESSION_IMAGE_SEND_BUDGET_MS = 120_000;
-
-/**
- * Budget for the chunk fallback, measured from the FIRST chunk publish.
- *
- * 55 s, deliberately UNDER the bridge's chunk-assembly window (60 s, armed on
- * the first chunk). Publishing past that window is guaranteed waste: the bridge
- * has already dropped the tracker, so the image can never assemble no matter how
- * many chunks we send. This is the phone half of "it takes forever AND nothing
- * arrives". PAIRED CONSTANT — if the bridge's window moves, move this too.
- */
-export const CHUNK_ASSEMBLY_BUDGET_MS = 55_000;
-
-/**
- * Refuse a chunk run that cannot finish inside the window rather than spending a
- * minute proving it. At ~35 KB per chunk plus a 200 ms gap, this is roughly what
- * fits; a bigger image needs Blossom, not patience.
- */
-export const MAX_FALLBACK_CHUNKS = 200;
-
-export interface SessionImageSendDeps {
-  /** Encrypt + PUT the raw bytes to Blossom (platform/dmImages.uploadDmImage). */
-  uploadToBlossom(bytes: Uint8Array, opts: { signal: AbortSignal; budgetMs: number }): Promise<EncryptedImageRef>;
-  /** api.uploadImageBlossom — reports the publish verdict (CDX-086). */
-  sendBlossom(payload: {
-    hash: string;
-    url: string;
-    key: string;
-    iv: string;
-    filename: string;
-    mimeType: string;
-    text: string;
-    sizeBytes: number;
-  }): Promise<PublishResult>;
-  /** api.uploadImageChunk — the legacy relay fallback. */
-  sendChunk(payload: {
-    uploadId: string;
-    filename: string;
-    mimeType: string;
-    base64Data: string;
-    text: string;
-    chunkIndex: number;
-    totalChunks: number;
-  }): Promise<PublishResult>;
-  /**
-   * REQUIRED, not optional. The founder pressed ✕ on a wedged upload and the
-   * image was delivered anyway, because the only guard on this path ran AFTER
-   * the publish. Making the signal mandatory is what stops the next author
-   * forgetting it.
-   */
-  signal: AbortSignal;
-  /** Fired the moment the blob is on the server, so a retry never re-uploads. */
-  onUploaded?(ref: EncryptedImageRef): void;
-  /** A previous attempt already uploaded these exact bytes — skip the PUT. */
-  existingRef?: EncryptedImageRef;
-  onProgress?(done: number, total: number): void;
-  budgetMs?: number;
-  now?(): number;
-  sleep?(ms: number): Promise<void>;
-  newUploadId?(): string;
-  log?(msg: string): void;
-}
-
-export type SessionImageOutcome = 'blossom' | 'blossom-unconfirmed' | 'chunks';
-
-/**
- * Two INDEPENDENT stages, and keeping them independent is the fix.
- *
- * The bug was a collapsed distinction: "get the bytes onto a server" and "tell
- * the bridge where they are" were wrapped in one try, so a failure of EITHER was
- * answered by the same remedy — re-upload every byte over the relays. A relay OK
- * that arrived after nostr-tools' 4.4 s timeout therefore triggered ~115 chunk
- * publishes for an image the bridge had already received and injected.
- *
- * Now:
- *   stage 1  upload bytes      — ONLY its failure can reach the chunk fallback
- *   stage 2  publish reference — accepted / unconfirmed both mean done
- *   stage 3  chunk fallback    — structurally unreachable once a URL exists
- *
- * So "never re-upload bytes the server already holds" is a property of the
- * control flow rather than a rule someone has to remember.
- */
-export async function sendSessionImage(
-  image: ProcessedImage,
-  text: string,
-  deps: SessionImageSendDeps,
-): Promise<SessionImageOutcome> {
-  const now = deps.now ?? Date.now;
-  const startedAt = now();
-  const budgetMs = deps.budgetMs ?? SESSION_IMAGE_SEND_BUDGET_MS;
-  const left = (): number => remainingBudget(startedAt, budgetMs, now);
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-
-  throwIfCancelled(deps.signal, 'image send');
-
-  // --- Stage 1: the bytes ---------------------------------------------------
-  let ref: EncryptedImageRef | null = deps.existingRef ?? null;
-  if (ref === null) {
-    try {
-      ref = await deps.uploadToBlossom(base64ToBytes(image.base64), {
-        signal: deps.signal,
-        budgetMs: left(),
-      });
-      deps.onUploaded?.(ref);
-    } catch (err) {
-      // A cancel is not a failure and must never fall through to stage 3.
-      if (isCancelled(err)) throw err;
-      deps.log?.(`[Image] Blossom upload failed, falling back to relay chunks: ${err}`);
-      ref = null;
-    }
-  }
-
-  // --- Stage 2: the reference ----------------------------------------------
-  if (ref !== null) {
-    throwIfCancelled(deps.signal, 'image send');
-    const result = await deps.sendBlossom({
-      hash: blossomHashFromUrl(ref.url),
-      url: ref.url,
-      key: ref.key,
-      iv: ref.iv,
-      filename: image.filename,
-      mimeType: image.mimeType,
-      text,
-      sizeBytes: image.sizeBytes,
-    });
-    if (result.verdict === 'accepted') return 'blossom';
-    // The frame reached an open socket and the bridge dedupes by event id, so
-    // this is success with a caveat, not a reason to re-upload megabytes. The
-    // honest confirmation the user reads is the image appearing in the
-    // transcript; the composer says so.
-    if (result.verdict === 'unconfirmed') return 'blossom-unconfirmed';
-    // Genuinely refused. The bytes ARE on the server — chunking them again would
-    // be pure waste, so fail loudly and let the caller retry with existingRef.
-    throw new Error(
-      `the image is uploaded but no relay would carry the message (${result.verdict}`
-      + `${result.detail ? `: ${result.detail}` : ''})`,
-    );
-  }
-
-  // --- Stage 3: chunk fallback (nobody holds the bytes) --------------------
-  const uploadId = deps.newUploadId?.() ?? crypto.randomUUID();
-  const chunks = chunkBase64(image.base64);
-  if (chunks.length > MAX_FALLBACK_CHUNKS) {
-    throw new Error(
-      `image too large for the relay fallback (${chunks.length} chunks; the bridge `
-      + `assembles for ${Math.round(CHUNK_ASSEMBLY_BUDGET_MS / 1000)}s) — the upload server is unreachable`,
-    );
-  }
-  const chunksStartedAt = now();
-  for (let i = 0; i < chunks.length; i++) {
-    throwIfCancelled(deps.signal, 'image send');
-    if (remainingBudget(chunksStartedAt, CHUNK_ASSEMBLY_BUDGET_MS, now) <= 0 || left() <= 0) {
-      throw timeoutError(`image chunk upload (${i}/${chunks.length} sent)`, budgetMs);
-    }
-    const result = await deps.sendChunk({
-      uploadId,
-      filename: image.filename,
-      mimeType: image.mimeType,
-      // Chunk 0 carries the caption; the rest must not repeat it.
-      text: i === 0 ? text : '',
-      base64Data: chunks[i]!,
-      chunkIndex: i,
-      totalChunks: chunks.length,
-    });
-    // Same late-OK logic per chunk: unconfirmed means the frame went out.
-    if (result.verdict !== 'accepted' && result.verdict !== 'unconfirmed') {
-      throw new Error(
-        `image chunk ${i + 1}/${chunks.length} failed to publish (${result.verdict}`
-        + `${result.detail ? `: ${result.detail}` : ''})`,
-      );
-    }
-    deps.onProgress?.(i + 1, chunks.length);
-    if (i < chunks.length - 1) await sleep(IMAGE_CHUNK_DELAY_MS);
-  }
-  return 'chunks';
-}
 
 // --- File plumbing (CDX-064: arrayBuffer-first, diagnosable errors) ---
 // The deadline/cancel primitives moved to core/deadline.ts (CDX-086) so the
@@ -325,8 +137,9 @@ export { describeError, withDeadline };
  * the composer's `finally` never ran, and the spinner and the disabled
  * ✕/Send stayed put until the user left the screen. A read that outlives its
  * budget now throws like any other read failure, through the same banner.
+ *
+ * Exported for the DM image path too (CDX-086), which shares this reader.
  */
-/** Exported for the DM path (CDX-086), which had no read fallback at all. */
 export async function readFileBytes(file: File): Promise<ArrayBuffer> {
   const startedAt = Date.now();
   let primaryError: unknown;

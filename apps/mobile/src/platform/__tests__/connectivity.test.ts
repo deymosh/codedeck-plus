@@ -8,8 +8,7 @@ import {
   DEFAULT_TAURI_RESUME_EVENTS,
   type NativeConnectivitySource,
 } from '../connectivity';
-import { createConnectionStore, type ConnectionEvent } from '../../core/stores/connection';
-import { serviceNotificationText } from '../foregroundService';
+import type { ConnectionEvent } from '../../core/stores/connection';
 import type { Timers } from '../../core/ports';
 
 class FakeTarget {
@@ -336,39 +335,23 @@ describe('native connectivity source (CDX-027)', () => {
     expect(second.h.events).toEqual([]);
   });
 
-  it('drives a REAL connection FSM to offline (no backoff burn) and back', async () => {
-    const connTimers = new VirtualTimers();
-    const opened: number[] = [];
-    let closes = 0;
-    const store = createConnectionStore({
-      timers: connTimers,
-      now: () => 0,
-      random: () => 0.5,
-      handlers: {
-        openSocket: () => opened.push(opened.length),
-        closeSocket: () => closes++,
-        refreshAndReconcile: () => {},
-      },
-    });
+  it('an airplane-mode flip dispatches offline then online, in order', async () => {
+    // The FSM itself (offline → no retry timer burned; online → reconnect
+    // immediately, not on a backoff schedule) is Rust's job now
+    // (client_core::connection::connection_reducer, tested there) — this
+    // only proves the native connectivity source's flip reaches dispatch()
+    // as the right raw events, same as every other test in this file.
     const native = fakeNative({ supported: true, online: true });
-    attach({ native: native.source, dispatch: (e) => store.getState().dispatch(e) });
+    const { h } = attach({ native: native.source });
     await settle();
+    // The boot handover dispatches the snapshot's own verdict unconditionally
+    // (not just when it says offline — see connectivity.ts's `native.get()`
+    // handling), so an online-at-boot snapshot already queued one 'online'
+    // before either flip below.
+    expect(h.events).toEqual([{ type: 'online' }]);
 
-    store.getState().dispatch({ type: 'connect-requested' });
-    store.getState().dispatch({ type: 'socket-open', at: 0 });
-    expect(store.getState().status).toBe('connected');
-
-    // Airplane mode: the native source is the ONLY thing that can say so.
     native.emit(false);
-    expect(store.getState().status).toBe('offline');
-    expect(serviceNotificationText(store.getState().status)).toBe('No network — waiting');
-    // No retry timer burns against the dead radio.
-    expect(connTimers.pending()).toBe(0);
-    void closes;
-
-    // Radio back: reconnect immediately, not on a backoff schedule.
     native.emit(true);
-    expect(store.getState().status).toBe('connecting');
-    expect(opened.length).toBeGreaterThanOrEqual(2);
+    expect(h.events).toEqual([{ type: 'online' }, { type: 'offline' }, { type: 'online' }]);
   });
 });

@@ -32,20 +32,14 @@ import { appendToDraft } from '../appendToDraft';
 import { GsdStrip } from '../gsd/GsdStrip';
 import { AttachIcon, MicIcon } from '../icons';
 import { recognizeSpeech } from '../../platform/stt';
-import { DEFAULT_BLOSSOM_SERVER, uploadDmImage } from '../../platform/dmImages';
 import { modelLabel } from '../modelLabel';
 import { findPendingPermission } from '../transcript/displayEntries';
 import { TranscriptView } from '../transcript/TranscriptView';
 import { contextBadge, usageBadges, type UsageBadge } from '../usageFormat';
 import { getOrderedSessionKeys } from '../getOrderedSessionKeys';
-import {
-  SESSION_IMAGE_SEND_BUDGET_MS,
-  processImageFile,
-  sendSessionImage,
-} from '../imageFile';
+import { SESSION_IMAGE_SEND_BUDGET_MS, processImageFile } from '../imageFile';
 import { base64ToBytes } from '../../core/imageChunks';
-import { describeError, isCancelled, withDeadline } from '../../core/deadline';
-import type { EncryptedImageRef } from '../../core/dmAttachments';
+import { describeError, withDeadline } from '../../core/deadline';
 import { cx, presenceBadge, shared as s, stateBadge } from '../shared';
 import { useAttentionDirection } from '../useAttentionDirection';
 import { useAutoGrowTextarea } from '../autoGrowTextarea';
@@ -155,7 +149,6 @@ export function SessionScreen({
   // pattern as DmChatScreen.
   const capabilities = useMachines((s) => s.machines[machinePubkey]?.capabilities);
   const canAttachImages = capabilities?.includes('images') ?? false;
-  const blossomServer = useSettings((st) => st.blossomServer);
   // CDX-048: the 5h/7d usage box is gated by Settings → "Show usage badge".
   const showUsageBadge = useSettings((st) => st.showUsageBadge);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -169,64 +162,43 @@ export function SessionScreen({
   // attachment they already dropped, no `setDraft('')` over text they have
   // since retyped, no `setUploading(false)` stomping a newer upload.
   const attachGenerationRef = useRef(0);
-  /**
-   * CDX-086: the generation counter above guards WRITE-BACK; this aborts the
-   * WORK. Both are needed and neither substitutes for the other — the founder hit
-   * ✕ on a wedged upload and the image was delivered anyway, because the only
-   * guard on that path ran after the publish had already happened.
-   */
-  const sendAbortRef = useRef<AbortController | null>(null);
-  /** Bytes already on the server, so a retry never re-uploads them. */
-  const uploadedRefRef = useRef<EncryptedImageRef | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
-  const [sentUnconfirmed, setSentUnconfirmed] = useState(false);
 
   const clearPendingImage = (): void => {
     if (pendingImage?.previewUrl) URL.revokeObjectURL(pendingImage.previewUrl);
     setPendingImage(null);
   };
 
-  /** Stop the work, THEN stop the writes. Order matters only for clarity; both
-   *  must happen or the old bug comes back in one form or the other. */
+  /** Bumping the generation is what makes `sendWithImage`'s `abandoned()`
+   *  check skip its post-dispatch writes — there is no way to cancel an
+   *  in-flight `sendSessionImageNative` dispatch itself once it reaches
+   *  Rust, only to stop reacting to it. */
   const cancelInFlightSend = (): void => {
     attachGenerationRef.current++;
-    sendAbortRef.current?.abort();
-    sendAbortRef.current = null;
   };
 
   /** The ✕ handler — deliberately live even mid-upload (CDX-068). A read that
    *  has not come back yet leaves the composer in a state whose ONLY exit is
    *  this button; disabling it while `uploading` made a stalled read
-   *  unrecoverable without leaving the screen. CDX-086: it now genuinely
-   *  cancels, rather than only ignoring the result. */
+   *  unrecoverable without leaving the screen. */
   const removePendingImage = (): void => {
     cancelInFlightSend();
     clearPendingImage();
     setUploading(false);
     setUploadError(null);
-    setUploadProgress(null);
-    setSentUnconfirmed(false);
-    uploadedRefRef.current = null;
   };
 
   const pickImage = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const file = e.target.files?.[0];
     if (!file) return;
-    cancelInFlightSend(); // replaces (and cancels) any in-flight send
+    cancelInFlightSend(); // abandons any in-flight send
     if (pendingImage?.previewUrl) URL.revokeObjectURL(pendingImage.previewUrl);
     const previewUrl =
       typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : null;
     setPendingImage({ file, previewUrl });
     setUploading(false);
     setUploadError(null);
-    setUploadProgress(null);
-    setSentUnconfirmed(false);
-    uploadedRefRef.current = null;
     e.target.value = '';
   };
-
-  // Leaving the screen must not leave a publish loop running behind it.
-  useEffect(() => () => sendAbortRef.current?.abort(), []);
 
   // Quick prompts (CDX-049): tappable shortcuts above the input bar; a tap
   // INSERTS the prompt into the draft (appends, never auto-sends) — the
@@ -293,95 +265,49 @@ export function SessionScreen({
     await core.outbox.getState().send(machinePubkey, sessionId, text);
   };
 
-  /** Blossom-first upload; on total failure the draft AND the staged image
-   *  survive (inline error, nothing sent). CDX-068: the read now carries a
-   *  deadline, so a stalled provider ends in the banner rather than a spinner
-   *  that never stops — and if the user gave up first and hit ✕, the stale
-   *  generation makes every write below a no-op. */
+  /** `Intent::SendSessionImage` does the whole Blossom-upload-then-chunk-
+   *  fallback as one step in Rust — no BridgeApi upload calls, no
+   *  fine-grained progress (the spinner just covers the one dispatch).
+   *  `withDeadline` still applies as the outer backstop, but with no way to
+   *  cancel an in-flight dispatch: a timeout stops the SPINNER, not the
+   *  send — the image can still land after the banner shows. CDX-068: the
+   *  read still carries its own deadline, so a stalled file provider ends in
+   *  the banner rather than a spinner that never stops — and if the user
+   *  gave up first and hit ✕, the stale generation makes every write below
+   *  a no-op. */
   const sendWithImage = async (text: string): Promise<void> => {
     if (!pendingImage || uploading) return;
     const generation = attachGenerationRef.current;
     const abandoned = (): boolean => generation !== attachGenerationRef.current;
-    const controller = new AbortController();
-    sendAbortRef.current = controller;
     setUploading(true);
     setUploadError(null);
-    setSentUnconfirmed(false);
     try {
       const image = await processImageFile(pendingImage.file);
       if (abandoned()) return;
 
-      // Native mode: `Intent::SendSessionImage` does the whole Blossom-
-      // upload-then-chunk-fallback as one step in Rust — no BridgeApi upload
-      // calls, no existingRef resume (nothing partial to resume from), no
-      // fine-grained progress (the spinner just covers the one dispatch).
-      // `withDeadline` still applies as the same outer backstop, but with no
-      // way to cancel an in-flight dispatch: a timeout stops the SPINNER,
-      // not the send — the image can still land after the banner shows.
-      if (core.sendSessionImageNative) {
-        await withDeadline(
-          core.sendSessionImageNative({
-            machine: machinePubkey,
-            sessionId,
-            text,
-            image: base64ToBytes(image.base64),
-            filename: image.filename,
-            mimeType: image.mimeType,
-          }),
-          SESSION_IMAGE_SEND_BACKSTOP_MS,
-          'image send',
-        );
-        if (abandoned()) return;
-        clearPendingImage();
-        setDraft('');
-        return;
-      }
-
-      const secretKey = core.identity.getState().keypair.secretKey;
-      const existingRef = uploadedRefRef.current;
-      /**
-       * The outer backstop. Every stage below it is bounded tighter, so THIS
-       * MUST NEVER BE THE THING THAT FIRES — if it does, an unbounded stage has
-       * been added. It exists so "the spinner always resolves" is a structural
-       * guarantee rather than the sum of several assumptions.
-       */
-      const outcome = await withDeadline(
-        sendSessionImage(image, text, {
-          signal: controller.signal,
-          ...(existingRef ? { existingRef } : {}),
-          onUploaded: (ref) => {
-            uploadedRefRef.current = ref;
-          },
-          onProgress: (done, total) => {
-            if (!abandoned()) setUploadProgress({ done, total });
-          },
-          uploadToBlossom: (bytes, opts) =>
-            uploadDmImage(bytes, secretKey, blossomServer || DEFAULT_BLOSSOM_SERVER, opts),
-          sendBlossom: (p) => core.api.uploadImageBlossom(machinePubkey, { sessionId, ...p }),
-          sendChunk: (p) =>
-            core.api.uploadImageChunk(machinePubkey, { sessionId, ...p }, { attempts: 1 }),
-          log: (msg) => console.log(msg),
+      await withDeadline(
+        core.sendSessionImageNative({
+          machine: machinePubkey,
+          sessionId,
+          text,
+          image: base64ToBytes(image.base64),
+          filename: image.filename,
+          mimeType: image.mimeType,
         }),
         SESSION_IMAGE_SEND_BACKSTOP_MS,
         'image send',
-        () => controller.abort(),
       );
       if (abandoned()) return;
       clearPendingImage();
       setDraft('');
-      uploadedRefRef.current = null;
-      if (outcome === 'blossom-unconfirmed') setSentUnconfirmed(true);
     } catch (err) {
-      // A cancel is the user's own doing — no banner, and removePendingImage has
-      // already tidied the composer.
-      if (abandoned() || isCancelled(err)) return;
+      // A cancel (✕ mid-upload, or the screen unmounting) is the user's own
+      // doing — no banner, and removePendingImage has already tidied the
+      // composer.
+      if (abandoned()) return;
       setUploadError(describeError(err));
     } finally {
-      if (!abandoned()) {
-        setUploading(false);
-        setUploadProgress(null);
-      }
-      if (sendAbortRef.current === controller) sendAbortRef.current = null;
+      if (!abandoned()) setUploading(false);
     }
   };
 
@@ -572,9 +498,7 @@ export function SessionScreen({
             {/* Keeps the `uploading…` substring — it is the oracle several
               * device checks and host tests read. */}
             {uploading
-              ? uploadProgress
-                ? `uploading… ${uploadProgress.done}/${uploadProgress.total}`
-                : 'uploading…'
+              ? 'uploading…'
               : `${Math.max(1, Math.round(pendingImage.file.size / 1024))} KB`}
           </span>
           {/* Never disabled (CDX-068): this is the escape hatch from an
@@ -587,15 +511,6 @@ export function SessionScreen({
       {uploadError && (
         <div className={s.bannerError} data-testid="session-upload-failed">
           Image upload failed: {uploadError}
-        </div>
-      )}
-      {/* CDX-086: the frame reached an open socket but no relay confirmed it
-        * inside the window. Almost certainly delivered — and the honest
-        * confirmation is the image turning up in the transcript — so say that
-        * rather than either claiming success or crying failure. */}
-      {sentUnconfirmed && (
-        <div className={s.bannerOk} data-testid="session-upload-unconfirmed">
-          Image sent — the relay never confirmed it. If it doesn’t appear above, send it again.
         </div>
       )}
 

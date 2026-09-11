@@ -95,7 +95,7 @@ export function createNativeConnectionStore(deps: NativeConnectionStoreDeps): Co
 
       dispatch,
 
-      // Same 3-state logic as connection.ts's own presenceOf, sourced from
+      // The same 3-state logic Rust's own presence check runs, sourced from
       // the machines adapter's cached lastHeartbeatAt instead of a
       // heartbeats map this store would otherwise have to duplicate.
       presence: (machinePubkey): Presence => {

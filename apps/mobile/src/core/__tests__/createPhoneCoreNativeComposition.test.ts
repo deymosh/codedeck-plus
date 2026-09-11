@@ -138,7 +138,6 @@ describe('createPhoneCoreNative', () => {
     ] as const) {
       expect(phone[key]).toBeDefined();
     }
-    expect(phone.client).toBeUndefined();
   });
 
   it('start/stop route through the connection adapter to core.start/core.stop', async () => {
@@ -216,7 +215,7 @@ describe('createPhoneCoreNative', () => {
     const { core, dispatched } = fakeCore();
     const phone = await createPhoneCoreNative({ core, kv: memoryKV() });
 
-    await phone.sendSessionImageNative?.({
+    await phone.sendSessionImageNative({
       machine: 'm1',
       sessionId: 's1',
       text: 'look at this',
