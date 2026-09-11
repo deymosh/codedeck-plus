@@ -1,14 +1,16 @@
-//! F1: the Rust `client-runtime` hosted IN the app process, behind the
+//! F1/F2b: the Rust `client-runtime` hosted IN the app process, behind the
 //! `native-core` Cargo feature.
 //!
 //! With the feature off, this module is not compiled and the crate builds
 //! byte-identical to before — the WebView `src/core` keeps owning the Nostr
 //! sockets. With it on and the WebView opting in (`core_init`), the sockets +
-//! crypto + connection FSM run here, on a dedicated thread inside the
-//! stay-connected foreground service; the WebView receives already-decoded
-//! bridge→phone messages over Tauri events and stops running its own transport.
-//! The two paths run in parallel until the native one is field-tested; then the
-//! TS network path is deleted (last step of F1).
+//! crypto + connection FSM + every store (F2b: over real SQLite persistence,
+//! `native_ports.rs`) run here, on a dedicated thread inside the
+//! stay-connected foreground service. The WebView receives the semantic
+//! `CoreEvent` stream + already-decoded bridge→phone messages over Tauri
+//! events, and drives user actions through `core_dispatch(Intent)` and the
+//! `core_*_view` queries (plan §2) — this is the full surface the re-point
+//! consumes, replacing `src/core`'s direct-socket path entirely.
 //!
 //! Threading: `client_runtime::Core` drives a `!Send` event loop
 //! (`Rc`-based, mirroring the TS `this` model), so it lives on this thread's
@@ -29,7 +31,10 @@ use client_runtime::client_core::wire::events::BridgeToPhone;
 use client_runtime::core::{
     ActionFailed, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
 };
-use client_runtime::{Core, CoreConfig};
+use client_runtime::{
+    Core, CoreConfig, CoreEvent, DmView, Intent, MachinesView, MarmotView, OutboxView,
+    PairingView, SettingsView,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -43,6 +48,12 @@ pub struct CoreBridge(Mutex<Option<Core>>);
 const EV_CONNECTION: &str = "core://connection";
 const EV_MESSAGE: &str = "core://message";
 const EV_ACTION_FAILED: &str = "core://action-failed";
+/// The full semantic event stream (plan §2.3), forwarded verbatim as JSON —
+/// see `CoreEvent`'s own doc comment for the wire shape. Additive to the
+/// three events above (kept for the WebView listeners already wired to
+/// them); a consumer migrating to the plan's View/Intent/CoreEvent surface
+/// needs only this one channel.
+const EV_CORE_EVENT: &str = "core://event";
 
 fn status_str(status: ConnectionStatus) -> &'static str {
     match status {
@@ -107,6 +118,10 @@ impl CoreObserver for TauriObserver {
 
     fn action_failed(&self, kind: ActionFailed) {
         let _ = self.app.emit(EV_ACTION_FAILED, action_str(kind));
+    }
+
+    fn on_event(&self, event: CoreEvent) {
+        let _ = self.app.emit(EV_CORE_EVENT, event);
     }
 }
 
@@ -292,4 +307,56 @@ pub async fn core_connection_status(
         status: status_str(status),
         needs_pairing_check,
     })
+}
+
+// --- F2b: the plan §2 View/Intent surface -----------------------------
+
+/// Dispatch one user action (plan §2.2). `intent` is `Intent`'s own JSON
+/// shape (externally tagged, camelCase — see its doc comment); Tauri
+/// deserializes it directly, no hand-rolled decoding on either side.
+#[tauri::command]
+pub async fn core_dispatch(bridge: State<'_, CoreBridge>, intent: Intent) -> Result<(), String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    core.dispatch(intent).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn core_machines_view(bridge: State<'_, CoreBridge>) -> Result<MachinesView, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.machines_view().await)
+}
+
+#[tauri::command]
+pub async fn core_settings_view(
+    bridge: State<'_, CoreBridge>,
+) -> Result<Option<SettingsView>, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.settings_view().await)
+}
+
+#[tauri::command]
+pub async fn core_outbox_view(bridge: State<'_, CoreBridge>) -> Result<OutboxView, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.outbox_view().await)
+}
+
+#[tauri::command]
+pub async fn core_pairing_view(
+    bridge: State<'_, CoreBridge>,
+) -> Result<Option<PairingView>, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.pairing_view().await)
+}
+
+#[tauri::command]
+pub async fn core_dm_view(bridge: State<'_, CoreBridge>) -> Result<Option<DmView>, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.dm_view().await)
+}
+
+#[tauri::command]
+pub async fn core_marmot_view(bridge: State<'_, CoreBridge>) -> Result<Option<MarmotView>, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.marmot_view().await)
 }

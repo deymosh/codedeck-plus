@@ -60,6 +60,20 @@ pub fn run() {
             corebridge::core_publish,
             #[cfg(feature = "native-core")]
             corebridge::core_connection_status,
+            #[cfg(feature = "native-core")]
+            corebridge::core_dispatch,
+            #[cfg(feature = "native-core")]
+            corebridge::core_machines_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_settings_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_outbox_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_pairing_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_dm_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_marmot_view,
         ])
         .plugin(tauri_plugin_deep_link::init())
         // CDX-029: Rust-side fetch escape hatch — Blossom's upload preflight
