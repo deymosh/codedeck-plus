@@ -1,36 +1,46 @@
 # `client-core` / `client-runtime` — the shared Rust client
 
-Status: **F2b in progress** (migration plan). The Node/TS side (`packages/*`,
-`apps/bridge`) is unaffected; `apps/mobile` is frozen except for this
-composition + cutover. `apps/mobile/src-tauri`'s `native-core` feature (off
-by default — the shipped APK is byte-identical without it) now exposes the
-full plan §2 View/Intent/CoreEvent surface as Tauri commands over real SQLite
-persistence and every `CorePorts` real: OS notifications (with working
-CDX-026c cancellation), Blossom HTTP, and Marmot/MLS — `NoMarmot` is no
-longer reachable from a native-core build. `apps/mobile/src/main.tsx` now
-picks between `createPhoneCoreNative.ts` (eleven `stores/native*.ts` adapters
-+ `services/nativeBridgeApi.ts`, presenting the exact same `PhoneCore` shape
-`createPhoneCore.ts` does) and the local composition via a single capability
-probe (`createNativeCore()` — non-null only on a `native-core` build). All
-three gaps this pass originally found — plus three more
-(`Notifier`/cancellation, `HttpFetch`, `Marmot`) it surfaced along the way —
-are closed: `Intent::RemoveMachine`, the `main.tsx` capability check,
-`SessionScreen.tsx`'s native image-send branch
-(`PhoneCore.sendSessionImageNative`), `TauriNotifier`, `ReqwestHttpFetch`, and
-`MarmotEngineImpl`. Verified end to end: a real `--features native-core`
-benchmark APK (`./codedeck apk benchmark --features native-core`) builds,
-installs, and pairs on a real device — that pass also surfaced and fixed one
-more bug (the undo toast never clearing itself once its window expired, see
-the port-tracking table). What's left before the F2b stop-point is no longer
-code: continued manual smoke testing on a real device, then deleting
-`src/core`. Two things
-touched along the way are recorded as separate, known gaps rather than fixed
-here — see the port-tracking table: the Tor toggle doesn't hot-reconfigure a
-running native-core transport or HTTP client (takes effect on next app
-start), and the attention chime (`ping`) + one-QR mesh auto-join
+Status: **F2b complete — the stop-point** (migration plan). The Node/TS side
+(`packages/*`, `apps/bridge`) is unaffected. `apps/mobile/src-tauri`'s
+`native-core` feature is now the **default** (field-tested on a real device;
+see the port-tracking table's last rows) and exposes the full plan §2
+View/Intent/CoreEvent surface as Tauri commands over real SQLite persistence
+and every `CorePorts` real: OS notifications (with working CDX-026c
+cancellation), Blossom HTTP, and Marmot/MLS — `NoMarmot` is no longer
+reachable from a default build. `apps/mobile/src/core` — the pre-F2b,
+WebView-driven local composition (`createPhoneCore.ts`, the local FSM/
+persistence half of every store, `services/nostrClient.ts`,
+`platform/relayTransport.ts`, `deleteController.ts`, `notifications.ts`,
+`selectionPersistence.ts`, `defaultSessionMode.ts`) is **deleted** (see git
+history on `claude/native-android`) — `createPhoneCoreNative.ts`
+(`apps/mobile/src/core/createPhoneCoreNative.ts`, eleven `stores/native*.ts`
+adapters + `services/nativeBridgeApi.ts`) is the sole `PhoneCore` composition
+now, and `main.tsx` fails loudly at boot rather than falling back to a local
+path if a Tauri build somehow lacks the feature — there is no fallback left
+to fall back to. Plain-browser dev (`pnpm dev` without Tauri) no longer boots
+the app at all; UI iteration requires a Tauri build. Every UI test that used
+to fixture itself against the local composition (~20 files) was migrated to
+a shared fake-`NativeCore` helper
+(`apps/mobile/src/core/__tests__/nativeCoreFixture.ts`) instead. All three
+gaps this pass originally found — plus three more (`Notifier`/cancellation,
+`HttpFetch`, `Marmot`) it surfaced along the way — are closed:
+`Intent::RemoveMachine`, the `main.tsx` capability check, `SessionScreen.tsx`'s
+native image-send branch (`PhoneCore.sendSessionImageNative`),
+`TauriNotifier`, `ReqwestHttpFetch`, and `MarmotEngineImpl`. Verified end to
+end: a real `native-core` benchmark APK builds, installs, and pairs on a real
+device — that pass also surfaced and fixed one more bug (the undo toast never
+clearing itself once its window expired, see the port-tracking table). Two
+things touched along the way are recorded as separate, known gaps rather than
+fixed here — see the port-tracking table: the Tor toggle doesn't
+hot-reconfigure a running native-core transport or HTTP client (takes effect
+on next app start), and the attention chime (`ping`) + one-QR mesh auto-join
 (`Intent`'s `mesh_join`/the ping seam) have no platform port wired for
 native-core yet — the latter is expected this early (mesh is its own F6
-Kotlin phase in the plan, not an F2b concern).
+Kotlin phase in the plan, not an F2b concern). `platform/torProxy.ts` (the
+WebView `PROXY_OVERRIDE` toggle) and its Tauri plugin
+(`tauri-plugin-tor-proxy`) are now dead code with no remaining call site —
+flagged here as a follow-up cleanup, deliberately not pulled in this pass (a
+whole plugin removal is a bigger, separate change than a TS module deletion).
 
 ## Why
 
@@ -191,12 +201,12 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | `Intent::RemoveMachine` (new) | `apps/mobile/src/core/createPhoneCore.ts`'s `removeMachine` | `client_runtime::intent::Intent::RemoveMachine` | ✅ F2b — purely local (no wire message: the bridge has no concept of "unpaired", it just stops hearing from a phone that stopped listening). Gathers the machine's session ids from `MachineView.sessions` (same source the TS version reads), drops the machine, clears each session's unread dot, deselects if it was selected, and queues each session for transcript-row removal — added `transcript_removed` to `IntentResult` (mirroring `RouteResult`'s tombstone-driven field) and cleared `TranscriptState`'s in-memory coverage via `remove_session` alongside the row-store delete, or a stale `local_high` would make `TranscriptRowsView` report rows that were already gone. `resubscribe` drops it from the authors filter. `createPhoneCoreNative.ts`'s `removeMachine` now dispatches this instead of being a no-op. |
 | Real `HttpFetch` for the native `Core` | `apps/mobile/src-tauri`'s `plugin-http`-backed WebView escape hatch (CDX-029) | `apps/mobile/src-tauri/src/native_http.rs`'s `ReqwestHttpFetch` | ✅ F2b — `corebridge.rs`'s `CorePorts` used `..CorePorts::default()` for `http`, i.e. `NoHttpFetch`: every Blossom upload/download would have failed under native-core (found wiring the `SessionScreen.tsx` image-send branch, not part of the original 3 documented gaps). Reuses `tauri-plugin-http`'s OWN `reqwest` (re-exported as `tauri_plugin_http::reqwest`) rather than adding a second HTTP stack — the WebView path already depends on this exact crate as its CORS escape hatch. SOCKS5-aware: `core_init`'s `InitConfig::proxy` (the same `host:port` the WS transport dials when Tor is on) configures an identical `reqwest::Proxy`, so a Blossom upload never bypasses Orbot while the relay sockets don't either — the `socks` feature is forwarded onto `tauri-plugin-http` only via the `native-core` Cargo feature (`tauri-plugin-http/socks`), never unconditionally, so the default build's dependency graph is untouched. Built once at `core_init`; does not hot-reconfigure if Tor is toggled while already running (same known gap as the WS transport). |
 | `PhoneCore.sendSessionImageNative` + the `SessionScreen.tsx` native branch | `apps/mobile/src/ui/screens/SessionScreen.tsx`'s `sendWithImage` | `apps/mobile/src/core/createPhoneCoreNative.ts` | ✅ F2b — the one `PhoneCore` method the native composition defines that the local one does not (optional on the interface): `Intent::SendSessionImage` already does the whole Blossom-upload-then-chunk-fallback as one step in Rust, so there is no way to plug that into `BridgeApiLike`'s `uploadImageBlossom`/`uploadImageChunk` shape without either double-uploading or silently breaking the documented fallback (see `createNativeBridgeApi`'s doc). `SessionScreen.tsx` checks for the method's presence and, when native, decodes the staged file's base64 to raw bytes (`base64ToBytes`, already used elsewhere) and dispatches directly — no `BridgeApi` calls, no fine-grained upload progress (the spinner covers the one dispatch), no true cancellation of an in-flight send (the same outer `withDeadline` backstop applies, but a timeout only stops the spinner, not a send already handed to Rust). |
-| `main.tsx` capability check | `apps/mobile/src/main.tsx`'s `boot()` | same file, `bootNative` / `bootLocal` | ✅ F2b — a single probe (`createNativeCore()`, already used for F1) now decides the ENTIRE composition, not just the transport: non-null → `bootNative` (identity/settings load, transport, Tor WebView proxy override, and the Marmot platform seam are all skipped — `createPhoneCoreNative` either owns them itself or Rust does); null → `bootLocal`, the unchanged pre-F2b WebView-driven path (also always taken in plain-browser dev). This retires F1's old partial wiring from the real boot path — `createPhoneCore.ts`'s own `nativeCore` option still exists and is still covered by its own dedicated test, just never reached from `main.tsx` once a build has the full F2b surface (which it always does now — both landed under the same `native-core` feature and Tauri command set). The stay-connected foreground service and connectivity wiring are interface-only and shared unchanged between both paths; `attachTorProxy` (a WebView-only `PROXY_OVERRIDE` toggle) is skipped for native mode, whose transport dials its own SOCKS5 at `core.init` instead. |
+| `main.tsx` capability check | `apps/mobile/src/main.tsx`'s `boot()` | same file, `bootNative` | ✅ F2b — landed as a `bootNative` / `bootLocal` split (a single `createNativeCore()` probe deciding the whole composition, not just the transport) while `native-core` was still opt-in. Once it became the default feature and `src/core`'s local composition was deleted, `bootLocal` and the probe's fallback branch went with it: `boot()` now calls `createNativeCore()` once and THROWS if it comes back null (no Tauri, or a Tauri build without the feature) instead of falling back to anything — there is no local path left to fall back to. The stay-connected foreground service and connectivity wiring are unchanged; the WebView-only `attachTorProxy` (`PROXY_OVERRIDE`) call site is gone from `main.tsx` entirely (native-core's transport dials its own SOCKS5 at `core.init`), leaving `platform/torProxy.ts` itself dead code — see the top status note. |
 | `CoreEvent`/`IntentResult::ui_effects` actually cancels notifications | `notificationsCoordinator.ts` (CDX-026c) | `client_runtime::core::Core::interpret_intent` | ✅ F2b bugfix — `Intent::SelectSession`/`SelectDmPeer` already returned the correct `UiEffect::SessionViewed`/`DmOpened` (proven by the `intent` module's own tests), but `interpret_intent` never read `r.ui_effects` at all: opening a session/DM the user was notified about left its OS notification sitting in the tray under native-core. Now maps each effect to `session_notify_tag`/`dm_notify_tag` (`client_core::notifications`, the same helpers `emit_notify` already used for delivery) and calls `self.notifier.cancel(tag)`. Found by re-auditing every `// … needs a … seam (F2b)` comment in `core.rs` after being asked "are there more gaps" — not part of the original 3, or of the `Notifier`/`HttpFetch` pair found earlier in this same pass. |
 | The undo toast never cleared on window expiry | `deleteController.ts` (via `notificationsCoordinator`) | `client_runtime::core::Core::on_undo_timer` | ✅ F2b bugfix — reported from a real device running the native-core benchmark APK: closing a session and never tapping undo left the banner up forever. `on_undo_timer` correctly cleared `stores.ui.undo_toast` (`delete_controller::commit`'s `HideUndoToast` effect) but emitted `StateChanged(Cards)` at the end instead of `StateChanged(Ui)` — `commit()` never produces a card effect at all, so nothing told a `UiView` consumer to re-fetch and notice the toast was gone. Tapping undo itself was unaffected (that path already goes through `apply_delete_effects`, which sets `ui_changed` correctly). Regression test pairs a machine, lists a session, deletes it, lets the real ~4s window elapse without ever dispatching `UndoDelete`, and asserts both the toast is gone and a `StateChanged(Ui)` fired for it — confirmed failing on the pre-fix code. |
 | Real `Notifier::cancel` for the native `Core` | `platform/notifier.ts`'s per-tag id bookkeeping | `apps/mobile/src-tauri/src/corebridge.rs`'s `TauriNotifier` | ✅ F2b — `TauriNotifier::cancel` was the trait's default no-op (a deliberate scope cut when `TauriNotifier` was first added). Now mirrors the JS notifier exactly: assigns an id per delivery (`.id(id)` on the builder, needed because `tauri-plugin-notification`'s mobile-only `remove_active` call removes by id, not tag), remembers ids per cancellation tag (capped, same as the JS side), and removes them on `cancel`. Desktop has no `remove_active` equivalent at all (`#[cfg(mobile)]`-gated; a no-op on desktop, matching the JS notifier's own graceful fallback). |
 | Real `Marmot` for the native `Core` | `platform/marmot.ts` + `stores/marmot.ts` | `apps/mobile/src-tauri/src/corebridge.rs` + `Cargo.toml` | ✅ F2b — `CorePorts.marmot` was the last field still defaulting to a stub (`NoMarmot`): the runtime-side wiring (`Core`'s full start sequence, `Intent::AcceptMarmotWelcome`/`SendMarmotMessage`/`StartMarmotChat`, see the two rows above) was already complete and tested, but `corebridge.rs` never constructed a real engine, so every Marmot chat would have failed outright under native-core. Fix was two lines of substance: forward `client-runtime`'s own `marmot` feature (already just `["client-core/marmot"]`) through the `native-core` feature list — `client-core`'s `marmot` feature was ALREADY unconditionally on for this crate (the WebView path's own `marmot.rs` Tauri commands need it), so this adds zero new compiled dependencies — then construct `MarmotEngineImpl::new(marmot_db_path)`. `marmot_db_path` resolves to the SAME `app_data_dir()/marmot.db` the WebView path's `marmot_init` command already opens, deliberately — an install switching between the two compositions must keep its MLS group state; losing it is unrecoverable (every chat needs a fresh invite). Found the same way as the notification-cancel fix above: this pass's own `..CorePorts::default()` comment ("`marmot` stays in-memory-default") was the tell. |
-| Re-point `apps/mobile` at the Rust `Core` + delete `src/core` | `createPhoneCore.ts` consumers | `apps/mobile/src/core/createPhoneCoreNative.ts` | ✅ F2b (composition + cutover landed) — `createPhoneCoreNative` assembles all eleven native store adapters (`createNative{Outbox,Settings,Pairing,Machines,Dm,Marmot,QuickPrompts,PendingSessions,Ui,Connection,Transcript}Store`) + `createNativeBridgeApi` into the exact `PhoneCore` shape `createPhoneCore.ts` builds, so `usePhoneCore()` and every screen need zero changes to run against it. `identity.ts` needs no adapter (the TS side always owns loading/generating the persisted secret locally — it is the `core_init` *argument*, not something Rust exposes back). `PhoneCore.client` is now optional (nothing in production UI reads it) and `PhoneCore.api` is typed as `BridgeApiLike`. All 3 originally-documented gaps are closed (rows above), as are the 3 more this pass found (`Notifier`/cancellation, `HttpFetch`, `Marmot`). Verified with a real `--features native-core` benchmark APK build, not just `cargo`/`vitest`. ⏳ What remains is no longer code: a real end-to-end manual smoke pass on a device, then deleting `src/core`. |
+| Re-point `apps/mobile` at the Rust `Core` + delete `src/core` | `createPhoneCore.ts` consumers | `apps/mobile/src/core/createPhoneCoreNative.ts` | ✅ F2b (composition, cutover, AND deletion landed) — `createPhoneCoreNative` assembles all eleven native store adapters (`createNative{Outbox,Settings,Pairing,Machines,Dm,Marmot,QuickPrompts,PendingSessions,Ui,Connection,Transcript}Store`) + `createNativeBridgeApi` into the `PhoneCore` shape `phoneCore.ts` now declares directly (relocated out of the deleted `createPhoneCore.ts`), so `usePhoneCore()` and every screen need zero changes to run against it. `identity.ts` needs no adapter (the TS side always owns loading/generating the persisted secret locally — it is the `core_init` *argument*, not something Rust exposes back). `PhoneCore.client` is gone entirely (nothing in production UI read it) and `sendSessionImageNative` is required, not optional, now that it is the only composition; `PhoneCore.api` is typed as `BridgeApiLike`. All 3 originally-documented gaps are closed (rows above), as are the 3 more this pass found (`Notifier`/cancellation, `HttpFetch`, `Marmot`). Verified with a real native-core benchmark APK build, not just `cargo`/`vitest`. `apps/mobile/src/core`'s local composition (`createPhoneCore.ts`, every store's local FSM/persistence half, `services/nostrClient.ts`, `platform/relayTransport.ts`, `deleteController.ts`, `notifications.ts`, `selectionPersistence.ts`, `defaultSessionMode.ts`, ~24 tests exercising them) is deleted; each surviving store file keeps only its shared types + pure helper functions native adapters or UI still call directly (`parsePairingUrl`, `sessionKeyOf`, `unifiedConversations`, `hydrateSettings`, …). `main.tsx` now has one boot path — no `bootLocal`, plain-browser dev no longer starts the app — and the `native-core` Cargo feature is `default = ["native-core"]`. The ~20 UI test files that used to fixture themselves against the local composition were migrated to a shared `fakeNativeCore()`/`buildFakePhoneCore()` helper (`core/__tests__/nativeCoreFixture.ts`) that scripts `NativeCore.dispatch` to behave like a real `client_runtime::Core` would, rather than re-implementing any Rust behavior in the fixture itself. |
 
 **F2a status: complete** — the whole pure `client-core` layer.
 
@@ -228,11 +238,15 @@ surface as Tauri commands (`core_dispatch` + six `core_*_view` queries + the
 `Kv`/`TranscriptStore`, schema-compatible with the WebView's existing
 `codedeck.db` so an upgrading install keeps its data), real OS notifications
 (`TauriNotifier`), and real Blossom HTTP (`ReqwestHttpFetch`, SOCKS5-aware) —
-replacing F1's in-memory-only ports. `apps/mobile/src` now DOES switch to
-that surface (`main.tsx`'s capability check, `createPhoneCoreNative.ts`) —
-see the port-tracking table's last rows. What remains before the F2b
-stop-point is no longer code: a real end-to-end manual smoke pass on a
-device, then deleting `src/core`.
+replacing F1's in-memory-only ports. `apps/mobile/src` now runs on that
+surface exclusively (`main.tsx`'s single boot path, `createPhoneCoreNative.ts`)
+— see the port-tracking table's last rows. `apps/mobile/src/core`'s local
+composition is deleted and `native-core` is the default Cargo feature: this
+is the F2b stop-point the plan describes, reached and verified (`./codedeck
+check` + `cargo test`/`cargo clippy` both green, a real device smoke pass
+done by the maintainer). Whether the project continues into F3 (the first
+Compose screen) is a separate decision, tracked in the plan document, not
+this one.
 
 **Aside — a regression caught along the way:** the MDK-engine relocation
 earlier in F2b had removed `rusqlite` from `apps/mobile/src-tauri`'s direct
@@ -250,12 +264,13 @@ Verify (`crates/`): `cargo test --workspace` + `cargo clippy --workspace
 toolchain needed — run in `rust:1-bookworm` via Docker like the rest of the
 repo.
 
-Verify (`apps/mobile/src-tauri`, `native-core` and default features both):
-`cargo test` / `cargo build --features native-core` (CI `cargo` job, `rust`
-filter). This needs the Tauri Linux system deps (`libwebkit2gtk-4.1-dev
-libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf`) installed
-into the same `rust:1-bookworm` image — a plain `crates/`-only container does
-NOT cover this crate at all (see the regression note above).
+Verify (`apps/mobile/src-tauri`, default (native-core) and
+`--no-default-features` both): `cargo test` / `cargo build
+--no-default-features` (CI `cargo` job, `rust` filter). This needs the Tauri
+Linux system deps (`libwebkit2gtk-4.1-dev libgtk-3-dev
+libayatana-appindicator3-dev librsvg2-dev patchelf`) installed into the same
+`rust:1-bookworm` image — a plain `crates/`-only container does NOT cover
+this crate at all (see the regression note above).
 
 ## F1 status
 
@@ -263,11 +278,11 @@ NOT cover this crate at all (see the regression note above).
 |---|---|
 | Layer 1 native vector tests (codec corpus, chunking, ranges, connection reducer, `nostr_client`, `bridge_api`, `nip42`, transport `frames`/`router`, `Core` on a mock relay) | ✅ 167 Rust tests, `clippy -D warnings` clean |
 | `./codedeck check` (TS unaffected) | ✅ |
-| `.so` ≤ 50 MB | ✅ 34.1 MB (`./codedeck apk benchmark --features native-core`) |
-| Real-device basic parity (benchmark APK, `native-core`): app opens, pair to a bridge, send + receive over the in-process runtime | ✅ |
+| `.so` ≤ 50 MB | ✅ 34.1 MB (`./codedeck apk benchmark`, native-core now default) |
+| Real-device basic parity (benchmark APK, native-core default): app opens, pair to a bridge, send + receive over the in-process runtime | ✅ |
 | Background matrix (screen-off 1h · forced Doze · WiFi↔cell · airplane blip · reconnection) on real Samsung/Xiaomi, with the complete transport | ⏳ owner's manual real-device test |
 | Transport parity checklist (plan §8) | ✅ — see below |
-| Delete the TS network path | ⏳ after the background matrix |
+| Delete the TS network path | ✅ — `apps/mobile/src/core` (the whole local composition, not just the transport half) is deleted |
 
 ### Transport parity checklist (plan §8)
 

@@ -51,9 +51,12 @@ case "$MODE" in
 esac
 shift || true
 
-# Optional cargo features for src-tauri, e.g. `--features native-core` to build
-# a test APK that hosts the in-process Rust client-runtime (migration F1). The
-# default build passes nothing, so it is byte-identical to before.
+# Optional EXTRA cargo features for src-tauri, added on top of the default
+# feature set. `native-core` (the in-process Rust client-runtime hosting the
+# entire bridge protocol + store layer — F2b) is a default feature now, so
+# every build already includes it unless `--features` is used to pass
+# `--no-default-features`-equivalent flags via cargo-tauri's own CLI. This
+# flag remains for any future opt-in feature.
 CARGO_FEATURES=""
 # Android ABI(s). Default arm64 (real devices); `--target x86_64` builds for an
 # emulator on an x86 host (add both to cover both).

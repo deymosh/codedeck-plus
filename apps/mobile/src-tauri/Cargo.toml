@@ -12,18 +12,20 @@ name = "codedeck_mobile_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-# F1: host the Rust client-runtime (Nostr sockets + crypto + connection FSM) in
-# the app process instead of the WebView. Off by default — the crate builds
-# byte-identical to before. A test APK turns it on (docker/build-apk.sh
-# --features native-core); it flips to default once field-tested.
+# F2b: the in-process Rust client-runtime (the entire bridge protocol + store
+# layer, not just F1's transport/crypto) hosted in the app process instead of
+# the WebView. Field-tested (see docs/CLIENT-CORE.md) and now the default and
+# only composition — `apps/mobile/src/core`'s local, WebView-driven
+# implementation was deleted the same day this flipped (see git history).
 # `tauri-plugin-http/socks` is forwarded here, not requested unconditionally
-# on the dependency itself, so the default build's dependency graph (and thus
-# the shipped APK) is untouched: `native_http.rs`'s `ReqwestHttpFetch` is the
-# only thing that needs SOCKS5 support, and it's `native-core`-gated too.
-# `client-runtime/marmot` unlocks `MarmotEngineImpl` (the same MDK/MLS engine
-# `client-core`'s own `marmot` feature below already compiles in for the
-# WebView path's Tauri commands) so `corebridge.rs` can wire a real Marmot
-# port instead of `NoMarmot`.
+# on the dependency itself, so a build with `--no-default-features` would
+# still shed it along with the rest of native-core's dependency graph:
+# `native_http.rs`'s `ReqwestHttpFetch` is the only thing that needs SOCKS5
+# support, and it's `native-core`-gated too. `client-runtime/marmot` unlocks
+# `MarmotEngineImpl` (the same MDK/MLS engine `client-core`'s own `marmot`
+# feature below already compiles in for the WebView path's Tauri commands) so
+# `corebridge.rs` can wire a real Marmot port instead of `NoMarmot`.
+default = ["native-core"]
 native-core = [
     "dep:client-runtime",
     "dep:tokio",
@@ -80,9 +82,9 @@ tauri-plugin-mesh = { path = "../tauri-plugin-mesh" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# F1 native-core (optional — see [features]). client-runtime already pulls
-# tokio; the direct dep is for the bridge thread's current-thread runtime +
-# LocalSet that hosts the `!Send` Core loop.
+# native-core (default feature — see [features] above). client-runtime
+# already pulls tokio; the direct dep is for the bridge thread's
+# current-thread runtime + LocalSet that hosts the `!Send` Core loop.
 client-runtime = { path = "../../../crates/client-runtime", optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros"], optional = true }
 

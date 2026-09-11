@@ -110,10 +110,13 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "4"
         run: |
+          # F2b: native-core (the in-process client-runtime hosting the whole
+          # bridge protocol) is a default feature now — this already covers it.
           cargo test --locked
-          # F1: the in-process client-runtime binding (off by default). Build it
-          # so a broken `corebridge` fails CI, not a test APK.
-          cargo build --locked --features native-core
+          # `--no-default-features` has no remaining production caller but is
+          # kept buildable (see [features] in Cargo.toml) — build it too so a
+          # break there fails CI, not a future opt-out build.
+          cargo build --locked --no-default-features
 
       # --- client-core / client-runtime workspace (pure Rust, no system deps) ---
       - name: Install Rust (client-core)

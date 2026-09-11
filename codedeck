@@ -40,10 +40,9 @@ Mobile APK (apps/mobile/docker/build-apk.sh — see that file for details):
   apk debug                Full symbols, ~300MB, Android's own debug keystore
   apk release              Minified+stripped, UNSIGNED — Android won't install it
   apk benchmark            Same build as release, but signed so it installs
-  apk benchmark --features native-core
-                           ^ test APK that hosts the in-process Rust
-                             client-runtime (migration F1); default build is
-                             unchanged
+                           (every build hosts the in-process Rust
+                           client-runtime by default — see [features] in
+                           apps/mobile/src-tauri/Cargo.toml)
 
 Workspace checks (run in a throwaway Node container — nothing installed
 locally is required):
@@ -134,7 +133,7 @@ cmd_tor() {
 cmd_apk() {
   case "${1:-}" in
     debug|release|benchmark)
-      # extra args pass through, e.g. `./codedeck apk benchmark --features native-core`
+      # extra args pass through, e.g. `./codedeck apk benchmark --target x86_64`
       exec ./apps/mobile/docker/build-apk.sh "$@"
       ;;
     *)
