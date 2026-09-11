@@ -84,6 +84,13 @@ pub struct RouteResult {
     /// after a restart), so this is the only signal a `PendingSessionsView`
     /// consumer gets that a re-fetch is worth doing.
     pub pending_sessions_changed: bool,
+    /// `stores.ui` changed in a way worth a `UiView` re-fetch. Deliberately
+    /// NOT set for the high-frequency per-output-chunk unread-clear path
+    /// (`is_agent_activity_entry`) — that would fire on nearly every streamed
+    /// token of an unfocused session. `mark_session_unread` (paired with an
+    /// existing notify) and the ack handlers below are low-frequency enough
+    /// to notify every time.
+    pub ui_changed: bool,
 }
 
 impl RouteResult {
@@ -250,6 +257,7 @@ impl<'a> Router<'a> {
                     Some(event) => {
                         if !self.viewing_session(machine, &m.session_id) {
                             self.stores.ui.mark_session_unread(machine, &m.session_id);
+                            r.ui_changed = true;
                         }
                         let fx = self.emit_notify(&event);
                         r.notifies.extend(fx);
@@ -381,11 +389,13 @@ impl<'a> Router<'a> {
                     },
                     self.now,
                 );
+                r.ui_changed = true;
             }
             BridgeToPhone::DeviceConfigAck(m) => {
                 self.stores
                     .ui
                     .apply_device_config_ack(machine, m.success, m.error.clone(), self.now);
+                r.ui_changed = true;
             }
             BridgeToPhone::ProviderProfileAck(m) => {
                 self.stores.ui.apply_provider_profile_ack(
@@ -398,6 +408,7 @@ impl<'a> Router<'a> {
                     },
                     self.now,
                 );
+                r.ui_changed = true;
             }
 
             // Remaining families land in later slices.
@@ -522,6 +533,7 @@ impl<'a> Router<'a> {
                 continue;
             }
             self.stores.ui.mark_session_unread(machine, &info.id);
+            r.ui_changed = true;
             let event = if turn_finished {
                 NotifyEvent::SessionFinished {
                     machine: machine.to_string(),

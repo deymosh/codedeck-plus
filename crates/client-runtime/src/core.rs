@@ -52,7 +52,7 @@ use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
     ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
-    PendingSessionsView, QuickPromptsView, SettingsView,
+    PendingSessionsView, QuickPromptsView, SettingsView, UiView,
 };
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
@@ -135,6 +135,7 @@ pub enum SliceId {
     Marmot,
     QuickPrompts,
     PendingSessions,
+    Ui,
 }
 
 /// The closed, semantic event set (plan §2.3). Serde shape: externally
@@ -423,6 +424,22 @@ impl Core {
             pending: Default::default(),
         })
     }
+    pub async fn ui_view(&self) -> UiView {
+        self.query(ViewQuery::Ui).await.unwrap_or(UiView {
+            selected_machine: None,
+            selected_session: None,
+            panel_mode: Default::default(),
+            active_dm_peer: None,
+            active_marmot_group: None,
+            unread_sessions: Default::default(),
+            responded_cards: Default::default(),
+            plan_approval_choices: Default::default(),
+            credentials_status: Default::default(),
+            device_config_status: Default::default(),
+            provider_profile_status: Default::default(),
+            undo_toast: None,
+        })
+    }
 
     async fn query<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> ViewQuery) -> Option<T> {
         let (rtx, rrx) = oneshot::channel();
@@ -495,6 +512,7 @@ enum ViewQuery {
     Marmot(oneshot::Sender<MarmotView>),
     QuickPrompts(oneshot::Sender<QuickPromptsView>),
     PendingSessions(oneshot::Sender<PendingSessionsView>),
+    Ui(oneshot::Sender<UiView>),
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -833,6 +851,9 @@ impl Loop {
         if r.pending_sessions_changed {
             self.state_changed(SliceId::PendingSessions);
         }
+        if r.ui_changed {
+            self.state_changed(SliceId::Ui);
+        }
         match r.pair_deadline {
             Some(PairDeadline::Arm { ms }) => {
                 abort(&mut self.pair_timer);
@@ -987,6 +1008,9 @@ impl Loop {
         if r.pending_sessions_changed {
             self.state_changed(SliceId::PendingSessions);
         }
+        if r.ui_changed {
+            self.state_changed(SliceId::Ui);
+        }
         // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
         // notification-cancel seam; `r.mesh_join` a mesh seam (F2b ports).
     }
@@ -1108,6 +1132,9 @@ impl Loop {
             }
             ViewQuery::PendingSessions(reply) => {
                 let _ = reply.send(PendingSessionsView::from_stores(&self.stores));
+            }
+            ViewQuery::Ui(reply) => {
+                let _ = reply.send(UiView::from_stores(&self.stores));
             }
         }
     }
@@ -2438,6 +2465,53 @@ mod tests {
                 assert!(events.contains(&CoreEvent::StateChanged {
                     slice: SliceId::Settings
                 }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn select_session_intent_updates_the_ui_view_and_emits_a_state_changed_event() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+
+                core.dispatch(Intent::SelectSession {
+                    machine: "m1".into(),
+                    session_id: Some("s1".into()),
+                })
+                .await;
+
+                let uv = core.ui_view().await;
+                assert_eq!(uv.selected_machine.as_deref(), Some("m1"));
+                assert_eq!(uv.selected_session.as_deref(), Some("s1"));
+
+                {
+                    let events = spy.events.lock().unwrap();
+                    assert!(events.contains(&CoreEvent::StateChanged { slice: SliceId::Ui }));
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn set_plan_approval_choice_intent_updates_the_ui_view() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+
+                core.dispatch(Intent::SetPlanApprovalChoice {
+                    card_id: "card1".into(),
+                    key: "2".into(),
+                })
+                .await;
+
+                let uv = core.ui_view().await;
+                assert_eq!(uv.plan_approval_choices.get("card1").map(String::as_str), Some("2"));
             })
             .await;
     }

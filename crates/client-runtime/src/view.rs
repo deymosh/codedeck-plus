@@ -8,7 +8,7 @@
 //! has no `Serialize` and is projected by hand. Transcript rows and the
 //! interaction-card view are row-backed and land with the loop integration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use client_core::connection::ConnectionStatus;
 use client_core::stores::dm::{DmConversation, DmMessage};
@@ -20,6 +20,7 @@ use client_core::stores::pending_sessions::PendingSessionView;
 use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
+use client_core::stores::ui::{CredentialsAck, DeviceConfigAck, PanelMode, ProviderProfileAck, UndoToast};
 use serde::Serialize;
 
 use crate::stores::CoreStores;
@@ -127,6 +128,53 @@ impl QuickPromptsView {
     pub fn from_stores(s: &CoreStores) -> Self {
         Self {
             prompts: s.quick_prompts.prompts.clone(),
+        }
+    }
+}
+
+// --- ui (selection + optimistic interaction-card bookkeeping) --------------
+//
+// This is `UiState` verbatim, NOT the plan §2.1 `CardsView` (that one is a
+// per-session, row-backed projection of actual card CONTENT that lands with
+// the transcript-view work — a different, larger thing). `UiState` only
+// holds the optimistic bookkeeping around cards (selection, unread dots,
+// responded-card ids, plan-approval labels, ack round-trip status, the undo
+// toast) — small, flat, and already fully ported in F2a, so it gets a thin
+// view now rather than waiting on that bigger design.
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiView {
+    pub selected_machine: Option<String>,
+    pub selected_session: Option<String>,
+    pub panel_mode: PanelMode,
+    pub active_dm_peer: Option<String>,
+    pub active_marmot_group: Option<String>,
+    pub unread_sessions: BTreeSet<String>,
+    pub responded_cards: BTreeMap<String, BTreeSet<String>>,
+    pub plan_approval_choices: BTreeMap<String, String>,
+    pub credentials_status: BTreeMap<String, CredentialsAck>,
+    pub device_config_status: BTreeMap<String, DeviceConfigAck>,
+    pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
+    pub undo_toast: Option<UndoToast>,
+}
+
+impl UiView {
+    pub fn from_stores(s: &CoreStores) -> Self {
+        let ui = &s.ui;
+        Self {
+            selected_machine: ui.selected_machine.clone(),
+            selected_session: ui.selected_session.clone(),
+            panel_mode: ui.panel_mode,
+            active_dm_peer: ui.active_dm_peer.clone(),
+            active_marmot_group: ui.active_marmot_group.clone(),
+            unread_sessions: ui.unread_sessions.clone(),
+            responded_cards: ui.responded_cards.clone(),
+            plan_approval_choices: ui.plan_approval_choices.clone(),
+            credentials_status: ui.credentials_status.clone(),
+            device_config_status: ui.device_config_status.clone(),
+            provider_profile_status: ui.provider_profile_status.clone(),
+            undo_toast: ui.undo_toast.clone(),
         }
     }
 }
@@ -380,6 +428,22 @@ mod tests {
         assert_eq!(qpv.prompts[0].label, "Go");
         let json = serde_json::to_string(&qpv).unwrap();
         assert!(json.contains(r#""prompts":[{"id":"qp-1","label":"Go","text":"continue"}]"#));
+    }
+
+    #[tokio::test]
+    async fn ui_view_is_thin_over_the_store() {
+        let mut s = stores().await;
+        s.ui.select_machine(Some("m1"));
+        s.ui.mark_session_unread("m1", "s1");
+        s.ui.set_plan_approval_choice("card1", "2");
+
+        let uv = UiView::from_stores(&s);
+        assert_eq!(uv.selected_machine.as_deref(), Some("m1"));
+        assert!(uv.unread_sessions.contains(&client_core::notifications::session_key_of("m1", "s1")));
+        assert_eq!(uv.plan_approval_choices.get("card1").map(String::as_str), Some("2"));
+        let json = serde_json::to_string(&uv).unwrap();
+        assert!(json.contains(r#""selectedMachine":"m1""#));
+        assert!(json.contains(r#""panelMode":"session""#));
     }
 
     #[tokio::test]

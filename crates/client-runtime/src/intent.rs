@@ -101,6 +101,9 @@ pub struct IntentResult {
     /// `pending_sessions` changed — not persisted, so this is the only signal
     /// a `PendingSessionsView` consumer gets that a re-fetch is worth doing.
     pub pending_sessions_changed: bool,
+    /// `stores.ui` changed in a way worth a `UiView` re-fetch — mirrors
+    /// `RouteResult::ui_changed`.
+    pub ui_changed: bool,
 }
 
 impl IntentResult {
@@ -334,6 +337,14 @@ pub enum Intent {
     DismissPendingSession {
         pending_id: String,
     },
+    /// Records which plan-approval option the user tapped (`"1"`/`"2"`/`"3"`)
+    /// so the resolved card can label itself before the bridge echoes
+    /// anything — sent ALONGSIDE the actual answer (`AnswerQuestion`), not
+    /// instead of it.
+    SetPlanApprovalChoice {
+        card_id: String,
+        key: String,
+    },
 }
 
 pub fn apply(
@@ -359,6 +370,7 @@ pub fn apply(
             // an untitled session takes its first user message as a stopgap
             // title until the bridge authors a topical one.
             stores.ui.clear_session_unread(&machine, &session_id);
+            r.ui_changed = true;
             stores
                 .machines
                 .note_first_user_message(&machine, &session_id, &text);
@@ -447,6 +459,7 @@ pub fn apply(
             stores
                 .ui
                 .mark_card_responded(&machine, &session_id, &request_id);
+            r.ui_changed = true;
             r.send(
                 &machine,
                 PhoneToBridge::PermissionRes(PermissionResMsg {
@@ -598,11 +611,13 @@ pub fn apply(
                 stores
                     .ui
                     .select_session(&machine, session_id.as_deref(), ctx.visible);
+            r.ui_changed = true;
         }
         Intent::SelectDmPeer { peer } => {
             r.ui_effects = stores.ui.select_dm_peer(peer.as_deref());
             stores.dm.set_active_peer(peer.as_deref());
             r.persist(StoreId::Dm);
+            r.ui_changed = true;
         }
         Intent::MarkDmRead { peer } => {
             if stores.dm.mark_read(&peer) {
@@ -626,6 +641,7 @@ pub fn apply(
             stores.ui.select_marmot_group(group_id.as_deref());
             stores.marmot.set_active_group(group_id.as_deref());
             r.persist(StoreId::Marmot);
+            r.ui_changed = true;
         }
         Intent::MarkMarmotRead { group_id } => {
             if stores.marmot.mark_read(&group_id) {
@@ -712,6 +728,10 @@ pub fn apply(
                 r.pending_sessions_changed = true;
             }
         }
+        Intent::SetPlanApprovalChoice { card_id, key } => {
+            stores.ui.set_plan_approval_choice(&card_id, &key);
+            r.ui_changed = true;
+        }
     }
     r
 }
@@ -767,13 +787,15 @@ fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: 
                 r.persist(StoreId::Machines);
             }
             DeleteEffect::ClearSessionUnread { machine, session_id } => {
-                stores.ui.clear_session_unread(&machine, &session_id)
+                stores.ui.clear_session_unread(&machine, &session_id);
+                r.ui_changed = true;
             }
             DeleteEffect::DeselectSession { machine, session_id } => {
                 if stores.ui.selected_machine.as_deref() == Some(machine.as_str())
                     && stores.ui.selected_session.as_deref() == Some(session_id.as_str())
                 {
                     stores.ui.select_machine(Some(&machine));
+                    r.ui_changed = true;
                 }
             }
             DeleteEffect::ArmUndoTimer { ms } => r.undo_timer = Some(UndoTimer::Arm { ms }),
@@ -782,12 +804,18 @@ fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: 
                 machine,
                 session_id,
                 label,
-            } => stores.ui.set_undo_toast(Some(UndoToast {
-                machine,
-                session_id,
-                label,
-            })),
-            DeleteEffect::HideUndoToast => stores.ui.set_undo_toast(None),
+            } => {
+                stores.ui.set_undo_toast(Some(UndoToast {
+                    machine,
+                    session_id,
+                    label,
+                }));
+                r.ui_changed = true;
+            }
+            DeleteEffect::HideUndoToast => {
+                stores.ui.set_undo_toast(None);
+                r.ui_changed = true;
+            }
             DeleteEffect::SendCloseSession { machine, session_id } => r.sends.push(Send {
                 machine,
                 msg: PhoneToBridge::CloseSession(SessionIdMsg {
