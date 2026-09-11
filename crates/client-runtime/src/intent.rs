@@ -20,6 +20,7 @@ use client_core::wire::commands::{
     QuestionInputMsg, SessionIdMsg, VersionFields,
 };
 use client_core::wire::common::{EffortLevel, PermissionMode};
+use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
 use crate::stores::CoreStores;
@@ -42,7 +43,8 @@ pub struct OutboxSend {
 /// A session image the loop uploads then attaches to `session_id`'s input.
 /// Bytes + mime, never a platform type (plan §2.2) — the UI decodes whatever
 /// picker/camera/resize API it has into this shape.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionImageSend {
     pub machine: String,
     pub session_id: String,
@@ -113,7 +115,13 @@ impl IntentResult {
 }
 
 /// The user action. Serializable so a binding can pass it across the FFI.
-#[derive(Debug, Clone, PartialEq)]
+/// Serde shape: externally tagged (`{"SendInput": {...}}` / `{"UndoDelete":
+/// null}`), `camelCase` field names within each variant. Not yet load-bearing
+/// on a real wire — the binding surface is stabilized, not frozen, until F3
+/// (plan §2.5) — but a binding needing a stable JSON shape can start from
+/// this rather than hand-rolling its own encoding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Intent {
     // --- the outbox path ---
     /// Send session input. `input_id` is the runtime's generated id — it keys
@@ -766,6 +774,30 @@ mod tests {
             now: 1_000,
             visible: true,
         }
+    }
+
+    /// Documents the JSON shape a binding sends: externally tagged, camelCase
+    /// fields. A change here is a deliberate, visible break to that shape.
+    #[test]
+    fn intent_json_shape_is_externally_tagged_camel_case() {
+        let i = Intent::SendInput {
+            machine: "m".into(),
+            session_id: "s1".into(),
+            text: "hi".into(),
+            input_id: "in-1".into(),
+        };
+        let v = serde_json::to_value(&i).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "sendInput": { "machine": "m", "sessionId": "s1", "text": "hi", "inputId": "in-1" }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Intent>(v).unwrap(), i);
+
+        // A unit variant is the bare tag string, not `{ "undoDelete": null }" —
+        // serde's external-tagging convention for a variant with no payload.
+        assert_eq!(serde_json::to_value(Intent::UndoDelete).unwrap(), "undoDelete");
     }
 
     #[tokio::test]
