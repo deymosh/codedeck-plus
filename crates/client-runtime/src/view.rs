@@ -5,8 +5,11 @@
 //! The store `*State` structs were designed as the serde wire shape, so the
 //! machines / outbox / settings views are thin newtypes over their public
 //! sub-state. `connection` is FSM-backed (the loop passes it in); `pairing`
-//! has no `Serialize` and is projected by hand. Transcript rows and the
-//! interaction-card view are row-backed and land with the loop integration.
+//! has no `Serialize` and is projected by hand. `TranscriptRowsView` is the
+//! one view backed by a port (`TranscriptStore`, SQLite on device) rather
+//! than a synchronous in-memory snapshot, so it alone needs I/O to build.
+//! The interaction-card *content* view (plan §2.1's `CardsView`, distinct
+//! from `UiView`'s optimistic bookkeeping) still has no home yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,6 +25,8 @@ use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
 use client_core::stores::ui::{CredentialsAck, DeviceConfigAck, PanelMode, ProviderProfileAck, UndoToast};
 use serde::Serialize;
+
+use crate::ports::TranscriptStore;
 
 use crate::stores::CoreStores;
 
@@ -331,6 +336,84 @@ impl TranscriptSyncView {
             target: s.sync.target,
             contiguous: t.has_contiguous(machine, session_id, None),
         })
+    }
+
+    /// A session `TranscriptState` has never heard of yet (no `Output`/
+    /// `SyncBegin` has landed) — the honest "nothing here yet" reading,
+    /// contiguous vacuously.
+    fn empty() -> Self {
+        Self {
+            state: SyncState::Idle,
+            attempts: 0,
+            next_retry_at: None,
+            local_high: 0,
+            target: 0,
+            contiguous: true,
+        }
+    }
+}
+
+// --- transcript rows (the row half — read-only, `TranscriptStore`-backed) --
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptRowView {
+    pub seq: u64,
+    pub entry: serde_json::Value,
+}
+
+/// Everything a phone needs to render one session's transcript: the rows
+/// (`1..=local_high`, the same "give me everything, the UI virtualizes"
+/// contract `TranscriptStoreState.entriesOf` has today — no pagination yet,
+/// see plan §2.1's future `transcript_view(id, from, to)`), the sync status,
+/// and the coverage `have_ranges` a sync-request would carry.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptRowsView {
+    pub rows: Vec<TranscriptRowView>,
+    pub have_ranges: Vec<(u64, u64)>,
+    pub sync: TranscriptSyncView,
+}
+
+impl TranscriptRowsView {
+    pub fn empty() -> Self {
+        Self {
+            rows: Vec::new(),
+            have_ranges: Vec::new(),
+            sync: TranscriptSyncView::empty(),
+        }
+    }
+
+    /// Reads `1..=local_high` from `transcript_store` (the row content) and
+    /// combines it with the in-memory sync/coverage state. `transcript_store`
+    /// is a port (SQLite on device), so this is the one view that needs I/O —
+    /// every other `*View::from_stores` is a synchronous, in-memory snapshot.
+    pub async fn load(
+        transcript: &TranscriptState,
+        transcript_store: &dyn TranscriptStore,
+        machine: &str,
+        session_id: &str,
+    ) -> Self {
+        let sync = TranscriptSyncView::for_session(transcript, machine, session_id)
+            .unwrap_or_else(TranscriptSyncView::empty);
+        if sync.local_high == 0 {
+            return Self {
+                rows: Vec::new(),
+                have_ranges: transcript.have_ranges_of(machine, session_id),
+                sync,
+            };
+        }
+        let rows = transcript_store
+            .read_range(machine, session_id, 1, sync.local_high)
+            .await
+            .into_iter()
+            .map(|r| TranscriptRowView { seq: r.seq, entry: r.entry })
+            .collect();
+        Self {
+            rows,
+            have_ranges: transcript.have_ranges_of(machine, session_id),
+            sync,
+        }
     }
 }
 

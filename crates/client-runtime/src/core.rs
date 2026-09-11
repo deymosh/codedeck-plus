@@ -52,7 +52,7 @@ use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
     ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
-    PendingSessionsView, QuickPromptsView, SettingsView, UiView,
+    PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView,
 };
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
@@ -153,6 +153,12 @@ pub enum CoreEvent {
     PairingSettled { paired: bool },
     /// A user-visible action did not land. Semantic — the UI writes the copy.
     ActionFailed { kind: ActionFailed },
+    /// New rows landed for this session (a live `Output`, or a `SyncChunk`
+    /// filling a gap) — a dedicated, per-session event rather than a generic
+    /// `StateChanged { slice: Transcript }`, since a blanket slice notify
+    /// cannot tell a consumer WHICH session to re-fetch and transcripts are
+    /// per-session by nature.
+    TranscriptAppended { machine: String, session_id: String },
 }
 
 // --- config ---------------------------------------------------------------
@@ -424,6 +430,16 @@ impl Core {
             pending: Default::default(),
         })
     }
+    /// Everything needed to render one session's transcript: rows
+    /// (`1..=local_high`, unpaginated — matches the TS store's own
+    /// `entriesOf` contract), sync status, and coverage. The one view
+    /// backed by I/O (`TranscriptStore`, SQLite on device), so it alone
+    /// takes an extra loop round trip beyond the in-memory snapshot views.
+    pub async fn transcript_view(&self, machine: String, session_id: String) -> TranscriptRowsView {
+        self.query(|reply| ViewQuery::Transcript { machine, session_id, reply })
+            .await
+            .unwrap_or_else(TranscriptRowsView::empty)
+    }
     pub async fn ui_view(&self) -> UiView {
         self.query(ViewQuery::Ui).await.unwrap_or(UiView {
             selected_machine: None,
@@ -513,6 +529,11 @@ enum ViewQuery {
     QuickPrompts(oneshot::Sender<QuickPromptsView>),
     PendingSessions(oneshot::Sender<PendingSessionsView>),
     Ui(oneshot::Sender<UiView>),
+    Transcript {
+        machine: String,
+        session_id: String,
+        reply: oneshot::Sender<TranscriptRowsView>,
+    },
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -651,7 +672,7 @@ impl Loop {
                     self.on_intent(*intent).await;
                     let _ = reply.send(());
                 }
-                Msg::View(query) => self.answer_view(query),
+                Msg::View(query) => self.answer_view(query).await,
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
                 Msg::UndoTimerFired => self.on_undo_timer().await,
                 Msg::RefreshReconcile => self.on_refresh_reconcile().await,
@@ -853,6 +874,9 @@ impl Loop {
         }
         if r.ui_changed {
             self.state_changed(SliceId::Ui);
+        }
+        if let Some((machine, session_id)) = r.transcript_appended {
+            self.emit(CoreEvent::TranscriptAppended { machine, session_id });
         }
         match r.pair_deadline {
             Some(PairDeadline::Arm { ms }) => {
@@ -1101,7 +1125,7 @@ impl Loop {
         self.state_changed(SliceId::Cards);
     }
 
-    fn answer_view(&self, query: ViewQuery) {
+    async fn answer_view(&self, query: ViewQuery) {
         match query {
             ViewQuery::Machines(reply) => {
                 let _ = reply.send(MachinesView::from_stores(&self.stores));
@@ -1135,6 +1159,16 @@ impl Loop {
             }
             ViewQuery::Ui(reply) => {
                 let _ = reply.send(UiView::from_stores(&self.stores));
+            }
+            ViewQuery::Transcript { machine, session_id, reply } => {
+                let view = TranscriptRowsView::load(
+                    &self.stores.transcript,
+                    self.transcript_store.as_ref(),
+                    &machine,
+                    &session_id,
+                )
+                .await;
+                let _ = reply.send(view);
             }
         }
     }
@@ -3342,6 +3376,70 @@ mod tests {
                 assert!(events.contains(&CoreEvent::StateChanged {
                     slice: SliceId::PendingSessions
                 }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_output_message_populates_the_transcript_view_and_emits_transcript_appended() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                    r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","content":"hi","timestamp":"t"}}"#,
+                )
+                .unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = client_core::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-3",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+
+                let view = core.transcript_view(machine.pubkey_hex.clone(), "s1".to_string()).await;
+                assert_eq!(view.rows.len(), 1);
+                assert_eq!(view.rows[0].seq, 1);
+                assert_eq!(view.sync.local_high, 1);
+
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::TranscriptAppended {
+                    machine: machine.pubkey_hex,
+                    session_id: "s1".to_string(),
+                }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn transcript_view_of_an_unknown_session_is_the_honest_empty_default() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+
+                let view = core.transcript_view("m1".to_string(), "s-never-seen".to_string()).await;
+                assert!(view.rows.is_empty());
+                assert!(view.have_ranges.is_empty());
+                assert_eq!(view.sync.local_high, 0);
+                assert!(view.sync.contiguous);
             })
             .await;
     }

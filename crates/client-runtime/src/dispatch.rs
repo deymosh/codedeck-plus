@@ -91,6 +91,11 @@ pub struct RouteResult {
     /// existing notify) and the ack handlers below are low-frequency enough
     /// to notify every time.
     pub ui_changed: bool,
+    /// `(machine, session_id)` new transcript rows landed for — `Output` or
+    /// `SyncChunk`. Unlike `ui_changed` this DOES fire on every live output
+    /// chunk: a transcript view's whole purpose is to look live, so silence
+    /// here would read as a frozen session, not a stale dot.
+    pub transcript_appended: Option<(String, String)>,
 }
 
 impl RouteResult {
@@ -245,6 +250,7 @@ impl<'a> Router<'a> {
                 let entry = to_value(&m.entry);
                 self.apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
                     .await;
+                r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                 // Unread + notify on LIVE entries only (sync catch-up takes the
                 // SyncChunk path, so replayed history never marks dots or fires
                 // a notification storm). A card / stream_end / failure marks the
@@ -283,6 +289,7 @@ impl<'a> Router<'a> {
                     .map(|e| (e.seq, to_value(&e.entry)))
                     .collect();
                 self.apply_rows(machine, &m.session_id, rows).await;
+                r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                 // Ack AFTER the entries are durably stored — an ack must never
                 // claim data we could still lose.
                 r.send(
@@ -828,7 +835,13 @@ mod tests {
                 }),
             )
             .await;
-        assert_eq!(out, RouteResult::default());
+        assert_eq!(
+            out,
+            RouteResult {
+                transcript_appended: Some((MACHINE.to_string(), "s1".to_string())),
+                ..RouteResult::default()
+            }
+        );
         assert_eq!(ts.seqs(MACHINE, "s1").await, vec![1]);
         assert!(s.transcript.has_contiguous(MACHINE, "s1", Some(1)));
     }

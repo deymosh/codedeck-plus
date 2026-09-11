@@ -34,7 +34,8 @@ pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, Tra
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
     ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
-    PendingSessionsView, QuickPromptsView, SettingsView, TranscriptSyncView, UiView,
+    PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, TranscriptRowView,
+    TranscriptSyncView, UiView,
 };
 
 /// Re-export the pure core so hosts have one dependency edge.
