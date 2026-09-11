@@ -175,8 +175,11 @@ pub fn prune_dismissed(dismissed: &BTreeMap<String, u64>, now: u64) -> BTreeMap<
 // --- MachineView + the store's pure transforms --------------------------------
 
 /// A paired bridge and its session list. `provider_profiles` is
-/// bridge-authoritative and in-memory only — it never serializes (a fresh boot
-/// re-requests the live list, CDX-062).
+/// bridge-authoritative and in-memory only — it DOES serialize into the live
+/// `MachinesView` (so the phone UI can render it), but `serialize_machines`
+/// (the KV-persistence path) strips it explicitly before writing, so a fresh
+/// boot re-requests the live list instead of trusting a stale local copy
+/// (CDX-062).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineView {
@@ -206,8 +209,10 @@ pub struct MachineView {
     pub default_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models_error: Option<String>,
-    /// Never persisted (CDX-062) and never hydrated.
-    #[serde(skip)]
+    /// Stripped by `serialize_machines` before persisting and forced back to
+    /// `None` by `hydrate_machines` on load (CDX-062) — but present here so it
+    /// serializes normally into the live `MachinesView` an IPC boundary reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profiles: Option<Vec<ProviderProfileInfo>>,
 }
 
@@ -236,9 +241,20 @@ impl MachineView {
 /// `serializeMachines`: a JSON array of the machines, `providerProfiles`
 /// stripped. Round-tripping through this can never truncate — it holds the FULL
 /// map, unlike the old app's merged-short list.
+///
+/// The strip happens HERE, not via a `#[serde(skip)]` on the field itself —
+/// `MachineView` also serializes into the live `MachinesView` that crosses the
+/// IPC boundary to the UI, and that path must carry `provider_profiles`.
 pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
-    serde_json::to_string(&machines.values().collect::<Vec<_>>())
-        .expect("MachineView always serializes")
+    let stripped: Vec<MachineView> = machines
+        .values()
+        .cloned()
+        .map(|mut m| {
+            m.provider_profiles = None;
+            m
+        })
+        .collect();
+    serde_json::to_string(&stripped).expect("MachineView always serializes")
 }
 
 /// `hydrateMachines`: tolerant parse. Every presence comes back `Offline` and
@@ -980,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_profiles_never_serialize() {
+    fn provider_profiles_never_persist_but_survive_hydration_round_trip_as_none() {
         let mut st = MachinesState::default();
         st.apply_session_list("pk", &list(&[], NONE()), 1);
         st.apply_provider_profiles(
@@ -990,6 +1006,34 @@ mod tests {
         assert!(st.machine("pk").unwrap().provider_profiles.is_some());
         let hydrated = hydrate_machines(Some(&serialize_machines(&st.machines)));
         assert!(hydrated["pk"].provider_profiles.is_none());
+    }
+
+    /// `#[serde(skip)]` would have hidden `provider_profiles` from every
+    /// serialization, including the live `MachinesView` the UI reads over IPC
+    /// — silently breaking the machine-providers screen the moment the phone
+    /// re-points at this core. Only `serialize_machines` (the KV-persistence
+    /// path) may strip it.
+    #[test]
+    fn provider_profiles_serializes_in_the_live_view_json() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[], NONE()), 1);
+        st.apply_provider_profiles(
+            "pk",
+            &ProviderProfilesMsg {
+                machine: "pk".into(),
+                profiles: vec![ProviderProfileInfo {
+                    id: "prof1".into(),
+                    label: "Anthropic".into(),
+                    base_url: "https://api.example".into(),
+                    models: vec![],
+                    default_model: None,
+                    has_token: true,
+                }],
+            },
+        );
+        let json = serde_json::to_string(st.machine("pk").unwrap()).unwrap();
+        assert!(json.contains("providerProfiles"));
+        assert!(json.contains("prof1"));
     }
 
     #[test]
