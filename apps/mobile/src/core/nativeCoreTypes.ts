@@ -301,6 +301,17 @@ export interface MarmotView {
   pendingWelcomes: Record<string, MarmotWelcomeInfo>;
 }
 
+/** Mirrors `client-core`'s `QuickPrompt`. */
+export interface QuickPrompt {
+  id: string;
+  label: string;
+  text: string;
+}
+
+export interface QuickPromptsView {
+  prompts: QuickPrompt[];
+}
+
 // --- CoreEvent (plan §2.3) ---
 
 export type SliceId =
@@ -312,7 +323,8 @@ export type SliceId =
   | 'settings'
   | 'pairing'
   | 'dm'
-  | 'marmot';
+  | 'marmot'
+  | 'quickPrompts';
 
 export type ActionFailedKind =
   | 'decryptFailed'

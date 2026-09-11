@@ -55,6 +55,7 @@ function fakeCore(initialView: MarmotView | null = emptyView()) {
     pairingView: () => Promise.reject(new Error('unused')),
     dmView: () => Promise.reject(new Error('unused')),
     marmotView: vi.fn(async () => view),
+    quickPromptsView: () => Promise.reject(new Error('unused')),
     onCoreEvent: vi.fn(async (cb: (e: CoreEvent) => void) => {
       coreEventListener = cb;
       return () => {
