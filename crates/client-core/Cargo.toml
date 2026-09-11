@@ -45,6 +45,9 @@ hex = "0.4"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TS bindings are generated from these types, not hand-mirrored — see protocol's Cargo.toml.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+specta-typescript = "0.0.12"
 
 # --- Marmot engine (feature "marmot" only) — the exact versions
 # apps/mobile/src-tauri pins (CDX-012). MDK's rusqlite pins "bundled-sqlcipher";

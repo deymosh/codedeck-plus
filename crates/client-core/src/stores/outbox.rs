@@ -23,7 +23,7 @@ pub const OUTBOX_CONFIRM_TIMEOUT_MS: u64 = 30_000;
 /// dropped oldest-first; unresolved items are NEVER dropped.
 pub const MAX_OUTBOX_ITEMS: usize = 200;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum OutboxItemState {
     Pending,
@@ -41,7 +41,7 @@ impl OutboxItemState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboxItem {
     /// Also the wire `inputId` echoed back by `input-ack`.
@@ -50,9 +50,13 @@ pub struct OutboxItem {
     pub session_id: String,
     pub text: String,
     pub state: OutboxItemState,
+    #[specta(type = specta_typescript::Number)]
     pub created_at: u64,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub published_at: Option<u64>,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub confirmed_at: Option<u64>,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub failed_at: Option<u64>,
     pub error: Option<String>,
     pub attempts: u32,

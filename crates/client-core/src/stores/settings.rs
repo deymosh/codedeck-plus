@@ -56,7 +56,7 @@ fn is_untouched_legacy_default(relays: &[String]) -> bool {
         .any(|legacy| legacy.len() == relays.len() && legacy.iter().zip(relays).all(|(a, b)| a == b))
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsData {
     pub relays: Vec<String>,

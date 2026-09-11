@@ -18,3 +18,15 @@ thiserror = "1"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TS bindings are generated FROM these types (apps/mobile/src-tauri's
+# gen_ts_bindings test), not hand-mirrored — derive-only, no runtime
+# footprint, does not pull tokio/sockets/anything host-specific.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+# `specta_typescript::Unknown` is a field-type-override marker only (see its
+# use in common.rs) — `serde_json::Value` is genuinely, structurally
+# recursive (object -> values -> objects...), and specta's own `Value: Type`
+# impl expands it inline with no cycle-breaking indirection, which overflows
+# the exporter's stack on export. The two fields that carry truly-untyped
+# JSON (as opposed to a real shape like `OutputEntry`) are overridden to
+# TS `unknown` instead of being expanded.
+specta-typescript = "0.0.12"

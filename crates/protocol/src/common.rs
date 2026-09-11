@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // --- enums ---
 
 /// `bypassPermissions` is intentionally absent — the bridge coerces it to `Default`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum PermissionMode {
     #[serde(rename = "default")]
     Default,
@@ -21,7 +21,7 @@ pub enum PermissionMode {
     Plan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
     Low,
@@ -32,7 +32,7 @@ pub enum EffortLevel {
     Auto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Idle,
@@ -43,7 +43,7 @@ pub enum SessionState {
     Offline,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputEntryType {
     Text,
@@ -58,7 +58,7 @@ pub enum OutputEntryType {
     Diff,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum DiffLineType {
     Add,
@@ -103,13 +103,14 @@ pub fn is_valid_provider_base_url(raw: &str) -> bool {
 
 // --- object types ---
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteSessionInfo {
     pub id: String,
     pub slug: String,
     pub cwd: String,
     pub last_activity: String,
+    #[specta(type = specta_typescript::Number)]
     pub line_count: u64,
     /// nullable (always present on the wire, may be `null`).
     pub title: Option<String>,
@@ -121,6 +122,7 @@ pub struct RemoteSessionInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<specta_typescript::Number>)]
     pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_percentage: Option<f64>,
@@ -130,6 +132,7 @@ pub struct RemoteSessionInfo {
     pub state: Option<SessionState>,
     /// v10: highest transcript seq the bridge has persisted for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<specta_typescript::Number>)]
     pub seq_high: Option<u64>,
     /// CDX-062: bound provider profile id (absent = Anthropic).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,7 +141,7 @@ pub struct RemoteSessionInfo {
     pub provider_label: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatus {
     pub has_anthropic_key: bool,
@@ -146,7 +149,7 @@ pub struct AuthStatus {
     pub has_env_key: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ProviderModel {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,7 +159,7 @@ pub struct ProviderModel {
 /// The REDACTED wire shape of a stored provider profile (`hasToken` only — the
 /// token itself never rides bridge→phone). CDX-071: `baseUrl` stays a bare
 /// non-empty string on read so a pre-gate cleartext profile is still listable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileInfo {
     pub id: String,
@@ -168,7 +171,7 @@ pub struct ProviderProfileInfo {
     pub has_token: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DiffLine {
     #[serde(rename = "type")]
     pub kind: DiffLineType,
@@ -177,7 +180,7 @@ pub struct DiffLine {
 
 /// Structured payload of an entryType `Diff` entry (CDX-050). Flat: a lines
 /// array derived from the Edit/Write tool INPUT, not real unified-diff hunks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DiffData {
     pub path: String,
     pub lines: Vec<DiffLine>,
@@ -185,27 +188,30 @@ pub struct DiffData {
     pub truncated: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OutputEntry {
     pub entry_type: OutputEntryType,
     pub content: String,
     pub timestamp: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Genuinely untyped JSON (arbitrary bridge-supplied hints), not a real
+    // shape — see this file's `specta-typescript` dependency comment.
+    #[specta(type = specta_typescript::Unknown)]
     pub metadata: Option<serde_json::Value>,
     /// Present iff `entry_type == Diff`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<DiffData>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
     pub utilization: Option<f64>,
     pub resets_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageData {
     pub available: bool,
@@ -225,34 +231,42 @@ pub struct UsageData {
 
 // --- GSD workflow state ---
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GsdPhase {
     pub number: String,
     pub name: String,
     pub disk_status: String,
+    #[specta(type = specta_typescript::Number)]
     pub plans: u64,
+    #[specta(type = specta_typescript::Number)]
     pub summaries: u64,
     pub recently_touched: bool,
     pub action: Option<String>,
     pub command: Option<String>,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub plan_count: Option<i64>,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub needs_you: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GsdExecution {
     pub phase: String,
+    #[specta(type = specta_typescript::Number)]
     pub plans_total: u64,
+    #[specta(type = specta_typescript::Number)]
     pub plans_done: u64,
     pub current_plan: Option<String>,
+    #[specta(type = specta_typescript::Number)]
     pub tasks_done: u64,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub tasks_total: Option<i64>,
     pub last_task: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct GsdAction {
     pub id: String,
     pub label: String,
@@ -260,7 +274,7 @@ pub struct GsdAction {
     pub recommended: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GsdState {
     pub installed: bool,
@@ -270,6 +284,7 @@ pub struct GsdState {
     pub summary: String,
     pub milestone: Option<String>,
     pub current_phase: Option<String>,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub total_phases: Option<i64>,
     pub percent: f64,
     pub phases: Vec<GsdPhase>,
@@ -283,14 +298,14 @@ pub struct GsdState {
 
 // --- Device / mesh config ---
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeviceRole {
     Controller,
     TestTarget,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum AppUnderTest {
     Kubo,
@@ -298,7 +313,7 @@ pub enum AppUnderTest {
     Custom,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceConfig {
     pub label: String,

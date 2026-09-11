@@ -31,7 +31,7 @@ pub fn sync_retry_delay_ms(attempts: u32) -> u64 {
         .min(SYNC_RETRY_MAX_MS)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncState {
     Idle,

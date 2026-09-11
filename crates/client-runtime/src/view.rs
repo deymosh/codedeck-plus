@@ -32,7 +32,7 @@ use crate::stores::CoreStores;
 
 // --- connection ---------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionView {
     /// `idle` | `connecting` | `connected` | `waiting-retry` | `offline` | `stopped`.
@@ -59,7 +59,7 @@ impl ConnectionView {
 
 // --- machines ----------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MachinesView {
     pub machines: BTreeMap<String, MachineView>,
@@ -75,7 +75,7 @@ impl MachinesView {
 
 // --- outbox ----------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboxView {
     /// Every queued item, oldest first.
@@ -92,7 +92,7 @@ impl OutboxView {
 
 // --- settings ------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(transparent)]
 pub struct SettingsView(pub SettingsData);
 
@@ -104,7 +104,7 @@ impl SettingsView {
 
 // --- pending sessions ------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingSessionsView {
     /// `pending_id` → placeholder. Not persisted (client-core's own
@@ -123,7 +123,7 @@ impl PendingSessionsView {
 
 // --- quick prompts -------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickPromptsView {
     pub prompts: Vec<QuickPrompt>,
@@ -147,7 +147,7 @@ impl QuickPromptsView {
 // toast) — small, flat, and already fully ported in F2a, so it gets a thin
 // view now rather than waiting on that bigger design.
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UiView {
     pub selected_machine: Option<String>,
@@ -186,7 +186,7 @@ impl UiView {
 
 // --- pairing ----------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingView {
     /// `idle` | `awaiting-ack` | `paired` | `failed`.
@@ -200,7 +200,7 @@ pub struct PairingView {
     pub candidate: Option<PairingCandidateView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingCandidateView {
     pub pubkey_hex: String,
@@ -237,7 +237,7 @@ impl PairingView {
 
 // --- dm ------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DmView {
     /// Conversations newest-first (by `last_message_at`).
@@ -246,8 +246,11 @@ pub struct DmView {
     pub messages: BTreeMap<String, Vec<DmMessage>>,
     pub active_peer: Option<String>,
     /// 1059 events seen / unwrap failures / non-DM rumors (CD-001 diagnostics).
+    #[specta(type = specta_typescript::Number)]
     pub events_received: u64,
+    #[specta(type = specta_typescript::Number)]
     pub unwrap_failures: u64,
+    #[specta(type = specta_typescript::Number)]
     pub invalid_rumors: u64,
 }
 
@@ -266,7 +269,7 @@ impl DmView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MarmotView {
     /// The MDK engine seam exists AND init succeeded — gates whether the UI
@@ -279,10 +282,14 @@ pub struct MarmotView {
     pub active_group: Option<String>,
     /// kind-445 events seen / `Ignored` verdicts / engine-call failures
     /// (CD-001 diagnostics — never silent).
+    #[specta(type = specta_typescript::Number)]
     pub events_received: u64,
+    #[specta(type = specta_typescript::Number)]
     pub ignored: u64,
+    #[specta(type = specta_typescript::Number)]
     pub errors: u64,
     /// 445s held for not-yet-joined groups (VEIL-029 buffer).
+    #[specta(type = specta_typescript::Number)]
     pub buffered: usize,
     /// Welcomes awaiting `Intent::AcceptMarmotWelcome`, keyed by `welcomeId`.
     /// Without this the accept-welcome UI has nothing to render — a chat
@@ -311,15 +318,18 @@ impl MarmotView {
 
 // --- transcript sync status (the non-row half) -------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptSyncView {
     pub state: SyncState,
     pub attempts: u32,
+    #[specta(type = Option<specta_typescript::Number>)]
     pub next_retry_at: Option<u64>,
     /// Highest locally-stored seq.
+    #[specta(type = specta_typescript::Number)]
     pub local_high: u64,
     /// seqHigh the current cycle is trying to cover.
+    #[specta(type = specta_typescript::Number)]
     pub target: u64,
     /// Contiguous `1..=local_high` with no gaps.
     pub contiguous: bool,
@@ -355,10 +365,17 @@ impl TranscriptSyncView {
 
 // --- transcript rows (the row half — read-only, `TranscriptStore`-backed) --
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptRowView {
+    #[specta(type = specta_typescript::Number)]
     pub seq: u64,
+    /// The Rust port carries no protocol dependency in its own field type
+    /// (`serde_json::Value`, since the row store is generic), but it always
+    /// holds a valid `OutputEntry` — this is what the bridge sends. Typed as
+    /// such for TS's benefit (`serde_json::Value` is structurally recursive
+    /// and would overflow the exporter if expanded as-is).
+    #[specta(type = protocol::common::OutputEntry)]
     pub entry: serde_json::Value,
 }
 
@@ -367,10 +384,11 @@ pub struct TranscriptRowView {
 /// contract `TranscriptStoreState.entriesOf` has today — no pagination yet,
 /// see plan §2.1's future `transcript_view(id, from, to)`), the sync status,
 /// and the coverage `have_ranges` a sync-request would carry.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptRowsView {
     pub rows: Vec<TranscriptRowView>,
+    #[specta(type = Vec<(specta_typescript::Number, specta_typescript::Number)>)]
     pub have_ranges: Vec<(u64, u64)>,
     pub sync: TranscriptSyncView,
 }

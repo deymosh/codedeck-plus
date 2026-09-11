@@ -61,7 +61,7 @@ pub struct MarmotGroupInfo {
     pub active: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MarmotWelcomeInfo {
     pub welcome_id: String,
@@ -71,6 +71,7 @@ pub struct MarmotWelcomeInfo {
     pub name: String,
     /// Who invited us — the 1:1 peer.
     pub welcomer: String,
+    #[specta(type = specta_typescript::Number)]
     pub member_count: u64,
 }
 
@@ -97,7 +98,7 @@ pub enum MarmotIngested {
 
 // --- Store types ---
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MarmotConversation {
     /// MLS group id (hex) — the conversation key.
@@ -108,13 +109,16 @@ pub struct MarmotConversation {
     /// store's per-pubkey cache.
     pub peer_pubkey: String,
     pub name: String,
+    #[specta(type = specta_typescript::Number)]
     pub member_count: u64,
+    #[specta(type = specta_typescript::Number)]
     pub last_message_at: u64,
+    #[specta(type = specta_typescript::Number)]
     pub unread_count: u64,
     pub last_preview: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum MarmotMessageStatus {
     Sent,
@@ -122,7 +126,7 @@ pub enum MarmotMessageStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MarmotMessage {
     /// Inner rumor id — identical on the sender echo and the recipient copy.
@@ -130,6 +134,7 @@ pub struct MarmotMessage {
     pub group_id: String,
     pub sender_pubkey: String,
     pub content: String,
+    #[specta(type = specta_typescript::Number)]
     pub at: u64,
     pub status: MarmotMessageStatus,
 }
@@ -145,7 +150,7 @@ pub struct MarmotDiagnostics {
 
 /// CDX-030: identity of the last KP we successfully published — persisted so
 /// app restarts do NOT re-mint.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PublishedKeyPackage {
     pub id: String,
@@ -153,6 +158,7 @@ pub struct PublishedKeyPackage {
     /// Serialized relay list it was published to — a changed set needs a fresh
     /// publish so new relays carry a KP.
     pub relays_payload: String,
+    #[specta(type = specta_typescript::Number)]
     pub published_at: u64,
     /// A welcome arrived — some KP of ours was consumed; re-mint next start.
     pub consumed: bool,
@@ -278,7 +284,7 @@ pub fn unified_conversations(
 
 // --- Persistence ---
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct MarmotPersisted {
     #[serde(default)]
     pub conversations: BTreeMap<String, MarmotConversation>,

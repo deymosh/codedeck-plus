@@ -17,7 +17,7 @@ use serde::Serialize;
 pub use crate::notifications::session_key_of;
 
 /// Which conversation surface the main panel shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PanelMode {
     #[default]
@@ -28,7 +28,7 @@ pub enum PanelMode {
 
 /// Fire-and-answer round-trip state for the `set-credentials` /
 /// `set-device-config` / `set-provider-profile` acks (CDX-011 / CDX-062).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum AckState {
     Saving,
@@ -36,10 +36,11 @@ pub enum AckState {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialsAck {
     pub state: AckState,
+    #[specta(type = specta_typescript::Number)]
     pub at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_anthropic_key: Option<bool>,
@@ -52,19 +53,21 @@ pub struct CredentialsAck {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceConfigAck {
     pub state: AckState,
+    #[specta(type = specta_typescript::Number)]
     pub at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileAck {
     pub state: AckState,
+    #[specta(type = specta_typescript::Number)]
     pub at: u64,
     /// Which profile the latest round-trip was about (ack routing detail).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,7 +82,7 @@ pub struct ProviderProfileAck {
 /// The bottom "Deleted X — Undo" toast for a pending session delete. The
 /// [`crate::delete_controller`] owns its 4 s lifecycle; this is only what the UI
 /// renders.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoToast {
     pub machine: String,

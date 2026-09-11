@@ -98,7 +98,7 @@ impl Entropy for TimeEntropy {
 // --- observer (seed of the F2 CoreEvent stream) --------------------------
 
 /// Why a user-visible action did not land. Semantic — the UI writes the copy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ActionFailed {
     DecryptFailed,
@@ -122,7 +122,7 @@ pub trait CoreObserver {
 
 /// A read-projection slice (plan §2.1) — the granularity a consumer
 /// re-subscribes to on a [`CoreEvent::StateChanged`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SliceId {
     Connection,
@@ -142,7 +142,7 @@ pub enum SliceId {
 /// The closed, semantic event set (plan §2.3). Serde shape: externally
 /// tagged, camelCase (same convention as [`crate::intent::Intent`]) — e.g.
 /// `{"stateChanged": {"slice": "machines"}}`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CoreEvent {
     /// The named view slice changed — re-read it.

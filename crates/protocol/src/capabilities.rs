@@ -62,7 +62,7 @@ pub const ALL_BRIDGE_CAPABILITIES: [&str; 10] = [
 pub const ALL_PHONE_CAPABILITIES: [&str; 2] = [DIFF, CHUNKED];
 
 /// Which host binary a bridge runs as — a UI badge only; identity is the keypair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum BridgeHostKind {
     Cli,

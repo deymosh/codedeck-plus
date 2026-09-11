@@ -39,25 +39,27 @@ pub const DM_STORAGE_KEY: &str = "dm";
 
 // --- Types ---
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum DmProtocol {
     Nip17,
     Marmot,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DmConversation {
     pub peer_pubkey: String,
     pub protocol: DmProtocol,
     /// ms timestamp of the newest message (rumor time).
+    #[specta(type = specta_typescript::Number)]
     pub last_message_at: u64,
+    #[specta(type = specta_typescript::Number)]
     pub unread_count: u64,
     pub last_preview: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum DmMessageStatus {
     Sent,
@@ -65,7 +67,7 @@ pub enum DmMessageStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DmMessage {
     /// The rumor id — shared across the recipient wrap, the self wrap and the
@@ -75,18 +77,19 @@ pub struct DmMessage {
     pub sender_pubkey: String,
     pub content: String,
     /// ms timestamp (rumor `created_at` × 1000; local clock for failed sends).
+    #[specta(type = specta_typescript::Number)]
     pub at: u64,
     pub status: DmMessageStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum DmProfileState {
     Ok,
     Notfound,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DmProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +102,7 @@ pub struct DmProfile {
     pub nip05: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
+    #[specta(type = specta_typescript::Number)]
     pub fetched_at: u64,
     pub status: DmProfileState,
 }
@@ -201,7 +205,7 @@ pub fn ordered_conversations(
 
 // --- Persistence ---
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DmPersisted {
     #[serde(default)]
     pub conversations: BTreeMap<String, DmConversation>,

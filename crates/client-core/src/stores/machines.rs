@@ -25,7 +25,7 @@ use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMs
 pub const DISMISSED_TTL_MS: u64 = 60 * 60 * 1000;
 
 /// The three honest presence states for a listed session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum ListingPresence {
     Live,
@@ -35,12 +35,13 @@ pub enum ListingPresence {
 
 /// One session as the machines store holds it. The per-session extras (`usage`,
 /// `gsd`) survive every heartbeat — the merge spreads the previous view.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
     pub info: RemoteSessionInfo,
     pub presence: ListingPresence,
     /// ms timestamp this session was last present in an incoming list.
+    #[specta(type = specta_typescript::Number)]
     pub last_listed_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<UsageData>,
@@ -180,7 +181,7 @@ pub fn prune_dismissed(dismissed: &BTreeMap<String, u64>, now: u64) -> BTreeMap<
 /// (the KV-persistence path) strips it explicitly before writing, so a fresh
 /// boot re-requests the live list instead of trusting a stale local copy
 /// (CDX-062).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineView {
     pub pubkey_hex: String,
@@ -200,6 +201,7 @@ pub struct MachineView {
     #[serde(default)]
     pub machine_offline: bool,
     #[serde(default)]
+    #[specta(type = Option<specta_typescript::Number>)]
     pub last_heartbeat_at: Option<u64>,
     #[serde(default)]
     pub sessions: BTreeMap<String, SessionView>,

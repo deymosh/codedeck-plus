@@ -47,6 +47,20 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Tristate<T> {
     }
 }
 
+// Not `#[derive(specta::Type)]` — the wire shape isn't a plain 3-variant enum,
+// it's `Option<T>` (Keep is `skip_serializing_if`-omitted at the FIELD level;
+// present-and-null is Clear; present-and-value is Set). So the TS type IS
+// `T | null`, exactly what `Option<T>` already generates — this impl just
+// forwards to it rather than describing a shape that doesn't exist on the
+// wire. Every field of this type keeps its own
+// `#[serde(default, skip_serializing_if = "Tristate::is_keep")]`, which
+// specta's serde-compat already reads as "optional" (`field?: T | null`).
+impl<T: specta::Type> specta::Type for Tristate<T> {
+    fn definition(types: &mut specta::Types) -> specta::datatype::DataType {
+        Option::<T>::definition(types)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

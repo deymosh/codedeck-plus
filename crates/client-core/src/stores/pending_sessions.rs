@@ -20,14 +20,14 @@ use serde::Serialize;
 /// expired off the relays.
 pub const PENDING_SWEEP_MS: u64 = 10 * 60 * 1000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PendingSessionState {
     Pending,
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingSessionView {
     pub pending_id: String,
@@ -41,6 +41,7 @@ pub struct PendingSessionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// ms timestamp the placeholder appeared (sweep bookkeeping).
+    #[specta(type = specta_typescript::Number)]
     pub seen_at: u64,
 }
 

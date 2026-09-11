@@ -46,7 +46,7 @@ pub struct OutboxSend {
 /// A session image the loop uploads then attaches to `session_id`'s input.
 /// Bytes + mime, never a platform type (plan §2.2) — the UI decodes whatever
 /// picker/camera/resize API it has into this shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionImageSend {
     pub machine: String,
@@ -134,7 +134,7 @@ impl IntentResult {
 /// on a real wire — the binding surface is stabilized, not frozen, until F3
 /// (plan §2.5) — but a binding needing a stable JSON shape can start from
 /// this rather than hand-rolling its own encoding.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Intent {
     // --- the outbox path ---
@@ -208,6 +208,7 @@ pub enum Intent {
         machine: String,
         session_id: String,
         text: String,
+        #[specta(type = specta_typescript::Number)]
         option_count: u64,
     },
     Keypress {

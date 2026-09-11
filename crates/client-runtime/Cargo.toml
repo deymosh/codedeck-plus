@@ -23,6 +23,9 @@ client-core = { path = "../client-core" }
 protocol = { path = "../protocol" }
 serde = "1"
 serde_json = "1"
+# TS bindings are generated from these types, not hand-mirrored — see protocol's Cargo.toml.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+specta-typescript = "0.0.12"
 
 # Real relay transport (F1). Hand-rolled on these rather than a relay-pool crate
 # — see docs/CLIENT-CORE.md. rustls (not native-tls) so wss:// cross-compiles

@@ -14,7 +14,7 @@ use crate::ranges::SeqRange;
 
 /// `v` + `caps` — flattened into every command. Kept as one struct so the pair
 /// is defined once; serde `flatten` places them alongside `type`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct VersionFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v: Option<u32>,
@@ -22,21 +22,21 @@ pub struct VersionFields {
     pub caps: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionModifier {
     Always,
     Never,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeypressContext {
     PlanApproval,
     Question,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct InputMsg {
     #[serde(flatten)]
@@ -47,17 +47,18 @@ pub struct InputMsg {
     pub input_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionInputMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub session_id: String,
     pub text: String,
+    #[specta(type = specta_typescript::Number)]
     pub option_count: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionResMsg {
     #[serde(flatten)]
@@ -69,7 +70,7 @@ pub struct PermissionResMsg {
     pub modifier: Option<PermissionModifier>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct KeypressMsg {
     #[serde(flatten)]
@@ -80,7 +81,7 @@ pub struct KeypressMsg {
     pub context: Option<KeypressContext>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ModeChangeMsg {
     #[serde(flatten)]
@@ -89,7 +90,7 @@ pub struct ModeChangeMsg {
     pub mode: PermissionMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EffortChangeMsg {
     #[serde(flatten)]
@@ -98,7 +99,7 @@ pub struct EffortChangeMsg {
     pub level: EffortLevel,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelChangeMsg {
     #[serde(flatten)]
@@ -107,25 +108,30 @@ pub struct ModelChangeMsg {
     pub model: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncRequestMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub session_id: String,
+    // `SeqRange = (u64, u64)` — the tuple's own elements trip Specta's
+    // BigInt-forbidden check; overridden to `[number, number]` (matches
+    // this app's actual seq range, well within JS's safe-integer span).
+    #[specta(type = Vec<(specta_typescript::Number, specta_typescript::Number)>)]
     pub have_ranges: Vec<SeqRange>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncAckMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub sync_id: String,
+    #[specta(type = (specta_typescript::Number, specta_typescript::Number))]
     pub range: SeqRange,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionMsg {
     #[serde(flatten)]
@@ -144,13 +150,13 @@ pub struct CreateSessionMsg {
     pub provider_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct BareMsg {
     #[serde(flatten)]
     pub version: VersionFields,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionIdMsg {
     #[serde(flatten)]
@@ -158,7 +164,7 @@ pub struct SessionIdMsg {
     pub session_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFolderMsg {
     #[serde(flatten)]
@@ -169,7 +175,7 @@ pub struct CreateFolderMsg {
     pub request_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadImageBlossomMsg {
     #[serde(flatten)]
@@ -182,10 +188,11 @@ pub struct UploadImageBlossomMsg {
     pub filename: String,
     pub mime_type: String,
     pub text: String,
+    #[specta(type = specta_typescript::Number)]
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadImageChunkMsg {
     #[serde(flatten)]
@@ -196,20 +203,22 @@ pub struct UploadImageChunkMsg {
     pub mime_type: String,
     pub base64_data: String,
     pub text: String,
+    #[specta(type = specta_typescript::Number)]
     pub chunk_index: u64,
+    #[specta(type = specta_typescript::Number)]
     pub total_chunks: u64,
 }
 
 /// Mirrors zod's `z.union([blossom, chunk])` — same `type`, disambiguated by
 /// shape (`hash`/`url` vs `uploadId`/`base64Data`). `untagged` tries each.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(untagged)]
 pub enum UploadImageMsg {
     Blossom(UploadImageBlossomMsg),
     Chunk(UploadImageChunkMsg),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SetCredentialsMsg {
     #[serde(flatten)]
@@ -220,7 +229,7 @@ pub struct SetCredentialsMsg {
     pub github_pat: Tristate<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SetDeviceConfigMsg {
     #[serde(flatten)]
@@ -228,7 +237,7 @@ pub struct SetDeviceConfigMsg {
     pub config: DeviceConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRequestMsg {
     #[serde(flatten)]
@@ -241,7 +250,7 @@ pub struct PairRequestMsg {
 
 /// Write shape of a provider profile (CDX-062/071). `auth_token` is tri-state
 /// (keep/clear/set) — the ONLY message the token ever rides on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileWrite {
     pub label: String,
@@ -255,7 +264,7 @@ pub struct ProviderProfileWrite {
     pub default_model: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SetProviderProfileMsg {
     #[serde(flatten)]
@@ -266,7 +275,7 @@ pub struct SetProviderProfileMsg {
 }
 
 /// The phone→bridge message union.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum PhoneToBridge {
     Input(InputMsg),

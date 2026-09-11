@@ -26,7 +26,7 @@ use std::thread;
 
 use client_runtime::client_core::bridge_api::PublishVerdict;
 use client_runtime::client_core::connection::ConnectionStatus;
-use client_runtime::protocol::codec::decode_phone_to_bridge;
+use client_runtime::protocol::commands::PhoneToBridge;
 use client_runtime::protocol::crypto::keypair_from_secret_hex;
 use client_runtime::protocol::events::BridgeToPhone;
 use client_runtime::core::{
@@ -78,7 +78,7 @@ fn action_str(kind: ActionFailed) -> &'static str {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, specta::Type)]
 pub struct ConnectionPayload {
     status: &'static str,
     needs_pairing_check: bool,
@@ -213,7 +213,7 @@ impl Notifier for TauriNotifier {
 
 /// `core_init` argument. `identity_secret_hex` is the phone's persisted nsec —
 /// a secret: it is consumed into the keypair here and never logged or echoed.
-#[derive(Deserialize)]
+#[derive(Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct InitConfig {
     pub relays: Vec<String>,
@@ -228,12 +228,14 @@ pub struct InitConfig {
 /// the WebView can call it BEFORE `core_init` to decide whether to use the
 /// in-process path at all.
 #[tauri::command]
+#[specta::specta]
 pub fn core_available() -> bool {
     true
 }
 
 /// Spin the bridge thread + `Core`. Idempotent — a second call is a no-op.
 #[tauri::command]
+#[specta::specta]
 pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConfig) -> Result<(), String> {
     let mut slot = bridge.0.lock().map_err(|_| "core bridge lock poisoned")?;
     if slot.is_some() {
@@ -339,50 +341,56 @@ fn with_core<R>(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_start(bridge: State<'_, CoreBridge>) -> Result<(), String> {
     with_core(&bridge, Core::start)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_stop(bridge: State<'_, CoreBridge>) -> Result<(), String> {
     with_core(&bridge, Core::stop)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_pause(bridge: State<'_, CoreBridge>) -> Result<(), String> {
     with_core(&bridge, Core::pause)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_resume(bridge: State<'_, CoreBridge>) -> Result<(), String> {
     with_core(&bridge, Core::resume)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_set_online(bridge: State<'_, CoreBridge>, online: bool) -> Result<(), String> {
     with_core(&bridge, |c| c.set_online(online))
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_set_machines(bridge: State<'_, CoreBridge>, machines: Vec<String>) -> Result<(), String> {
     with_core(&bridge, |c| c.set_machines(machines))
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn core_set_relays(bridge: State<'_, CoreBridge>, relays: Vec<String>) -> Result<(), String> {
     with_core(&bridge, |c| c.set_relays(relays))
 }
 
-/// Fire-and-forget send. `message` is a phone→bridge command in wire JSON — the
-/// same object the WebView's TS encoder builds.
+/// Fire-and-forget send. `message` is a phone→bridge command — the same
+/// shape `PhoneToBridge` decodes to; Tauri deserializes it directly (no
+/// intermediate `serde_json::Value` round-trip — `decode_phone_to_bridge` was
+/// ever only a generic JSON-parse-then-deserialize, so this is the same
+/// validation, just performed by the IPC layer instead of by hand).
 #[tauri::command]
-pub fn core_send(
-    bridge: State<'_, CoreBridge>,
-    machine: String,
-    message: serde_json::Value,
-) -> Result<(), String> {
-    let msg = decode_phone_to_bridge(&message.to_string())?;
-    with_core(&bridge, |c| c.send(machine, msg))
+#[specta::specta]
+pub fn core_send(bridge: State<'_, CoreBridge>, machine: String, message: PhoneToBridge) -> Result<(), String> {
+    with_core(&bridge, |c| c.send(machine, message))
 }
 
 fn verdict_str(verdict: PublishVerdict) -> &'static str {
@@ -395,20 +403,21 @@ fn verdict_str(verdict: PublishVerdict) -> &'static str {
 }
 
 /// Send and await the CDX-086 publish verdict (`accepted` / `unconfirmed` /
-/// `rejected` / `unreachable`).
+/// `rejected` / `unreachable`). `message` — see `core_send`'s doc comment.
 #[tauri::command]
+#[specta::specta]
 pub async fn core_publish(
     bridge: State<'_, CoreBridge>,
     machine: String,
-    message: serde_json::Value,
+    message: PhoneToBridge,
 ) -> Result<String, String> {
-    let msg = decode_phone_to_bridge(&message.to_string())?;
     let core = with_core(&bridge, |c| c.clone())?;
-    let result = core.publish_confirmed(machine, msg).await;
+    let result = core.publish_confirmed(machine, message).await;
     Ok(verdict_str(result.verdict).to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_connection_status(
     bridge: State<'_, CoreBridge>,
 ) -> Result<ConnectionPayload, String> {
@@ -426,6 +435,7 @@ pub async fn core_connection_status(
 /// shape (externally tagged, camelCase — see its doc comment); Tauri
 /// deserializes it directly, no hand-rolled decoding on either side.
 #[tauri::command]
+#[specta::specta]
 pub async fn core_dispatch(bridge: State<'_, CoreBridge>, intent: Intent) -> Result<(), String> {
     let core = with_core(&bridge, |c| c.clone())?;
     core.dispatch(intent).await;
@@ -433,12 +443,14 @@ pub async fn core_dispatch(bridge: State<'_, CoreBridge>, intent: Intent) -> Res
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_machines_view(bridge: State<'_, CoreBridge>) -> Result<MachinesView, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.machines_view().await)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_settings_view(
     bridge: State<'_, CoreBridge>,
 ) -> Result<Option<SettingsView>, String> {
@@ -447,12 +459,14 @@ pub async fn core_settings_view(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_outbox_view(bridge: State<'_, CoreBridge>) -> Result<OutboxView, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.outbox_view().await)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_pairing_view(
     bridge: State<'_, CoreBridge>,
 ) -> Result<Option<PairingView>, String> {
@@ -461,18 +475,21 @@ pub async fn core_pairing_view(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_dm_view(bridge: State<'_, CoreBridge>) -> Result<Option<DmView>, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.dm_view().await)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_marmot_view(bridge: State<'_, CoreBridge>) -> Result<Option<MarmotView>, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.marmot_view().await)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_quick_prompts_view(
     bridge: State<'_, CoreBridge>,
 ) -> Result<QuickPromptsView, String> {
@@ -481,6 +498,7 @@ pub async fn core_quick_prompts_view(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_pending_sessions_view(
     bridge: State<'_, CoreBridge>,
 ) -> Result<PendingSessionsView, String> {
@@ -489,12 +507,14 @@ pub async fn core_pending_sessions_view(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_ui_view(bridge: State<'_, CoreBridge>) -> Result<UiView, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.ui_view().await)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn core_transcript_view(
     bridge: State<'_, CoreBridge>,
     machine: String,
@@ -502,4 +522,43 @@ pub async fn core_transcript_view(
 ) -> Result<TranscriptRowsView, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.transcript_view(machine, session_id).await)
+}
+
+/// The `tauri_specta::Builder` for every `core_*` command, used ONLY by
+/// `tests/gen_ts_bindings.rs` to regenerate `apps/mobile/src/core/
+/// nativeCoreTypes.ts`. Lives here, not in the test file: `#[specta::specta]`
+/// generates a companion macro alongside each command that `collect_commands!`
+/// needs in scope, and that macro is only reliably reachable from the same
+/// module the commands are defined in.
+pub fn ts_bindings_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .commands(tauri_specta::collect_commands![
+            core_available,
+            core_init,
+            core_start,
+            core_stop,
+            core_pause,
+            core_resume,
+            core_set_online,
+            core_set_machines,
+            core_set_relays,
+            core_send,
+            core_publish,
+            core_connection_status,
+            core_dispatch,
+            core_machines_view,
+            core_settings_view,
+            core_outbox_view,
+            core_pairing_view,
+            core_dm_view,
+            core_marmot_view,
+            core_quick_prompts_view,
+            core_pending_sessions_view,
+            core_ui_view,
+            core_transcript_view,
+        ])
+        // Cross the wire as event payloads, not command returns/args —
+        // collect_commands never sees them otherwise.
+        .typ::<ConnectionPayload>()
+        .typ::<CoreEvent>()
 }

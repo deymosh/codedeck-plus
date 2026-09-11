@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 pub const QUICK_PROMPTS_STORAGE_KEY: &str = "quickPrompts";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct QuickPrompt {
     pub id: String,
     pub label: String,
