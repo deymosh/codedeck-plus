@@ -98,6 +98,9 @@ pub struct IntentResult {
     pub marmot_send: Option<(String, String)>,
     /// `peer_pubkey` — the loop fetches their KeyPackage and creates the group.
     pub marmot_start_chat: Option<String>,
+    /// `pending_sessions` changed — not persisted, so this is the only signal
+    /// a `PendingSessionsView` consumer gets that a re-fetch is worth doing.
+    pub pending_sessions_changed: bool,
 }
 
 impl IntentResult {
@@ -326,6 +329,10 @@ pub enum Intent {
     },
     RemoveQuickPrompt {
         id: String,
+    },
+    /// User dismisses a failed pending-session card.
+    DismissPendingSession {
+        pending_id: String,
     },
 }
 
@@ -697,6 +704,12 @@ pub fn apply(
         Intent::RemoveQuickPrompt { id } => {
             if stores.quick_prompts.remove_prompt(&id) {
                 r.persist(StoreId::QuickPrompts);
+            }
+        }
+        Intent::DismissPendingSession { pending_id } => {
+            if stores.pending_sessions.contains(&pending_id) {
+                stores.pending_sessions.dismiss(&pending_id);
+                r.pending_sessions_changed = true;
             }
         }
     }

@@ -16,6 +16,7 @@ use client_core::stores::machines::MachineView;
 use client_core::stores::marmot::{MarmotConversation, MarmotMessage, MarmotWelcomeInfo};
 use client_core::stores::outbox::OutboxItem;
 use client_core::stores::pairing::{PairingPhase, PairingState};
+use client_core::stores::pending_sessions::PendingSessionView;
 use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
@@ -92,6 +93,25 @@ pub struct SettingsView(pub SettingsData);
 impl SettingsView {
     pub fn from_stores(s: &CoreStores) -> Self {
         Self(s.settings.data.clone())
+    }
+}
+
+// --- pending sessions ------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSessionsView {
+    /// `pending_id` → placeholder. Not persisted (client-core's own
+    /// invariant) — a `stateChanged` for this slice is the only signal a
+    /// consumer gets that it changed.
+    pub pending: BTreeMap<String, PendingSessionView>,
+}
+
+impl PendingSessionsView {
+    pub fn from_stores(s: &CoreStores) -> Self {
+        Self {
+            pending: s.pending_sessions.all().clone(),
+        }
     }
 }
 

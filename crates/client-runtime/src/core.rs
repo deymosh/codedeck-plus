@@ -51,8 +51,8 @@ use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, 
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
-    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView, QuickPromptsView,
-    SettingsView,
+    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
+    PendingSessionsView, QuickPromptsView, SettingsView,
 };
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
@@ -134,6 +134,7 @@ pub enum SliceId {
     Dm,
     Marmot,
     QuickPrompts,
+    PendingSessions,
 }
 
 /// The closed, semantic event set (plan §2.3). Serde shape: externally
@@ -417,6 +418,11 @@ impl Core {
             .await
             .unwrap_or(QuickPromptsView { prompts: Vec::new() })
     }
+    pub async fn pending_sessions_view(&self) -> PendingSessionsView {
+        self.query(ViewQuery::PendingSessions).await.unwrap_or(PendingSessionsView {
+            pending: Default::default(),
+        })
+    }
 
     async fn query<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> ViewQuery) -> Option<T> {
         let (rtx, rrx) = oneshot::channel();
@@ -488,6 +494,7 @@ enum ViewQuery {
     Dm(oneshot::Sender<DmView>),
     Marmot(oneshot::Sender<MarmotView>),
     QuickPrompts(oneshot::Sender<QuickPromptsView>),
+    PendingSessions(oneshot::Sender<PendingSessionsView>),
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -823,6 +830,9 @@ impl Loop {
             self.refresh_authors();
             self.state_changed(SliceId::Machines);
         }
+        if r.pending_sessions_changed {
+            self.state_changed(SliceId::PendingSessions);
+        }
         match r.pair_deadline {
             Some(PairDeadline::Arm { ms }) => {
                 abort(&mut self.pair_timer);
@@ -974,6 +984,9 @@ impl Loop {
         if r.pair_deadline.is_some() || r.pairing_settled.is_some() {
             self.state_changed(SliceId::Pairing);
         }
+        if r.pending_sessions_changed {
+            self.state_changed(SliceId::PendingSessions);
+        }
         // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
         // notification-cancel seam; `r.mesh_join` a mesh seam (F2b ports).
     }
@@ -1092,6 +1105,9 @@ impl Loop {
             }
             ViewQuery::QuickPrompts(reply) => {
                 let _ = reply.send(QuickPromptsView::from_stores(&self.stores));
+            }
+            ViewQuery::PendingSessions(reply) => {
+                let _ = reply.send(PendingSessionsView::from_stores(&self.stores));
             }
         }
     }
@@ -3156,6 +3172,100 @@ mod tests {
                 let events = spy.events.lock().unwrap();
                 assert!(events.contains(&CoreEvent::StateChanged {
                     slice: SliceId::Connection
+                }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_session_pending_message_populates_the_view_and_emits_a_state_changed_event() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                    r#"{"type":"session-pending","pendingId":"p1","machine":"devbox","createdAt":"2026-01-01T00:00:00.000Z"}"#,
+                )
+                .unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = client_core::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-3",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::StateChanged {
+                    slice: SliceId::PendingSessions
+                }));
+                drop(events);
+
+                let view = core.pending_sessions_view().await;
+                let placeholder = view.pending.get("p1").expect("placeholder in the view");
+                assert_eq!(placeholder.machine_name, "devbox");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn dismiss_pending_session_removes_it_and_emits_a_state_changed_event() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                    r#"{"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
+                )
+                .unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = client_core::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-3",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+                assert!(core.pending_sessions_view().await.pending.contains_key("p1"));
+
+                core.dispatch(Intent::DismissPendingSession {
+                    pending_id: "p1".into(),
+                })
+                .await;
+
+                assert!(!core.pending_sessions_view().await.pending.contains_key("p1"));
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::StateChanged {
+                    slice: SliceId::PendingSessions
                 }));
             })
             .await;

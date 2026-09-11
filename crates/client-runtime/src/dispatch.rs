@@ -80,6 +80,10 @@ pub struct RouteResult {
     pub outbox_settled: Vec<(String, bool)>,
     /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
     pub pairing_settled: Option<bool>,
+    /// `pending_sessions` changed — not persisted (a placeholder is meaningless
+    /// after a restart), so this is the only signal a `PendingSessionsView`
+    /// consumer gets that a re-fetch is worth doing.
+    pub pending_sessions_changed: bool,
 }
 
 impl RouteResult {
@@ -177,11 +181,13 @@ impl<'a> Router<'a> {
                     &m.created_at,
                     self.now,
                 );
+                r.pending_sessions_changed = true;
             }
             BridgeToPhone::SessionFailed(m) => {
                 self.stores
                     .pending_sessions
                     .apply_failed(&m.pending_id, &m.reason, self.now);
+                r.pending_sessions_changed = true;
                 let fx = self.emit_notify(&NotifyEvent::SessionFailed {
                     machine: machine.to_string(),
                     session_id: m.pending_id.clone(),
@@ -190,7 +196,10 @@ impl<'a> Router<'a> {
                 r.notifies.extend(fx);
             }
             BridgeToPhone::SessionReady(m) => {
-                self.stores.pending_sessions.resolve(&m.pending_id);
+                if self.stores.pending_sessions.contains(&m.pending_id) {
+                    self.stores.pending_sessions.resolve(&m.pending_id);
+                    r.pending_sessions_changed = true;
+                }
                 self.stores
                     .machines
                     .apply_session_upsert(machine, &m.session, self.now);
@@ -541,10 +550,14 @@ impl<'a> Router<'a> {
 
         // A pending placeholder whose session shows up in the list is resolved
         // (the bridge reuses the sessionId as the pendingId).
+        let pending_before = self.stores.pending_sessions.len();
         for info in &m.sessions {
             self.stores.pending_sessions.resolve(&info.id);
         }
         self.stores.pending_sessions.sweep(self.now);
+        if self.stores.pending_sessions.len() != pending_before {
+            r.pending_sessions_changed = true;
+        }
 
         // Self-healing transcripts: any advertised seqHigh above local coverage
         // starts (or backoff-gates) a sync cycle.

@@ -137,6 +137,16 @@ impl PendingSessionsState {
         out
     }
 
+    /// Whether a placeholder with this id is currently held.
+    pub fn contains(&self, pending_id: &str) -> bool {
+        self.pending.contains_key(pending_id)
+    }
+
+    /// The full placeholder map, for a view projection.
+    pub fn all(&self) -> &BTreeMap<String, PendingSessionView> {
+        &self.pending
+    }
+
     /// Test/inspection helper: total placeholder count.
     pub fn len(&self) -> usize {
         self.pending.len()
