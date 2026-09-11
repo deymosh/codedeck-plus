@@ -96,6 +96,19 @@ export type Intent =
   | { requestModels: { machine: string } }
   | { requestUsage: { machine: string; sessionId: string } }
   | { requestGsd: { machine: string; sessionId: string } }
+  | {
+      setCredentials: {
+        machine: string;
+        /** The wire's own keep/clear/set convention: the key omitted keeps
+         *  the stored value, `null` deletes it, a string sets it. Secrets —
+         *  never logged. */
+        anthropicApiKey?: string | null;
+        githubPat?: string | null;
+      };
+    }
+  | { setProviderProfile: { machine: string; profileId: string; profile: ProviderProfileWrite | null } }
+  | { requestProviderProfiles: { machine: string } }
+  | { setDeviceConfig: { machine: string; config: DeviceConfig } }
   | { selectSession: { machine: string; sessionId: string | null } }
   | { selectDmPeer: { peer: string | null } }
   | { markDmRead: { peer: string } }
@@ -148,6 +161,33 @@ export interface ProviderProfileInfo {
   models: Array<{ id: string; label?: string }>;
   defaultModel?: string;
   hasToken: boolean;
+}
+
+/** Mirrors `client-core`'s `ProviderProfileWrite` (the SEND shape —
+ *  `authToken` follows the same keep/clear/set convention `setCredentials`
+ *  does, unlike the read-side `ProviderProfileInfo.hasToken` boolean). */
+export interface ProviderProfileWrite {
+  label: string;
+  baseUrl: string;
+  authToken?: string | null;
+  models: Array<{ id: string; label?: string }>;
+  defaultModel?: string;
+}
+
+export type DeviceRole = 'controller' | 'test-target';
+export type AppUnderTest = 'kubo' | 'veil' | 'custom';
+
+/** Mirrors `client-core`'s `DeviceConfig` (Phase 5d mesh test-device config). */
+export interface DeviceConfig {
+  label: string;
+  role?: DeviceRole;
+  serial?: string;
+  meshIp?: string;
+  meshPubkey?: string;
+  appUnderTest: AppUnderTest;
+  customPackage?: string;
+  customBuildCmd?: string;
+  projectDir?: string;
 }
 
 export interface MachineView {
