@@ -76,6 +76,8 @@ pub fn run() {
             corebridge::core_marmot_view,
             #[cfg(feature = "native-core")]
             corebridge::core_quick_prompts_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_pending_sessions_view,
         ])
         .plugin(tauri_plugin_deep_link::init())
         // CDX-029: Rust-side fetch escape hatch — Blossom's upload preflight
