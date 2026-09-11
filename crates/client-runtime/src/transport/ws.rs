@@ -492,6 +492,7 @@ fn project_event(raw: &Value) -> Option<NostrEvent> {
         created_at: ev.created_at.as_secs() as i64,
         pubkey: ev.pubkey.to_hex(),
         content: ev.content.clone(),
+        raw: raw.clone(),
     })
 }
 

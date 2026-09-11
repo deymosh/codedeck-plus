@@ -48,6 +48,9 @@ pub struct NostrEvent {
     pub pubkey: String,
     /// `event.content`: `base64(NIP-44(json))`, or a `chunk` fragment.
     pub content: String,
+    /// The full relay event object — the DM / Marmot gift-wrap paths re-parse
+    /// it (they need `tags` + `sig`, not just what the client routes on).
+    pub raw: serde_json::Value,
 }
 
 /// Callbacks a `Transport` invokes for one subscription. Mirrors the TS
@@ -396,7 +399,14 @@ mod tests {
     }
 
     fn evt(id: &str, kind: u16, created_at: i64) -> NostrEvent {
-        NostrEvent { id: id.into(), kind, created_at, pubkey: "b1".into(), content: String::new() }
+        NostrEvent {
+            id: id.into(),
+            kind,
+            created_at,
+            pubkey: "b1".into(),
+            content: String::new(),
+            raw: serde_json::Value::Null,
+        }
     }
 
     fn harness(authors: &[&str]) -> (FakeTransport, Rc<Host>, NostrClient<FakeTransport, Host>) {

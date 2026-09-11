@@ -36,6 +36,7 @@ use client_core::notifications::NotifyEvent;
 use client_core::stores::dm::{
     AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
 };
+use client_core::stores::marmot::{MarmotIngested, WELCOME_RUMOR_KIND};
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::giftwrap::{relay_list_event, unwrap_gift_parts, wrap_dm};
@@ -519,10 +520,9 @@ struct Loop {
     transcript_store: Rc<dyn TranscriptStore>,
     notifier: Rc<dyn Notifier>,
     http: Rc<dyn crate::attachments::HttpFetch>,
-    /// Reserved for the Marmot runtime — inert (`NoMarmot`) until the MDK
-    /// engine is relocated into this crate and `on_dm_event` routes kind-444
-    /// welcomes to it (needs `NostrEvent` to carry the raw event JSON first).
-    #[allow(dead_code)]
+    /// The MLS engine — `on_dm_event` routes kind-444 welcomes to it. Inert
+    /// (`NoMarmot`, every call errors → the welcome counts invalid) until the
+    /// MDK engine is relocated into this crate.
     marmot_engine: Rc<dyn crate::marmot::MarmotEngine>,
 }
 
@@ -1038,8 +1038,24 @@ impl Loop {
                     }
                 }
             }
-            // A well-formed non-DM rumor (a Marmot kind-444 welcome, most
-            // likely). The Marmot route lands with that runtime.
+            // A Marmot welcome (kind-444) rides the SAME 1059 subscription:
+            // hand the ORIGINAL event to the MLS engine, which re-unwraps it
+            // with its own keys. `NoMarmot` errors — then it counts invalid,
+            // as it did before the engine existed.
+            Ok(rumor) if rumor.kind == WELCOME_RUMOR_KIND => {
+                match self.marmot_engine.ingest(&ev.raw).await {
+                    Ok(MarmotIngested::Welcome(welcome)) => {
+                        let kp_changed = self.stores.marmot.apply_welcome(welcome);
+                        if kp_changed {
+                            self.persist_store(StoreId::Marmot).await;
+                        }
+                        self.state_changed(SliceId::Marmot);
+                    }
+                    Ok(MarmotIngested::Ignored { .. }) => self.stores.marmot.note_ignored(),
+                    Ok(_) => {}
+                    Err(_) => self.stores.dm.note_invalid_rumor(),
+                }
+            }
             Ok(_) => self.stores.dm.note_invalid_rumor(),
         }
     }
