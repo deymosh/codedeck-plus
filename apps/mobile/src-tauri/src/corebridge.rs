@@ -33,7 +33,7 @@ use client_runtime::core::{
 };
 use client_runtime::{
     Core, CoreConfig, CoreEvent, DmView, Intent, MachinesView, MarmotView, OutboxView,
-    PairingView, SettingsView,
+    PairingView, QuickPromptsView, SettingsView,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -359,4 +359,12 @@ pub async fn core_dm_view(bridge: State<'_, CoreBridge>) -> Result<Option<DmView
 pub async fn core_marmot_view(bridge: State<'_, CoreBridge>) -> Result<Option<MarmotView>, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.marmot_view().await)
+}
+
+#[tauri::command]
+pub async fn core_quick_prompts_view(
+    bridge: State<'_, CoreBridge>,
+) -> Result<QuickPromptsView, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.quick_prompts_view().await)
 }
