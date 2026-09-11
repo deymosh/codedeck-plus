@@ -16,6 +16,7 @@ use client_core::stores::machines::MachineView;
 use client_core::stores::marmot::{MarmotConversation, MarmotMessage, MarmotWelcomeInfo};
 use client_core::stores::outbox::OutboxItem;
 use client_core::stores::pairing::{PairingPhase, PairingState};
+use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
 use serde::Serialize;
@@ -91,6 +92,22 @@ pub struct SettingsView(pub SettingsData);
 impl SettingsView {
     pub fn from_stores(s: &CoreStores) -> Self {
         Self(s.settings.data.clone())
+    }
+}
+
+// --- quick prompts -------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPromptsView {
+    pub prompts: Vec<QuickPrompt>,
+}
+
+impl QuickPromptsView {
+    pub fn from_stores(s: &CoreStores) -> Self {
+        Self {
+            prompts: s.quick_prompts.prompts.clone(),
+        }
     }
 }
 
@@ -332,6 +349,17 @@ mod tests {
         let json = serde_json::to_string(&mv).unwrap();
         assert!(json.contains(r#""available":false"#));
         assert!(json.contains(r#""pendingWelcomes":{"w1":{"welcomeId":"w1""#));
+    }
+
+    #[tokio::test]
+    async fn quick_prompts_view_is_thin_over_the_store() {
+        let mut s = stores().await;
+        s.quick_prompts.add_prompt("qp-1", "Go", "continue");
+        let qpv = QuickPromptsView::from_stores(&s);
+        assert_eq!(qpv.prompts.len(), 1);
+        assert_eq!(qpv.prompts[0].label, "Go");
+        let json = serde_json::to_string(&qpv).unwrap();
+        assert!(json.contains(r#""prompts":[{"id":"qp-1","label":"Go","text":"continue"}]"#));
     }
 
     #[tokio::test]

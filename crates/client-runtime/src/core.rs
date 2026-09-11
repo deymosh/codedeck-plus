@@ -51,7 +51,8 @@ use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, 
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
-    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView, SettingsView,
+    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView, QuickPromptsView,
+    SettingsView,
 };
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
@@ -132,6 +133,7 @@ pub enum SliceId {
     Pairing,
     Dm,
     Marmot,
+    QuickPrompts,
 }
 
 /// The closed, semantic event set (plan §2.3). Serde shape: externally
@@ -410,6 +412,11 @@ impl Core {
     pub async fn marmot_view(&self) -> Option<MarmotView> {
         self.query(ViewQuery::Marmot).await
     }
+    pub async fn quick_prompts_view(&self) -> QuickPromptsView {
+        self.query(ViewQuery::QuickPrompts)
+            .await
+            .unwrap_or(QuickPromptsView { prompts: Vec::new() })
+    }
 
     async fn query<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> ViewQuery) -> Option<T> {
         let (rtx, rrx) = oneshot::channel();
@@ -480,6 +487,7 @@ enum ViewQuery {
     Connection(oneshot::Sender<ConnectionView>),
     Dm(oneshot::Sender<DmView>),
     Marmot(oneshot::Sender<MarmotView>),
+    QuickPrompts(oneshot::Sender<QuickPromptsView>),
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -1081,6 +1089,9 @@ impl Loop {
             }
             ViewQuery::Marmot(reply) => {
                 let _ = reply.send(MarmotView::from_stores(&self.stores));
+            }
+            ViewQuery::QuickPrompts(reply) => {
+                let _ = reply.send(QuickPromptsView::from_stores(&self.stores));
             }
         }
     }
@@ -1891,7 +1902,8 @@ fn slice_of(id: StoreId) -> SliceId {
     match id {
         StoreId::Machines => SliceId::Machines,
         StoreId::Outbox => SliceId::Outbox,
-        StoreId::Settings | StoreId::QuickPrompts => SliceId::Settings,
+        StoreId::Settings => SliceId::Settings,
+        StoreId::QuickPrompts => SliceId::QuickPrompts,
         StoreId::Dm => SliceId::Dm,
         StoreId::Marmot => SliceId::Marmot,
     }
