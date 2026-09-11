@@ -36,7 +36,9 @@ use client_core::notifications::NotifyEvent;
 use client_core::stores::dm::{
     AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
 };
-use client_core::stores::marmot::{MarmotIngested, WELCOME_RUMOR_KIND};
+use client_core::stores::marmot::{
+    AddOutcome as MarmotAddOutcome, MarmotIngested, GROUP_MESSAGE_KIND, WELCOME_RUMOR_KIND,
+};
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::giftwrap::{relay_list_event, unwrap_gift_parts, wrap_dm};
@@ -48,7 +50,7 @@ use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, 
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
-    ConnectionView, DmView, MachinesView, OutboxView, PairingView, SettingsView,
+    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView, SettingsView,
 };
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
@@ -269,6 +271,8 @@ impl Core {
             undo_timer: None,
             dm_sub: None,
             dm_epoch: 0,
+            marmot_sub: None,
+            marmot_epoch: 0,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -397,6 +401,9 @@ impl Core {
     pub async fn dm_view(&self) -> Option<DmView> {
         self.query(ViewQuery::Dm).await
     }
+    pub async fn marmot_view(&self) -> Option<MarmotView> {
+        self.query(ViewQuery::Marmot).await
+    }
 
     async fn query<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> ViewQuery) -> Option<T> {
         let (rtx, rrx) = oneshot::channel();
@@ -446,6 +453,10 @@ enum Msg {
     DmEvent(NostrEvent),
     /// The DM subscription of `epoch` died (not a deliberate teardown).
     DmClosed(u64),
+    /// A kind-445 group message arrived on the Marmot subscription.
+    MarmotEvent(NostrEvent),
+    /// The Marmot subscription of `epoch` died.
+    MarmotClosed(u64),
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -456,6 +467,7 @@ enum ViewQuery {
     Pairing(oneshot::Sender<PairingView>),
     Connection(oneshot::Sender<ConnectionView>),
     Dm(oneshot::Sender<DmView>),
+    Marmot(oneshot::Sender<MarmotView>),
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -515,6 +527,9 @@ struct Loop {
     /// The kind-1059 DM subscription + its epoch guard.
     dm_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
     dm_epoch: u64,
+    /// The kind-445 Marmot group-message subscription (over joined `h` tags).
+    marmot_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
+    marmot_epoch: u64,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- F2b: the composed store layer ---
     stores: CoreStores,
@@ -601,6 +616,12 @@ impl Loop {
                         self.dm_sub = None;
                     }
                 }
+                Msg::MarmotEvent(event) => self.on_marmot_event(event).await,
+                Msg::MarmotClosed(epoch) => {
+                    if epoch == self.marmot_epoch {
+                        self.marmot_sub = None;
+                    }
+                }
             }
         }
     }
@@ -626,10 +647,12 @@ impl Loop {
                 self.ws.ensure_connected();
                 self.nostr.connect();
                 self.start_dm_sub();
+                self.start_marmot_sub();
             }
             ConnectionEffect::CloseSocket => {
                 self.nostr.disconnect();
                 self.stop_dm_sub();
+                self.stop_marmot_sub();
                 self.ws.shutdown();
             }
             ConnectionEffect::ScheduleRetry { delay_ms } => {
@@ -1019,6 +1042,9 @@ impl Loop {
             ViewQuery::Dm(reply) => {
                 let _ = reply.send(DmView::from_stores(&self.stores));
             }
+            ViewQuery::Marmot(reply) => {
+                let _ = reply.send(MarmotView::from_stores(&self.stores));
+            }
         }
     }
 
@@ -1036,6 +1062,7 @@ impl Loop {
             kinds: vec![GIFT_WRAP_KIND],
             authors: Vec::new(),
             p_tags: vec![self.identity.pubkey_hex.clone()],
+            h_tags: Vec::new(),
             since: self.stores.dm.since_cursor().map(|s| s as i64),
         };
         let ev_tx = self.self_tx.clone();
@@ -1138,6 +1165,96 @@ impl Loop {
         self.stores.dm.ingest_dm_rumor(&rumor, &me);
         self.persist_store(StoreId::Dm).await;
         self.state_changed(SliceId::Dm);
+    }
+
+    // --- Marmot (MLS group) runtime ---
+
+    /// (Re)open the kind-445 subscription over the joined groups' `h` tags with
+    /// a fresh epoch + catch-up cursor. A group with no joined `h` tags has
+    /// nothing to listen for, so the subscription is torn down until a welcome
+    /// is accepted (which calls this again).
+    fn start_marmot_sub(&mut self) {
+        self.marmot_epoch += 1;
+        let epoch = self.marmot_epoch;
+        if let Some(sub) = self.marmot_sub.take() {
+            sub.close();
+        }
+        let h_tags = self.stores.marmot.h_tags();
+        if h_tags.is_empty() {
+            return;
+        }
+        let filter = Filter {
+            kinds: vec![GROUP_MESSAGE_KIND],
+            authors: Vec::new(),
+            p_tags: Vec::new(),
+            h_tags,
+            since: self.stores.marmot.since_cursor().map(|s| s as i64),
+        };
+        let ev_tx = self.self_tx.clone();
+        let close_tx = self.self_tx.clone();
+        let callbacks = SubCallbacks {
+            on_event: Rc::new(move |ev: &NostrEvent| {
+                let _ = ev_tx.send(Msg::MarmotEvent(ev.clone()));
+            }),
+            on_eose: Rc::new(|| {}),
+            on_close: Rc::new(move |_reason| {
+                let _ = close_tx.send(Msg::MarmotClosed(epoch));
+            }),
+        };
+        self.marmot_sub = Some(self.ws.subscribe(filter, callbacks));
+    }
+
+    fn stop_marmot_sub(&mut self) {
+        self.marmot_epoch += 1; // orphan any in-flight callback
+        if let Some(sub) = self.marmot_sub.take() {
+            sub.close();
+        }
+    }
+
+    /// A kind-445 group message: feed it to the MLS engine and fold the decrypted
+    /// result into the Marmot store. A 445 for a group we have not joined yet is
+    /// buffered (VEIL-029) and re-fed once the welcome is accepted; it is never
+    /// dropped and never a throw. `NoMarmot` errors — then it counts as an
+    /// engine error, as it did before the engine existed.
+    async fn on_marmot_event(&mut self, ev: NostrEvent) {
+        self.stores.marmot.note_event_received();
+        let me = self.identity.pubkey_hex.clone();
+        match self.marmot_engine.ingest(&ev.raw).await {
+            Ok(MarmotIngested::Message(result)) => {
+                if let Some(MarmotAddOutcome::Inserted {
+                    is_incoming,
+                    counts_unread,
+                }) = self.stores.marmot.apply_group_message(&result, &me)
+                {
+                    self.persist_store(StoreId::Marmot).await;
+                    self.state_changed(SliceId::Marmot);
+                    if is_incoming && counts_unread {
+                        let preview = truncate_preview(&result.content);
+                        self.run_notify(NotifyEvent::DmReceived {
+                            peer: result.sender.clone(),
+                            peer_label: None,
+                            preview: Some(preview),
+                        });
+                    }
+                }
+            }
+            // A 445 whose group is not joined yet: hold the ORIGINAL event so it
+            // can be re-fed verbatim after `accept_welcome` (VEIL-029 / -167).
+            Ok(MarmotIngested::NotJoined { h_tag }) => {
+                self.stores.marmot.buffer_not_joined(&h_tag, ev.raw.clone());
+                self.state_changed(SliceId::Marmot);
+            }
+            Ok(MarmotIngested::Welcome(welcome)) => {
+                let kp_changed = self.stores.marmot.apply_welcome(welcome);
+                if kp_changed {
+                    self.persist_store(StoreId::Marmot).await;
+                }
+                self.state_changed(SliceId::Marmot);
+            }
+            Ok(MarmotIngested::Ignored { .. }) => self.stores.marmot.note_ignored(),
+            Ok(MarmotIngested::None) => {}
+            Err(_) => self.stores.marmot.note_error(),
+        }
     }
 
     /// Run the notification coordinator for one event and deliver its effects.
@@ -1440,6 +1557,28 @@ mod tests {
             }
         }
         dm_sub
+    }
+
+    /// Like [`eose_all`] but for a phone with a joined Marmot group: five REQs
+    /// (3 bridge + DM + the kind-445 group sub). Returns the 445 sub's id.
+    async fn eose_all_with_marmot(mock: &mut MockRelay) -> String {
+        let mut seen = 0;
+        let mut marmot_sub = String::new();
+        while seen < 5 {
+            let frame = mock.next_frame().await;
+            let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+            if v[0] == "REQ" {
+                let sub_id = v[1].as_str().unwrap().to_string();
+                if v.get(2).and_then(|f| f["kinds"].as_array())
+                    == Some(&vec![serde_json::json!(445)])
+                {
+                    marmot_sub = sub_id.clone();
+                }
+                mock.push(format!(r#"["EOSE","{sub_id}"]"#));
+                seen += 1;
+            }
+        }
+        marmot_sub
     }
 
     #[tokio::test]
@@ -1822,6 +1961,151 @@ mod tests {
                 // the appended line is `<blossom-url> key=<64hex> iv=<24hex>`
                 let line = msg.lines().nth(1).unwrap();
                 assert!(line.contains(" key=") && line.contains(" iv="));
+            })
+            .await;
+    }
+
+    /// A [`crate::marmot::MarmotEngine`] double: `ingest` reports one decrypted
+    /// kind-9 chat message for the seeded group; every other call errors (unused
+    /// on this path).
+    struct FakeMarmot {
+        result: client_core::stores::marmot::MarmotMessageResult,
+    }
+    impl crate::marmot::MarmotEngine for FakeMarmot {
+        fn init(&self, _s: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, String>> {
+            Box::pin(async { Ok(String::new()) })
+        }
+        fn publish_key_package(
+            &self,
+            _relays: &[String],
+        ) -> crate::ports::LocalBoxFuture<'_, Result<serde_json::Value, String>> {
+            Box::pin(async { Err("unused".to_string()) })
+        }
+        fn create_group(
+            &self,
+            _peer: &str,
+            _kp: &serde_json::Value,
+            _relays: &[String],
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::marmot::MarmotGroupCreated, String>>
+        {
+            Box::pin(async { Err("unused".to_string()) })
+        }
+        fn send(
+            &self,
+            _group_id: &str,
+            _text: &str,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::marmot::MarmotOutgoing, String>> {
+            Box::pin(async { Err("unused".to_string()) })
+        }
+        fn ingest(
+            &self,
+            _event: &serde_json::Value,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<MarmotIngested, String>> {
+            let r = self.result.clone();
+            Box::pin(async move { Ok(MarmotIngested::Message(r)) })
+        }
+        fn pending_welcomes(
+            &self,
+        ) -> crate::ports::LocalBoxFuture<
+            '_,
+            Result<Vec<client_core::stores::marmot::MarmotWelcomeInfo>, String>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn accept_welcome(
+            &self,
+            _id: &str,
+        ) -> crate::ports::LocalBoxFuture<
+            '_,
+            Result<client_core::stores::marmot::MarmotGroupInfo, String>,
+        > {
+            Box::pin(async { Err("unused".to_string()) })
+        }
+        fn list_groups(
+            &self,
+        ) -> crate::ports::LocalBoxFuture<
+            '_,
+            Result<Vec<client_core::stores::marmot::MarmotGroupInfo>, String>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_kind_445_group_message_folds_into_the_marmot_view() {
+        use client_core::stores::marmot::{
+            MarmotConversation, MarmotMessageResult, MarmotPersisted,
+        };
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let peer = generate_keypair();
+
+                // A phone that has already joined one 1:1 Marmot group.
+                let mut persisted = MarmotPersisted::default();
+                persisted.conversations.insert(
+                    "group-abc".into(),
+                    MarmotConversation {
+                        group_id: "group-abc".into(),
+                        h_tag: "hhh111".into(),
+                        peer_pubkey: peer.pubkey_hex.clone(),
+                        name: "peer".into(),
+                        member_count: 2,
+                        last_message_at: 0,
+                        unread_count: 0,
+                        last_preview: String::new(),
+                    },
+                );
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MARMOT_KEY,
+                    client_core::stores::marmot::serialize_marmot(&persisted),
+                )]);
+
+                let ports = CorePorts {
+                    kv: Rc::new(kv),
+                    marmot: Rc::new(FakeMarmot {
+                        result: MarmotMessageResult {
+                            group_id: "group-abc".into(),
+                            id: "rumor-1".into(),
+                            sender: peer.pubkey_hex.clone(),
+                            kind: 9,
+                            content: "hello group".into(),
+                            created_at: 1_700_000,
+                        },
+                    }),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                let marmot_sub = eose_all_with_marmot(&mut mock).await;
+                assert!(!marmot_sub.is_empty(), "no kind-445 subscription opened");
+                settle().await;
+
+                // A real signed kind-445 for the joined group lands on that
+                // subscription (the read loop verifies sigs, so it must be
+                // genuine — the MLS ciphertext is opaque and the FakeMarmot
+                // returns the decrypted rumor regardless).
+                let ev = {
+                    use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+                    let keys = Keys::new(peer.secret_key.clone());
+                    EventBuilder::new(Kind::Custom(445), "mls-ciphertext")
+                        .tags([Tag::parse(["h".to_string(), "hhh111".to_string()]).unwrap()])
+                        .sign_with_keys(&keys)
+                        .unwrap()
+                        .as_json()
+                };
+                mock.push(format!(r#"["EVENT","{marmot_sub}",{ev}]"#));
+                settle().await;
+
+                let m = core.marmot_view().await.unwrap();
+                assert_eq!(m.events_received, 1);
+                let msgs = &m.messages["group-abc"];
+                assert_eq!(msgs.len(), 1);
+                assert_eq!(msgs[0].content, "hello group");
+                assert_eq!(m.conversations[0].unread_count, 1);
             })
             .await;
     }

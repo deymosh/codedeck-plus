@@ -555,6 +555,7 @@ mod tests {
             kinds: vec![24515],
             authors: vec!["a".repeat(64)],
             p_tags: vec![phone.pubkey_hex.clone()],
+            h_tags: Vec::new(),
             since: None,
         }
     }

@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use client_core::connection::ConnectionStatus;
 use client_core::stores::dm::{DmConversation, DmMessage};
 use client_core::stores::machines::MachineView;
+use client_core::stores::marmot::{MarmotConversation, MarmotMessage};
 use client_core::stores::outbox::OutboxItem;
 use client_core::stores::pairing::{PairingPhase, PairingState};
 use client_core::stores::settings::SettingsData;
@@ -171,6 +172,40 @@ impl DmView {
             events_received: s.dm.diagnostics.events_received,
             unwrap_failures: s.dm.diagnostics.unwrap_failures,
             invalid_rumors: s.dm.diagnostics.invalid_rumors,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarmotView {
+    /// Conversations newest-first (by `last_message_at`).
+    pub conversations: Vec<MarmotConversation>,
+    /// `group_id` → messages ascending by `at`.
+    pub messages: BTreeMap<String, Vec<MarmotMessage>>,
+    pub active_group: Option<String>,
+    /// kind-445 events seen / `Ignored` verdicts / engine-call failures
+    /// (CD-001 diagnostics — never silent).
+    pub events_received: u64,
+    pub ignored: u64,
+    pub errors: u64,
+    /// 445s held for not-yet-joined groups (VEIL-029 buffer).
+    pub buffered: usize,
+}
+
+impl MarmotView {
+    pub fn from_stores(s: &CoreStores) -> Self {
+        let mut conversations: Vec<MarmotConversation> =
+            s.marmot.conversations.values().cloned().collect();
+        conversations.sort_by_key(|c| std::cmp::Reverse(c.last_message_at));
+        Self {
+            conversations,
+            messages: s.marmot.messages.clone(),
+            active_group: s.marmot.active_group.clone(),
+            events_received: s.marmot.diagnostics.events_received,
+            ignored: s.marmot.diagnostics.ignored,
+            errors: s.marmot.diagnostics.errors,
+            buffered: s.marmot.buffered_len(),
         }
     }
 }

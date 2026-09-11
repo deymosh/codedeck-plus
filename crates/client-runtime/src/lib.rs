@@ -33,7 +33,8 @@ pub use intent::{Intent, IntentCtx};
 pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
-    ConnectionView, DmView, MachinesView, OutboxView, PairingView, SettingsView, TranscriptSyncView,
+    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView, SettingsView,
+    TranscriptSyncView,
 };
 
 /// Re-export the pure core so hosts have one dependency edge.

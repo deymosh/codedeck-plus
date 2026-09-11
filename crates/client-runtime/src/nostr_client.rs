@@ -34,6 +34,8 @@ pub struct Filter {
     pub authors: Vec<String>,
     /// the `#p` tag filter.
     pub p_tags: Vec<String>,
+    /// the `#h` tag filter (Marmot kind-445 group routing).
+    pub h_tags: Vec<String>,
     pub since: Option<i64>,
 }
 
@@ -99,6 +101,7 @@ pub fn build_phone_filters(phone_pubkey: &str, authors: &[String], last_stored_s
         kinds,
         authors: authors.to_vec(),
         p_tags: vec![phone_pubkey.to_string()],
+        h_tags: Vec::new(),
         since,
     };
     vec![
