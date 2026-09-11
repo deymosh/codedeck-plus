@@ -16,6 +16,7 @@
 //! of `Send` messages) and is handed back to Tauri's `State` for the commands
 //! to call.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread;
@@ -30,7 +31,10 @@ use client_runtime::core::{
 };
 use client_runtime::{Core, CoreConfig};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::native_ports::{open_native_db, KvSqlite, TranscriptStoreSqlite};
+use crate::sqlstore::DB_FILE;
 
 /// Managed Tauri state: `Some` once `core_init` has spun the bridge thread.
 #[derive(Default)]
@@ -140,7 +144,18 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
     let core_config = CoreConfig::new(config.relays, identity, config.proxy, config.tor);
     let observer_app = app.clone();
 
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Core>();
+    // Resolve the SAME db path `sqlstore::sql_open` uses, on the main thread
+    // (`Manager::path()` needs the `AppHandle`) — but open the connection
+    // ITSELF on the core thread below: `rusqlite::Connection` isn't `Send`,
+    // and every other `client_runtime` port lives behind an `Rc`, matching
+    // the Core's single-threaded design.
+    let db_path = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("app config dir: {e}"))?
+        .join(DB_FILE);
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Core, String>>();
     thread::Builder::new()
         .name("codedeck-core".to_string())
         .spawn(move || {
@@ -153,12 +168,27 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
                 let observer: Rc<dyn CoreObserver> = Rc::new(TauriObserver { app: observer_app });
                 let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                 let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
-                // F2b transitional: the composed store layer runs with
-                // in-memory ports here — the WebView still owns persistence
-                // until `apps/mobile` is re-pointed at the Rust `Core`.
-                let core =
-                    Core::spawn(core_config, CorePorts::default(), observer, clock, entropy).await;
-                let _ = ready_tx.send(core);
+
+                let conn = match open_native_db(&db_path) {
+                    Ok(conn) => Rc::new(RefCell::new(conn)),
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("open native db: {e}")));
+                        return;
+                    }
+                };
+                // Real, persistent Kv + TranscriptStore — the SAME
+                // `codedeck.db` / schema `sqlstore.rs`'s SqlExecutor seam
+                // serves the WebView, so an install upgrading onto this path
+                // keeps its pairing, sessions, and transcript history.
+                // `notifier` / `http` / `marmot` stay in-memory-default until
+                // their own real bindings land.
+                let ports = CorePorts {
+                    kv: Rc::new(KvSqlite::new(conn.clone())),
+                    transcript_store: Rc::new(TranscriptStoreSqlite::new(conn)),
+                    ..CorePorts::default()
+                };
+                let core = Core::spawn(core_config, ports, observer, clock, entropy).await;
+                let _ = ready_tx.send(Ok(core));
                 // Keep the LocalSet alive: it drives the Core loop, its timers,
                 // and the per-relay socket tasks.
                 std::future::pending::<()>().await;
@@ -168,7 +198,7 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
 
     let core = ready_rx
         .recv()
-        .map_err(|_| "core thread exited before init".to_string())?;
+        .map_err(|_| "core thread exited before init".to_string())??;
     *slot = Some(core);
     Ok(())
 }
