@@ -17,9 +17,11 @@ use client_core::stores::ui::{UiEffect, UndoToast};
 use client_core::wire::commands::{
     BareMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext, KeypressMsg,
     ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg, PhoneToBridge,
-    QuestionInputMsg, SessionIdMsg, VersionFields,
+    ProviderProfileWrite, QuestionInputMsg, SessionIdMsg, SetCredentialsMsg, SetDeviceConfigMsg,
+    SetProviderProfileMsg, VersionFields,
 };
-use client_core::wire::common::{EffortLevel, PermissionMode};
+use client_core::wire::common::{DeviceConfig, EffortLevel, PermissionMode};
+use client_core::wire::tristate::Tristate;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
@@ -245,6 +247,32 @@ pub enum Intent {
     RequestGsd {
         machine: String,
         session_id: String,
+    },
+    /// Store credentials on the bridge host (CDX-011): an absent field keeps
+    /// the stored value, `null` deletes it, a string sets it — the wire's
+    /// own keep/clear/set convention (`Tristate`), carried straight through
+    /// rather than re-derived here. Secrets: never logged.
+    SetCredentials {
+        machine: String,
+        #[serde(default, skip_serializing_if = "Tristate::is_keep")]
+        anthropic_api_key: Tristate<String>,
+        #[serde(default, skip_serializing_if = "Tristate::is_keep")]
+        github_pat: Tristate<String>,
+    },
+    /// Upsert (`profile: Some`) or delete (`profile: None`) one custom
+    /// provider profile stored bridge-side (CDX-062).
+    SetProviderProfile {
+        machine: String,
+        profile_id: String,
+        profile: Option<ProviderProfileWrite>,
+    },
+    RequestProviderProfiles {
+        machine: String,
+    },
+    /// Test-device config (Phase 5d, mesh autonomous test loop).
+    SetDeviceConfig {
+        machine: String,
+        config: DeviceConfig,
     },
 
     // --- pure store actions ---
@@ -599,6 +627,41 @@ pub fn apply(
             PhoneToBridge::GsdRequest(SessionIdMsg {
                 version: v(),
                 session_id,
+            }),
+        ),
+        Intent::SetCredentials {
+            machine,
+            anthropic_api_key,
+            github_pat,
+        } => r.send(
+            &machine,
+            PhoneToBridge::SetCredentials(SetCredentialsMsg {
+                version: v(),
+                anthropic_api_key,
+                github_pat,
+            }),
+        ),
+        Intent::SetProviderProfile {
+            machine,
+            profile_id,
+            profile,
+        } => r.send(
+            &machine,
+            PhoneToBridge::SetProviderProfile(SetProviderProfileMsg {
+                version: v(),
+                profile_id,
+                profile,
+            }),
+        ),
+        Intent::RequestProviderProfiles { machine } => r.send(
+            &machine,
+            PhoneToBridge::ProviderProfilesRequest(BareMsg { version: v() }),
+        ),
+        Intent::SetDeviceConfig { machine, config } => r.send(
+            &machine,
+            PhoneToBridge::SetDeviceConfig(SetDeviceConfigMsg {
+                version: v(),
+                config,
             }),
         ),
 
@@ -1050,6 +1113,90 @@ mod tests {
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::PermissionRes(m) }]
                 if machine == "m" && m.allow && m.request_id == "req-1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn set_credentials_carries_the_tristate_keep_clear_set_convention() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::SetCredentials {
+                machine: "m".into(),
+                anthropic_api_key: Tristate::Set("sk-ant-xyz".into()),
+                github_pat: Tristate::Clear,
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::SetCredentials(m) }]
+                if machine == "m"
+                    && m.anthropic_api_key == Tristate::Set("sk-ant-xyz".to_string())
+                    && m.github_pat == Tristate::Clear
+        ));
+    }
+
+    #[tokio::test]
+    async fn set_provider_profile_upsert_and_delete_both_send() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::SetProviderProfile {
+                machine: "m".into(),
+                profile_id: "p1".into(),
+                profile: None,
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::SetProviderProfile(m) }]
+                if machine == "m" && m.profile_id == "p1" && m.profile.is_none()
+        ));
+    }
+
+    #[tokio::test]
+    async fn request_provider_profiles_sends_a_bare_request() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::RequestProviderProfiles { machine: "m".into() },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::ProviderProfilesRequest(_) }] if machine == "m"
+        ));
+    }
+
+    #[tokio::test]
+    async fn set_device_config_sends_the_config_verbatim() {
+        let (mut s, kp) = stores().await;
+        let config = client_core::wire::common::DeviceConfig {
+            label: "phone-1".into(),
+            role: Some(client_core::wire::common::DeviceRole::TestTarget),
+            serial: None,
+            mesh_ip: Some("10.0.0.1".into()),
+            mesh_pubkey: Some("abc".into()),
+            app_under_test: client_core::wire::common::AppUnderTest::Veil,
+            custom_package: None,
+            custom_build_cmd: None,
+            project_dir: None,
+        };
+        let out = apply(
+            &mut s,
+            Intent::SetDeviceConfig { machine: "m".into(), config: config.clone() },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::SetDeviceConfig(m) }]
+                if machine == "m" && m.config == config
         ));
     }
 
