@@ -108,12 +108,20 @@ export type Intent =
   | { startMarmotChat: { peerPubkey: string } }
   | { addRelay: { url: string } }
   | { removeRelay: { url: string } }
+  | { addRelays: { urls: string[] } }
   | { setTorEnabled: boolean }
   | { setStayConnected: boolean }
+  | { setMeshTestTarget: boolean }
+  | { setBlossomServer: string }
   | { setNotificationsEnabled: boolean }
   | { setDefaultMode: PermissionMode }
+  /** Empty string = unset (the bridge/SDK default) — `EffortLevel` has no
+   *  such variant, so this carries the raw wire string, same as the store. */
+  | { setDefaultEffort: string }
   | { setDefaultModel: string }
   | { setUiScale: number }
+  | { setShowUsageBadge: boolean }
+  | { setShowCommitBadge: boolean }
   | { addQuickPrompt: { id: string; label: string; text: string } }
   | { updateQuickPrompt: { id: string; label: string; text: string } }
   | { removeQuickPrompt: { id: string } };
