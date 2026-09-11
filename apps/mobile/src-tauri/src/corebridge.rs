@@ -33,7 +33,7 @@ use client_runtime::core::{
 };
 use client_runtime::{
     Core, CoreConfig, CoreEvent, DmView, Intent, MachinesView, MarmotView, OutboxView,
-    PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
+    PairingView, PendingSessionsView, QuickPromptsView, SettingsView, UiView,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -375,4 +375,10 @@ pub async fn core_pending_sessions_view(
 ) -> Result<PendingSessionsView, String> {
     let core = with_core(&bridge, |c| c.clone())?;
     Ok(core.pending_sessions_view().await)
+}
+
+#[tauri::command]
+pub async fn core_ui_view(bridge: State<'_, CoreBridge>) -> Result<UiView, String> {
+    let core = with_core(&bridge, |c| c.clone())?;
+    Ok(core.ui_view().await)
 }
