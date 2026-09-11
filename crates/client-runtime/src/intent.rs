@@ -4,8 +4,8 @@
 //! (`resubscribe`, a new relay list, a Tor toggle).
 //!
 //! Covers the session-interaction commands, the pure store actions, the outbox
-//! send/retry lifecycle, the optimistic delete + undo, and the pairing flow.
-//! `UploadImage` (Blossom + `aes-gcm`) still lands with the DM-attachment work.
+//! send/retry lifecycle, the optimistic delete + undo, the pairing flow, and
+//! the session image upload (Blossom-first, relay-chunk fallback).
 
 use client_core::delete_controller::DeleteEffect;
 use client_core::stores::outbox::OutboxState;
@@ -37,6 +37,19 @@ pub struct OutboxSend {
     pub id: String,
     pub machine: String,
     pub msg: PhoneToBridge,
+}
+
+/// A session image the loop uploads then attaches to `session_id`'s input.
+/// Bytes + mime, never a platform type (plan §2.2) — the UI decodes whatever
+/// picker/camera/resize API it has into this shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionImageSend {
+    pub machine: String,
+    pub session_id: String,
+    pub text: String,
+    pub image: Vec<u8>,
+    pub filename: String,
+    pub mime_type: String,
 }
 
 /// Ambient inputs `apply` needs.
@@ -74,6 +87,9 @@ pub struct IntentResult {
     pub dm_send: Option<(String, String)>,
     /// `(peer, text, image)` — the loop uploads the image then sends the DM.
     pub dm_image_send: Option<(String, String, Vec<u8>)>,
+    /// The loop uploads a session image (Blossom-first, chunk fallback) then
+    /// publishes the `upload-image` command.
+    pub session_image_send: Option<SessionImageSend>,
     /// `welcome_id` — the loop joins the MLS group engine-side.
     pub marmot_accept: Option<String>,
     /// `(group_id, text)` — the loop encrypts + publishes this Marmot message.
@@ -111,6 +127,11 @@ pub enum Intent {
         machine: String,
         id: String,
     },
+    /// Attach an image to `session_id`'s next input (CDX-029). The loop
+    /// uploads it to Blossom, falling back to relay chunks, then publishes the
+    /// `upload-image` command — no outbox item, no local echo (the transcript
+    /// shows it once the bridge injects it, like any other output).
+    SendSessionImage(SessionImageSend),
 
     // --- optimistic delete (4 s undo) ---
     DeleteSession {
@@ -333,6 +354,10 @@ pub fn apply(
                     }),
                 });
             }
+        }
+
+        Intent::SendSessionImage(send) => {
+            r.session_image_send = Some(send);
         }
 
         Intent::DeleteSession {

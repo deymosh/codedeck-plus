@@ -863,6 +863,7 @@ impl Loop {
         let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
         let dm_send = result.dm_send.clone();
         let dm_image_send = result.dm_image_send.clone();
+        let session_image_send = result.session_image_send.clone();
         let marmot_accept = result.marmot_accept.clone();
         let marmot_send = result.marmot_send.clone();
         self.interpret_intent(result).await;
@@ -871,6 +872,17 @@ impl Loop {
         }
         if let Some((peer, text, image)) = dm_image_send {
             self.send_dm_image(peer, text, image).await;
+        }
+        if let Some(send) = session_image_send {
+            self.send_session_image(
+                send.machine,
+                send.session_id,
+                send.text,
+                send.image,
+                send.filename,
+                send.mime_type,
+            )
+            .await;
         }
         if let Some(welcome_id) = marmot_accept {
             self.accept_marmot_welcome(welcome_id).await;
@@ -1524,6 +1536,144 @@ impl Loop {
         });
     }
 
+    /// Build + sign + publish one command inline (unlike [`Self::publish_command`],
+    /// which is fire-and-forget off the loop) so a caller can branch on the
+    /// verdict — the session-image upload needs that to decide Blossom vs.
+    /// chunk fallback.
+    async fn publish_and_confirm(
+        &self,
+        machine: &str,
+        msg: PhoneToBridge,
+        budget: Duration,
+        attempts: u32,
+    ) -> PublishResult {
+        let now = self.clock.now_ms();
+        match build_command(&self.identity, machine, &msg, now) {
+            Ok(event) => self.ws.publish_confirmed(&event, budget, attempts).await,
+            Err(err) => PublishResult {
+                verdict: PublishVerdict::Rejected,
+                detail: Some(egress_detail(&err)),
+            },
+        }
+    }
+
+    /// Session image upload (CDX-029), Blossom-first with a relay-chunk
+    /// fallback — port of the TS `sendSessionImage`. Two INDEPENDENT stages:
+    /// stage 1 puts the bytes somewhere durable, stage 2 tells the bridge
+    /// where they are. Only a stage-1 failure reaches the chunk fallback — once
+    /// the bridge is told a URL, the bytes are already on the server, so a
+    /// stage-2 rejection is a hard failure, never a reason to re-upload
+    /// megabytes over the relays. No optimistic local echo: the image lands in
+    /// the transcript only once the bridge injects it, like any other output.
+    async fn send_session_image(
+        &mut self,
+        machine: String,
+        session_id: String,
+        text: String,
+        image: Vec<u8>,
+        filename: String,
+        mime_type: String,
+    ) {
+        use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
+        use client_core::wire::commands::{
+            UploadImageBlossomMsg, UploadImageChunkMsg, UploadImageMsg, VersionFields,
+        };
+
+        /// Overall wall clock for the whole send, all stages together.
+        const SESSION_IMAGE_SEND_BUDGET_MS: u64 = 120_000;
+        /// Budget for the chunk fallback, from the first chunk. Deliberately
+        /// under the bridge's 60 s chunk-assembly window (armed on the first
+        /// chunk) — past that point every further chunk is guaranteed waste,
+        /// the tracker is already gone. PAIRED CONSTANT with the bridge side.
+        const CHUNK_ASSEMBLY_BUDGET_MS: u64 = 55_000;
+        /// A run that cannot fit this window needs Blossom, not patience.
+        const MAX_FALLBACK_CHUNKS: usize = 200;
+
+        let started_at = self.clock.now_ms();
+        let size_bytes = image.len() as u64;
+
+        let fail = |this: &Self| {
+            this.observer.action_failed(ActionFailed::PublishRejected);
+            this.observer
+                .on_event(CoreEvent::ActionFailed { kind: ActionFailed::PublishRejected });
+        };
+
+        // --- Stage 1: the bytes ---
+        let opts = crate::attachments::UploadOptions::at(started_at);
+        let uploaded =
+            crate::attachments::upload_encrypted_image(&image, &self.identity, self.http.as_ref(), opts)
+                .await;
+
+        if let Ok(reference) = uploaded {
+            // --- Stage 2: the reference ---
+            let hash = client_core::image_chunks::blossom_hash_from_url(&reference.url).to_string();
+            let msg = PhoneToBridge::UploadImage(UploadImageMsg::Blossom(UploadImageBlossomMsg {
+                version: VersionFields::default(),
+                session_id,
+                hash,
+                url: reference.url,
+                key: reference.key,
+                iv: reference.iv,
+                filename,
+                mime_type,
+                text,
+                size_bytes,
+            }));
+            let result = self
+                .publish_and_confirm(&machine, msg, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
+                .await;
+            if !matches!(result.verdict, PublishVerdict::Accepted | PublishVerdict::Unconfirmed) {
+                fail(self);
+            }
+            return;
+        }
+
+        // --- Stage 3: chunk fallback (nobody holds the bytes) ---
+        use base64::Engine as _;
+        let base64_image = base64::engine::general_purpose::STANDARD.encode(&image);
+        let chunks = chunk_base64(&base64_image, IMAGE_CHUNK_BYTES);
+        if chunks.len() > MAX_FALLBACK_CHUNKS {
+            fail(self);
+            return;
+        }
+        let upload_id = format!("{started_at:x}-{:x}", (self.entropy.unit() * 1e9) as u64);
+        let total_chunks = chunks.len() as u64;
+        let chunks_started_at = self.clock.now_ms();
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let now = self.clock.now_ms();
+            if now.saturating_sub(chunks_started_at) >= CHUNK_ASSEMBLY_BUDGET_MS
+                || now.saturating_sub(started_at) >= SESSION_IMAGE_SEND_BUDGET_MS
+            {
+                fail(self);
+                return;
+            }
+            let msg = PhoneToBridge::UploadImage(UploadImageMsg::Chunk(UploadImageChunkMsg {
+                version: VersionFields::default(),
+                session_id: session_id.clone(),
+                upload_id: upload_id.clone(),
+                filename: filename.clone(),
+                mime_type: mime_type.clone(),
+                base64_data: chunk,
+                // Chunk 0 carries the caption; the rest must not repeat it.
+                text: if i == 0 { text.clone() } else { String::new() },
+                chunk_index: i as u64,
+                total_chunks,
+            }));
+            // The TS client sends chunks with a single attempt each — the outer
+            // budget disciplines the run, not per-frame retry.
+            let result = self
+                .publish_and_confirm(&machine, msg, PUBLISH_CONFIRM_BUDGET, 1)
+                .await;
+            if !matches!(result.verdict, PublishVerdict::Accepted | PublishVerdict::Unconfirmed) {
+                fail(self);
+                return;
+            }
+            if (i as u64) + 1 < total_chunks {
+                tokio::time::sleep(Duration::from_millis(IMAGE_CHUNK_DELAY_MS)).await;
+            }
+        }
+    }
+
     /// The publish of an outbox item settled — record it and emit `OutboxSettled`.
     async fn on_publish_settled(&mut self, id: String, result: PublishResult) {
         let accepted = matches!(
@@ -1616,7 +1766,9 @@ mod tests {
     use crate::transport::mock::{mock_relay, MockRelay};
     use client_core::crypto::{generate_keypair, keypair_from_secret_hex};
     use client_core::wire::codec::encode_bridge_to_phone;
+    use client_core::wire::commands::UploadImageMsg;
     use client_core::wire::kinds::{LIVE_KIND, SESSION_LIST_KIND};
+    use crate::intent::SessionImageSend;
     use std::sync::Mutex;
     use tokio::task::LocalSet;
 
@@ -1719,6 +1871,56 @@ mod tests {
         {
             Box::pin(async { Err("not used".to_string()) })
         }
+    }
+
+    /// Every call fails — forces the session-image chunk fallback.
+    struct FailHttp;
+    impl crate::attachments::HttpFetch for FailHttp {
+        fn put(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: Vec<u8>,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(async { Err("no server".to_string()) })
+        }
+        fn get(
+            &self,
+            _url: &str,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(async { Err("no server".to_string()) })
+        }
+    }
+
+    /// Decrypt + decode a relay `EVENT` frame as a `PhoneToBridge` command from
+    /// `phone` to `machine` — `None` if the frame isn't an EVENT, isn't tagged
+    /// for `machine`, or doesn't decrypt/decode as one.
+    fn decode_command_frame(
+        frame: &str,
+        phone_pubkey: &str,
+        machine: &Keypair,
+    ) -> Option<PhoneToBridge> {
+        let v: Vec<serde_json::Value> = serde_json::from_str(frame).ok()?;
+        if v.first()? != "EVENT" {
+            return None;
+        }
+        let ev = v.get(1)?;
+        if ev.get("pubkey")? != &serde_json::json!(phone_pubkey) {
+            return None;
+        }
+        let tagged = ev.get("tags")?.as_array()?.iter().any(|t| {
+            t.get(0) == Some(&serde_json::json!("p"))
+                && t.get(1) == Some(&serde_json::json!(machine.pubkey_hex))
+        });
+        if !tagged {
+            return None;
+        }
+        let content = ev.get("content")?.as_str()?;
+        let plaintext =
+            client_core::crypto::decrypt_from(&machine.secret_key, phone_pubkey, content).ok()?;
+        client_core::wire::codec::decode_phone_to_bridge(&plaintext).ok()
     }
 
     /// EOSE the four subscriptions (3 bridge + 1 DM) and return the DM sub's id
@@ -2146,6 +2348,145 @@ mod tests {
                 // the appended line is `<blossom-url> key=<64hex> iv=<24hex>`
                 let line = msg.lines().nth(1).unwrap();
                 assert!(line.contains(" key=") && line.contains(" iv="));
+            })
+            .await;
+    }
+
+    /// Read frames from `mock` until `matches` returns one, ACK-ing every
+    /// `EVENT` along the way (by its real id) so a concurrent
+    /// `publish_confirmed` settles immediately instead of riding out the full
+    /// confirm budget — the image upload awaits its own publish, so the test
+    /// must answer it while `dispatch` is still in flight.
+    async fn find_command_frame(
+        mock: &mut MockRelay,
+        phone_pubkey: &str,
+        machine: &Keypair,
+        matches: impl Fn(&PhoneToBridge) -> bool,
+    ) -> PhoneToBridge {
+        for _ in 0..16 {
+            let frame = mock.next_frame().await;
+            let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+            if v[0] == "EVENT" {
+                if let Some(id) = v[1]["id"].as_str() {
+                    mock.push(format!(r#"["OK","{id}",true,""]"#));
+                }
+            }
+            if let Some(msg) = decode_command_frame(&frame, phone_pubkey, machine) {
+                if matches(&msg) {
+                    return msg;
+                }
+            }
+        }
+        panic!("no matching command reached the machine within 16 frames");
+    }
+
+    #[tokio::test]
+    async fn sending_a_session_image_uploads_to_blossom_and_publishes_the_command() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let ports = CorePorts {
+                    http: Rc::new(OkHttp),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                let core2 = core.clone();
+                let machine_pubkey = machine.pubkey_hex.clone();
+                let dispatched = tokio::task::spawn_local(async move {
+                    core2
+                        .dispatch(Intent::SendSessionImage(SessionImageSend {
+                            machine: machine_pubkey,
+                            session_id: "s1".into(),
+                            text: "look at this".into(),
+                            image: b"png bytes here".to_vec(),
+                            filename: "photo.png".into(),
+                            mime_type: "image/png".into(),
+                        }))
+                        .await;
+                });
+
+                let msg = find_command_frame(
+                    &mut mock,
+                    &phone.pubkey_hex,
+                    &machine,
+                    |m| matches!(m, PhoneToBridge::UploadImage(_)),
+                )
+                .await;
+                dispatched.await.unwrap();
+
+                match msg {
+                    PhoneToBridge::UploadImage(UploadImageMsg::Blossom(m)) => {
+                        assert_eq!(m.session_id, "s1");
+                        assert_eq!(m.text, "look at this");
+                        assert_eq!(m.filename, "photo.png");
+                        assert_eq!(m.size_bytes, b"png bytes here".len() as u64);
+                        assert!(!m.hash.is_empty());
+                    }
+                    other => panic!("Blossom succeeded — should not chunk: {other:?}"),
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn sending_a_session_image_falls_back_to_chunks_when_blossom_is_unreachable() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let ports = CorePorts {
+                    http: Rc::new(FailHttp),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                let core2 = core.clone();
+                let machine_pubkey = machine.pubkey_hex.clone();
+                let dispatched = tokio::task::spawn_local(async move {
+                    core2
+                        .dispatch(Intent::SendSessionImage(SessionImageSend {
+                            machine: machine_pubkey,
+                            session_id: "s1".into(),
+                            text: "a caption".into(),
+                            image: b"small image bytes".to_vec(),
+                            filename: "photo.jpg".into(),
+                            mime_type: "image/jpeg".into(),
+                        }))
+                        .await;
+                });
+
+                let msg = find_command_frame(
+                    &mut mock,
+                    &phone.pubkey_hex,
+                    &machine,
+                    |m| matches!(m, PhoneToBridge::UploadImage(_)),
+                )
+                .await;
+                dispatched.await.unwrap();
+
+                match msg {
+                    PhoneToBridge::UploadImage(UploadImageMsg::Chunk(m)) => {
+                        assert_eq!(m.session_id, "s1");
+                        assert_eq!(m.chunk_index, 0);
+                        assert_eq!(m.total_chunks, 1); // well under 35 KB
+                        assert_eq!(m.text, "a caption");
+                    }
+                    other => panic!("blossom is unreachable in this test: {other:?}"),
+                }
             })
             .await;
     }

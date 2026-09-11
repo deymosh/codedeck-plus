@@ -143,7 +143,8 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | semantic event stream | store subscriptions | `client_runtime::core::CoreEvent` | ✅ F2b — `StateChanged{slice}` / `OutboxSettled` / `PairingSettled` / `ActionFailed` via `CoreObserver::on_event`. |
 | composed `Core` loop | `createPhoneCore.ts` | `client_runtime::core::Core` | ✅ F2b — async `spawn` (hydrate), Router + Intent + View + CoreEvent on one event loop; retry / vis / stale / pair / undo timers. |
 | NIP-17 DM runtime | `nostrService` DM path + `dmStore` I/O | `client_runtime::core` (1059 sub) + `client_runtime::giftwrap` | ✅ F2b — kind-1059 subscription (epoch + catch-up cursor + kind-10050 publish), `wrap_dm` / `unwrap_gift_parts` (NIP-59), `Intent::SendDm`, `DmReceived` notification. |
-| `dmAttachments` crypto / upload | `apps/mobile/src/core/dmAttachments.ts` | `client_runtime::attachments` | ✅ F2b — AES-256-GCM blob + SHA-256 id, `HttpFetch` port, BUD-02 signed upload with a retry budget, download+decrypt. The `UploadImage` intent wiring (needs `HttpFetch` in `CorePorts`) ⏳. |
+| `dmAttachments` crypto / upload | `apps/mobile/src/core/dmAttachments.ts` | `client_runtime::attachments` | ✅ F2b — AES-256-GCM blob + SHA-256 id, `HttpFetch` port, BUD-02 signed upload with a retry budget, download+decrypt. |
+| Session image upload (CDX-029, Blossom + chunk fallback) | `apps/mobile/src/ui/imageFile.ts` `sendSessionImage` | `client_runtime::core` (`send_session_image`) | ✅ F2b — `Intent::SendSessionImage(SessionImageSend { machine, session_id, text, image, filename, mime_type })` (bytes + mime, no platform type, plan §2.2). Two independent stages, same shape as the TS port: stage 1 uploads to Blossom (`attachments::upload_encrypted_image`); on success stage 2 publishes `upload-image` Blossom and returns — a rejection there is a hard failure (the bytes are already on the server, so no chunk retry). On a stage-1 failure only, stage 3 falls back to `client_core::image_chunks::chunk_base64` (35 KB pieces, 200 ms inter-chunk delay, ≤200 chunks, 55 s chunk-assembly budget paired with the bridge's window, 120 s overall) publishing one `upload-image` Chunk command per piece at a single publish attempt each. No outbox item, no local echo — the image lands in the transcript once the bridge injects it, like any other output; any unresolved failure surfaces as `ActionFailed::PublishRejected`. |
 | Marmot runtime (445 sub, 444-welcome route, MDK seam) | `dmStore`/`marmotStore` I/O | `client_runtime::core` + `client_runtime::marmot` | ✅ F2b — `MarmotEngine` port (`NoMarmot` stub / `MarmotEngineImpl` behind feat `marmot`) in `CorePorts`. On (re)connect `Core` runs the full start sequence (mirrors `marmotStore.start()`): engine `init` → reconcile joined groups from `list_groups` → apply pending welcomes → CDX-030 mint-once KeyPackage + publish + the kind-10051 KP relay list → open the kind-445 subscription over the joined groups' `h` tags (epoch guard + catch-up cursor, torn down when no group is joined or the engine is absent). Each 445 goes through `marmot_engine.ingest`: a decrypted kind-9 rumor folds into `MarmotState` (unread + `DmReceived` notify), a not-joined verdict buffers the event verbatim (VEIL-029). kind-444 welcomes still ride the 1059 sub → routed to the same engine. `Intent::AcceptMarmotWelcome` joins the group, re-feeds the buffered 445s for its `h` tag in order, then reopens the sub; a welcome the engine can never accept (VEIL-117, a stale KeyPackage) drops the card instead of retrying forever. `Intent::SendMarmotMessage` encrypts + publishes then adds the plaintext locally (optimistic, `sent`). `Intent::SelectMarmotGroup` / `MarkMarmotRead` are pure store ops. `MarmotView` + `Core::marmot_view()`. `StartMarmotChat` (KeyPackage fetch + `create_group`) ⏳. |
 | MDK/MLS engine relocation | `apps/mobile/src-tauri/src/marmot.rs` + `sqlstore.rs` | `client_core::marmot_engine` (feat `marmot`, SQLCipher) + `client_runtime::marmot::MarmotEngineImpl` | ✅ F2b — the MDK 0.8 / MLS + `rusqlite bundled-sqlcipher-vendored-openssl` engine moved verbatim into `client_core` behind feat `marmot` (off → `client-core` stays pure nostr+serde). `apps/mobile/src-tauri` now depends on `client-core` with `features = ["marmot"]` (same transitive stack, shared) and keeps only the Tauri command wrapper. CI builds + tests both `marmot` on and off. |
 | `tools/contract-harness/` + re-point `apps/mobile` + delete `src/core` | `createPhoneCore.ts` consumers | `client_runtime` bindings | ⏳ F2b |
@@ -155,14 +156,14 @@ Marmot group messaging in Rust.** `client_runtime::Core` hydrates the store
 bundle from the `Kv` port, folds every decoded `BridgeToPhone` through the
 `Router`, exposes the `View` / `Intent` / `CoreEvent` surface (plan §2), and
 drives the 1059 DM subscription, the Marmot start sequence (engine init →
-group reconcile → KeyPackage/10051 publish), and the kind-445 group
-subscription (receive, send, accept-welcome + VEIL-029 re-feed) — proven
-end-to-end against the mock relay. The MDK/MLS engine is relocated into
-`client_core::marmot_engine` behind feat `marmot`; `client_runtime::marmot`
-carries the `MarmotEngine` port and its `MarmotEngineImpl`. ~420 workspace
-tests (marmot off) + 317 `client-core` lib tests with `--features marmot`,
-`clippy -D warnings` clean both ways. Remaining: `StartMarmotChat` (KeyPackage
-fetch + `create_group`), the `UploadImage` / DM-attachment `HttpFetch` wiring,
+group reconcile → KeyPackage/10051 publish), the kind-445 group subscription
+(receive, send, accept-welcome + VEIL-029 re-feed), and the Blossom-first /
+chunk-fallback session image upload — proven end-to-end against the mock
+relay. The MDK/MLS engine is relocated into `client_core::marmot_engine`
+behind feat `marmot`; `client_runtime::marmot` carries the `MarmotEngine` port
+and its `MarmotEngineImpl`. ~421 workspace tests (marmot off) + 317
+`client-core` lib tests with `--features marmot`, `clippy -D warnings` clean
+both ways. Remaining: `StartMarmotChat` (KeyPackage fetch + `create_group`),
 `tools/contract-harness/`, and re-pointing `apps/mobile` at the Rust `Core`
 (then deleting `src/core`).
 

@@ -29,7 +29,7 @@ pub use core::{
     SystemClock, TimeEntropy,
 };
 pub use dispatch::StoreId;
-pub use intent::{Intent, IntentCtx};
+pub use intent::{Intent, IntentCtx, SessionImageSend};
 pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
