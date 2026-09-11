@@ -96,7 +96,8 @@ impl Entropy for TimeEntropy {
 // --- observer (seed of the F2 CoreEvent stream) --------------------------
 
 /// Why a user-visible action did not land. Semantic — the UI writes the copy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ActionFailed {
     DecryptFailed,
     DecodeFailed,
@@ -119,7 +120,8 @@ pub trait CoreObserver {
 
 /// A read-projection slice (plan §2.1) — the granularity a consumer
 /// re-subscribes to on a [`CoreEvent::StateChanged`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SliceId {
     Connection,
     Machines,
@@ -132,8 +134,11 @@ pub enum SliceId {
     Marmot,
 }
 
-/// The closed, semantic event set (plan §2.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The closed, semantic event set (plan §2.3). Serde shape: externally
+/// tagged, camelCase (same convention as [`crate::intent::Intent`]) — e.g.
+/// `{"stateChanged": {"slice": "machines"}}`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CoreEvent {
     /// The named view slice changed — re-read it.
     StateChanged { slice: SliceId },
@@ -3142,5 +3147,30 @@ mod tests {
                 }));
             })
             .await;
+    }
+
+    /// Documents the JSON shape a binding receives — externally tagged,
+    /// camelCase, matching `Intent`'s own convention.
+    #[test]
+    fn core_event_json_shape_is_externally_tagged_camel_case() {
+        assert_eq!(
+            serde_json::to_value(CoreEvent::StateChanged { slice: SliceId::Machines }).unwrap(),
+            serde_json::json!({ "stateChanged": { "slice": "machines" } }),
+        );
+        assert_eq!(
+            serde_json::to_value(CoreEvent::OutboxSettled {
+                id: "in-1".into(),
+                delivered: true,
+            })
+            .unwrap(),
+            serde_json::json!({ "outboxSettled": { "id": "in-1", "delivered": true } }),
+        );
+        assert_eq!(
+            serde_json::to_value(CoreEvent::ActionFailed {
+                kind: ActionFailed::PublishRejected,
+            })
+            .unwrap(),
+            serde_json::json!({ "actionFailed": { "kind": "publishRejected" } }),
+        );
     }
 }
