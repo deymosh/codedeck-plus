@@ -19,6 +19,7 @@
 import type {
   EffortLevel,
   GsdState,
+  OutputEntry,
   PermissionMode,
   RemoteSessionInfo,
   UsageData,
@@ -392,6 +393,37 @@ export interface UiView {
   undoToast: UndoToastState | null;
 }
 
+// --- transcript (the one view backed by I/O — TranscriptStore, SQLite on
+// device — rather than a synchronous in-memory snapshot) ---
+
+export type TranscriptSyncState = 'idle' | 'requested' | 'syncing' | 'complete' | 'failed';
+
+export interface TranscriptSyncView {
+  state: TranscriptSyncState;
+  attempts: number;
+  nextRetryAt: number | null;
+  localHigh: number;
+  target: number;
+  contiguous: boolean;
+}
+
+export interface TranscriptRowView {
+  seq: number;
+  /** The Rust port carries no protocol dependency (`serde_json::Value`), but
+   *  it always holds a valid `OutputEntry` — this is what the bridge sends. */
+  entry: OutputEntry;
+}
+
+/** Rows `1..=localHigh`, unpaginated — matches `TranscriptStoreState`'s own
+ *  `entriesOf` contract (return everything, the UI virtualizes) rather than
+ *  the plan §2.1 future windowed `transcript_view(id, from, to)`. */
+export interface TranscriptRowsView {
+  rows: TranscriptRowView[];
+  /** `[from, to]` tuples — crosses the wire as 2-element arrays. */
+  haveRanges: [number, number][];
+  sync: TranscriptSyncView;
+}
+
 // --- CoreEvent (plan §2.3) ---
 
 export type SliceId =
@@ -418,4 +450,5 @@ export type CoreEvent =
   | { stateChanged: { slice: SliceId } }
   | { outboxSettled: { id: string; delivered: boolean } }
   | { pairingSettled: { paired: boolean } }
-  | { actionFailed: { kind: ActionFailedKind } };
+  | { actionFailed: { kind: ActionFailedKind } }
+  | { transcriptAppended: { machine: string; sessionId: string } };

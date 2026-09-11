@@ -52,6 +52,7 @@ function fakeCore(initialView: PairingView = { phase: 'idle', error: null, timed
     quickPromptsView: () => Promise.reject(new Error('unused')),
     pendingSessionsView: () => Promise.reject(new Error('unused')),
     uiView: () => Promise.reject(new Error('unused')),
+    transcriptView: () => Promise.reject(new Error('unused')),
     onCoreEvent: vi.fn(async (cb: (e: CoreEvent) => void) => {
       coreEventListener = cb;
       return () => {

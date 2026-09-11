@@ -39,6 +39,7 @@ import type {
   PendingSessionsView,
   QuickPromptsView,
   SettingsView,
+  TranscriptRowsView,
   UiView,
 } from '../core/nativeCoreTypes';
 
@@ -104,6 +105,7 @@ export interface NativeCore {
   quickPromptsView(): Promise<QuickPromptsView>;
   pendingSessionsView(): Promise<PendingSessionsView>;
   uiView(): Promise<UiView>;
+  transcriptView(machine: string, sessionId: string): Promise<TranscriptRowsView>;
   /** The full semantic event stream (plan §2.3). Resolves an unlisten. */
   onCoreEvent(cb: (event: CoreEvent) => void): Promise<() => void>;
 }
@@ -191,6 +193,8 @@ export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: L
     quickPromptsView: () => invoke<QuickPromptsView>('core_quick_prompts_view'),
     pendingSessionsView: () => invoke<PendingSessionsView>('core_pending_sessions_view'),
     uiView: () => invoke<UiView>('core_ui_view'),
+    transcriptView: (machine, sessionId) =>
+      invoke<TranscriptRowsView>('core_transcript_view', { machine, sessionId }),
     onCoreEvent: (cb) => listen<CoreEvent>(EV_CORE_EVENT, ({ payload }) => cb(payload)),
   };
 }
