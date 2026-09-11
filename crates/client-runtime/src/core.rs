@@ -1035,6 +1035,12 @@ impl Loop {
         if r.ui_changed {
             self.state_changed(SliceId::Ui);
         }
+        if !r.transcript_removed.is_empty() {
+            self.state_changed(SliceId::Transcript);
+        }
+        for (machine, session) in r.transcript_removed {
+            self.transcript_store.remove(&machine, &session).await;
+        }
         // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
         // notification-cancel seam; `r.mesh_join` a mesh seam (F2b ports).
     }
@@ -3440,6 +3446,166 @@ mod tests {
                 assert!(view.have_ranges.is_empty());
                 assert_eq!(view.sync.local_high, 0);
                 assert!(view.sync.contiguous);
+            })
+            .await;
+    }
+
+    /// A resubscribe triggered by an authors-filter change (a new pairing
+    /// candidate, a freshly paired machine) only re-does the phone's 3
+    /// traffic filters — the DM sub is managed separately and untouched — so
+    /// unlike [`eose_all`] this drains exactly 3 REQs (skipping the CLOSE
+    /// frames for the superseded subs along the way) and returns one sub_id
+    /// the router now has open.
+    async fn drain_traffic_resubscribe(mock: &mut MockRelay) -> String {
+        let mut seen = 0;
+        let mut sub_id = String::new();
+        while seen < 3 {
+            let frame = mock.next_frame().await;
+            let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+            if v[0] == "REQ" {
+                let id = v[1].as_str().unwrap().to_string();
+                mock.push(format!(r#"["EOSE","{id}"]"#));
+                sub_id = id;
+                seen += 1;
+            }
+        }
+        sub_id
+    }
+
+    /// Pushes one raw encrypted `machine -> phone` event through the mock
+    /// relay, tagged to `sub_id` — the router only delivers an `EVENT` frame
+    /// for a sub_id it currently has open (it doesn't check the filter), and
+    /// every resubscribe (a new pairing candidate, a freshly paired machine)
+    /// tears down the old subs and opens new ones with new ids, so the caller
+    /// must hand in a sub_id drained from the CURRENT `eose_all` round, not
+    /// one left over from an earlier one.
+    fn push_bridge_to_phone_event(
+        mock: &MockRelay,
+        machine: &client_core::crypto::Keypair,
+        phone_pubkey_hex: &str,
+        sub_id: &str,
+        msg: &BridgeToPhone,
+    ) {
+        let plaintext = encode_bridge_to_phone(msg);
+        let ct = client_core::crypto::encrypt_to(&machine.secret_key, phone_pubkey_hex, &plaintext)
+            .unwrap();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+            .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+            .unwrap();
+        mock.push(format!(
+            r#"["EVENT","{sub_id}",{}]"#,
+            <nostr::Event as nostr::JsonUtil>::as_json(&event)
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                // `set_machines` alone (as other tests use it) only steers the
+                // subscription authors filter — it does not populate
+                // `stores.machines`, so it is not enough to make `RemoveMachine`
+                // find anything to forget. Only a completed pairing does that.
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                core.dispatch(Intent::BeginManualPairing {
+                    npub: machine.npub.clone(),
+                    token: "tok".into(),
+                    label: "laptop".into(),
+                })
+                .await;
+                // Staging the candidate resubscribes (the ack must pass the
+                // authors filter) — drain that round to get a sub_id the
+                // router currently has open.
+                let sub = drain_traffic_resubscribe(&mut mock).await;
+                push_bridge_to_phone_event(
+                    &mock,
+                    &machine,
+                    &phone.pubkey_hex,
+                    &sub,
+                    &BridgeToPhone::PairAck(client_core::wire::events::PairAckMsg {
+                        machine: "laptop".into(),
+                        ok: true,
+                        reason: None,
+                        relays: None,
+                        host: None,
+                    }),
+                );
+                settle().await;
+                assert!(core
+                    .machines_view()
+                    .await
+                    .machines
+                    .contains_key(&machine.pubkey_hex));
+
+                // Registering the machine resubscribes again — same reason.
+                let sub = drain_traffic_resubscribe(&mut mock).await;
+
+                // A session must actually be listed (not just have output
+                // flowing) for `RemoveMachine` to find it — it gathers the
+                // sessions to forget from `MachineView.sessions`, exactly
+                // like the TS `removeMachine` it mirrors.
+                let sessions_msg = client_core::wire::codec::decode_bridge_to_phone(
+                    r#"{"type":"sessions","machine":"laptop","sessions":[
+                        {"id":"s1","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
+                    ],"protocolVersion":10}"#,
+                )
+                .unwrap();
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
+                settle().await;
+
+                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                    r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","content":"hi","timestamp":"t"}}"#,
+                )
+                .unwrap();
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &msg);
+                settle().await;
+
+                // Sanity: the transcript is really there before forgetting the machine.
+                let before = core.transcript_view(machine.pubkey_hex.clone(), "s1".to_string()).await;
+                assert_eq!(before.rows.len(), 1);
+
+                core.dispatch(Intent::RemoveMachine {
+                    pubkey_hex: machine.pubkey_hex.clone(),
+                })
+                .await;
+                settle().await;
+
+                assert!(!core
+                    .machines_view()
+                    .await
+                    .machines
+                    .contains_key(&machine.pubkey_hex));
+                let after = core.transcript_view(machine.pubkey_hex.clone(), "s1".to_string()).await;
+                assert!(after.rows.is_empty());
+
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::StateChanged { slice: SliceId::Transcript }));
+                assert!(events.contains(&CoreEvent::StateChanged { slice: SliceId::Machines }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn remove_machine_for_a_never_paired_pubkey_is_a_harmless_no_op() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+
+                core.dispatch(Intent::RemoveMachine {
+                    pubkey_hex: "never-paired".into(),
+                })
+                .await;
+
+                assert!(!core.machines_view().await.machines.contains_key("never-paired"));
             })
             .await;
     }

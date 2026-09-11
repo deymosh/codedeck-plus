@@ -4,8 +4,9 @@
 //! (`resubscribe`, a new relay list, a Tor toggle).
 //!
 //! Covers the session-interaction commands, the pure store actions, the outbox
-//! send/retry lifecycle, the optimistic delete + undo, the pairing flow, and
-//! the session image upload (Blossom-first, relay-chunk fallback).
+//! send/retry lifecycle, the optimistic delete + undo, the pairing flow (and
+//! its inverse, forgetting a paired machine), and the session image upload
+//! (Blossom-first, relay-chunk fallback).
 
 use client_core::delete_controller::DeleteEffect;
 use client_core::stores::outbox::OutboxState;
@@ -106,6 +107,11 @@ pub struct IntentResult {
     /// `stores.ui` changed in a way worth a `UiView` re-fetch — mirrors
     /// `RouteResult::ui_changed`.
     pub ui_changed: bool,
+    /// `(machine, session_id)` pairs whose transcript rows the loop must
+    /// drop from the `TranscriptStore` — mirrors `RouteResult::transcript_removed`
+    /// (there: remote tombstones; here: `RemoveMachine` forgetting every
+    /// session the machine had).
+    pub transcript_removed: Vec<(String, String)>,
 }
 
 impl IntentResult {
@@ -181,6 +187,14 @@ pub enum Intent {
     },
     DismissStagedPairing,
     ResetPairing,
+
+    /// Forget a paired machine: drops it (and its sessions) from local state
+    /// and the subscription authors filter. Purely local — there is no wire
+    /// message for this (the bridge has no concept of being "unpaired"; it
+    /// simply stops hearing from a phone that stopped listening to it).
+    RemoveMachine {
+        pubkey_hex: String,
+    },
 
     // --- session commands ---
     RespondPermission {
@@ -475,6 +489,30 @@ pub fn apply(
             begin_pairing(stores, identity, PairingEvent::DismissStaged, &mut r)
         }
         Intent::ResetPairing => begin_pairing(stores, identity, PairingEvent::Reset, &mut r),
+        Intent::RemoveMachine { pubkey_hex } => {
+            let session_ids: Vec<String> = stores
+                .machines
+                .machine(&pubkey_hex)
+                .map(|m| m.sessions.keys().cloned().collect())
+                .unwrap_or_default();
+            if stores.machines.remove_machine(&pubkey_hex) {
+                r.persist(StoreId::Machines);
+                r.resubscribe = true;
+                for session_id in session_ids {
+                    stores.ui.clear_session_unread(&pubkey_hex, &session_id);
+                    // Drop the in-memory coverage bookkeeping too, not just
+                    // the persisted rows below — otherwise a stale local_high
+                    // would make `TranscriptRowsView::load` believe rows still
+                    // exist right up until the next sync cycle re-derives it.
+                    stores.transcript.remove_session(&pubkey_hex, &session_id);
+                    r.transcript_removed.push((pubkey_hex.clone(), session_id));
+                }
+                r.ui_changed = true;
+                if stores.ui.selected_machine.as_deref() == Some(pubkey_hex.as_str()) {
+                    stores.ui.select_machine(None);
+                }
+            }
+        }
         Intent::RespondPermission {
             machine,
             session_id,
@@ -1044,6 +1082,85 @@ mod tests {
         assert!(s.machines.session("m", "s1").is_some());
         assert_eq!(undo.undo_timer, Some(UndoTimer::Clear));
         assert!(s.ui.undo_toast.is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_machine_forgets_it_deselects_and_queues_its_sessions_for_transcript_removal() {
+        use client_core::wire::common::RemoteSessionInfo;
+        let (mut s, kp) = stores().await;
+        s.machines.register_machine("m", "laptop", None, None);
+        s.machines.apply_session_upsert(
+            "m",
+            &RemoteSessionInfo {
+                id: "s1".into(),
+                slug: "the-slug".into(),
+                cwd: "/w".into(),
+                last_activity: "t".into(),
+                line_count: 0,
+                title: None,
+                project: "p".into(),
+                permission_mode: None,
+                effort_level: None,
+                model: None,
+                context_window: None,
+                context_percentage: None,
+                committed: None,
+                state: None,
+                seq_high: None,
+                provider_id: None,
+                provider_label: None,
+            },
+            0,
+        );
+        s.ui.select_machine(Some("m"));
+        s.ui.mark_session_unread("m", "s1");
+
+        let out = apply(
+            &mut s,
+            Intent::RemoveMachine { pubkey_hex: "m".into() },
+            &kp,
+            ctx(),
+        );
+
+        assert!(s.machines.machine("m").is_none());
+        assert!(out.resubscribe);
+        assert!(out.persist.contains(&StoreId::Machines));
+        assert!(out.ui_changed);
+        assert_eq!(out.transcript_removed, vec![("m".to_string(), "s1".to_string())]);
+        assert!(!s.ui.is_session_unread("m", "s1"));
+        assert_eq!(s.ui.selected_machine, None);
+    }
+
+    #[tokio::test]
+    async fn remove_machine_leaves_the_selection_alone_when_a_different_machine_is_selected() {
+        let (mut s, kp) = stores().await;
+        s.machines.register_machine("m1", "laptop", None, None);
+        s.machines.register_machine("m2", "desktop", None, None);
+        s.ui.select_machine(Some("m2"));
+
+        let out = apply(
+            &mut s,
+            Intent::RemoveMachine { pubkey_hex: "m1".into() },
+            &kp,
+            ctx(),
+        );
+
+        assert!(s.machines.machine("m1").is_none());
+        assert!(s.machines.machine("m2").is_some());
+        assert!(out.resubscribe);
+        assert_eq!(s.ui.selected_machine.as_deref(), Some("m2"));
+    }
+
+    #[tokio::test]
+    async fn remove_machine_on_an_unknown_machine_is_a_harmless_no_op() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::RemoveMachine { pubkey_hex: "ghost".into() },
+            &kp,
+            ctx(),
+        );
+        assert_eq!(out, IntentResult::default());
     }
 
     #[tokio::test]
