@@ -43,6 +43,7 @@ import {
   processImageFile,
   sendSessionImage,
 } from '../imageFile';
+import { base64ToBytes } from '../../core/imageChunks';
 import { describeError, isCancelled, withDeadline } from '../../core/deadline';
 import type { EncryptedImageRef } from '../../core/dmAttachments';
 import { cx, presenceBadge, shared as s, stateBadge } from '../shared';
@@ -309,6 +310,33 @@ export function SessionScreen({
     try {
       const image = await processImageFile(pendingImage.file);
       if (abandoned()) return;
+
+      // Native mode: `Intent::SendSessionImage` does the whole Blossom-
+      // upload-then-chunk-fallback as one step in Rust — no BridgeApi upload
+      // calls, no existingRef resume (nothing partial to resume from), no
+      // fine-grained progress (the spinner just covers the one dispatch).
+      // `withDeadline` still applies as the same outer backstop, but with no
+      // way to cancel an in-flight dispatch: a timeout stops the SPINNER,
+      // not the send — the image can still land after the banner shows.
+      if (core.sendSessionImageNative) {
+        await withDeadline(
+          core.sendSessionImageNative({
+            machine: machinePubkey,
+            sessionId,
+            text,
+            image: base64ToBytes(image.base64),
+            filename: image.filename,
+            mimeType: image.mimeType,
+          }),
+          SESSION_IMAGE_SEND_BACKSTOP_MS,
+          'image send',
+        );
+        if (abandoned()) return;
+        clearPendingImage();
+        setDraft('');
+        return;
+      }
+
       const secretKey = core.identity.getState().keypair.secretKey;
       const existingRef = uploadedRefRef.current;
       /**

@@ -1,27 +1,34 @@
 /**
- * Phase 3b boot wiring — builds the platform seams and mounts the React shell
- * on the framework-free phone core:
- * - under Tauri: SQLite persistence via the in-crate sql_* commands (KV +
- *   transcripts, migrations + boot prune; tauri-plugin-sql was replaced in
- *   CDX-012 — see src-tauri/src/sqlstore.rs), Tauri resume/focus events,
- *   codedeck:// deep links via tauri-plugin-deep-link;
- * - plain-browser dev (`pnpm dev` without Tauri): in-memory KV/transcripts —
- *   a throwaway identity per reload, good enough for UI work.
- * Either way: real relay transport (SimplePool, enablePing) + connectivity
- * event sources feeding the connection FSM.
+ * Boot wiring — builds the platform seams and mounts the React shell on the
+ * phone core. One capability probe decides which composition boots:
+ * - `createPhoneCoreNative` (F2b): the in-process Rust `client_runtime::Core`
+ *   owns the ENTIRE bridge protocol + store layer, present only when this
+ *   APK was built with the `native-core` Cargo feature (`core_available`
+ *   probes for it — see `platform/nativeCore.ts` and `docs/CLIENT-CORE.md`).
+ * - `createPhoneCore` (local): the pre-F2b, WebView-driven path — every
+ *   store, the connection FSM, and the bridge protocol codec run here in TS,
+ *   over a real relay transport (SimplePool, enablePing). Always used in
+ *   plain-browser dev (`pnpm dev` without Tauri has no Tauri commands to
+ *   probe at all) and on any Tauri build without the `native-core` feature.
+ * Either way: under Tauri, SQLite persistence via the in-crate sql_* commands
+ * (KV + transcripts, migrations + boot prune; tauri-plugin-sql was replaced
+ * in CDX-012 — see src-tauri/src/sqlstore.rs), Tauri resume/focus events,
+ * codedeck:// deep links via tauri-plugin-deep-link. Plain-browser dev keeps
+ * in-memory KV/transcripts — a throwaway identity per reload, good enough
+ * for UI work.
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/global.css';
 import { createPhoneCore, type PhoneCore } from './core/createPhoneCore';
+import { createPhoneCoreNative } from './core/createPhoneCoreNative';
 import { memoryKV, memoryTranscriptStorage, realTimers, type KV, type TranscriptStorage } from './core/ports';
 import { loadOrCreateIdentity } from './core/stores/identity';
 import { parsePairingUrl } from './core/stores/pairing';
 import { loadPersistedSettings } from './core/stores/settings';
 import { attachConnectivity, tauriNativeConnectivity, type TauriListen } from './platform/connectivity';
 import { createRelayTransport } from './platform/relayTransport';
-import { createNativeCore } from './platform/nativeCore';
-import type { NativeCoreControl } from './core/nativeCore';
+import { createNativeCore, type NativeCore } from './platform/nativeCore';
 import { App } from './ui/App';
 import { PhoneCoreProvider } from './ui/coreContext';
 import { PHONE_LABEL } from './ui/label';
@@ -30,33 +37,30 @@ const log = (msg: string): void => console.log(msg);
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-async function boot(): Promise<PhoneCore> {
-  let kv: KV;
-  let transcriptStorage: TranscriptStorage;
-  let prune: (() => Promise<void>) | undefined;
+/**
+ * F2b: the Rust runtime owns the entire protocol/store layer, so this is
+ * MUCH smaller than `bootLocal` — no transport (Rust dials the relays
+ * itself), no Tor WebView proxy override (Rust configures its own SOCKS5 at
+ * `core.init`, see `CoreConfig`), no Marmot platform seam (Marmot
+ * orchestration lives in `client-core` behind an `Intent`, not a direct
+ * Tauri command from this file). `createPhoneCoreNative` builds all eleven
+ * store adapters + the identity/settings load itself from `kv` alone.
+ */
+async function bootNative(nativeCore: NativeCore, kv: KV): Promise<PhoneCore> {
+  log('[Boot] native-core present — booting the full Rust-backed composition (F2b)');
+  const { createProfileFetcher } = await import('./platform/profileFetch');
+  const profileFetcher = createProfileFetcher({ log });
+  return createPhoneCoreNative({
+    core: nativeCore,
+    kv,
+    nativeCoreProxy: '127.0.0.1:9050',
+    profileFetcher,
+    log,
+  });
+}
 
-  if (isTauri) {
-    const [{ openTauriDatabase }, sqlite] = await Promise.all([
-      import('./platform/tauriSqlite'),
-      import('./platform/sqlite'),
-    ]);
-    const db = await openTauriDatabase();
-    await sqlite.runMigrations(db);
-    kv = sqlite.sqliteKv(db);
-    transcriptStorage = sqlite.sqliteTranscriptStorage(db);
-    prune = async () => {
-      const result = await sqlite.pruneTranscripts(db);
-      if (result.removedSessions > 0 || result.trimmedRows > 0) {
-        log(`[Prune] removed ${result.removedSessions} idle sessions, trimmed ${result.trimmedRows} rows`);
-      }
-    };
-    await prune(); // boot prune (plan §5: 5k/session, 30-day idle)
-  } else {
-    log('[Boot] no Tauri runtime — in-memory persistence (browser dev mode)');
-    kv = memoryKV();
-    transcriptStorage = memoryTranscriptStorage();
-  }
-
+/** The pre-F2b, WebView-driven composition — see the module doc. */
+async function bootLocal(kv: KV, transcriptStorage: TranscriptStorage): Promise<PhoneCore> {
   // The transport needs the persisted relay list before the core exists;
   // later changes flow settings → nostrClient.setRelays → transport.
   const settings = await loadPersistedSettings(kv);
@@ -89,28 +93,6 @@ async function boot(): Promise<PhoneCore> {
 
   const transport = createRelayTransport({ relays: settings.relays, log, secretKey: identity.secretKey });
 
-  // F1: the in-process Rust runtime. `null` unless this APK was built with the
-  // `native-core` feature (the probe command is absent otherwise). When
-  // present, createPhoneCore routes the BRIDGE protocol through it; `transport`
-  // above still serves DM (1059) + Marmot (445). Inbound is wired after the
-  // core exists (below).
-  const nativeSeam = await createNativeCore(log);
-  const nativeCore: NativeCoreControl | undefined = nativeSeam
-    ? {
-        init: (c) => nativeSeam.init(c),
-        start: () => nativeSeam.start(),
-        stop: () => nativeSeam.stop(),
-        setMachines: (m) => nativeSeam.setMachines(m),
-        setRelays: (r) => nativeSeam.setRelays(r),
-        send: async (machine, msg) => {
-          await nativeSeam.send(machine, msg);
-          return true;
-        },
-        publish: async (machine, msg) => ({ verdict: await nativeSeam.publish(machine, msg) }),
-      }
-    : undefined;
-  if (nativeCore) log('[Boot] native-core present — bridge protocol runs in-process (Rust)');
-
   // DM peer profiles (kind 0) resolve over their own one-shot pool (lazy —
   // no sockets until the first conversation needs a name).
   const { createProfileFetcher } = await import('./platform/profileFetch');
@@ -118,9 +100,7 @@ async function boot(): Promise<PhoneCore> {
 
   // OS notifications (5c): delivery seam only — the core decides when
   // (store-driven events × app visibility, core/notifications.ts).
-  const { createPlatformNotifier, ensureNotificationPermission } = await import(
-    './platform/notifier'
-  );
+  const { createPlatformNotifier } = await import('./platform/notifier');
   const notifier = createPlatformNotifier(log);
 
   // Attention chime (Phase 4): pure Web Audio, independent of the OS
@@ -135,10 +115,9 @@ async function boot(): Promise<PhoneCore> {
   const { createMarmotPlatform } = await import('./platform/marmot');
   const marmot = await createMarmotPlatform(log);
 
-  const core = await createPhoneCore({
+  return createPhoneCore({
     kv,
     transport,
-    ...(nativeCore ? { nativeCore, nativeCoreProxy: '127.0.0.1:9050' } : {}),
     transcriptStorage,
     profileFetcher,
     notifier,
@@ -159,30 +138,47 @@ async function boot(): Promise<PhoneCore> {
     },
     log,
   });
+}
 
-  // F1 inbound: the runtime's decoded bridge→phone messages and connection
-  // snapshots feed the SAME handlers / FSM the WebView transport would have.
-  if (nativeSeam) {
-    void nativeSeam.onMessage((machine, msg) => core.api.dispatchDecoded(msg, machine));
-    void nativeSeam.onConnection(({ status }) => {
-      // The runtime owns the socket + reconnect; mirror its status onto the
-      // WebView FSM so the connection chip and resync-on-reconnect stay honest.
-      if (status === 'connected') {
-        core.connection.getState().dispatch({ type: 'socket-open', at: Date.now() });
-      } else if (status === 'waiting-retry' || status === 'offline') {
-        core.connection.getState().dispatch({ type: 'socket-close' });
+async function boot(): Promise<PhoneCore> {
+  let kv: KV;
+  let transcriptStorage: TranscriptStorage;
+  let prune: (() => Promise<void>) | undefined;
+
+  if (isTauri) {
+    const [{ openTauriDatabase }, sqlite] = await Promise.all([
+      import('./platform/tauriSqlite'),
+      import('./platform/sqlite'),
+    ]);
+    const db = await openTauriDatabase();
+    await sqlite.runMigrations(db);
+    kv = sqlite.sqliteKv(db);
+    transcriptStorage = sqlite.sqliteTranscriptStorage(db);
+    prune = async () => {
+      const result = await sqlite.pruneTranscripts(db);
+      if (result.removedSessions > 0 || result.trimmedRows > 0) {
+        log(`[Prune] removed ${result.removedSessions} idle sessions, trimmed ${result.trimmedRows} rows`);
       }
-    });
-    void nativeSeam.onActionFailed((kind) => {
-      if (kind === 'decrypt-failed') {
-        core.connection.getState().dispatch({ type: 'decrypt-failure' });
-      }
-    });
+    };
+    await prune(); // boot prune (plan §5: 5k/session, 30-day idle)
+  } else {
+    log('[Boot] no Tauri runtime — in-memory persistence (browser dev mode)');
+    kv = memoryKV();
+    transcriptStorage = memoryTranscriptStorage();
   }
+
+  // Single capability probe (see the module doc): `null` unless this APK was
+  // built with the `native-core` feature.
+  const nativeCore = await createNativeCore(log);
+  const core = nativeCore ? await bootNative(nativeCore, kv) : await bootLocal(kv, transcriptStorage);
+
+  const { ensureNotificationPermission } = await import('./platform/notifier');
 
   // Stay-connected foreground service (5c): settings toggle → start/stop,
   // connection FSM status → notification text. Android does the real work;
   // desktop's plugin commands are no-ops, so attaching under Tauri is safe.
+  // Interface-only (`core.settings`/`core.connection`) — identical wiring
+  // regardless of which composition booted.
   if (isTauri) {
     const { attachStayConnectedService, tauriServiceApi } = await import(
       './platform/foregroundService'
@@ -195,14 +191,21 @@ async function boot(): Promise<PhoneCore> {
       log,
     });
 
-    // Reacts to the toggle changing WHILE the app is running (the boot-time
-    // application above only covers app start). Reconfigures future
-    // connections only — see torProxy.ts for why an in-session toggle isn't
-    // fully retroactive.
-    const { attachTorProxy, tauriTorProxyApi: tauriTorProxyApiLive } = await import(
-      './platform/torProxy'
-    );
-    attachTorProxy({ settings: core.settings, proxy: tauriTorProxyApiLive(log), log });
+    // Reacts to the toggle changing WHILE the app is running (bootLocal's
+    // own application above only covers app start). WebView-only: this
+    // overrides the WEBVIEW's own PROXY_OVERRIDE, which native-core's relay
+    // traffic never goes through in the first place (Rust dials its own
+    // SOCKS5 at `core.init`). Toggling Tor while a native-core boot is
+    // already running does not yet hot-reconfigure that transport — it takes
+    // effect on the next app start (`client_runtime::Core`'s `tor_changed`
+    // effect has no transport-proxy seam wired yet, a separate, known gap;
+    // see docs/CLIENT-CORE.md).
+    if (!nativeCore) {
+      const { attachTorProxy, tauriTorProxyApi: tauriTorProxyApiLive } = await import(
+        './platform/torProxy'
+      );
+      attachTorProxy({ settings: core.settings, proxy: tauriTorProxyApiLive(log), log });
+    }
   }
 
   // Native event sources → connection FSM + maintenance ticks.

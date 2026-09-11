@@ -28,10 +28,12 @@
  *   existing TS `uploadToBlossom` helper the caller already ran, once more
  *   inside the dispatched Intent) or silently swallow the fallback the
  *   caller expects to invoke independently. Neither is an acceptable
- *   "close enough": the native call site needs to skip `sendSessionImage()`
- *   (`apps/mobile/src/ui/imageFile.ts`) entirely and
- *   `dispatch({ sendSessionImage: {...} })` directly with the raw bytes —
- *   a UI-level change, not something this backend shim can paper over.
+ *   "close enough": the native call site skips `sendSessionImage()`
+ *   (`apps/mobile/src/ui/imageFile.ts`) entirely and dispatches
+ *   `Intent::SendSessionImage` with the raw bytes directly — see
+ *   `PhoneCore.sendSessionImageNative` (`createPhoneCoreNative.ts`) and its
+ *   `SessionScreen.tsx` call site, a UI-level branch this backend shim
+ *   cannot paper over.
  */
 import type { NativeCore } from '../../platform/nativeCore';
 import type { BridgeApiLike } from './bridgeApi';

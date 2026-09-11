@@ -3,10 +3,9 @@
  * the identity secret + seeded relays from TS's own persisted KV, every one
  * of the eleven native store adapters is present on the returned `PhoneCore`
  * (matching `usePhoneCore()`'s consumers' expectations), `start`/`stop`
- * route through the connection adapter, `deleteSession`/`undoDelete`
- * dispatch the matching `Intent`, boot-time hydration fetches every known
- * session's transcript, and `removeMachine` is an honest, logged no-op
- * (no `Intent` exists for unpairing yet).
+ * route through the connection adapter, `deleteSession`/`undoDelete`/
+ * `removeMachine` dispatch the matching `Intent`, and boot-time hydration
+ * fetches every known session's transcript.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { createPhoneCoreNative } from '../createPhoneCoreNative';
@@ -195,13 +194,48 @@ describe('createPhoneCoreNative', () => {
     );
   });
 
-  it('removeMachine is an honest no-op — no Intent exists for unpairing yet', async () => {
+  it('removeMachine dispatches the matching Intent', async () => {
     const { core, dispatched } = fakeCore();
+    const phone = await createPhoneCoreNative({ core, kv: memoryKV() });
+
+    await phone.removeMachine('m1');
+    expect(dispatched).toEqual([{ removeMachine: { pubkeyHex: 'm1' } }]);
+  });
+
+  it('removeMachine logs rather than throwing when the dispatch fails', async () => {
+    const { core } = fakeCore();
+    core.dispatch = vi.fn(() => Promise.reject(new Error('boom')));
     const log = vi.fn();
     const phone = await createPhoneCoreNative({ core, kv: memoryKV(), log });
 
-    await phone.removeMachine('m1');
-    expect(dispatched).toEqual([]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('not supported yet'));
+    await expect(phone.removeMachine('m1')).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('removeMachine dispatch failed'));
+  });
+
+  it('sendSessionImageNative dispatches Intent::SendSessionImage with the raw bytes', async () => {
+    const { core, dispatched } = fakeCore();
+    const phone = await createPhoneCoreNative({ core, kv: memoryKV() });
+
+    await phone.sendSessionImageNative?.({
+      machine: 'm1',
+      sessionId: 's1',
+      text: 'look at this',
+      image: new Uint8Array([1, 2, 3]),
+      filename: 'cat.png',
+      mimeType: 'image/png',
+    });
+
+    expect(dispatched).toEqual([
+      {
+        sendSessionImage: {
+          machine: 'm1',
+          sessionId: 's1',
+          text: 'look at this',
+          image: [1, 2, 3],
+          filename: 'cat.png',
+          mimeType: 'image/png',
+        },
+      },
+    ]);
   });
 });

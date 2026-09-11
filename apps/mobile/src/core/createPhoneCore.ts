@@ -171,6 +171,29 @@ export interface PhoneCore {
   deleteSession(machine: string, sessionId: string, label?: string): void;
   /** Cancel a pending deleteSession and restore the snapshot. */
   undoDelete(): void;
+  /**
+   * Attach + send a session image. Present ONLY on the native composition
+   * (`createPhoneCoreNative`) — `Intent::SendSessionImage` does the entire
+   * Blossom-upload-then-chunk-fallback as one atomic step inside Rust, so
+   * this composition's own screen-level orchestrator
+   * (`ui/imageFile.ts`'s `sendSessionImage()`, which calls
+   * `BridgeApi.uploadImageBlossom`/`uploadImageChunk` as two INDEPENDENT
+   * steps it sequences itself) has no native equivalent to plug into:
+   * shimming it 1:1 would either double-upload or silently break the
+   * documented fallback (see `createNativeBridgeApi`'s module doc).
+   * `SessionScreen.tsx` checks for this method's presence to pick which of
+   * the two entirely different image-send paths a screen attachment takes.
+   */
+  sendSessionImageNative?(params: {
+    machine: string;
+    sessionId: string;
+    text: string;
+    /** Raw decoded bytes — the screen already has these from processing the
+     *  picked file; this composition itself does no decoding. */
+    image: Uint8Array;
+    filename: string;
+    mimeType: string;
+  }): Promise<void>;
 }
 
 export async function createPhoneCore(deps: PhoneCoreDeps): Promise<PhoneCore> {

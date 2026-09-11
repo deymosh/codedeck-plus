@@ -289,6 +289,81 @@ describe('staged attachment → send', () => {
 });
 
 /**
+ * `PhoneCore.sendSessionImageNative` (F2b) is optional — present only on the
+ * native composition. `SessionScreen` picks the whole-dispatch path over the
+ * local Blossom-then-chunk orchestration purely on this method's presence,
+ * so grafting it onto an otherwise-local `createPhoneCore()` core is enough
+ * to exercise the branch without standing up the full native composition.
+ */
+describe('native session image send (PhoneCore.sendSessionImageNative present)', () => {
+  it('dispatches the whole image with no BridgeApi upload call, then clears the composer', async () => {
+    const core = await makeCore(['images']);
+    vi.mocked(imageFile.processImageFile).mockResolvedValue({
+      base64: 'QUJD',
+      mimeType: 'image/png',
+      filename: 'cat.png',
+      sizeBytes: 3,
+    });
+    const sendNative = vi.fn().mockResolvedValue(undefined);
+    core.sendSessionImageNative = sendNative;
+    const uploadSpy = vi.spyOn(core.api, 'uploadImageBlossom');
+    const chunkSpy = vi.spyOn(core.api, 'uploadImageChunk');
+    renderSession(core);
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'cat.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('session-file-input'), { target: { files: [file] } });
+    fireEvent.change(screen.getByPlaceholderText('Message the session…'), {
+      target: { value: 'what is this?' },
+    });
+    fireEvent.click(screen.getByText('Send'));
+
+    await waitFor(() => expect(sendNative).toHaveBeenCalledOnce());
+    const [params] = sendNative.mock.calls[0]!;
+    expect(params.machine).toBe(MACHINE);
+    expect(params.sessionId).toBe('s1');
+    expect(params.text).toBe('what is this?');
+    expect(params.filename).toBe('cat.png');
+    expect(params.mimeType).toBe('image/png');
+    expect(Array.from(params.image as Uint8Array)).toEqual([65, 66, 67]); // 'QUJD' → 'ABC'
+
+    expect(uploadSpy).not.toHaveBeenCalled();
+    expect(chunkSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('session-attach-strip')).toBeNull());
+    expect(
+      (screen.getByPlaceholderText('Message the session…') as HTMLTextAreaElement).value,
+    ).toBe('');
+  });
+
+  it('a dispatch failure shows the inline error and keeps draft + staged image', async () => {
+    const core = await makeCore(['images']);
+    vi.mocked(imageFile.processImageFile).mockResolvedValue({
+      base64: 'QUJD',
+      mimeType: 'image/png',
+      filename: 'cat.png',
+      sizeBytes: 3,
+    });
+    core.sendSessionImageNative = vi.fn().mockRejectedValue(new Error('dispatch failed'));
+    const uploadSpy = vi.spyOn(core.api, 'uploadImageBlossom');
+    renderSession(core);
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'cat.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('session-file-input'), { target: { files: [file] } });
+    fireEvent.change(screen.getByPlaceholderText('Message the session…'), {
+      target: { value: 'keep me' },
+    });
+    fireEvent.click(screen.getByText('Send'));
+
+    const banner = await screen.findByTestId('session-upload-failed');
+    expect(banner.textContent).toContain('Image upload failed');
+    expect(screen.getByTestId('session-attach-strip')).toBeTruthy(); // still staged
+    expect(
+      (screen.getByPlaceholderText('Message the session…') as HTMLTextAreaElement).value,
+    ).toBe('keep me');
+    expect(uploadSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * CDX-086 — the coverage hole that let the founder's bug ship.
  *
  * Every pre-existing mock in this file resolves IMMEDIATELY, and the only stall

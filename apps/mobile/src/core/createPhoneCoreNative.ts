@@ -18,24 +18,21 @@
  * against the SAME `NativeCore` handle, and hydrate transcripts for the
  * sessions already known at boot.
  *
- * Two `PhoneCore` methods have no Rust equivalent yet and are honest,
- * logged no-ops rather than invented behavior:
- * - `removeMachine`: unpairing has no `Intent` at all yet (a real gap, not
- *   an oversight — `apps/mobile/src/ui/Sidebar.tsx`'s "forget this machine"
- *   action would need one designed and added before this can work
- *   natively).
- * - `client` is omitted from the returned `PhoneCore` (now optional):
- *   nothing in production UI reads it directly (confirmed by search), and
- *   there is no `PhoneNostrClient` in native mode — Rust owns the socket.
+ * `client` is omitted from the returned `PhoneCore` (now optional): nothing
+ * in production UI reads it directly (confirmed by search), and there is no
+ * `PhoneNostrClient` in native mode — Rust owns the socket.
  *
- * NOT wired here (deliberately out of scope for this composition — a UI/
- * bootstrap decision, not a backend one): which `main.tsx` capability check
- * decides whether to call this function instead of `createPhoneCore`, and
- * updating `apps/mobile/src/ui/screens/SessionScreen.tsx`'s image-send path
- * to `dispatch({ sendSessionImage })` directly instead of going through
- * `sendSessionImage()`/`BridgeApi.uploadImageBlossom`/`uploadImageChunk`
- * (see `createNativeBridgeApi`'s module doc for why those two cannot be
- * shimmed like-for-like).
+ * `sendSessionImageNative` is the one `PhoneCore` method this composition
+ * defines that `createPhoneCore.ts` does not (it is optional on the
+ * interface): `SessionScreen.tsx` checks for its presence to route a session
+ * image attachment through a single `Intent::SendSessionImage` dispatch
+ * instead of the local composition's own upload-then-send orchestration —
+ * see `createNativeBridgeApi`'s module doc for why those two cannot be
+ * shimmed 1:1 through `BridgeApiLike`.
+ *
+ * `main.tsx` picks this composition over `createPhoneCore` via a single
+ * capability probe (`createNativeCore()` — non-null only when this APK was
+ * built with the `native-core` feature); see that module's doc.
  */
 import { bytesToHex } from './crypto';
 import { createNativeBridgeApi } from './services/nativeBridgeApi';
@@ -143,11 +140,16 @@ export async function createPhoneCoreNative(deps: PhoneCoreNativeDeps): Promise<
     },
     flush: () => transcript.getState().flush(),
 
+    // Forgetting a machine is now a single `Intent` — the store cleanup
+    // `createPhoneCore.ts` does by hand (drop the machine, clear its
+    // sessions' unread dots, remove their transcripts, deselect, resubscribe)
+    // is `client_runtime::Core`'s job on the other side of this dispatch.
     removeMachine: async (pubkeyHex: string) => {
-      log?.(
-        `[PhoneCoreNative] removeMachine(${pubkeyHex.slice(0, 8)}…) is not supported yet — ` +
-          'no Intent exists for unpairing a machine natively.',
-      );
+      try {
+        await core.dispatch({ removeMachine: { pubkeyHex } });
+      } catch (err) {
+        log?.(`[PhoneCoreNative] removeMachine dispatch failed: ${err}`);
+      }
     },
 
     deleteSession: (machine, sessionId, label) => {
@@ -158,5 +160,21 @@ export async function createPhoneCoreNative(deps: PhoneCoreNativeDeps): Promise<
     undoDelete: () => {
       void core.dispatch('undoDelete').catch((err) => log?.(`[PhoneCoreNative] undoDelete dispatch failed: ${err}`));
     },
+
+    // See the `PhoneCore` interface doc: `Intent::SendSessionImage` does the
+    // whole Blossom-upload-then-chunk-fallback as one step in Rust, so this
+    // is a plain dispatch, not the multi-callback orchestration the local
+    // composition's `sendSessionImage()` does.
+    sendSessionImageNative: (params) =>
+      core.dispatch({
+        sendSessionImage: {
+          machine: params.machine,
+          sessionId: params.sessionId,
+          text: params.text,
+          image: Array.from(params.image),
+          filename: params.filename,
+          mimeType: params.mimeType,
+        },
+      }),
   };
 }

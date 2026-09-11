@@ -58,6 +58,9 @@ export type Intent =
   | { confirmStagedPairing: { label: string } }
   | 'dismissStagedPairing'
   | 'resetPairing'
+  /** Forget a paired machine and its sessions — purely local, there is no
+   *  wire message for unpairing (the bridge has no concept of it). */
+  | { removeMachine: { pubkeyHex: string } }
   | {
       respondPermission: {
         machine: string;
