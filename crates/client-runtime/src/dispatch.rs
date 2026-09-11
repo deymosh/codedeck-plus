@@ -699,7 +699,7 @@ fn to_value<T: serde::Serialize>(value: &T) -> serde_json::Value {
     serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
 }
 
-fn sync_effect_to_cmd(effect: SyncEffect) -> PhoneToBridge {
+pub(crate) fn sync_effect_to_cmd(effect: SyncEffect) -> PhoneToBridge {
     match effect {
         SyncEffect::SendSyncRequest {
             session_id,

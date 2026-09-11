@@ -440,6 +440,8 @@ enum Msg {
     },
     /// The delete-controller's 4 s undo window elapsed.
     UndoTimerFired,
+    /// The connection FSM asked for a post-(re)connect reconcile.
+    RefreshReconcile,
     /// A kind-1059 gift wrap arrived on the DM subscription.
     DmEvent(NostrEvent),
     /// The DM subscription of `epoch` died (not a deliberate teardown).
@@ -592,6 +594,7 @@ impl Loop {
                 Msg::View(query) => self.answer_view(query),
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
                 Msg::UndoTimerFired => self.on_undo_timer().await,
+                Msg::RefreshReconcile => self.on_refresh_reconcile().await,
                 Msg::DmEvent(event) => self.on_dm_event(event).await,
                 Msg::DmClosed(epoch) => {
                     if epoch == self.dm_epoch {
@@ -639,8 +642,12 @@ impl Loop {
                 self.vis_timer = Some(self.arm(delay_ms, Msg::VisibilitySettled));
             }
             ConnectionEffect::CancelVisibilityCheck => abort(&mut self.vis_timer),
-            // F2 sync engine hooks here; F1 has no transcript store yet.
-            ConnectionEffect::RefreshAndReconcile => {}
+            // A (re)connect: reset stuck sync cycles, ask every machine for a
+            // fresh list, reconcile from what we know. Deferred to a message so
+            // this sync `apply` can stay non-blocking.
+            ConnectionEffect::RefreshAndReconcile => {
+                let _ = self.self_tx.send(Msg::RefreshReconcile);
+            }
         }
     }
 
@@ -901,6 +908,56 @@ impl Loop {
         }
         // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
         // notification-cancel seam; `r.mesh_join` a mesh seam (F2b ports).
+    }
+
+    /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
+    /// `refreshAndReconcile` handler.
+    async fn on_refresh_reconcile(&mut self) {
+        // Reset any sync cycle a prior failure left stuck.
+        self.stores.transcript.on_reconnect(None);
+
+        let machines = self.stores.machines.machine_pubkeys();
+        for machine in &machines {
+            // Ask for a fresh session list (the stored 30515's seqHigh goes
+            // stale — CDX-008).
+            self.on_send(
+                machine.clone(),
+                PhoneToBridge::RefreshSessions(client_core::wire::commands::BareMsg {
+                    version: Default::default(),
+                }),
+                None,
+            );
+            // Reconcile from what we already know while the answers travel.
+            let targets: Vec<(String, u64)> = self
+                .stores
+                .machines
+                .machine(machine)
+                .map(|mv| {
+                    mv.sessions
+                        .iter()
+                        .filter_map(|(id, v)| v.info.seq_high.map(|h| (id.clone(), h)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (session_id, target) in targets {
+                if target == 0 {
+                    continue;
+                }
+                let effects = self.stores.transcript.ensure_synced(
+                    machine,
+                    &session_id,
+                    target,
+                    self.clock.now_ms(),
+                );
+                for e in effects {
+                    self.on_send(machine.clone(), crate::dispatch::sync_effect_to_cmd(e), None);
+                }
+            }
+        }
+
+        self.stores.outbox.sweep(self.clock.now_ms());
+        self.persist_store(StoreId::Outbox).await;
+        self.state_changed(SliceId::Outbox);
     }
 
     /// The undo window elapsed — commit the delete (send `close-session`).
