@@ -1,8 +1,12 @@
 # `client-core` / `client-runtime` — the shared Rust client
 
-Status: **F1 in progress** (migration plan). The Node/TS side (`packages/*`,
+Status: **F2b in progress** (migration plan). The Node/TS side (`packages/*`,
 `apps/bridge`) is unaffected; `apps/mobile` is frozen and still ships the APK
-until Compose reaches parity.
+until Compose reaches parity. `apps/mobile/src-tauri`'s `native-core` feature
+(off by default) now exposes the full plan §2 View/Intent/CoreEvent surface
+as Tauri commands over real SQLite persistence; `apps/mobile/src` itself has
+not been switched over yet — that (and deleting `src/core`) is the one item
+left before the F2b stop-point.
 
 ## Why
 
@@ -149,7 +153,10 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | MDK/MLS engine relocation | `apps/mobile/src-tauri/src/marmot.rs` + `sqlstore.rs` | `client_core::marmot_engine` (feat `marmot`, SQLCipher) + `client_runtime::marmot::MarmotEngineImpl` | ✅ F2b — the MDK 0.8 / MLS + `rusqlite bundled-sqlcipher-vendored-openssl` engine moved verbatim into `client_core` behind feat `marmot` (off → `client-core` stays pure nostr+serde). `apps/mobile/src-tauri` now depends on `client-core` with `features = ["marmot"]` (same transitive stack, shared) and keeps only the Tauri command wrapper. CI builds + tests both `marmot` on and off. |
 | `tools/contract-harness/` (Node devtool) | new | `tools/contract-harness` | ✅ F2b — a real `BridgeCore` + `FakeSdkFacade` fronted by a genuine `ws://127.0.0.1:<port>` relay (`relayServer.ts`, a thin wire adapter over `@codedeck/testkit`'s `InMemoryRelay`), driven by a documented stdin/stdout JSON control protocol (`get-relay-url` / `open-pairing-window` / `emit-sdk-message` / `get-bridge-transcript` / `restart-bridge` / `drain-logs` / `shutdown` — see its `README.md`). `restart-bridge` shuts the current `BridgeCore` down and starts a fresh one with the same identity/storage/state dir — a real process-restart scenario, not a reset. Process + socket, no FFI shim, matching the plan's rejection of one. Wired into the pnpm workspace (`tools/*`); its own `typecheck`/`test`/`build` run under the existing recursive scripts, `./codedeck check` green. |
 | Rust integration test against the harness — Scenario A, in full (Layer 2 Go/No-Go gate) | `phoneCore.contract.test.ts` Scenario A | `crates/client-runtime/tests/contract_harness.rs` | ✅ F2b — spawns `node tools/contract-harness/out/main.js` as a real subprocess, speaks its stdin/stdout control protocol, and drives a real `client_runtime::Core` against it over an actual `ws://` socket, end to end: connect → `open-pairing-window` → `Intent::BeginPairing` → `pairing_view().phase == "paired"` → `Intent::CreateSession` → the harness's `list-sdk-sessions` names the spawned session → `emit-sdk-message` (init) → the session is visible in `machines_view()` → `emit-sdk-message` (assistant text) → rows land in the injected `MemoryTranscriptStore` → `Intent::SendInput` → the outbox item reaches `OutboxItemState::Confirmed` via a real `input-ack` → `restart-bridge` (the harness hands the resumed session a FRESH `FakeSdkFacade`, same as a real bridge restart killing the old SDK subprocess) → `BridgeCore`'s own resume-on-boot re-spawns the SAME session id → the bridge produces output while the phone is dark → `core.set_online(false)`/`set_online(true)` (the phone's own connectivity, independent of the bridge) → the FSM reconnects on its own, no manual nudging → sync gap-refill catches the phone's transcript up → asserted byte-identical to the bridge's own store, seq for seq. No FFI shim — process + socket, exactly as the plan calls for. `#[ignore]`d by default (needs Node + the harness build; `cargo test -p client-runtime --test contract_harness -- --ignored`), so `cargo test --workspace` needs no JS toolchain. Verified passing consistently across repeated runs (~0.5s each). |
-| Re-point `apps/mobile` at the Rust `Core` + delete `src/core` | `createPhoneCore.ts` consumers | `client_runtime` bindings | ⏳ F2b — the remaining item before the F2b stop-point: rewrite `apps/mobile/src-tauri/src/corebridge.rs` to expose the full View/Intent/CoreEvent surface as Tauri commands, switch `apps/mobile/src` to consume it, then delete `src/core` last, only after `./codedeck check` + a full manual smoke pass are green against the re-pointed app. |
+`Intent` / `CoreEvent` get a stable JSON shape | — (new) | `client_runtime::intent::Intent`, `client_runtime::core::CoreEvent` | ✅ F2b — both gained `Serialize`/`Deserialize` (`Intent`) and `Serialize` (`CoreEvent`, `SliceId`, `ActionFailed`): externally tagged, camelCase throughout (`{"sendInput":{"machine":...,"sessionId":...}}`, bare `"undoDelete"` for a unit variant) — needs BOTH `rename_all` (variant names) and `rename_all_fields` (struct-variant field names), a one-line-easy-to-miss serde gotcha caught by a dedicated round-trip test on each. Every field type either already touched the wire codec (`PermissionModifier`, `EffortLevel`, `PhoneToBridge`, …) or is a plain type serde handles natively, so this was additive — no `Intent::apply` or `Core` loop behavior changed. Per plan §2.5 the shape is stabilized, not frozen, until F3. |
+| Real persistent `Kv`/`TranscriptStore` for the native `Core` | `apps/mobile/src/platform/sqlite.ts` | `apps/mobile/src-tauri/src/native_ports.rs` | ✅ F2b — `KvSqlite` + `TranscriptStoreSqlite`, one shared `rusqlite::Connection`, opened INSIDE the core's own dedicated thread (`Connection` isn't `Send`; every `client_runtime` port lives behind an `Rc`). Deliberately schema-compatible with the WebView's existing migrations — same `codedeck.db` file, same `kv(key, value)` / `transcript(machine_pubkey, session_id, seq, kind, json, created_at)` tables — so an install upgrading onto the native path keeps its pairing, sessions, and transcript history. `corebridge.rs`'s `core_init` resolves `app_config_dir()` on the main thread (needs the `AppHandle`) then passes the bare path into the thread closure. Replaces F1's `CorePorts::default()` (fully in-memory — lost every store on every restart). |
+| `corebridge.rs` exposes the full View/Intent/CoreEvent surface | `createPhoneCore.ts` | `apps/mobile/src-tauri/src/corebridge.rs` | ✅ F2b — `core_dispatch(intent: Intent)` (one command for all ~30 actions, `Intent`'s own JSON shape, no hand-rolled decoding) + `core_machines_view` / `core_settings_view` / `core_outbox_view` / `core_pairing_view` / `core_dm_view` / `core_marmot_view` (each a thin wrapper over the matching `Core::*_view()`; `core_connection_status` from F1 already covers `ConnectionView`'s ground) + `TauriObserver::on_event` forwarding the full semantic `CoreEvent` stream as a new `core://event` Tauri event (additive to F1's three hand-mapped events). All `native-core`-gated; the default build is untouched. |
+| Re-point `apps/mobile` at the Rust `Core` + delete `src/core` | `createPhoneCore.ts` consumers | `apps/mobile/src` | ⏳ F2b — the one remaining item before the F2b stop-point. The Rust side is done and verified (real persistence + the full command/event surface above); what's left is switching `apps/mobile/src`'s stores/UI to call `core_dispatch`/`core_*_view`/listen on `core://event` instead of `src/core`'s own direct-socket path, then deleting `src/core` last, only after `./codedeck check` + a full manual smoke pass are green against the re-pointed app. Large and delicate (touches the currently-shipping, otherwise-frozen TS tree) — deliberately not started in the same pass as the Rust-side work above. |
 
 **F2a status: complete** — the whole pure `client-core` layer.
 
@@ -174,12 +181,39 @@ creation, live output landing in the transcript, an input reaching
 `Confirmed` via a real `input-ack`, a bridge restart with resume-on-boot, the
 phone's own FSM reconnecting on its own, and a sync gap-refill leaving the
 phone's transcript byte-identical to the bridge's — all over a genuine
-socket, no FFI shim. The only remaining item before the F2b stop-point is
-re-pointing `apps/mobile` at the Rust `Core` (then deleting `src/core`).
+socket, no FFI shim. `Intent` and `CoreEvent` now carry a stable, tested JSON
+shape, and `apps/mobile/src-tauri`'s `native-core` feature exposes the full
+surface as Tauri commands (`core_dispatch` + six `core_*_view` queries + the
+`core://event` stream) over REAL persistence (`native_ports.rs`'s SQLite-backed
+`Kv`/`TranscriptStore`, schema-compatible with the WebView's existing
+`codedeck.db` so an upgrading install keeps its data) — replacing F1's
+in-memory-only ports. The only remaining item before the F2b stop-point is
+switching `apps/mobile/src` itself to consume that surface (then deleting
+`src/core`) — large and deliberately not attempted in the same pass as the
+above.
 
-Verify: `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D
-warnings` (CI `cargo` job, `core` filter). No host toolchain needed — run in
-`rust:1-bookworm` via Docker like the rest of the repo.
+**Aside — a regression caught along the way:** the MDK-engine relocation
+earlier in F2b had removed `rusqlite` from `apps/mobile/src-tauri`'s direct
+dependencies (its own need for it, unrelated to MDK's, moved with it by
+mistake), which broke that crate's build entirely, in every feature
+configuration, undetected because verifying it needs the Tauri Linux system
+deps that a plain Rust container doesn't have and no PR had run it through
+CI yet. Fixed; see the git history for `apps/mobile/src-tauri/Cargo.toml` if
+this surfaces again after a future dependency shuffle — the lesson is that
+`cargo check` on the `crates/` workspace alone does NOT cover `apps/mobile/
+src-tauri`, which needs its own verification pass.
+
+Verify (`crates/`): `cargo test --workspace` + `cargo clippy --workspace
+--all-targets -- -D warnings` (CI `cargo` job, `core` filter). No host
+toolchain needed — run in `rust:1-bookworm` via Docker like the rest of the
+repo.
+
+Verify (`apps/mobile/src-tauri`, `native-core` and default features both):
+`cargo test` / `cargo build --features native-core` (CI `cargo` job, `rust`
+filter). This needs the Tauri Linux system deps (`libwebkit2gtk-4.1-dev
+libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf`) installed
+into the same `rust:1-bookworm` image — a plain `crates/`-only container does
+NOT cover this crate at all (see the regression note above).
 
 ## F1 status
 
