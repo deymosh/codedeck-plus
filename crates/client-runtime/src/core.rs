@@ -37,7 +37,8 @@ use client_core::stores::dm::{
     AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
 };
 use client_core::stores::marmot::{
-    AddOutcome as MarmotAddOutcome, MarmotIngested, GROUP_MESSAGE_KIND, WELCOME_RUMOR_KIND,
+    should_mint_key_package, AddOutcome as MarmotAddOutcome, MarmotIngested, PublishedKeyPackage,
+    GROUP_MESSAGE_KIND, KEY_PACKAGE_ROTATION_MS, KP_RELAY_LIST_KIND, WELCOME_RUMOR_KIND,
 };
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
@@ -453,10 +454,16 @@ enum Msg {
     DmEvent(NostrEvent),
     /// The DM subscription of `epoch` died (not a deliberate teardown).
     DmClosed(u64),
-    /// A kind-445 group message arrived on the Marmot subscription.
-    MarmotEvent(NostrEvent),
+    /// A kind-445 group message arrived on the Marmot subscription (the raw
+    /// relay event object — the MLS engine re-decrypts from that, same as a
+    /// buffered VEIL-029 re-feed).
+    MarmotEvent(serde_json::Value),
     /// The Marmot subscription of `epoch` died.
     MarmotClosed(u64),
+    /// A (re)connect: run the Marmot start sequence (engine init, group
+    /// reconcile, KeyPackage / 10051 publish, then the 445 sub). Deferred to a
+    /// message so the sync connection `apply` stays non-blocking.
+    MarmotStart,
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -622,6 +629,7 @@ impl Loop {
                         self.marmot_sub = None;
                     }
                 }
+                Msg::MarmotStart => self.on_marmot_start().await,
             }
         }
     }
@@ -647,7 +655,7 @@ impl Loop {
                 self.ws.ensure_connected();
                 self.nostr.connect();
                 self.start_dm_sub();
-                self.start_marmot_sub();
+                let _ = self.self_tx.send(Msg::MarmotStart);
             }
             ConnectionEffect::CloseSocket => {
                 self.nostr.disconnect();
@@ -855,12 +863,20 @@ impl Loop {
         let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
         let dm_send = result.dm_send.clone();
         let dm_image_send = result.dm_image_send.clone();
+        let marmot_accept = result.marmot_accept.clone();
+        let marmot_send = result.marmot_send.clone();
         self.interpret_intent(result).await;
         if let Some((peer, text)) = dm_send {
             self.send_dm(peer, text).await;
         }
         if let Some((peer, text, image)) = dm_image_send {
             self.send_dm_image(peer, text, image).await;
+        }
+        if let Some(welcome_id) = marmot_accept {
+            self.accept_marmot_welcome(welcome_id).await;
+        }
+        if let Some((group_id, text)) = marmot_send {
+            self.send_marmot_message(group_id, text).await;
         }
     }
 
@@ -1194,7 +1210,7 @@ impl Loop {
         let close_tx = self.self_tx.clone();
         let callbacks = SubCallbacks {
             on_event: Rc::new(move |ev: &NostrEvent| {
-                let _ = ev_tx.send(Msg::MarmotEvent(ev.clone()));
+                let _ = ev_tx.send(Msg::MarmotEvent(ev.raw.clone()));
             }),
             on_eose: Rc::new(|| {}),
             on_close: Rc::new(move |_reason| {
@@ -1215,11 +1231,12 @@ impl Loop {
     /// result into the Marmot store. A 445 for a group we have not joined yet is
     /// buffered (VEIL-029) and re-fed once the welcome is accepted; it is never
     /// dropped and never a throw. `NoMarmot` errors — then it counts as an
-    /// engine error, as it did before the engine existed.
-    async fn on_marmot_event(&mut self, ev: NostrEvent) {
+    /// engine error, as it did before the engine existed. Also the entry point
+    /// for a VEIL-029 re-feed, which passes the buffered event verbatim.
+    async fn on_marmot_event(&mut self, raw: serde_json::Value) {
         self.stores.marmot.note_event_received();
         let me = self.identity.pubkey_hex.clone();
-        match self.marmot_engine.ingest(&ev.raw).await {
+        match self.marmot_engine.ingest(&raw).await {
             Ok(MarmotIngested::Message(result)) => {
                 if let Some(MarmotAddOutcome::Inserted {
                     is_incoming,
@@ -1241,7 +1258,7 @@ impl Loop {
             // A 445 whose group is not joined yet: hold the ORIGINAL event so it
             // can be re-fed verbatim after `accept_welcome` (VEIL-029 / -167).
             Ok(MarmotIngested::NotJoined { h_tag }) => {
-                self.stores.marmot.buffer_not_joined(&h_tag, ev.raw.clone());
+                self.stores.marmot.buffer_not_joined(&h_tag, raw);
                 self.state_changed(SliceId::Marmot);
             }
             Ok(MarmotIngested::Welcome(welcome)) => {
@@ -1255,6 +1272,142 @@ impl Loop {
             Ok(MarmotIngested::None) => {}
             Err(_) => self.stores.marmot.note_error(),
         }
+    }
+
+    /// (Re)connect: engine init (idempotent) → reconcile joined groups from the
+    /// engine → apply any pending welcomes → mint + publish the KeyPackage once
+    /// (CDX-030) plus the kind-10051 KP relay list → open the 445 subscription.
+    /// `NoMarmot` fails `init`, so with the engine absent this is a no-op and
+    /// Marmot chats stay unavailable (NIP-17 only), same as before the engine
+    /// existed.
+    async fn on_marmot_start(&mut self) {
+        if self
+            .marmot_engine
+            .init(&self.identity.secret_hex())
+            .await
+            .is_err()
+        {
+            return;
+        }
+        self.stores.marmot.available = true;
+
+        // A restart or a peer's action may have changed the joined groups —
+        // reconcile from the engine's own book-keeping.
+        if let Ok(groups) = self.marmot_engine.list_groups().await {
+            if !groups.is_empty() {
+                let me = self.identity.pubkey_hex.clone();
+                let now = self.clock.now_ms();
+                for g in &groups {
+                    self.stores.marmot.upsert_conversation(g, &me, now);
+                }
+                self.persist_store(StoreId::Marmot).await;
+                self.state_changed(SliceId::Marmot);
+            }
+        }
+
+        if let Ok(welcomes) = self.marmot_engine.pending_welcomes().await {
+            if !welcomes.is_empty() {
+                for w in welcomes {
+                    self.stores.marmot.apply_welcome(w);
+                }
+                self.state_changed(SliceId::Marmot);
+            }
+        }
+
+        let relays = self.stores.settings.data.relays.clone();
+        if !relays.is_empty() {
+            let now = self.clock.now_ms();
+            let payload = serde_json::to_string(&relays).unwrap_or_default();
+            if should_mint_key_package(
+                self.stores.marmot.published_key_package.as_ref(),
+                &payload,
+                now,
+                KEY_PACKAGE_ROTATION_MS,
+            ) {
+                if let Ok(kp_event) = self.marmot_engine.publish_key_package(&relays).await {
+                    if let Some(record) = key_package_record(&kp_event, &payload, now) {
+                        self.publish_value(kp_event);
+                        self.stores.marmot.store_published_key_package(record);
+                        self.persist_store(StoreId::Marmot).await;
+                    }
+                }
+            }
+            if let Ok(event) =
+                relay_list_event(&self.identity, KP_RELAY_LIST_KIND, &relays, now / 1000)
+            {
+                self.publish_raw(event);
+            }
+        }
+
+        self.start_marmot_sub();
+    }
+
+    /// Publish an event the Marmot engine produced (kind 445 / 30443 JSON, same
+    /// field shape as [`client_core::nostr_event::SignedEvent`]).
+    fn publish_value(&self, event: serde_json::Value) {
+        match serde_json::from_value::<client_core::nostr_event::SignedEvent>(event) {
+            Ok(ev) => self.publish_raw(ev),
+            Err(_) => self.observer.action_failed(ActionFailed::PublishRejected),
+        }
+    }
+
+    /// The user accepted a pending Marmot welcome: join the group engine-side,
+    /// upsert the conversation, re-feed the 445s buffered for its `h` tag while
+    /// unjoined (VEIL-029, in order), then reopen the 445 sub to cover it.
+    /// VEIL-117: a welcome that can never be accepted (a stale KeyPackage after
+    /// reinstall) drops the card instead of retrying forever.
+    async fn accept_marmot_welcome(&mut self, welcome_id: String) {
+        let info = match self.marmot_engine.accept_welcome(&welcome_id).await {
+            Ok(info) => info,
+            Err(_) => {
+                self.stores.marmot.drop_pending_welcome(&welcome_id);
+                self.stores.marmot.note_error();
+                self.persist_store(StoreId::Marmot).await;
+                self.state_changed(SliceId::Marmot);
+                return;
+            }
+        };
+        let me = self.identity.pubkey_hex.clone();
+        let now = self.clock.now_ms();
+        let h_tag = self
+            .stores
+            .marmot
+            .on_welcome_accepted(&welcome_id, &info, &me, now);
+        self.persist_store(StoreId::Marmot).await;
+        self.state_changed(SliceId::Marmot);
+
+        for buffered in self.stores.marmot.take_buffered_for(&h_tag) {
+            self.on_marmot_event(buffered).await;
+        }
+        self.start_marmot_sub();
+    }
+
+    /// Send a Marmot group message: the engine encrypts it into a kind-445
+    /// event, which we publish; the plaintext is added locally (optimistic,
+    /// status `sent`) so the sender sees it immediately.
+    async fn send_marmot_message(&mut self, group_id: String, text: String) {
+        let out = match self.marmot_engine.send(&group_id, &text).await {
+            Ok(out) => out,
+            Err(_) => {
+                self.observer.action_failed(ActionFailed::PublishRejected);
+                return;
+            }
+        };
+        self.publish_value(out.event);
+        let me = self.identity.pubkey_hex.clone();
+        self.stores.marmot.add_message(
+            client_core::stores::marmot::MarmotMessage {
+                id: out.rumor_id,
+                group_id,
+                sender_pubkey: me.clone(),
+                content: text,
+                at: out.created_at.saturating_mul(1000),
+                status: client_core::stores::marmot::MarmotMessageStatus::Sent,
+            },
+            &me,
+        );
+        self.persist_store(StoreId::Marmot).await;
+        self.state_changed(SliceId::Marmot);
     }
 
     /// Run the notification coordinator for one event and deliver its effects.
@@ -1405,6 +1558,38 @@ fn truncate_preview(content: &str) -> String {
     } else {
         content.to_string()
     }
+}
+
+/// Extract the `PublishedKeyPackage` bookkeeping record (CDX-030) from the
+/// engine's KeyPackage event JSON: the event id and its `d` tag (the
+/// addressable identity a rotation/republish replaces).
+fn key_package_record(
+    event: &serde_json::Value,
+    relays_payload: &str,
+    now_ms: u64,
+) -> Option<PublishedKeyPackage> {
+    let id = event.get("id")?.as_str()?.to_string();
+    let d_tag = event
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .and_then(|tags| {
+            tags.iter().find_map(|t| {
+                let t = t.as_array()?;
+                if t.first()?.as_str()? == "d" {
+                    Some(t.get(1)?.as_str()?.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_default();
+    Some(PublishedKeyPackage {
+        id,
+        d_tag,
+        relays_payload: relays_payload.to_string(),
+        published_at: now_ms,
+        consumed: false,
+    })
 }
 
 fn slice_of(id: StoreId) -> SliceId {
@@ -1965,11 +2150,28 @@ mod tests {
             .await;
     }
 
-    /// A [`crate::marmot::MarmotEngine`] double: `ingest` reports one decrypted
-    /// kind-9 chat message for the seeded group; every other call errors (unused
-    /// on this path).
+    /// A [`crate::marmot::MarmotEngine`] double, configurable per test:
+    /// `ingest_results` is consumed front-to-back, one verdict per call (the
+    /// last one repeats once exhausted — a scripted sequence for a
+    /// not-joined-then-joined re-feed); `send` / `accept_welcome` answer with
+    /// the canned `Ok` set, or error (unused on that test's path) when left
+    /// `None`; `pending_welcomes_result` seeds the welcomes `on_marmot_start`
+    /// picks up.
     struct FakeMarmot {
-        result: client_core::stores::marmot::MarmotMessageResult,
+        ingest_results: RefCell<Vec<client_core::stores::marmot::MarmotIngested>>,
+        send_result: Option<crate::marmot::MarmotOutgoing>,
+        accept_result: Option<client_core::stores::marmot::MarmotGroupInfo>,
+        pending_welcomes_result: Vec<client_core::stores::marmot::MarmotWelcomeInfo>,
+    }
+    impl Default for FakeMarmot {
+        fn default() -> Self {
+            Self {
+                ingest_results: RefCell::new(vec![MarmotIngested::None]),
+                send_result: None,
+                accept_result: None,
+                pending_welcomes_result: Vec::new(),
+            }
+        }
     }
     impl crate::marmot::MarmotEngine for FakeMarmot {
         fn init(&self, _s: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, String>> {
@@ -1995,14 +2197,20 @@ mod tests {
             _group_id: &str,
             _text: &str,
         ) -> crate::ports::LocalBoxFuture<'_, Result<crate::marmot::MarmotOutgoing, String>> {
-            Box::pin(async { Err("unused".to_string()) })
+            let out = self.send_result.clone();
+            Box::pin(async move { out.ok_or_else(|| "unused".to_string()) })
         }
         fn ingest(
             &self,
             _event: &serde_json::Value,
         ) -> crate::ports::LocalBoxFuture<'_, Result<MarmotIngested, String>> {
-            let r = self.result.clone();
-            Box::pin(async move { Ok(MarmotIngested::Message(r)) })
+            let mut q = self.ingest_results.borrow_mut();
+            let r = if q.len() > 1 {
+                q.remove(0)
+            } else {
+                q.first().cloned().unwrap_or(MarmotIngested::None)
+            };
+            Box::pin(async move { Ok(r) })
         }
         fn pending_welcomes(
             &self,
@@ -2010,7 +2218,8 @@ mod tests {
             '_,
             Result<Vec<client_core::stores::marmot::MarmotWelcomeInfo>, String>,
         > {
-            Box::pin(async { Ok(Vec::new()) })
+            let v = self.pending_welcomes_result.clone();
+            Box::pin(async move { Ok(v) })
         }
         fn accept_welcome(
             &self,
@@ -2019,7 +2228,8 @@ mod tests {
             '_,
             Result<client_core::stores::marmot::MarmotGroupInfo, String>,
         > {
-            Box::pin(async { Err("unused".to_string()) })
+            let out = self.accept_result.clone();
+            Box::pin(async move { out.ok_or_else(|| "unused".to_string()) })
         }
         fn list_groups(
             &self,
@@ -2065,14 +2275,17 @@ mod tests {
                 let ports = CorePorts {
                     kv: Rc::new(kv),
                     marmot: Rc::new(FakeMarmot {
-                        result: MarmotMessageResult {
-                            group_id: "group-abc".into(),
-                            id: "rumor-1".into(),
-                            sender: peer.pubkey_hex.clone(),
-                            kind: 9,
-                            content: "hello group".into(),
-                            created_at: 1_700_000,
-                        },
+                        ingest_results: RefCell::new(vec![MarmotIngested::Message(
+                            MarmotMessageResult {
+                                group_id: "group-abc".into(),
+                                id: "rumor-1".into(),
+                                sender: peer.pubkey_hex.clone(),
+                                kind: 9,
+                                content: "hello group".into(),
+                                created_at: 1_700_000,
+                            },
+                        )]),
+                        ..FakeMarmot::default()
                     }),
                     ..CorePorts::default()
                 };
@@ -2106,6 +2319,182 @@ mod tests {
                 assert_eq!(msgs.len(), 1);
                 assert_eq!(msgs[0].content, "hello group");
                 assert_eq!(m.conversations[0].unread_count, 1);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn sending_a_marmot_message_publishes_and_adds_it_locally() {
+        use client_core::stores::marmot::{MarmotConversation, MarmotPersisted};
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let peer = generate_keypair();
+
+                let mut persisted = MarmotPersisted::default();
+                persisted.conversations.insert(
+                    "group-abc".into(),
+                    MarmotConversation {
+                        group_id: "group-abc".into(),
+                        h_tag: "hhh111".into(),
+                        peer_pubkey: peer.pubkey_hex.clone(),
+                        name: "peer".into(),
+                        member_count: 2,
+                        last_message_at: 0,
+                        unread_count: 0,
+                        last_preview: String::new(),
+                    },
+                );
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MARMOT_KEY,
+                    client_core::stores::marmot::serialize_marmot(&persisted),
+                )]);
+                let outgoing = serde_json::json!({
+                    "id": "evt-out", "pubkey": phone.pubkey_hex, "created_at": 1_700_100,
+                    "kind": 445, "tags": [["h", "hhh111"]], "content": "mls-ciphertext",
+                    "sig": "sig-out",
+                });
+                let ports = CorePorts {
+                    kv: Rc::new(kv),
+                    marmot: Rc::new(FakeMarmot {
+                        send_result: Some(crate::marmot::MarmotOutgoing {
+                            event: outgoing,
+                            rumor_id: "rumor-out".into(),
+                            created_at: 1_700_100,
+                        }),
+                        ..FakeMarmot::default()
+                    }),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                settle().await;
+
+                core.dispatch(Intent::SendMarmotMessage {
+                    group_id: "group-abc".into(),
+                    text: "hi group".into(),
+                })
+                .await;
+                settle().await;
+
+                let m = core.marmot_view().await.unwrap();
+                let msgs = &m.messages["group-abc"];
+                assert_eq!(msgs.len(), 1);
+                assert_eq!(msgs[0].content, "hi group");
+                assert_eq!(msgs[0].sender_pubkey, phone.pubkey_hex);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn accepting_a_marmot_welcome_joins_and_refeeds_buffered_445s() {
+        use client_core::stores::marmot::{
+            MarmotConversation, MarmotGroupInfo, MarmotMessageResult, MarmotPersisted,
+            MarmotWelcomeInfo,
+        };
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let peer = generate_keypair();
+
+                // One group already joined (so the 445 sub opens at all) plus a
+                // pending welcome into a SECOND group the engine has not joined.
+                let mut persisted = MarmotPersisted::default();
+                persisted.conversations.insert(
+                    "group-abc".into(),
+                    MarmotConversation {
+                        group_id: "group-abc".into(),
+                        h_tag: "hhh111".into(),
+                        peer_pubkey: peer.pubkey_hex.clone(),
+                        name: "peer".into(),
+                        member_count: 2,
+                        last_message_at: 0,
+                        unread_count: 0,
+                        last_preview: String::new(),
+                    },
+                );
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MARMOT_KEY,
+                    client_core::stores::marmot::serialize_marmot(&persisted),
+                )]);
+
+                let ports = CorePorts {
+                    kv: Rc::new(kv),
+                    marmot: Rc::new(FakeMarmot {
+                        // First 445 fed (before accept) is not-joined and gets
+                        // buffered; the re-feed after accept decrypts for real.
+                        ingest_results: RefCell::new(vec![
+                            MarmotIngested::NotJoined {
+                                h_tag: "hhh222".into(),
+                            },
+                            MarmotIngested::Message(MarmotMessageResult {
+                                group_id: "group-xyz".into(),
+                                id: "rumor-2".into(),
+                                sender: peer.pubkey_hex.clone(),
+                                kind: 9,
+                                content: "welcome to the group".into(),
+                                created_at: 1_700_200,
+                            }),
+                        ]),
+                        accept_result: Some(MarmotGroupInfo {
+                            group_id: "group-xyz".into(),
+                            h_tag: "hhh222".into(),
+                            name: String::new(),
+                            members: vec![phone.pubkey_hex.clone(), peer.pubkey_hex.clone()],
+                            admins: Vec::new(),
+                            active: true,
+                        }),
+                        pending_welcomes_result: vec![MarmotWelcomeInfo {
+                            welcome_id: "w1".into(),
+                            wrapper_id: "wrap1".into(),
+                            group_id: "group-xyz".into(),
+                            h_tag: "hhh222".into(),
+                            name: String::new(),
+                            welcomer: peer.pubkey_hex.clone(),
+                            member_count: 2,
+                        }],
+                        ..FakeMarmot::default()
+                    }),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                let marmot_sub = eose_all_with_marmot(&mut mock).await;
+                settle().await;
+
+                // A 445 for the not-yet-joined group arrives and is buffered
+                // (VEIL-029) instead of being dropped.
+                let ev = {
+                    use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+                    let keys = Keys::new(peer.secret_key.clone());
+                    EventBuilder::new(Kind::Custom(445), "mls-ciphertext")
+                        .tags([Tag::parse(["h".to_string(), "hhh222".to_string()]).unwrap()])
+                        .sign_with_keys(&keys)
+                        .unwrap()
+                        .as_json()
+                };
+                mock.push(format!(r#"["EVENT","{marmot_sub}",{ev}]"#));
+                settle().await;
+                assert_eq!(core.marmot_view().await.unwrap().buffered, 1);
+
+                core.dispatch(Intent::AcceptMarmotWelcome {
+                    welcome_id: "w1".into(),
+                })
+                .await;
+                settle().await;
+
+                let m = core.marmot_view().await.unwrap();
+                assert_eq!(m.buffered, 0, "the buffered 445 was not re-fed");
+                assert!(m.conversations.iter().any(|c| c.group_id == "group-xyz"));
+                let msgs = &m.messages["group-xyz"];
+                assert_eq!(msgs.len(), 1);
+                assert_eq!(msgs[0].content, "welcome to the group");
             })
             .await;
     }

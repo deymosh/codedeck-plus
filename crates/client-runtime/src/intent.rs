@@ -74,6 +74,10 @@ pub struct IntentResult {
     pub dm_send: Option<(String, String)>,
     /// `(peer, text, image)` — the loop uploads the image then sends the DM.
     pub dm_image_send: Option<(String, String, Vec<u8>)>,
+    /// `welcome_id` — the loop joins the MLS group engine-side.
+    pub marmot_accept: Option<String>,
+    /// `(group_id, text)` — the loop encrypts + publishes this Marmot message.
+    pub marmot_send: Option<(String, String)>,
 }
 
 impl IntentResult {
@@ -232,6 +236,21 @@ pub enum Intent {
         peer: String,
         text: String,
         image: Vec<u8>,
+    },
+    SelectMarmotGroup {
+        group_id: Option<String>,
+    },
+    MarkMarmotRead {
+        group_id: String,
+    },
+    /// Join an MLS group from a pending welcome (the loop calls the engine).
+    AcceptMarmotWelcome {
+        welcome_id: String,
+    },
+    /// Send a Marmot (MLS) group message; the loop encrypts + publishes.
+    SendMarmotMessage {
+        group_id: String,
+        text: String,
     },
     AddRelay {
         url: String,
@@ -541,6 +560,22 @@ pub fn apply(
         }
         Intent::SendDmImage { peer, text, image } => {
             r.dm_image_send = Some((peer, text, image));
+        }
+        Intent::SelectMarmotGroup { group_id } => {
+            stores.ui.select_marmot_group(group_id.as_deref());
+            stores.marmot.set_active_group(group_id.as_deref());
+            r.persist(StoreId::Marmot);
+        }
+        Intent::MarkMarmotRead { group_id } => {
+            if stores.marmot.mark_read(&group_id) {
+                r.persist(StoreId::Marmot);
+            }
+        }
+        Intent::AcceptMarmotWelcome { welcome_id } => {
+            r.marmot_accept = Some(welcome_id);
+        }
+        Intent::SendMarmotMessage { group_id, text } => {
+            r.marmot_send = Some((group_id, text));
         }
         Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
         Intent::RemoveRelay { url } => {

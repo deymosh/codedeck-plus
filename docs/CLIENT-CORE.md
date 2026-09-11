@@ -144,7 +144,7 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 | composed `Core` loop | `createPhoneCore.ts` | `client_runtime::core::Core` | ✅ F2b — async `spawn` (hydrate), Router + Intent + View + CoreEvent on one event loop; retry / vis / stale / pair / undo timers. |
 | NIP-17 DM runtime | `nostrService` DM path + `dmStore` I/O | `client_runtime::core` (1059 sub) + `client_runtime::giftwrap` | ✅ F2b — kind-1059 subscription (epoch + catch-up cursor + kind-10050 publish), `wrap_dm` / `unwrap_gift_parts` (NIP-59), `Intent::SendDm`, `DmReceived` notification. |
 | `dmAttachments` crypto / upload | `apps/mobile/src/core/dmAttachments.ts` | `client_runtime::attachments` | ✅ F2b — AES-256-GCM blob + SHA-256 id, `HttpFetch` port, BUD-02 signed upload with a retry budget, download+decrypt. The `UploadImage` intent wiring (needs `HttpFetch` in `CorePorts`) ⏳. |
-| Marmot runtime (445 sub, 444-welcome route, MDK seam) | `dmStore`/`marmotStore` I/O | `client_runtime::core` + `client_runtime::marmot` | ✅ F2b — `MarmotEngine` port (`NoMarmot` stub / `MarmotEngineImpl` behind feat `marmot`) in `CorePorts`. `Core` opens the kind-445 subscription over the joined groups' `h` tags (epoch guard + catch-up cursor, torn down when no group is joined), feeds each 445 to `marmot_engine.ingest`, folds a decrypted kind-9 rumor into `MarmotState` (unread + `DmReceived` notify), and buffers a not-joined 445 verbatim for VEIL-029 re-feed. kind-444 welcomes still ride the 1059 sub → routed to the same engine. `MarmotView` + `Core::marmot_view()`. The `StartMarmotChat` / `AcceptMarmotWelcome` / `SendMarmotMessage` intents + KP/10051 publish-on-connect ⏳. |
+| Marmot runtime (445 sub, 444-welcome route, MDK seam) | `dmStore`/`marmotStore` I/O | `client_runtime::core` + `client_runtime::marmot` | ✅ F2b — `MarmotEngine` port (`NoMarmot` stub / `MarmotEngineImpl` behind feat `marmot`) in `CorePorts`. On (re)connect `Core` runs the full start sequence (mirrors `marmotStore.start()`): engine `init` → reconcile joined groups from `list_groups` → apply pending welcomes → CDX-030 mint-once KeyPackage + publish + the kind-10051 KP relay list → open the kind-445 subscription over the joined groups' `h` tags (epoch guard + catch-up cursor, torn down when no group is joined or the engine is absent). Each 445 goes through `marmot_engine.ingest`: a decrypted kind-9 rumor folds into `MarmotState` (unread + `DmReceived` notify), a not-joined verdict buffers the event verbatim (VEIL-029). kind-444 welcomes still ride the 1059 sub → routed to the same engine. `Intent::AcceptMarmotWelcome` joins the group, re-feeds the buffered 445s for its `h` tag in order, then reopens the sub; a welcome the engine can never accept (VEIL-117, a stale KeyPackage) drops the card instead of retrying forever. `Intent::SendMarmotMessage` encrypts + publishes then adds the plaintext locally (optimistic, `sent`). `Intent::SelectMarmotGroup` / `MarkMarmotRead` are pure store ops. `MarmotView` + `Core::marmot_view()`. `StartMarmotChat` (KeyPackage fetch + `create_group`) ⏳. |
 | MDK/MLS engine relocation | `apps/mobile/src-tauri/src/marmot.rs` + `sqlstore.rs` | `client_core::marmot_engine` (feat `marmot`, SQLCipher) + `client_runtime::marmot::MarmotEngineImpl` | ✅ F2b — the MDK 0.8 / MLS + `rusqlite bundled-sqlcipher-vendored-openssl` engine moved verbatim into `client_core` behind feat `marmot` (off → `client-core` stays pure nostr+serde). `apps/mobile/src-tauri` now depends on `client-core` with `features = ["marmot"]` (same transitive stack, shared) and keeps only the Tauri command wrapper. CI builds + tests both `marmot` on and off. |
 | `tools/contract-harness/` + re-point `apps/mobile` + delete `src/core` | `createPhoneCore.ts` consumers | `client_runtime` bindings | ⏳ F2b |
 
@@ -154,14 +154,15 @@ job's `core` path filter includes `packages/protocol/fixtures/**`.
 Marmot group messaging in Rust.** `client_runtime::Core` hydrates the store
 bundle from the `Kv` port, folds every decoded `BridgeToPhone` through the
 `Router`, exposes the `View` / `Intent` / `CoreEvent` surface (plan §2), and
-drives the 1059 DM subscription and the kind-445 Marmot group subscription —
-proven end-to-end against the mock relay. The MDK/MLS engine is relocated into
+drives the 1059 DM subscription, the Marmot start sequence (engine init →
+group reconcile → KeyPackage/10051 publish), and the kind-445 group
+subscription (receive, send, accept-welcome + VEIL-029 re-feed) — proven
+end-to-end against the mock relay. The MDK/MLS engine is relocated into
 `client_core::marmot_engine` behind feat `marmot`; `client_runtime::marmot`
-carries the `MarmotEngine` port and its `MarmotEngineImpl`. ~416 workspace
+carries the `MarmotEngine` port and its `MarmotEngineImpl`. ~420 workspace
 tests (marmot off) + 317 `client-core` lib tests with `--features marmot`,
-`clippy -D warnings` clean both ways. Remaining: the Marmot user-action intents
-(`StartMarmotChat` / `AcceptMarmotWelcome` / `SendMarmotMessage`) + KeyPackage /
-10051 publish-on-connect, the `UploadImage` / DM-attachment `HttpFetch` wiring,
+`clippy -D warnings` clean both ways. Remaining: `StartMarmotChat` (KeyPackage
+fetch + `create_group`), the `UploadImage` / DM-attachment `HttpFetch` wiring,
 `tools/contract-harness/`, and re-pointing `apps/mobile` at the Rust `Core`
 (then deleting `src/core`).
 

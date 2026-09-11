@@ -3,12 +3,14 @@
 //! (phone→bridge commands) and [`crate::nip42`] (relay AUTH). The transport
 //! serializes it straight into a relay `["EVENT", …]` frame.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A signed Nostr event, ready for the wire. Field set and names match the
 /// canonical Nostr event JSON, so `serde_json::to_value(&e)` is a publishable
-/// event object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// event object — and `serde_json::from_value` round-trips one the `nostr`
+/// crate (or a relay) produced (`client-runtime` publishes the Marmot engine's
+/// event JSON this way).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedEvent {
     pub id: String,
     pub pubkey: String,
