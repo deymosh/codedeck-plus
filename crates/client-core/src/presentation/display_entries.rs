@@ -29,7 +29,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::wire::common::{OutputEntry, OutputEntryType};
+use protocol::common::{OutputEntry, OutputEntryType};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SeqEntry {

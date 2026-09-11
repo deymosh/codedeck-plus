@@ -18,6 +18,9 @@ marmot = ["client-core/marmot"]
 
 [dependencies]
 client-core = { path = "../client-core" }
+# Direct, not just transitive through client-core — makes the intended
+# layering (client-runtime depends on client-core AND protocol) explicit.
+protocol = { path = "../protocol" }
 serde = "1"
 serde_json = "1"
 

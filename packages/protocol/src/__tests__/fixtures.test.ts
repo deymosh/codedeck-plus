@@ -1,6 +1,6 @@
 /**
  * TS half of the shared codec conformance corpus (`fixtures/corpus.json`).
- * The Rust half is `crates/client-core/tests/codec_conformance.rs` and runs the
+ * The Rust half is `crates/protocol/tests/codec_conformance.rs` and runs the
  * identical assertions on the identical bytes. A zod-schema change that isn't
  * mirrored in the Rust `wire` codec (or vice versa) fails CI on one side.
  */

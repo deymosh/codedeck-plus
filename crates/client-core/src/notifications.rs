@@ -7,7 +7,7 @@
 //! notification (the UI is the notification). Sync catch-up never notifies:
 //! only the LIVE output path calls [`classify_output_entry`].
 
-use crate::wire::common::{OutputEntry, OutputEntryType};
+use protocol::common::{OutputEntry, OutputEntryType};
 
 // --- event vocabulary ---
 

@@ -9,7 +9,7 @@
 //! but a session blocked on the user must light up even while it IS the
 //! foreground session.
 
-use crate::wire::common::SessionState;
+use protocol::common::SessionState;
 
 pub fn session_needs_attention(state: Option<SessionState>, is_unread: bool) -> bool {
     matches!(

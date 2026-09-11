@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::wire::common::PermissionMode;
+use protocol::common::PermissionMode;
 
 /// Tracks which `(machine, session)` pairs have already had the preference
 /// applied.

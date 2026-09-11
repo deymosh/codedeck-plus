@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ranges::{missing_ranges, normalize_ranges, union_ranges, SeqRange};
+use protocol::ranges::{missing_ranges, normalize_ranges, union_ranges, SeqRange};
 
 pub const SYNC_MAX_ATTEMPTS: u32 = 3;
 pub const SYNC_RETRY_BASE_MS: u64 = 5_000;
@@ -402,7 +402,7 @@ mod tests {
         let mut sizes = Vec::new();
         for seq in [7, 1, 3, 2, 9, 8, 4, 6, 5, 10] {
             t.integrate_rows("m", "s", &[seq], &[]);
-            sizes.push(crate::ranges::range_size(&t.have_ranges_of("m", "s")));
+            sizes.push(protocol::ranges::range_size(&t.have_ranges_of("m", "s")));
         }
         assert_eq!(t.have_ranges_of("m", "s"), vec![(1, 10)]);
         let mut sorted = sizes.clone();

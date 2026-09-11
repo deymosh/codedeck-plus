@@ -26,9 +26,9 @@ use std::thread;
 
 use client_runtime::client_core::bridge_api::PublishVerdict;
 use client_runtime::client_core::connection::ConnectionStatus;
-use client_runtime::client_core::crypto::keypair_from_secret_hex;
-use client_runtime::client_core::wire::codec::decode_phone_to_bridge;
-use client_runtime::client_core::wire::events::BridgeToPhone;
+use client_runtime::protocol::codec::decode_phone_to_bridge;
+use client_runtime::protocol::crypto::keypair_from_secret_hex;
+use client_runtime::protocol::events::BridgeToPhone;
 use client_runtime::core::{
     ActionFailed, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
 };

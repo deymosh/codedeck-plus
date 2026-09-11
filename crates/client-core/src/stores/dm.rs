@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::{hex_from_npub, npub_from_hex};
+use protocol::crypto::{hex_from_npub, npub_from_hex};
 
 // --- Kinds + constants (standard Nostr, NOT packages/protocol) ---
 
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn parse_peer_input_accepts_npub_and_hex_rejects_garbage() {
-        let kp = crate::crypto::generate_keypair();
+        let kp = protocol::crypto::generate_keypair();
         assert_eq!(parse_peer_input(&kp.npub).as_deref(), Some(kp.pubkey_hex.as_str()));
         assert_eq!(
             parse_peer_input(&format!("  {}  ", kp.pubkey_hex.to_uppercase())).as_deref(),
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn truncate_peer_label_prefers_an_npub_form() {
-        let kp = crate::crypto::generate_keypair();
+        let kp = protocol::crypto::generate_keypair();
         let label = truncate_peer_label(&kp.pubkey_hex);
         assert!(label.starts_with("npub1"));
         assert!(label.contains('…'));
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn start_conversation_creates_once_activates_and_rejects_invalid() {
-        let kp = crate::crypto::generate_keypair();
+        let kp = protocol::crypto::generate_keypair();
         let mut s = DmState::default();
 
         assert_eq!(s.start_conversation("garbage", 10), None);

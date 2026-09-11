@@ -60,8 +60,8 @@ pub fn encode_bridge_to_phone(msg: &BridgeToPhone) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::commands::{ProviderProfileWrite, SetProviderProfileMsg, VersionFields};
-    use crate::wire::tristate::Tristate;
+    use crate::commands::{ProviderProfileWrite, SetProviderProfileMsg, VersionFields};
+    use crate::tristate::Tristate;
     use serde_json::json;
 
     #[test]

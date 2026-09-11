@@ -4,7 +4,7 @@
 //! assertions on the identical bytes. A zod-schema change that isn't mirrored
 //! here (or vice versa) fails CI on one side.
 
-use client_core::wire::{decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone, encode_phone_to_bridge};
+use protocol::{decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone, encode_phone_to_bridge};
 use serde_json::Value;
 
 // Absolute path resolved by build.rs (no `../../..` literal here).

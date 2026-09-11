@@ -191,7 +191,7 @@ impl DeleteController {
 mod tests {
     use super::*;
     use crate::stores::machines::ListingPresence;
-    use crate::wire::common::RemoteSessionInfo;
+    use protocol::common::RemoteSessionInfo;
     use DeleteEffect as E;
 
     fn info(id: &str) -> RemoteSessionInfo {

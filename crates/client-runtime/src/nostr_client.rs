@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
-use client_core::wire::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
+use protocol::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
 
 /// since-filter grace below the stored-seen cursor (overlap beats gaps; the
 /// event-id dedup absorbs the replays).

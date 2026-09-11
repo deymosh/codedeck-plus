@@ -1,7 +1,8 @@
 //! `SignedEvent` — a signed Nostr event as plain serializable data, and the one
-//! place a `nostr::Event` is flattened into it. Shared by [`crate::bridge_api`]
-//! (phone→bridge commands) and [`crate::nip42`] (relay AUTH). The transport
-//! serializes it straight into a relay `["EVENT", …]` frame.
+//! place a `nostr::Event` is flattened into it. Shared by `client-core`'s
+//! `bridge_api` (phone→bridge commands) and this crate's [`crate::nip42`]
+//! (relay AUTH). The transport serializes it straight into a relay
+//! `["EVENT", …]` frame.
 
 use serde::{Deserialize, Serialize};
 

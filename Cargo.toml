@@ -1,19 +1,30 @@
-# The Rust client workspace (migration plan F1). Node/TS packages under
+# The Rust client workspace (migration plan F1/F2). Node/TS packages under
 # packages/* and apps/bridge are unaffected — this only governs crates/*.
 #
-# client-core   = pure logic (protocol codec, crypto, reducers, stores as state
-#                 machines, sync, merge, pairing FSM, presentation). No tokio,
-#                 no sockets, no I/O. Deterministic. The part that is never
-#                 duplicated.
+# protocol       = the wire contract (codec, schemas, ranges, chunking,
+#                 NIP-42/crypto primitives). Depends on nothing else in this
+#                 workspace — client-core depends on it, never the reverse, so
+#                 a future Rust bridge (bridge-core/bridge-runtime, see
+#                 docs/CLIENT-CORE.md) can consume it too without reorganizing
+#                 anything here. Mirrors packages/protocol (TS), which stays
+#                 the normative zod spec for now; see this crate's own doc
+#                 comment and `tests/codec_conformance.rs` for the anti-drift
+#                 mechanism.
+# client-core   = client domain logic (reducers, stores as state machines,
+#                 sync, merge, pairing FSM, presentation). Depends on protocol.
+#                 No tokio, no sockets, no I/O, no Tauri/Android/Node/
+#                 filesystem. Deterministic. The part that is never duplicated
+#                 between Android and a future desktop client.
 # client-runtime = the async host (tokio reactor, Transport driver, lifecycle,
-#                 ports wiring). Bindings (UniFFI / tauri::command) attach here.
+#                 ports wiring). Depends on client-core AND protocol. Bindings
+#                 (UniFFI / tauri::command) attach here.
 #
 # apps/mobile/src-tauri and its tauri-plugin-* crates keep their own build and
 # are deliberately NOT members yet (apps/mobile is frozen; they join when
 # apps/android is built).
 [workspace]
 resolver = "2"
-members = ["crates/client-core", "crates/client-runtime"]
+members = ["crates/protocol", "crates/client-core", "crates/client-runtime"]
 exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
 
 [workspace.package]

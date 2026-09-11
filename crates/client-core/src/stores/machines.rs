@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::wire::capabilities::BridgeHostKind;
-use crate::wire::common::{GsdState, ProviderProfileInfo, RemoteSessionInfo, UsageData};
-use crate::wire::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
+use protocol::capabilities::BridgeHostKind;
+use protocol::common::{GsdState, ProviderProfileInfo, RemoteSessionInfo, UsageData};
+use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
 /// A user-dismissed session id keeps suppressing incoming lists for this long
 /// (then the bridge is trusted again — it has had ample time to process the
@@ -546,8 +546,8 @@ impl MachinesState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::codec::decode_bridge_to_phone;
-    use crate::wire::events::BridgeToPhone;
+    use protocol::codec::decode_bridge_to_phone;
+    use protocol::events::BridgeToPhone;
     use serde_json::json;
 
     fn info(id: &str) -> RemoteSessionInfo {
@@ -586,7 +586,7 @@ mod tests {
             "type": "sessions",
             "machine": "m1",
             "sessions": sessions,
-            "protocolVersion": crate::wire::capabilities::PROTOCOL_VERSION,
+            "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
         });
         if let (Some(o), Some(e)) = (obj.as_object_mut(), extra.as_object()) {
             for (k, v) in e {

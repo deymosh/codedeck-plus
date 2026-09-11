@@ -8,7 +8,7 @@
 //! - no confirmation within ~8 s → the display reverts to the last CONFIRMED
 //!   mode (the request may have been lost; the button must not lie).
 
-use crate::wire::common::PermissionMode;
+use protocol::common::PermissionMode;
 
 /// Legacy cycle order.
 pub const MODE_CYCLE: [PermissionMode; 3] = [

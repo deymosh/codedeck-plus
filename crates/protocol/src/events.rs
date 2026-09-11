@@ -391,7 +391,7 @@ mod tests {
         }}));
         match m {
             BridgeToPhone::Output(o) => {
-                assert_eq!(o.entry.entry_type, crate::wire::common::OutputEntryType::Diff);
+                assert_eq!(o.entry.entry_type, crate::common::OutputEntryType::Diff);
                 assert_eq!(o.entry.diff.unwrap().truncated, Some(true));
             }
             _ => panic!(),

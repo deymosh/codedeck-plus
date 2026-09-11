@@ -1,0 +1,20 @@
+[package]
+name = "protocol"
+description = "CodeDeck+ wire contract (pure). Mirrors packages/protocol's zod schemas; source of truth for client-core/client-runtime and (future) bridge-core/bridge-runtime."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "protocol"
+
+[dependencies]
+# NIP-44 v2 + keys + NIP-42 AUTH signing — verified against this crate in the
+# F0 uniffi probe. default-features = false keeps the tree tight.
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
+thiserror = "1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

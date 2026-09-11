@@ -23,14 +23,14 @@ use std::collections::HashSet;
 use nostr::key::{Keys, PublicKey};
 use nostr::{EventBuilder, Kind, Tag, Timestamp};
 
-use crate::chunking::{AssemblerResult, ChunkAssembler};
-use crate::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
-use crate::nostr_event::SignedEvent;
-use crate::wire::capabilities::{ALL_PHONE_CAPABILITIES, PROTOCOL_VERSION};
-use crate::wire::codec::encode_phone_to_bridge;
-use crate::wire::commands::PhoneToBridge;
-use crate::wire::events::BridgeToPhone;
-use crate::wire::kinds::{COMMAND_EXPIRY_SECONDS, COMMAND_KIND};
+use protocol::chunking::{AssemblerResult, ChunkAssembler};
+use protocol::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
+use protocol::nostr_event::SignedEvent;
+use protocol::capabilities::{ALL_PHONE_CAPABILITIES, PROTOCOL_VERSION};
+use protocol::codec::encode_phone_to_bridge;
+use protocol::commands::PhoneToBridge;
+use protocol::events::BridgeToPhone;
+use protocol::kinds::{COMMAND_EXPIRY_SECONDS, COMMAND_KIND};
 
 /// Most-recent invalid-payload records kept for diagnostics (older ones drop).
 const INVALID_RECORDS_CAP: usize = 100;
@@ -357,7 +357,7 @@ impl BridgeApi {
             }
         };
 
-        match crate::wire::codec::decode_bridge_to_phone(&plaintext) {
+        match protocol::codec::decode_bridge_to_phone(&plaintext) {
             Ok(msg) => Ingested::Message(Box::new(msg)),
             Err(error) => {
                 self.record_invalid(event, InvalidStage::Decode, error);
@@ -405,9 +405,9 @@ impl BridgeApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunking::frame_encoded_message;
-    use crate::crypto::{generate_keypair, keypair_from_secret_hex};
-    use crate::wire::codec::{decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone};
+    use protocol::chunking::frame_encoded_message;
+    use protocol::crypto::{generate_keypair, keypair_from_secret_hex};
+    use protocol::codec::{decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone};
     use serde_json::json;
 
     const SEC_PHONE: &str =
@@ -432,7 +432,7 @@ mod tests {
         IncomingEvent {
             id: "evt-1",
             pubkey: author,
-            kind: crate::wire::kinds::LIVE_KIND,
+            kind: protocol::kinds::LIVE_KIND,
             content,
         }
     }
@@ -522,7 +522,7 @@ mod tests {
         let plaintext = decrypt_from(&mac.secret_key, &id.pubkey_hex, &cmd.content).unwrap();
         let decoded = decode_phone_to_bridge(&plaintext).unwrap();
         match decoded {
-            PhoneToBridge::UploadImage(crate::wire::commands::UploadImageMsg::Blossom(b)) => {
+            PhoneToBridge::UploadImage(protocol::commands::UploadImageMsg::Blossom(b)) => {
                 assert_eq!(b.hash, "c".repeat(64));
                 assert_eq!(b.key, "a".repeat(64));
                 assert_eq!(b.iv, "b".repeat(24));
@@ -555,7 +555,7 @@ mod tests {
         let cmd = build_command(&id, &mac.pubkey_hex, &msg, 1_000).unwrap();
         let plaintext = decrypt_from(&mac.secret_key, &id.pubkey_hex, &cmd.content).unwrap();
         match decode_phone_to_bridge(&plaintext).unwrap() {
-            PhoneToBridge::UploadImage(crate::wire::commands::UploadImageMsg::Chunk(c)) => {
+            PhoneToBridge::UploadImage(protocol::commands::UploadImageMsg::Chunk(c)) => {
                 assert_eq!(c.upload_id, "u-1");
                 assert_eq!(c.chunk_index, 0);
                 assert_eq!(c.total_chunks, 3);

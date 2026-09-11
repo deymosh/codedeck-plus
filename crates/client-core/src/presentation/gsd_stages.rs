@@ -9,7 +9,7 @@
 //! The three marks read left→right as Discuss, Plan, Execute:
 //!   `✓` done · `◆` in flight / needs you · `○` ready to start · `·` not reached
 
-use crate::wire::common::{GsdAction, GsdPhase, GsdState};
+use protocol::common::{GsdAction, GsdPhase, GsdState};
 
 pub type StageMark = char;
 
@@ -196,7 +196,7 @@ pub fn recovery_chips(gsd: &GsdState) -> Vec<RecoveryChip> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::common::GsdExecution;
+    use protocol::common::GsdExecution;
 
     fn phase(disk_status: &str, action: Option<&str>) -> GsdPhase {
         GsdPhase {

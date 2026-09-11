@@ -1,7 +1,7 @@
 # `fixtures/corpus.json` — the shared codec conformance corpus
 
 The executable half of "one source of truth" for the wire. `packages/protocol`
-(zod) is the **normative spec**; `crates/client-core::wire` is a Rust mirror of
+(zod) is the **normative spec**; `crates/protocol` is a Rust mirror of
 it. This corpus is what keeps them from drifting.
 
 ## Consumed by
@@ -9,7 +9,7 @@ it. This corpus is what keeps them from drifting.
 | Side | Test | Runner |
 |---|---|---|
 | TS | `packages/protocol/src/__tests__/fixtures.test.ts` | `pnpm test` (CI `verify` job) |
-| Rust | `crates/client-core/tests/codec_conformance.rs` | `cargo test` (CI `cargo` job — `core` path filter includes `fixtures/**`) |
+| Rust | `crates/protocol/tests/codec_conformance.rs` | `cargo test` (CI `cargo` job — `core` path filter includes `fixtures/**`) |
 
 Both run the **identical assertions on the identical bytes**:
 
@@ -39,7 +39,7 @@ edge cases (tristate keep/clear/set, empty `models` + `error`, the two
 ## Adding a message / field
 
 1. Change the zod schema in `packages/protocol/src/schemas/`.
-2. Mirror it in `crates/client-core/src/wire/`.
+2. Mirror it in `crates/protocol/src/`.
 3. Add / update the fixture(s) here.
 4. `pnpm --filter @codedeck/protocol test` and
    `cargo test -p client-core` must both pass.

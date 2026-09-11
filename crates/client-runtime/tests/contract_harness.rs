@@ -24,9 +24,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use client_runtime::client_core::connection::ConnectionStatus;
-use client_runtime::client_core::crypto::generate_keypair;
+use client_runtime::protocol::crypto::generate_keypair;
 use client_runtime::client_core::stores::outbox::OutboxItemState;
-use client_runtime::client_core::wire::events::BridgeToPhone;
+use client_runtime::protocol::events::BridgeToPhone;
 use client_runtime::{
     Core, CoreConfig, CoreObserver, CorePorts, Intent, MemoryTranscriptStore, SystemClock,
     TimeEntropy, TranscriptStore,

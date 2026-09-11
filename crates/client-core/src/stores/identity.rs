@@ -6,7 +6,7 @@
 //! here — no other store touches key material. The KV read/write is the
 //! runtime's; this module only decides whether the stored secret is usable.
 
-use crate::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
+use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
 
 pub const IDENTITY_STORAGE_KEY: &str = "identity.secretKey";
 

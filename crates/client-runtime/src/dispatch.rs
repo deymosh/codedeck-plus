@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use client_core::crypto::Keypair;
+use protocol::crypto::Keypair;
 use client_core::notifications::{
     classify_output_entry, is_agent_activity_entry, NotifyEffect, NotifyEvent,
 };
@@ -21,11 +21,11 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
-use client_core::wire::commands::{
+use protocol::commands::{
     ModeChangeMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
-use client_core::wire::common::SessionState;
-use client_core::wire::events::BridgeToPhone;
+use protocol::common::SessionState;
+use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
 use crate::stores::CoreStores;
@@ -488,7 +488,7 @@ impl<'a> Router<'a> {
     async fn on_sessions(
         &mut self,
         machine: &str,
-        m: &client_core::wire::events::SessionListMsg,
+        m: &protocol::events::SessionListMsg,
         r: &mut RouteResult,
     ) {
         // CDX-013: only a PAIRED machine may create/update its entry. The
@@ -613,7 +613,7 @@ impl<'a> Router<'a> {
     fn on_pair_ack(
         &mut self,
         machine: &str,
-        m: &client_core::wire::events::PairAckMsg,
+        m: &protocol::events::PairAckMsg,
         r: &mut RouteResult,
     ) {
         let result = pairing_reducer(
@@ -756,11 +756,11 @@ mod tests {
     use crate::stores::{hydrate, StoresConfig};
     use crate::ports::MemoryKv;
     use client_core::stores::outbox::{OutboxItemState, OutboxState};
-    use client_core::wire::events::{
+    use protocol::events::{
         InputAckMsg, InputFailedMsg, OutputMsg, SessionListMsg, SessionReadyMsg, SyncChunkMsg,
         SyncEndMsg,
     };
-    use client_core::wire::common::{
+    use protocol::common::{
         OutputEntry, OutputEntryType, PermissionMode, RemoteSessionInfo, SessionState,
     };
     use serde_json::json;
@@ -933,8 +933,8 @@ mod tests {
                     sync_id: "sy1".into(),
                     range: (1, 2),
                     entries: vec![
-                        client_core::wire::events::SyncEntry { seq: 1, entry: text_entry("a") },
-                        client_core::wire::events::SyncEntry { seq: 2, entry: text_entry("b") },
+                        protocol::events::SyncEntry { seq: 1, entry: text_entry("a") },
+                        protocol::events::SyncEntry { seq: 2, entry: text_entry("b") },
                     ],
                 }),
             )
@@ -967,8 +967,8 @@ mod tests {
                     sync_id: "sy1".into(),
                     range: (1, 2),
                     entries: vec![
-                        client_core::wire::events::SyncEntry { seq: 1, entry: text_entry("a") },
-                        client_core::wire::events::SyncEntry { seq: 2, entry: text_entry("b") },
+                        protocol::events::SyncEntry { seq: 1, entry: text_entry("a") },
+                        protocol::events::SyncEntry { seq: 2, entry: text_entry("b") },
                     ],
                 }),
             )
@@ -1145,7 +1145,7 @@ mod tests {
         let out = r
             .route(
                 MACHINE,
-                &BridgeToPhone::CloseSessionAck(client_core::wire::events::CloseSessionAckMsg {
+                &BridgeToPhone::CloseSessionAck(protocol::events::CloseSessionAckMsg {
                     session_id: "s1".into(),
                     success: true,
                 }),
@@ -1161,8 +1161,8 @@ mod tests {
     #[tokio::test]
     async fn a_pair_ack_registers_the_machine_learns_its_relays_and_disarms_the_deadline() {
         use client_core::stores::pairing::{PairingCandidate, PairingPhase, PairingState};
-        use client_core::wire::capabilities::BridgeHostKind;
-        use client_core::wire::events::PairAckMsg;
+        use protocol::capabilities::BridgeHostKind;
+        use protocol::events::PairAckMsg;
 
         let (mut s, ts, kp) = stores().await;
         s.pairing = PairingState {
@@ -1218,7 +1218,7 @@ mod tests {
             .route(
                 MACHINE,
                 &BridgeToPhone::CredentialsAck(
-                    client_core::wire::events::CredentialsAckMsg {
+                    protocol::events::CredentialsAckMsg {
                         machine: "laptop".into(),
                         success: true,
                         has_anthropic_key: true,
@@ -1243,8 +1243,8 @@ mod tests {
         let out = r
             .route(
                 MACHINE,
-                &BridgeToPhone::Models(client_core::wire::events::ModelsMsg {
-                    models: vec![client_core::wire::events::ModelEntry {
+                &BridgeToPhone::Models(protocol::events::ModelsMsg {
+                    models: vec![protocol::events::ModelEntry {
                         id: "sonnet".into(),
                         label: Some("Sonnet".into()),
                     }],
@@ -1262,7 +1262,7 @@ mod tests {
 
     #[tokio::test]
     async fn mode_confirmed_writes_through_to_the_session_info() {
-        use client_core::wire::common::{PermissionMode, RemoteSessionInfo};
+        use protocol::common::{PermissionMode, RemoteSessionInfo};
         let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         s.machines.apply_session_upsert(
@@ -1291,7 +1291,7 @@ mod tests {
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         r.route(
             MACHINE,
-            &BridgeToPhone::ModeConfirmed(client_core::wire::events::ModeConfirmedMsg {
+            &BridgeToPhone::ModeConfirmed(protocol::events::ModeConfirmedMsg {
                 session_id: "s1".into(),
                 mode: PermissionMode::AcceptEdits,
             }),
@@ -1316,7 +1316,7 @@ mod tests {
                 MACHINE,
                 &BridgeToPhone::InputFailed(InputFailedMsg {
                     session_id: "s1".into(),
-                    reason: client_core::wire::events::InputFailedReason::Busy,
+                    reason: protocol::events::InputFailedReason::Busy,
                     input_id: Some("in-1".into()),
                 }),
             )

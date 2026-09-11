@@ -22,9 +22,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use client_core::bridge_api::{PublishResult, PublishVerdict};
-use client_core::crypto::Keypair;
-use client_core::nip42::build_auth_event;
-use client_core::nostr_event::SignedEvent;
+use protocol::crypto::Keypair;
+use protocol::nip42::build_auth_event;
+use protocol::nostr_event::SignedEvent;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::net::TcpStream;
@@ -533,8 +533,8 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
 mod tests {
     use super::*;
     use crate::transport::mock::{mock_relay, MockRelay};
-    use client_core::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
-    use client_core::wire::codec::decode_phone_to_bridge;
+    use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
+    use protocol::codec::decode_phone_to_bridge;
     use nostr::JsonUtil;
     use std::cell::RefCell;
     use tokio::task::LocalSet;

@@ -38,5 +38,8 @@ pub use view::{
     TranscriptSyncView, UiView,
 };
 
-/// Re-export the pure core so hosts have one dependency edge.
+/// Re-export the pure core and the wire contract so hosts have one
+/// dependency edge each, without needing `protocol`/`client-core` as direct
+/// Cargo dependencies of their own just to name a type.
 pub use client_core;
+pub use protocol;

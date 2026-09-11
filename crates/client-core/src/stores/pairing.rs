@@ -12,9 +12,9 @@
 //! The deadline timer and the send / candidate / paired seams are the
 //! runtime's; the FSM emits [`PairingEffect`]s.
 
-use crate::crypto::hex_from_npub;
-use crate::wire::capabilities::BridgeHostKind;
-use crate::wire::events::{PairAckMsg, PairAckReason};
+use protocol::crypto::hex_from_npub;
+use protocol::capabilities::BridgeHostKind;
+use protocol::events::{PairAckMsg, PairAckReason};
 
 /// CDX-013: a hostile pairing link cannot flood the global relay set.
 pub const MAX_PAIRING_RELAYS: usize = 5;
@@ -435,7 +435,7 @@ pub fn pairing_reducer(state: &PairingState, event: PairingEvent, timeout_ms: u6
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::generate_keypair;
+    use protocol::crypto::generate_keypair;
 
     fn enc(s: &str) -> String {
         s.bytes()

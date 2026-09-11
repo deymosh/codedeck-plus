@@ -8,8 +8,8 @@
 //! every copy), then wrap it for the recipient AND for ourselves (the self-copy
 //! is what makes our own sends survive a reinstall via relay catch-up).
 
-use client_core::crypto::{decrypt_from, Keypair};
-use client_core::nostr_event::SignedEvent;
+use protocol::crypto::{decrypt_from, Keypair};
+use protocol::nostr_event::SignedEvent;
 use client_core::stores::dm::{DmRumor, DM_RUMOR_KIND};
 use nostr::{Event, EventBuilder, JsonUtil, Keys, Kind, PublicKey, Tag, UnsignedEvent};
 
@@ -157,7 +157,7 @@ pub fn unwrap_gift(identity: &Keypair, raw: &str) -> Result<DmRumor, GiftwrapErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use client_core::crypto::generate_keypair;
+    use protocol::crypto::generate_keypair;
 
     #[tokio::test]
     async fn a_dm_round_trips_peer_to_peer_and_the_self_copy_shares_the_rumor_id() {

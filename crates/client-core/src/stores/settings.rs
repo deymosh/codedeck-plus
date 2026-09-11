@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::wire::common::{EffortLevel, PermissionMode};
-use crate::wire::relays::{DEFAULT_RELAYS, MARMOT_RELAYS};
+use protocol::common::{EffortLevel, PermissionMode};
+use protocol::relays::{DEFAULT_RELAYS, MARMOT_RELAYS};
 
 /// UI-scale slider range (plan §5).
 pub const UI_SCALE_MIN: f64 = 0.85;

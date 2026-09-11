@@ -10,7 +10,7 @@
 //! the read loop ignores it rather than dropping the socket. A malformed known
 //! frame *is* an error, so the caller can log it.
 
-use client_core::nostr_event::SignedEvent;
+use protocol::nostr_event::SignedEvent;
 use serde_json::{json, Value};
 
 use crate::nostr_client::Filter;

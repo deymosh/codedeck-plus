@@ -30,6 +30,12 @@ marmot = [
 ]
 
 [dependencies]
+# The wire contract (codec, schemas, ranges, chunking, NIP-42/crypto
+# primitives) — the single source of truth; client-core never redefines a
+# wire type. See `crates/protocol`'s own doc comment for the dependency rule
+# (protocol depends on nothing in this workspace, so a future Rust bridge can
+# consume it too without reorganizing anything here).
+protocol = { path = "../protocol" }
 # NIP-44 v2 + keys, verified against this crate in the F0 uniffi probe.
 # default-features = false keeps the tree tight (see spike/uniffi-binding-probe).
 nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }

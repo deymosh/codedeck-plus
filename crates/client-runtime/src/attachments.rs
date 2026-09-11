@@ -10,7 +10,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
-use client_core::crypto::{bytes_to_hex, hex_to_bytes, Keypair};
+use protocol::crypto::{bytes_to_hex, hex_to_bytes, Keypair};
 use client_core::dm_attachments::{EncryptedImageRef, BLOSSOM_AUTH_KIND, DEFAULT_BLOSSOM_SERVER};
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
 use sha2::{Digest, Sha256};
@@ -229,7 +229,7 @@ fn base64_std(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use client_core::crypto::generate_keypair;
+    use protocol::crypto::generate_keypair;
     use std::cell::RefCell;
     use std::rc::Rc;
 

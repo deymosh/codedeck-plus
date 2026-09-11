@@ -1,5 +1,5 @@
 {
-  "_note": "Shared codec conformance corpus. Consumed by BOTH packages/protocol/src/__tests__/fixtures.test.ts and crates/client-core/tests/codec_conformance.rs. It is the executable half of 'one source of truth': change a zod schema and forget the Rust mirror (or vice versa) and one side fails CI. Keep entries minimal-but-representative — the per-message unit tests on each side cover field-combo depth.",
+  "_note": "Shared codec conformance corpus. Consumed by BOTH packages/protocol/src/__tests__/fixtures.test.ts and crates/protocol/tests/codec_conformance.rs. It is the executable half of 'one source of truth': change a zod schema and forget the Rust mirror (or vice versa) and one side fails CI. Keep entries minimal-but-representative — the per-message unit tests on each side cover field-combo depth.",
   "phoneToBridge": {
     "valid": [
       { "type": "input", "sessionId": "s", "text": "hi" },

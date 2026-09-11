@@ -6,7 +6,7 @@
 //! the runtime applies a mutation to it. Storage keys match the legacy
 //! `apps/mobile/src/core` layout so an in-place upgrade keeps its data.
 
-use client_core::crypto::Keypair;
+use protocol::crypto::Keypair;
 use client_core::default_session_mode::DefaultModeApplier;
 use client_core::delete_controller::DeleteController;
 use client_core::notifications::NotificationCoordinator;
@@ -252,7 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn transcript_coverage_is_rehydrated_from_the_row_store() {
-        use client_core::wire::common::RemoteSessionInfo;
+        use protocol::common::RemoteSessionInfo;
 
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();

@@ -6,7 +6,7 @@
 use std::path::Path;
 
 fn main() {
-    // <workspace>/crates/client-core
+    // <workspace>/crates/protocol
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let corpus = Path::new(&manifest)
         .join("../../packages/protocol/fixtures/corpus.json")

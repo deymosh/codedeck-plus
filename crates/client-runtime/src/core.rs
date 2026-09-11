@@ -24,11 +24,11 @@ use client_core::connection::{
     ConnectionEvent, ConnectionState, ConnectionStatus, ReconnectConfig, DEFAULT_RECONNECT_CONFIG,
     TOR_RECONNECT_CONFIG,
 };
-use client_core::crypto::Keypair;
+use protocol::crypto::Keypair;
 use client_core::notifications::NotifyEffect;
-use client_core::wire::commands::PhoneToBridge;
-use client_core::wire::events::BridgeToPhone;
-use client_core::wire::kinds::SESSION_LIST_KIND;
+use protocol::commands::PhoneToBridge;
+use protocol::events::BridgeToPhone;
+use protocol::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
@@ -1070,7 +1070,7 @@ impl Loop {
             // stale — CDX-008).
             self.on_send(
                 machine.clone(),
-                PhoneToBridge::RefreshSessions(client_core::wire::commands::BareMsg {
+                PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {
                     version: Default::default(),
                 }),
                 None,
@@ -1123,7 +1123,7 @@ impl Loop {
                 } => r.sends.push(RouteSend {
                     machine,
                     msg: PhoneToBridge::CloseSession(
-                        client_core::wire::commands::SessionIdMsg {
+                        protocol::commands::SessionIdMsg {
                             version: Default::default(),
                             session_id,
                         },
@@ -1478,9 +1478,9 @@ impl Loop {
     }
 
     /// Publish an event the Marmot engine produced (kind 445 / 30443 JSON, same
-    /// field shape as [`client_core::nostr_event::SignedEvent`]).
+    /// field shape as [`protocol::nostr_event::SignedEvent`]).
     fn publish_value(&self, event: serde_json::Value) {
-        match serde_json::from_value::<client_core::nostr_event::SignedEvent>(event) {
+        match serde_json::from_value::<protocol::nostr_event::SignedEvent>(event) {
             Ok(ev) => self.publish_raw(ev),
             Err(_) => self.observer.action_failed(ActionFailed::PublishRejected),
         }
@@ -1648,7 +1648,7 @@ impl Loop {
         };
 
         let Ok(welcome) =
-            serde_json::from_value::<client_core::nostr_event::SignedEvent>(created.welcome_event)
+            serde_json::from_value::<protocol::nostr_event::SignedEvent>(created.welcome_event)
         else {
             fail(self);
             return;
@@ -1701,7 +1701,7 @@ impl Loop {
 
     /// Publish a pre-built signed event (DM wraps, the 10050 relay list) off the
     /// loop.
-    fn publish_raw(&self, event: client_core::nostr_event::SignedEvent) {
+    fn publish_raw(&self, event: protocol::nostr_event::SignedEvent) {
         let ws = self.ws.clone();
         tokio::task::spawn_local(async move {
             let _ = ws
@@ -1834,7 +1834,7 @@ impl Loop {
         mime_type: String,
     ) {
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
-        use client_core::wire::commands::{
+        use protocol::commands::{
             UploadImageBlossomMsg, UploadImageChunkMsg, UploadImageMsg, VersionFields,
         };
 
@@ -2025,10 +2025,10 @@ mod tests {
     use super::*;
     use crate::ports::RecordingNotifier;
     use crate::transport::mock::{mock_relay, MockRelay};
-    use client_core::crypto::{generate_keypair, keypair_from_secret_hex};
-    use client_core::wire::codec::encode_bridge_to_phone;
-    use client_core::wire::commands::UploadImageMsg;
-    use client_core::wire::kinds::{LIVE_KIND, SESSION_LIST_KIND};
+    use protocol::crypto::{generate_keypair, keypair_from_secret_hex};
+    use protocol::codec::encode_bridge_to_phone;
+    use protocol::commands::UploadImageMsg;
+    use protocol::kinds::{LIVE_KIND, SESSION_LIST_KIND};
     use crate::intent::SessionImageSend;
     use std::sync::Mutex;
     use tokio::task::LocalSet;
@@ -2180,8 +2180,8 @@ mod tests {
         }
         let content = ev.get("content")?.as_str()?;
         let plaintext =
-            client_core::crypto::decrypt_from(&machine.secret_key, phone_pubkey, content).ok()?;
-        client_core::wire::codec::decode_phone_to_bridge(&plaintext).ok()
+            protocol::crypto::decrypt_from(&machine.secret_key, phone_pubkey, content).ok()?;
+        protocol::codec::decode_phone_to_bridge(&plaintext).ok()
     }
 
     /// EOSE the four subscriptions (3 bridge + 1 DM) and return the DM sub's id
@@ -2268,12 +2268,12 @@ mod tests {
                 core.start();
                 eose_all(&mut mock).await;
 
-                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                let msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
                 )
                 .unwrap();
                 let plaintext = encode_bridge_to_phone(&msg);
-                let ct = client_core::crypto::encrypt_to(
+                let ct = protocol::crypto::encrypt_to(
                     &machine.secret_key,
                     &phone.pubkey_hex,
                     &plaintext,
@@ -3364,12 +3364,12 @@ mod tests {
                 core.start();
                 eose_all(&mut mock).await;
 
-                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                let msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"session-pending","pendingId":"p1","machine":"devbox","createdAt":"2026-01-01T00:00:00.000Z"}"#,
                 )
                 .unwrap();
                 let plaintext = encode_bridge_to_phone(&msg);
-                let ct = client_core::crypto::encrypt_to(
+                let ct = protocol::crypto::encrypt_to(
                     &machine.secret_key,
                     &phone.pubkey_hex,
                     &plaintext,
@@ -3411,12 +3411,12 @@ mod tests {
                 core.start();
                 eose_all(&mut mock).await;
 
-                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                let msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
                 )
                 .unwrap();
                 let plaintext = encode_bridge_to_phone(&msg);
-                let ct = client_core::crypto::encrypt_to(
+                let ct = protocol::crypto::encrypt_to(
                     &machine.secret_key,
                     &phone.pubkey_hex,
                     &plaintext,
@@ -3459,12 +3459,12 @@ mod tests {
                 core.start();
                 eose_all(&mut mock).await;
 
-                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                let msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","content":"hi","timestamp":"t"}}"#,
                 )
                 .unwrap();
                 let plaintext = encode_bridge_to_phone(&msg);
-                let ct = client_core::crypto::encrypt_to(
+                let ct = protocol::crypto::encrypt_to(
                     &machine.secret_key,
                     &phone.pubkey_hex,
                     &plaintext,
@@ -3541,13 +3541,13 @@ mod tests {
     /// one left over from an earlier one.
     fn push_bridge_to_phone_event(
         mock: &MockRelay,
-        machine: &client_core::crypto::Keypair,
+        machine: &protocol::crypto::Keypair,
         phone_pubkey_hex: &str,
         sub_id: &str,
         msg: &BridgeToPhone,
     ) {
         let plaintext = encode_bridge_to_phone(msg);
-        let ct = client_core::crypto::encrypt_to(&machine.secret_key, phone_pubkey_hex, &plaintext)
+        let ct = protocol::crypto::encrypt_to(&machine.secret_key, phone_pubkey_hex, &plaintext)
             .unwrap();
         let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
             .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
@@ -3589,7 +3589,7 @@ mod tests {
                     &machine,
                     &phone.pubkey_hex,
                     &sub,
-                    &BridgeToPhone::PairAck(client_core::wire::events::PairAckMsg {
+                    &BridgeToPhone::PairAck(protocol::events::PairAckMsg {
                         machine: "laptop".into(),
                         ok: true,
                         reason: None,
@@ -3611,7 +3611,7 @@ mod tests {
                 // flowing) for `RemoveMachine` to find it — it gathers the
                 // sessions to forget from `MachineView.sessions`, exactly
                 // like the TS `removeMachine` it mirrors.
-                let sessions_msg = client_core::wire::codec::decode_bridge_to_phone(
+                let sessions_msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"sessions","machine":"laptop","sessions":[
                         {"id":"s1","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
                     ],"protocolVersion":10}"#,
@@ -3620,7 +3620,7 @@ mod tests {
                 push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
                 settle().await;
 
-                let msg = client_core::wire::codec::decode_bridge_to_phone(
+                let msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","content":"hi","timestamp":"t"}}"#,
                 )
                 .unwrap();
@@ -3701,7 +3701,7 @@ mod tests {
                     &machine,
                     &phone.pubkey_hex,
                     &sub,
-                    &BridgeToPhone::PairAck(client_core::wire::events::PairAckMsg {
+                    &BridgeToPhone::PairAck(protocol::events::PairAckMsg {
                         machine: "laptop".into(),
                         ok: true,
                         reason: None,
@@ -3712,7 +3712,7 @@ mod tests {
                 settle().await;
 
                 let sub = drain_traffic_resubscribe(&mut mock).await;
-                let sessions_msg = client_core::wire::codec::decode_bridge_to_phone(
+                let sessions_msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"sessions","machine":"laptop","sessions":[
                         {"id":"s1","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
                     ],"protocolVersion":10}"#,

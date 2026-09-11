@@ -15,14 +15,14 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{UiEffect, UndoToast};
-use client_core::wire::commands::{
+use protocol::commands::{
     BareMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext, KeypressMsg,
     ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg, PhoneToBridge,
     ProviderProfileWrite, QuestionInputMsg, SessionIdMsg, SetCredentialsMsg, SetDeviceConfigMsg,
     SetProviderProfileMsg, VersionFields,
 };
-use client_core::wire::common::{DeviceConfig, EffortLevel, PermissionMode};
-use client_core::wire::tristate::Tristate;
+use protocol::common::{DeviceConfig, EffortLevel, PermissionMode};
+use protocol::tristate::Tristate;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
@@ -392,7 +392,7 @@ pub enum Intent {
 pub fn apply(
     stores: &mut CoreStores,
     intent: Intent,
-    identity: &client_core::crypto::Keypair,
+    identity: &protocol::crypto::Keypair,
     ctx: IntentCtx,
 ) -> IntentResult {
     let mut r = IntentResult::default();
@@ -853,7 +853,7 @@ fn apply_relay_effects(effects: Vec<SettingsEffect>, r: &mut IntentResult) {
 /// the transport-affecting effects into the [`IntentResult`].
 fn begin_pairing(
     stores: &mut CoreStores,
-    identity: &client_core::crypto::Keypair,
+    identity: &protocol::crypto::Keypair,
     event: PairingEvent,
     r: &mut IntentResult,
 ) {
@@ -938,7 +938,7 @@ mod tests {
     use crate::ports::{MemoryKv, MemoryTranscriptStore};
     use crate::stores::{hydrate, StoresConfig};
 
-    async fn stores() -> (CoreStores, client_core::crypto::Keypair) {
+    async fn stores() -> (CoreStores, protocol::crypto::Keypair) {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
@@ -1032,7 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_session_dismisses_removes_arms_the_undo_and_shows_a_toast() {
-        use client_core::wire::common::RemoteSessionInfo;
+        use protocol::common::RemoteSessionInfo;
         let (mut s, kp) = stores().await;
         s.machines.register_machine("m", "laptop", None, None);
         s.machines.apply_session_upsert(
@@ -1086,7 +1086,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_machine_forgets_it_deselects_and_queues_its_sessions_for_transcript_removal() {
-        use client_core::wire::common::RemoteSessionInfo;
+        use protocol::common::RemoteSessionInfo;
         let (mut s, kp) = stores().await;
         s.machines.register_machine("m", "laptop", None, None);
         s.machines.apply_session_upsert(
@@ -1166,7 +1166,7 @@ mod tests {
     #[tokio::test]
     async fn begin_manual_pairing_stages_a_candidate_and_sends_a_pair_request() {
         let (mut s, kp) = stores().await;
-        let peer = client_core::crypto::generate_keypair();
+        let peer = protocol::crypto::generate_keypair();
 
         let out = apply(
             &mut s,
@@ -1293,13 +1293,13 @@ mod tests {
     #[tokio::test]
     async fn set_device_config_sends_the_config_verbatim() {
         let (mut s, kp) = stores().await;
-        let config = client_core::wire::common::DeviceConfig {
+        let config = protocol::common::DeviceConfig {
             label: "phone-1".into(),
-            role: Some(client_core::wire::common::DeviceRole::TestTarget),
+            role: Some(protocol::common::DeviceRole::TestTarget),
             serial: None,
             mesh_ip: Some("10.0.0.1".into()),
             mesh_pubkey: Some("abc".into()),
-            app_under_test: client_core::wire::common::AppUnderTest::Veil,
+            app_under_test: protocol::common::AppUnderTest::Veil,
             custom_package: None,
             custom_build_cmd: None,
             project_dir: None,
