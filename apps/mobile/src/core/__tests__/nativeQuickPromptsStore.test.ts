@@ -41,6 +41,7 @@ function fakeCore(initialView: QuickPromptsView = { prompts: [] }) {
     marmotView: () => Promise.reject(new Error('unused')),
     quickPromptsView: vi.fn(async () => view),
     pendingSessionsView: () => Promise.reject(new Error('unused')),
+    uiView: () => Promise.reject(new Error('unused')),
     onCoreEvent: vi.fn(async (cb: (e: CoreEvent) => void) => {
       coreEventListener = cb;
       return () => {

@@ -125,7 +125,8 @@ export type Intent =
   | { addQuickPrompt: { id: string; label: string; text: string } }
   | { updateQuickPrompt: { id: string; label: string; text: string } }
   | { removeQuickPrompt: { id: string } }
-  | { dismissPendingSession: { pendingId: string } };
+  | { dismissPendingSession: { pendingId: string } }
+  | { setPlanApprovalChoice: { cardId: string; key: string } };
 
 // --- Views (plan §2.1) ---
 
@@ -334,6 +335,63 @@ export interface PendingSessionsView {
   pending: Record<string, PendingSessionView>;
 }
 
+// --- ui (selection + optimistic interaction-card bookkeeping) ---
+//
+// Mirrors `client-core`'s `UiState` verbatim — NOT the plan §2.1 `CardsView`
+// (a different, larger, per-session projection of actual card content that
+// does not exist yet). This is only the small flat bookkeeping around cards:
+// selection, unread dots, responded-card ids, plan-approval labels, ack
+// round-trip status, the undo toast.
+
+export type PanelMode = 'session' | 'dm' | 'marmot';
+export type AckState = 'saving' | 'saved' | 'failed';
+
+export interface CredentialsAckState {
+  state: AckState;
+  at: number;
+  hasAnthropicKey?: boolean;
+  hasGithubPat?: boolean;
+  keyValid?: boolean;
+  error?: string;
+}
+
+export interface DeviceConfigAckState {
+  state: AckState;
+  at: number;
+  error?: string;
+}
+
+export interface ProviderProfileAckState {
+  state: AckState;
+  at: number;
+  profileId?: string;
+  tokenValid?: boolean;
+  error?: string;
+}
+
+export interface UndoToastState {
+  machine: string;
+  sessionId: string;
+  label: string;
+}
+
+export interface UiView {
+  selectedMachine: string | null;
+  selectedSession: string | null;
+  panelMode: PanelMode;
+  activeDmPeer: string | null;
+  activeMarmotGroup: string | null;
+  /** `BTreeSet<String>` on the Rust side — crosses the wire as a plain array. */
+  unreadSessions: string[];
+  /** `BTreeMap<String, BTreeSet<String>>` — each value crosses as an array. */
+  respondedCards: Record<string, string[]>;
+  planApprovalChoices: Record<string, string>;
+  credentialsStatus: Record<string, CredentialsAckState>;
+  deviceConfigStatus: Record<string, DeviceConfigAckState>;
+  providerProfileStatus: Record<string, ProviderProfileAckState>;
+  undoToast: UndoToastState | null;
+}
+
 // --- CoreEvent (plan §2.3) ---
 
 export type SliceId =
@@ -347,7 +405,8 @@ export type SliceId =
   | 'dm'
   | 'marmot'
   | 'quickPrompts'
-  | 'pendingSessions';
+  | 'pendingSessions'
+  | 'ui';
 
 export type ActionFailedKind =
   | 'decryptFailed'

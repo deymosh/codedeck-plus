@@ -39,6 +39,7 @@ import type {
   PendingSessionsView,
   QuickPromptsView,
   SettingsView,
+  UiView,
 } from '../core/nativeCoreTypes';
 
 export type NativeConnectionStatus =
@@ -102,6 +103,7 @@ export interface NativeCore {
   marmotView(): Promise<MarmotView | null>;
   quickPromptsView(): Promise<QuickPromptsView>;
   pendingSessionsView(): Promise<PendingSessionsView>;
+  uiView(): Promise<UiView>;
   /** The full semantic event stream (plan §2.3). Resolves an unlisten. */
   onCoreEvent(cb: (event: CoreEvent) => void): Promise<() => void>;
 }
@@ -188,6 +190,7 @@ export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: L
     marmotView: () => invoke<MarmotView | null>('core_marmot_view'),
     quickPromptsView: () => invoke<QuickPromptsView>('core_quick_prompts_view'),
     pendingSessionsView: () => invoke<PendingSessionsView>('core_pending_sessions_view'),
+    uiView: () => invoke<UiView>('core_ui_view'),
     onCoreEvent: (cb) => listen<CoreEvent>(EV_CORE_EVENT, ({ payload }) => cb(payload)),
   };
 }
