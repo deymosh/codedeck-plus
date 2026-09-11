@@ -32,12 +32,14 @@ use client_runtime::core::{
     ActionFailed, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
 };
 use client_runtime::{
-    Core, CoreConfig, CoreEvent, DmView, Intent, MachinesView, MarmotView, OutboxView,
+    Core, CoreConfig, CoreEvent, DmView, Intent, MachinesView, MarmotView, Notifier, OutboxView,
     PairingView, PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 
+use crate::native_http::ReqwestHttpFetch;
 use crate::native_ports::{open_native_db, KvSqlite, TranscriptStoreSqlite};
 use crate::sqlstore::DB_FILE;
 
@@ -125,6 +127,35 @@ impl CoreObserver for TauriObserver {
     }
 }
 
+/// Delivers the `Notifier` port through `tauri-plugin-notification`'s Rust
+/// API — the same plugin `apps/mobile/src/platform/notifier.ts` drives over
+/// its JS bindings for the WebView path, called directly from the core's own
+/// thread instead of round-tripping through the frontend. Without this the
+/// native-core `CorePorts` default (`NullNotifier`) would silently drop every
+/// OS notification (DMs, turn-finished, permission prompts) under F2b.
+///
+/// `cancel` is left as the trait's own default no-op: the plugin's
+/// remove-by-id call is exposed to the JS side (`removeActive`), not to this
+/// Rust API, and duplicating the WebView notifier's per-tag id bookkeeping
+/// here just to dismiss an already-resolved permission-request notification
+/// is not worth it yet — a resolved card's notification lingers until swiped
+/// away rather than auto-clearing, but nothing is ever silently dropped.
+struct TauriNotifier {
+    app: AppHandle,
+}
+
+impl Notifier for TauriNotifier {
+    fn notify(&self, title: &str, body: &str, _tag: Option<&str>) {
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show();
+    }
+}
+
 /// `core_init` argument. `identity_secret_hex` is the phone's persisted nsec —
 /// a secret: it is consumed into the keypair here and never logged or echoed.
 #[derive(Deserialize)]
@@ -156,8 +187,13 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
 
     let identity = keypair_from_secret_hex(&config.identity_secret_hex)
         .map_err(|e| format!("identity secret: {e}"))?;
+    // Cloned before `CoreConfig::new` consumes `config.proxy` — the SAME
+    // `host:port` also configures `ReqwestHttpFetch`'s SOCKS5 proxy below, so
+    // a Blossom upload routes through Orbot exactly when the relay sockets do.
+    let http_proxy = config.proxy.clone();
     let core_config = CoreConfig::new(config.relays, identity, config.proxy, config.tor);
     let observer_app = app.clone();
+    let notifier_app = app.clone();
 
     // Resolve the SAME db path `sqlstore::sql_open` uses, on the main thread
     // (`Manager::path()` needs the `AppHandle`) — but open the connection
@@ -191,15 +227,25 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
                         return;
                     }
                 };
+                let http = match ReqwestHttpFetch::new(http_proxy.as_deref()) {
+                    Ok(f) => Rc::new(f),
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(format!("build http client: {e}")));
+                        return;
+                    }
+                };
                 // Real, persistent Kv + TranscriptStore — the SAME
                 // `codedeck.db` / schema `sqlstore.rs`'s SqlExecutor seam
                 // serves the WebView, so an install upgrading onto this path
-                // keeps its pairing, sessions, and transcript history.
-                // `notifier` / `http` / `marmot` stay in-memory-default until
-                // their own real bindings land.
+                // keeps its pairing, sessions, and transcript history. Real
+                // OS-notification delivery via `TauriNotifier`; real Blossom
+                // upload/download via `ReqwestHttpFetch`. `marmot` stays
+                // in-memory-default until its own real binding lands.
                 let ports = CorePorts {
                     kv: Rc::new(KvSqlite::new(conn.clone())),
                     transcript_store: Rc::new(TranscriptStoreSqlite::new(conn)),
+                    notifier: Rc::new(TauriNotifier { app: notifier_app }),
+                    http,
                     ..CorePorts::default()
                 };
                 let core = Core::spawn(core_config, ports, observer, clock, entropy).await;

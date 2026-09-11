@@ -16,7 +16,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # the app process instead of the WebView. Off by default — the crate builds
 # byte-identical to before. A test APK turns it on (docker/build-apk.sh
 # --features native-core); it flips to default once field-tested.
-native-core = ["dep:client-runtime", "dep:tokio"]
+# `tauri-plugin-http/socks` is forwarded here, not requested unconditionally
+# on the dependency itself, so the default build's dependency graph (and thus
+# the shipped APK) is untouched: `native_http.rs`'s `ReqwestHttpFetch` is the
+# only thing that needs SOCKS5 support, and it's `native-core`-gated too.
+native-core = ["dep:client-runtime", "dep:tokio", "tauri-plugin-http/socks"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -43,6 +47,10 @@ tauri-plugin-deep-link = "2"
 # access-control-allow-* headers, so the Android WebView blocks the authorized
 # upload. plugin-http fetches from Rust — no CORS — and is the designed escape
 # hatch (platform/dmImages.ts resolves its fetch when running under Tauri).
+# `socks` (forwarded to the plugin's own `reqwest`, re-exported as
+# `tauri_plugin_http::reqwest`) is requested only via the `native-core`
+# feature below, not unconditionally here — the default build must stay
+# byte-identical without it.
 tauri-plugin-http = "2"
 # Phase 5c: OS notifications + the two local plugins (mic STT, stay-connected
 # foreground service — both no-ops on desktop).

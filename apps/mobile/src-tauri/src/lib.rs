@@ -11,6 +11,8 @@
 #[cfg(feature = "native-core")]
 pub mod corebridge;
 #[cfg(feature = "native-core")]
+pub mod native_http;
+#[cfg(feature = "native-core")]
 pub mod native_ports;
 pub mod marmot;
 pub mod sqlstore;

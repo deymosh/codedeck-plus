@@ -295,7 +295,7 @@ mod tests {
         let conn = Rc::new(RefCell::new(conn));
         let store = TranscriptStoreSqlite::new(conn);
         let row = TranscriptRow { seq: 1, entry: serde_json::json!({}) };
-        store.insert_ignore("m1", "s1", &[row.clone()]).await;
+        store.insert_ignore("m1", "s1", std::slice::from_ref(&row)).await;
         store.insert_ignore("m1", "s2", &[row]).await;
 
         store.remove("m1", "s1").await;
