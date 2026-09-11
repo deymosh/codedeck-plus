@@ -31,7 +31,11 @@ export interface Harness {
   relay: InMemoryRelay;
   relayServer: RunningRelayServer;
   bridgeKeys: Keypair;
-  facade: FakeSdkFacade;
+  /** The live `FakeSdkFacade` — a FRESH instance after `restart()`, same as a
+   *  real bridge restart kills the underlying Claude Code subprocess too. A
+   *  session id that survived the restart (the registry resumed it on boot)
+   *  is only ever live on the NEW facade, never the old one. */
+  readonly facade: FakeSdkFacade;
   /** The live `BridgeCore` — a fresh instance after `restart()`. */
   readonly core: BridgeCore;
   /** Every log line the host received, in order (drained on read by the
@@ -41,9 +45,12 @@ export interface Harness {
   /** `readRange` over the session's whole known range — `[]` for an unknown
    *  session, never a throw (mirrors the transcript store's own tolerance). */
   transcript(sessionId: string): Promise<{ seq: number; entry: OutputEntry }[]>;
-  /** Shut the current `BridgeCore` down and start a fresh one with the SAME
-   *  identity/storage/state dir — simulates a bridge process restart without
-   *  losing the phone's pairing or the on-disk transcript. */
+  /** Shut the current `BridgeCore` down and start a fresh one — with the SAME
+   *  identity/storage/state dir but a FRESH `FakeSdkFacade` — a real bridge
+   *  process restart, not a reset: the on-disk transcript and registry
+   *  survive, but nothing that only lived in the old facade's memory does.
+   *  Any session the registry still tracks resumes on the new facade under
+   *  the SAME session id (`BridgeCore`'s own resume-on-boot path). */
   restart(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -71,7 +78,7 @@ export async function createHarness(opts: { port?: number } = {}): Promise<Harne
   const relay = new InMemoryRelay();
   const relayServer = await startRelayServer(relay, { port: opts.port });
   const bridgeKeys = generateKeypair();
-  const facade = new FakeSdkFacade();
+  let facade = new FakeSdkFacade();
   const storage = new Map<string, string>();
   let logs: HarnessLogLine[] = [];
 
@@ -106,7 +113,9 @@ export async function createHarness(opts: { port?: number } = {}): Promise<Harne
     relay,
     relayServer,
     bridgeKeys,
-    facade,
+    get facade() {
+      return facade;
+    },
     get core() {
       return core;
     },
@@ -124,6 +133,7 @@ export async function createHarness(opts: { port?: number } = {}): Promise<Harne
     },
     restart: async () => {
       await core.shutdown();
+      facade = new FakeSdkFacade();
       core = await makeBridge({ host, bridgeKeys, facade });
     },
     shutdown: async () => {

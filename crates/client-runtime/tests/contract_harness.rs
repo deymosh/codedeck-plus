@@ -9,12 +9,14 @@
 //!   cd tools/contract-harness && pnpm install && pnpm build
 //!   cargo test -p client-runtime --test contract_harness -- --ignored
 //!
-//! Scenario (the plan's Scenario A, first slice — pair → session → live
-//! output → input ack; a bridge-restart + reconnect + sync-gap-refill
-//! extension is tracked as a fast-follow in docs/CLIENT-CORE.md):
+//! Scenario (the plan's Scenario A in full):
 //!
 //!   pairing window → session in the bridge's default folder → live output
-//!   lands in the transcript store → input via the outbox reaches confirmed.
+//!   lands in the transcript store → input via the outbox reaches confirmed
+//!   → bridge restart (resume-on-boot, a FRESH `FakeSdkFacade`) → the
+//!   phone's own connectivity drops and comes back → the FSM reconnects on
+//!   its own → sync gap-refill catches the phone up → the phone's
+//!   transcript is byte-identical to the bridge's own, seq for seq.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -142,7 +144,7 @@ async fn sleep_a_bit() {
 
 #[tokio::test]
 #[ignore = "needs Node + `pnpm build` in tools/contract-harness — see module docs"]
-async fn pair_session_output_and_input_ack_over_a_real_socket() {
+async fn scenario_a_pair_session_output_input_ack_restart_reconnect_sync_gap_refill() {
     LocalSet::new()
         .run_until(async {
             let (mut harness, ws_url) = Harness::spawn().await;
@@ -306,6 +308,130 @@ async fn pair_session_output_and_input_ack_over_a_real_socket() {
                 }
                 assert!(tokio::time::Instant::now() < deadline, "input was never confirmed");
                 sleep_a_bit().await;
+            }
+
+            // --- bridge restart → resume-on-boot → phone reconnect → sync gap-refill ---
+            harness.call("restart-bridge", serde_json::json!({})).await;
+
+            // `BridgeCore`'s own resume-on-boot: the SAME session id reappears
+            // on the FRESH facade (the harness gives it a new one on restart,
+            // same as a real bridge restart kills the old SDK subprocess).
+            let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+            loop {
+                let sessions = harness.call("list-sdk-sessions", serde_json::json!({})).await;
+                let resumed = sessions
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(session_id.as_str())));
+                if resumed {
+                    break;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "the session never resumed on boot");
+                sleep_a_bit().await;
+            }
+
+            // The bridge produces output the (about to be) dark phone misses.
+            harness
+                .call(
+                    "emit-sdk-message",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "message": {
+                            "type": "assistant", "session_id": format!("sdk-{session_id}"),
+                            "parent_tool_use_id": null,
+                            "message": {
+                                "model": "claude-test-1",
+                                "content": [{ "type": "text", "text": "missed while you were away" }],
+                            },
+                        },
+                    }),
+                )
+                .await;
+
+            let bridge_high = {
+                let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+                loop {
+                    let rows = harness
+                        .call("get-bridge-transcript", serde_json::json!({ "sessionId": session_id }))
+                        .await;
+                    let rows = rows.as_array().cloned().unwrap_or_default();
+                    let high = rows.iter().filter_map(|r| r["seq"].as_u64()).max().unwrap_or(0);
+                    // Contiguous 1..=high, not just "something arrived" — the
+                    // bridge's own store is the oracle the phone must match.
+                    if high > 0 && rows.len() as u64 == high {
+                        break high;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "the missed output never persisted bridge-side"
+                    );
+                    sleep_a_bit().await;
+                }
+            };
+
+            // The phone's own connectivity drops and comes back — the FSM
+            // reconnects and the production connect procedure (refresh-sessions
+            // + sync reconcile) fires on its own, no manual nudging.
+            core.set_online(false);
+            let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+            loop {
+                match core.connection_view().await {
+                    Some(view) if view.status == "connected" => {}
+                    _ => break,
+                }
+                assert!(tokio::time::Instant::now() < deadline, "the FSM never went offline");
+                sleep_a_bit().await;
+            }
+            core.set_online(true);
+
+            let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+            loop {
+                if let Some(view) = core.connection_view().await {
+                    if view.status == "connected" {
+                        break;
+                    }
+                }
+                assert!(tokio::time::Instant::now() < deadline, "the FSM never reconnected");
+                sleep_a_bit().await;
+            }
+
+            let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+            loop {
+                let seqs = transcript_store.seqs(&machine, &session_id).await;
+                if seqs.len() as u64 >= bridge_high {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "sync gap-refill never caught the phone up (have {}, want {bridge_high})",
+                    transcript_store.seqs(&machine, &session_id).await.len()
+                );
+                sleep_a_bit().await;
+            }
+
+            // The phone's transcript is byte-identical to the bridge's own,
+            // seq for seq — the F2b Capa 2 gate's own oracle.
+            let bridge_rows = harness
+                .call("get-bridge-transcript", serde_json::json!({ "sessionId": session_id }))
+                .await;
+            let bridge_rows = bridge_rows.as_array().cloned().unwrap_or_default();
+            let phone_rows = transcript_store
+                .read_range(&machine, &session_id, 1, bridge_high)
+                .await;
+            assert_eq!(
+                phone_rows.len() as u64,
+                bridge_high,
+                "the phone's transcript has a gap the sync pass should have healed"
+            );
+            for bridge_row in &bridge_rows {
+                let seq = bridge_row["seq"].as_u64().expect("bridge row has a seq");
+                let phone_row = phone_rows
+                    .iter()
+                    .find(|r| r.seq == seq)
+                    .unwrap_or_else(|| panic!("seq {seq} present bridge-side but missing on the phone"));
+                assert_eq!(
+                    &phone_row.entry, &bridge_row["entry"],
+                    "seq {seq} differs between the phone and the bridge"
+                );
             }
 
             harness.shutdown().await;

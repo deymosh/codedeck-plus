@@ -130,12 +130,14 @@ describe('handleCommand — against a real Harness', () => {
     expect(() => new Date(result.expiresAt).toISOString()).not.toThrow();
   });
 
-  it('restart-bridge swaps the underlying BridgeCore without touching the relay', async () => {
+  it('restart-bridge swaps the BridgeCore and the facade without touching the relay', async () => {
     const h = await realHarness();
-    const before = h.core;
+    const beforeCore = h.core;
+    const beforeFacade = h.facade;
     const res = await handleCommand(h, { id: '3', cmd: 'restart-bridge' });
     expect(res).toEqual({ id: '3', ok: true, result: null });
-    expect(h.core).not.toBe(before);
+    expect(h.core).not.toBe(beforeCore);
+    expect(h.facade).not.toBe(beforeFacade);
   });
 
   it('an unknown session transcript is empty, not an error', async () => {
