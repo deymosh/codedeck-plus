@@ -276,7 +276,21 @@ export interface MarmotMessage {
   status: MarmotMessageStatus;
 }
 
+/** Mirrors `client-core`'s `MarmotWelcomeInfo`. */
+export interface MarmotWelcomeInfo {
+  welcomeId: string;
+  wrapperId: string;
+  groupId: string;
+  hTag: string;
+  name: string;
+  welcomer: string;
+  memberCount: number;
+}
+
 export interface MarmotView {
+  /** The MDK engine seam exists AND init succeeded — gates whether the UI
+   *  offers starting a Marmot chat at all. */
+  available: boolean;
   conversations: MarmotConversation[];
   messages: Record<string, MarmotMessage[]>;
   activeGroup: string | null;
@@ -284,6 +298,7 @@ export interface MarmotView {
   ignored: number;
   errors: number;
   buffered: number;
+  pendingWelcomes: Record<string, MarmotWelcomeInfo>;
 }
 
 // --- CoreEvent (plan §2.3) ---
