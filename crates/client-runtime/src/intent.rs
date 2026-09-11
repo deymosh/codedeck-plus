@@ -295,12 +295,25 @@ pub enum Intent {
     RemoveRelay {
         url: String,
     },
+    /// Merge relays learned from a pairing URL. Not itself user-facing on the
+    /// pairing path (that already merges internally when a candidate settles)
+    /// — kept for a Settings UI that wants to bulk-add without a per-URL loop.
+    AddRelays {
+        urls: Vec<String>,
+    },
     SetTorEnabled(bool),
     SetStayConnected(bool),
+    SetMeshTestTarget(bool),
+    SetBlossomServer(String),
     SetNotificationsEnabled(bool),
     SetDefaultMode(PermissionMode),
+    /// Empty string = unset (the bridge/SDK default) — `EffortLevel` has no
+    /// such variant, so this carries the raw wire string, same as the store.
+    SetDefaultEffort(String),
     SetDefaultModel(String),
     SetUiScale(f64),
+    SetShowUsageBadge(bool),
+    SetShowCommitBadge(bool),
     AddQuickPrompt {
         id: String,
         label: String,
@@ -625,6 +638,7 @@ pub fn apply(
         Intent::RemoveRelay { url } => {
             apply_relay_effects(stores.settings.remove_relay(&url), &mut r)
         }
+        Intent::AddRelays { urls } => apply_relay_effects(stores.settings.add_relays(&urls), &mut r),
         Intent::SetTorEnabled(on) => {
             stores.settings.set_tor_proxy_enabled(on);
             r.tor_changed = Some(on);
@@ -632,6 +646,14 @@ pub fn apply(
         }
         Intent::SetStayConnected(on) => {
             stores.settings.set_stay_connected(on);
+            r.persist(StoreId::Settings);
+        }
+        Intent::SetMeshTestTarget(on) => {
+            stores.settings.set_mesh_test_target(on);
+            r.persist(StoreId::Settings);
+        }
+        Intent::SetBlossomServer(url) => {
+            stores.settings.set_blossom_server(&url);
             r.persist(StoreId::Settings);
         }
         Intent::SetNotificationsEnabled(on) => {
@@ -642,12 +664,24 @@ pub fn apply(
             stores.settings.set_default_mode(mode);
             r.persist(StoreId::Settings);
         }
+        Intent::SetDefaultEffort(level) => {
+            stores.settings.set_default_effort(&level);
+            r.persist(StoreId::Settings);
+        }
         Intent::SetDefaultModel(model) => {
             stores.settings.set_default_model(&model);
             r.persist(StoreId::Settings);
         }
         Intent::SetUiScale(scale) => {
             stores.settings.set_ui_scale(scale);
+            r.persist(StoreId::Settings);
+        }
+        Intent::SetShowUsageBadge(on) => {
+            stores.settings.set_show_usage_badge(on);
+            r.persist(StoreId::Settings);
+        }
+        Intent::SetShowCommitBadge(on) => {
+            stores.settings.set_show_commit_badge(on);
             r.persist(StoreId::Settings);
         }
         Intent::AddQuickPrompt { id, label, text } => {
@@ -1011,6 +1045,47 @@ mod tests {
         let out2 = apply(
             &mut s, Intent::AddRelay { url: "wss://new.example".into() }, &kp, ctx());
         assert_eq!(out2, IntentResult::default());
+    }
+
+    #[tokio::test]
+    async fn add_relays_merges_a_batch_in_one_call() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::AddRelays {
+                urls: vec!["wss://a.example".into(), "wss://b.example".into()],
+            },
+            &kp,
+            ctx(),
+        );
+        let relays = out.relays_changed.unwrap();
+        assert!(relays.iter().any(|r| r == "wss://a.example"));
+        assert!(relays.iter().any(|r| r == "wss://b.example"));
+        assert_eq!(out.persist, vec![StoreId::Settings]);
+    }
+
+    #[tokio::test]
+    async fn every_settings_intent_mutates_the_store_and_persists() {
+        let (mut s, kp) = stores().await;
+
+        let out = apply(&mut s, Intent::SetMeshTestTarget(true), &kp, ctx());
+        assert!(s.settings.data.mesh_test_target);
+        assert_eq!(out.persist, vec![StoreId::Settings]);
+
+        apply(&mut s, Intent::SetBlossomServer("https://blossom.example".into()), &kp, ctx());
+        assert_eq!(s.settings.data.blossom_server, "https://blossom.example");
+
+        apply(&mut s, Intent::SetDefaultEffort("high".into()), &kp, ctx());
+        assert_eq!(s.settings.data.default_effort, "high");
+        // empty string is the valid "unset" sentinel — not coerced to a default
+        apply(&mut s, Intent::SetDefaultEffort(String::new()), &kp, ctx());
+        assert_eq!(s.settings.data.default_effort, "");
+
+        apply(&mut s, Intent::SetShowUsageBadge(false), &kp, ctx());
+        assert!(!s.settings.data.show_usage_badge);
+
+        apply(&mut s, Intent::SetShowCommitBadge(false), &kp, ctx());
+        assert!(!s.settings.data.show_commit_badge);
     }
 
     #[tokio::test]
