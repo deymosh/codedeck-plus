@@ -61,7 +61,8 @@ pub struct MarmotGroupInfo {
     pub active: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MarmotWelcomeInfo {
     pub welcome_id: String,
     pub wrapper_id: String,

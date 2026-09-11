@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use client_core::connection::ConnectionStatus;
 use client_core::stores::dm::{DmConversation, DmMessage};
 use client_core::stores::machines::MachineView;
-use client_core::stores::marmot::{MarmotConversation, MarmotMessage};
+use client_core::stores::marmot::{MarmotConversation, MarmotMessage, MarmotWelcomeInfo};
 use client_core::stores::outbox::OutboxItem;
 use client_core::stores::pairing::{PairingPhase, PairingState};
 use client_core::stores::settings::SettingsData;
@@ -179,6 +179,9 @@ impl DmView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarmotView {
+    /// The MDK engine seam exists AND init succeeded — gates whether the UI
+    /// offers starting a Marmot chat at all.
+    pub available: bool,
     /// Conversations newest-first (by `last_message_at`).
     pub conversations: Vec<MarmotConversation>,
     /// `group_id` → messages ascending by `at`.
@@ -191,6 +194,10 @@ pub struct MarmotView {
     pub errors: u64,
     /// 445s held for not-yet-joined groups (VEIL-029 buffer).
     pub buffered: usize,
+    /// Welcomes awaiting `Intent::AcceptMarmotWelcome`, keyed by `welcomeId`.
+    /// Without this the accept-welcome UI has nothing to render — a chat
+    /// invite would sit accepted engine-side-only and invisible forever.
+    pub pending_welcomes: BTreeMap<String, MarmotWelcomeInfo>,
 }
 
 impl MarmotView {
@@ -199,6 +206,7 @@ impl MarmotView {
             s.marmot.conversations.values().cloned().collect();
         conversations.sort_by_key(|c| std::cmp::Reverse(c.last_message_at));
         Self {
+            available: s.marmot.available,
             conversations,
             messages: s.marmot.messages.clone(),
             active_group: s.marmot.active_group.clone(),
@@ -206,6 +214,7 @@ impl MarmotView {
             ignored: s.marmot.diagnostics.ignored,
             errors: s.marmot.diagnostics.errors,
             buffered: s.marmot.buffered_len(),
+            pending_welcomes: s.marmot.pending_welcomes.clone(),
         }
     }
 }
@@ -299,6 +308,30 @@ mod tests {
         let pv = PairingView::from_stores(&s);
         assert_eq!(pv.phase, "awaiting-ack");
         assert_eq!(pv.candidate.unwrap().machine, "(manual)");
+    }
+
+    #[tokio::test]
+    async fn marmot_view_carries_pending_welcomes_camel_case() {
+        let mut s = stores().await;
+        s.marmot.pending_welcomes.insert(
+            "w1".into(),
+            MarmotWelcomeInfo {
+                welcome_id: "w1".into(),
+                wrapper_id: "wrap1".into(),
+                group_id: "g1".into(),
+                h_tag: "h1".into(),
+                name: "".into(),
+                welcomer: "peer-pubkey".into(),
+                member_count: 2,
+            },
+        );
+        let mv = MarmotView::from_stores(&s);
+        let welcome = mv.pending_welcomes.get("w1").expect("welcome present in the view");
+        assert_eq!(welcome.welcomer, "peer-pubkey");
+        assert!(!mv.available); // engine never initialized in this test
+        let json = serde_json::to_string(&mv).unwrap();
+        assert!(json.contains(r#""available":false"#));
+        assert!(json.contains(r#""pendingWelcomes":{"w1":{"welcomeId":"w1""#));
     }
 
     #[tokio::test]
