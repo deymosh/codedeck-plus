@@ -1,0 +1,41 @@
+{
+  "name": "@codedeck/contract-harness",
+  "version": "0.11.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "codedeck-contract-harness": "./out/main.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@codedeck/core": "workspace:*",
+    "@codedeck/protocol": "workspace:*",
+    "@codedeck/testkit": "workspace:*",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "description": "Standalone process a native client (or a TS test) drives over a real ws:// socket against a real BridgeCore + FakeSdkFacade — the F2b migration plan's Capa 2 contract-test harness.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deymosh/codedeck-plus.git",
+    "directory": "tools/contract-harness"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "out/",
+    "README.md"
+  ]
+}

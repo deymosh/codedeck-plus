@@ -218,6 +218,37 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.0.1))
 
+  tools/contract-harness:
+    dependencies:
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.3
+    devDependencies:
+      '@codedeck/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@codedeck/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@codedeck/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.0.1))
+
 packages:
 
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.240':

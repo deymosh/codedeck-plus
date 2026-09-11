@@ -10,6 +10,7 @@ pnpm-debug.log*
 # Build outputs
 apps/bridge/out/
 apps/mobile/dist/
+tools/contract-harness/out/
 **/target/
 **/*.tsbuildinfo
 
