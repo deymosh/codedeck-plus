@@ -70,6 +70,8 @@ pub struct IntentResult {
     pub mesh_join: Option<(String, String)>,
     /// Arm / clear the delete-controller undo timer.
     pub undo_timer: Option<UndoTimer>,
+    /// `(peer, text)` — the loop wraps + publishes this NIP-17 DM (async).
+    pub dm_send: Option<(String, String)>,
 }
 
 impl IntentResult {
@@ -212,6 +214,15 @@ pub enum Intent {
     },
     MarkDmRead {
         peer: String,
+    },
+    /// Open (or create) a NIP-17 conversation for an npub / hex peer.
+    StartDmConversation {
+        peer_input: String,
+    },
+    /// Send a NIP-17 DM (the loop wraps + publishes).
+    SendDm {
+        peer: String,
+        text: String,
     },
     AddRelay {
         url: String,
@@ -501,11 +512,23 @@ pub fn apply(
         }
         Intent::SelectDmPeer { peer } => {
             r.ui_effects = stores.ui.select_dm_peer(peer.as_deref());
+            stores.dm.set_active_peer(peer.as_deref());
+            r.persist(StoreId::Dm);
         }
         Intent::MarkDmRead { peer } => {
             if stores.dm.mark_read(&peer) {
                 r.persist(StoreId::Dm);
             }
+        }
+        Intent::StartDmConversation { peer_input } => {
+            if let Some(sc) = stores.dm.start_conversation(&peer_input, ctx.now) {
+                if sc.created {
+                    r.persist(StoreId::Dm);
+                }
+            }
+        }
+        Intent::SendDm { peer, text } => {
+            r.dm_send = Some((peer, text));
         }
         Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
         Intent::RemoveRelay { url } => {

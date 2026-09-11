@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use client_core::connection::ConnectionStatus;
+use client_core::stores::dm::{DmConversation, DmMessage};
 use client_core::stores::machines::MachineView;
 use client_core::stores::outbox::OutboxItem;
 use client_core::stores::pairing::{PairingPhase, PairingState};
@@ -140,6 +141,37 @@ impl PairingView {
 
     pub fn from_stores(s: &CoreStores) -> Self {
         Self::from_state(&s.pairing)
+    }
+}
+
+// --- dm ------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DmView {
+    /// Conversations newest-first (by `last_message_at`).
+    pub conversations: Vec<DmConversation>,
+    /// `peer` → messages ascending by `at`.
+    pub messages: BTreeMap<String, Vec<DmMessage>>,
+    pub active_peer: Option<String>,
+    /// 1059 events seen / unwrap failures / non-DM rumors (CD-001 diagnostics).
+    pub events_received: u64,
+    pub unwrap_failures: u64,
+    pub invalid_rumors: u64,
+}
+
+impl DmView {
+    pub fn from_stores(s: &CoreStores) -> Self {
+        let mut conversations: Vec<DmConversation> = s.dm.conversations.values().cloned().collect();
+        conversations.sort_by_key(|c| std::cmp::Reverse(c.last_message_at));
+        Self {
+            conversations,
+            messages: s.dm.messages.clone(),
+            active_peer: s.dm.active_peer.clone(),
+            events_received: s.dm.diagnostics.events_received,
+            unwrap_failures: s.dm.diagnostics.unwrap_failures,
+            invalid_rumors: s.dm.diagnostics.invalid_rumors,
+        }
     }
 }
 

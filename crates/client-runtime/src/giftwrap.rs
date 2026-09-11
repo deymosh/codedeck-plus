@@ -51,6 +51,28 @@ fn keys_of(identity: &Keypair) -> Keys {
     Keys::new(identity.secret_key.clone())
 }
 
+/// A replaceable relay-list event (NIP-17 kind-10050 / MIP-00 kind-10051): one
+/// `relay` tag per URL, identity-signed, empty content.
+pub fn relay_list_event(
+    identity: &Keypair,
+    kind: u16,
+    relays: &[String],
+    created_at_secs: u64,
+) -> Result<SignedEvent, GiftwrapError> {
+    let me = keys_of(identity);
+    let tags: Vec<Tag> = relays
+        .iter()
+        .map(|url| Tag::parse(["relay".to_string(), url.clone()]))
+        .collect::<Result<_, _>>()
+        .map_err(|e| GiftwrapError::Build(e.to_string()))?;
+    let event = EventBuilder::new(Kind::Custom(kind), "")
+        .tags(tags)
+        .custom_created_at(nostr::Timestamp::from_secs(created_at_secs))
+        .sign_with_keys(&me)
+        .map_err(|e| GiftwrapError::Build(e.to_string()))?;
+    Ok(SignedEvent::from_nostr(&event))
+}
+
 /// Build the rumor once and wrap it for the peer and for ourselves.
 pub async fn wrap_dm(
     identity: &Keypair,

@@ -32,13 +32,23 @@ use client_core::wire::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
+use client_core::notifications::NotifyEvent;
+use client_core::stores::dm::{
+    AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
+};
+
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
+use crate::giftwrap::{relay_list_event, unwrap_gift_parts, wrap_dm};
 use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, UndoTimer};
-use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
+use crate::nostr_client::{
+    Filter, NostrClient, NostrClientHost, NostrEvent, SubCallbacks, Transport,
+};
 use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
-use crate::view::{ConnectionView, MachinesView, OutboxView, PairingView, SettingsView};
+use crate::view::{
+    ConnectionView, DmView, MachinesView, OutboxView, PairingView, SettingsView,
+};
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
@@ -248,6 +258,8 @@ impl Core {
             stale_timer: None,
             pair_timer: None,
             undo_timer: None,
+            dm_sub: None,
+            dm_epoch: 0,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -371,6 +383,9 @@ impl Core {
     pub async fn connection_view(&self) -> Option<ConnectionView> {
         self.query(ViewQuery::Connection).await
     }
+    pub async fn dm_view(&self) -> Option<DmView> {
+        self.query(ViewQuery::Dm).await
+    }
 
     async fn query<T>(&self, make: impl FnOnce(oneshot::Sender<T>) -> ViewQuery) -> Option<T> {
         let (rtx, rrx) = oneshot::channel();
@@ -414,6 +429,10 @@ enum Msg {
     },
     /// The delete-controller's 4 s undo window elapsed.
     UndoTimerFired,
+    /// A kind-1059 gift wrap arrived on the DM subscription.
+    DmEvent(NostrEvent),
+    /// The DM subscription of `epoch` died (not a deliberate teardown).
+    DmClosed(u64),
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -423,6 +442,7 @@ enum ViewQuery {
     Outbox(oneshot::Sender<OutboxView>),
     Pairing(oneshot::Sender<PairingView>),
     Connection(oneshot::Sender<ConnectionView>),
+    Dm(oneshot::Sender<DmView>),
 }
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
@@ -479,6 +499,9 @@ struct Loop {
     pair_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
+    /// The kind-1059 DM subscription + its epoch guard.
+    dm_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
+    dm_epoch: u64,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- F2b: the composed store layer ---
     stores: CoreStores,
@@ -553,6 +576,12 @@ impl Loop {
                 Msg::View(query) => self.answer_view(query),
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
                 Msg::UndoTimerFired => self.on_undo_timer().await,
+                Msg::DmEvent(event) => self.on_dm_event(event).await,
+                Msg::DmClosed(epoch) => {
+                    if epoch == self.dm_epoch {
+                        self.dm_sub = None;
+                    }
+                }
             }
         }
     }
@@ -577,9 +606,11 @@ impl Loop {
             ConnectionEffect::OpenSocket => {
                 self.ws.ensure_connected();
                 self.nostr.connect();
+                self.start_dm_sub();
             }
             ConnectionEffect::CloseSocket => {
                 self.nostr.disconnect();
+                self.stop_dm_sub();
                 self.ws.shutdown();
             }
             ConnectionEffect::ScheduleRetry { delay_ms } => {
@@ -776,7 +807,11 @@ impl Loop {
             visible: self.conn.visible,
         };
         let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
+        let dm_send = result.dm_send.clone();
         self.interpret_intent(result).await;
+        if let Some((peer, text)) = dm_send {
+            self.send_dm(peer, text).await;
+        }
     }
 
     async fn interpret_intent(&mut self, r: IntentResult) {
@@ -879,7 +914,141 @@ impl Loop {
                     self.conn.needs_pairing_check,
                 ));
             }
+            ViewQuery::Dm(reply) => {
+                let _ = reply.send(DmView::from_stores(&self.stores));
+            }
         }
+    }
+
+    // --- NIP-17 DM runtime ---
+
+    /// (Re)open the kind-1059 subscription with a fresh epoch + catch-up cursor,
+    /// and publish the kind-10050 DM relay list.
+    fn start_dm_sub(&mut self) {
+        self.dm_epoch += 1;
+        let epoch = self.dm_epoch;
+        if let Some(sub) = self.dm_sub.take() {
+            sub.close();
+        }
+        let filter = Filter {
+            kinds: vec![GIFT_WRAP_KIND],
+            authors: Vec::new(),
+            p_tags: vec![self.identity.pubkey_hex.clone()],
+            since: self.stores.dm.since_cursor().map(|s| s as i64),
+        };
+        let ev_tx = self.self_tx.clone();
+        let close_tx = self.self_tx.clone();
+        let callbacks = SubCallbacks {
+            on_event: Rc::new(move |ev: &NostrEvent| {
+                let _ = ev_tx.send(Msg::DmEvent(ev.clone()));
+            }),
+            on_eose: Rc::new(|| {}),
+            on_close: Rc::new(move |_reason| {
+                let _ = close_tx.send(Msg::DmClosed(epoch));
+            }),
+        };
+        self.dm_sub = Some(self.ws.subscribe(filter, callbacks));
+
+        let relays = self.stores.settings.data.relays.clone();
+        if !relays.is_empty() {
+            if let Ok(event) =
+                relay_list_event(&self.identity, DM_RELAY_LIST_KIND, &relays, self.clock.now_ms() / 1000)
+            {
+                self.publish_raw(event);
+            }
+        }
+    }
+
+    fn stop_dm_sub(&mut self) {
+        self.dm_epoch += 1; // orphan any in-flight callback
+        if let Some(sub) = self.dm_sub.take() {
+            sub.close();
+        }
+    }
+
+    /// A kind-1059 gift wrap: unwrap, and either fold a kind-14 rumor into the
+    /// DM store or count it (CD-001: never silent, never a throw).
+    async fn on_dm_event(&mut self, ev: NostrEvent) {
+        self.stores.dm.note_event_received();
+        let me = self.identity.pubkey_hex.clone();
+        match unwrap_gift_parts(&self.identity, &ev.pubkey, &ev.content) {
+            Err(_) => self.stores.dm.note_unwrap_failure(),
+            Ok(rumor) if rumor.kind == DM_RUMOR_KIND => {
+                let outcome = self.stores.dm.ingest_dm_rumor(&rumor, &me);
+                if let AddOutcome::Inserted {
+                    is_incoming,
+                    counts_unread,
+                    ..
+                } = outcome
+                {
+                    self.persist_store(StoreId::Dm).await;
+                    self.state_changed(SliceId::Dm);
+                    if is_incoming && counts_unread {
+                        let preview = truncate_preview(&rumor.content);
+                        self.run_notify(NotifyEvent::DmReceived {
+                            peer: rumor.pubkey.clone(),
+                            peer_label: None,
+                            preview: Some(preview),
+                        });
+                    }
+                }
+            }
+            // A well-formed non-DM rumor (a Marmot kind-444 welcome, most
+            // likely). The Marmot route lands with that runtime.
+            Ok(_) => self.stores.dm.note_invalid_rumor(),
+        }
+    }
+
+    /// NIP-17 send: wrap the rumor once, publish the recipient + self copies,
+    /// and add it locally (optimistic, status `sent`).
+    async fn send_dm(&mut self, peer: String, text: String) {
+        let Ok(wrapped) = wrap_dm(&self.identity, &peer, &text).await else {
+            self.observer.action_failed(ActionFailed::PublishRejected);
+            return;
+        };
+        self.publish_raw(wrapped.for_recipient);
+        self.publish_raw(wrapped.for_self);
+        let me = self.identity.pubkey_hex.clone();
+        let rumor = DmRumor {
+            id: wrapped.rumor_id,
+            pubkey: me.clone(),
+            kind: DM_RUMOR_KIND,
+            content: text,
+            created_at: wrapped.created_at,
+            tags: vec![vec!["p".to_string(), peer]],
+        };
+        self.stores.dm.ingest_dm_rumor(&rumor, &me);
+        self.persist_store(StoreId::Dm).await;
+        self.state_changed(SliceId::Dm);
+    }
+
+    /// Run the notification coordinator for one event and deliver its effects.
+    fn run_notify(&mut self, event: NotifyEvent) {
+        let visible = self.conn.visible;
+        let enabled = self.stores.settings.data.notifications_enabled;
+        let effects = self
+            .stores
+            .notifications
+            .emit(&event, visible, enabled, false, None, self.clock.now_ms());
+        if !effects.is_empty() {
+            self.state_changed(SliceId::Cards);
+        }
+        for effect in effects {
+            if let client_core::notifications::NotifyEffect::Notify { content, tag } = effect {
+                self.notifier.notify(&content.title, &content.body, Some(&tag));
+            }
+        }
+    }
+
+    /// Publish a pre-built signed event (DM wraps, the 10050 relay list) off the
+    /// loop.
+    fn publish_raw(&self, event: client_core::nostr_event::SignedEvent) {
+        let ws = self.ws.clone();
+        tokio::task::spawn_local(async move {
+            let _ = ws
+                .publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
+                .await;
+        });
     }
 
     /// CDX-040: the pair-ack deadline elapsed.
@@ -993,6 +1162,16 @@ fn abort(slot: &mut Option<AbortHandle>) {
     }
 }
 
+/// Notification / conversation-list preview cap (mirrors the TS 120/117 rule).
+fn truncate_preview(content: &str) -> String {
+    if content.chars().count() > 120 {
+        let head: String = content.chars().take(117).collect();
+        format!("{head}…")
+    } else {
+        content.to_string()
+    }
+}
+
 fn slice_of(id: StoreId) -> SliceId {
     match id {
         StoreId::Machines => SliceId::Machines,
@@ -1088,15 +1267,27 @@ mod tests {
         .await
     }
 
-    async fn eose_all(mock: &mut MockRelay) {
-        // NostrClient opens three subs: cd-1 / cd-2 / cd-3.
-        for _ in 0..3 {
-            let req = mock.next_frame().await;
-            let v: Vec<serde_json::Value> = serde_json::from_str(&req).unwrap();
-            assert_eq!(v[0], "REQ");
-            let sub_id = v[1].as_str().unwrap().to_string();
-            mock.push(format!(r#"["EOSE","{sub_id}"]"#));
+    /// EOSE the four subscriptions (3 bridge + 1 DM) and return the DM sub's id
+    /// (the REQ whose filter is `kinds:[1059]`). All are named `cd-N` and replay
+    /// in non-deterministic order; a kind-10050 EVENT is interleaved — skip it.
+    async fn eose_all(mock: &mut MockRelay) -> String {
+        let mut seen = 0;
+        let mut dm_sub = String::new();
+        while seen < 4 {
+            let frame = mock.next_frame().await;
+            let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+            if v[0] == "REQ" {
+                let sub_id = v[1].as_str().unwrap().to_string();
+                if v.get(2).and_then(|f| f["kinds"].as_array())
+                    == Some(&vec![serde_json::json!(1059)])
+                {
+                    dm_sub = sub_id.clone();
+                }
+                mock.push(format!(r#"["EOSE","{sub_id}"]"#));
+                seen += 1;
+            }
         }
+        dm_sub
     }
 
     #[tokio::test]
@@ -1315,8 +1506,17 @@ mod tests {
                 assert_eq!(core.connection_view().await.unwrap().status, "idle");
                 core.start();
                 eose_all(&mut mock).await;
-                settle().await;
-                assert_eq!(core.connection_view().await.unwrap().status, "connected");
+                // let the EOSEs propagate through the transport → NostrClient →
+                // the FSM (a few extra spawn_local tasks now share the loop).
+                let mut status = "";
+                for _ in 0..10 {
+                    settle().await;
+                    status = core.connection_view().await.unwrap().status;
+                    if status == "connected" {
+                        break;
+                    }
+                }
+                assert_eq!(status, "connected");
             })
             .await;
     }
@@ -1340,17 +1540,28 @@ mod tests {
                 .await;
                 settle().await;
 
-                // the loop published one EVENT — a kind-COMMAND wrap for the machine
-                let frame = mock.next_frame().await;
-                let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
-                assert_eq!(v[0], "EVENT");
-                let ev = &v[1];
-                assert_eq!(ev["pubkey"], phone.pubkey_hex);
-                assert!(ev["tags"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|t| t[0] == "p" && t[1] == machine.pubkey_hex));
+                // among the published EVENTs (the kind-10050 DM list, then the
+                // command) find the one wrapped for the machine.
+                let mut found = false;
+                for _ in 0..6 {
+                    let frame = mock.next_frame().await;
+                    let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                    if v[0] != "EVENT" {
+                        continue;
+                    }
+                    let ev = &v[1];
+                    if ev["pubkey"] == serde_json::json!(phone.pubkey_hex)
+                        && ev["tags"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|t| t[0] == "p" && t[1] == machine.pubkey_hex)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                assert!(found, "no command EVENT p-tagged to the machine");
             })
             .await;
     }
@@ -1376,6 +1587,51 @@ mod tests {
                 assert!(events.contains(&CoreEvent::StateChanged {
                     slice: SliceId::Settings
                 }));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_nip17_dm_round_trips_through_the_1059_subscription() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let peer = generate_keypair();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                let dm_sub = eose_all(&mut mock).await;
+                settle().await;
+
+                // --- send: optimistic local add + two 1059 wraps on the wire ---
+                core.dispatch(Intent::SendDm {
+                    peer: peer.pubkey_hex.clone(),
+                    text: "hi over nostr".into(),
+                })
+                .await;
+                settle().await;
+
+                // optimistic local add (status sent, our own message)
+                let dm = core.dm_view().await.unwrap();
+                assert_eq!(dm.messages[&peer.pubkey_hex].len(), 1);
+                assert_eq!(dm.messages[&peer.pubkey_hex][0].content, "hi over nostr");
+
+                // --- receive: a 1059 for us from another sender ---
+                let w = crate::giftwrap::wrap_dm(&peer, &phone.pubkey_hex, "hello back")
+                    .await
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","{dm_sub}",{}]"#,
+                    serde_json::to_string(&w.for_recipient).unwrap()
+                ));
+                settle().await;
+
+                let dm = core.dm_view().await.unwrap();
+                assert_eq!(dm.events_received, 1);
+                let from_peer = &dm.messages[&peer.pubkey_hex];
+                assert!(from_peer.iter().any(|m| m.content == "hello back"));
+                assert_eq!(dm.conversations[0].unread_count, 1);
             })
             .await;
     }
