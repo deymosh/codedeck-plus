@@ -18,7 +18,8 @@
 //! of `Send` messages) and is handed back to Tauri's `State` for the commands
 //! to call.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread;
@@ -134,25 +135,79 @@ impl CoreObserver for TauriObserver {
 /// native-core `CorePorts` default (`NullNotifier`) would silently drop every
 /// OS notification (DMs, turn-finished, permission prompts) under F2b.
 ///
-/// `cancel` is left as the trait's own default no-op: the plugin's
-/// remove-by-id call is exposed to the JS side (`removeActive`), not to this
-/// Rust API, and duplicating the WebView notifier's per-tag id bookkeeping
-/// here just to dismiss an already-resolved permission-request notification
-/// is not worth it yet — a resolved card's notification lingers until swiped
-/// away rather than auto-clearing, but nothing is ever silently dropped.
+/// CDX-026c cancellation: the plugin's remove-by-id call
+/// (`Notification::remove_active`) exists on mobile only — desktop's Rust API
+/// has no equivalent at all — and it needs OUR ids, not tags, so this mirrors
+/// `platform/notifier.ts`'s own approach: assign an id per delivery, remember
+/// it per cancellation tag (capped so a pathological stream can't leak
+/// memory), and remove them all when that tag is cancelled. Ids survive only
+/// this app run, same limitation the JS notifier documents.
 struct TauriNotifier {
     app: AppHandle,
+    next_id: Cell<i32>,
+    ids_by_tag: RefCell<HashMap<String, Vec<i32>>>,
+}
+
+/// Per-tag bookkeeping cap — mirrors `platform/notifier.ts`'s own
+/// `MAX_IDS_PER_TAG`: a tag rarely accumulates more than a couple of live
+/// notifications, so this only bounds memory on a pathological stream.
+const MAX_NOTIFICATION_IDS_PER_TAG: usize = 16;
+
+impl TauriNotifier {
+    fn new(app: AppHandle) -> Self {
+        // 32-bit-safe seed; per-run uniqueness is all cancellation needs, same
+        // as the JS notifier's `Date.now() & 0x0fffffff`.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_millis() as i32) & 0x0fff_ffff)
+            .unwrap_or(0);
+        Self {
+            app,
+            next_id: Cell::new(seed),
+            ids_by_tag: RefCell::new(HashMap::new()),
+        }
+    }
 }
 
 impl Notifier for TauriNotifier {
-    fn notify(&self, title: &str, body: &str, _tag: Option<&str>) {
-        let _ = self
+    fn notify(&self, title: &str, body: &str, tag: Option<&str>) {
+        let id = self.next_id.get().wrapping_add(1);
+        self.next_id.set(id);
+        let shown = self
             .app
             .notification()
             .builder()
+            .id(id)
             .title(title)
             .body(body)
-            .show();
+            .show()
+            .is_ok();
+        if shown {
+            if let Some(tag) = tag {
+                let mut ids_by_tag = self.ids_by_tag.borrow_mut();
+                let ids = ids_by_tag.entry(tag.to_string()).or_default();
+                ids.push(id);
+                if ids.len() > MAX_NOTIFICATION_IDS_PER_TAG {
+                    ids.remove(0);
+                }
+            }
+        }
+    }
+
+    fn cancel(&self, tag: &str) {
+        let Some(ids) = self.ids_by_tag.borrow_mut().remove(tag) else {
+            return;
+        };
+        #[cfg(mobile)]
+        {
+            let _ = self.app.notification().remove_active(ids);
+        }
+        #[cfg(not(mobile))]
+        {
+            // Desktop's Rust API has no remove-by-id call at all (mobile-only)
+            // — best-effort no-op.
+            let _ = ids;
+        }
     }
 }
 
@@ -205,6 +260,15 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
         .app_config_dir()
         .map_err(|e| format!("app config dir: {e}"))?
         .join(DB_FILE);
+    // The SAME path + file name `marmot.rs`'s `marmot_init` command already
+    // uses for the WebView path's engine — an install switching between the
+    // two must keep its MLS group state (losing it means every Marmot chat
+    // needs a fresh invite, unrecoverably).
+    let marmot_db_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {e}"))?
+        .join("marmot.db");
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Core, String>>();
     thread::Builder::new()
@@ -239,14 +303,15 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
                 // serves the WebView, so an install upgrading onto this path
                 // keeps its pairing, sessions, and transcript history. Real
                 // OS-notification delivery via `TauriNotifier`; real Blossom
-                // upload/download via `ReqwestHttpFetch`. `marmot` stays
-                // in-memory-default until its own real binding lands.
+                // upload/download via `ReqwestHttpFetch`; real Marmot (MDK/
+                // MLS) via `MarmotEngineImpl`, over the SAME `marmot.db` the
+                // WebView path's `marmot_init` command already uses.
                 let ports = CorePorts {
                     kv: Rc::new(KvSqlite::new(conn.clone())),
                     transcript_store: Rc::new(TranscriptStoreSqlite::new(conn)),
-                    notifier: Rc::new(TauriNotifier { app: notifier_app }),
+                    notifier: Rc::new(TauriNotifier::new(notifier_app)),
                     http,
-                    ..CorePorts::default()
+                    marmot: Rc::new(client_runtime::marmot::MarmotEngineImpl::new(marmot_db_path)),
                 };
                 let core = Core::spawn(core_config, ports, observer, clock, entropy).await;
                 let _ = ready_tx.send(Ok(core));

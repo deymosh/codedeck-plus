@@ -20,7 +20,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # on the dependency itself, so the default build's dependency graph (and thus
 # the shipped APK) is untouched: `native_http.rs`'s `ReqwestHttpFetch` is the
 # only thing that needs SOCKS5 support, and it's `native-core`-gated too.
-native-core = ["dep:client-runtime", "dep:tokio", "tauri-plugin-http/socks"]
+# `client-runtime/marmot` unlocks `MarmotEngineImpl` (the same MDK/MLS engine
+# `client-core`'s own `marmot` feature below already compiles in for the
+# WebView path's Tauri commands) so `corebridge.rs` can wire a real Marmot
+# port instead of `NoMarmot`.
+native-core = [
+    "dep:client-runtime",
+    "dep:tokio",
+    "tauri-plugin-http/socks",
+    "client-runtime/marmot",
+]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
