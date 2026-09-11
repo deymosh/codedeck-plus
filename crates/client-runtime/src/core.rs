@@ -1141,7 +1141,14 @@ impl Loop {
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
         }
-        self.state_changed(SliceId::Cards);
+        // `commit()` only ever emits ClearUndoTimer + SendCloseSession +
+        // HideUndoToast (see delete_controller::commit) — never a card
+        // effect. This was `SliceId::Cards`, which notified nothing that
+        // could see `stores.ui.undo_toast` had just been cleared: the undo
+        // toast would silently outlive its own window forever once the user
+        // let it expire instead of tapping undo (a `UiView` consumer never
+        // learns to re-fetch).
+        self.state_changed(SliceId::Ui);
     }
 
     async fn answer_view(&self, query: ViewQuery) {
@@ -3659,6 +3666,100 @@ mod tests {
                 .await;
 
                 assert!(!core.machines_view().await.machines.contains_key("never-paired"));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_undo_toast_clears_itself_when_the_window_expires_without_a_tap() {
+        // Regression: `on_undo_timer` cleared `stores.ui.undo_toast` correctly
+        // but emitted `StateChanged(Cards)` instead of `StateChanged(Ui)` — a
+        // `UiView` consumer (the native adapter) never learned to re-fetch, so
+        // letting the undo window expire without tapping undo left the toast
+        // showing forever. Waits out the REAL `UNDO_DELAY_MS` (~4s) rather than
+        // a shortened one: `Core::spawn` hydrates `StoresConfig::default()`
+        // unconditionally, so the production delay isn't test-overridable here.
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                core.dispatch(Intent::BeginManualPairing {
+                    npub: machine.npub.clone(),
+                    token: "tok".into(),
+                    label: "laptop".into(),
+                })
+                .await;
+                let sub = drain_traffic_resubscribe(&mut mock).await;
+                push_bridge_to_phone_event(
+                    &mock,
+                    &machine,
+                    &phone.pubkey_hex,
+                    &sub,
+                    &BridgeToPhone::PairAck(client_core::wire::events::PairAckMsg {
+                        machine: "laptop".into(),
+                        ok: true,
+                        reason: None,
+                        relays: None,
+                        host: None,
+                    }),
+                );
+                settle().await;
+
+                let sub = drain_traffic_resubscribe(&mut mock).await;
+                let sessions_msg = client_core::wire::codec::decode_bridge_to_phone(
+                    r#"{"type":"sessions","machine":"laptop","sessions":[
+                        {"id":"s1","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
+                    ],"protocolVersion":10}"#,
+                )
+                .unwrap();
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
+                settle().await;
+
+                core.dispatch(Intent::DeleteSession {
+                    machine: machine.pubkey_hex.clone(),
+                    session_id: "s1".into(),
+                    label: None,
+                })
+                .await;
+                assert!(
+                    core.ui_view().await.undo_toast.is_some(),
+                    "delete should arm the undo toast"
+                );
+                let ui_events_before = spy
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| matches!(e, CoreEvent::StateChanged { slice: SliceId::Ui }))
+                    .count();
+
+                // Let the window elapse for real, without ever dispatching
+                // UndoDelete.
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    client_core::delete_controller::UNDO_DELAY_MS + 300,
+                ))
+                .await;
+
+                assert!(core.ui_view().await.undo_toast.is_none());
+                let ui_events_after = spy
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| matches!(e, CoreEvent::StateChanged { slice: SliceId::Ui }))
+                    .count();
+                assert!(
+                    ui_events_after > ui_events_before,
+                    "the timer firing must emit its own StateChanged(Ui) — a \
+                     UiView consumer has no other way to learn the toast \
+                     cleared itself"
+                );
             })
             .await;
     }
