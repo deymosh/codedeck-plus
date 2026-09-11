@@ -3210,11 +3210,12 @@ mod tests {
                 ));
                 settle().await;
 
-                let events = spy.events.lock().unwrap();
-                assert!(events.contains(&CoreEvent::StateChanged {
-                    slice: SliceId::PendingSessions
-                }));
-                drop(events);
+                {
+                    let events = spy.events.lock().unwrap();
+                    assert!(events.contains(&CoreEvent::StateChanged {
+                        slice: SliceId::PendingSessions
+                    }));
+                }
 
                 let view = core.pending_sessions_view().await;
                 let placeholder = view.pending.get("p1").expect("placeholder in the view");
