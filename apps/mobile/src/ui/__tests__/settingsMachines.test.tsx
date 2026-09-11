@@ -5,9 +5,10 @@
  * "Remove machine" flow calling core.removeMachine.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
+import type { MachineView } from '../../core/nativeCoreTypes';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { SettingsScreen } from '../screens/SettingsScreen';
 
@@ -16,17 +17,32 @@ afterEach(cleanup);
 const MACHINE = 'a'.repeat(64);
 const MACHINE_2 = 'b'.repeat(64);
 
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
+function machine(pubkeyHex: string, name: string, host: MachineView['host']): MachineView {
+  return {
+    pubkeyHex,
+    name,
+    host,
+    capabilities: [],
+    folders: [],
+    roots: [],
+    machineOffline: false,
+    sessions: {},
+  };
+}
 
-async function makeCore(): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines
-    .getState()
-    .registerMachine({ pubkeyHex: MACHINE, name: 'laptop', host: 'vscode' });
-  return core;
+async function makeCore(machines: MachineView[] = [machine(MACHINE, 'laptop', 'vscode')]) {
+  const { phone, fake } = await buildFakePhoneCore({
+    machines: { machines: Object.fromEntries(machines.map((m) => [m.pubkeyHex, m])) },
+  });
+  // `Intent::RemoveMachine` drops it from the view Rust-side — see that
+  // intent's own tests for the full cascade (sessions, transcripts, unread).
+  fake.onDispatch((intent) => {
+    if (typeof intent === 'object' && 'removeMachine' in intent) {
+      const { [intent.removeMachine.pubkeyHex]: _removed, ...rest } = fake.views.machines.machines;
+      fake.setView('machines', { machines: rest });
+    }
+  });
+  return { core: phone, fake };
 }
 
 function renderSettings(core: PhoneCore) {
@@ -39,7 +55,7 @@ function renderSettings(core: PhoneCore) {
 
 describe('Settings — Machines section (Phase 2b)', () => {
   it('renders a block per machine: name, host badge, truncated pubkey, credentials', async () => {
-    const core = await makeCore();
+    const { core } = await makeCore();
     renderSettings(core);
 
     const block = screen.getByTestId('machine-block');
@@ -50,7 +66,7 @@ describe('Settings — Machines section (Phase 2b)', () => {
   });
 
   it('Remove machine requires the confirm step; Cancel keeps the machine', async () => {
-    const core = await makeCore();
+    const { core } = await makeCore();
     renderSettings(core);
 
     fireEvent.click(screen.getByText('Remove machine…'));
@@ -61,11 +77,14 @@ describe('Settings — Machines section (Phase 2b)', () => {
   });
 
   it('confirming removes the machine (block gone, store empty)', async () => {
-    const core = await makeCore();
+    const { core } = await makeCore();
     renderSettings(core);
 
     fireEvent.click(screen.getByText('Remove machine…'));
-    fireEvent.click(screen.getByText('Remove machine'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Remove machine'));
+      await tick();
+    });
     expect(core.machines.getState().machines[MACHINE]).toBeUndefined();
     expect(screen.queryByTestId('machine-block')).toBeNull();
   });
@@ -77,10 +96,10 @@ describe('Settings — Machines section (Phase 2b)', () => {
   // jsdom applies no real flex layout, so this guards the structure; the
   // `.screen > * { flex-shrink: 0 }` rule itself is checked manually.
   it('renders one block per machine, each inside the Machines <section>', async () => {
-    const core = await makeCore();
-    core.machines
-      .getState()
-      .registerMachine({ pubkeyHex: MACHINE_2, name: 'server', host: 'cli' });
+    const { core } = await makeCore([
+      machine(MACHINE, 'laptop', 'vscode'),
+      machine(MACHINE_2, 'server', 'cli'),
+    ]);
     renderSettings(core);
 
     const blocks = screen.getAllByTestId('machine-block');
@@ -93,7 +112,7 @@ describe('Settings — Machines section (Phase 2b)', () => {
   });
 
   it('wraps the Mesh section in its own <section>', async () => {
-    const core = await makeCore();
+    const { core } = await makeCore();
     renderSettings(core);
 
     const meshTitle = screen.getByText('Mesh (remote testing)');

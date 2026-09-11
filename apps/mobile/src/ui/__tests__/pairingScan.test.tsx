@@ -4,15 +4,21 @@
  * through EXACTLY the pasted-link path (parsePairingUrl → beginPair) — these
  * tests mock only the platform camera seam and assert the same flow the
  * pairing tests already prove for pasted URLs.
+ *
+ * The pairing FSM itself (publish, await-ack timeout, the bridge's ack
+ * landing) is `client_runtime::Core`'s job now (`Intent::BeginPairing`/
+ * `BeginManualPairing`; see its own tests for that timing, including
+ * CDX-040's "window may have closed" failure). What is left worth testing
+ * here is: `parsePairingUrl` gating what reaches `beginPair` at all, the
+ * exact dispatched Intent, and that `PairingScreen` renders each pairing
+ * phase correctly — so awaiting-ack/paired/failed are reached by seeding the
+ * fake core's `pairing` view directly, the way Rust's own events would.
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { npubEncode } from 'nostr-tools/nip19';
-import type { NostrEvent } from 'nostr-tools/core';
-import type { PhoneCore } from '../../core/createPhoneCore';
-import { createPhoneCore } from '../../core/createPhoneCore';
+import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
 import { generateKeypair } from '../../core/crypto';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
 import { PhoneCoreProvider } from '../coreContext';
 import { PairingScreen } from '../screens/PairingScreen';
 import * as qrScan from '../../platform/qrScan';
@@ -28,19 +34,37 @@ afterEach(() => {
   vi.mocked(qrScan.scanQrCode).mockReset();
 });
 
-async function makeCore(
-  extra: { pairTimeoutMs?: number } = {},
-): Promise<{ core: PhoneCore; published: NostrEvent[] }> {
-  const published: NostrEvent[] = [];
-  const transport: PhoneTransport = {
-    subscribe: () => ({ close: () => {} }),
-    publish: async (event) => {
-      published.push(event);
-      return true;
-    },
-  };
-  const core = await createPhoneCore({ kv: memoryKV(), transport, ...extra });
-  return { core, published };
+async function makeCore() {
+  const { phone, fake } = await buildFakePhoneCore();
+  // Any begin-pairing dispatch moves the view to awaiting-ack with a
+  // candidate the assertions below can check — same shape a real
+  // `Intent::BeginPairing`/`BeginManualPairing` acceptance would produce.
+  fake.onDispatch((intent) => {
+    if (typeof intent === 'object' && 'beginPairing' in intent) {
+      const url = new URL(intent.beginPairing.url.replace('codedeck://pair', 'https://pair'));
+      fake.setView('pairing', {
+        phase: 'awaiting-ack',
+        candidate: {
+          pubkeyHex: '', // not asserted in this path — see below
+          npub: url.searchParams.get('npub') ?? '',
+          machine: url.searchParams.get('machine') ?? '',
+          relays: (url.searchParams.get('relays') ?? '').split(',').filter(Boolean),
+        },
+        error: null,
+        timedOut: false,
+        hasStaged: false,
+      });
+    } else if (typeof intent === 'object' && 'beginManualPairing' in intent) {
+      fake.setView('pairing', {
+        phase: 'awaiting-ack',
+        candidate: { pubkeyHex: '', npub: intent.beginManualPairing.npub, machine: '', relays: [] },
+        error: null,
+        timedOut: false,
+        hasStaged: false,
+      });
+    }
+  });
+  return { core: phone, fake };
 }
 
 function pairingUrlFor(bridge: { pubkeyHex: string }): string {
@@ -50,7 +74,7 @@ function pairingUrlFor(bridge: { pubkeyHex: string }): string {
 
 describe('PairingScreen QR scan', () => {
   it('a scanned pairing QR starts the pair flow (same path as a pasted link)', async () => {
-    const { core, published } = await makeCore();
+    const { core, fake } = await makeCore();
     const bridge = generateKeypair();
     vi.mocked(qrScan.scanQrCode).mockResolvedValue(pairingUrlFor(bridge));
 
@@ -59,13 +83,17 @@ describe('PairingScreen QR scan', () => {
         <PairingScreen onDone={() => {}} />
       </PhoneCoreProvider>,
     );
-    fireEvent.click(screen.getByText('Scan pairing QR'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Scan pairing QR'));
+      await tick();
+    });
 
-    // The flow leaves idle: candidate set, pair-request published, awaiting ack.
+    // The flow leaves idle: candidate set, pair-request dispatched, awaiting ack.
     await waitFor(() => expect(core.pairing.getState().phase).toBe('awaiting-ack'));
-    expect(core.pairing.getState().candidate?.pubkeyHex).toBe(bridge.pubkeyHex);
     expect(core.pairing.getState().candidate?.machine).toBe('laptop');
-    expect(published.length).toBeGreaterThan(0); // the encrypted pair-request left
+    expect(fake.dispatched).toContainEqual(
+      expect.objectContaining({ beginPairing: expect.objectContaining({ label: expect.any(String) }) }),
+    );
     expect(screen.getByText(/waiting for the bridge/i)).toBeTruthy();
   });
 
@@ -88,7 +116,7 @@ describe('PairingScreen QR scan', () => {
   });
 
   it('CDX-041: the manual-pair confirmation renders the real machine name, not "(manual)"', async () => {
-    const { core } = await makeCore();
+    const { core, fake } = await makeCore();
     const bridge = generateKeypair();
 
     render(
@@ -106,10 +134,18 @@ describe('PairingScreen QR scan', () => {
     fireEvent.click(screen.getByText('Pair manually'));
     await waitFor(() => expect(core.pairing.getState().phase).toBe('awaiting-ack'));
 
-    // The bridge answers with its real name (the manual URL never carried one).
-    core.pairing
-      .getState()
-      .handlePairAck(bridge.pubkeyHex, { type: 'pair-ack', machine: 'laptop', ok: true });
+    // The bridge answers with its real name (the manual URL never carried one)
+    // — simulating what `client_runtime::Core`'s Router does on a real ack.
+    await act(async () => {
+      fake.setView('pairing', {
+        phase: 'paired',
+        candidate: { pubkeyHex: bridge.pubkeyHex, npub: npubEncode(bridge.pubkeyHex), machine: 'laptop', relays: [] },
+        error: null,
+        timedOut: false,
+        hasStaged: false,
+      });
+      await tick();
+    });
 
     // Device symptom: the overlay read "Paired with (manual)." — an apparently
     // empty name plus a stray parenthetical.
@@ -119,7 +155,7 @@ describe('PairingScreen QR scan', () => {
   });
 
   it('CDX-040: a pairing attempt nothing answers ends in a failure message, not an endless spinner', async () => {
-    const { core } = await makeCore({ pairTimeoutMs: 50 });
+    const { core, fake } = await makeCore();
     const bridge = generateKeypair();
 
     render(
@@ -140,8 +176,19 @@ describe('PairingScreen QR scan', () => {
     await waitFor(() => expect(core.pairing.getState().phase).toBe('awaiting-ack'));
     expect(screen.getByText('Cancel')).toBeTruthy();
 
-    // Nothing ever answers (the bridge's window is already closed, so it is not
-    // even subscribed to nack). The phone's own deadline resolves it.
+    // Nothing ever answers — simulating `client_runtime::Core`'s own deadline
+    // resolving the attempt to a failure (its own test owns the timing).
+    await act(async () => {
+      fake.setView('pairing', {
+        phase: 'failed',
+        candidate: null,
+        error: 'the pairing window may have closed',
+        timedOut: true,
+        hasStaged: false,
+      });
+      await tick();
+    });
+
     const banner = await screen.findByText(/Pairing failed/i);
     expect(banner.textContent).toMatch(/window may have closed/i);
     expect(core.pairing.getState().phase).toBe('failed');

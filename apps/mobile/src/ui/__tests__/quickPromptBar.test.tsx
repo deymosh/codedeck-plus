@@ -7,9 +7,8 @@
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { SessionListMessage } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import { buildFakePhoneCore } from '../../core/__tests__/nativeCoreFixture';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { SessionScreen } from '../screens/SessionScreen';
 
@@ -41,32 +40,40 @@ beforeAll(() => {
 
 const MACHINE = 'a'.repeat(64);
 
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
-
-async function makeCore(): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  const heartbeat: SessionListMessage = {
-    type: 'sessions',
-    machine: 'laptop',
-    sessions: [
-      {
-        id: 's1',
-        slug: 's1',
-        cwd: '/home/x/s1',
-        lastActivity: '2026-08-08T10:00:00.000Z',
-        lineCount: 0,
-        title: null,
-        project: 'proj-s1',
+async function makeCore(
+  prompts: Array<{ id: string; label: string; text: string }> = [],
+): Promise<PhoneCore> {
+  const { phone } = await buildFakePhoneCore({
+    machines: {
+      machines: {
+        [MACHINE]: {
+          pubkeyHex: MACHINE,
+          name: 'laptop',
+          capabilities: [],
+          folders: [],
+          roots: [],
+          machineOffline: false,
+          sessions: {
+            s1: {
+              info: {
+                id: 's1',
+                slug: 's1',
+                cwd: '/home/x/s1',
+                lastActivity: '2026-08-08T10:00:00.000Z',
+                lineCount: 0,
+                title: null,
+                project: 'proj-s1',
+              },
+              presence: 'live',
+              lastListedAt: Date.now(),
+            },
+          },
+        },
       },
-    ],
-    protocolVersion: 10,
-  };
-  core.machines.getState().applySessionList(MACHINE, heartbeat, Date.now());
-  return core;
+    },
+    quickPrompts: { prompts },
+  });
+  return phone;
 }
 
 function renderSession(core: PhoneCore) {
@@ -85,9 +92,10 @@ describe('quick prompt bar (CDX-049)', () => {
   });
 
   it('renders one labeled box per prompt, above the input bar', async () => {
-    const core = await makeCore();
-    core.quickPrompts.getState().addPrompt('Continue', 'Keep going.');
-    core.quickPrompts.getState().addPrompt('Tests', 'Run the tests.');
+    const core = await makeCore([
+      { id: 'p1', label: 'Continue', text: 'Keep going.' },
+      { id: 'p2', label: 'Tests', text: 'Run the tests.' },
+    ]);
     renderSession(core);
 
     const bar = screen.getByTestId('quick-prompt-bar');
@@ -101,8 +109,7 @@ describe('quick prompt bar (CDX-049)', () => {
   });
 
   it('tap inserts into an empty draft and APPENDS to an existing one — never sends', async () => {
-    const core = await makeCore();
-    core.quickPrompts.getState().addPrompt('Continue', 'Keep going.');
+    const core = await makeCore([{ id: 'p1', label: 'Continue', text: 'Keep going.' }]);
     const send = vi.spyOn(core.outbox.getState(), 'send');
     renderSession(core);
 

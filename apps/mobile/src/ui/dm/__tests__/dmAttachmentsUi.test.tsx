@@ -4,15 +4,24 @@
  * (mocked platform seam) and appends the ref line to the REAL dm store send;
  * received refs render as inline images with tap-to-open and degrade to a
  * link when fetch/decrypt fails; upload failure keeps the attachment + text.
+ *
+ * DM image sending is a genuinely separate flow from session images (see
+ * `imageFile.ts`'s module doc): the Blossom upload (`uploadDmImage`) still
+ * runs client-side, unaffected by the `src/core` deletion — only
+ * `core.dm.getState().send(...)`, now a dispatch + async re-fetch against the
+ * native core, needed a fixture swap. Persisted DM history used to hydrate
+ * from a local `kv` key at boot (the deleted local composition's job); it
+ * lives entirely in `client_core` now, so a "message already there" fixture
+ * seeds the fake's `dm` view directly instead.
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { NostrEvent } from 'nostr-tools/core';
-import type { PhoneCore } from '../../../core/createPhoneCore';
-import { createPhoneCore } from '../../../core/createPhoneCore';
+import { buildFakePhoneCore } from '../../../core/__tests__/nativeCoreFixture';
+import type { FakeNativeCore } from '../../../core/__tests__/nativeCoreFixture';
+import type { DmMessage, DmView } from '../../../core/nativeCoreTypes';
 import { buildImageRef } from '../../../core/dmAttachments';
 import { generateKeypair } from '../../../core/crypto';
-import { memoryKV, type KV, type PhoneTransport } from '../../../core/ports';
+import type { PhoneCore } from '../../../core/phoneCore';
 import { PhoneCoreProvider } from '../../coreContext';
 import { DmChatScreen } from '../DmChatScreen';
 import * as dmImages from '../../../platform/dmImages';
@@ -32,37 +41,42 @@ afterEach(() => {
 const PEER = generateKeypair().pubkeyHex; // must be a real curve point (NIP-44 seal)
 const REF = { url: 'https://blossom.descendant.io/' + 'c'.repeat(64), key: 'a'.repeat(64), iv: 'b'.repeat(24) };
 
-async function makeCore(kv: KV = memoryKV()): Promise<{ core: PhoneCore; published: NostrEvent[] }> {
-  const published: NostrEvent[] = [];
-  const transport: PhoneTransport = {
-    subscribe: () => ({ close: () => {} }),
-    publish: async (event) => {
-      published.push(event);
-      return true;
-    },
-  };
-  const core = await createPhoneCore({ kv, transport });
-  return { core, published };
+function emptyDmView(): DmView {
+  return { conversations: [], messages: {}, activePeer: null, eventsReceived: 0, unwrapFailures: 0, invalidRumors: 0 };
 }
 
-/** Seed a received message via the persisted-dm path (hydrated at core boot). */
-async function kvWithMessage(content: string): Promise<KV> {
-  const kv = memoryKV();
-  await kv.set(
-    'dm',
-    JSON.stringify({
-      conversations: {
-        [PEER]: { peerPubkey: PEER, protocol: 'nip17', lastMessageAt: 1000, unreadCount: 0, lastPreview: content },
-      },
-      messages: {
-        [PEER]: [
-          { id: 'm1', peerPubkey: PEER, senderPubkey: PEER, content, at: 1000, status: 'delivered' },
-        ],
-      },
-      profiles: {},
-    }),
-  );
-  return kv;
+/** `sendDm` has no local optimistic append (see nativeDm.ts's `send`: it
+ *  dispatches then re-fetches `dmView()`) — script the fake to behave like a
+ *  real send, appending the message the way `client_runtime::Core` would. */
+function wireSend(fake: FakeNativeCore): void {
+  let seq = 0;
+  fake.onDispatch((intent) => {
+    if (typeof intent !== 'object' || !('sendDm' in intent)) return;
+    const { peer, text } = intent.sendDm;
+    const view = fake.views.dm ?? emptyDmView();
+    const msg: DmMessage = {
+      id: `m${++seq}`,
+      peerPubkey: peer,
+      senderPubkey: 'phone',
+      content: text,
+      at: Date.now(),
+      status: 'sent',
+    };
+    fake.setView('dm', {
+      ...view,
+      messages: { ...view.messages, [peer]: [...(view.messages[peer] ?? []), msg] },
+      conversations: [
+        ...view.conversations.filter((c) => c.peerPubkey !== peer),
+        { peerPubkey: peer, protocol: 'nip17', lastMessageAt: msg.at, unreadCount: 0, lastPreview: text },
+      ],
+    });
+  });
+}
+
+async function makeCore(dm: DmView = emptyDmView()) {
+  const { phone, fake } = await buildFakePhoneCore({ dm });
+  wireSend(fake);
+  return { core: phone, fake };
 }
 
 function renderChat(core: PhoneCore) {
@@ -76,7 +90,12 @@ function renderChat(core: PhoneCore) {
 describe('received attachments render inline', () => {
   it('an encrypted ref becomes an inline image; tap opens the overlay', async () => {
     vi.mocked(dmImages.fetchDecryptedImage).mockResolvedValue('blob:decrypted-1');
-    const { core } = await makeCore(await kvWithMessage(`dinner pic\n${buildImageRef(REF)}`));
+    const content = `dinner pic\n${buildImageRef(REF)}`;
+    const { core } = await makeCore({
+      ...emptyDmView(),
+      conversations: [{ peerPubkey: PEER, protocol: 'nip17', lastMessageAt: 1000, unreadCount: 0, lastPreview: content }],
+      messages: { [PEER]: [{ id: 'm1', peerPubkey: PEER, senderPubkey: PEER, content, at: 1000, status: 'delivered' }] },
+    });
     renderChat(core);
 
     const img = await screen.findByTestId('dm-inline-image');
@@ -92,7 +111,12 @@ describe('received attachments render inline', () => {
 
   it('fetch/decrypt failure degrades to a tappable link (never a broken image)', async () => {
     vi.mocked(dmImages.fetchDecryptedImage).mockResolvedValue(null);
-    const { core } = await makeCore(await kvWithMessage(buildImageRef(REF)));
+    const content = buildImageRef(REF);
+    const { core } = await makeCore({
+      ...emptyDmView(),
+      conversations: [{ peerPubkey: PEER, protocol: 'nip17', lastMessageAt: 1000, unreadCount: 0, lastPreview: content }],
+      messages: { [PEER]: [{ id: 'm1', peerPubkey: PEER, senderPubkey: PEER, content, at: 1000, status: 'delivered' }] },
+    });
     renderChat(core);
     const link = await screen.findByTestId('dm-image-fallback');
     expect(link.getAttribute('href')).toBe(REF.url);
@@ -103,7 +127,7 @@ describe('received attachments render inline', () => {
 describe('attachment send path', () => {
   it('attach → preview strip → Send uploads and appends the ref line to the sent DM', async () => {
     vi.mocked(dmImages.uploadDmImage).mockResolvedValue(REF);
-    const { core, published } = await makeCore();
+    const { core } = await makeCore();
     renderChat(core);
 
     // The attach button is a DIRECT child of the one-flex-row bar (invariant).
@@ -127,8 +151,6 @@ describe('attachment send path', () => {
     const [bytes, secretKey] = vi.mocked(dmImages.uploadDmImage).mock.calls[0]!;
     expect(Array.from(bytes)).toEqual([1, 2, 3]);
     expect(secretKey).toBe(core.identity.getState().keypair.secretKey);
-    // The wrap actually left through the transport, strip cleared.
-    expect(published.length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.queryByTestId('dm-attach-strip')).toBeNull());
   });
 

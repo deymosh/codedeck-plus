@@ -3,17 +3,22 @@
  * CDX-046 — the session header's permission mode is a tappable cycle button
  * (PLAN → YOLO → EDITS), not the read-only badge 0.9.0 shipped: a tap sends
  * the mode command optimistically (pending pulse), and the store's
- * mode-confirmed ingestion (onModeConfirmed → updateSessionInfo) is what both
- * settles the pending state and drives the displayed mode.
+ * mode-confirmed ingestion is what both settles the pending state and drives
+ * the displayed mode.
  *
  * Timing rules (cooldown / timeout-revert) are owned by core/modeCycle and
  * proven on virtual time in modeCycle.test.ts — this is the React wiring.
+ * "mode-confirmed lands in the store" is Rust's `Router` folding the bridge
+ * message into `MachinesView` now — scripted here via the fake core's
+ * `machines` view rather than the deleted local `updateSessionInfo` call.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { RemoteSessionInfo, SessionListMessage } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import type { RemoteSessionInfo } from '@codedeck/protocol';
+import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
+import type { FakeNativeCore } from '../../core/__tests__/nativeCoreFixture';
+import type { MachineView } from '../../core/nativeCoreTypes';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { SessionScreen } from '../screens/SessionScreen';
 
@@ -45,33 +50,41 @@ beforeAll(() => {
 
 const MACHINE = 'a'.repeat(64);
 
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
+const sessionInfo = (permissionMode: RemoteSessionInfo['permissionMode']): RemoteSessionInfo => ({
+  id: 's1',
+  slug: 's1',
+  cwd: '/home/x/s1',
+  lastActivity: '2026-08-08T10:00:00.000Z',
+  lineCount: 0,
+  title: null,
+  project: 'proj-s1',
+  ...(permissionMode ? { permissionMode } : {}),
+});
 
-async function makeCore(permissionMode: RemoteSessionInfo['permissionMode']): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  const heartbeat: SessionListMessage = {
-    type: 'sessions',
-    machine: 'laptop',
-    sessions: [
-      {
-        id: 's1',
-        slug: 's1',
-        cwd: '/home/x/s1',
-        lastActivity: '2026-08-08T10:00:00.000Z',
-        lineCount: 0,
-        title: null,
-        project: 'proj-s1',
-        ...(permissionMode ? { permissionMode } : {}),
-      },
-    ],
-    protocolVersion: 10,
+function machineWith(permissionMode: RemoteSessionInfo['permissionMode']): MachineView {
+  return {
+    pubkeyHex: MACHINE,
+    name: 'laptop',
+    capabilities: [],
+    folders: [],
+    roots: [],
+    machineOffline: false,
+    sessions: { s1: { info: sessionInfo(permissionMode), presence: 'live', lastListedAt: 0 } },
   };
-  core.machines.getState().applySessionList(MACHINE, heartbeat, Date.now());
-  return core;
+}
+
+async function makeCore(permissionMode: RemoteSessionInfo['permissionMode']) {
+  return buildFakePhoneCore({ machines: { machines: { [MACHINE]: machineWith(permissionMode) } } });
+}
+
+/** Simulates a `mode-confirmed` (or any) session-info update landing via the
+ *  Rust `Router` — the native `machines` adapter has no write path of its
+ *  own, so the test drives the view directly. */
+async function updateSessionInfo(fake: FakeNativeCore, permissionMode: RemoteSessionInfo['permissionMode']): Promise<void> {
+  await act(async () => {
+    fake.setView('machines', { machines: { [MACHINE]: machineWith(permissionMode) } });
+    await tick();
+  });
 }
 
 function renderSession(core: PhoneCore) {
@@ -84,7 +97,7 @@ function renderSession(core: PhoneCore) {
 
 describe('mode cycle button (CDX-046)', () => {
   it('renders the confirmed mode as a tappable button with the legacy label', async () => {
-    const core = await makeCore('plan');
+    const { phone: core } = await makeCore('plan');
     renderSession(core);
 
     const btn = screen.getByTestId('mode-button');
@@ -94,7 +107,7 @@ describe('mode cycle button (CDX-046)', () => {
   });
 
   it('tap sends the NEXT mode and pulses pending until mode-confirmed lands in the store', async () => {
-    const core = await makeCore('plan');
+    const { phone: core, fake } = await makeCore('plan');
     const modeChange = vi.spyOn(core.api, 'modeChange').mockResolvedValue(true);
     renderSession(core);
 
@@ -106,24 +119,18 @@ describe('mode cycle button (CDX-046)', () => {
     expect(btn.textContent).toBe('YOLO');
     expect(btn.getAttribute('data-pending')).toBe('true');
 
-    // mode-confirmed → machines store (the createPhoneCore onModeConfirmed
-    // path) → pending settles, display stays on the confirmed mode.
-    act(() => {
-      core.machines.getState().updateSessionInfo(MACHINE, 's1', { permissionMode: 'default' });
-    });
+    // mode-confirmed → the Router folds it into MachinesView → pending
+    // settles, display stays on the confirmed mode.
+    await updateSessionInfo(fake, 'default');
     expect(btn.textContent).toBe('YOLO');
     expect(btn.getAttribute('data-pending')).toBeNull();
   });
 
   it('a mode-confirmed from elsewhere (no tap) just updates the displayed mode', async () => {
-    const core = await makeCore('plan');
+    const { phone: core, fake } = await makeCore('plan');
     renderSession(core);
 
-    act(() => {
-      core.machines.getState().updateSessionInfo(MACHINE, 's1', {
-        permissionMode: 'acceptEdits',
-      });
-    });
+    await updateSessionInfo(fake, 'acceptEdits');
     const btn = screen.getByTestId('mode-button');
     expect(btn.textContent).toBe('EDITS');
     expect(btn.getAttribute('data-pending')).toBeNull();

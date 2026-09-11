@@ -4,15 +4,22 @@
  * are direct children, no nested control columns; the old icon-layout bug's
  * structural fix), conversation-list ordering + unread badges, and the chat
  * screen's failed-send retry affordance.
+ *
+ * Two real cores exchanging an actual NIP-17 gift-wrap over a fake transport
+ * was the old local composition's own crypto — dead now (Rust owns DM
+ * unwrap/ingest entirely; `createNativeDmStore`'s `ingest` is a documented
+ * no-op). Every scenario below seeds the fake core's `dm`/`ui` views with the
+ * state a real exchange would have produced, and scripts `onDispatch` for the
+ * two Intents this screen actually sends (`startDmConversation`,
+ * `selectDmPeer`) to react the way `client_runtime::Core` would.
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { NostrEvent } from 'nostr-tools/core';
-import type { PhoneCore } from '../../../core/createPhoneCore';
-import { createPhoneCore } from '../../../core/createPhoneCore';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { buildFakePhoneCore, tick } from '../../../core/__tests__/nativeCoreFixture';
+import type { FakeNativeCore } from '../../../core/__tests__/nativeCoreFixture';
 import { generateKeypair } from '../../../core/crypto';
-import { memoryKV, type PhoneTransport } from '../../../core/ports';
-import { GIFT_WRAP_KIND } from '../../../core/stores/dm';
+import { parsePeerInput } from '../../../core/stores/dm';
+import type { DmView } from '../../../core/nativeCoreTypes';
 import { PhoneCoreProvider } from '../../coreContext';
 import { DmBottomBar } from '../DmBottomBar';
 import { DmChatScreen } from '../DmChatScreen';
@@ -21,28 +28,44 @@ import { relativeTime } from '../../relativeTime';
 
 afterEach(cleanup);
 
-function fakeTransport(publishOk = true) {
-  const published: NostrEvent[] = [];
-  const transport: PhoneTransport = {
-    subscribe: () => ({ close: () => {} }),
-    publish: async (event) => {
-      published.push(event);
-      return publishOk;
-    },
-  };
-  return { transport, published };
+function emptyDmView(): DmView {
+  return { conversations: [], messages: {}, activePeer: null, eventsReceived: 0, unwrapFailures: 0, invalidRumors: 0 };
 }
 
-async function makeCore(publishOk = true): Promise<{ core: PhoneCore; published: NostrEvent[] }> {
-  const { transport, published } = fakeTransport(publishOk);
-  const core = await createPhoneCore({ kv: memoryKV(), transport });
-  return { core, published };
+/** Scripts the two dispatches this screen/section actually send, the way a
+ *  real `client_runtime::Core` round trip would settle them. */
+function wireDm(fake: FakeNativeCore): void {
+  fake.onDispatch((intent) => {
+    if (typeof intent !== 'object') return;
+    if ('startDmConversation' in intent) {
+      const peer = parsePeerInput(intent.startDmConversation.peerInput);
+      if (!peer) return;
+      const view = fake.views.dm ?? emptyDmView();
+      if (view.conversations.some((c) => c.peerPubkey === peer)) return;
+      fake.setView('dm', {
+        ...view,
+        conversations: [
+          ...view.conversations,
+          { peerPubkey: peer, protocol: 'nip17', lastMessageAt: Date.now(), unreadCount: 0, lastPreview: '' },
+        ],
+      });
+    } else if ('selectDmPeer' in intent) {
+      const { peer } = intent.selectDmPeer;
+      const view = fake.views.dm ?? emptyDmView();
+      if (!peer || !(peer in Object.fromEntries(view.conversations.map((c) => [c.peerPubkey, c])))) return;
+      fake.setView('dm', {
+        ...view,
+        conversations: view.conversations.map((c) => (c.peerPubkey === peer ? { ...c, unreadCount: 0 } : c)),
+      });
+    }
+  });
 }
 
-const wrapFor = (published: NostrEvent[], pubkey: string): NostrEvent =>
-  published.find(
-    (e) => e.kind === GIFT_WRAP_KIND && e.tags.some((t) => t[0] === 'p' && t[1] === pubkey),
-  )!;
+async function makeCore(dm: DmView = emptyDmView()) {
+  const { phone, fake } = await buildFakePhoneCore({ dm });
+  wireDm(fake);
+  return { core: phone, fake };
+}
 
 describe('DmBottomBar (the rebuilt bar)', () => {
   it('is ONE flex component: textarea and send button are direct children of the bar', () => {
@@ -84,30 +107,18 @@ describe('DmBottomBar (the rebuilt bar)', () => {
 
 describe('DmSection (Phase 2b sidebar section — the DM list surface)', () => {
   it('orders conversations newest-first and shows unread badges', async () => {
-    const { core } = await makeCore();
-    const dm = core.dm.getState();
-
-    // Older conversation (created first, no unread) — pinned clearly into the
-    // past (startConversation stamps "now", which would tie with the incoming
-    // message's second-truncated rumor time).
-    const olderPeer = generateKeypair();
-    dm.startConversation(olderPeer.pubkeyHex);
-    core.dm.getState().setActivePeer(null);
-    core.dm.setState({
-      conversations: {
-        ...core.dm.getState().conversations,
-        [olderPeer.pubkeyHex]: {
-          ...core.dm.getState().conversations[olderPeer.pubkeyHex]!,
-          lastMessageAt: Date.now() - 3_600_000,
-        },
+    const olderPeer = generateKeypair().pubkeyHex;
+    const senderHex = generateKeypair().pubkeyHex;
+    const { core } = await makeCore({
+      ...emptyDmView(),
+      conversations: [
+        { peerPubkey: olderPeer, protocol: 'nip17', lastMessageAt: Date.now() - 3_600_000, unreadCount: 0, lastPreview: '' },
+        { peerPubkey: senderHex, protocol: 'nip17', lastMessageAt: Date.now(), unreadCount: 1, lastPreview: 'newest message' },
+      ],
+      messages: {
+        [senderHex]: [{ id: 'm1', peerPubkey: senderHex, senderPubkey: senderHex, content: 'newest message', at: Date.now(), status: 'delivered' }],
       },
     });
-
-    // Newer conversation via an incoming message → unread 1, newer activity.
-    const sender = await makeCore();
-    const me = core.identity.getState().pubkeyHex;
-    await sender.core.dm.getState().send(me, 'newest message');
-    core.dm.getState().ingest(wrapFor(sender.published, me));
 
     const onSelected = vi.fn();
     render(
@@ -129,7 +140,6 @@ describe('DmSection (Phase 2b sidebar section — the DM list surface)', () => {
     // Tapping a tile selects the DM in the ui store (panelMode flips so the
     // MainPanel shows the chat) and fires the drawer-close callback.
     fireEvent.click(rows[0]! as HTMLElement);
-    const senderHex = sender.core.identity.getState().pubkeyHex;
     expect(core.ui.getState().panelMode).toBe('dm');
     expect(core.ui.getState().activeDmPeer).toBe(senderHex);
     expect(onSelected).toHaveBeenCalledOnce();
@@ -148,10 +158,13 @@ describe('DmSection (Phase 2b sidebar section — the DM list surface)', () => {
     expect(screen.getByText('Not a valid npub or hex pubkey')).toBeTruthy();
 
     const peer = generateKeypair();
-    fireEvent.change(screen.getByPlaceholderText(/npub/), {
-      target: { value: peer.pubkeyHex },
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/npub/), {
+        target: { value: peer.pubkeyHex },
+      });
+      fireEvent.click(screen.getByText('Start conversation'));
+      await tick();
     });
-    fireEvent.click(screen.getByText('Start conversation'));
     expect(core.ui.getState().panelMode).toBe('dm');
     expect(core.ui.getState().activeDmPeer).toBe(peer.pubkeyHex);
     // The input closed and the new conversation renders as a tile.
@@ -159,7 +172,7 @@ describe('DmSection (Phase 2b sidebar section — the DM list surface)', () => {
     expect(screen.getAllByTestId('dm-tile')).toHaveLength(1);
   });
 
-  it('empty state and the connection dot reflect the store', async () => {
+  it('empty state renders; the connection dot is always on (client-runtime owns the one socket)', async () => {
     const { core } = await makeCore();
     render(
       <PhoneCoreProvider value={core}>
@@ -167,23 +180,28 @@ describe('DmSection (Phase 2b sidebar section — the DM list surface)', () => {
       </PhoneCoreProvider>,
     );
     expect(screen.getByText('No conversations yet.')).toBeTruthy();
-    expect(screen.getByTestId('dm-connection-dot').getAttribute('data-connected')).toBe('false');
+    // `DmStoreState.subscribed` is hardcoded `true` on the native adapter —
+    // there is no separate "DM subscription" to toggle from TS any more (see
+    // nativeDm.ts's module doc); the dot no longer distinguishes states.
+    expect(screen.getByTestId('dm-connection-dot').getAttribute('data-connected')).toBe('true');
   });
 });
 
 describe('DmChatScreen', () => {
   it('renders bubbles, marks the conversation read on open, and offers retry on failed sends', async () => {
-    // Failed send: transport rejects everything.
-    const { core } = await makeCore(false);
-    const peer = generateKeypair();
-    await core.dm.getState().send(peer.pubkeyHex, 'did not make it');
-
-    // An incoming message too (unread until the chat opens).
-    const sender = await makeCore();
-    const me = core.identity.getState().pubkeyHex;
-    await sender.core.dm.getState().send(me, 'incoming text');
-    core.dm.getState().ingest(wrapFor(sender.published, me));
-    const senderHex = sender.core.identity.getState().pubkeyHex;
+    const peerHex = generateKeypair().pubkeyHex;
+    const senderHex = generateKeypair().pubkeyHex;
+    const { core } = await makeCore({
+      ...emptyDmView(),
+      conversations: [
+        { peerPubkey: peerHex, protocol: 'nip17', lastMessageAt: 1, unreadCount: 0, lastPreview: 'did not make it' },
+        { peerPubkey: senderHex, protocol: 'nip17', lastMessageAt: 2, unreadCount: 1, lastPreview: 'incoming text' },
+      ],
+      messages: {
+        [peerHex]: [{ id: 'm1', peerPubkey: peerHex, senderPubkey: 'phone', content: 'did not make it', at: 1, status: 'failed' }],
+        [senderHex]: [{ id: 'm2', peerPubkey: senderHex, senderPubkey: senderHex, content: 'incoming text', at: 2, status: 'delivered' }],
+      },
+    });
     expect(core.dm.getState().conversations[senderHex]!.unreadCount).toBe(1);
 
     render(
@@ -192,14 +210,18 @@ describe('DmChatScreen', () => {
       </PhoneCoreProvider>,
     );
     expect(screen.getByText('incoming text')).toBeTruthy();
-    // Opening the chat marked it read.
+    // Opening the chat selected the peer, which the Router treats as reading
+    // it — scripted here via wireDm's `selectDmPeer` handler.
+    await act(async () => {
+      await tick();
+    });
     expect(core.dm.getState().conversations[senderHex]!.unreadCount).toBe(0);
     expect(core.dm.getState().activePeer).toBe(senderHex);
     cleanup();
 
     render(
       <PhoneCoreProvider value={core}>
-        <DmChatScreen peerPubkey={peer.pubkeyHex} />
+        <DmChatScreen peerPubkey={peerHex} />
       </PhoneCoreProvider>,
     );
     expect(screen.getByText(/send failed/)).toBeTruthy();

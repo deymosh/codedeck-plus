@@ -17,9 +17,10 @@
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import type { RemoteSessionInfo, SessionListMessage, UsageData } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import type { RemoteSessionInfo, UsageData } from '@codedeck/protocol';
+import { buildFakePhoneCore } from '../../core/__tests__/nativeCoreFixture';
+import type { MachineView, SettingsView } from '../../core/nativeCoreTypes';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { SessionScreen } from '../screens/SessionScreen';
 
@@ -51,11 +52,6 @@ beforeAll(() => {
 
 const MACHINE = 'a'.repeat(64);
 
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
-
 const sessionInfo = (over: Partial<RemoteSessionInfo> = {}): RemoteSessionInfo => ({
   id: 's1',
   slug: 's1',
@@ -79,18 +75,42 @@ const usageData = (fiveHour: number, sevenDay: number): UsageData => ({
 async function makeCore(
   info: Partial<RemoteSessionInfo> = {},
   usage?: UsageData,
+  settingsOverride?: Partial<SettingsView>,
 ): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  const heartbeat: SessionListMessage = {
-    type: 'sessions',
-    machine: 'laptop',
-    sessions: [sessionInfo(info)],
-    protocolVersion: 10,
+  const machine: MachineView = {
+    pubkeyHex: MACHINE,
+    name: 'laptop',
+    capabilities: [],
+    folders: [],
+    roots: [],
+    machineOffline: false,
+    sessions: {
+      s1: { info: sessionInfo(info), presence: 'live', lastListedAt: Date.now(), ...(usage ? { usage } : {}) },
+    },
   };
-  core.machines.getState().applySessionList(MACHINE, heartbeat, Date.now());
-  if (usage) core.machines.getState().applyUsage(MACHINE, 's1', usage);
-  return core;
+  const { phone } = await buildFakePhoneCore({
+    machines: { machines: { [MACHINE]: machine } },
+    ...(settingsOverride
+      ? {
+          settings: {
+            relays: [],
+            uiScale: 1,
+            stayConnected: true,
+            torProxyEnabled: false,
+            meshTestTarget: false,
+            blossomServer: '',
+            defaultMode: 'default',
+            defaultEffort: '',
+            defaultModel: '',
+            notificationsEnabled: true,
+            showUsageBadge: true,
+            showCommitBadge: true,
+            ...settingsOverride,
+          },
+        }
+      : {}),
+  });
+  return phone;
 }
 
 function renderSession(core: PhoneCore) {
@@ -129,14 +149,13 @@ describe('session header chrome — rectangular boxes (CDX-045)', () => {
   });
 
   it('Settings → "Show usage badge" OFF hides the usage box; ON restores it (CDX-048)', async () => {
-    const core = await makeCore({}, usageData(42, 61));
-    core.settings.getState().setShowUsageBadge(false);
-    renderSession(core);
+    const off = await makeCore({}, usageData(42, 61), { showUsageBadge: false });
+    renderSession(off);
     expect(screen.queryByTestId('usage-box')).toBeNull();
     cleanup();
 
-    core.settings.getState().setShowUsageBadge(true);
-    renderSession(core);
+    const on = await makeCore({}, usageData(42, 61), { showUsageBadge: true });
+    renderSession(on);
     expect(screen.getByTestId('usage-box')).toBeTruthy();
   });
 
