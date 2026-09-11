@@ -28,6 +28,7 @@
  */
 import { createStore } from 'zustand/vanilla';
 import { HEARTBEAT_STALE_AFTER_MS } from './connection';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { ConnectionEvent, ConnectionStore, ConnectionStoreState, Presence } from './connection';
 import type { MachinesStore } from './machines';
@@ -46,16 +47,26 @@ export function createNativeConnectionStore(deps: NativeConnectionStoreDeps): Co
   const now = deps.now ?? Date.now;
 
   const store = createStore<ConnectionStoreState>()((set, get) => {
-    void deps.core
-      .connectionStatus()
-      .then((snapshot) => set({ status: snapshot.status, needsPairingCheck: snapshot.needsPairingCheck }))
-      .catch((err) => deps.log?.(`[nativeConnection] status fetch failed: ${err}`));
-
-    void deps.core
-      .onConnection((snapshot) => {
-        set({ status: snapshot.status, needsPairingCheck: snapshot.needsPairingCheck });
-      })
-      .catch((err) => deps.log?.(`[nativeConnection] onConnection failed: ${err}`));
+    void hydrateFromCore(
+      () =>
+        deps.core.onConnection((snapshot) => {
+          set({
+            status: snapshot.status,
+            needsPairingCheck: snapshot.needsPairingCheck,
+            connectedRelays: snapshot.connectedRelays,
+          });
+        }),
+      async () => {
+        const snapshot = await deps.core.connectionStatus();
+        set({
+          status: snapshot.status,
+          needsPairingCheck: snapshot.needsPairingCheck,
+          connectedRelays: snapshot.connectedRelays,
+        });
+      },
+      'nativeConnection',
+      deps.log,
+    );
 
     const dispatch = (event: ConnectionEvent): void => {
       const run = (): Promise<void> => {
@@ -92,6 +103,7 @@ export function createNativeConnectionStore(deps: NativeConnectionStoreDeps): Co
       decryptFailures: 0,
       needsPairingCheck: false,
       heartbeats: {},
+      connectedRelays: [],
 
       dispatch,
 

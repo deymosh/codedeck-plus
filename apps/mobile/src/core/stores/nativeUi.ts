@@ -38,6 +38,7 @@
  * `nativePairing.ts`'s `confirmStaged`/`reset` do.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import { sessionKeyOf } from './ui';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { UiView as NativeUiView } from '../nativeCoreTypes';
@@ -90,22 +91,21 @@ export interface NativeUiStoreDeps {
 export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
   const store = createStore<UiStoreState>()((set, get) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.uiView();
-        set(applyView(view));
-      } catch (err) {
-        deps.log?.(`[nativeUi] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.uiView();
+      set(applyView(view));
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'ui') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeUi] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'ui') {
+            void refresh().catch((err) => deps.log?.(`[nativeUi] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeUi',
+      deps.log,
+    );
 
     const dispatch = (intent: Parameters<NativeCore['dispatch']>[0]): void => {
       deps.core.dispatch(intent).catch((err) => deps.log?.(`[nativeUi] dispatch failed: ${err}`));

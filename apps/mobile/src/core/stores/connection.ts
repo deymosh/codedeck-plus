@@ -65,6 +65,11 @@ export const HEARTBEAT_STALE_AFTER_MS = 150_000;
 export interface ConnectionStoreState extends ConnectionState {
   dispatch(event: ConnectionEvent): void;
   presence(machinePubkey: string): Presence;
+  /** Configured relays with a live socket right now — Settings' per-relay
+   *  status dot. Not a subscription/publish-readiness signal, just "the
+   *  socket is up." Empty on the pre-migration store (it had no per-relay
+   *  concept); the native adapter is the only one that ever populates it. */
+  connectedRelays: string[];
   /** CDX-020: periodic dead-subscription check (the 30s sweep). Dispatches one
    *  `socket-close` when connected but every machine heartbeat has gone stale,
    *  so the FSM reconnects instead of the chip lying `connected` forever.

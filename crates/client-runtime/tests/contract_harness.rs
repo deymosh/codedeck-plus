@@ -131,7 +131,7 @@ impl Harness {
 #[derive(Default)]
 struct Observer;
 impl CoreObserver for Observer {
-    fn connection_changed(&self, _status: ConnectionStatus, _needs_pairing_check: bool) {}
+    fn connection_changed(&self, _status: ConnectionStatus, _needs_pairing_check: bool, _connected_relays: &[String]) {}
     fn bridge_message(&self, _machine: String, _msg: BridgeToPhone) {}
 }
 

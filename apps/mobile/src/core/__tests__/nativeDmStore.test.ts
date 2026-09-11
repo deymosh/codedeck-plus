@@ -6,13 +6,37 @@
  * resolution layered on top (no Rust view backs it yet).
  */
 import { describe, it, expect, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 import { createNativeDmStore } from '../stores/nativeDm';
 import { generateKeypair } from '../crypto';
+import type { ConnectionStore, ConnectionStoreState } from '../stores/connection';
 import type { CoreEvent, DmView, Intent, SliceId } from '../nativeCoreTypes';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { DmProfile, ProfileFetcher } from '../stores/dm';
 
 const peer = generateKeypair().pubkeyHex;
+
+/** A minimal, static `ConnectionStore` — `subscribed` reads its `status`
+ *  once at construction (see `nativeDm.ts`'s own module doc), so a fixed
+ *  value is enough for every test here except the one that specifically
+ *  covers reactivity. */
+function fakeConnection(status: ConnectionStoreState['status'] = 'connected'): ConnectionStore {
+  return createStore<ConnectionStoreState>()(() => ({
+    status,
+    attempt: 0,
+    online: true,
+    visible: true,
+    hiddenPending: false,
+    lastConnectedAt: null,
+    decryptFailures: 0,
+    needsPairingCheck: false,
+    heartbeats: {},
+    connectedRelays: [],
+    dispatch: () => {},
+    presence: () => 'offline',
+    checkHeartbeats: () => {},
+  }));
+}
 
 function fakeCore(initialView: DmView | null = { conversations: [], messages: {}, activePeer: null, eventsReceived: 0, unwrapFailures: 0, invalidRumors: 0 }) {
   let view: DmView | null = initialView;
@@ -84,7 +108,7 @@ describe('createNativeDmStore', () => {
       unwrapFailures: 1,
       invalidRumors: 0,
     });
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     expect(store.getState().conversations[peer]?.unreadCount).toBe(2);
@@ -95,19 +119,28 @@ describe('createNativeDmStore', () => {
 
   it('start/stop/ingest are no-ops — client-runtime owns the 1059 subscription', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     store.getState().start();
     store.getState().stop();
     store.getState().ingest({} as never);
     expect(dispatched).toEqual([]);
-    expect(store.getState().subscribed).toBe(true);
+  });
+
+  it('subscribed reflects the shared connection status, not a hardcoded constant', async () => {
+    const { core } = fakeCore();
+    const connected = createNativeDmStore({ core, connection: fakeConnection('connected') });
+    const offline = createNativeDmStore({ core, connection: fakeConnection('offline') });
+    await tick();
+
+    expect(connected.getState().subscribed).toBe(true);
+    expect(offline.getState().subscribed).toBe(false);
   });
 
   it('send dispatches sendDm, refreshes, and returns the newest message for that peer', async () => {
     const { core, dispatched, setView } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({
@@ -127,7 +160,7 @@ describe('createNativeDmStore', () => {
 
   it('retry re-dispatches sendDm with the failed message content and is a no-op when nothing matches', async () => {
     const { core, dispatched, setView } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     // Nothing failed yet — no-op.
@@ -152,7 +185,7 @@ describe('createNativeDmStore', () => {
 
   it('startConversation validates the format synchronously and dispatches in the background', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     expect(store.getState().startConversation('not-valid')).toBeNull();
@@ -163,7 +196,7 @@ describe('createNativeDmStore', () => {
 
   it('setActivePeer sets state optimistically and dispatches selectDmPeer', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     store.getState().setActivePeer(peer);
@@ -177,7 +210,7 @@ describe('createNativeDmStore', () => {
 
   it('markRead dispatches markDmRead', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     store.getState().markRead(peer);
@@ -186,7 +219,7 @@ describe('createNativeDmStore', () => {
 
   it('a stateChanged("dm") core event re-fetches the view', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({
@@ -205,7 +238,7 @@ describe('createNativeDmStore', () => {
 
   it('a stateChanged for a different slice does not trigger a refresh', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({
@@ -226,7 +259,7 @@ describe('createNativeDmStore', () => {
     const { core } = fakeCore();
     const okProfile: DmProfile = { name: 'Alice', fetchedAt: Date.now(), status: 'ok' };
     const fetcher: ProfileFetcher = vi.fn(async () => okProfile);
-    const store = createNativeDmStore({ core, profileFetcher: fetcher });
+    const store = createNativeDmStore({ core, connection: fakeConnection(), profileFetcher: fetcher });
     await tick();
 
     await store.getState().resolveProfile(peer);
@@ -243,7 +276,7 @@ describe('createNativeDmStore', () => {
 
   it('resolveProfile is a no-op with no fetcher configured', async () => {
     const { core } = fakeCore();
-    const store = createNativeDmStore({ core });
+    const store = createNativeDmStore({ core, connection: fakeConnection() });
     await tick();
     await store.getState().resolveProfile(peer);
     expect(store.getState().profiles[peer]).toBeUndefined();
@@ -253,7 +286,7 @@ describe('createNativeDmStore', () => {
     const other = generateKeypair().pubkeyHex;
     const { core, setView } = fakeCore();
     const fetcher: ProfileFetcher = vi.fn(async (pk) => ({ name: pk.slice(0, 4), fetchedAt: Date.now(), status: 'ok' as const }));
-    const store = createNativeDmStore({ core, profileFetcher: fetcher });
+    const store = createNativeDmStore({ core, connection: fakeConnection(), profileFetcher: fetcher });
     await tick();
 
     setView({

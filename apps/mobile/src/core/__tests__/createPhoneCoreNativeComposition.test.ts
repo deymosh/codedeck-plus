@@ -40,7 +40,7 @@ function fakeCore(machinesView: MachinesView = { machines: {} }) {
     setRelays: () => Promise.reject(new Error('unused')),
     send: () => Promise.reject(new Error('unused')),
     publish: () => Promise.reject(new Error('unused')),
-    connectionStatus: () => Promise.resolve({ status: 'idle', needsPairingCheck: false }),
+    connectionStatus: () => Promise.resolve({ status: 'idle', needsPairingCheck: false, connectedRelays: [] }),
     onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.resolve(() => {}),
     onActionFailed: () => Promise.reject(new Error('unused')),

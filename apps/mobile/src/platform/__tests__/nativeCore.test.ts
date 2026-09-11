@@ -74,7 +74,11 @@ describe('nativeCoreOver', () => {
   it('connectionStatus normalises snake_case + an unknown status', async () => {
     const { invoke, listen } = fakes();
     const core = nativeCoreOver(invoke, listen);
-    expect(await core.connectionStatus()).toEqual({ status: 'connected', needsPairingCheck: true });
+    expect(await core.connectionStatus()).toEqual({
+      status: 'connected',
+      needsPairingCheck: true,
+      connectedRelays: [],
+    });
   });
 
   it('onMessage decodes the payload and drops an undecodable one', async () => {
@@ -99,8 +103,12 @@ describe('nativeCoreOver', () => {
     const snapshots: unknown[] = [];
     await core.onConnection((s) => snapshots.push(s));
 
-    listeners.get('core://connection')!({ payload: { status: 'waiting-retry', needsPairingCheck: false } });
-    expect(snapshots).toEqual([{ status: 'waiting-retry', needsPairingCheck: false }]);
+    listeners.get('core://connection')!({
+      payload: { status: 'waiting-retry', needsPairingCheck: false, connectedRelays: ['wss://relay.example'] },
+    });
+    expect(snapshots).toEqual([
+      { status: 'waiting-retry', needsPairingCheck: false, connectedRelays: ['wss://relay.example'] },
+    ]);
   });
 
   it('dispatch sends the Intent verbatim to core_dispatch', async () => {

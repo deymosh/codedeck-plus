@@ -17,6 +17,7 @@
  * and dispatches `Intent::DismissPendingSession`.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { PendingSessionsStore, PendingSessionsStoreState, PendingSessionView } from './pendingSessions';
 
@@ -28,30 +29,29 @@ export interface NativePendingSessionsStoreDeps {
 export function createNativePendingSessionsStore(deps: NativePendingSessionsStoreDeps): PendingSessionsStore {
   const store = createStore<PendingSessionsStoreState>()((set, get) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.pendingSessionsView();
-        // `reason` is a skip_serializing_if field — specta types it
-        // conservatively as `string | null`, but it's only ever actually
-        // omitted on the wire; `./pendingSessions.ts`'s shape predates that
-        // and spells "no reason" as `undefined` only.
-        const pending: PendingSessionsStoreState['pending'] = {};
-        for (const [id, p] of Object.entries(view.pending)) {
-          pending[id] = { ...p, ...(p.reason != null ? { reason: p.reason } : { reason: undefined }) };
-        }
-        set({ pending });
-      } catch (err) {
-        deps.log?.(`[nativePendingSessions] view refresh failed: ${err}`);
+      const view = await deps.core.pendingSessionsView();
+      // `reason` is a skip_serializing_if field — specta types it
+      // conservatively as `string | null`, but it's only ever actually
+      // omitted on the wire; `./pendingSessions.ts`'s shape predates that
+      // and spells "no reason" as `undefined` only.
+      const pending: PendingSessionsStoreState['pending'] = {};
+      for (const [id, p] of Object.entries(view.pending)) {
+        pending[id] = { ...p, ...(p.reason != null ? { reason: p.reason } : { reason: undefined }) };
       }
+      set({ pending });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'pendingSessions') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativePendingSessions] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'pendingSessions') {
+            void refresh().catch((err) => deps.log?.(`[nativePendingSessions] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativePendingSessions',
+      deps.log,
+    );
 
     const noop = (): void => {};
 

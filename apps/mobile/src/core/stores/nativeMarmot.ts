@@ -27,8 +27,10 @@
  * next refresh to reflect whatever the Rust store ends up holding.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { MarmotView as NativeMarmotView } from '../nativeCoreTypes';
+import type { ConnectionStore } from './connection';
 import type {
   MarmotConversation,
   MarmotMessage,
@@ -45,6 +47,9 @@ function toConversations(view: NativeMarmotView): Record<string, MarmotConversat
 
 export interface NativeMarmotStoreDeps {
   core: NativeCore;
+  /** The already-constructed native connection adapter — `subscribed`
+   *  answers from its status, same reasoning as `nativeDm.ts`'s. */
+  connection: ConnectionStore;
   now?(): number;
   log?(msg: string): void;
 }
@@ -54,34 +59,39 @@ export function createNativeMarmotStore(deps: NativeMarmotStoreDeps): MarmotStor
 
   const store = createStore<MarmotStoreState>()((set, get) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.marmotView();
-        if (!view) return;
-        set({
-          available: view.available,
-          conversations: toConversations(view),
-          messages: view.messages as Record<string, MarmotMessage[]>,
-          pendingWelcomes: view.pendingWelcomes,
-          activeGroup: view.activeGroup,
-          diagnostics: {
-            eventsReceived: view.eventsReceived,
-            ignored: view.ignored,
-            errors: view.errors,
-          },
-        });
-      } catch (err) {
-        deps.log?.(`[nativeMarmot] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.marmotView();
+      if (!view) return;
+      set({
+        available: view.available,
+        conversations: toConversations(view),
+        messages: view.messages as Record<string, MarmotMessage[]>,
+        pendingWelcomes: view.pendingWelcomes,
+        activeGroup: view.activeGroup,
+        diagnostics: {
+          eventsReceived: view.eventsReceived,
+          ignored: view.ignored,
+          errors: view.errors,
+        },
+      });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'marmot') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeMarmot] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'marmot') {
+            void refresh().catch((err) => deps.log?.(`[nativeMarmot] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeMarmot',
+      deps.log,
+    );
+
+    // No independent "Marmot subscription" concept left to report post-F2b
+    // — reflect the shared connection status instead of a hardcoded
+    // constant. Only future transitions go through `set` here; the initial
+    // value is read directly into the returned state below.
+    deps.connection.subscribe((state) => set({ subscribed: state.status === 'connected' }));
 
     const dispatch = (intent: Parameters<NativeCore['dispatch']>[0]): Promise<void> =>
       deps.core.dispatch(intent).catch((err) => deps.log?.(`[nativeMarmot] dispatch failed: ${err}`));
@@ -92,7 +102,7 @@ export function createNativeMarmotStore(deps: NativeMarmotStoreDeps): MarmotStor
       messages: {},
       pendingWelcomes: {},
       activeGroup: null,
-      subscribed: true,
+      subscribed: deps.connection.getState().status === 'connected',
       diagnostics: { eventsReceived: 0, ignored: 0, errors: 0 },
       publishedKeyPackage: null,
 

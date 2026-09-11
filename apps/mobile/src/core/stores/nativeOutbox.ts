@@ -20,6 +20,7 @@
  * establishes.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { Logger } from '../ports';
 import type { OutboxItem as NativeOutboxItem } from '../nativeCoreTypes';
@@ -54,24 +55,23 @@ export function createNativeOutboxStore(deps: NativeOutboxStoreDeps): OutboxStor
 
   const store = createStore<OutboxStoreState>()((set, get) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.outboxView();
-        const items: Record<string, OutboxItem> = {};
-        for (const raw of view.items) items[raw.id] = toOutboxItem(raw);
-        set({ items });
-      } catch (err) {
-        deps.log?.(`[nativeOutbox] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.outboxView();
+      const items: Record<string, OutboxItem> = {};
+      for (const raw of view.items) items[raw.id] = toOutboxItem(raw);
+      set({ items });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'outbox') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeOutbox] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'outbox') {
+            void refresh().catch((err) => deps.log?.(`[nativeOutbox] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeOutbox',
+      deps.log,
+    );
 
     return {
       items: {},

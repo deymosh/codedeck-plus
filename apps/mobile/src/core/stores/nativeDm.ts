@@ -11,8 +11,11 @@
  * native mode there is no separate "DM subscription" to open/close from TS —
  * `client-runtime` multiplexes every kind of traffic over one socket and
  * owns the 1059 subscription itself for as long as the core is running.
- * `subscribed` mirrors that: always `true` once this adapter is constructed
- * (there is nothing meaningful to toggle it false from here).
+ * `subscribed` mirrors that: there is no independent per-traffic-class
+ * subscription health left to report (unlike the old per-filter WebView
+ * transport), so this reflects the ONE thing that actually varies —
+ * `connection`'s own status — rather than a hardcoded constant that could
+ * never show a real disconnect.
  *
  * Profile resolution (`resolveProfile`/`resolveAllProfiles`, backing the
  * `profiles`/`profileStatus` fields) is the one piece of `DmStoreState` this
@@ -32,6 +35,8 @@
  */
 import { createStore } from 'zustand/vanilla';
 import { parsePeerInput } from './dm';
+import { hydrateFromCore } from './nativeHydration';
+import type { ConnectionStore } from './connection';
 import type { DmConversation, DmMessage, DmProfile, DmProfileStatus, DmStore, DmStoreState, ProfileFetcher } from './dm';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { DmView as NativeDmView } from '../nativeCoreTypes';
@@ -47,6 +52,11 @@ function toConversations(view: NativeDmView): Record<string, DmConversation> {
 
 export interface NativeDmStoreDeps {
   core: NativeCore;
+  /** The already-constructed native connection adapter — `subscribed`
+   *  answers from its status rather than this store maintaining a second,
+   *  duplicate connection-health signal of its own (same reasoning as
+   *  `nativeConnection.ts`'s own `machines` dependency). */
+  connection: ConnectionStore;
   profileFetcher?: ProfileFetcher;
   now?(): number;
   log?(msg: string): void;
@@ -61,32 +71,38 @@ export function createNativeDmStore(deps: NativeDmStoreDeps): DmStore {
 
   const store = createStore<DmStoreState>()((set, get) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.dmView();
-        if (!view) return;
-        set({
-          conversations: toConversations(view),
-          messages: view.messages as Record<string, DmMessage[]>,
-          activePeer: view.activePeer,
-          diagnostics: {
-            eventsReceived: view.eventsReceived,
-            unwrapFailures: view.unwrapFailures,
-            invalidRumors: view.invalidRumors,
-          },
-        });
-      } catch (err) {
-        deps.log?.(`[nativeDm] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.dmView();
+      if (!view) return;
+      set({
+        conversations: toConversations(view),
+        messages: view.messages as Record<string, DmMessage[]>,
+        activePeer: view.activePeer,
+        diagnostics: {
+          eventsReceived: view.eventsReceived,
+          unwrapFailures: view.unwrapFailures,
+          invalidRumors: view.invalidRumors,
+        },
+      });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'dm') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeDm] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'dm') {
+            void refresh().catch((err) => deps.log?.(`[nativeDm] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeDm',
+      deps.log,
+    );
+
+    // No independent "DM subscription" concept left to report post-F2b —
+    // reflect the shared connection status instead of a hardcoded constant.
+    // Only future transitions go through `set` here; the initial value is
+    // read directly into the returned state below (calling `set` before
+    // this factory has returned its initial state is not safe in zustand).
+    deps.connection.subscribe((state) => set({ subscribed: state.status === 'connected' }));
 
     const dispatch = (intent: Parameters<NativeCore['dispatch']>[0]): Promise<void> =>
       deps.core.dispatch(intent).catch((err) => deps.log?.(`[nativeDm] dispatch failed: ${err}`));
@@ -95,7 +111,7 @@ export function createNativeDmStore(deps: NativeDmStoreDeps): DmStore {
       conversations: {},
       messages: {},
       activePeer: null,
-      subscribed: true,
+      subscribed: deps.connection.getState().status === 'connected',
       diagnostics: { eventsReceived: 0, unwrapFailures: 0, invalidRumors: 0 },
       profiles: {},
       profileStatus: {},

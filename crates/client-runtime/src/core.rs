@@ -111,7 +111,12 @@ pub enum ActionFailed {
 /// platform events.
 pub trait CoreObserver {
     /// Connection status or the `needs pairing check` diagnostic changed.
-    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool);
+    /// `connected_relays` is a live snapshot (not itself part of what
+    /// triggered this callback — a relay dropping without the overall
+    /// status changing does not re-fire this) for a per-relay status dot
+    /// (Settings) to have a reasonably fresh value without its own push
+    /// channel.
+    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, connected_relays: &[String]);
     /// A decoded bridge→phone message for the given machine.
     fn bridge_message(&self, machine: String, msg: BridgeToPhone);
     fn action_failed(&self, _kind: ActionFailed) {}
@@ -331,15 +336,17 @@ impl Core {
         let _ = self.tx.send(Msg::SetRelays(relays));
     }
 
-    /// Current connection status + the `needs pairing check` diagnostic. A
-    /// fresh read for a UI that just attached (the observer only reports
-    /// changes).
-    pub async fn connection_status(&self) -> (ConnectionStatus, bool) {
+    /// Current connection status + the `needs pairing check` diagnostic +
+    /// which configured relays have a live socket right now (Settings' own
+    /// per-relay dot — not a subscription/publish-readiness signal, just
+    /// "the socket is up"). A fresh read for a UI that just attached (the
+    /// observer only reports changes).
+    pub async fn connection_status(&self) -> (ConnectionStatus, bool, Vec<String>) {
         let (rtx, rrx) = oneshot::channel();
         if self.tx.send(Msg::QueryStatus(rtx)).is_err() {
-            return (ConnectionStatus::Stopped, false);
+            return (ConnectionStatus::Stopped, false, Vec::new());
         }
-        rrx.await.unwrap_or((ConnectionStatus::Stopped, false))
+        rrx.await.unwrap_or((ConnectionStatus::Stopped, false, Vec::new()))
     }
 
     /// Fire-and-forget send of a phone→bridge command.
@@ -475,7 +482,7 @@ enum Msg {
     SetOnline(bool),
     SetMachines(Vec<String>),
     SetRelays(Vec<String>),
-    QueryStatus(oneshot::Sender<(ConnectionStatus, bool)>),
+    QueryStatus(oneshot::Sender<(ConnectionStatus, bool, Vec<String>)>),
     RelayEvent(NostrEvent),
     SocketOpen,
     SocketClose,
@@ -641,7 +648,8 @@ impl Loop {
                 }
                 Msg::SetRelays(relays) => self.nostr.set_relays(&relays),
                 Msg::QueryStatus(reply) => {
-                    let _ = reply.send((self.conn.status, self.conn.needs_pairing_check));
+                    let connected: Vec<String> = self.ws.connected_relays().into_iter().collect();
+                    let _ = reply.send((self.conn.status, self.conn.needs_pairing_check, connected));
                 }
                 Msg::RetryDue => self.dispatch(ConnectionEvent::RetryDue),
                 Msg::VisibilitySettled => self.dispatch(ConnectionEvent::VisibilitySettled),
@@ -703,8 +711,9 @@ impl Loop {
         }
         let after = (self.conn.status, self.conn.needs_pairing_check);
         if after != before {
+            let connected: Vec<String> = self.ws.connected_relays().into_iter().collect();
             self.observer
-                .connection_changed(self.conn.status, self.conn.needs_pairing_check);
+                .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
             self.state_changed(SliceId::Connection);
         }
     }
@@ -2044,7 +2053,7 @@ mod tests {
         events: Mutex<Vec<CoreEvent>>,
     }
     impl CoreObserver for Spy {
-        fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool) {
+        fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, _connected_relays: &[String]) {
             self.statuses.lock().unwrap().push((status, needs_pairing_check));
         }
         fn bridge_message(&self, machine: String, msg: BridgeToPhone) {

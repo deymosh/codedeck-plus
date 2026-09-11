@@ -91,6 +91,13 @@ impl Router {
         self.connected.insert(relay.to_string());
     }
 
+    /// Relays with a live, connected socket right now — for a per-relay
+    /// status indicator (Settings). Not a subscription/publish-readiness
+    /// signal, just "the socket is up."
+    pub fn connected_relays(&self) -> &HashSet<String> {
+        &self.connected
+    }
+
     /// A relay socket closed or failed. Subs may go fully dead; publishes still
     /// awaiting an OK from it resolve that relay as unreachable.
     pub fn relay_disconnected(&mut self, relay: &str) -> Vec<RouterAction> {

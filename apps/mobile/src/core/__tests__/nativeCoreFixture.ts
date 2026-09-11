@@ -129,7 +129,7 @@ export interface FakeNativeCore {
  */
 export function fakeNativeCore(
   overrides: Partial<FakeNativeCoreViews> = {},
-  initialConnection: NativeConnectionSnapshot = { status: 'idle', needsPairingCheck: false },
+  initialConnection: NativeConnectionSnapshot = { status: 'idle', needsPairingCheck: false, connectedRelays: [] },
 ): FakeNativeCore {
   const views: FakeNativeCoreViews = { ...defaultNativeCoreViews(), ...overrides };
   const dispatched: Intent[] = [];

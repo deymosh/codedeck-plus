@@ -6,12 +6,34 @@
  * inference `startChat`/`acceptWelcome` do from a post-dispatch refresh.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 import { createNativeMarmotStore } from '../stores/nativeMarmot';
 import { generateKeypair } from '../crypto';
+import type { ConnectionStore, ConnectionStoreState } from '../stores/connection';
 import type { CoreEvent, Intent, MarmotView, SliceId } from '../nativeCoreTypes';
 import type { NativeCore } from '../../platform/nativeCore';
 
 const peer = generateKeypair().pubkeyHex;
+
+/** A minimal, static `ConnectionStore` — see `nativeDmStore.test.ts`'s copy
+ *  of this helper for why a fixed value is enough here. */
+function fakeConnection(status: ConnectionStoreState['status'] = 'connected'): ConnectionStore {
+  return createStore<ConnectionStoreState>()(() => ({
+    status,
+    attempt: 0,
+    online: true,
+    visible: true,
+    hiddenPending: false,
+    lastConnectedAt: null,
+    decryptFailures: 0,
+    needsPairingCheck: false,
+    heartbeats: {},
+    connectedRelays: [],
+    dispatch: () => {},
+    presence: () => 'offline',
+    checkHeartbeats: () => {},
+  }));
+}
 
 const emptyView = (): MarmotView => ({
   available: false,
@@ -98,7 +120,7 @@ describe('createNativeMarmotStore', () => {
       buffered: 3,
       pendingWelcomes: { w1: { welcomeId: 'w1', wrapperId: 'wrap1', groupId: 'g2', hTag: 'h2', name: '', welcomer: peer, memberCount: 2 } },
     });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     expect(store.getState().available).toBe(true);
@@ -111,7 +133,7 @@ describe('createNativeMarmotStore', () => {
 
   it('start/stop/ingestGiftWrap/ingestGroupMessage are no-ops', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     store.getState().start();
@@ -119,12 +141,21 @@ describe('createNativeMarmotStore', () => {
     store.getState().ingestGiftWrap({} as never);
     store.getState().ingestGroupMessage({} as never);
     expect(dispatched).toEqual([]);
-    expect(store.getState().subscribed).toBe(true);
+  });
+
+  it('subscribed reflects the shared connection status, not a hardcoded constant', async () => {
+    const { core } = fakeCore();
+    const connected = createNativeMarmotStore({ core, connection: fakeConnection('connected') });
+    const offline = createNativeMarmotStore({ core, connection: fakeConnection('offline') });
+    await tick();
+
+    expect(connected.getState().subscribed).toBe(true);
+    expect(offline.getState().subscribed).toBe(false);
   });
 
   it('send dispatches sendMarmotMessage, refreshes, and returns the newest message', async () => {
     const { core, dispatched, setView } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({
@@ -140,7 +171,7 @@ describe('createNativeMarmotStore', () => {
 
   it('retry re-dispatches sendMarmotMessage with the failed content and is a no-op when nothing matches', async () => {
     const { core, dispatched, setView } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     await store.getState().retry('g1', 'nope');
@@ -156,7 +187,7 @@ describe('createNativeMarmotStore', () => {
 
   it('startChat fails fast as unavailable without dispatching when the engine is not available', async () => {
     const { core, dispatched } = fakeCore({ ...emptyView(), available: false });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     const result = await store.getState().startChat(peer);
@@ -170,7 +201,7 @@ describe('createNativeMarmotStore', () => {
       available: true,
       conversations: [{ groupId: 'g1', hTag: 'h1', peerPubkey: peer, name: '', memberCount: 2, lastMessageAt: 1, unreadCount: 0, lastPreview: '' }],
     });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     const result = await store.getState().startChat(peer);
@@ -180,7 +211,7 @@ describe('createNativeMarmotStore', () => {
 
   it('startChat dispatches startMarmotChat and reports failed when no conversation appears after refresh', async () => {
     const { core, dispatched } = fakeCore({ ...emptyView(), available: true });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     const result = await store.getState().startChat(peer);
@@ -190,7 +221,7 @@ describe('createNativeMarmotStore', () => {
 
   it('startChat reports ok once the refreshed view shows the new conversation', async () => {
     const { core, setView } = fakeCore({ ...emptyView(), available: true });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     // Simulate the engine having created the group by the time dispatch()
@@ -210,7 +241,7 @@ describe('createNativeMarmotStore', () => {
       ...emptyView(),
       pendingWelcomes: { w1: { welcomeId: 'w1', wrapperId: 'wrap1', groupId: 'g1', hTag: 'h1', name: '', welcomer: peer, memberCount: 2 } },
     });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({ ...emptyView(), pendingWelcomes: {} }); // simulate the accept having landed
@@ -224,7 +255,7 @@ describe('createNativeMarmotStore', () => {
       ...emptyView(),
       pendingWelcomes: { w1: { welcomeId: 'w1', wrapperId: 'wrap1', groupId: 'g1', hTag: 'h1', name: '', welcomer: peer, memberCount: 2 } },
     });
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     const ok = await store.getState().acceptWelcome('w1');
@@ -233,7 +264,7 @@ describe('createNativeMarmotStore', () => {
 
   it('setActiveGroup sets state optimistically and dispatches selectMarmotGroup', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     store.getState().setActiveGroup('g1');
@@ -243,7 +274,7 @@ describe('createNativeMarmotStore', () => {
 
   it('markRead dispatches markMarmotRead', async () => {
     const { core, dispatched } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     store.getState().markRead('g1');
@@ -252,7 +283,7 @@ describe('createNativeMarmotStore', () => {
 
   it('a stateChanged("marmot") core event re-fetches the view', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({ ...emptyView(), available: true });
@@ -264,7 +295,7 @@ describe('createNativeMarmotStore', () => {
 
   it('a stateChanged for a different slice does not trigger a refresh', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
-    const store = createNativeMarmotStore({ core });
+    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
     await tick();
 
     setView({ ...emptyView(), available: true });

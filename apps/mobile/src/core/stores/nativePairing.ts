@@ -24,6 +24,7 @@
  */
 import { createStore } from 'zustand/vanilla';
 import { hexFromNpub } from '../crypto';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { Intent, PairingCandidateView } from '../nativeCoreTypes';
 import type { ParsedPairingUrl, PairingCandidate, PairingPhase, PairingStore, PairingStoreState } from './pairing';
@@ -56,34 +57,33 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
     let stagedCache: ParsedPairingUrl | null = null;
 
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.pairingView();
-        if (!view) return;
-        if (!view.hasStaged) stagedCache = null;
-        set({
-          // `PairingView.phase` crosses the wire as a plain Rust `&'static
-          // str`, not a literal-union type (specta has no way to see the
-          // closed set `Core::phase_str` actually emits) — same trust the
-          // hand-written type placed in this value before generation existed.
-          phase: view.phase as PairingPhase,
-          candidate: toCandidate(view.candidate),
-          error: view.error,
-          timedOut: view.timedOut,
-          staged: view.hasStaged ? stagedCache : null,
-        });
-      } catch (err) {
-        deps.log?.(`[nativePairing] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.pairingView();
+      if (!view) return;
+      if (!view.hasStaged) stagedCache = null;
+      set({
+        // `PairingView.phase` crosses the wire as a plain Rust `&'static
+        // str`, not a literal-union type (specta has no way to see the
+        // closed set `Core::phase_str` actually emits) — same trust the
+        // hand-written type placed in this value before generation existed.
+        phase: view.phase as PairingPhase,
+        candidate: toCandidate(view.candidate),
+        error: view.error,
+        timedOut: view.timedOut,
+        staged: view.hasStaged ? stagedCache : null,
+      });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'pairing') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativePairing] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'pairing') {
+            void refresh().catch((err) => deps.log?.(`[nativePairing] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativePairing',
+      deps.log,
+    );
 
     const dispatch = (intent: Intent): void => {
       deps.core.dispatch(intent).catch((err) => deps.log?.(`[nativePairing] dispatch failed: ${err}`));

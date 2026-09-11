@@ -64,7 +64,7 @@ function fakeMachines(lastHeartbeatAt: number | null): MachinesStore {
   return createNativeMachinesStore({ core: machinesCore });
 }
 
-function fakeCore(initial: NativeConnectionSnapshot = { status: 'idle', needsPairingCheck: false }) {
+function fakeCore(initial: NativeConnectionSnapshot = { status: 'idle', needsPairingCheck: false, connectedRelays: [] }) {
   const calls: string[] = [];
   let onConnectionCb: ((s: NativeConnectionSnapshot) => void) | null = null;
 
@@ -131,7 +131,7 @@ async function tick(): Promise<void> {
 
 describe('createNativeConnectionStore', () => {
   it('hydrates status/needsPairingCheck from connectionStatus() on creation', async () => {
-    const { core } = fakeCore({ status: 'connecting', needsPairingCheck: true });
+    const { core } = fakeCore({ status: 'connecting', needsPairingCheck: true, connectedRelays: [] });
     const store = createNativeConnectionStore({ core, machines: fakeMachines(null) });
     await tick();
 
@@ -144,7 +144,7 @@ describe('createNativeConnectionStore', () => {
     const store = createNativeConnectionStore({ core, machines: fakeMachines(null) });
     await tick();
 
-    pushConnection({ status: 'connected', needsPairingCheck: false });
+    pushConnection({ status: 'connected', needsPairingCheck: false, connectedRelays: [] });
     expect(store.getState().status).toBe('connected');
   });
 
@@ -199,7 +199,7 @@ describe('createNativeConnectionStore', () => {
     // Not connected yet — offline regardless of heartbeat freshness.
     expect(store.getState().presence('m1')).toBe('offline');
 
-    pushConnection({ status: 'connected', needsPairingCheck: false });
+    pushConnection({ status: 'connected', needsPairingCheck: false, connectedRelays: [] });
     expect(store.getState().presence('m1')).toBe('live');
   });
 
@@ -207,7 +207,7 @@ describe('createNativeConnectionStore', () => {
     const { core, pushConnection } = fakeCore();
     const store = createNativeConnectionStore({ core, machines: fakeMachines(null) });
     await tick();
-    pushConnection({ status: 'connected', needsPairingCheck: false });
+    pushConnection({ status: 'connected', needsPairingCheck: false, connectedRelays: [] });
 
     expect(store.getState().presence('never-seen')).toBe('offline');
   });

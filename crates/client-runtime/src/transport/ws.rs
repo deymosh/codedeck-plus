@@ -17,7 +17,7 @@
 //! * **`publish_confirmed`** keeps the CDX-086 four-way verdict end to end.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -138,6 +138,12 @@ impl WsTransport {
         for relay in relays {
             self.spawn_relay(relay);
         }
+    }
+
+    /// Relays with a live socket right now — for a per-relay status
+    /// indicator (Settings).
+    pub fn connected_relays(&self) -> BTreeSet<String> {
+        self.state.borrow().router.connected_relays().iter().cloned().collect()
     }
 
     /// Tear down every socket deliberately (no `on_close` fires).

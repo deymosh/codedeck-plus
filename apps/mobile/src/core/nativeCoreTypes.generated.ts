@@ -126,6 +126,14 @@ export type BridgeHostKind = "cli" | "vscode" | "service";
 export type ConnectionPayload = {
 	status: string,
 	needs_pairing_check: boolean,
+	/**
+	 *  Configured relays with a live socket right now — Settings' per-relay
+	 *  status dot. Not a subscription/publish-readiness signal, just "the
+	 *  socket is up." A relay dropping without the overall `status`
+	 *  changing does not push a fresh value; it's refreshed by whatever
+	 *  next causes a real reconnect-class transition or a manual re-query.
+	 */
+	connected_relays: string[],
 };
 
 /**

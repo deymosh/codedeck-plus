@@ -11,6 +11,7 @@
  * last reported — same "the next event wins" model as `nativeOutbox.ts`.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { SettingsView as NativeSettingsView } from '../nativeCoreTypes';
@@ -49,22 +50,21 @@ export interface NativeSettingsStoreDeps {
 export function createNativeSettingsStore(deps: NativeSettingsStoreDeps): SettingsStore {
   const store = createStore<SettingsStoreState>()((set) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.settingsView();
-        if (view) set(toSettingsData(view));
-      } catch (err) {
-        deps.log?.(`[nativeSettings] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.settingsView();
+      if (view) set(toSettingsData(view));
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'settings') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeSettings] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'settings') {
+            void refresh().catch((err) => deps.log?.(`[nativeSettings] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeSettings',
+      deps.log,
+    );
 
     const dispatch = (intent: Parameters<NativeCore['dispatch']>[0]): void => {
       deps.core.dispatch(intent).catch((err) => deps.log?.(`[nativeSettings] dispatch failed: ${err}`));

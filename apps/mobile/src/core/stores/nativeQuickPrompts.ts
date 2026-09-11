@@ -16,6 +16,7 @@
  * dispatched `Intent` is what a test asserts on, not the id's shape.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { QuickPromptsStore, QuickPromptsStoreState } from './quickPrompts';
 
@@ -27,22 +28,21 @@ export interface NativeQuickPromptsStoreDeps {
 export function createNativeQuickPromptsStore(deps: NativeQuickPromptsStoreDeps): QuickPromptsStore {
   const store = createStore<QuickPromptsStoreState>()((set) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.quickPromptsView();
-        set({ prompts: view.prompts });
-      } catch (err) {
-        deps.log?.(`[nativeQuickPrompts] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.quickPromptsView();
+      set({ prompts: view.prompts });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'quickPrompts') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeQuickPrompts] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'quickPrompts') {
+            void refresh().catch((err) => deps.log?.(`[nativeQuickPrompts] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeQuickPrompts',
+      deps.log,
+    );
 
     const dispatch = (intent: Parameters<NativeCore['dispatch']>[0]): void => {
       deps.core.dispatch(intent).catch((err) => deps.log?.(`[nativeQuickPrompts] dispatch failed: ${err}`));

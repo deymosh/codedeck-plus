@@ -24,6 +24,7 @@
  * `handlePairAck` no-op.
  */
 import { createStore } from 'zustand/vanilla';
+import { hydrateFromCore } from './nativeHydration';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { MachineView as NativeMachineView, MachinesView as NativeMachinesView } from '../nativeCoreTypes';
 import type { MachineView, MachinesStore, MachinesStoreState, SessionView } from './machines';
@@ -99,22 +100,21 @@ export interface NativeMachinesStoreDeps {
 export function createNativeMachinesStore(deps: NativeMachinesStoreDeps): MachinesStore {
   const store = createStore<MachinesStoreState>()((set, get) => {
     const refresh = async (): Promise<void> => {
-      try {
-        const view = await deps.core.machinesView();
-        set({ machines: toMachines(view) });
-      } catch (err) {
-        deps.log?.(`[nativeMachines] view refresh failed: ${err}`);
-      }
+      const view = await deps.core.machinesView();
+      set({ machines: toMachines(view) });
     };
 
-    void deps.core
-      .onCoreEvent((event) => {
-        if (typeof event === 'object' && event.stateChanged?.slice === 'machines') {
-          void refresh();
-        }
-      })
-      .catch((err) => deps.log?.(`[nativeMachines] onCoreEvent failed: ${err}`));
-    void refresh();
+    void hydrateFromCore(
+      () =>
+        deps.core.onCoreEvent((event) => {
+          if (typeof event === 'object' && event.stateChanged?.slice === 'machines') {
+            void refresh().catch((err) => deps.log?.(`[nativeMachines] view refresh failed: ${err}`));
+          }
+        }),
+      refresh,
+      'nativeMachines',
+      deps.log,
+    );
 
     const noop = (): void => {};
 

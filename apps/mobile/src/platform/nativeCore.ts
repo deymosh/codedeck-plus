@@ -62,6 +62,10 @@ export type NativePublishVerdict = 'accepted' | 'unconfirmed' | 'rejected' | 'un
 export interface NativeConnectionSnapshot {
   status: NativeConnectionStatus;
   needsPairingCheck: boolean;
+  /** Configured relays with a live socket right now (Settings' per-relay
+   *  status dot) — see `ConnectionPayload`'s own doc comment for why this
+   *  isn't a fully live push. */
+  connectedRelays: string[];
 }
 
 export interface NativeCoreConfig {
@@ -133,13 +137,21 @@ const CONNECTION_STATUSES: readonly NativeConnectionStatus[] = [
 ];
 
 function asSnapshot(raw: unknown): NativeConnectionSnapshot {
-  const o = (raw ?? {}) as { status?: unknown; needs_pairing_check?: unknown; needsPairingCheck?: unknown };
+  const o = (raw ?? {}) as {
+    status?: unknown;
+    needs_pairing_check?: unknown;
+    needsPairingCheck?: unknown;
+    connected_relays?: unknown;
+    connectedRelays?: unknown;
+  };
   const status = CONNECTION_STATUSES.includes(o.status as NativeConnectionStatus)
     ? (o.status as NativeConnectionStatus)
     : 'idle';
+  const relays = o.connected_relays ?? o.connectedRelays;
   return {
     status,
     needsPairingCheck: Boolean(o.needs_pairing_check ?? o.needsPairingCheck),
+    connectedRelays: Array.isArray(relays) ? (relays as string[]) : [],
   };
 }
 

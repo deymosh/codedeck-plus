@@ -78,10 +78,11 @@ export async function createPhoneCoreNative(deps: PhoneCoreNativeDeps): Promise<
   const pairing = createNativePairingStore({ core, ...(log ? { log } : {}) });
   const dm = createNativeDmStore({
     core,
+    connection,
     ...(deps.profileFetcher ? { profileFetcher: deps.profileFetcher } : {}),
     ...(log ? { log } : {}),
   });
-  const marmot = createNativeMarmotStore({ core, ...(log ? { log } : {}) });
+  const marmot = createNativeMarmotStore({ core, connection, ...(log ? { log } : {}) });
   const settings = createNativeSettingsStore({ core, ...(log ? { log } : {}) });
   const quickPrompts = createNativeQuickPromptsStore({ core, ...(log ? { log } : {}) });
   const ui = createNativeUiStore({ core, ...(log ? { log } : {}) });

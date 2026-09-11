@@ -82,6 +82,12 @@ fn action_str(kind: ActionFailed) -> &'static str {
 pub struct ConnectionPayload {
     status: &'static str,
     needs_pairing_check: bool,
+    /// Configured relays with a live socket right now — Settings' per-relay
+    /// status dot. Not a subscription/publish-readiness signal, just "the
+    /// socket is up." A relay dropping without the overall `status`
+    /// changing does not push a fresh value; it's refreshed by whatever
+    /// next causes a real reconnect-class transition or a manual re-query.
+    connected_relays: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -99,12 +105,13 @@ struct TauriObserver {
 }
 
 impl CoreObserver for TauriObserver {
-    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool) {
+    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, connected_relays: &[String]) {
         let _ = self.app.emit(
             EV_CONNECTION,
             ConnectionPayload {
                 status: status_str(status),
                 needs_pairing_check,
+                connected_relays: connected_relays.to_vec(),
             },
         );
     }
@@ -239,6 +246,16 @@ pub fn core_available() -> bool {
 pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConfig) -> Result<(), String> {
     let mut slot = bridge.0.lock().map_err(|_| "core bridge lock poisoned")?;
     if slot.is_some() {
+        // Diagnostic for the "stale connection dot after close/reopen"
+        // family of reports: this line firing on a real-device close/reopen
+        // confirms the singleton `CoreBridge` (and its live socket) really
+        // did survive the WebView reload, as this idempotent no-op assumes —
+        // if the dot is STILL stale after confirming this fires, the bug is
+        // downstream of here (the native adapters' own hydration), not a
+        // surprise full-process restart. `eprintln!` — this crate has no
+        // logging framework wired; check with whatever captures this app's
+        // native stderr on your device (e.g. `adb logcat`).
+        eprintln!("[core_init] already initialized — reusing the running Core (WebView reload, not a fresh process)");
         return Ok(());
     }
 
@@ -422,10 +439,11 @@ pub async fn core_connection_status(
     bridge: State<'_, CoreBridge>,
 ) -> Result<ConnectionPayload, String> {
     let core = with_core(&bridge, |c| c.clone())?;
-    let (status, needs_pairing_check) = core.connection_status().await;
+    let (status, needs_pairing_check, connected_relays) = core.connection_status().await;
     Ok(ConnectionPayload {
         status: status_str(status),
         needs_pairing_check,
+        connected_relays,
     })
 }
 

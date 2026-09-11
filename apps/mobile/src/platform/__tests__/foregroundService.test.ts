@@ -63,7 +63,7 @@ function fakeNativeCore(stayConnected: boolean) {
     setRelays: () => Promise.reject(new Error('unused')),
     send: () => Promise.reject(new Error('unused')),
     publish: () => Promise.reject(new Error('unused')),
-    connectionStatus: () => Promise.resolve({ status, needsPairingCheck: false }),
+    connectionStatus: () => Promise.resolve({ status, needsPairingCheck: false, connectedRelays: [] }),
     onMessage: () => Promise.reject(new Error('unused')),
     onConnection: (cb) => {
       onConnectionCb = cb;
@@ -101,7 +101,7 @@ function fakeNativeCore(stayConnected: boolean) {
     core,
     setConnectionStatus: (next: ConnectionStatus): void => {
       status = next;
-      onConnectionCb?.({ status, needsPairingCheck: false });
+      onConnectionCb?.({ status, needsPairingCheck: false, connectedRelays: [] });
     },
   };
 }

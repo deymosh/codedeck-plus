@@ -172,18 +172,34 @@ describe('DmSection (Phase 2b sidebar section — the DM list surface)', () => {
     expect(screen.getAllByTestId('dm-tile')).toHaveLength(1);
   });
 
-  it('empty state renders; the connection dot is always on (client-runtime owns the one socket)', async () => {
-    const { core } = await makeCore();
+  it('empty state renders; the connection dot reflects the shared connection status', async () => {
+    // `DmStoreState.subscribed` has no independent "DM subscription" concept
+    // to report post-F2b (see nativeDm.ts's module doc) — it derives from
+    // `connection.status` instead, so the dot tracks REAL connectivity
+    // rather than a hardcoded constant that could never show a disconnect.
+    const { phone: connected } = await buildFakePhoneCore(
+      { dm: emptyDmView() },
+      { status: 'connected', needsPairingCheck: false, connectedRelays: [] },
+    );
     render(
-      <PhoneCoreProvider value={core}>
+      <PhoneCoreProvider value={connected}>
         <DmSection />
       </PhoneCoreProvider>,
     );
     expect(screen.getByText('No conversations yet.')).toBeTruthy();
-    // `DmStoreState.subscribed` is hardcoded `true` on the native adapter —
-    // there is no separate "DM subscription" to toggle from TS any more (see
-    // nativeDm.ts's module doc); the dot no longer distinguishes states.
     expect(screen.getByTestId('dm-connection-dot').getAttribute('data-connected')).toBe('true');
+    cleanup();
+
+    const { phone: offline } = await buildFakePhoneCore(
+      { dm: emptyDmView() },
+      { status: 'offline', needsPairingCheck: false, connectedRelays: [] },
+    );
+    render(
+      <PhoneCoreProvider value={offline}>
+        <DmSection />
+      </PhoneCoreProvider>,
+    );
+    expect(screen.getByTestId('dm-connection-dot').getAttribute('data-connected')).toBe('false');
   });
 });
 
