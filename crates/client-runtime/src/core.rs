@@ -161,6 +161,9 @@ pub struct CorePorts {
     pub kv: Rc<dyn Kv>,
     pub transcript_store: Rc<dyn TranscriptStore>,
     pub notifier: Rc<dyn Notifier>,
+    /// Blossom image upload/download. `NoHttpFetch` until the platform binds
+    /// real networking.
+    pub http: Rc<dyn crate::attachments::HttpFetch>,
 }
 
 impl Default for CorePorts {
@@ -169,6 +172,7 @@ impl Default for CorePorts {
             kv: Rc::new(MemoryKv::new()),
             transcript_store: Rc::new(MemoryTranscriptStore::new()),
             notifier: Rc::new(NullNotifier),
+            http: Rc::new(crate::attachments::NoHttpFetch),
         }
     }
 }
@@ -265,6 +269,7 @@ impl Core {
             kv: ports.kv,
             transcript_store: ports.transcript_store,
             notifier: ports.notifier,
+            http: ports.http,
         };
         tokio::task::spawn_local(event_loop.run(rx));
         Self { tx }
@@ -508,6 +513,7 @@ struct Loop {
     kv: Rc<dyn Kv>,
     transcript_store: Rc<dyn TranscriptStore>,
     notifier: Rc<dyn Notifier>,
+    http: Rc<dyn crate::attachments::HttpFetch>,
 }
 
 impl Loop {
@@ -808,9 +814,38 @@ impl Loop {
         };
         let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
         let dm_send = result.dm_send.clone();
+        let dm_image_send = result.dm_image_send.clone();
         self.interpret_intent(result).await;
         if let Some((peer, text)) = dm_send {
             self.send_dm(peer, text).await;
+        }
+        if let Some((peer, text, image)) = dm_image_send {
+            self.send_dm_image(peer, text, image).await;
+        }
+    }
+
+    /// Encrypt + upload an image, then send it as a DM (the ref line appended
+    /// to `text`).
+    async fn send_dm_image(&mut self, peer: String, text: String, image: Vec<u8>) {
+        let opts = crate::attachments::UploadOptions::at(self.clock.now_ms());
+        match crate::attachments::upload_encrypted_image(
+            &image,
+            &self.identity,
+            self.http.as_ref(),
+            opts,
+        )
+        .await
+        {
+            Ok(reference) => {
+                let line = client_core::dm_attachments::build_image_ref(&reference);
+                let body = if text.is_empty() {
+                    line
+                } else {
+                    format!("{text}\n{line}")
+                };
+                self.send_dm(peer, body).await;
+            }
+            Err(_) => self.observer.action_failed(ActionFailed::PublishRejected),
         }
     }
 
@@ -1252,6 +1287,15 @@ mod tests {
     }
 
     async fn core_for(mock: &MockRelay, phone: &Keypair, spy: Rc<Spy>) -> Core {
+        core_for_ports(mock, phone, spy, CorePorts::default()).await
+    }
+
+    async fn core_for_ports(
+        mock: &MockRelay,
+        phone: &Keypair,
+        spy: Rc<Spy>,
+        ports: CorePorts,
+    ) -> Core {
         Core::spawn(
             CoreConfig {
                 relays: vec![mock.url.clone()],
@@ -1259,12 +1303,37 @@ mod tests {
                 proxy: None,
                 reconnect: fast_reconnect(),
             },
-            CorePorts::default(),
+            ports,
             spy,
             Rc::new(FixedClock(RefCell::new(1_000_000))),
             Rc::new(ZeroEntropy),
         )
         .await
+    }
+
+    struct OkHttp;
+    impl crate::attachments::HttpFetch for OkHttp {
+        fn put(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: Vec<u8>,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(async {
+                Ok(crate::attachments::HttpResponse {
+                    status: 200,
+                    body: b"{}".to_vec(),
+                })
+            })
+        }
+        fn get(
+            &self,
+            _url: &str,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(async { Err("not used".to_string()) })
+        }
     }
 
     /// EOSE the four subscriptions (3 bridge + 1 DM) and return the DM sub's id
@@ -1632,6 +1701,44 @@ mod tests {
                 let from_peer = &dm.messages[&peer.pubkey_hex];
                 assert!(from_peer.iter().any(|m| m.content == "hello back"));
                 assert_eq!(dm.conversations[0].unread_count, 1);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn send_dm_image_uploads_then_appends_the_ref_line_to_the_dm() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let peer = generate_keypair();
+                let ports = CorePorts {
+                    http: Rc::new(OkHttp),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                core.dispatch(Intent::SendDmImage {
+                    peer: peer.pubkey_hex.clone(),
+                    text: "look at this".into(),
+                    image: b"png bytes here".to_vec(),
+                })
+                .await;
+                for _ in 0..5 {
+                    settle().await;
+                }
+
+                let dm = core.dm_view().await.unwrap();
+                let msg = &dm.messages[&peer.pubkey_hex][0].content;
+                assert!(msg.starts_with("look at this\n"));
+                // the appended line is `<blossom-url> key=<64hex> iv=<24hex>`
+                let line = msg.lines().nth(1).unwrap();
+                assert!(line.contains(" key=") && line.contains(" iv="));
             })
             .await;
     }

@@ -72,6 +72,8 @@ pub struct IntentResult {
     pub undo_timer: Option<UndoTimer>,
     /// `(peer, text)` — the loop wraps + publishes this NIP-17 DM (async).
     pub dm_send: Option<(String, String)>,
+    /// `(peer, text, image)` — the loop uploads the image then sends the DM.
+    pub dm_image_send: Option<(String, String, Vec<u8>)>,
 }
 
 impl IntentResult {
@@ -223,6 +225,13 @@ pub enum Intent {
     SendDm {
         peer: String,
         text: String,
+    },
+    /// Encrypt + upload an image to Blossom, then send it as a DM (the ref line
+    /// `<url> key=… iv=…` appended to `text`). The loop does the async work.
+    SendDmImage {
+        peer: String,
+        text: String,
+        image: Vec<u8>,
     },
     AddRelay {
         url: String,
@@ -529,6 +538,9 @@ pub fn apply(
         }
         Intent::SendDm { peer, text } => {
             r.dm_send = Some((peer, text));
+        }
+        Intent::SendDmImage { peer, text, image } => {
+            r.dm_image_send = Some((peer, text, image));
         }
         Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
         Intent::RemoveRelay { url } => {

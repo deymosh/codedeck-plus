@@ -86,6 +86,23 @@ pub trait HttpFetch {
     fn get(&self, url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>>;
 }
 
+/// An [`HttpFetch`] that fails every request — the default before a platform
+/// binds real networking (image attachments simply error until then).
+pub struct NoHttpFetch;
+impl HttpFetch for NoHttpFetch {
+    fn put(
+        &self,
+        _url: &str,
+        _headers: Vec<(String, String)>,
+        _body: Vec<u8>,
+    ) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
+        Box::pin(async { Err("no HTTP transport configured".to_string()) })
+    }
+    fn get(&self, _url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
+        Box::pin(async { Err("no HTTP transport configured".to_string()) })
+    }
+}
+
 // --- upload / download ----------------------------------------------------
 
 /// Generous per attempt (a multi-MB body on mobile data); a false trip costs a
