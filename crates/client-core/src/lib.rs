@@ -15,6 +15,8 @@ pub mod default_session_mode;
 pub mod delete_controller;
 pub mod dm_attachments;
 pub mod image_chunks;
+#[cfg(feature = "marmot")]
+pub mod marmot_engine;
 pub mod mode_cycle;
 pub mod nip42;
 pub mod notifications;

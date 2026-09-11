@@ -69,26 +69,13 @@ serde_json = "1"
 client-runtime = { path = "../../../crates/client-runtime", optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros"], optional = true }
 
-# Phase 6 (CDX-012): Marmot (MLS) DMs. MDK does the crypto + group state in
-# Rust (its own SQLite file in the app data dir); JS owns transport — events
-# in/out as JSON over the marmot_* commands (plan §5b). Same stack as the
-# local yenn reference (MDK 0.8 / nostr 0.44 — White Noise-compatible).
-mdk-core = "0.8"
-mdk-sqlite-storage = "0.8"
-# Direct dep for `groups::Pagination` (the cached-rumor re-feed fallback pages
-# `MDK::get_messages`); mdk_core::prelude does not re-export it (yenn note).
-mdk-storage-traits = "0.8"
+# Phase 6 (CDX-012): Marmot (MLS) DMs. The MDK 0.8 / MLS + SQLCipher engine
+# now lives in `client_core::marmot_engine` (feature `marmot` — same dep stack,
+# shared with the future composed Core); `src/marmot.rs` here is just the
+# `#[tauri::command]` wrapper. `nostr` stays a direct dep — the command layer
+# uses its types in its signatures.
+client-core = { path = "../../../crates/client-core", features = ["marmot"] }
 nostr = { version = "0.44", features = ["std", "nip44", "nip59"] }
-# mdk-sqlite-storage pins rusqlite's "bundled-sqlcipher", whose C build
-# #includes OpenSSL headers that don't exist for Android targets. This direct
-# dep upgrades the feature (via unification) to the vendored-OpenSSL variant so
-# SQLCipher cross-compiles self-contained (yenn's proven workaround). Keep the
-# version in lockstep with mdk's rusqlite.
-rusqlite = { version = "0.37", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
-# MDK store key derivation (domain-separated hash of the identity secret —
-# the host app owns key derivation; no platform keyring on Android).
-sha2 = "0.10"
-hex = "0.4"
 
 [dev-dependencies]
 # The gift-wrap path is async (nostr 0.44) — loopback tests need a runtime.

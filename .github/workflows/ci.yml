@@ -134,6 +134,12 @@ jobs:
         run: |
           cargo test --workspace --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
+          # The Marmot engine (MDK 0.8 / MLS + SQLCipher) is behind `marmot`,
+          # off for the pure-logic run above. Build + test it too so the
+          # relocated engine and its `MarmotEngine` port impl fail CI here, not
+          # only in the src-tauri job.
+          cargo test -p client-core --features marmot --locked
+          cargo clippy -p client-runtime --features marmot --all-targets --locked -- -D warnings
 
       - name: No Rust changes — skipped
         if: steps.filter.outputs.rust != 'true' && steps.filter.outputs.core != 'true'

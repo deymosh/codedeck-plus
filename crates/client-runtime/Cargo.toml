@@ -10,6 +10,12 @@ publish.workspace = true
 [lib]
 name = "client_runtime"
 
+[features]
+# Turns on `client-core/marmot` (the MDK 0.8 / MLS + SQLCipher engine) and
+# compiles `MarmotEngineImpl`. Off by default so the pure-logic tests and the
+# byte-identical mobile build stay lean.
+marmot = ["client-core/marmot"]
+
 [dependencies]
 client-core = { path = "../client-core" }
 serde = "1"

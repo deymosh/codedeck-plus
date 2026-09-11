@@ -12,12 +12,22 @@ name = "client_core"
 
 [features]
 default = []
-# These gate the heavy runtime pieces (MDK / SQLCipher for Marmot, nip59
-# gift-wrap crypto for NIP-17) which live in `client-runtime`. The pure
-# `stores::dm` / `stores::marmot` state machines here add no dependencies and
-# are always compiled.
-marmot = []
+# NIP-17: the `stores::dm` state machine here is dep-free and always compiled;
+# `dm` gates the gift-wrap crypto, which lives in `client-runtime`.
 dm = []
+# Marmot: `marmot_engine` (the MDK 0.8 / MLS + SQLCipher engine, ported verbatim
+# from `apps/mobile/src-tauri/src/marmot.rs`). OFF keeps `client-core` pure
+# (nostr + serde). ON pulls the MDK / rusqlite / SQLCipher stack — exactly what
+# `apps/mobile/src-tauri` carries today. `client-runtime`'s own `marmot` feature
+# turns this on to implement its `MarmotEngine` port.
+marmot = [
+    "dep:mdk-core",
+    "dep:mdk-sqlite-storage",
+    "dep:mdk-storage-traits",
+    "dep:rusqlite",
+    "dep:sha2",
+    "nostr/nip59",
+]
 
 [dependencies]
 # NIP-44 v2 + keys, verified against this crate in the F0 uniffi probe.
@@ -29,3 +39,18 @@ hex = "0.4"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# --- Marmot engine (feature "marmot" only) — the exact versions
+# apps/mobile/src-tauri pins (CDX-012). MDK's rusqlite pins "bundled-sqlcipher";
+# the direct rusqlite dep upgrades it to the vendored-OpenSSL variant so
+# SQLCipher cross-compiles self-contained for Android.
+mdk-core = { version = "0.8", optional = true }
+mdk-sqlite-storage = { version = "0.8", optional = true }
+mdk-storage-traits = { version = "0.8", optional = true }
+rusqlite = { version = "0.37", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+# Feature `marmot` loopback tests only (`marmot_engine::tests`).
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros"] }
