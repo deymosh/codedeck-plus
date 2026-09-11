@@ -117,10 +117,95 @@ export interface BridgeApiDeps {
   log?: Logger;
 }
 
+/**
+ * The subset of `BridgeApi`'s public surface production UI actually calls
+ * (confirmed by search across `src/ui`) — extracted so `PhoneCore.api` can be
+ * typed against an interface instead of the concrete class. `BridgeApi`
+ * satisfies this structurally, unmodified; `createNativeBridgeApi.ts` (F2b)
+ * is the other implementation, dispatching the matching `Intent` instead of
+ * building/signing/publishing the wire command itself.
+ *
+ * Deliberately excludes `input`, `sendConfirmed`, `ingest`, `dispatchDecoded`
+ * (never called directly by UI) and `uploadImageBlossom`/`uploadImageChunk`/
+ * `createFolder` (real gaps for the native side — see `createNativeBridgeApi`'s
+ * module doc for why each needs more than a like-for-like shim).
+ */
+export interface BridgeApiLike {
+  /** The one generic escape hatch UI still uses directly (permission/plan/
+   *  question cards) — every real call site sends `permission-res`,
+   *  `keypress`, or `question-input`, each with its own `Intent` already. */
+  send(machinePubkey: string, msg: PhoneToBridgeMessage): Promise<boolean>;
+  createSession(
+    machine: string,
+    opts?: Omit<CreateSessionMessage, 'type' | 'v' | 'caps'>,
+  ): Promise<boolean>;
+  refreshSessions(machine: string): Promise<boolean>;
+  closeSession(machine: string, sessionId: string): Promise<boolean>;
+  interrupt(machine: string, sessionId: string): Promise<boolean>;
+  permissionResponse(
+    machine: string,
+    sessionId: string,
+    requestId: string,
+    allow: boolean,
+    modifier?: 'always' | 'never',
+  ): Promise<boolean>;
+  keypress(
+    machine: string,
+    sessionId: string,
+    key: string,
+    context?: 'plan-approval' | 'question',
+  ): Promise<boolean>;
+  questionInput(machine: string, sessionId: string, text: string, optionCount: number): Promise<boolean>;
+  modeChange(machine: string, sessionId: string, mode: PermissionMode): Promise<boolean>;
+  effortChange(machine: string, sessionId: string, level: EffortLevel): Promise<boolean>;
+  modelChange(machine: string, sessionId: string, model: string): Promise<boolean>;
+  usageRequest(machine: string, sessionId: string): Promise<boolean>;
+  gsdRequest(machine: string, sessionId: string): Promise<boolean>;
+  modelsRequest(machine: string): Promise<boolean>;
+  setCredentials(
+    machine: string,
+    creds: { anthropicApiKey?: string | null; githubPat?: string | null },
+  ): Promise<boolean>;
+  setProviderProfile(
+    machine: string,
+    profileId: string,
+    profile: SetProviderProfileMessage['profile'],
+  ): Promise<boolean>;
+  requestProviderProfiles(machine: string): Promise<boolean>;
+  setDeviceConfig(machine: string, config: DeviceConfig): Promise<boolean>;
+  /** Correlated request/response (folder-ack) — no Rust Intent or CoreEvent
+   *  exists for this yet (a real gap, not an oversight this file papers
+   *  over). `createNativeBridgeApi` rejects rather than pretending to
+   *  support it. */
+  createFolder(
+    machine: string,
+    path: string,
+    root?: string,
+    timeoutMs?: number,
+  ): Promise<FolderAckMessage>;
+  /** Image upload's two-stage shape (blossom-first, chunk-fallback) is
+   *  entirely re-implemented as ONE step inside `Intent::SendSessionImage`
+   *  Rust-side — these two callbacks cannot be shimmed like-for-like without
+   *  either double-uploading or silently no-op'ing the fallback callers
+   *  expect to be able to invoke independently. `createNativeBridgeApi`
+   *  rejects both; the native call site needs its own
+   *  `dispatch({ sendSessionImage })` path, not a drop-in replacement here. */
+  uploadImageBlossom(
+    machine: string,
+    payload: Omit<Extract<UploadImageMessage, { hash: string }>, 'type' | 'v' | 'caps'>,
+    opts?: PublishConfirmOptions,
+  ): Promise<PublishResult>;
+  uploadImageChunk(
+    machine: string,
+    payload: Omit<Extract<UploadImageMessage, { chunkIndex: number }>, 'type' | 'v' | 'caps'>,
+    opts?: PublishConfirmOptions,
+  ): Promise<PublishResult>;
+}
+
 const INVALID_RECORDS_CAP = 100;
 const FOLDER_ACK_TIMEOUT_MS = 15_000;
 
-export class BridgeApi {
+export class BridgeApi implements BridgeApiLike {
   readonly diagnostics: BridgeApiDiagnostics = {
     decryptFailures: 0,
     decodeFailures: 0,
