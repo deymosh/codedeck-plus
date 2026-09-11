@@ -20,8 +20,9 @@ pub struct SignedEvent {
 }
 
 impl SignedEvent {
-    /// Flatten a fully built `nostr::Event`.
-    pub(crate) fn from_nostr(event: &nostr::Event) -> Self {
+    /// Flatten a fully built `nostr::Event`. `pub` so `client-runtime` can wrap
+    /// the NIP-17 / Marmot gift-wrap events it builds with the `nostr` crate.
+    pub fn from_nostr(event: &nostr::Event) -> Self {
         Self {
             id: event.id.to_hex(),
             pubkey: event.pubkey.to_hex(),

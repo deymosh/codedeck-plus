@@ -25,7 +25,8 @@ tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 url = "2"
 # Inbound event parse + signature verification only (same version as client-core).
-nostr = { version = "0.44", default-features = false, features = ["std"] }
+# std for parse/verify; nip44 + nip59 for the NIP-17 DM gift-wrap path.
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44", "nip59"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util"] }
