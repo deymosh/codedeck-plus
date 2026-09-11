@@ -26,6 +26,7 @@ function fakeMachines(lastHeartbeatAt: number | null): MachinesStore {
             capabilities: [],
             folders: [],
             roots: [],
+            protocolVersion: null,
             machineOffline: false,
             lastHeartbeatAt,
             sessions: {},

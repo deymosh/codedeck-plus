@@ -160,17 +160,17 @@ export function fakeNativeCore(
   // about the selection and stomps it back to its old value.
   const echoSelection = (intent: Intent): void => {
     if (typeof intent !== 'object') return;
-    if ('selectSession' in intent) {
+    if (intent.selectSession) {
       setViewInternal('ui', {
         ...views.ui,
         selectedMachine: intent.selectSession.machine,
         selectedSession: intent.selectSession.sessionId,
         panelMode: 'session',
       });
-    } else if ('selectDmPeer' in intent) {
+    } else if (intent.selectDmPeer) {
       setViewInternal('ui', { ...views.ui, activeDmPeer: intent.selectDmPeer.peer, panelMode: 'dm' });
       if (views.dm) setViewInternal('dm', { ...views.dm, activePeer: intent.selectDmPeer.peer });
-    } else if ('selectMarmotGroup' in intent) {
+    } else if (intent.selectMarmotGroup) {
       setViewInternal('ui', {
         ...views.ui,
         activeMarmotGroup: intent.selectMarmotGroup.groupId,

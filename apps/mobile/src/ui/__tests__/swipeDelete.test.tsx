@@ -40,7 +40,9 @@ async function makeCore(): Promise<{ phone: PhoneCore; fake: Awaited<ReturnType<
           capabilities: [],
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {
             s1: {
               info: {
@@ -67,7 +69,7 @@ async function makeCore(): Promise<{ phone: PhoneCore; fake: Awaited<ReturnType<
   const machineView = fake.views.machines.machines[MACHINE]!;
   const savedSession = machineView.sessions['s1']!;
   fake.onDispatch((intent) => {
-    if (typeof intent === 'object' && 'deleteSession' in intent) {
+    if (typeof intent === 'object' && intent.deleteSession) {
       const { sessionId, label } = intent.deleteSession;
       const { [sessionId]: _removed, ...rest } = machineView.sessions;
       fake.setView('machines', {

@@ -213,14 +213,16 @@ async function makeCore() {
           capabilities: [],
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {},
         },
       },
     },
   });
   fake.onDispatch((intent) => {
-    if (typeof intent === 'object' && 'sendInput' in intent) {
+    if (typeof intent === 'object' && intent.sendInput) {
       fake.setView('outbox', { items: [...fake.views.outbox.items, pendingItem(intent.sendInput)] });
     }
   });

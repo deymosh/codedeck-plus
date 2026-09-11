@@ -26,7 +26,7 @@ import { createStore } from 'zustand/vanilla';
 import { hexFromNpub } from '../crypto';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { Intent, PairingCandidateView } from '../nativeCoreTypes';
-import type { ParsedPairingUrl, PairingCandidate, PairingStore, PairingStoreState } from './pairing';
+import type { ParsedPairingUrl, PairingCandidate, PairingPhase, PairingStore, PairingStoreState } from './pairing';
 
 function buildPairingUrl(parts: ParsedPairingUrl): string {
   const relaysParam = parts.relays.map((r) => encodeURIComponent(r)).join(',');
@@ -61,7 +61,11 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
         if (!view) return;
         if (!view.hasStaged) stagedCache = null;
         set({
-          phase: view.phase,
+          // `PairingView.phase` crosses the wire as a plain Rust `&'static
+          // str`, not a literal-union type (specta has no way to see the
+          // closed set `Core::phase_str` actually emits) — same trust the
+          // hand-written type placed in this value before generation existed.
+          phase: view.phase as PairingPhase,
           candidate: toCandidate(view.candidate),
           error: view.error,
           timedOut: view.timedOut,
@@ -74,7 +78,7 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'pairing') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'pairing') {
           void refresh();
         }
       })

@@ -36,7 +36,9 @@ const machine = (pubkeyHex: string, name: string, sessions: RemoteSessionInfo[])
   capabilities: [],
   folders: [],
   roots: [],
+  protocolVersion: null,
   machineOffline: false,
+  lastHeartbeatAt: null,
   sessions: Object.fromEntries(
     sessions.map((info) => [info.id, { info, presence: 'live' as const, lastListedAt: 0 }]),
   ),

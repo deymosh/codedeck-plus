@@ -81,7 +81,7 @@ export function createNativeDmStore(deps: NativeDmStoreDeps): DmStore {
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'dm') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'dm') {
           void refresh();
         }
       })

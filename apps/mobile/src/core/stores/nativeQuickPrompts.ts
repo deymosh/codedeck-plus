@@ -37,7 +37,7 @@ export function createNativeQuickPromptsStore(deps: NativeQuickPromptsStoreDeps)
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'quickPrompts') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'quickPrompts') {
           void refresh();
         }
       })

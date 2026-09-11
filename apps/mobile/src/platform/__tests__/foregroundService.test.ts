@@ -73,7 +73,7 @@ function fakeNativeCore(stayConnected: boolean) {
     },
     onActionFailed: () => Promise.reject(new Error('unused')),
     dispatch: (intent) => {
-      if (typeof intent === 'object' && 'setStayConnected' in intent) {
+      if (typeof intent === 'object' && intent.setStayConnected !== undefined) {
         settings = { ...settings, stayConnected: intent.setStayConnected };
         onEventCb?.({ stateChanged: { slice: 'settings' } });
       }

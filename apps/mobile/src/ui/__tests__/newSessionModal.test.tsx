@@ -34,6 +34,7 @@ function baseMachine(capabilities: string[] = []): MachineView {
     capabilities,
     folders: ['proj-a', 'proj-b'],
     roots: [],
+    protocolVersion: null,
     machineOffline: false,
     lastHeartbeatAt: 1,
     sessions: {},

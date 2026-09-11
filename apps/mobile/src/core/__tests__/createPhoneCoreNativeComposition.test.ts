@@ -176,7 +176,9 @@ describe('createPhoneCoreNative', () => {
           capabilities: [],
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {
             s1: { info: {} as never, presence: 'live', lastListedAt: 0 },
             s2: { info: {} as never, presence: 'live', lastListedAt: 0 },

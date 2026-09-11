@@ -51,7 +51,7 @@ function wireMarmot(fake: FakeNativeCore, opts: { acceptSucceeds?: boolean } = {
   fake.onDispatch((intent) => {
     if (typeof intent !== 'object') return;
     const view = fake.views.marmot ?? emptyMarmotView();
-    if ('acceptMarmotWelcome' in intent && acceptSucceeds) {
+    if (intent.acceptMarmotWelcome && acceptSucceeds) {
       const { welcomeId } = intent.acceptMarmotWelcome;
       const welcome = view.pendingWelcomes[welcomeId];
       if (!welcome) return;
@@ -73,14 +73,14 @@ function wireMarmot(fake: FakeNativeCore, opts: { acceptSucceeds?: boolean } = {
           },
         ],
       });
-    } else if ('selectMarmotGroup' in intent) {
+    } else if (intent.selectMarmotGroup) {
       const { groupId } = intent.selectMarmotGroup;
       if (!groupId) return;
       fake.setView('marmot', {
         ...view,
         conversations: view.conversations.map((c) => (c.groupId === groupId ? { ...c, unreadCount: 0 } : c)),
       });
-    } else if ('sendMarmotMessage' in intent) {
+    } else if (intent.sendMarmotMessage) {
       const { groupId, text } = intent.sendMarmotMessage;
       const existing = view.messages[groupId] ?? [];
       fake.setView('marmot', {

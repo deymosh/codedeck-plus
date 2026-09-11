@@ -106,7 +106,9 @@ async function makeSessionCore(
     capabilities: [],
     folders: [],
     roots: [],
+    protocolVersion: null,
     machineOffline: false,
+    lastHeartbeatAt: null,
     sessions: {
       's-new': {
         info: sessionInfo('s-new', { lastActivity: '2026-08-08T11:00:00.000Z', ...sessionOverrides['s-new'] }),
@@ -150,7 +152,7 @@ async function makeSessionCore(
   // selectSession's own optimistic set + dispatch clears the target
   // session's unread mark Rust-side — scripted here, see module doc.
   fake.onDispatch((intent) => {
-    if (typeof intent === 'object' && 'selectSession' in intent) {
+    if (typeof intent === 'object' && intent.selectSession) {
       const { sessionId } = intent.selectSession;
       fake.setView('ui', {
         ...fake.views.ui,
@@ -306,7 +308,7 @@ describe('DM swipe carousel (wrap)', () => {
       },
     });
     fake.onDispatch((intent) => {
-      if (typeof intent === 'object' && 'selectDmPeer' in intent) {
+      if (typeof intent === 'object' && intent.selectDmPeer) {
         fake.setView('dm', { ...fake.views.dm!, activePeer: intent.selectDmPeer.peer });
       }
     });

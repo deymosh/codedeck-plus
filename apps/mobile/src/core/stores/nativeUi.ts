@@ -41,11 +41,27 @@ import { createStore } from 'zustand/vanilla';
 import { sessionKeyOf } from './ui';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { UiView as NativeUiView } from '../nativeCoreTypes';
-import type { UiStore, UiStoreState } from './ui';
+import type { CredentialsAckState, DeviceConfigAckState, ProviderProfileAckState, UiStore, UiStoreState } from './ui';
 
 function toSetRecord(record: Record<string, string[]>): Record<string, ReadonlySet<string>> {
   const out: Record<string, ReadonlySet<string>> = {};
   for (const [key, values] of Object.entries(record)) out[key] = new Set(values);
+  return out;
+}
+
+/** Ack-status maps carry several skip_serializing_if fields — specta types
+ *  them conservatively as `T | null`, but they're only ever actually
+ *  omitted on the wire; `./ui.ts`'s shapes predate that and spell "no
+ *  value" as `undefined` only. The cast at the return is the one place that
+ *  trusts this: the loop body genuinely never leaves a `null` in the
+ *  result, it just isn't a shape TS can infer field-by-field generically. */
+function nullsToUndefinedRecord<U extends object>(record: Record<string, object>): Record<string, U> {
+  const out: Record<string, U> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const clean = {} as U;
+    for (const [k, v] of Object.entries(value)) (clean as Record<string, unknown>)[k] = v === null ? undefined : v;
+    out[key] = clean;
+  }
   return out;
 }
 
@@ -59,9 +75,9 @@ function applyView(view: NativeUiView): Partial<UiStoreState> {
     unreadSessions: new Set(view.unreadSessions),
     respondedCards: toSetRecord(view.respondedCards),
     planApprovalChoices: view.planApprovalChoices,
-    credentialsStatus: view.credentialsStatus,
-    deviceConfigStatus: view.deviceConfigStatus,
-    providerProfileStatus: view.providerProfileStatus,
+    credentialsStatus: nullsToUndefinedRecord<CredentialsAckState>(view.credentialsStatus),
+    deviceConfigStatus: nullsToUndefinedRecord<DeviceConfigAckState>(view.deviceConfigStatus),
+    providerProfileStatus: nullsToUndefinedRecord<ProviderProfileAckState>(view.providerProfileStatus),
     undoToast: view.undoToast,
   };
 }
@@ -84,7 +100,7 @@ export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'ui') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'ui') {
           void refresh();
         }
       })

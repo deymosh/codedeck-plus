@@ -28,22 +28,37 @@ import type { NativeCore } from '../../platform/nativeCore';
 import type { MachineView as NativeMachineView, MachinesView as NativeMachinesView } from '../nativeCoreTypes';
 import type { MachineView, MachinesStore, MachinesStoreState, SessionView } from './machines';
 
+/** `protocol`'s `skip_serializing_if` fields specta types conservatively as
+ *  `T | null | undefined` (both "may be omitted" and "may be Option::None"),
+ *  even though this app's own skip-if fields only ever take the omitted
+ *  form. `./machines.ts`'s pre-migration shape spells "no value" as
+ *  `undefined` only — this normalizes at the one seam that matters, rather
+ *  than widening every domain-store field to also accept `null`. The cast at
+ *  the return is the one place that trusts this: the loop body genuinely
+ *  never leaves a `null` in the result, it just isn't a shape TS can infer
+ *  field-by-field generically. */
+function nullsToUndefined<U extends object>(obj: object): U {
+  const out = {} as U;
+  for (const [k, v] of Object.entries(obj)) (out as Record<string, unknown>)[k] = v === null ? undefined : v;
+  return out;
+}
+
 function toMachineView(view: NativeMachineView): MachineView {
   const sessions: Record<string, SessionView> = {};
   for (const [id, s] of Object.entries(view.sessions)) {
     sessions[id] = {
-      info: s.info,
+      info: nullsToUndefined<SessionView['info']>(s.info),
       presence: s.presence,
       lastListedAt: s.lastListedAt,
-      ...(s.usage !== undefined ? { usage: s.usage } : {}),
-      ...(s.gsd !== undefined ? { gsd: s.gsd } : {}),
+      ...(s.usage != null ? { usage: nullsToUndefined<NonNullable<SessionView['usage']>>(s.usage) } : {}),
+      ...(s.gsd != null ? { gsd: nullsToUndefined<NonNullable<SessionView['gsd']>>(s.gsd) } : {}),
     };
   }
   return {
     pubkeyHex: view.pubkeyHex,
     name: view.name,
-    ...(view.host !== undefined ? { host: view.host } : {}),
-    ...(view.label !== undefined ? { label: view.label } : {}),
+    ...(view.host != null ? { host: view.host } : {}),
+    ...(view.label != null ? { label: view.label } : {}),
     capabilities: view.capabilities,
     folders: view.folders,
     roots: view.roots,
@@ -55,10 +70,18 @@ function toMachineView(view: NativeMachineView): MachineView {
     machineOffline: view.machineOffline,
     lastHeartbeatAt: view.lastHeartbeatAt ?? null,
     sessions,
-    ...(view.models !== undefined ? { models: view.models } : {}),
-    ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
-    ...(view.modelsError !== undefined ? { modelsError: view.modelsError } : {}),
-    ...(view.providerProfiles !== undefined ? { providerProfiles: view.providerProfiles } : {}),
+    ...(view.models != null
+      ? { models: view.models.map((m) => nullsToUndefined<NonNullable<MachineView['models']>[number]>(m)) }
+      : {}),
+    ...(view.defaultModel != null ? { defaultModel: view.defaultModel } : {}),
+    ...(view.modelsError != null ? { modelsError: view.modelsError } : {}),
+    ...(view.providerProfiles != null
+      ? {
+          providerProfiles: view.providerProfiles.map((p) =>
+            nullsToUndefined<NonNullable<MachineView['providerProfiles']>[number]>(p),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -86,7 +109,7 @@ export function createNativeMachinesStore(deps: NativeMachinesStoreDeps): Machin
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'machines') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'machines') {
           void refresh();
         }
       })

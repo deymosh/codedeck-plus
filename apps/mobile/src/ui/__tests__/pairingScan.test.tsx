@@ -40,7 +40,7 @@ async function makeCore() {
   // candidate the assertions below can check — same shape a real
   // `Intent::BeginPairing`/`BeginManualPairing` acceptance would produce.
   fake.onDispatch((intent) => {
-    if (typeof intent === 'object' && 'beginPairing' in intent) {
+    if (typeof intent === 'object' && intent.beginPairing) {
       const url = new URL(intent.beginPairing.url.replace('codedeck://pair', 'https://pair'));
       fake.setView('pairing', {
         phase: 'awaiting-ack',
@@ -54,7 +54,7 @@ async function makeCore() {
         timedOut: false,
         hasStaged: false,
       });
-    } else if (typeof intent === 'object' && 'beginManualPairing' in intent) {
+    } else if (typeof intent === 'object' && intent.beginManualPairing) {
       fake.setView('pairing', {
         phase: 'awaiting-ack',
         candidate: { pubkeyHex: '', npub: intent.beginManualPairing.npub, machine: '', relays: [] },

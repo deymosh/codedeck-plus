@@ -44,7 +44,9 @@ function machineWithRoots(roots: string[], folders: string[]): MachineView {
     capabilities: [],
     folders,
     roots,
+    protocolVersion: null,
     machineOffline: false,
+    lastHeartbeatAt: null,
     sessions: {},
   };
 }

@@ -16,7 +16,7 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
-import type { CredentialsAckState, DeviceConfigAckState } from '../../core/nativeCoreTypes';
+import type { CredentialsAck, DeviceConfigAck } from '../../core/nativeCoreTypes';
 import { generateKeypair, type Keypair } from '../../core/crypto';
 import { PhoneCoreProvider } from '../coreContext';
 import { MachineCredentials } from '../screens/MachineCredentials';
@@ -34,7 +34,9 @@ async function makeCore(machine: Keypair) {
           capabilities: [],
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {},
         },
       },
@@ -63,7 +65,7 @@ describe('MachineCredentials UI', () => {
     });
 
     // The bridge answers; the Router folds the ack into UiView — seeded here.
-    const acked: CredentialsAckState = {
+    const acked: CredentialsAck = {
       state: 'saved',
       at: Date.now(),
       hasAnthropicKey: true,
@@ -108,21 +110,21 @@ describe('MachineCredentials UI', () => {
     );
     fireEvent.click(screen.getByText('Machine credentials…'));
 
-    const failedCreds: CredentialsAckState = { state: 'failed', at: Date.now(), error: 'disk full' };
+    const failedCreds: CredentialsAck = { state: 'failed', at: Date.now(), error: 'disk full' };
     await act(async () => {
       fake.setView('ui', { ...fake.views.ui, credentialsStatus: { [machine.pubkeyHex]: failedCreds } });
       await tick();
     });
     expect((await screen.findByTestId('credentials-status')).textContent).toContain('disk full');
 
-    const savedConfig: DeviceConfigAckState = { state: 'saved', at: Date.now() };
+    const savedConfig: DeviceConfigAck = { state: 'saved', at: Date.now() };
     await act(async () => {
       fake.setView('ui', { ...fake.views.ui, deviceConfigStatus: { [machine.pubkeyHex]: savedConfig } });
       await tick();
     });
     expect(core.ui.getState().deviceConfigStatus[machine.pubkeyHex]?.state).toBe('saved');
 
-    const failedConfig: DeviceConfigAckState = { state: 'failed', at: Date.now(), error: 'no roster' };
+    const failedConfig: DeviceConfigAck = { state: 'failed', at: Date.now(), error: 'no roster' };
     await act(async () => {
       fake.setView('ui', { ...fake.views.ui, deviceConfigStatus: { [machine.pubkeyHex]: failedConfig } });
       await tick();

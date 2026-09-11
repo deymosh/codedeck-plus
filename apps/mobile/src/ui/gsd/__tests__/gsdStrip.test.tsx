@@ -65,7 +65,9 @@ async function makeCore(gsd: GsdState | null, state?: RemoteSessionInfo['state']
           capabilities: [],
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {
             [SESSION]: {
               info: sessionInfo(state),

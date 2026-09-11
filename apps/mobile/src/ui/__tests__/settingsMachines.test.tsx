@@ -25,7 +25,9 @@ function machine(pubkeyHex: string, name: string, host: MachineView['host']): Ma
     capabilities: [],
     folders: [],
     roots: [],
+    protocolVersion: null,
     machineOffline: false,
+    lastHeartbeatAt: null,
     sessions: {},
   };
 }
@@ -37,7 +39,7 @@ async function makeCore(machines: MachineView[] = [machine(MACHINE, 'laptop', 'v
   // `Intent::RemoveMachine` drops it from the view Rust-side — see that
   // intent's own tests for the full cascade (sessions, transcripts, unread).
   fake.onDispatch((intent) => {
-    if (typeof intent === 'object' && 'removeMachine' in intent) {
+    if (typeof intent === 'object' && intent.removeMachine) {
       const { [intent.removeMachine.pubkeyHex]: _removed, ...rest } = fake.views.machines.machines;
       fake.setView('machines', { machines: rest });
     }

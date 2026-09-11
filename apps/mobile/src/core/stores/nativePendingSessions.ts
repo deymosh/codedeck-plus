@@ -30,7 +30,15 @@ export function createNativePendingSessionsStore(deps: NativePendingSessionsStor
     const refresh = async (): Promise<void> => {
       try {
         const view = await deps.core.pendingSessionsView();
-        set({ pending: view.pending });
+        // `reason` is a skip_serializing_if field — specta types it
+        // conservatively as `string | null`, but it's only ever actually
+        // omitted on the wire; `./pendingSessions.ts`'s shape predates that
+        // and spells "no reason" as `undefined` only.
+        const pending: PendingSessionsStoreState['pending'] = {};
+        for (const [id, p] of Object.entries(view.pending)) {
+          pending[id] = { ...p, ...(p.reason != null ? { reason: p.reason } : { reason: undefined }) };
+        }
+        set({ pending });
       } catch (err) {
         deps.log?.(`[nativePendingSessions] view refresh failed: ${err}`);
       }
@@ -38,7 +46,7 @@ export function createNativePendingSessionsStore(deps: NativePendingSessionsStor
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'pendingSessions') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'pendingSessions') {
           void refresh();
         }
       })

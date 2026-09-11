@@ -52,7 +52,9 @@ async function makeCore(
           capabilities: [],
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {
             s1: {
               info: {

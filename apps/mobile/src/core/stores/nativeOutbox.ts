@@ -66,7 +66,7 @@ export function createNativeOutboxStore(deps: NativeOutboxStoreDeps): OutboxStor
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'outbox') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'outbox') {
           void refresh();
         }
       })

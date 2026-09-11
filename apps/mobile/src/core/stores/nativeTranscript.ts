@@ -45,7 +45,22 @@ function toSessionTranscript(
   view: NativeTranscriptRowsView,
 ): SessionTranscript {
   const entries: SessionTranscript['entries'] = {};
-  for (const row of view.rows) entries[row.seq] = row.entry;
+  // `diff` is a skip_serializing_if field — specta types it conservatively
+  // as `DiffData | null`, but it's only ever actually omitted on the wire;
+  // `@codedeck/protocol`'s `OutputEntry` predates that and spells "no diff"
+  // as `undefined` only.
+  for (const row of view.rows) {
+    const diff = row.entry.diff;
+    entries[row.seq] = {
+      ...row.entry,
+      diff: diff ? { ...diff, truncated: diff.truncated ?? undefined } : undefined,
+      // `metadata` is genuinely-untyped JSON (see `crates/protocol/src/
+      // common.rs`'s specta override) — `unknown` on the Rust-generated
+      // side, `Record<string, unknown> | undefined` on this pre-migration
+      // one; both mean "caller must narrow before use."
+      metadata: row.entry.metadata as Record<string, unknown> | undefined,
+    };
+  }
   return {
     machine,
     sessionId,
@@ -85,7 +100,7 @@ export function createNativeTranscriptStore(deps: NativeTranscriptStoreDeps): Tr
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'transcriptAppended' in event) {
+        if (typeof event === 'object' && event.transcriptAppended) {
           const { machine, sessionId } = event.transcriptAppended;
           void fetchAndCache(machine, sessionId);
         }

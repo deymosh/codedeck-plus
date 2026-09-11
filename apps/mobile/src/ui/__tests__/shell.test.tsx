@@ -90,7 +90,9 @@ async function makeCoreAndFake(opts: MakeCoreOpts = {}) {
     capabilities: [],
     folders: [],
     roots: [],
+    protocolVersion: null,
     machineOffline: false,
+    lastHeartbeatAt: null,
     sessions: Object.fromEntries(
       Object.entries(sessions).map(([id, info]) => [id, { info, presence: 'live' as const, lastListedAt: 0 }]),
     ),
@@ -188,7 +190,7 @@ describe('Sidebar', () => {
     // for that behaviour) — scripted here per nativeCoreFixture.ts's module
     // doc, so this test only proves the UI reacts once the view says so.
     fake.onDispatch((intent) => {
-      if (typeof intent === 'object' && 'selectSession' in intent) {
+      if (typeof intent === 'object' && intent.selectSession) {
         fake.setView('ui', {
           ...fake.views.ui,
           unreadSessions: fake.views.ui.unreadSessions.filter((k) => k !== `${MACHINE} s1`),
@@ -248,7 +250,7 @@ describe('Sidebar', () => {
     };
     const { phone: core, fake } = await makeCoreAndFake({ pending });
     fake.onDispatch((intent) => {
-      if (typeof intent === 'object' && 'dismissPendingSession' in intent) {
+      if (typeof intent === 'object' && intent.dismissPendingSession) {
         const { [intent.dismissPendingSession.pendingId]: _dismissed, ...rest } = fake.views.pendingSessions.pending;
         fake.setView('pendingSessions', { pending: rest });
       }

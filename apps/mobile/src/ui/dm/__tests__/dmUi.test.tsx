@@ -37,7 +37,7 @@ function emptyDmView(): DmView {
 function wireDm(fake: FakeNativeCore): void {
   fake.onDispatch((intent) => {
     if (typeof intent !== 'object') return;
-    if ('startDmConversation' in intent) {
+    if (intent.startDmConversation) {
       const peer = parsePeerInput(intent.startDmConversation.peerInput);
       if (!peer) return;
       const view = fake.views.dm ?? emptyDmView();
@@ -49,7 +49,7 @@ function wireDm(fake: FakeNativeCore): void {
           { peerPubkey: peer, protocol: 'nip17', lastMessageAt: Date.now(), unreadCount: 0, lastPreview: '' },
         ],
       });
-    } else if ('selectDmPeer' in intent) {
+    } else if (intent.selectDmPeer) {
       const { peer } = intent.selectDmPeer;
       const view = fake.views.dm ?? emptyDmView();
       if (!peer || !(peer in Object.fromEntries(view.conversations.map((c) => [c.peerPubkey, c])))) return;

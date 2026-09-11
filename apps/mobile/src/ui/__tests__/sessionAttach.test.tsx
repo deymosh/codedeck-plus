@@ -73,7 +73,9 @@ async function makeCore(capabilities: string[]): Promise<PhoneCore> {
           capabilities,
           folders: [],
           roots: [],
+          protocolVersion: null,
           machineOffline: false,
+          lastHeartbeatAt: null,
           sessions: {
             s1: {
               info: {

@@ -68,7 +68,9 @@ function machineWith(permissionMode: RemoteSessionInfo['permissionMode']): Machi
     capabilities: [],
     folders: [],
     roots: [],
+    protocolVersion: null,
     machineOffline: false,
+    lastHeartbeatAt: null,
     sessions: { s1: { info: sessionInfo(permissionMode), presence: 'live', lastListedAt: 0 } },
   };
 }

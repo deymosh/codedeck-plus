@@ -76,7 +76,7 @@ export function createNativeMarmotStore(deps: NativeMarmotStoreDeps): MarmotStor
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'marmot') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'marmot') {
           void refresh();
         }
       })

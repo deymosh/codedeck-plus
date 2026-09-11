@@ -15,12 +15,16 @@ import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { SettingsView as NativeSettingsView } from '../nativeCoreTypes';
 import type { SettingsData, SettingsStore, SettingsStoreState } from './settings';
-import { defaultSettings } from './settings';
+import { defaultSettings, UI_SCALE_DEFAULT } from './settings';
 
 function toSettingsData(view: NativeSettingsView): SettingsData {
   return {
     relays: view.relays,
-    uiScale: view.uiScale,
+    // `f64` serializes as `null` on the wire for NaN/Infinity, so specta
+    // types every plain (non-`Option`) float as nullable — `clamp_ui_scale`
+    // (Rust) already guarantees a real, in-range value here, but the
+    // fallback keeps this store honest against the wire schema regardless.
+    uiScale: view.uiScale ?? UI_SCALE_DEFAULT,
     stayConnected: view.stayConnected,
     torProxyEnabled: view.torProxyEnabled,
     meshTestTarget: view.meshTestTarget,
@@ -55,7 +59,7 @@ export function createNativeSettingsStore(deps: NativeSettingsStoreDeps): Settin
 
     void deps.core
       .onCoreEvent((event) => {
-        if (typeof event === 'object' && 'stateChanged' in event && event.stateChanged.slice === 'settings') {
+        if (typeof event === 'object' && event.stateChanged?.slice === 'settings') {
           void refresh();
         }
       })

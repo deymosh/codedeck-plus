@@ -51,7 +51,7 @@ function emptyDmView(): DmView {
 function wireSend(fake: FakeNativeCore): void {
   let seq = 0;
   fake.onDispatch((intent) => {
-    if (typeof intent !== 'object' || !('sendDm' in intent)) return;
+    if (typeof intent !== 'object' || !intent.sendDm) return;
     const { peer, text } = intent.sendDm;
     const view = fake.views.dm ?? emptyDmView();
     const msg: DmMessage = {

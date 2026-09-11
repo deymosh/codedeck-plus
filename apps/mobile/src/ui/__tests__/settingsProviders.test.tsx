@@ -57,6 +57,7 @@ function baseMachine(withCap: boolean, profiles: ProviderProfileInfo[] | undefin
     capabilities: withCap ? [CAPABILITIES.customProviders] : [],
     folders: [],
     roots: [],
+    protocolVersion: null,
     machineOffline: false,
     lastHeartbeatAt: heartbeatAt,
     sessions: {},
