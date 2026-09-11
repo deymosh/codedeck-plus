@@ -14,6 +14,7 @@ pub mod deadline;
 pub mod dispatch;
 pub mod giftwrap;
 pub mod intent;
+pub mod marmot;
 pub mod nostr_client;
 pub mod ports;
 pub mod stores;

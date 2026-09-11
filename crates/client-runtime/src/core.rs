@@ -164,6 +164,9 @@ pub struct CorePorts {
     /// Blossom image upload/download. `NoHttpFetch` until the platform binds
     /// real networking.
     pub http: Rc<dyn crate::attachments::HttpFetch>,
+    /// The MDK / MLS engine. `NoMarmot` until the engine is relocated into this
+    /// crate — Marmot chats are unavailable, NIP-17 only, until then.
+    pub marmot: Rc<dyn crate::marmot::MarmotEngine>,
 }
 
 impl Default for CorePorts {
@@ -173,6 +176,7 @@ impl Default for CorePorts {
             transcript_store: Rc::new(MemoryTranscriptStore::new()),
             notifier: Rc::new(NullNotifier),
             http: Rc::new(crate::attachments::NoHttpFetch),
+            marmot: Rc::new(crate::marmot::NoMarmot),
         }
     }
 }
@@ -270,6 +274,7 @@ impl Core {
             transcript_store: ports.transcript_store,
             notifier: ports.notifier,
             http: ports.http,
+            marmot_engine: ports.marmot,
         };
         tokio::task::spawn_local(event_loop.run(rx));
         Self { tx }
@@ -514,6 +519,11 @@ struct Loop {
     transcript_store: Rc<dyn TranscriptStore>,
     notifier: Rc<dyn Notifier>,
     http: Rc<dyn crate::attachments::HttpFetch>,
+    /// Reserved for the Marmot runtime — inert (`NoMarmot`) until the MDK
+    /// engine is relocated into this crate and `on_dm_event` routes kind-444
+    /// welcomes to it (needs `NostrEvent` to carry the raw event JSON first).
+    #[allow(dead_code)]
+    marmot_engine: Rc<dyn crate::marmot::MarmotEngine>,
 }
 
 impl Loop {
