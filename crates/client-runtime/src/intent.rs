@@ -3,14 +3,17 @@
 //! sign+publish, stores to persist, and the transport-affecting effects
 //! (`resubscribe`, a new relay list, a Tor toggle).
 //!
-//! This slice covers the session-interaction commands and the pure store
-//! actions. `SendInput`, `RetryOutboxItem`, `DeleteSession` / `UndoDelete`,
-//! `BeginPairing` and `UploadImage` need the outbox lifecycle / timers /
-//! transport and land with the loop integration.
+//! Covers the session-interaction commands, the pure store actions, the outbox
+//! send/retry lifecycle, the optimistic delete + undo, and the pairing flow.
+//! `UploadImage` (Blossom + `aes-gcm`) still lands with the DM-attachment work.
 
+use client_core::delete_controller::DeleteEffect;
 use client_core::stores::outbox::OutboxState;
+use client_core::stores::pairing::{
+    parse_manual_pair, parse_pairing_url, pairing_reducer, PairingEvent, PAIR_ACK_TIMEOUT_MS,
+};
 use client_core::stores::settings::SettingsEffect;
-use client_core::stores::ui::UiEffect;
+use client_core::stores::ui::{UiEffect, UndoToast};
 use client_core::wire::commands::{
     BareMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext, KeypressMsg,
     ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg, PhoneToBridge,
@@ -18,8 +21,15 @@ use client_core::wire::commands::{
 };
 use client_core::wire::common::{EffortLevel, PermissionMode};
 
-use crate::dispatch::{Send, StoreId};
+use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
 use crate::stores::CoreStores;
+
+/// Arm / clear the delete-controller's 4 s undo timer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoTimer {
+    Arm { ms: u64 },
+    Clear,
+}
 
 /// A send whose publish outcome must settle an outbox item.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +62,14 @@ pub struct IntentResult {
     /// A `send` whose publish outcome settles an outbox item (`SendInput` /
     /// `RetryOutboxItem`).
     pub outbox_send: Option<OutboxSend>,
+    /// Arm / clear the CDX-040 pair-ack deadline.
+    pub pair_deadline: Option<PairDeadline>,
+    /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
+    pub pairing_settled: Option<bool>,
+    /// CDX-028 one-QR mesh join.
+    pub mesh_join: Option<(String, String)>,
+    /// Arm / clear the delete-controller undo timer.
+    pub undo_timer: Option<UndoTimer>,
 }
 
 impl IntentResult {
@@ -85,6 +103,37 @@ pub enum Intent {
         machine: String,
         id: String,
     },
+
+    // --- optimistic delete (4 s undo) ---
+    DeleteSession {
+        machine: String,
+        session_id: String,
+        /// Undo-toast label; falls back to the session title / slug.
+        label: Option<String>,
+    },
+    UndoDelete,
+
+    // --- pairing (CDX-013 / 040 / 041 / 028) ---
+    /// Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
+    BeginPairing {
+        url: String,
+        label: String,
+    },
+    /// Manual npub + token fallback.
+    BeginManualPairing {
+        npub: String,
+        token: String,
+        label: String,
+    },
+    /// CDX-013: stage a deep-link URL for explicit confirmation.
+    StagePairing {
+        url: String,
+    },
+    ConfirmStagedPairing {
+        label: String,
+    },
+    DismissStagedPairing,
+    ResetPairing,
 
     // --- session commands ---
     RespondPermission {
@@ -191,7 +240,12 @@ pub enum Intent {
     },
 }
 
-pub fn apply(stores: &mut CoreStores, intent: Intent, ctx: IntentCtx) -> IntentResult {
+pub fn apply(
+    stores: &mut CoreStores,
+    intent: Intent,
+    identity: &client_core::crypto::Keypair,
+    ctx: IntentCtx,
+) -> IntentResult {
     let mut r = IntentResult::default();
     let v = VersionFields::default;
     match intent {
@@ -241,6 +295,46 @@ pub fn apply(stores: &mut CoreStores, intent: Intent, ctx: IntentCtx) -> IntentR
                 });
             }
         }
+
+        Intent::DeleteSession {
+            machine,
+            session_id,
+            label,
+        } => {
+            let snapshot = stores.machines.session(&machine, &session_id).cloned();
+            let effects = stores.delete_controller.request_delete(
+                &machine,
+                &session_id,
+                snapshot,
+                label.as_deref(),
+                ctx.now,
+            );
+            apply_delete_effects(stores, effects, &mut r);
+        }
+        Intent::UndoDelete => {
+            let effects = stores.delete_controller.undo();
+            apply_delete_effects(stores, effects, &mut r);
+        }
+
+        Intent::BeginPairing { url, label } => match parse_pairing_url(&url) {
+            Ok(parts) => begin_pairing(stores, identity, PairingEvent::BeginPair { parts, label }, &mut r),
+            Err(_) => stores.pairing.error = Some("invalid pairing URL".to_string()),
+        },
+        Intent::BeginManualPairing { npub, token, label } => match parse_manual_pair(&npub, &token) {
+            Ok(parts) => begin_pairing(stores, identity, PairingEvent::BeginPair { parts, label }, &mut r),
+            Err(_) => stores.pairing.error = Some("invalid npub or token".to_string()),
+        },
+        Intent::StagePairing { url } => match parse_pairing_url(&url) {
+            Ok(parts) => begin_pairing(stores, identity, PairingEvent::StagePair(parts), &mut r),
+            Err(_) => stores.pairing.error = Some("invalid pairing URL".to_string()),
+        },
+        Intent::ConfirmStagedPairing { label } => {
+            begin_pairing(stores, identity, PairingEvent::ConfirmStaged { label }, &mut r)
+        }
+        Intent::DismissStagedPairing => {
+            begin_pairing(stores, identity, PairingEvent::DismissStaged, &mut r)
+        }
+        Intent::ResetPairing => begin_pairing(stores, identity, PairingEvent::Reset, &mut r),
         Intent::RespondPermission {
             machine,
             session_id,
@@ -473,16 +567,92 @@ fn apply_relay_effects(effects: Vec<SettingsEffect>, r: &mut IntentResult) {
     }
 }
 
+/// Run a pairing event through the reducer + [`apply_pairing_effects`], folding
+/// the transport-affecting effects into the [`IntentResult`].
+fn begin_pairing(
+    stores: &mut CoreStores,
+    identity: &client_core::crypto::Keypair,
+    event: PairingEvent,
+    r: &mut IntentResult,
+) {
+    let result = pairing_reducer(&stores.pairing, event, PAIR_ACK_TIMEOUT_MS);
+    let out = apply_pairing_effects(stores, identity, result);
+    r.sends.extend(out.sends);
+    for id in out.persist {
+        r.persist(id);
+    }
+    r.resubscribe |= out.resubscribe;
+    if out.pair_deadline.is_some() {
+        r.pair_deadline = out.pair_deadline;
+    }
+    if out.mesh_join.is_some() {
+        r.mesh_join = out.mesh_join;
+    }
+    if out.pairing_settled.is_some() {
+        r.pairing_settled = out.pairing_settled;
+    }
+}
+
+/// Interpret the delete-controller's effects: the store mutations happen here,
+/// the undo timer and the `close-session` send are surfaced on the result.
+fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: &mut IntentResult) {
+    for effect in effects {
+        match effect {
+            DeleteEffect::DismissSession { session_id, now } => {
+                stores.machines.dismiss_session(&session_id, now)
+            }
+            DeleteEffect::RemoveSession { machine, session_id } => {
+                stores.machines.user_remove_session(&machine, &session_id);
+                r.persist(StoreId::Machines);
+            }
+            DeleteEffect::ClearSessionUnread { machine, session_id } => {
+                stores.ui.clear_session_unread(&machine, &session_id)
+            }
+            DeleteEffect::DeselectSession { machine, session_id } => {
+                if stores.ui.selected_machine.as_deref() == Some(machine.as_str())
+                    && stores.ui.selected_session.as_deref() == Some(session_id.as_str())
+                {
+                    stores.ui.select_machine(Some(&machine));
+                }
+            }
+            DeleteEffect::ArmUndoTimer { ms } => r.undo_timer = Some(UndoTimer::Arm { ms }),
+            DeleteEffect::ClearUndoTimer => r.undo_timer = Some(UndoTimer::Clear),
+            DeleteEffect::ShowUndoToast {
+                machine,
+                session_id,
+                label,
+            } => stores.ui.set_undo_toast(Some(UndoToast {
+                machine,
+                session_id,
+                label,
+            })),
+            DeleteEffect::HideUndoToast => stores.ui.set_undo_toast(None),
+            DeleteEffect::SendCloseSession { machine, session_id } => r.sends.push(Send {
+                machine,
+                msg: PhoneToBridge::CloseSession(SessionIdMsg {
+                    version: VersionFields::default(),
+                    session_id,
+                }),
+            }),
+            DeleteEffect::RestoreSnapshot { machine, snapshot } => {
+                stores.machines.restore_session(&machine, *snapshot);
+                r.persist(StoreId::Machines);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ports::{MemoryKv, MemoryTranscriptStore};
     use crate::stores::{hydrate, StoresConfig};
 
-    async fn stores() -> CoreStores {
+    async fn stores() -> (CoreStores, client_core::crypto::Keypair) {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
-        hydrate(&kv, &ts, &StoresConfig::default()).await.stores
+        let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
+        (h.stores, h.keypair)
     }
 
     fn ctx() -> IntentCtx {
@@ -495,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn send_input_queues_an_outbox_item_clears_unread_and_stamps_a_stopgap_title() {
         use client_core::stores::outbox::OutboxItemState;
-        let mut s = stores().await;
+        let (mut s, kp) = stores().await;
         s.machines.register_machine("m", "laptop", None, None);
         s.ui.mark_session_unread("m", "s1");
 
@@ -507,6 +677,7 @@ mod tests {
                 text: "fix the build\nplease".into(),
                 input_id: "in-1".into(),
             },
+            &kp,
             ctx(),
         );
 
@@ -524,12 +695,13 @@ mod tests {
     #[tokio::test]
     async fn retry_outbox_item_only_fires_for_a_failed_item() {
         use client_core::stores::outbox::OutboxState;
-        let mut s = stores().await;
+        let (mut s, kp) = stores().await;
         let item = OutboxState::new_input("in-1", "m", "s1", "hi", 100);
         s.outbox.begin_publish(item);
         // still Pending → retry is a no-op
         assert_eq!(
-            apply(&mut s, Intent::RetryOutboxItem { machine: "m".into(), id: "in-1".into() }, ctx()),
+            apply(
+            &mut s, Intent::RetryOutboxItem { machine: "m".into(), id: "in-1".into() }, &kp, ctx()),
             IntentResult::default()
         );
         // fail it, then retry re-queues
@@ -537,6 +709,7 @@ mod tests {
         let out = apply(
             &mut s,
             Intent::RetryOutboxItem { machine: "m".into(), id: "in-1".into() },
+            &kp,
             ctx(),
         );
         assert!(out.outbox_send.is_some());
@@ -544,8 +717,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_session_dismisses_removes_arms_the_undo_and_shows_a_toast() {
+        use client_core::wire::common::RemoteSessionInfo;
+        let (mut s, kp) = stores().await;
+        s.machines.register_machine("m", "laptop", None, None);
+        s.machines.apply_session_upsert(
+            "m",
+            &RemoteSessionInfo {
+                id: "s1".into(),
+                slug: "the-slug".into(),
+                cwd: "/w".into(),
+                last_activity: "t".into(),
+                line_count: 0,
+                title: None,
+                project: "p".into(),
+                permission_mode: None,
+                effort_level: None,
+                model: None,
+                context_window: None,
+                context_percentage: None,
+                committed: None,
+                state: None,
+                seq_high: None,
+                provider_id: None,
+                provider_label: None,
+            },
+            0,
+        );
+
+        let out = apply(
+            &mut s,
+            Intent::DeleteSession {
+                machine: "m".into(),
+                session_id: "s1".into(),
+                label: None,
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(s.machines.session("m", "s1").is_none()); // removed locally
+        assert!(s.machines.dismissed_sessions.contains_key("s1")); // + shielded
+        assert!(matches!(out.undo_timer, Some(UndoTimer::Arm { .. })));
+        assert!(out.persist.contains(&StoreId::Machines));
+        assert!(s.ui.undo_toast.is_some());
+        // no close-session yet — only after the window
+        assert!(out.sends.is_empty());
+
+        // undo restores the snapshot
+        let undo = apply(&mut s, Intent::UndoDelete, &kp, ctx());
+        assert!(s.machines.session("m", "s1").is_some());
+        assert_eq!(undo.undo_timer, Some(UndoTimer::Clear));
+        assert!(s.ui.undo_toast.is_none());
+    }
+
+    #[tokio::test]
+    async fn begin_manual_pairing_stages_a_candidate_and_sends_a_pair_request() {
+        let (mut s, kp) = stores().await;
+        let peer = client_core::crypto::generate_keypair();
+
+        let out = apply(
+            &mut s,
+            Intent::BeginManualPairing {
+                npub: peer.npub.clone(),
+                token: "tok".into(),
+                label: "my phone".into(),
+            },
+            &kp,
+            ctx(),
+        );
+
+        assert_eq!(
+            s.pairing.candidate.as_ref().unwrap().pubkey_hex,
+            peer.pubkey_hex
+        );
+        assert!(matches!(out.pair_deadline, Some(PairDeadline::Arm { .. })));
+        assert!(out.resubscribe);
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::PairRequest(m) }]
+                if *machine == peer.pubkey_hex
+                    && m.pubkey_hex == kp.pubkey_hex
+                    && m.token == "tok"
+        ));
+
+        // an invalid npub sets the error, no candidate, no send
+        let mut s2 = stores().await.0;
+        let bad = apply(
+            &mut s2,
+            Intent::BeginManualPairing {
+                npub: "npub1nope".into(),
+                token: "t".into(),
+                label: "x".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(s2.pairing.candidate.is_none());
+        assert!(s2.pairing.error.is_some());
+        assert_eq!(bad, IntentResult::default());
+    }
+
+    #[tokio::test]
     async fn respond_permission_marks_the_card_and_sends() {
-        let mut s = stores().await;
+        let (mut s, kp) = stores().await;
         let out = apply(
             &mut s,
             Intent::RespondPermission {
@@ -555,6 +829,7 @@ mod tests {
                 allow: true,
                 modifier: None,
             },
+            &kp,
             ctx(),
         );
         assert!(s.ui.is_card_responded("m", "s1", "req-1"));
@@ -567,7 +842,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_mode_maps_to_one_command() {
-        let mut s = stores().await;
+        let (mut s, kp) = stores().await;
         let out = apply(
             &mut s,
             Intent::SetMode {
@@ -575,6 +850,7 @@ mod tests {
                 session_id: "s1".into(),
                 mode: PermissionMode::AcceptEdits,
             },
+            &kp,
             ctx(),
         );
         assert!(matches!(
@@ -587,19 +863,21 @@ mod tests {
 
     #[tokio::test]
     async fn add_relay_emits_a_relays_changed_effect_and_persists() {
-        let mut s = stores().await;
-        let out = apply(&mut s, Intent::AddRelay { url: "wss://new.example".into() }, ctx());
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s, Intent::AddRelay { url: "wss://new.example".into() }, &kp, ctx());
         assert!(out.relays_changed.unwrap().iter().any(|r| r == "wss://new.example"));
         assert_eq!(out.persist, vec![StoreId::Settings]);
         assert!(out.resubscribe);
         // adding the same relay again is a no-op
-        let out2 = apply(&mut s, Intent::AddRelay { url: "wss://new.example".into() }, ctx());
+        let out2 = apply(
+            &mut s, Intent::AddRelay { url: "wss://new.example".into() }, &kp, ctx());
         assert_eq!(out2, IntentResult::default());
     }
 
     #[tokio::test]
     async fn select_session_returns_the_cdx_026c_effect_and_moves_the_ui() {
-        let mut s = stores().await;
+        let (mut s, kp) = stores().await;
         s.ui.mark_session_unread("m", "s1");
         let out = apply(
             &mut s,
@@ -607,6 +885,7 @@ mod tests {
                 machine: "m".into(),
                 session_id: Some("s1".into()),
             },
+            &kp,
             ctx(),
         );
         assert_eq!(s.ui.selected_session.as_deref(), Some("s1"));
@@ -622,7 +901,7 @@ mod tests {
 
     #[tokio::test]
     async fn quick_prompt_crud_persists_only_on_a_real_change() {
-        let mut s = stores().await;
+        let (mut s, kp) = stores().await;
         let add = apply(
             &mut s,
             Intent::AddQuickPrompt {
@@ -630,6 +909,7 @@ mod tests {
                 label: "Go".into(),
                 text: "continue".into(),
             },
+            &kp,
             ctx(),
         );
         assert_eq!(add.persist, vec![StoreId::QuickPrompts]);
@@ -641,11 +921,13 @@ mod tests {
                 label: "  ".into(),
                 text: "x".into(),
             },
+            &kp,
             ctx(),
         );
         assert!(rej.persist.is_empty());
         // unknown id remove → no persist
-        let miss = apply(&mut s, Intent::RemoveQuickPrompt { id: "nope".into() }, ctx());
+        let miss = apply(
+            &mut s, Intent::RemoveQuickPrompt { id: "nope".into() }, &kp, ctx());
         assert!(miss.persist.is_empty());
     }
 }

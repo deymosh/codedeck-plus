@@ -592,58 +592,107 @@ impl<'a> Router<'a> {
             },
             PAIR_ACK_TIMEOUT_MS,
         );
-        self.stores.pairing = result.state;
-        r.pairing_settled = match self.stores.pairing.phase {
-            client_core::stores::pairing::PairingPhase::Paired => Some(true),
-            client_core::stores::pairing::PairingPhase::Failed => Some(false),
-            _ => None,
-        };
+        let out = apply_pairing_effects(self.stores, self.identity, result);
+        out.merge_into(r);
+    }
+}
 
-        for effect in result.effects {
-            match effect {
-                PairingEffect::DisarmDeadline => r.pair_deadline = Some(PairDeadline::Clear),
-                PairingEffect::ArmDeadline { ms } => {
-                    r.pair_deadline = Some(PairDeadline::Arm { ms })
-                }
-                PairingEffect::NotifyCandidate(_) => r.resubscribe = true,
-                PairingEffect::SendPairRequest { to, label, token } => {
-                    r.send(
-                        &to,
-                        PhoneToBridge::PairRequest(PairRequestMsg {
-                            version: VersionFields::default(),
-                            npub: self.identity.npub.clone(),
-                            pubkey_hex: self.identity.pubkey_hex.clone(),
-                            label,
-                            token,
-                        }),
-                    );
-                }
-                PairingEffect::OnPaired {
-                    candidate,
-                    machine_name,
+/// What interpreting a batch of [`PairingEffect`]s asked for beyond the store
+/// mutations it already applied. Shared by the pair-ack route and the
+/// pairing intents.
+#[derive(Debug, Default, PartialEq)]
+pub struct PairingEffectsOut {
+    pub sends: Vec<Send>,
+    pub persist: Vec<StoreId>,
+    pub resubscribe: bool,
+    pub pair_deadline: Option<PairDeadline>,
+    pub mesh_join: Option<(String, String)>,
+    /// `Some(true)` paired, `Some(false)` nack / timeout, `None` still pending.
+    pub pairing_settled: Option<bool>,
+}
+
+impl PairingEffectsOut {
+    fn merge_into(self, r: &mut RouteResult) {
+        r.sends.extend(self.sends);
+        for id in self.persist {
+            r.persist(id);
+        }
+        r.resubscribe |= self.resubscribe;
+        if self.pair_deadline.is_some() {
+            r.pair_deadline = self.pair_deadline;
+        }
+        if self.mesh_join.is_some() {
+            r.mesh_join = self.mesh_join;
+        }
+        if self.pairing_settled.is_some() {
+            r.pairing_settled = self.pairing_settled;
+        }
+    }
+}
+
+/// Run a [`client_core::stores::pairing::PairingResult`] against the stores:
+/// commit the new state, register the machine + learn its relays on `OnPaired`,
+/// and return the transport-affecting effects.
+pub fn apply_pairing_effects(
+    stores: &mut CoreStores,
+    identity: &Keypair,
+    result: client_core::stores::pairing::PairingResult,
+) -> PairingEffectsOut {
+    use client_core::stores::pairing::PairingPhase;
+
+    stores.pairing = result.state;
+    let mut out = PairingEffectsOut {
+        pairing_settled: match stores.pairing.phase {
+            PairingPhase::Paired => Some(true),
+            PairingPhase::Failed => Some(false),
+            _ => None,
+        },
+        ..Default::default()
+    };
+
+    for effect in result.effects {
+        match effect {
+            PairingEffect::DisarmDeadline => out.pair_deadline = Some(PairDeadline::Clear),
+            PairingEffect::ArmDeadline { ms } => out.pair_deadline = Some(PairDeadline::Arm { ms }),
+            PairingEffect::NotifyCandidate(_) => out.resubscribe = true,
+            PairingEffect::SendPairRequest { to, label, token } => {
+                out.sends.push(Send {
+                    machine: to,
+                    msg: PhoneToBridge::PairRequest(PairRequestMsg {
+                        version: VersionFields::default(),
+                        npub: identity.npub.clone(),
+                        pubkey_hex: identity.pubkey_hex.clone(),
+                        label,
+                        token,
+                    }),
+                });
+            }
+            PairingEffect::OnPaired {
+                candidate,
+                machine_name,
+                host,
+            } => {
+                stores.machines.register_machine(
+                    &candidate.pubkey_hex,
+                    &machine_name,
+                    Some(candidate.machine.clone()),
                     host,
-                } => {
-                    self.stores.machines.register_machine(
-                        &candidate.pubkey_hex,
-                        &machine_name,
-                        Some(candidate.machine.clone()),
-                        host,
-                    );
-                    if !candidate.relays.is_empty() {
-                        self.stores.settings.add_relays(&candidate.relays);
-                        r.persist(StoreId::Settings);
-                    }
-                    if let (Some(admin), Some(netid)) =
-                        (candidate.mesh_admin.clone(), candidate.netid.clone())
-                    {
-                        r.mesh_join = Some((admin, netid));
-                    }
-                    r.persist(StoreId::Machines);
-                    r.resubscribe = true;
+                );
+                if !candidate.relays.is_empty() {
+                    stores.settings.add_relays(&candidate.relays);
+                    out.persist.push(StoreId::Settings);
                 }
+                if let (Some(admin), Some(netid)) =
+                    (candidate.mesh_admin.clone(), candidate.netid.clone())
+                {
+                    out.mesh_join = Some((admin, netid));
+                }
+                out.persist.push(StoreId::Machines);
+                out.resubscribe = true;
             }
         }
     }
+    out
 }
 
 fn to_value<T: serde::Serialize>(value: &T) -> serde_json::Value {

@@ -33,7 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
-use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult};
+use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, UndoTimer};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
@@ -247,6 +247,7 @@ impl Core {
             vis_timer: None,
             stale_timer: None,
             pair_timer: None,
+            undo_timer: None,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -411,6 +412,8 @@ enum Msg {
         id: String,
         result: PublishResult,
     },
+    /// The delete-controller's 4 s undo window elapsed.
+    UndoTimerFired,
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -474,6 +477,8 @@ struct Loop {
     stale_timer: Option<AbortHandle>,
     /// CDX-040 pair-ack deadline.
     pair_timer: Option<AbortHandle>,
+    /// The delete-controller's 4 s undo window.
+    undo_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- F2b: the composed store layer ---
     stores: CoreStores,
@@ -547,6 +552,7 @@ impl Loop {
                 }
                 Msg::View(query) => self.answer_view(query),
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
+                Msg::UndoTimerFired => self.on_undo_timer().await,
             }
         }
     }
@@ -769,7 +775,7 @@ impl Loop {
             now: self.clock.now_ms(),
             visible: self.conn.visible,
         };
-        let result = apply_intent(&mut self.stores, intent, ctx);
+        let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
         self.interpret_intent(result).await;
     }
 
@@ -791,8 +797,66 @@ impl Loop {
             self.refresh_authors();
             self.state_changed(SliceId::Machines);
         }
+        match r.pair_deadline {
+            Some(PairDeadline::Arm { ms }) => {
+                abort(&mut self.pair_timer);
+                self.pair_timer = Some(self.arm(ms, Msg::PairDeadline));
+            }
+            Some(PairDeadline::Clear) => abort(&mut self.pair_timer),
+            None => {}
+        }
+        match r.undo_timer {
+            Some(UndoTimer::Arm { ms }) => {
+                abort(&mut self.undo_timer);
+                self.undo_timer = Some(self.arm(ms, Msg::UndoTimerFired));
+            }
+            Some(UndoTimer::Clear) => abort(&mut self.undo_timer),
+            None => {}
+        }
+        if let Some(paired) = r.pairing_settled {
+            self.emit(CoreEvent::PairingSettled { paired });
+        }
+        if r.pair_deadline.is_some() || r.pairing_settled.is_some() {
+            self.state_changed(SliceId::Pairing);
+        }
         // `r.tor_changed` needs a transport-proxy seam; `r.ui_effects` a
-        // notification-cancel seam (F2b — platform ports).
+        // notification-cancel seam; `r.mesh_join` a mesh seam (F2b ports).
+    }
+
+    /// The undo window elapsed — commit the delete (send `close-session`).
+    async fn on_undo_timer(&mut self) {
+        let effects = self.stores.delete_controller.timer_fired();
+        let mut r = IntentResult::default();
+        // The delete-controller's timer_fired only emits ClearUndoTimer +
+        // SendCloseSession + HideUndoToast; route them through the same
+        // interpreter path.
+        for effect in effects {
+            match effect {
+                client_core::delete_controller::DeleteEffect::SendCloseSession {
+                    machine,
+                    session_id,
+                } => r.sends.push(RouteSend {
+                    machine,
+                    msg: PhoneToBridge::CloseSession(
+                        client_core::wire::commands::SessionIdMsg {
+                            version: Default::default(),
+                            session_id,
+                        },
+                    ),
+                }),
+                client_core::delete_controller::DeleteEffect::ClearUndoTimer => {
+                    abort(&mut self.undo_timer)
+                }
+                client_core::delete_controller::DeleteEffect::HideUndoToast => {
+                    self.stores.ui.set_undo_toast(None)
+                }
+                _ => {}
+            }
+        }
+        for RouteSend { machine, msg } in r.sends {
+            self.on_send(machine, msg, None);
+        }
+        self.state_changed(SliceId::Cards);
     }
 
     fn answer_view(&self, query: ViewQuery) {
