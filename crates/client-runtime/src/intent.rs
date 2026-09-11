@@ -94,6 +94,8 @@ pub struct IntentResult {
     pub marmot_accept: Option<String>,
     /// `(group_id, text)` — the loop encrypts + publishes this Marmot message.
     pub marmot_send: Option<(String, String)>,
+    /// `peer_pubkey` — the loop fetches their KeyPackage and creates the group.
+    pub marmot_start_chat: Option<String>,
 }
 
 impl IntentResult {
@@ -272,6 +274,12 @@ pub enum Intent {
     SendMarmotMessage {
         group_id: String,
         text: String,
+    },
+    /// Open a 1:1 Marmot chat with a peer: an existing conversation is reused,
+    /// never duplicated; otherwise the loop fetches their KeyPackage and asks
+    /// the engine to create the group and publish the welcome.
+    StartMarmotChat {
+        peer_pubkey: String,
     },
     AddRelay {
         url: String,
@@ -601,6 +609,9 @@ pub fn apply(
         }
         Intent::SendMarmotMessage { group_id, text } => {
             r.marmot_send = Some((group_id, text));
+        }
+        Intent::StartMarmotChat { peer_pubkey } => {
+            r.marmot_start_chat = Some(peer_pubkey);
         }
         Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
         Intent::RemoveRelay { url } => {
