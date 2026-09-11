@@ -13,6 +13,7 @@ export type HarnessCommand =
   | { id: string; cmd: 'get-relay-url' }
   | { id: string; cmd: 'open-pairing-window'; opts?: PairingWindowOptions }
   | { id: string; cmd: 'emit-sdk-message'; sessionId: string; message: SdkMessage }
+  | { id: string; cmd: 'list-sdk-sessions' }
   | { id: string; cmd: 'get-bridge-transcript'; sessionId: string }
   | { id: string; cmd: 'restart-bridge' }
   | { id: string; cmd: 'drain-logs' }
@@ -53,6 +54,11 @@ export async function handleCommand(
       case 'emit-sdk-message':
         harness.facade.emit(req.sessionId, req.message);
         return { id: req.id, ok: true, result: null };
+
+      case 'list-sdk-sessions':
+        // Insertion order — a driver that just called create-session over the
+        // wire can safely take the last id as the one it caused.
+        return { id: req.id, ok: true, result: [...harness.facade.sessions.keys()] };
 
       case 'get-bridge-transcript': {
         const rows = await harness.transcript(req.sessionId);

@@ -21,6 +21,18 @@ describe('handleCommand — pure dispatch over a fake Harness', () => {
     expect(emitted).toEqual([{ sessionId: 's1', msg: { type: 'system' } }]);
   });
 
+  it('list-sdk-sessions reports ids in creation order', async () => {
+    const fake = {
+      facade: { sessions: new Map([['s1', {}], ['s2', {}]]) },
+    } as unknown as Harness;
+
+    expect(await handleCommand(fake, { id: 'r0', cmd: 'list-sdk-sessions' })).toEqual({
+      id: 'r0',
+      ok: true,
+      result: ['s1', 's2'],
+    });
+  });
+
   it('maps a thrown error to an ok:false response, never a rejection', async () => {
     const fake = {
       facade: {

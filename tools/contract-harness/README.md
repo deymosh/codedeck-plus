@@ -54,6 +54,7 @@ responses may be correlated even if a future version answers out of order.
 | `get-relay-url` | — | `{ url }` — same as the `ready` line's `wsUrl`. |
 | `open-pairing-window` | `opts?` (`PairingWindowOptions`, minus the callbacks — see below) | `{ url, displayUrl, token, expiresAt }` — `expiresAt` is an ISO-8601 string. |
 | `emit-sdk-message` | `sessionId`, `message` (an `SdkMessage`) | `null`. Pushes `message` into that session's stream, as if the Claude Code subprocess had emitted it. The session must already exist (created via a real phone `create-session` command over the socket) or this throws. |
+| `list-sdk-sessions` | — | An array of session ids, in creation order — the same ids the phone sees on the wire. A driver that just sent `create-session` can safely take the last one. |
 | `get-bridge-transcript` | `sessionId` | An array of `{ seq, entry }` — every row the bridge has stored for that session, in order. `[]` for an unknown session. |
 | `restart-bridge` | — | `null`. Shuts the current `BridgeCore` down and starts a fresh one — same secret key, same storage, same on-disk transcripts. The relay server and its socket are untouched, so a connected client sees a real disconnect/reconnect, not a torn-down world. |
 | `drain-logs` | — | An array of `{ level, message }` — every host log line since the last drain (own or the previous command's). Logs are queued regardless of whether anything reads them. |

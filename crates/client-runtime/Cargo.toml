@@ -39,4 +39,4 @@ base64 = "0.22"
 nostr = { version = "0.44", default-features = false, features = ["std", "nip44", "nip59"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util", "process"] }
