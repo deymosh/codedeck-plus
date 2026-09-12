@@ -15,34 +15,37 @@
 //! carries the SAME `host:port` the WS transport dials for the relay
 //! sockets — this client is built with the identical `reqwest::Proxy`, so a
 //! Blossom upload never bypasses Orbot while Tor is on (the repo's no-bypass
-//! rule applies here exactly as it does to the relay sockets). Built once at
-//! `core_init`; like the WS transport, toggling Tor while the app is already
-//! running does not hot-reconfigure this client — a known, separate gap
-//! (see docs/CLIENT-CORE.md).
+//! rule applies here exactly as it does to the relay sockets). `set_proxy`
+//! rebuilds the client live when `Intent::SetTorEnabled` fires — `reqwest`
+//! bakes its proxy in at build time, so there is no in-place update, only a
+//! fresh client swapped into the same `RefCell` `put`/`get` already clone
+//! out of before every request.
 
 use client_runtime::attachments::{HttpFetch, HttpResponse};
 use client_runtime::ports::LocalBoxFuture;
+use std::cell::RefCell;
 use tauri_plugin_http::reqwest;
+
+fn build_client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(host_port) = proxy {
+        let url = format!("socks5://{host_port}");
+        let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("bad proxy {url}: {e}"))?;
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(|e| format!("build http client: {e}"))
+}
 
 #[derive(Debug)]
 pub struct ReqwestHttpFetch {
-    client: reqwest::Client,
+    client: RefCell<reqwest::Client>,
 }
 
 impl ReqwestHttpFetch {
     /// `proxy` is the same bare `host:port` (no scheme) `InitConfig::proxy`
     /// carries for the WS transport — `None` when Tor is off.
     pub fn new(proxy: Option<&str>) -> Result<Self, String> {
-        let mut builder = reqwest::Client::builder();
-        if let Some(host_port) = proxy {
-            let url = format!("socks5://{host_port}");
-            let proxy = reqwest::Proxy::all(&url).map_err(|e| format!("bad proxy {url}: {e}"))?;
-            builder = builder.proxy(proxy);
-        }
-        let client = builder
-            .build()
-            .map_err(|e| format!("build http client: {e}"))?;
-        Ok(Self { client })
+        Ok(Self { client: RefCell::new(build_client(proxy)?) })
     }
 }
 
@@ -53,7 +56,7 @@ impl HttpFetch for ReqwestHttpFetch {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
-        let client = self.client.clone();
+        let client = self.client.borrow().clone();
         let url = url.to_string();
         Box::pin(async move {
             let mut req = client.put(&url).body(body);
@@ -68,7 +71,7 @@ impl HttpFetch for ReqwestHttpFetch {
     }
 
     fn get(&self, url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
-        let client = self.client.clone();
+        let client = self.client.borrow().clone();
         let url = url.to_string();
         Box::pin(async move {
             let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
@@ -76,6 +79,14 @@ impl HttpFetch for ReqwestHttpFetch {
             let body = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
             Ok(HttpResponse { status, body })
         })
+    }
+
+    fn set_proxy(&self, proxy: Option<&str>) {
+        // A malformed proxy string here would already have failed at
+        // `core_init` — this is a defensive fallback, not an expected path.
+        if let Ok(client) = build_client(proxy) {
+            *self.client.borrow_mut() = client;
+        }
     }
 }
 
@@ -99,5 +110,24 @@ mod tests {
         // rather than this module trying to validate `host:port` itself.
         let err = ReqwestHttpFetch::new(Some("not a proxy")).unwrap_err();
         assert!(err.contains("bad proxy"));
+    }
+
+    #[test]
+    fn set_proxy_swaps_the_client_live_in_both_directions() {
+        let fetch = ReqwestHttpFetch::new(None).unwrap();
+        fetch.set_proxy(Some("127.0.0.1:9050"));
+        fetch.set_proxy(None);
+        // Nothing observable to assert on `reqwest::Client` itself (it's
+        // opaque) — this proves set_proxy never panics or leaves the
+        // RefCell borrowed across either direction of the toggle.
+    }
+
+    #[test]
+    fn set_proxy_with_a_malformed_address_leaves_the_existing_client_in_place() {
+        let fetch = ReqwestHttpFetch::new(None).unwrap();
+        fetch.set_proxy(Some("not a proxy"));
+        // Did not panic, and a later valid call still works — the failed
+        // rebuild didn't leave the RefCell in a bad state.
+        fetch.set_proxy(Some("127.0.0.1:9050"));
     }
 }

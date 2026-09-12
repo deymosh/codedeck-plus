@@ -13,11 +13,14 @@
  * promises: `true` there means "a relay accepted the publish," never "the
  * bridge processed it."
  *
- * Three methods are deliberate, documented rejections rather than
+ * `createFolder` dispatches `Intent::CreateFolder` with a fresh request id
+ * and races the matching `CoreEvent::FolderAck` against `timeoutMs` — the
+ * listener is registered BEFORE the dispatch (same ordering `hydrateFromCore`
+ * uses elsewhere), so a same-tick reply can never be lost to a late-attaching
+ * callback.
+ *
+ * Two methods stay deliberate, documented rejections rather than
  * like-for-like shims:
- * - `createFolder`: a correlated request/response (folder-ack) with no
- *   `Intent` or `CoreEvent` on the Rust side at all yet — a real gap, not
- *   an oversight papered over here.
  * - `uploadImageBlossom`/`uploadImageChunk`: their two-stage shape (upload
  *   raw bytes to Blossom, THEN separately publish the resulting hash/key
  *   reference; or fall back to relay chunks) is already re-implemented as
@@ -37,8 +40,7 @@
  */
 import type { NativeCore } from '../../platform/nativeCore';
 import type { BridgeApiLike } from './bridgeApi';
-import type { PhoneToBridgeMessage } from '../nativeCoreTypes';
-import type { Intent } from '../nativeCoreTypes';
+import type { FolderAckMessage, Intent, PhoneToBridgeMessage } from '../nativeCoreTypes';
 
 export interface NativeBridgeApiDeps {
   core: NativeCore;
@@ -141,13 +143,51 @@ export function createNativeBridgeApi(deps: NativeBridgeApiDeps): BridgeApiLike 
     requestProviderProfiles: (machine) => dispatch({ requestProviderProfiles: { machine } }),
     setDeviceConfig: (machine, config) => dispatch({ setDeviceConfig: { machine, config } }),
 
-    createFolder: (_machine, _path, _root, _timeoutMs) =>
-      Promise.resolve({
-        type: 'folder-ack',
-        requestId: '',
-        success: false,
-        error: 'createFolder is not supported by the native bridge API yet — no Intent exists for it',
-      }),
+    createFolder: async (machine, path, root, timeoutMs = 10_000) => {
+      const requestId = globalThis.crypto.randomUUID();
+      return new Promise<FolderAckMessage>((resolve) => {
+        let unlisten: (() => void) | null = null;
+        let settled = false;
+        const finish = (msg: FolderAckMessage): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          unlisten?.();
+          resolve(msg);
+        };
+        const timer = setTimeout(
+          () => finish({ type: 'folder-ack', requestId, success: false, error: 'createFolder timed out' }),
+          timeoutMs,
+        );
+        deps.core
+          .onCoreEvent((event) => {
+            if (typeof event === 'object' && event.folderAck?.requestId === requestId) {
+              const { success, path: ackPath, error } = event.folderAck;
+              finish({
+                type: 'folder-ack',
+                requestId,
+                success,
+                ...(ackPath != null ? { path: ackPath } : {}),
+                ...(error != null ? { error } : {}),
+              });
+            }
+          })
+          .then((u) => {
+            unlisten = u;
+            if (settled) u(); // finish() already ran (e.g. the timeout) before this resolved
+          })
+          .catch((err) => {
+            deps.log?.(`[nativeBridgeApi] createFolder listener failed: ${err}`);
+            finish({ type: 'folder-ack', requestId, success: false, error: 'listener registration failed' });
+          });
+        deps.core
+          .dispatch({ createFolder: { machine, path, root: root ?? null, requestId } })
+          .catch((err) => {
+            deps.log?.(`[nativeBridgeApi] createFolder dispatch failed: ${err}`);
+            finish({ type: 'folder-ack', requestId, success: false, error: 'dispatch failed' });
+          });
+      });
+    },
     uploadImageBlossom: () =>
       Promise.reject(
         new Error(

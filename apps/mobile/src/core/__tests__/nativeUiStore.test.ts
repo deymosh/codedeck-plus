@@ -153,19 +153,30 @@ describe('createNativeUiStore', () => {
     expect(dispatched).toEqual([{ setPlanApprovalChoice: { cardId: 'card1', key: '2' } }]);
   });
 
-  it('every remaining mutator is an inert no-op — Rust applies the real transition', async () => {
+  it('markCardResponded is an inert no-op — Rust applies the real transition', async () => {
     const { core, dispatched } = fakeCore();
     const store = createNativeUiStore({ core });
     await tick();
 
-    const s = store.getState();
-    s.markCardResponded('m1', 's1', 'card1');
-    s.noteCredentialsSent('m1');
-    s.noteDeviceConfigSent('m1');
-    s.noteProviderProfileSent('m1', 'p1');
+    store.getState().markCardResponded('m1', 's1', 'card1');
 
     expect(dispatched).toEqual([]);
     expect(store.getState().undoToast).toBeNull();
+  });
+
+  it('note*Sent marks a local "saving" state ahead of the bridge ack', async () => {
+    const { core } = fakeCore();
+    const store = createNativeUiStore({ core });
+    await tick();
+
+    store.getState().noteCredentialsSent('m1');
+    expect(store.getState().credentialsStatus.m1?.state).toBe('saving');
+
+    store.getState().noteDeviceConfigSent('m1');
+    expect(store.getState().deviceConfigStatus.m1?.state).toBe('saving');
+
+    store.getState().noteProviderProfileSent('m1', 'p1');
+    expect(store.getState().providerProfileStatus.m1).toMatchObject({ state: 'saving', profileId: 'p1' });
   });
 
   it('a stateChanged("ui") core event re-fetches the view', async () => {

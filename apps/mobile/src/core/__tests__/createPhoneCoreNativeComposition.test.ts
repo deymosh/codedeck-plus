@@ -114,15 +114,25 @@ describe('createPhoneCoreNative', () => {
     expect(initCalls[0]!.identitySecretHex).toBe(bytesToHex(phone.identity.getState().keypair.secretKey));
   });
 
-  it('passes the Tor proxy through only when torProxyEnabled', async () => {
-    const { core, initCalls } = fakeCore();
+  it('sends the proxy address unconditionally, and `tor` as the separate on/off flag', async () => {
+    // The address is sent even with Tor OFF at boot — a later live toggle
+    // (`Intent::SetTorEnabled`) needs it to switch back on, and `init` is the
+    // only place it ever reaches Rust.
+    const { core: coreOff, initCalls: offCalls } = fakeCore();
+    await createPhoneCoreNative({
+      core: coreOff,
+      kv: memoryKV(),
+      nativeCoreProxy: '127.0.0.1:9050',
+    });
+    expect(offCalls[0]!.tor).toBe(false);
+    expect(offCalls[0]!.proxy).toBe('127.0.0.1:9050');
+
+    const { core: coreOn, initCalls: onCalls } = fakeCore();
     const kv = memoryKV();
     await kv.set('settings', JSON.stringify({ relays: [], torProxyEnabled: true }));
-
-    await createPhoneCoreNative({ core, kv, nativeCoreProxy: '127.0.0.1:9050' });
-
-    expect(initCalls[0]!.tor).toBe(true);
-    expect(initCalls[0]!.proxy).toBe('127.0.0.1:9050');
+    await createPhoneCoreNative({ core: coreOn, kv, nativeCoreProxy: '127.0.0.1:9050' });
+    expect(onCalls[0]!.tor).toBe(true);
+    expect(onCalls[0]!.proxy).toBe('127.0.0.1:9050');
   });
 
   it('reuses a persisted identity across two boots rather than generating a new one', async () => {

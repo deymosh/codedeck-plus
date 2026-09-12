@@ -78,6 +78,10 @@ pub trait Transport {
     fn subscribe(&self, filter: Filter, callbacks: SubCallbacks) -> Box<dyn TransportSub>;
     /// Replace the relay list. Default: no-op (in-memory test transports).
     fn set_relays(&self, _urls: &[String]) {}
+    /// Replace the SOCKS5 proxy (Tor on/off, or a different host:port) and
+    /// redial every relay through it. Default: no-op (in-memory test
+    /// transports have no real socket to redial).
+    fn set_proxy(&self, _proxy: Option<String>) {}
 }
 
 /// The client's outward surface — what a heard event / lifecycle change does.
@@ -296,6 +300,15 @@ impl<T: Transport, H: NostrClientHost + 'static> NostrClient<T, H> {
     /// Point the transport at a new relay list and resubscribe if live.
     pub fn set_relays(&self, urls: &[String]) {
         self.transport.set_relays(urls);
+        if self.is_connected() {
+            self.resubscribe();
+        }
+    }
+
+    /// Redial every relay through the (possibly new) proxy — see
+    /// `Transport::set_proxy`.
+    pub fn set_proxy(&self, proxy: Option<String>) {
+        self.transport.set_proxy(proxy);
         if self.is_connected() {
             self.resubscribe();
         }

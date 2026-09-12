@@ -106,11 +106,22 @@ async function boot(): Promise<PhoneCore> {
   });
   // Rust dials its own SOCKS5 at `core.init` (`CoreConfig.proxy`/`tor`, set
   // from the persisted `torProxyEnabled` setting) — there is no WebView-side
-  // proxy toggle to attach here. Toggling Tor while already running does not
-  // yet hot-reconfigure that transport — it takes effect on the next app
-  // start (`client_runtime::Core`'s `tor_changed` effect has no
-  // transport-proxy seam wired yet, a separate, known gap; see
-  // docs/CLIENT-CORE.md).
+  // proxy toggle to attach here. Toggling Tor while already running DOES
+  // hot-reconfigure the transport now: `Intent::SetTorEnabled` (dispatched by
+  // `nativeSettings.ts`'s `setTorProxyEnabled`) redials every relay through
+  // `WsTransport::set_proxy`, using the SOCKS5 address `core.init` always
+  // sends (regardless of whether Tor started on or off) — see
+  // `client_runtime::core::Loop`'s `tor_proxy_address`.
+
+  // The in-app attention chime: Rust decides WHEN to ping
+  // (`client_core::notifications::decide_ping`) and emits `CoreEvent::Ping`
+  // (the bare string `"ping"`, a unit variant) — this is the one platform
+  // seam that decision needs, since Rust has no audio API of its own.
+  const { initPingAudio, playAttentionPing } = await import('./platform/pingSound');
+  initPingAudio();
+  void nativeCore.onCoreEvent((event) => {
+    if (event === 'ping') playAttentionPing();
+  });
 
   // Native event sources → connection FSM + maintenance ticks.
   const { listen } = await import('@tauri-apps/api/event');

@@ -16,10 +16,10 @@ use client_core::stores::pairing::{
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    BareMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext, KeypressMsg,
-    ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg, PhoneToBridge,
-    ProviderProfileWrite, QuestionInputMsg, SessionIdMsg, SetCredentialsMsg, SetDeviceConfigMsg,
-    SetProviderProfileMsg, VersionFields,
+    BareMsg, CreateFolderMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext,
+    KeypressMsg, ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg,
+    PhoneToBridge, ProviderProfileWrite, QuestionInputMsg, SessionIdMsg, SetCredentialsMsg,
+    SetDeviceConfigMsg, SetProviderProfileMsg, VersionFields,
 };
 use protocol::common::{DeviceConfig, EffortLevel, PermissionMode};
 use protocol::tristate::Tristate;
@@ -288,6 +288,16 @@ pub enum Intent {
     SetDeviceConfig {
         machine: String,
         config: DeviceConfig,
+    },
+    /// Create a new project folder under a workspace root (and `git init` it,
+    /// bridge-side). Answered with `CoreEvent::FolderAck`, matched by
+    /// `request_id` — the caller mints it (a UUID is fine; the bridge only
+    /// ever echoes it back).
+    CreateFolder {
+        machine: String,
+        path: String,
+        root: Option<String>,
+        request_id: String,
     },
 
     // --- pure store actions ---
@@ -701,6 +711,20 @@ pub fn apply(
             PhoneToBridge::SetDeviceConfig(SetDeviceConfigMsg {
                 version: v(),
                 config,
+            }),
+        ),
+        Intent::CreateFolder {
+            machine,
+            path,
+            root,
+            request_id,
+        } => r.send(
+            &machine,
+            PhoneToBridge::CreateFolder(CreateFolderMsg {
+                version: v(),
+                path,
+                root,
+                request_id,
             }),
         ),
 
@@ -1315,6 +1339,30 @@ mod tests {
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::SetDeviceConfig(m) }]
                 if machine == "m" && m.config == config
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_folder_sends_the_request_with_its_id() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::CreateFolder {
+                machine: "m".into(),
+                path: "sub/dir".into(),
+                root: Some("/ws".into()),
+                request_id: "req-1".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::CreateFolder(m) }]
+                if machine == "m"
+                    && m.path == "sub/dir"
+                    && m.root.as_deref() == Some("/ws")
+                    && m.request_id == "req-1"
         ));
     }
 

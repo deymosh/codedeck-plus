@@ -47,9 +47,10 @@ export interface BridgeApiDiagnostics {
  * interface carries no inbound-decode or dispatch methods at all — only the
  * outbound intents a screen actually sends.
  *
- * `createFolder`/`uploadImageBlossom`/`uploadImageChunk` are the three
- * genuine gaps — see each one's own doc below for why `createNativeBridgeApi`
- * rejects rather than shims them.
+ * `uploadImageBlossom`/`uploadImageChunk` are the two genuine gaps left — see
+ * their own doc below for why `createNativeBridgeApi` rejects rather than
+ * shims them. `createFolder` is real: a correlated request/response
+ * (`Intent::CreateFolder` → `CoreEvent::FolderAck`, matched by request id).
  */
 export interface BridgeApiLike {
   readonly diagnostics: BridgeApiDiagnostics;
@@ -95,10 +96,9 @@ export interface BridgeApiLike {
   ): Promise<boolean>;
   requestProviderProfiles(machine: string): Promise<boolean>;
   setDeviceConfig(machine: string, config: DeviceConfig): Promise<boolean>;
-  /** Correlated request/response (folder-ack) — no Rust Intent or CoreEvent
-   *  exists for this yet (a real gap, not an oversight this file papers
-   *  over). `createNativeBridgeApi` rejects rather than pretending to
-   *  support it. */
+  /** Correlated request/response: dispatches `Intent::CreateFolder` with a
+   *  fresh request id and resolves once the matching `CoreEvent::FolderAck`
+   *  arrives, or `timeoutMs` elapses. */
   createFolder(
     machine: string,
     path: string,

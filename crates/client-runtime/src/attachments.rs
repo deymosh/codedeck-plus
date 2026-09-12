@@ -84,6 +84,10 @@ pub trait HttpFetch {
         body: Vec<u8>,
     ) -> LocalBoxFuture<'_, Result<HttpResponse, String>>;
     fn get(&self, url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>>;
+    /// Rebuild the underlying client through the (possibly new) SOCKS5 proxy
+    /// — `None` when Tor turns off. Default: no-op (`NoHttpFetch`, test
+    /// doubles with nothing to reconfigure).
+    fn set_proxy(&self, _proxy: Option<&str>) {}
 }
 
 /// An [`HttpFetch`] that fails every request — the default before a platform

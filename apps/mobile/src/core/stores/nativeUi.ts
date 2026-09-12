@@ -16,14 +16,15 @@
  * picks this up on its own — the call site's own local mark just avoids a
  * one-frame flicker back to "unresponded" while that refresh is in flight.
  *
- * `noteCredentialsSent`/`noteDeviceConfigSent`/`noteProviderProfileSent` are
- * no-ops for a different reason: they have no Rust Intent to reach at all
- * yet — sending a set-credentials / set-device-config / set-provider-profile
- * command has not been ported (only receiving its ack has, which the next
- * view refresh already reflects). The "saving…" optimistic state these
- * normally show will not appear natively until that command-send surface
- * exists — a real, currently-open gap, not an oversight to paper over with
- * invented Rust surface here.
+ * `noteCredentialsSent`/`noteDeviceConfigSent`/`noteProviderProfileSent` set
+ * a local `state: 'saving'` entry the same way `setPlanApprovalChoice` sets
+ * its local choice: `Intent::SetCredentials`/`SetDeviceConfig`/
+ * `SetProviderProfile` are real and already dispatched by the call sites
+ * that call these (`MachineCredentials.tsx`, `MeshSection.tsx`,
+ * `MachineProviders.tsx`), but nothing marks "saving" while the round trip
+ * is in flight — without this, the button just looks unresponsive until the
+ * bridge's ack eventually lands and the next view refresh shows `saved`/
+ * `failed` out of nowhere.
  *
  * `selectSession`/`selectDmPeer`/`selectMarmotGroup`/`setPlanApprovalChoice`
  * are the genuinely user-facing mutations and dispatch real Intents,
@@ -145,9 +146,30 @@ export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
         dispatch({ setPlanApprovalChoice: { cardId, key } });
       },
 
-      noteCredentialsSent: noop,
-      noteDeviceConfigSent: noop,
-      noteProviderProfileSent: noop,
+      noteCredentialsSent: (machinePubkey) => {
+        set({
+          credentialsStatus: {
+            ...get().credentialsStatus,
+            [machinePubkey]: { state: 'saving', at: Date.now() },
+          },
+        });
+      },
+      noteDeviceConfigSent: (machinePubkey) => {
+        set({
+          deviceConfigStatus: {
+            ...get().deviceConfigStatus,
+            [machinePubkey]: { state: 'saving', at: Date.now() },
+          },
+        });
+      },
+      noteProviderProfileSent: (machinePubkey, profileId) => {
+        set({
+          providerProfileStatus: {
+            ...get().providerProfileStatus,
+            [machinePubkey]: { state: 'saving', at: Date.now(), profileId },
+          },
+        });
+      },
     };
   });
 

@@ -62,10 +62,14 @@ export async function createPhoneCoreNative(deps: PhoneCoreNativeDeps): Promise<
   // ever handed to Rust, and it happens exactly once per run.
   const keypair = await loadOrCreateIdentity(deps.kv, log);
   const settingsData = await loadPersistedSettings(deps.kv);
+  // `proxy` is the SOCKS5 address Rust dials through WHEN Tor is on — sent
+  // unconditionally (not nulled out when starting with Tor off) so a later
+  // live toggle has an address to switch back to; `tor` is the separate
+  // on/off flag deciding whether it's actually used, at boot and hereafter.
   await core.init({
     relays: settingsData.relays,
     identitySecretHex: bytesToHex(keypair.secretKey),
-    proxy: settingsData.torProxyEnabled ? (deps.nativeCoreProxy ?? null) : null,
+    proxy: deps.nativeCoreProxy ?? null,
     tor: settingsData.torProxyEnabled,
   });
 

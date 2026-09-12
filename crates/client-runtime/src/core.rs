@@ -165,6 +165,20 @@ pub enum CoreEvent {
     /// cannot tell a consumer WHICH session to re-fetch and transcripts are
     /// per-session by nature.
     TranscriptAppended { machine: String, session_id: String },
+    /// The correlated response to `Intent::CreateFolder` — matched by
+    /// `request_id` off this stream (no store, no view: nothing to persist or
+    /// re-fetch for a one-shot RPC-style exchange).
+    FolderAck {
+        request_id: String,
+        success: bool,
+        path: Option<String>,
+        error: Option<String>,
+    },
+    /// The in-app attention chime — `client_core::notifications::decide_ping`
+    /// already decided this event needs it (app hidden, or a different
+    /// session is active); Rust has no audio API of its own, so this is the
+    /// seam the WebView plays `platform/pingSound.ts`'s tone through.
+    Ping,
 }
 
 // --- config ---------------------------------------------------------------
@@ -172,8 +186,16 @@ pub enum CoreEvent {
 pub struct CoreConfig {
     pub relays: Vec<String>,
     pub identity: Keypair,
-    /// SOCKS5 `host:port` (Orbot). When set every relay is dialled through it.
+    /// SOCKS5 `host:port` (Orbot) — the address to dial through WHEN Tor is
+    /// on. Sent unconditionally by the phone (not nulled out when starting
+    /// with Tor off), so a later `Intent::SetTorEnabled(true)` has an address
+    /// to switch back to; `tor` below is the separate flag deciding whether
+    /// it's actually in use, at boot and hereafter.
     pub proxy: Option<String>,
+    /// Whether the proxy above is in use at boot. [`Loop`] remembers `proxy`
+    /// regardless, so `Intent::SetTorEnabled` can toggle between `Some` and
+    /// `None` without needing the phone to resend the address.
+    pub tor: bool,
     /// Backoff / stale-window timing. [`CoreConfig::new`] picks the Tor variant
     /// when `tor` is set; tests override directly.
     pub reconnect: ReconnectConfig,
@@ -217,6 +239,7 @@ impl CoreConfig {
             relays,
             identity,
             proxy,
+            tor,
             reconnect: if tor {
                 TOR_RECONNECT_CONFIG
             } else {
@@ -286,7 +309,7 @@ impl Core {
         let ws = WsTransport::new(WsConfig {
             relays: config.relays.clone(),
             identity: config.identity.clone(),
-            proxy: config.proxy.clone(),
+            proxy: if config.tor { config.proxy.clone() } else { None },
         });
         let nostr = NostrClient::new(
             ws.clone(),
@@ -296,6 +319,7 @@ impl Core {
         let event_loop = Loop {
             reconnect: config.reconnect,
             identity: config.identity,
+            tor_proxy_address: config.proxy,
             clock,
             entropy,
             observer,
@@ -612,6 +636,10 @@ impl NostrClientHost for HostBridge {
 struct Loop {
     reconnect: ReconnectConfig,
     identity: Keypair,
+    /// The SOCKS5 address to dial through WHEN Tor is on — remembered
+    /// regardless of whether it's currently in use, so `Intent::SetTorEnabled`
+    /// can toggle `self.ws`'s live proxy without the phone resending it.
+    tor_proxy_address: Option<String>,
     clock: Rc<dyn Clock>,
     entropy: Rc<dyn Entropy>,
     observer: Rc<dyn CoreObserver>,
@@ -877,6 +905,11 @@ impl Loop {
                 );
                 router.visible = visible;
                 router.notify_enabled = notify_enabled;
+                // `CoreEvent::Ping` gives the WebView somewhere to play
+                // `platform/pingSound.ts`'s chime through now — the seam
+                // `Router::new`'s conservative `ping_available: false`
+                // default was written to wait for.
+                router.ping_available = true;
                 let result = router.route(&machine, &msg).await;
                 self.interpret_route(result).await;
                 self.observer.bridge_message(machine, *msg);
@@ -919,10 +952,12 @@ impl Loop {
             self.state_changed(SliceId::Cards);
         }
         for effect in r.notifies {
-            if let NotifyEffect::Notify { content, tag } = effect {
-                self.notifier.notify(&content.title, &content.body, Some(&tag));
+            match effect {
+                NotifyEffect::Notify { content, tag } => {
+                    self.notifier.notify(&content.title, &content.body, Some(&tag));
+                }
+                NotifyEffect::Ping => self.emit(CoreEvent::Ping),
             }
-            // Ping seam not wired yet (F2b: the chime is a platform port).
         }
         if !r.transcript_removed.is_empty() {
             self.state_changed(SliceId::Transcript);
@@ -949,6 +984,14 @@ impl Loop {
         }
         if let Some((machine, session_id)) = r.transcript_appended {
             self.emit(CoreEvent::TranscriptAppended { machine, session_id });
+        }
+        if let Some(m) = r.folder_ack {
+            self.emit(CoreEvent::FolderAck {
+                request_id: m.request_id,
+                success: m.success,
+                path: m.path,
+                error: m.error,
+            });
         }
         match r.pair_deadline {
             Some(PairDeadline::Arm { ms }) => {
@@ -1125,8 +1168,12 @@ impl Loop {
                 }
             }
         }
-        // `r.tor_changed` needs a transport-proxy seam; `r.mesh_join` a mesh
-        // seam (F2b ports).
+        if let Some(on) = r.tor_changed {
+            let proxy = if on { self.tor_proxy_address.clone() } else { None };
+            self.nostr.set_proxy(proxy.clone());
+            self.http.set_proxy(proxy.as_deref());
+        }
+        // `r.mesh_join` needs a mesh seam (F2b ports).
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
@@ -2173,6 +2220,7 @@ mod tests {
                 relays: vec![mock.url.clone()],
                 identity: phone.clone(),
                 proxy: None,
+                tor: false,
                 reconnect: fast_reconnect(),
             },
             ports,
@@ -2357,6 +2405,7 @@ mod tests {
                         relays: vec![mock1.url.clone(), mock2.url.clone()],
                         identity: phone.clone(),
                         proxy: None,
+                        tor: false,
                         reconnect: fast_reconnect(),
                     },
                     CorePorts::default(),
@@ -2436,6 +2485,110 @@ mod tests {
                 assert_eq!(messages.len(), 1, "{messages:?}");
                 assert_eq!(messages[0].0, machine.pubkey_hex);
                 assert!(matches!(messages[0].1, BridgeToPhone::InputAck(_)));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                // Backgrounded — `decide_ping` wants a chime unconditionally
+                // once the app isn't visible, for any notify-worthy event.
+                core.pause();
+                settle().await;
+
+                let msg = protocol::codec::decode_bridge_to_phone(
+                    r#"{"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
+                )
+                .unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = protocol::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-1",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+
+                let events = spy.events.lock().unwrap();
+                assert!(events.contains(&CoreEvent::Ping), "{events:?}");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn create_folder_round_trips_to_a_matching_folder_ack_core_event() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                core.dispatch(Intent::CreateFolder {
+                    machine: machine.pubkey_hex.clone(),
+                    path: "sub/dir".into(),
+                    root: None,
+                    request_id: "req-1".into(),
+                })
+                .await;
+
+                // The dispatched command reaches the bridge as a real, signed
+                // create-folder event — same publish path every other Intent uses.
+                let frame = mock.next_frame().await;
+                let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
+                assert_eq!(v[0], "EVENT");
+
+                let msg = protocol::codec::decode_bridge_to_phone(
+                    r#"{"type":"folder-ack","requestId":"req-1","success":true,"path":"sub/dir"}"#,
+                )
+                .unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = protocol::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-1",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+
+                let events = spy.events.lock().unwrap();
+                assert!(
+                    events.iter().any(|e| matches!(
+                        e,
+                        CoreEvent::FolderAck { request_id, success: true, path: Some(p), error: None }
+                            if request_id == "req-1" && p == "sub/dir"
+                    )),
+                    "{events:?}",
+                );
             })
             .await;
     }

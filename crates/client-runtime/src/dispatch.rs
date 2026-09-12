@@ -96,6 +96,11 @@ pub struct RouteResult {
     /// chunk: a transcript view's whole purpose is to look live, so silence
     /// here would read as a frozen session, not a stale dot.
     pub transcript_appended: Option<(String, String)>,
+    /// A `folder-ack` arrived — the correlated response to `Intent::CreateFolder`.
+    /// Not store-backed (nothing to persist or re-fetch a view for): the
+    /// caller matches it by `request_id` off the `CoreEvent` stream, same
+    /// shape as `outbox_settled`/`pairing_settled` above.
+    pub folder_ack: Option<protocol::events::FolderAckMsg>,
 }
 
 impl RouteResult {
@@ -245,6 +250,10 @@ impl<'a> Router<'a> {
 
             // --- slice D: the pair-ack (CDX-040/041/028) ---
             BridgeToPhone::PairAck(m) => self.on_pair_ack(machine, m, &mut r),
+
+            BridgeToPhone::FolderAck(m) => {
+                r.folder_ack = Some(m.clone());
+            }
 
             BridgeToPhone::Output(m) => {
                 let entry = to_value(&m.entry);
@@ -417,9 +426,6 @@ impl<'a> Router<'a> {
                 );
                 r.ui_changed = true;
             }
-
-            // Remaining families land in later slices.
-            _ => {}
         }
         r
     }
@@ -1156,6 +1162,37 @@ mod tests {
             out.transcript_removed,
             vec![(MACHINE.to_string(), "s1".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn a_folder_ack_is_surfaced_verbatim_with_no_store_side_effect() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None);
+
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::FolderAck(protocol::events::FolderAckMsg {
+                    request_id: "req-1".into(),
+                    success: true,
+                    path: Some("sub/dir".into()),
+                    error: None,
+                }),
+            )
+            .await;
+        assert_eq!(
+            out.folder_ack,
+            Some(protocol::events::FolderAckMsg {
+                request_id: "req-1".into(),
+                success: true,
+                path: Some("sub/dir".into()),
+                error: None,
+            }),
+        );
+        // Not store-backed — nothing to persist or re-fetch a view for.
+        assert!(out.persist.is_empty());
+        assert!(!out.ui_changed);
     }
 
     #[tokio::test]

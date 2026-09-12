@@ -146,6 +146,11 @@ impl WsTransport {
         self.state.borrow().router.connected_relays().iter().cloned().collect()
     }
 
+    /// The proxy every NEW dial uses right now — test/introspection only.
+    pub fn current_proxy(&self) -> Option<String> {
+        self.state.borrow().proxy.clone()
+    }
+
     /// Tear down every socket deliberately (no `on_close` fires).
     pub fn shutdown(&self) {
         let conns: Vec<Conn> = self.state.borrow_mut().conns.drain().map(|(_, c)| c).collect();
@@ -457,6 +462,23 @@ impl Transport for WsTransport {
         }
         self.ensure_connected();
     }
+
+    /// Every relay is dialled through the (possibly new) proxy — unlike
+    /// `set_relays`, which only redials the relays that actually changed, a
+    /// proxy change invalidates EVERY existing socket (each one dialled
+    /// through the OLD setting), so every current connection is redialled,
+    /// not just the ones matching some diff.
+    fn set_proxy(&self, proxy: Option<String>) {
+        let to_kill: Vec<Conn> = {
+            let mut st = self.state.borrow_mut();
+            st.proxy = proxy;
+            st.conns.drain().map(|(_, c)| c).collect()
+        };
+        for c in to_kill {
+            let _ = c.tx.send(Out::Close);
+        }
+        self.ensure_connected();
+    }
 }
 
 struct WsSub {
@@ -593,6 +615,55 @@ mod tests {
         // 127.0.0.1 — proves loopback is genuinely usable, not just "not
         // rejected before some other failure".
         dial(&mock.url, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_proxy_updates_what_the_next_dial_uses_and_closes_every_live_connection() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                assert_eq!(t.current_proxy(), None);
+                t.ensure_connected();
+
+                t.subscribe(
+                    a_filter(&phone),
+                    SubCallbacks {
+                        on_event: Rc::new(|_| {}),
+                        on_eose: Rc::new(|| {}),
+                        on_close: Rc::new(|_| {}),
+                    },
+                );
+                // Real handshake against the mock relay — poll rather than a
+                // flat sleep so this isn't a race against however long that
+                // takes on a loaded CI box.
+                for _ in 0..100 {
+                    if !t.connected_relays().is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                assert!(!t.connected_relays().is_empty());
+
+                t.set_proxy(Some("127.0.0.1:9050".to_string()));
+                assert_eq!(t.current_proxy(), Some("127.0.0.1:9050".to_string()));
+                // The live connection (dialled before the proxy existed) is
+                // torn down — every existing socket was dialled under the OLD
+                // setting, so none of them can be trusted to still be routed
+                // correctly once it changes.
+                for _ in 0..100 {
+                    if t.connected_relays().is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                assert!(t.connected_relays().is_empty());
+
+                t.set_proxy(None);
+                assert_eq!(t.current_proxy(), None);
+            })
+            .await;
     }
 
     fn a_filter(phone: &Keypair) -> Filter {

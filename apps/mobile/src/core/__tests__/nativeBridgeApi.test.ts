@@ -2,9 +2,10 @@
  * nativeBridgeApi — proves `createNativeBridgeApi` presents the SAME
  * `BridgeApiLike` shape `BridgeApi` does for every method that has a real
  * `Intent` mapping, that `send` pattern-matches the three real message types
- * card actions use, and that the three documented gaps (`createFolder`,
- * `uploadImageBlossom`, `uploadImageChunk`) fail honestly rather than
- * pretending to succeed.
+ * card actions use, that `createFolder`'s correlated request/response
+ * actually resolves (or times out) rather than hanging, and that the two
+ * remaining documented gaps (`uploadImageBlossom`, `uploadImageChunk`) fail
+ * honestly rather than pretending to succeed.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { createNativeBridgeApi } from '../services/nativeBridgeApi';
@@ -13,6 +14,10 @@ import type { NativeCore } from '../../platform/nativeCore';
 
 function fakeCore(shouldFail = false) {
   const dispatched: Intent[] = [];
+  const coreEventHandlers = new Set<(event: CoreEvent) => void>();
+  const emitCoreEvent = (event: CoreEvent): void => {
+    for (const cb of coreEventHandlers) cb(event);
+  };
   const core: NativeCore = {
     defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
@@ -41,9 +46,12 @@ function fakeCore(shouldFail = false) {
     pendingSessionsView: () => Promise.reject(new Error('unused')),
     uiView: () => Promise.reject(new Error('unused')),
     transcriptView: () => Promise.reject(new Error('unused')),
-    onCoreEvent: () => Promise.resolve(() => {}),
+    onCoreEvent: (cb) => {
+      coreEventHandlers.add(cb);
+      return Promise.resolve(() => coreEventHandlers.delete(cb));
+    },
   };
-  return { core, dispatched };
+  return { core, dispatched, emitCoreEvent };
 }
 
 describe('createNativeBridgeApi', () => {
@@ -135,11 +143,27 @@ describe('createNativeBridgeApi', () => {
     expect(await api.interrupt('m', 's1')).toBe(false);
   });
 
-  it('createFolder resolves a failed ack rather than hanging or throwing', async () => {
+  it('createFolder resolves with the matching FolderAck CoreEvent', async () => {
+    const { core, dispatched, emitCoreEvent } = fakeCore();
+    const api = createNativeBridgeApi({ core });
+
+    const pending = api.createFolder('m', 'some/path');
+    await Promise.resolve(); // let the dispatch + listener registration settle
+    const intent = dispatched[0]!;
+    if (typeof intent !== 'object' || !intent.createFolder) {
+      throw new Error(`expected a createFolder intent, got ${JSON.stringify(intent)}`);
+    }
+    const { requestId } = intent.createFolder;
+
+    emitCoreEvent({ folderAck: { requestId, success: true, path: 'some/path', error: null } });
+    expect(await pending).toEqual({ type: 'folder-ack', requestId, success: true, path: 'some/path' });
+  });
+
+  it('createFolder times out to a failed ack rather than hanging forever', async () => {
     const { core } = fakeCore();
     const api = createNativeBridgeApi({ core });
 
-    const ack = await api.createFolder('m', 'some/path');
+    const ack = await api.createFolder('m', 'some/path', undefined, 5);
     expect(ack.success).toBe(false);
   });
 
