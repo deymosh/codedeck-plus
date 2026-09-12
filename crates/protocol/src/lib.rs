@@ -20,6 +20,7 @@ pub mod codec;
 pub mod commands;
 pub mod common;
 pub mod crypto;
+pub mod defaults;
 pub mod events;
 pub mod kinds;
 pub mod nip42;

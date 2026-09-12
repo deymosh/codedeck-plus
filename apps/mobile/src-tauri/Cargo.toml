@@ -105,6 +105,10 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"], 
 # `#[tauri::command]` wrapper. `nostr` stays a direct dep — the command layer
 # uses its types in its signatures.
 client-core = { path = "../../../crates/client-core", features = ["marmot"] }
+# `core_defaults` (corebridge.rs) reads straight from the wire-contract crate
+# — already an unconditional transitive dep via client-core above, so this
+# adds nothing to any build's actual compile graph.
+protocol = { path = "../../../crates/protocol" }
 nostr = { version = "0.44", features = ["std", "nip44", "nip59"] }
 # `client-core`'s `marmot` feature pulls the SAME rusqlite build MDK needs, but
 # `src/sqlstore.rs` uses `rusqlite` directly for its OWN generic SQL executor

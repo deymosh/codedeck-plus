@@ -53,6 +53,7 @@ function fakeNativeCore(stayConnected: boolean) {
   let onEventCb: ((e: CoreEvent) => void) | null = null;
 
   const core: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
     start: () => Promise.resolve(),
     stop: () => Promise.resolve(),

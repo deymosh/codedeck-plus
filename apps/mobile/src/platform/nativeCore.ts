@@ -23,6 +23,7 @@ import type {
   OutboxView,
   PairingView,
   PendingSessionsView,
+  ProtocolDefaults,
   QuickPromptsView,
   SettingsView,
   TranscriptRowsView,
@@ -62,6 +63,9 @@ export interface NativeCoreConfig {
 }
 
 export interface NativeCore {
+  /** The `ProtocolDefaults` view `protocol::defaults::protocol_defaults()`
+   *  computes — needs no running `Core`, callable before `init`. */
+  defaults(): Promise<ProtocolDefaults>;
   init(config: NativeCoreConfig): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -153,6 +157,7 @@ function asSnapshot(raw: unknown): NativeConnectionSnapshot {
 /** The wrapper over a resolved `invoke` / `listen` pair — the testable core. */
 export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: Logger): NativeCore {
   return {
+    defaults: () => invoke<ProtocolDefaults>('core_defaults'),
     init: (config) =>
       invoke<void>('core_init', {
         config: {

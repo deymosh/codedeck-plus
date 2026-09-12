@@ -240,6 +240,16 @@ pub fn core_available() -> bool {
     true
 }
 
+/// The phone-facing defaults `protocol::defaults` computes from its own
+/// constants (effort levels, permission modes, the default relay lists, the
+/// custom-providers capability string, the provider-base-url error message)
+/// — a pure read needing no running `Core`, callable before `core_init`.
+#[tauri::command]
+#[specta::specta]
+pub fn core_defaults() -> protocol::defaults::ProtocolDefaults {
+    protocol::defaults::protocol_defaults()
+}
+
 /// Spin the bridge thread + `Core`. Idempotent — a second call is a no-op.
 #[tauri::command]
 #[specta::specta]
@@ -552,6 +562,7 @@ pub fn ts_bindings_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![
             core_available,
+            core_defaults,
             core_init,
             core_start,
             core_stop,

@@ -15,6 +15,13 @@ export const commands = {
 	 *  in-process path at all.
 	 */
 	coreAvailable: () => __TAURI_INVOKE<boolean>("core_available"),
+	/**
+	 *  The phone-facing defaults `protocol::defaults` computes from its own
+	 *  constants (effort levels, permission modes, the default relay lists, the
+	 *  custom-providers capability string, the provider-base-url error message)
+	 *  — a pure read needing no running `Core`, callable before `core_init`.
+	 */
+	coreDefaults: () => __TAURI_INVOKE<ProtocolDefaults>("core_defaults"),
 	/**  Spin the bridge thread + `Core`. Idempotent — a second call is a no-op. */
 	coreInit: (config: InitConfig) => typedError<null, string>(__TAURI_INVOKE("core_init", { config })),
 	coreStart: () => typedError<null, string>(__TAURI_INVOKE("core_start")),
@@ -1636,6 +1643,24 @@ export type PhoneToBridge_Serialize = ({ input: {
 } & SetProviderProfileMsg_Serialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "models-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "provider-profiles-request": {
 	type: "provider-profiles-request",
 } & BareMsg_Serialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "models-request"?: never; "pair-request"?: never; "permission-res"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never };
+
+export type ProtocolDefaults = {
+	/**
+	 *  Every value `EffortLevel` accepts, in the order a picker should list
+	 *  them — `bypassPermissions` has no `PermissionMode` counterpart by
+	 *  design (see `common::PermissionMode`'s own doc comment).
+	 */
+	effortLevels: EffortLevel[],
+	permissionModes: PermissionMode[],
+	defaultRelays: string[],
+	marmotRelays: string[],
+	/**
+	 *  The `custom-providers` capability string (`CAPABILITIES.customProviders`
+	 *  on the old TS side) — the one capability constant the phone UI reads.
+	 */
+	customProvidersCapability: string,
+	providerBaseUrlError: string,
+};
 
 export type ProviderModel = ProviderModel_Serialize | ProviderModel_Deserialize;
 

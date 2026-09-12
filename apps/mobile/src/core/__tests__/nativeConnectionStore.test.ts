@@ -34,6 +34,7 @@ function fakeMachines(lastHeartbeatAt: number | null): MachinesStore {
         },
       };
   const machinesCore: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),
     stop: () => Promise.reject(new Error('unused')),
@@ -67,6 +68,7 @@ function fakeCore(initial: NativeConnectionSnapshot = { status: 'idle', needsPai
   let onConnectionCb: ((s: NativeConnectionSnapshot) => void) | null = null;
 
   const core: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
     start: () => {
       calls.push('start');

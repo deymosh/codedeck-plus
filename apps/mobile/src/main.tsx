@@ -79,6 +79,16 @@ async function boot(): Promise<PhoneCore> {
       'This build was not compiled with the native-core Cargo feature (core_available returned false) — there is no fallback composition anymore.',
     );
   }
+  // Replace protocolConstants.ts's hand-written fallback with what Rust
+  // actually computed, before anything (settings hydration included) reads
+  // one of those values — see that module's own doc comment for why a plain
+  // reassignment here is visible to every already-imported consumer.
+  try {
+    const { applyProtocolDefaults } = await import('./core/protocolConstants');
+    applyProtocolDefaults(await nativeCore.defaults());
+  } catch (err) {
+    log(`[boot] core.defaults() failed — keeping the hand-written fallback: ${err}`);
+  }
   const core = await bootNative(nativeCore, kv);
 
   const { ensureNotificationPermission } = await import('./platform/notifier');

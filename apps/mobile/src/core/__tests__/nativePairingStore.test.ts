@@ -25,6 +25,7 @@ function fakeCore(initialView: PairingView = { phase: 'idle', error: null, timed
   let coreEventListener: ((e: CoreEvent) => void) | null = null;
 
   const core: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),
     stop: () => Promise.reject(new Error('unused')),

@@ -41,6 +41,8 @@ pub fn run() {
             #[cfg(feature = "native-core")]
             corebridge::core_available,
             #[cfg(feature = "native-core")]
+            corebridge::core_defaults,
+            #[cfg(feature = "native-core")]
             corebridge::core_init,
             #[cfg(feature = "native-core")]
             corebridge::core_start,

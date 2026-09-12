@@ -35,6 +35,7 @@ function fakeCore() {
   );
 
   const core: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),
     stop: () => Promise.reject(new Error('unused')),

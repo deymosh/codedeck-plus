@@ -21,6 +21,16 @@ function fakeCore(machinesView: MachinesView = { machines: {} }) {
   const transcriptViewCalls: Array<[string, string]> = [];
 
   const core: NativeCore = {
+    defaults: () =>
+      Promise.resolve({
+        effortLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
+        permissionModes: ['default', 'acceptEdits', 'plan'],
+        defaultRelays: ['wss://relay2.descendant.io', 'wss://relay.primal.net', 'wss://nostr.oxtr.dev'],
+        marmotRelays: ['wss://relay.us.whitenoise.chat', 'wss://relay.eu.whitenoise.chat'],
+        customProvidersCapability: 'custom-providers',
+        providerBaseUrlError:
+          'Base URL must be https:// (http:// is allowed only for localhost, 127.0.0.1 or [::1])',
+      }),
     init: (config) => {
       initCalls.push(config);
       return Promise.resolve();

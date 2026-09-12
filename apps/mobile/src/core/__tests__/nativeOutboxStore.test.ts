@@ -17,6 +17,7 @@ function fakeCore(initialView: OutboxView = { items: [] }) {
   let coreEventListener: ((e: CoreEvent) => void) | null = null;
 
   const core: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
     init: () => Promise.reject(new Error('unused')),
     start: () => Promise.reject(new Error('unused')),
     stop: () => Promise.reject(new Error('unused')),

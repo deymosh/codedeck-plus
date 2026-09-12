@@ -724,6 +724,7 @@ dependencies = [
  "client-core",
  "client-runtime",
  "nostr",
+ "protocol",
  "rusqlite",
  "serde",
  "serde_json",
