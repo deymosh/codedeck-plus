@@ -259,9 +259,28 @@ impl Core {
                 .await;
         }
 
+        // A machine paired in a PRIOR run is already in `hydrated.stores.machines`
+        // — nothing about a plain (re)connect ever calls `refresh_authors()` for
+        // it (that only fires reactively, off a pairing-related route/intent
+        // result), so seeding this empty and waiting for one would leave a
+        // returning phone subscribed to nobody: `NostrClient::connect()` treats
+        // an empty author list as vacuous and opens zero real subscriptions,
+        // silently dropping every heartbeat and session update the bridge sends
+        // from that point on. Seed it here from the same persisted state
+        // `refresh_authors()` itself reads, so the very first `connect()` this
+        // process makes already has the right subscription from cold start.
+        let initial_authors = {
+            let mut authors = hydrated.stores.machines.machine_pubkeys();
+            if let Some(candidate) = &hydrated.stores.pairing.candidate {
+                if !authors.contains(&candidate.pubkey_hex) {
+                    authors.push(candidate.pubkey_hex.clone());
+                }
+            }
+            authors
+        };
         let host = Rc::new(HostBridge {
             tx: tx.clone(),
-            machines: RefCell::new(Vec::new()),
+            machines: RefCell::new(initial_authors.clone()),
             cursor: RefCell::new(hydrated.last_stored_seen),
         });
         let ws = WsTransport::new(WsConfig {
@@ -284,7 +303,7 @@ impl Core {
             nostr,
             ws,
             api: BridgeApi::new(),
-            machines: Vec::new(),
+            machines: initial_authors,
             host,
             retry_timer: None,
             vis_timer: None,
@@ -2485,6 +2504,73 @@ mod tests {
                 core.stop();
                 settle().await;
                 assert_eq!(core.connection_status().await.0, ConnectionStatus::Stopped);
+            })
+            .await;
+    }
+
+    /// A machine paired in a PRIOR run is only in the persisted `Kv`, never in
+    /// `set_machines` — production code never calls that (only a live pairing
+    /// route/intent populates the subscription author list reactively). A
+    /// fresh `Core::spawn()` used to leave that list empty for the rest of the
+    /// process's life unless a NEW pairing happened to run in it:
+    /// `NostrClient::connect()` treats an empty author list as vacuous and
+    /// opens zero of the three bridge subscriptions, so a returning phone
+    /// would never see another heartbeat or session update from a machine it
+    /// paired before this boot — the root cause behind "the machine dot never
+    /// leaves orange, and a bridge-confirmed session never appears, except
+    /// right after pairing".
+    #[tokio::test]
+    async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without_set_machines() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let ports = CorePorts { kv: Rc::new(kv), ..CorePorts::default() };
+
+                let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                // Deliberately no `core.set_machines(...)` — this is the part
+                // of the boot sequence a real app reopen actually exercises.
+                core.start();
+
+                // Hangs (and `next_frame` panics at its 2s budget) if the
+                // subscription author list is still empty at this point.
+                eose_all(&mut mock).await;
+                settle().await;
+
+                // A real heartbeat from that same machine must still reach the
+                // machines view — proving the subscription actually scopes to
+                // it, not just that some vacuous socket opened.
+                let sessions_json =
+                    r#"{"type":"sessions","machine":"bridge","sessions":[],"protocolVersion":10}"#;
+                let msg = protocol::codec::decode_bridge_to_phone(sessions_json).unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = protocol::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event =
+                    nostr::EventBuilder::new(nostr::Kind::Custom(SESSION_LIST_KIND), ct)
+                        .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                        .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-1",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+
+                let view = core.machines_view().await;
+                let m = view.machines.get(&machine.pubkey_hex).expect("machine still known");
+                assert!(m.last_heartbeat_at.is_some(), "heartbeat never reached the view");
             })
             .await;
     }
