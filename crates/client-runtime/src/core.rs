@@ -543,6 +543,13 @@ enum Msg {
     /// reconcile, KeyPackage / 10051 publish, then the 445 sub). Deferred to a
     /// message so the sync connection `apply` stays non-blocking.
     MarmotStart,
+    /// `HostBridge::note_stored_seen` advanced the cursor — persist it so a
+    /// restart resumes the stored-response filter instead of replaying the
+    /// relay's entire history for this identity. Deferred the same way every
+    /// other host callback is: `note_stored_seen` itself is a synchronous
+    /// trait method with no `Kv` access, called from inside the transport's
+    /// own task.
+    NoteStoredSeen(i64),
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -569,8 +576,10 @@ enum ViewQuery {
 struct HostBridge {
     tx: mpsc::UnboundedSender<Msg>,
     machines: RefCell<Vec<String>>,
-    /// `last_stored_seen` cursor (seconds). F1 keeps it in memory; F2 backs it
-    /// with the `Kv` port.
+    /// `last_stored_seen` cursor (seconds) — the in-memory copy `authors()`'s
+    /// caller reads synchronously. `note_stored_seen` also fires
+    /// `Msg::NoteStoredSeen` to persist it through the `Kv` port, so a restart
+    /// resumes the stored-response filter instead of replaying history.
     cursor: RefCell<i64>,
 }
 
@@ -595,6 +604,7 @@ impl NostrClientHost for HostBridge {
         let mut c = self.cursor.borrow_mut();
         if ts > *c {
             *c = ts;
+            let _ = self.tx.send(Msg::NoteStoredSeen(ts));
         }
     }
 }
@@ -707,6 +717,9 @@ impl Loop {
                     }
                 }
                 Msg::RelayEvent(event) => self.on_relay_event(event).await,
+                Msg::NoteStoredSeen(ts) => {
+                    Persister::new(self.kv.as_ref()).save_last_stored_seen(ts).await;
+                }
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
                 Msg::PairDeadline => self.on_pair_deadline(),
                 Msg::Intent { intent, reply } => {
@@ -2086,7 +2099,8 @@ mod tests {
     use protocol::crypto::{generate_keypair, keypair_from_secret_hex};
     use protocol::codec::encode_bridge_to_phone;
     use protocol::commands::UploadImageMsg;
-    use protocol::kinds::{LIVE_KIND, SESSION_LIST_KIND};
+    use protocol::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
+    use crate::stores::LAST_STORED_SEEN_KEY;
     use crate::intent::SessionImageSend;
     use std::sync::Mutex;
     use tokio::task::LocalSet;
@@ -2422,6 +2436,59 @@ mod tests {
                 assert_eq!(messages.len(), 1, "{messages:?}");
                 assert_eq!(messages[0].0, machine.pubkey_hex);
                 assert!(matches!(messages[0].1, BridgeToPhone::InputAck(_)));
+            })
+            .await;
+    }
+
+    /// A stored-kind event (4516/30515) advancing `last_stored_seen` used to
+    /// update only the in-memory `HostBridge` cursor — a restart re-hydrated
+    /// from the `Kv` at 0 and re-fetched the peer's ENTIRE stored history
+    /// instead of resuming from where it left off, on every single restart.
+    #[tokio::test]
+    async fn a_stored_kind_event_persists_the_cursor_to_kv() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let kv = Rc::new(MemoryKv::new());
+                let ports = CorePorts { kv: Rc::clone(&kv) as Rc<dyn Kv>, ..CorePorts::default() };
+                let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+
+                assert_eq!(kv.get(LAST_STORED_SEEN_KEY).await, None);
+
+                let msg = protocol::codec::decode_bridge_to_phone(
+                    r#"{"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
+                )
+                .unwrap();
+                let plaintext = encode_bridge_to_phone(&msg);
+                let ct = protocol::crypto::encrypt_to(
+                    &machine.secret_key,
+                    &phone.pubkey_hex,
+                    &plaintext,
+                )
+                .unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                let created_at = event.created_at.as_secs();
+                // "cd-1" is a real, currently-open subscription id (one of the
+                // three bridge filters `eose_all` just drained) — an id with no
+                // matching subscription is silently dropped by the transport,
+                // same as a real relay addressing a closed sub.
+                mock.push(format!(
+                    r#"["EVENT","cd-1",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&event)
+                ));
+                settle().await;
+
+                assert_eq!(
+                    kv.get(LAST_STORED_SEEN_KEY).await,
+                    Some(created_at.to_string()),
+                );
             })
             .await;
     }

@@ -509,6 +509,20 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
         .port_or_known_default()
         .ok_or("relay url has no port and unknown scheme")?;
     let tls = matches!(url.scheme(), "wss");
+    // Cleartext ws:// leaks every relay message (session output, DMs, pairing)
+    // to anyone on the path — allowed only for .onion (Tor's own onion routing
+    // + the hidden service's authentication already provide the transport
+    // security wss:// would otherwise supply) and loopback (traffic that never
+    // leaves the machine — the mock relays every test in this file dials
+    // against). This was previously only an app-level settings check (easy to
+    // bypass via config file or a manually typed relay); it now holds
+    // regardless of what added this URL.
+    let is_loopback = matches!(host.as_str(), "127.0.0.1" | "::1" | "localhost");
+    if !tls && !host.ends_with(".onion") && !is_loopback {
+        return Err(format!(
+            "refusing cleartext ws:// to non-.onion, non-loopback host {host:?} — use wss://"
+        ));
+    }
 
     let tcp: Either<TcpStream, Socks5Stream<TcpStream>> = match proxy {
         Some(p) => Either::Right(
@@ -554,6 +568,31 @@ mod tests {
             identity: phone.clone(),
             proxy: None,
         })
+    }
+
+    #[tokio::test]
+    async fn dial_refuses_cleartext_to_a_public_host() {
+        let err = dial("ws://relay.example.com", None).await.unwrap_err();
+        assert!(err.contains("cleartext"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn dial_does_not_refuse_cleartext_to_onion_on_scheme_grounds() {
+        // No real Tor network in a test — this fails on the actual connection
+        // attempt (no proxy, an .onion address does not resolve over plain
+        // DNS), but that failure must be a dial/DNS error, never the
+        // cleartext-rejection this test exists to rule out.
+        let err = dial("ws://expyuzz4wqqyqhjn.onion", None).await.unwrap_err();
+        assert!(!err.contains("cleartext"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn dial_does_not_refuse_cleartext_to_loopback() {
+        let mock = mock_relay().await;
+        // A real connect+handshake against the mock relay itself, over ws://
+        // 127.0.0.1 — proves loopback is genuinely usable, not just "not
+        // rejected before some other failure".
+        dial(&mock.url, None).await.unwrap();
     }
 
     fn a_filter(phone: &Keypair) -> Filter {
