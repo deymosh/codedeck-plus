@@ -92,7 +92,6 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_codedeck_stt::init())
         .plugin(tauri_plugin_background_relay::init())
-        .plugin(tauri_plugin_tor_proxy::init())
         .plugin(tauri_plugin_mesh::init());
     // F1: the in-process Rust client-runtime handle (behind the `native-core`
     // feature). Inert until the WebView calls `core_init`.

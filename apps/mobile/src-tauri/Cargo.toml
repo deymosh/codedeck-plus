@@ -78,11 +78,6 @@ tauri-plugin-http = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-codedeck-stt = { path = "../tauri-plugin-codedeck-stt" }
 tauri-plugin-background-relay = { path = "../tauri-plugin-background-relay" }
-# Routes the WebView's relay traffic through Orbot's SOCKS5 proxy on Android
-# (androidx.webkit.ProxyController) — no-op on desktop. Off by default; the
-# user opts in via a settings toggle (main.tsx wires it before the transport
-# opens its first socket).
-tauri-plugin-tor-proxy = { path = "../tauri-plugin-tor-proxy" }
 # Phase 5d: embedded nostr-vpn FIPS mesh as CodeDeck's own Android VpnService
 # (one app on the phone). The mesh engine (nostr-vpn-app-core) is NOT a direct
 # dep of this crate — it is cross-compiled for arm64 and packaged by

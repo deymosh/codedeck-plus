@@ -2833,36 +2833,6 @@
           "type": "string",
           "const": "notification:deny-show",
           "markdownDescription": "Denies the show command without any pre-configured scope."
-        },
-        {
-          "description": "Default permissions for the tor-proxy plugin: enable/disable routing the WebView's relay traffic through a local SOCKS5 proxy (Orbot)\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`",
-          "type": "string",
-          "const": "tor-proxy:default",
-          "markdownDescription": "Default permissions for the tor-proxy plugin: enable/disable routing the WebView's relay traffic through a local SOCKS5 proxy (Orbot)\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`"
-        },
-        {
-          "description": "Enables the disable command without any pre-configured scope.",
-          "type": "string",
-          "const": "tor-proxy:allow-disable",
-          "markdownDescription": "Enables the disable command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the enable command without any pre-configured scope.",
-          "type": "string",
-          "const": "tor-proxy:allow-enable",
-          "markdownDescription": "Enables the enable command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the disable command without any pre-configured scope.",
-          "type": "string",
-          "const": "tor-proxy:deny-disable",
-          "markdownDescription": "Denies the disable command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the enable command without any pre-configured scope.",
-          "type": "string",
-          "const": "tor-proxy:deny-enable",
-          "markdownDescription": "Denies the enable command without any pre-configured scope."
         }
       ]
     },

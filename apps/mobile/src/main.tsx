@@ -94,11 +94,11 @@ async function boot(): Promise<PhoneCore> {
     requestPermission: ensureNotificationPermission,
     log,
   });
-  // Rust dials its own SOCKS5 at `core.init` — the WebView's own
-  // PROXY_OVERRIDE (`platform/torProxy.ts`) has no traffic to affect under
-  // native-core and is not attached here. Toggling Tor while already running
-  // does not yet hot-reconfigure that transport — it takes effect on the next
-  // app start (`client_runtime::Core`'s `tor_changed` effect has no
+  // Rust dials its own SOCKS5 at `core.init` (`CoreConfig.proxy`/`tor`, set
+  // from the persisted `torProxyEnabled` setting) — there is no WebView-side
+  // proxy toggle to attach here. Toggling Tor while already running does not
+  // yet hot-reconfigure that transport — it takes effect on the next app
+  // start (`client_runtime::Core`'s `tor_changed` effect has no
   // transport-proxy seam wired yet, a separate, known gap; see
   // docs/CLIENT-CORE.md).
 

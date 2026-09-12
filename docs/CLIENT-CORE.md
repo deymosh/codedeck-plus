@@ -37,10 +37,11 @@ on next app start), and the attention chime (`ping`) + one-QR mesh auto-join
 (`Intent`'s `mesh_join`/the ping seam) have no platform port wired for
 native-core yet — the latter is expected this early (mesh is its own F6
 Kotlin phase in the plan, not an F2b concern). `platform/torProxy.ts` (the
-WebView `PROXY_OVERRIDE` toggle) and its Tauri plugin
-(`tauri-plugin-tor-proxy`) are now dead code with no remaining call site —
-flagged here as a follow-up cleanup, deliberately not pulled in this pass (a
-whole plugin removal is a bigger, separate change than a TS module deletion).
+WebView `PROXY_OVERRIDE` toggle) and its Tauri plugin (`tauri-plugin-tor-proxy`)
+had become dead code with no remaining call site once native-core started
+dialing its own SOCKS5 directly — both are now deleted; the `torProxyEnabled`
+setting and its Settings toggle stay, since they still drive `CoreConfig.proxy`/
+`tor` at `core_init`.
 
 ## Why
 
