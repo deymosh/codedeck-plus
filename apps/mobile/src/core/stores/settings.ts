@@ -6,14 +6,8 @@
  * history — since `client_runtime::Core` owns the settings slice end to end.
  */
 import type { StoreApi } from 'zustand/vanilla';
-import {
-  DEFAULT_RELAYS,
-  MARMOT_RELAYS,
-  effortLevelSchema,
-  permissionModeSchema,
-  type EffortLevel,
-  type PermissionMode,
-} from '@codedeck/protocol';
+import { DEFAULT_RELAYS, MARMOT_RELAYS, effortLevelSchema, permissionModeSchema } from '@codedeck/protocol';
+import type { EffortLevel, PermissionMode } from '../nativeCoreTypes';
 import type { KV } from '../ports';
 
 export const SETTINGS_STORAGE_KEY = 'settings';

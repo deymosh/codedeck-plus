@@ -18,7 +18,8 @@
  * options are all optional on the wire.
  */
 import { useEffect, useState } from 'react';
-import { CAPABILITIES, effortLevelSchema, type EffortLevel } from '@codedeck/protocol';
+import { CAPABILITIES, effortLevelSchema } from '@codedeck/protocol';
+import type { EffortLevel } from '../core/nativeCoreTypes';
 import { useMachines, usePhoneCore } from './coreContext';
 import { ScreenOverlay } from './ScreenOverlay';
 import { cx, shared as s } from './shared';

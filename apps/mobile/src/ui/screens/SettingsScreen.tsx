@@ -7,12 +7,8 @@
  * every component supports manually adding relays).
  */
 import { useEffect, useState } from 'react';
-import {
-  effortLevelSchema,
-  permissionModeSchema,
-  type EffortLevel,
-  type PermissionMode,
-} from '@codedeck/protocol';
+import { effortLevelSchema, permissionModeSchema } from '@codedeck/protocol';
+import type { EffortLevel, PermissionMode } from '../../core/nativeCoreTypes';
 import { MODE_LABELS } from '../../core/modeCycle';
 import { UI_SCALE_DEFAULT, UI_SCALE_MAX, UI_SCALE_MIN } from '../../core/stores/settings';
 import { tauriServiceApi } from '../../platform/foregroundService';

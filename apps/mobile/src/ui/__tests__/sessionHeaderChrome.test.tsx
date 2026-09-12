@@ -17,7 +17,7 @@
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import type { RemoteSessionInfo, UsageData } from '@codedeck/protocol';
+import type { RemoteSessionInfo, UsageData } from '../../core/nativeCoreTypes';
 import { buildFakePhoneCore } from '../../core/__tests__/nativeCoreFixture';
 import type { MachineView, SettingsView } from '../../core/nativeCoreTypes';
 import type { PhoneCore } from '../../core/phoneCore';

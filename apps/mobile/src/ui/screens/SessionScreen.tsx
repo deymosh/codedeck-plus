@@ -24,7 +24,8 @@
  * header when a session needing attention lies left/right in carousel order.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { effortLevelSchema, type UsageData } from '@codedeck/protocol';
+import { effortLevelSchema } from '@codedeck/protocol';
+import type { UsageData } from '../../core/nativeCoreTypes';
 import { createModeCycle, MODE_LABELS } from '../../core/modeCycle';
 import { realTimers } from '../../core/ports';
 import { useConnection, useMachines, useOutbox, usePhoneCore, useQuickPrompts, useSettings, useTranscript, useUi } from '../coreContext';

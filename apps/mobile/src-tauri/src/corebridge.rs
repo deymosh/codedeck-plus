@@ -576,7 +576,11 @@ pub fn ts_bindings_builder() -> tauri_specta::Builder<tauri::Wry> {
             core_transcript_view,
         ])
         // Cross the wire as event payloads, not command returns/args —
-        // collect_commands never sees them otherwise.
+        // collect_commands never sees them otherwise. BridgeToPhone in
+        // particular is the core://message event's payload (bridge_message
+        // above) — collect_commands never reaches it since core_send/
+        // core_publish only carry PhoneToBridge (the other direction).
         .typ::<ConnectionPayload>()
         .typ::<CoreEvent>()
+        .typ::<BridgeToPhone>()
 }

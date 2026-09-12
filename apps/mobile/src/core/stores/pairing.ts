@@ -13,7 +13,7 @@
  * TYPES survive here.
  */
 import type { StoreApi } from 'zustand/vanilla';
-import type { PairAckMessage } from '@codedeck/protocol';
+import type { PairAckMessage } from '../nativeCoreTypes';
 import { hexFromNpub } from '../crypto';
 
 export interface ParsedPairingUrl {

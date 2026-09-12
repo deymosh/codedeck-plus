@@ -16,13 +16,9 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import {
-  CAPABILITIES,
-  PROVIDER_BASE_URL_ERROR,
-  type ProviderProfileInfo,
-} from '@codedeck/protocol';
+import { CAPABILITIES, PROVIDER_BASE_URL_ERROR } from '@codedeck/protocol';
 import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
-import type { MachineView } from '../../core/nativeCoreTypes';
+import type { MachineView, ProviderProfileInfo } from '../../core/nativeCoreTypes';
 import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { MachineProviders, profileIdFromLabel } from '../screens/MachineProviders';

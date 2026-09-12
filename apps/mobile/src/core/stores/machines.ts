@@ -21,7 +21,7 @@ import type {
   RemoteSessionInfo,
   SessionListMessage,
   UsageData,
-} from '@codedeck/protocol';
+} from '../nativeCoreTypes';
 
 export type ListingPresence = 'live' | 'stale' | 'offline';
 

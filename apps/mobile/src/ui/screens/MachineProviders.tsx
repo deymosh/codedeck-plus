@@ -22,13 +22,8 @@
  *   can be fixed or deleted rather than sitting unexplained.
  */
 import { useEffect, useState } from 'react';
-import {
-  CAPABILITIES,
-  isValidProviderBaseUrl,
-  PROVIDER_BASE_URL_ERROR,
-  type ProviderModel,
-  type ProviderProfileInfo,
-} from '@codedeck/protocol';
+import { CAPABILITIES, isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '@codedeck/protocol';
+import type { ProviderModel, ProviderProfileInfo } from '../../core/nativeCoreTypes';
 import { useMachines, usePhoneCore, useUi } from '../coreContext';
 import { cx, shared as s } from '../shared';
 

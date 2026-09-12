@@ -7,7 +7,7 @@
  * Expansion state lives in the parent's expandedGroups set (like
  * ToolGroupRow) so it survives virtua unmounting the row.
  */
-import type { DiffLine, OutputEntry } from '@codedeck/protocol';
+import type { DiffLine, OutputEntry } from '../../../core/nativeCoreTypes';
 import styles from './rows.module.css';
 
 export const DIFF_COLLAPSE_AT = 40;

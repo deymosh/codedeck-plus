@@ -15,7 +15,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { CAPABILITIES, type ProviderProfileInfo } from '@codedeck/protocol';
+import { CAPABILITIES } from '@codedeck/protocol';
+import type { ProviderProfileInfo } from '../../core/nativeCoreTypes';
 import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
 import type { FakeNativeCore } from '../../core/__tests__/nativeCoreFixture';
 import type { MachineView } from '../../core/nativeCoreTypes';

@@ -15,7 +15,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
-import type { PhoneToBridgeMessage } from '@codedeck/protocol';
+import type { PhoneToBridgeMessage } from '../../core/nativeCoreTypes';
 import { useMachines, useOutbox, usePhoneCore, useTranscript, useUi } from '../coreContext';
 import { buildDisplayEntries, type DisplayEntry } from './displayEntries';
 import { visibleOutboxItems } from './outboxCoverage';

@@ -1,8 +1,15 @@
 /**
  * Layering guard: production phone code (src/core, src/platform, src/ui, the
- * entrypoints) must NEVER import @codedeck/core or @codedeck/testkit — the
- * wire contract (@codedeck/protocol) is the only shared code. Bridge engine +
- * testkit are devDependencies for the contract tests only.
+ * entrypoints) must NEVER import @codedeck/core or @codedeck/testkit. Bridge
+ * engine + testkit are devDependencies for the contract tests only.
+ *
+ * @codedeck/protocol is a narrower, deliberate exception: `core/nativeCoreTypes.ts`
+ * (generated from `crates/protocol`/`client-core`/`client-runtime`) is the
+ * source of truth for every wire TYPE this app uses now — only the small set
+ * of files that need protocol's REAL RUNTIME behavior (the phone-side zod
+ * schemas backing `SettingsScreen`'s effort/permission dropdowns, the
+ * `core://message` decode boundary in `platform/nativeCore.ts`, capability
+ * string constants) still import it, and only for that.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';

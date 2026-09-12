@@ -37,7 +37,7 @@
  */
 import type { NativeCore } from '../../platform/nativeCore';
 import type { BridgeApiLike } from './bridgeApi';
-import type { PhoneToBridgeMessage } from '@codedeck/protocol';
+import type { PhoneToBridgeMessage } from '../nativeCoreTypes';
 import type { Intent } from '../nativeCoreTypes';
 
 export interface NativeBridgeApiDeps {

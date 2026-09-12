@@ -12,7 +12,7 @@
  */
 import { createStore } from 'zustand/vanilla';
 import { hydrateFromCore } from './nativeHydration';
-import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
+import type { EffortLevel, PermissionMode } from '../nativeCoreTypes';
 import type { NativeCore } from '../../platform/nativeCore';
 import type { SettingsView as NativeSettingsView } from '../nativeCoreTypes';
 import type { SettingsData, SettingsStore, SettingsStoreState } from './settings';

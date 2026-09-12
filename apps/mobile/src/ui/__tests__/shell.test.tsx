@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { RemoteSessionInfo } from '@codedeck/protocol';
+import type { RemoteSessionInfo } from '../../core/nativeCoreTypes';
 import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
 import type { MachineView, PendingSessionView, SettingsView } from '../../core/nativeCoreTypes';
 import type { PhoneCore } from '../../core/phoneCore';

@@ -21,7 +21,7 @@ import type {
   PhoneToBridgeMessage,
   SetProviderProfileMessage,
   UploadImageMessage,
-} from '@codedeck/protocol';
+} from '../nativeCoreTypes';
 import type { PublishConfirmOptions, PublishResult } from '../ports';
 
 export interface InvalidPayloadRecord {

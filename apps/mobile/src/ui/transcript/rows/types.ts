@@ -4,7 +4,7 @@
  * wires that to bridgeApi.send(machine, msg), and component tests substitute a
  * recorder to assert the exact wire payload.
  */
-import type { PhoneToBridgeMessage } from '@codedeck/protocol';
+import type { PhoneToBridgeMessage } from '../../../core/nativeCoreTypes';
 
 export interface CardActions {
   /** Send one phone→bridge command for THIS session's machine. */

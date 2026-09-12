@@ -11,7 +11,7 @@
  * createSession.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SessionState } from '@codedeck/protocol';
+import type { SessionState } from '../core/nativeCoreTypes';
 import {
   useConnection,
   useMachines,

@@ -4,7 +4,7 @@
  * entries), plus grouping, answered-state detection and the noise filter.
  */
 import { describe, it, expect } from 'vitest';
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import {
   buildDisplayEntries,
   findPendingPermission,

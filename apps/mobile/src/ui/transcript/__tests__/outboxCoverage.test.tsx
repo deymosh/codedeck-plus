@@ -19,7 +19,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import { buildFakePhoneCore, tick } from '../../../core/__tests__/nativeCoreFixture';
 import { generateKeypair } from '../../../core/crypto';
 import type { OutboxItem as NativeOutboxItem, TranscriptRowView } from '../../../core/nativeCoreTypes';

@@ -114,6 +114,12 @@ export type ActionFailed = "decryptFailed" | "decodeFailed" | "publishRejected" 
 
 export type AppUnderTest = "kubo" | "veil" | "custom";
 
+export type AuthStatus = {
+	hasAnthropicKey: boolean,
+	hasGithubPat: boolean,
+	hasEnvKey: boolean,
+};
+
 export type BareMsg = BareMsg_Serialize | BareMsg_Deserialize;
 
 export type BareMsg_Deserialize = VersionFields_Deserialize;
@@ -122,6 +128,116 @@ export type BareMsg_Serialize = VersionFields_Serialize;
 
 /**  Which host binary a bridge runs as — a UI badge only; identity is the keypair. */
 export type BridgeHostKind = "cli" | "vscode" | "service";
+
+/**  The bridge→phone message union. */
+export type BridgeToPhone = BridgeToPhone_Serialize | BridgeToPhone_Deserialize;
+
+/**  The bridge→phone message union. */
+export type BridgeToPhone_Deserialize = ({ sessions: {
+	type: "sessions",
+} & SessionListMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; usage?: never } | ({ output: {
+	type: "output",
+} & OutputMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; sessions?: never; usage?: never } | ({ "input-ack": {
+	type: "input-ack",
+} & InputAckMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "sync-begin": {
+	type: "sync-begin",
+} & SyncBeginMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "sync-chunk": {
+	type: "sync-chunk",
+} & SyncChunkMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "sync-end": {
+	type: "sync-end",
+} & SyncEndMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-pending": {
+	type: "session-pending",
+} & SessionPendingMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-ready": {
+	type: "session-ready",
+} & SessionReadyMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-failed": {
+	type: "session-failed",
+} & SessionFailedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "input-failed": {
+	type: "input-failed",
+} & InputFailedMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "close-session-ack": {
+	type: "close-session-ack",
+} & CloseSessionAckMsg }) & { "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-replaced": {
+	type: "session-replaced",
+} & SessionReplacedMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "mode-confirmed": {
+	type: "mode-confirmed",
+} & ModeConfirmedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "effort-confirmed": {
+	type: "effort-confirmed",
+} & EffortConfirmedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "model-confirmed": {
+	type: "model-confirmed",
+} & ModelConfirmedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "folder-ack": {
+	type: "folder-ack",
+} & FolderAckMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ usage: {
+	type: "usage",
+} & UsageMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never } | ({ "gsd-state": {
+	type: "gsd-state",
+} & GsdStateMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ models: {
+	type: "models",
+} & ModelsMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; output?: never; sessions?: never; usage?: never } | ({ "credentials-ack": {
+	type: "credentials-ack",
+} & CredentialsAckMsg_Deserialize }) & { "close-session-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "device-config-ack": {
+	type: "device-config-ack",
+} & DeviceConfigAckMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "pair-ack": {
+	type: "pair-ack",
+} & PairAckMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "provider-profiles": {
+	type: "provider-profiles",
+} & ProviderProfilesMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "provider-profile-ack": {
+	type: "provider-profile-ack",
+} & ProviderProfileAckMsg_Deserialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never };
+
+/**  The bridge→phone message union. */
+export type BridgeToPhone_Serialize = ({ sessions: {
+	type: "sessions",
+} & SessionListMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; usage?: never } | ({ output: {
+	type: "output",
+} & OutputMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; sessions?: never; usage?: never } | ({ "input-ack": {
+	type: "input-ack",
+} & InputAckMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "sync-begin": {
+	type: "sync-begin",
+} & SyncBeginMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "sync-chunk": {
+	type: "sync-chunk",
+} & SyncChunkMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "sync-end": {
+	type: "sync-end",
+} & SyncEndMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-pending": {
+	type: "session-pending",
+} & SessionPendingMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-ready": {
+	type: "session-ready",
+} & SessionReadyMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-failed": {
+	type: "session-failed",
+} & SessionFailedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "input-failed": {
+	type: "input-failed",
+} & InputFailedMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "close-session-ack": {
+	type: "close-session-ack",
+} & CloseSessionAckMsg }) & { "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "session-replaced": {
+	type: "session-replaced",
+} & SessionReplacedMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "mode-confirmed": {
+	type: "mode-confirmed",
+} & ModeConfirmedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "effort-confirmed": {
+	type: "effort-confirmed",
+} & EffortConfirmedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "model-confirmed": {
+	type: "model-confirmed",
+} & ModelConfirmedMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "folder-ack": {
+	type: "folder-ack",
+} & FolderAckMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ usage: {
+	type: "usage",
+} & UsageMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never } | ({ "gsd-state": {
+	type: "gsd-state",
+} & GsdStateMsg }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ models: {
+	type: "models",
+} & ModelsMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; output?: never; sessions?: never; usage?: never } | ({ "credentials-ack": {
+	type: "credentials-ack",
+} & CredentialsAckMsg_Serialize }) & { "close-session-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "device-config-ack": {
+	type: "device-config-ack",
+} & DeviceConfigAckMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "pair-ack": {
+	type: "pair-ack",
+} & PairAckMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "provider-profile-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "provider-profiles": {
+	type: "provider-profiles",
+} & ProviderProfilesMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profile-ack"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never } | ({ "provider-profile-ack": {
+	type: "provider-profile-ack",
+} & ProviderProfileAckMsg_Serialize }) & { "close-session-ack"?: never; "credentials-ack"?: never; "device-config-ack"?: never; "effort-confirmed"?: never; "folder-ack"?: never; "gsd-state"?: never; "input-ack"?: never; "input-failed"?: never; "mode-confirmed"?: never; "model-confirmed"?: never; "pair-ack"?: never; "provider-profiles"?: never; "session-failed"?: never; "session-pending"?: never; "session-ready"?: never; "session-replaced"?: never; "sync-begin"?: never; "sync-chunk"?: never; "sync-end"?: never; models?: never; output?: never; sessions?: never; usage?: never };
+
+export type CloseSessionAckMsg = {
+	sessionId: string,
+	success: boolean,
+};
 
 export type ConnectionPayload = {
 	status: string,
@@ -210,6 +326,26 @@ export type CreateSessionMsg_Serialize = {
 
 export type CredentialsAck = CredentialsAck_Serialize | CredentialsAck_Deserialize;
 
+export type CredentialsAckMsg = CredentialsAckMsg_Serialize | CredentialsAckMsg_Deserialize;
+
+export type CredentialsAckMsg_Deserialize = {
+	machine: string,
+	success: boolean,
+	hasAnthropicKey: boolean,
+	hasGithubPat: boolean,
+	keyValid?: boolean | null,
+	error?: string | null,
+};
+
+export type CredentialsAckMsg_Serialize = {
+	machine: string,
+	success: boolean,
+	hasAnthropicKey: boolean,
+	hasGithubPat: boolean,
+	keyValid?: boolean | null,
+	error?: string | null,
+};
+
 export type CredentialsAck_Deserialize = {
 	state: AckState,
 	at: number,
@@ -233,6 +369,20 @@ export type CredentialsAck_Serialize = {
 export type DeviceConfig = DeviceConfig_Serialize | DeviceConfig_Deserialize;
 
 export type DeviceConfigAck = DeviceConfigAck_Serialize | DeviceConfigAck_Deserialize;
+
+export type DeviceConfigAckMsg = DeviceConfigAckMsg_Serialize | DeviceConfigAckMsg_Deserialize;
+
+export type DeviceConfigAckMsg_Deserialize = {
+	success: boolean,
+	reachable?: boolean | null,
+	error?: string | null,
+};
+
+export type DeviceConfigAckMsg_Serialize = {
+	success: boolean,
+	reachable?: boolean | null,
+	error?: string | null,
+};
 
 export type DeviceConfigAck_Deserialize = {
 	state: AckState,
@@ -356,7 +506,28 @@ export type EffortChangeMsg_Serialize = {
 	level: EffortLevel,
 } & VersionFields_Serialize;
 
+export type EffortConfirmedMsg = {
+	sessionId: string,
+	level: EffortLevel,
+};
+
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
+
+export type FolderAckMsg = FolderAckMsg_Serialize | FolderAckMsg_Deserialize;
+
+export type FolderAckMsg_Deserialize = {
+	requestId: string,
+	success: boolean,
+	path?: string | null,
+	error?: string | null,
+};
+
+export type FolderAckMsg_Serialize = {
+	requestId: string,
+	success: boolean,
+	path?: string | null,
+	error?: string | null,
+};
 
 export type GsdAction = {
 	id: string,
@@ -407,6 +578,11 @@ export type GsdState = {
 	execution: GsdExecution | null,
 };
 
+export type GsdStateMsg = {
+	sessionId: string,
+	gsd: GsdState,
+};
+
 /**
  *  `core_init` argument. `identity_secret_hex` is the phone's persisted nsec —
  *  a secret: it is consumed into the keypair here and never logged or echoed.
@@ -418,6 +594,27 @@ export type InitConfig = {
 	proxy: string | null,
 	tor: boolean,
 };
+
+export type InputAckMsg = {
+	sessionId: string,
+	inputId: string,
+};
+
+export type InputFailedMsg = InputFailedMsg_Serialize | InputFailedMsg_Deserialize;
+
+export type InputFailedMsg_Deserialize = {
+	sessionId: string,
+	reason: InputFailedReason,
+	inputId?: string | null,
+};
+
+export type InputFailedMsg_Serialize = {
+	sessionId: string,
+	reason: InputFailedReason,
+	inputId?: string | null,
+};
+
+export type InputFailedReason = "no-session" | "expired" | "busy" | "error";
 
 export type InputMsg = InputMsg_Serialize | InputMsg_Deserialize;
 
@@ -1082,6 +1279,11 @@ export type ModeChangeMsg_Serialize = {
 	mode: PermissionMode,
 } & VersionFields_Serialize;
 
+export type ModeConfirmedMsg = {
+	sessionId: string,
+	mode: PermissionMode,
+};
+
 export type ModelChangeMsg = ModelChangeMsg_Serialize | ModelChangeMsg_Deserialize;
 
 export type ModelChangeMsg_Deserialize = {
@@ -1094,6 +1296,11 @@ export type ModelChangeMsg_Serialize = {
 	model: string,
 } & VersionFields_Serialize;
 
+export type ModelConfirmedMsg = {
+	sessionId: string,
+	model: string,
+};
+
 export type ModelEntry = ModelEntry_Serialize | ModelEntry_Deserialize;
 
 export type ModelEntry_Deserialize = {
@@ -1104,6 +1311,28 @@ export type ModelEntry_Deserialize = {
 export type ModelEntry_Serialize = {
 	id: string,
 	label?: string | null,
+};
+
+export type ModelsMsg = ModelsMsg_Serialize | ModelsMsg_Deserialize;
+
+export type ModelsMsg_Deserialize = {
+	models: ModelEntry_Deserialize[],
+	defaultModel?: string | null,
+	/**
+	 *  CDX-035: why the bridge could not answer — set ONLY alongside an empty
+	 *  `models`; the phone keeps its list and keeps re-requesting.
+	 */
+	error?: string | null,
+};
+
+export type ModelsMsg_Serialize = {
+	models: ModelEntry_Serialize[],
+	defaultModel?: string | null,
+	/**
+	 *  CDX-035: why the bridge could not answer — set ONLY alongside an empty
+	 *  `models`; the phone keeps its list and keeps re-requesting.
+	 */
+	error?: string | null,
 };
 
 export type OutboxItem = {
@@ -1153,6 +1382,48 @@ export type OutputEntry_Serialize = {
 	/**  Present iff `entry_type == Diff`. */
 	diff?: DiffData_Serialize | null,
 };
+
+export type OutputMsg = OutputMsg_Serialize | OutputMsg_Deserialize;
+
+export type OutputMsg_Deserialize = {
+	sessionId: string,
+	seq: number,
+	entry: OutputEntry_Deserialize,
+};
+
+export type OutputMsg_Serialize = {
+	sessionId: string,
+	seq: number,
+	entry: OutputEntry_Serialize,
+};
+
+export type PairAckMsg = PairAckMsg_Serialize | PairAckMsg_Deserialize;
+
+export type PairAckMsg_Deserialize = {
+	machine: string,
+	ok: boolean,
+	reason?: PairAckReason | null,
+	/**
+	 *  the bridge's relay list, so a manual-npub pairing still learns where it
+	 *  lives (merged into settings, deduped).
+	 */
+	relays?: string[] | null,
+	host?: BridgeHostKind | null,
+};
+
+export type PairAckMsg_Serialize = {
+	machine: string,
+	ok: boolean,
+	reason?: PairAckReason | null,
+	/**
+	 *  the bridge's relay list, so a manual-npub pairing still learns where it
+	 *  lives (merged into settings, deduped).
+	 */
+	relays?: string[] | null,
+	host?: BridgeHostKind | null,
+};
+
+export type PairAckReason = "bad-token" | "window-closed";
 
 export type PairRequestMsg = PairRequestMsg_Serialize | PairRequestMsg_Deserialize;
 
@@ -1380,6 +1651,24 @@ export type ProviderModel_Serialize = {
 
 export type ProviderProfileAck = ProviderProfileAck_Serialize | ProviderProfileAck_Deserialize;
 
+export type ProviderProfileAckMsg = ProviderProfileAckMsg_Serialize | ProviderProfileAckMsg_Deserialize;
+
+export type ProviderProfileAckMsg_Deserialize = {
+	machine: string,
+	profileId: string,
+	success: boolean,
+	tokenValid?: boolean | null,
+	error?: string | null,
+};
+
+export type ProviderProfileAckMsg_Serialize = {
+	machine: string,
+	profileId: string,
+	success: boolean,
+	tokenValid?: boolean | null,
+	error?: string | null,
+};
+
 export type ProviderProfileAck_Deserialize = {
 	state: AckState,
 	at: number,
@@ -1473,6 +1762,18 @@ export type ProviderProfileWrite_Serialize = {
 	defaultModel?: string | null,
 };
 
+export type ProviderProfilesMsg = ProviderProfilesMsg_Serialize | ProviderProfilesMsg_Deserialize;
+
+export type ProviderProfilesMsg_Deserialize = {
+	machine: string,
+	profiles: ProviderProfileInfo_Deserialize[],
+};
+
+export type ProviderProfilesMsg_Serialize = {
+	machine: string,
+	profiles: ProviderProfileInfo_Serialize[],
+};
+
 export type QuestionInputMsg = QuestionInputMsg_Serialize | QuestionInputMsg_Deserialize;
 
 export type QuestionInputMsg_Deserialize = {
@@ -1545,6 +1846,11 @@ export type RemoteSessionInfo_Serialize = {
 	providerLabel?: string | null,
 };
 
+export type SessionFailedMsg = {
+	pendingId: string,
+	reason: string,
+};
+
 export type SessionIdMsg = SessionIdMsg_Serialize | SessionIdMsg_Deserialize;
 
 export type SessionIdMsg_Deserialize = {
@@ -1567,6 +1873,78 @@ export type SessionImageSend = {
 	image: number[],
 	filename: string,
 	mimeType: string,
+};
+
+export type SessionListMsg = SessionListMsg_Serialize | SessionListMsg_Deserialize;
+
+export type SessionListMsg_Deserialize = {
+	machine: string,
+	host?: BridgeHostKind | null,
+	sessions: RemoteSessionInfo_Deserialize[],
+	authStatus?: AuthStatus | null,
+	protocolVersion: number,
+	capabilities?: string[] | null,
+	/**  project folders per workspace root (relative). Valid `create-session.cwd`. */
+	folders?: string[] | null,
+	/**  CDX-031: the workspace roots themselves, ABSOLUTE, in `--workspace` order. */
+	roots?: string[] | null,
+	/**
+	 *  v10: explicit tombstones — the ONLY way a bridge removes a session
+	 *  (absence from `sessions` never deletes).
+	 */
+	removedSessions?: string[] | null,
+	/**  v10: set on clean shutdown — sessions stay listed (`state: offline`). */
+	machineOffline?: boolean | null,
+};
+
+export type SessionListMsg_Serialize = {
+	machine: string,
+	host?: BridgeHostKind | null,
+	sessions: RemoteSessionInfo_Serialize[],
+	authStatus?: AuthStatus | null,
+	protocolVersion: number,
+	capabilities?: string[] | null,
+	/**  project folders per workspace root (relative). Valid `create-session.cwd`. */
+	folders?: string[] | null,
+	/**  CDX-031: the workspace roots themselves, ABSOLUTE, in `--workspace` order. */
+	roots?: string[] | null,
+	/**
+	 *  v10: explicit tombstones — the ONLY way a bridge removes a session
+	 *  (absence from `sessions` never deletes).
+	 */
+	removedSessions?: string[] | null,
+	/**  v10: set on clean shutdown — sessions stay listed (`state: offline`). */
+	machineOffline?: boolean | null,
+};
+
+export type SessionPendingMsg = {
+	pendingId: string,
+	machine: string,
+	createdAt: string,
+};
+
+export type SessionReadyMsg = SessionReadyMsg_Serialize | SessionReadyMsg_Deserialize;
+
+export type SessionReadyMsg_Deserialize = {
+	pendingId: string,
+	session: RemoteSessionInfo_Deserialize,
+};
+
+export type SessionReadyMsg_Serialize = {
+	pendingId: string,
+	session: RemoteSessionInfo_Serialize,
+};
+
+export type SessionReplacedMsg = SessionReplacedMsg_Serialize | SessionReplacedMsg_Deserialize;
+
+export type SessionReplacedMsg_Deserialize = {
+	oldSessionId: string,
+	newSession: RemoteSessionInfo_Deserialize,
+};
+
+export type SessionReplacedMsg_Serialize = {
+	oldSessionId: string,
+	newSession: RemoteSessionInfo_Serialize,
 };
 
 export type SessionState = "idle" | "running" | "waiting_permission" | "waiting_question" | 
@@ -1683,6 +2061,47 @@ export type SyncAckMsg_Serialize = {
 	syncId: string,
 	range: [number, number],
 } & VersionFields_Serialize;
+
+export type SyncBeginMsg = {
+	sessionId: string,
+	syncId: string,
+	seqHigh: number,
+	ranges: ([number, number])[],
+};
+
+export type SyncChunkMsg = SyncChunkMsg_Serialize | SyncChunkMsg_Deserialize;
+
+export type SyncChunkMsg_Deserialize = {
+	sessionId: string,
+	syncId: string,
+	range: [number, number],
+	entries: SyncEntry_Deserialize[],
+};
+
+export type SyncChunkMsg_Serialize = {
+	sessionId: string,
+	syncId: string,
+	range: [number, number],
+	entries: SyncEntry_Serialize[],
+};
+
+export type SyncEndMsg = {
+	sessionId: string,
+	syncId: string,
+	deliveredRanges: ([number, number])[],
+};
+
+export type SyncEntry = SyncEntry_Serialize | SyncEntry_Deserialize;
+
+export type SyncEntry_Deserialize = {
+	seq: number,
+	entry: OutputEntry_Deserialize,
+};
+
+export type SyncEntry_Serialize = {
+	seq: number,
+	entry: OutputEntry_Serialize,
+};
 
 export type SyncRequestMsg = SyncRequestMsg_Serialize | SyncRequestMsg_Deserialize;
 
@@ -1904,6 +2323,18 @@ export type UsageData_Serialize = {
 	sevenDaySonnet?: UsageWindow | null,
 	sessionCostUsd?: number | null,
 	fetchedAt: string,
+};
+
+export type UsageMsg = UsageMsg_Serialize | UsageMsg_Deserialize;
+
+export type UsageMsg_Deserialize = {
+	sessionId: string,
+	usage: UsageData_Deserialize,
+};
+
+export type UsageMsg_Serialize = {
+	sessionId: string,
+	usage: UsageData_Serialize,
 };
 
 export type UsageWindow = {

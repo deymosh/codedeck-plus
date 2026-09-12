@@ -15,7 +15,7 @@ import type {
   SyncBeginMessage,
   SyncChunkMessage,
   SyncEndMessage,
-} from '@codedeck/protocol';
+} from '../nativeCoreTypes';
 
 export type SyncState = 'idle' | 'requested' | 'syncing' | 'complete' | 'failed';
 

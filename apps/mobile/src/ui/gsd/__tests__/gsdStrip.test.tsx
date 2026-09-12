@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { GsdState, RemoteSessionInfo } from '@codedeck/protocol';
+import type { GsdState, RemoteSessionInfo } from '../../../core/nativeCoreTypes';
 import { buildFakePhoneCore } from '../../../core/__tests__/nativeCoreFixture';
 import type { PhoneCore } from '../../../core/phoneCore';
 import { PhoneCoreProvider } from '../../coreContext';

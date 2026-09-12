@@ -22,12 +22,9 @@
  * Kept isTauri-guarded with lazy imports (house style) so plain-browser dev and
  * the node test suite never touch `@tauri-apps/api`.
  */
-import {
-  decodeBridgeToPhone,
-  type BridgeToPhoneMessage,
-  type PhoneToBridgeMessage,
-} from '@codedeck/protocol';
+import { decodeBridgeToPhone } from '@codedeck/protocol';
 import type { Logger } from '../core/ports';
+import type { BridgeToPhoneMessage, PhoneToBridgeMessage } from '../core/nativeCoreTypes';
 import type {
   CoreEvent,
   DmView,

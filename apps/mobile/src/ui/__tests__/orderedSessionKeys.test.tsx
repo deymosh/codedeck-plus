@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import type { RemoteSessionInfo } from '@codedeck/protocol';
+import type { RemoteSessionInfo } from '../../core/nativeCoreTypes';
 import { buildFakePhoneCore } from '../../core/__tests__/nativeCoreFixture';
 import type { MachineView } from '../../core/nativeCoreTypes';
 import { PhoneCoreProvider } from '../coreContext';

@@ -38,7 +38,7 @@ import type {
   NativeCoreConfig,
   NativePublishVerdict,
 } from '../../platform/nativeCore';
-import type { BridgeToPhoneMessage } from '@codedeck/protocol';
+import type { BridgeToPhoneMessage } from '../nativeCoreTypes';
 
 export interface FakeNativeCoreViews {
   machines: MachinesView;
