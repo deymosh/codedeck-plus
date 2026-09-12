@@ -10,7 +10,6 @@
  * `Intent` instead of building the wire command by hand. Only the shared
  * TYPE survives here.
  */
-import type { NostrEvent } from 'nostr-tools/core';
 import type {
   BridgeToPhoneMessage,
   CreateSessionMessage,
@@ -63,9 +62,11 @@ export interface BridgeApiLike {
   input(machine: string, sessionId: string, text: string, inputId: string): Promise<boolean>;
   /** Decrypt + decode one relay event and dispatch it — the WebView
    *  transport's own inbound path. Not called under full F2b native mode
-   *  (Rust decrypts/decodes/dispatches internally); tests still call it
-   *  directly to simulate an incoming event. */
-  ingest(event: NostrEvent): void;
+   *  (Rust decrypts/decodes/dispatches internally, and this interface has
+   *  no reason to know the transport is Nostr at all); tests still call it
+   *  directly to simulate an incoming event, always via a cast — nothing
+   *  reads this parameter under native mode. */
+  ingest(event: unknown): void;
   /** F1 in-process-runtime inbound routing (`main.tsx`) — a no-op under full
    *  F2b native mode, where Rust's `Router` never hands anything back here. */
   dispatchDecoded(msg: BridgeToPhoneMessage, machinePubkeyHex: string): void;

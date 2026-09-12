@@ -11,7 +11,6 @@
  * the DM + Marmot lists) survive here.
  */
 import type { StoreApi } from 'zustand/vanilla';
-import type { NostrEvent } from 'nostr-tools/core';
 import type { DmConversation } from './dm';
 
 export interface MarmotWelcomeInfo {
@@ -170,10 +169,12 @@ export interface MarmotStoreState {
   markRead(groupId: string): void;
 
   /** Feed a kind-1059 whose rumor was NOT a NIP-17 DM (dm store routes these
-   *  here — Marmot welcomes travel gift-wrapped like DMs do). */
-  ingestGiftWrap(event: NostrEvent): void;
+   *  here — Marmot welcomes travel gift-wrapped like DMs do). No-op under
+   *  native mode (Rust owns ingest entirely), so this has no reason to know
+   *  the transport is Nostr at all. */
+  ingestGiftWrap(event: unknown): void;
   /** Feed one kind-445 (the subscription's path; exposed for tests). */
-  ingestGroupMessage(event: NostrEvent): void;
+  ingestGroupMessage(event: unknown): void;
 }
 
 export type MarmotStore = StoreApi<MarmotStoreState>;

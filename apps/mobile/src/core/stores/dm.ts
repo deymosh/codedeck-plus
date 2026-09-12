@@ -12,7 +12,6 @@
  */
 import type { StoreApi } from 'zustand/vanilla';
 import * as nip19 from 'nostr-tools/nip19';
-import type { NostrEvent } from 'nostr-tools/core';
 
 export type DmProtocol = 'nip17' | 'marmot';
 
@@ -129,8 +128,10 @@ export interface DmStoreState {
   /** Kick off resolution for every conversation peer + ourselves. */
   resolveAllProfiles(): void;
 
-  /** Ingest one kind-1059 event (the subscription's path; exposed for tests). */
-  ingest(event: NostrEvent): void;
+  /** Ingest one kind-1059 event (the subscription's path; exposed for tests,
+   *  a no-op under native mode — Rust owns gift-wrap ingest entirely, so
+   *  this has no reason to know the transport is Nostr at all). */
+  ingest(event: unknown): void;
 }
 
 export type DmStore = StoreApi<DmStoreState>;
