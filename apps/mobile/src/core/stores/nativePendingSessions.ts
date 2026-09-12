@@ -49,6 +49,7 @@ export function createNativePendingSessionsStore(deps: NativePendingSessionsStor
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativePendingSessions',
       deps.log,
     );

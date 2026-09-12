@@ -30,6 +30,7 @@ function fakeCore(initialView: SettingsView = { ...defaultSettings() }) {
     onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.reject(new Error('unused')),
     onActionFailed: () => Promise.reject(new Error('unused')),
+    onResume: () => Promise.resolve(() => {}),
 
     dispatch: vi.fn(async (intent: Intent) => {
       dispatched.push(intent);

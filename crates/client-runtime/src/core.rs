@@ -289,6 +289,7 @@ impl Core {
             retry_timer: None,
             vis_timer: None,
             stale_timer: None,
+            last_connected_relays: Vec::new(),
             pair_timer: None,
             undo_timer: None,
             dm_sub: None,
@@ -594,6 +595,17 @@ struct Loop {
     retry_timer: Option<AbortHandle>,
     vis_timer: Option<AbortHandle>,
     stale_timer: Option<AbortHandle>,
+    /// Last set of relays reported to the observer (Settings' per-relay dot).
+    /// Individual relay connect/disconnect (`Router::relay_connected`/
+    /// `relay_disconnected`, driven straight from each relay's own WS task)
+    /// never runs through `dispatch`'s status-transition gate below — the
+    /// overall `ConnectionStatus` can stay `Connected` for the whole session
+    /// while relays individually flap. Without this, the ONLY chances to see
+    /// a change were an unrelated status transition (rare once connected) or
+    /// a UI-triggered snapshot pull, and the very first snapshot could easily
+    /// race relay dial-up and freeze on an empty set forever. The stale
+    /// watchdog's existing 30s tick (below) is repurposed to notice this too.
+    last_connected_relays: Vec<String>,
     /// CDX-040 pair-ack deadline.
     pair_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
@@ -670,6 +682,7 @@ impl Loop {
                         let random = Some(self.entropy.unit());
                         self.dispatch(ConnectionEvent::SocketClose { random });
                     }
+                    self.check_connected_relays_changed();
                     if self.conn.status != ConnectionStatus::Stopped {
                         self.arm_stale_watchdog();
                     }
@@ -712,10 +725,27 @@ impl Loop {
         let after = (self.conn.status, self.conn.needs_pairing_check);
         if after != before {
             let connected: Vec<String> = self.ws.connected_relays().into_iter().collect();
+            self.last_connected_relays = connected.clone();
             self.observer
                 .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
             self.state_changed(SliceId::Connection);
         }
+    }
+
+    /// Notice a per-relay connect/disconnect the status-transition gate in
+    /// `dispatch` above cannot see on its own (see `last_connected_relays`'s
+    /// own doc comment). `Router::connected` is a `BTreeSet`, so two reads
+    /// collected into a `Vec` compare equal iff the same relays are up —
+    /// order is never the source of a false difference here.
+    fn check_connected_relays_changed(&mut self) {
+        let connected: Vec<String> = self.ws.connected_relays().into_iter().collect();
+        if connected == self.last_connected_relays {
+            return;
+        }
+        self.last_connected_relays = connected.clone();
+        self.observer
+            .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
+        self.state_changed(SliceId::Connection);
     }
 
     fn apply(&mut self, effect: ConnectionEffect) {
@@ -2048,13 +2078,15 @@ mod tests {
     #[derive(Default)]
     struct Spy {
         statuses: Mutex<Vec<(ConnectionStatus, bool)>>,
+        connected_relays: Mutex<Vec<Vec<String>>>,
         messages: Mutex<Vec<(String, BridgeToPhone)>>,
         failures: Mutex<Vec<ActionFailed>>,
         events: Mutex<Vec<CoreEvent>>,
     }
     impl CoreObserver for Spy {
-        fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, _connected_relays: &[String]) {
+        fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, connected_relays: &[String]) {
             self.statuses.lock().unwrap().push((status, needs_pairing_check));
+            self.connected_relays.lock().unwrap().push(connected_relays.to_vec());
         }
         fn bridge_message(&self, machine: String, msg: BridgeToPhone) {
             self.messages.lock().unwrap().push((machine, msg));
@@ -2260,6 +2292,76 @@ mod tests {
                     "{statuses:?}"
                 );
                 assert_eq!(statuses.last().unwrap().0, ConnectionStatus::Connected);
+                // The relay that actually opened is what Settings' per-relay
+                // dot should read — not an empty placeholder.
+                assert_eq!(
+                    spy.connected_relays.lock().unwrap().last().unwrap(),
+                    &vec![mock.url.clone()],
+                );
+            })
+            .await;
+    }
+
+    /// One relay of two dying leaves overall `ConnectionStatus` untouched
+    /// (`NostrClient::on_close` only fires once EVERY relay for a
+    /// subscription is dead — see `router::tests::
+    /// eose_fires_once_after_every_live_relay_reports` for the same
+    /// aggregate rule on the open side), so `dispatch`'s status-transition
+    /// gate never runs. Without the periodic watchdog picking this up too,
+    /// Settings' per-relay dot would freeze on the stale, fuller set forever
+    /// — this is the "dots never show any color" report's root cause.
+    #[tokio::test]
+    async fn a_relay_dying_while_another_survives_is_caught_by_the_periodic_watchdog() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock1 = mock_relay().await;
+                let mut mock2 = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let core = Core::spawn(
+                    CoreConfig {
+                        relays: vec![mock1.url.clone(), mock2.url.clone()],
+                        identity: phone.clone(),
+                        proxy: None,
+                        reconnect: fast_reconnect(),
+                    },
+                    CorePorts::default(),
+                    Rc::clone(&spy) as Rc<dyn CoreObserver>,
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+
+                eose_all(&mut mock1).await;
+                eose_all(&mut mock2).await;
+                settle().await;
+
+                let before = spy.connected_relays.lock().unwrap().last().unwrap().clone();
+                assert_eq!(before.len(), 2, "{before:?}");
+                let before_status_calls = spy.statuses.lock().unwrap().len();
+
+                mock2.close();
+                settle().await; // real time — confirms the close registers on its own
+                // The status-transition gate did NOT fire — confirms this
+                // scenario actually needs the watchdog, not dispatch's own
+                // path (which the previous test already covers).
+                assert_eq!(spy.statuses.lock().unwrap().len(), before_status_calls, "{:?}", spy.statuses.lock().unwrap());
+
+                // Fast-forward past the watchdog's 30s tick. Paused only NOW
+                // (after the real socket close above already settled) so it
+                // never races the mock relays' own real-time handshake.
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(31)).await;
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+
+                let after = spy.connected_relays.lock().unwrap().last().unwrap().clone();
+                assert_eq!(after, vec![mock1.url.clone()], "{after:?}");
             })
             .await;
     }

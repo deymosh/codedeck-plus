@@ -62,6 +62,7 @@ export function createNativeSettingsStore(deps: NativeSettingsStoreDeps): Settin
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeSettings',
       deps.log,
     );

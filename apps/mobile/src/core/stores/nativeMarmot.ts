@@ -83,6 +83,7 @@ export function createNativeMarmotStore(deps: NativeMarmotStoreDeps): MarmotStor
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeMarmot',
       deps.log,
     );

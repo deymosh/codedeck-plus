@@ -95,6 +95,19 @@ export interface NativeCore {
   ): Promise<() => void>;
   onConnection(cb: (snapshot: NativeConnectionSnapshot) => void): Promise<() => void>;
   onActionFailed(cb: (kind: NativeActionFailed) => void): Promise<() => void>;
+  /**
+   * Fires on Android resume / desktop focus — "the OS may have frozen us".
+   * `hydrateFromCore` uses this to re-pull a fresh snapshot on top of the
+   * live-update listener: Tauri's `emit` has no buffering or retry
+   * (`corebridge.rs`'s `TauriObserver` discards every emit result), and
+   * Android can suspend a backgrounded WebView's JS execution for long
+   * enough that a push racing that window is silently lost — not just at
+   * boot (the listener-registration race `hydrateFromCore` already closes),
+   * but at any later point a background/foreground cycle straddles a real
+   * state change. A push-only design has no way to notice that; re-pulling
+   * on resume does, regardless of what caused the miss.
+   */
+  onResume(cb: () => void): Promise<() => void>;
 
   // --- F2b: the plan §2 View/Intent/CoreEvent surface ---
 
@@ -126,6 +139,11 @@ const EV_CONNECTION = 'core://connection';
 const EV_MESSAGE = 'core://message';
 const EV_ACTION_FAILED = 'core://action-failed';
 const EV_CORE_EVENT = 'core://event';
+/** Android resume + desktop focus — mirrors `platform/connectivity.ts`'s
+ *  `DEFAULT_TAURI_RESUME_EVENTS` (kept as a separate literal here: this
+ *  module stays free of a dependency on connectivity.ts, which owns the
+ *  connection-FSM-facing side of the same two event names). */
+const RESUME_EVENTS = ['tauri://resume', 'tauri://focus'] as const;
 
 const CONNECTION_STATUSES: readonly NativeConnectionStatus[] = [
   'idle',
@@ -194,6 +212,15 @@ export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: L
 
     onActionFailed: (cb) =>
       listen<NativeActionFailed>(EV_ACTION_FAILED, ({ payload }) => cb(payload)),
+
+    onResume: async (cb) => {
+      const unlistens = await Promise.all(
+        RESUME_EVENTS.map((name) => listen<void>(name, () => cb())),
+      );
+      return () => {
+        for (const unlisten of unlistens) unlisten();
+      };
+    },
 
     dispatch: (intent) => invoke<void>('core_dispatch', { intent }),
     machinesView: () => invoke<MachinesView>('core_machines_view'),

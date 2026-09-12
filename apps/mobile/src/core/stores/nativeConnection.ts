@@ -64,6 +64,7 @@ export function createNativeConnectionStore(deps: NativeConnectionStoreDeps): Co
           connectedRelays: snapshot.connectedRelays,
         });
       },
+      deps.core.onResume,
       'nativeConnection',
       deps.log,
     );

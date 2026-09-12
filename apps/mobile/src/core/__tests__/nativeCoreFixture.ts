@@ -113,6 +113,9 @@ export interface FakeNativeCore {
   emitConnection(snapshot: NativeConnectionSnapshot): void;
   emitMessage(machine: string, message: BridgeToPhoneMessage): void;
   emitActionFailed(kind: NativeActionFailed): void;
+  /** Fire every registered `onResume` callback — simulates an Android
+   *  resume / desktop focus, the same signal `hydrateFromCore` re-pulls on. */
+  emitResume(): void;
   /** Script what a dispatched `Intent` does to the fake's views — the
    *  fixture never guesses this itself (that would be re-implementing
    *  `client_runtime::Core` in TS). Runs on every `dispatch()` call, in
@@ -140,6 +143,7 @@ export function fakeNativeCore(
   const connectionHandlers = new Set<(snapshot: NativeConnectionSnapshot) => void>();
   const messageHandlers = new Set<(machine: string, message: BridgeToPhoneMessage) => void>();
   const actionFailedHandlers = new Set<(kind: NativeActionFailed) => void>();
+  const resumeHandlers = new Set<() => void>();
   const dispatchHandlers = new Set<(intent: Intent) => void | Promise<void>>();
 
   const setViewInternal = <K extends keyof FakeNativeCoreViews>(
@@ -220,6 +224,10 @@ export function fakeNativeCore(
       actionFailedHandlers.add(cb);
       return Promise.resolve(() => actionFailedHandlers.delete(cb));
     },
+    onResume: (cb) => {
+      resumeHandlers.add(cb);
+      return Promise.resolve(() => resumeHandlers.delete(cb));
+    },
     dispatch: (intent) => dispatchMock(intent) as Promise<void>,
     machinesView: () => Promise.resolve(views.machines),
     settingsView: () => Promise.resolve(views.settings),
@@ -257,6 +265,9 @@ export function fakeNativeCore(
     },
     emitActionFailed: (kind) => {
       for (const cb of actionFailedHandlers) cb(kind);
+    },
+    emitResume: () => {
+      for (const cb of resumeHandlers) cb();
     },
     onDispatch: (handler) => {
       dispatchHandlers.add(handler);

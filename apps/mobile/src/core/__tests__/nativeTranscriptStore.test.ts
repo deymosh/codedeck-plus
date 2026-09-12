@@ -49,6 +49,7 @@ function fakeCore() {
     onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.reject(new Error('unused')),
     onActionFailed: () => Promise.reject(new Error('unused')),
+    onResume: () => Promise.resolve(() => {}),
     dispatch: () => Promise.reject(new Error('unused')),
     machinesView: () => Promise.reject(new Error('unused')),
     settingsView: () => Promise.reject(new Error('unused')),

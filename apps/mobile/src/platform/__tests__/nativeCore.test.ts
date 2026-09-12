@@ -152,4 +152,23 @@ describe('nativeCoreOver', () => {
       { pairingSettled: { paired: true } },
     ]);
   });
+
+  it('onResume fires on both tauri://resume and tauri://focus, and unlistens both', async () => {
+    const { listeners, invoke, listen } = fakes();
+    const core = nativeCoreOver(invoke, listen);
+    let fired = 0;
+    const unlisten = await core.onResume(() => {
+      fired++;
+    });
+
+    expect(listeners.has('tauri://resume')).toBe(true);
+    expect(listeners.has('tauri://focus')).toBe(true);
+    listeners.get('tauri://resume')!({ payload: undefined });
+    listeners.get('tauri://focus')!({ payload: undefined });
+    expect(fired).toBe(2);
+
+    unlisten();
+    expect(listeners.has('tauri://resume')).toBe(false);
+    expect(listeners.has('tauri://focus')).toBe(false); // both torn down, not just one
+  });
 });

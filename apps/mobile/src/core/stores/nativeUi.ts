@@ -103,6 +103,7 @@ export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeUi',
       deps.log,
     );

@@ -40,6 +40,7 @@ export function createNativeQuickPromptsStore(deps: NativeQuickPromptsStoreDeps)
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeQuickPrompts',
       deps.log,
     );

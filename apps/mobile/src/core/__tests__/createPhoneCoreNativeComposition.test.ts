@@ -44,6 +44,7 @@ function fakeCore(machinesView: MachinesView = { machines: {} }) {
     onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.resolve(() => {}),
     onActionFailed: () => Promise.reject(new Error('unused')),
+    onResume: () => Promise.resolve(() => {}),
     dispatch: vi.fn((intent: Intent) => {
       dispatched.push(intent);
       return Promise.resolve();

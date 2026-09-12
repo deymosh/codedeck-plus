@@ -93,6 +93,7 @@ export function createNativeDmStore(deps: NativeDmStoreDeps): DmStore {
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeDm',
       deps.log,
     );

@@ -81,6 +81,7 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativePairing',
       deps.log,
     );

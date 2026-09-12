@@ -69,6 +69,7 @@ export function createNativeOutboxStore(deps: NativeOutboxStoreDeps): OutboxStor
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeOutbox',
       deps.log,
     );

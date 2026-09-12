@@ -1,7 +1,7 @@
 /**
  * The hydration sequence every native-core store adapter uses: register the
  * live-update listener, THEN pull the initial snapshot — never
- * concurrently.
+ * concurrently — and re-pull that same snapshot on every OS resume.
  *
  * Rust only re-announces state on an actual transition (see
  * `client_runtime::Core::dispatch`'s own doc comment on `connection_status`/
@@ -21,14 +21,25 @@
  * behind the connection dot staying stale, and a bridge-confirmed session
  * not appearing, after closing and reopening the app.
  *
- * Awaiting registration first closes the gap completely: once it resolves,
- * any transition from that point on is guaranteed to arrive over the
- * listener, and the fetch that follows reads whatever is true at that
- * instant — no version/generation counter needed.
+ * Awaiting registration first closes THAT gap: once it resolves, any
+ * transition from that point on is guaranteed to arrive over the listener,
+ * and the fetch that follows reads whatever is true at that instant — no
+ * version/generation counter needed.
+ *
+ * It does not close a second, ongoing one: `corebridge.rs`'s `TauriObserver`
+ * discards every `app.emit(...)` result (`let _ = ...`), and Android can
+ * suspend a backgrounded WebView's JS execution for long enough that a push
+ * racing that window is silently dropped — mid-session, not just at boot,
+ * and with nothing left afterward to notice or retry it (Rust does not
+ * repeat an announcement once made). Re-pulling on every `onResume` closes
+ * this the same way the boot-time fetch closes the listener-registration
+ * race: never trust a push alone to have survived whatever the OS did while
+ * the app was backgrounded — re-read the truth once it's safe to.
  */
 export async function hydrateFromCore(
   registerListener: () => Promise<unknown>,
   fetchSnapshot: () => Promise<void>,
+  onResume: (cb: () => void) => Promise<unknown>,
   tag: string,
   log?: (msg: string) => void,
 ): Promise<void> {
@@ -41,5 +52,12 @@ export async function hydrateFromCore(
     await fetchSnapshot();
   } catch (err) {
     log?.(`[${tag}] initial snapshot fetch failed: ${err}`);
+  }
+  try {
+    await onResume(() => {
+      void fetchSnapshot().catch((err) => log?.(`[${tag}] resume snapshot refetch failed: ${err}`));
+    });
+  } catch (err) {
+    log?.(`[${tag}] resume listener registration failed: ${err}`);
   }
 }

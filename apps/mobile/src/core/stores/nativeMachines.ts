@@ -112,6 +112,7 @@ export function createNativeMachinesStore(deps: NativeMachinesStoreDeps): Machin
           }
         }),
       refresh,
+      deps.core.onResume,
       'nativeMachines',
       deps.log,
     );

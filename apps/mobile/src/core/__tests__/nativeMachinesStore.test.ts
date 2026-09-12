@@ -13,6 +13,7 @@ import type { NativeCore } from '../../platform/nativeCore';
 function fakeCore(initialView: MachinesView = { machines: {} }) {
   let view: MachinesView = initialView;
   let coreEventListener: ((e: CoreEvent) => void) | null = null;
+  let resumeListener: (() => void) | null = null;
 
   const core: NativeCore = {
     init: () => Promise.reject(new Error('unused')),
@@ -29,6 +30,12 @@ function fakeCore(initialView: MachinesView = { machines: {} }) {
     onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.reject(new Error('unused')),
     onActionFailed: () => Promise.reject(new Error('unused')),
+    onResume: (cb: () => void) => {
+      resumeListener = cb;
+      return Promise.resolve(() => {
+        resumeListener = null;
+      });
+    },
 
     dispatch: vi.fn(async () => {}),
     machinesView: vi.fn(async () => view),
@@ -56,6 +63,9 @@ function fakeCore(initialView: MachinesView = { machines: {} }) {
     },
     emitStateChanged: (slice: SliceId) => {
       coreEventListener?.({ stateChanged: { slice } });
+    },
+    emitResume: () => {
+      resumeListener?.();
     },
   };
 }
@@ -173,6 +183,21 @@ describe('createNativeMachinesStore', () => {
     await tick();
 
     expect(store.getState().machinePubkeys()).toEqual([]);
+  });
+
+  it('an OS resume re-fetches the view too, not just a stateChanged event', async () => {
+    // CDX-060 sibling: Tauri's emit has no retry, and Android can suspend a
+    // backgrounded WebView's JS long enough for a real stateChanged push to
+    // be silently lost. onResume is the backstop that notices regardless.
+    const { core, setView, emitResume } = fakeCore();
+    const store = createNativeMachinesStore({ core });
+    await tick();
+
+    setView(machineView);
+    emitResume();
+    await tick();
+
+    expect(store.getState().machinePubkeys()).toEqual(['pk1']);
   });
 
   it('every write method is an inert no-op that never touches the cached state', async () => {

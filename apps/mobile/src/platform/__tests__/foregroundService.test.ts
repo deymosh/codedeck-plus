@@ -72,6 +72,7 @@ function fakeNativeCore(stayConnected: boolean) {
       });
     },
     onActionFailed: () => Promise.reject(new Error('unused')),
+    onResume: () => Promise.resolve(() => {}),
     dispatch: (intent) => {
       if (typeof intent === 'object' && intent.setStayConnected !== undefined) {
         settings = { ...settings, stayConnected: intent.setStayConnected };
