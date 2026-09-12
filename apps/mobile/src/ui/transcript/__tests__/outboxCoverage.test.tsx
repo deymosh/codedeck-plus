@@ -19,16 +19,10 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { finalizeEvent } from 'nostr-tools/pure';
-import {
-  LIVE_KIND,
-  encodeBridgeToPhone,
-  type BridgeToPhoneMessage,
-  type OutputEntry,
-} from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../../core/createPhoneCore';
-import { encryptTo, generateKeypair, type Keypair } from '../../../core/crypto';
-import { memoryKV, type PhoneTransport } from '../../../core/ports';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
+import { buildFakePhoneCore, tick } from '../../../core/__tests__/nativeCoreFixture';
+import { generateKeypair } from '../../../core/crypto';
+import type { OutboxItem as NativeOutboxItem, TranscriptRowView } from '../../../core/nativeCoreTypes';
 import type { OutboxItem } from '../../../core/stores/outbox';
 import { buildDisplayEntries } from '../displayEntries';
 import {
@@ -172,12 +166,17 @@ describe('visibleOutboxItems — aging out stranded "delivered" rows', () => {
   });
 });
 
-// --- The real pipeline: PhoneCore + encrypted ingest ---
-
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
+// --- The real pipeline: native PhoneCore + a scripted fake core ---
+//
+// Driving two real `PhoneCore`s through an actual encrypted gift-wrap/live
+// event was the old local composition's own decrypt→decode→dispatch pipeline
+// — dead now (Rust's `Router` owns all of that; `createNativeBridgeApi`'s
+// `ingest` is a documented no-op). What is left worth proving here is
+// `visibleOutboxItems`/`buildDisplayEntries` reading the REAL native store
+// surface (`core.outbox`/`core.transcript`), fed by a fake core scripted to
+// behave the way the Router would: `sendInput` lands as a pending item, and
+// each scenario then seeds the "ack"/"echo"/"sync backfill" step directly on
+// the fake's views, the same shape a real one would produce.
 
 const userEcho = (content: string): OutputEntry => ({
   entryType: 'text',
@@ -186,28 +185,71 @@ const userEcho = (content: string): OutputEntry => ({
   metadata: { role: 'user' },
 });
 
-function bridgeEvent(core: PhoneCore, machine: Keypair, msg: BridgeToPhoneMessage) {
-  const phonePubkey = core.identity.getState().keypair.pubkeyHex;
-  return finalizeEvent(
-    {
-      kind: LIVE_KIND,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['p', phonePubkey]],
-      content: encryptTo(machine.secretKey, phonePubkey, encodeBridgeToPhone(msg)),
-    },
-    machine.secretKey,
-  );
+function pendingItem(m: { machine: string; sessionId: string; text: string; inputId: string }): NativeOutboxItem {
+  return {
+    id: m.inputId,
+    machine: m.machine,
+    sessionId: m.sessionId,
+    text: m.text,
+    state: 'pending',
+    createdAt: Date.now(),
+    publishedAt: null,
+    confirmedAt: null,
+    failedAt: null,
+    error: null,
+    attempts: 1,
+  };
 }
 
 async function makeCore() {
   const machine = generateKeypair();
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({
-    pubkeyHex: machine.pubkeyHex,
-    name: 'test machine',
-    label: 'test',
+  const { phone: core, fake } = await buildFakePhoneCore({
+    machines: {
+      machines: {
+        [machine.pubkeyHex]: {
+          pubkeyHex: machine.pubkeyHex,
+          name: 'test machine',
+          label: 'test',
+          capabilities: [],
+          folders: [],
+          roots: [],
+          protocolVersion: null,
+          machineOffline: false,
+          lastHeartbeatAt: null,
+          sessions: {},
+        },
+      },
+    },
   });
-  const rows = async () => {
+  fake.onDispatch((intent) => {
+    if (typeof intent === 'object' && intent.sendInput) {
+      fake.setView('outbox', { items: [...fake.views.outbox.items, pendingItem(intent.sendInput)] });
+    }
+  });
+
+  /** Simulates the Router folding an `input-ack` into the outbox view. */
+  const ack = async (id: string): Promise<void> => {
+    const items: NativeOutboxItem[] = fake.views.outbox.items.map((i) =>
+      i.id === id ? { ...i, state: 'confirmed' as const, confirmedAt: Date.now() } : i,
+    );
+    fake.setView('outbox', { items });
+    await tick();
+  };
+
+  /** Simulates a transcript row landing (an `output` message or a sync-chunk
+   *  backfill — both just append rows on the real side). */
+  const appendTranscriptRow = async (rows: TranscriptRowView[]): Promise<void> => {
+    const existing = core.transcript.getState().entriesOf(machine.pubkeyHex, 's1');
+    fake.setTranscript(machine.pubkeyHex, 's1', {
+      rows: [...existing.map((e) => ({ seq: e.seq, entry: e.entry })), ...rows],
+      haveRanges: [[1, Math.max(...existing.map((e) => e.seq), 0, ...rows.map((r) => r.seq))]],
+      sync: { state: 'idle', attempts: 0, nextRetryAt: null, localHigh: rows.at(-1)?.seq ?? 0, target: rows.at(-1)?.seq ?? 0, contiguous: true },
+    });
+    fake.emitCoreEvent({ transcriptAppended: { machine: machine.pubkeyHex, sessionId: 's1' } });
+    await tick();
+  };
+
+  const rows = async (): Promise<OutboxItem[]> => {
     await core.transcript.getState().flush();
     return visibleOutboxItems(
       core.outbox.getState().items,
@@ -216,101 +258,68 @@ async function makeCore() {
       core.transcript.getState().entriesOf(machine.pubkeyHex, 's1'),
     );
   };
-  return { core, machine, rows };
+  return { core, machine, rows, ack, appendTranscriptRow };
 }
 
-describe('CDX-063 through the real pipeline', () => {
+describe('CDX-063 through the real store surface', () => {
   it('ack arrives, echo never does → the row STAYS (the filed vanish)', async () => {
-    const { core, machine, rows } = await makeCore();
+    const { core, machine, rows, ack } = await makeCore();
     const sent = await core.outbox.getState().send(machine.pubkeyHex, 's1', 'where did I go');
-    core.api.ingest(
-      bridgeEvent(core, machine, { type: 'input-ack', sessionId: 's1', inputId: sent.id }),
-    );
+    await ack(sent.id);
     expect(core.outbox.getState().items[sent.id]?.state).toBe('confirmed');
     // Pre-fix: `state !== 'confirmed'` filtered this row out right here.
     expect((await rows()).map((i) => i.id)).toEqual([sent.id]);
-    await core.stop();
   });
 
   it('the echo arrives → the row swaps for the transcript entry, no duplication', async () => {
-    const { core, machine, rows } = await makeCore();
+    const { core, machine, rows, ack, appendTranscriptRow } = await makeCore();
     const sent = await core.outbox.getState().send(machine.pubkeyHex, 's1', 'fix the login bug');
-    core.api.ingest(
-      bridgeEvent(core, machine, { type: 'input-ack', sessionId: 's1', inputId: sent.id }),
-    );
+    await ack(sent.id);
     // The SDK echo carries the bridge-appended one-shot meta comment.
-    core.api.ingest(
-      bridgeEvent(core, machine, {
-        type: 'output',
-        sessionId: 's1',
+    await appendTranscriptRow([
+      {
         seq: 1,
         entry: userEcho(
           'fix the login bug\n\n<!-- emit-session-meta: In your response, include exactly one HTML comment -->',
         ),
-      }),
-    );
+      },
+    ]);
     expect(await rows()).toEqual([]);
     const display = buildDisplayEntries(
       core.transcript.getState().entriesOf(machine.pubkeyHex, 's1'),
     );
     expect(display.filter((d) => d.kind === 'user_message')).toHaveLength(1);
-    await core.stop();
   });
 
   it('a sync backfill covering the message hides the row the same way', async () => {
-    const { core, machine, rows } = await makeCore();
+    const { core, machine, rows, ack, appendTranscriptRow } = await makeCore();
     const sent = await core.outbox.getState().send(machine.pubkeyHex, 's1', 'backfilled send');
-    core.api.ingest(
-      bridgeEvent(core, machine, { type: 'input-ack', sessionId: 's1', inputId: sent.id }),
-    );
+    await ack(sent.id);
     expect((await rows()).map((i) => i.id)).toEqual([sent.id]);
-    core.api.ingest(
-      bridgeEvent(core, machine, {
-        type: 'sync-chunk',
-        sessionId: 's1',
-        syncId: 'sync1',
-        range: [1, 1],
-        entries: [{ seq: 1, entry: userEcho('backfilled send') }],
-      }),
-    );
+    await appendTranscriptRow([{ seq: 1, entry: userEcho('backfilled send') }]);
     expect(await rows()).toEqual([]);
-    await core.stop();
   });
 
   it('two identical sends: one echo hides ONE row; the second echo hides the other', async () => {
-    const { core, machine, rows } = await makeCore();
+    const { core, machine, rows, ack, appendTranscriptRow } = await makeCore();
     const first = await core.outbox.getState().send(machine.pubkeyHex, 's1', 'go');
     const second = await core.outbox.getState().send(machine.pubkeyHex, 's1', 'go');
-    for (const id of [first.id, second.id]) {
-      core.api.ingest(bridgeEvent(core, machine, { type: 'input-ack', sessionId: 's1', inputId: id }));
-    }
-    core.api.ingest(
-      bridgeEvent(core, machine, { type: 'output', sessionId: 's1', seq: 1, entry: userEcho('go') }),
-    );
+    await ack(first.id);
+    await ack(second.id);
+    await appendTranscriptRow([{ seq: 1, entry: userEcho('go') }]);
     expect((await rows()).map((i) => i.id)).toEqual([second.id]);
-    core.api.ingest(
-      bridgeEvent(core, machine, { type: 'output', sessionId: 's1', seq: 2, entry: userEcho('go') }),
-    );
+    await appendTranscriptRow([{ seq: 2, entry: userEcho('go') }]);
     expect(await rows()).toEqual([]);
-    await core.stop();
   });
 
   it('assistant/system entries never cover — only user-role entries do', async () => {
-    const { core, machine, rows } = await makeCore();
+    const { core, machine, rows, ack, appendTranscriptRow } = await makeCore();
     const sent = await core.outbox.getState().send(machine.pubkeyHex, 's1', 'say hi');
-    core.api.ingest(
-      bridgeEvent(core, machine, { type: 'input-ack', sessionId: 's1', inputId: sent.id }),
-    );
-    core.api.ingest(
-      bridgeEvent(core, machine, {
-        type: 'output',
-        sessionId: 's1',
-        seq: 1,
-        entry: { entryType: 'text', content: 'say hi', timestamp: new Date(0).toISOString() },
-      }),
-    );
+    await ack(sent.id);
+    await appendTranscriptRow([
+      { seq: 1, entry: { entryType: 'text', content: 'say hi', timestamp: new Date(0).toISOString() } },
+    ]);
     expect((await rows()).map((i) => i.id)).toEqual([sent.id]);
-    await core.stop();
   });
 });
 

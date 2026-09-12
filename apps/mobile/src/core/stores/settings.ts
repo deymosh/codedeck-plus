@@ -1,20 +1,14 @@
 /**
- * settingsStore — user settings behind the KV port.
- *
- * Phase 3a scope: the relay list (manual add/remove — every component supports
- * it, plan §6) plus placeholders the later phases fill in (UI scale slider,
- * stay-connected foreground-service toggle).
+ * Settings — shared types + the persisted-shape helpers `createNativeSettingsStore`
+ * (`./nativeSettings.ts`) and `createPhoneCoreNative.ts` still call directly.
+ * The stateful local store this file used to also implement (`createSettingsStore`,
+ * every setter persisting straight to `kv`) is Rust's job now — see git
+ * history — since `client_runtime::Core` owns the settings slice end to end.
  */
-import { createStore, type StoreApi } from 'zustand/vanilla';
-import {
-  DEFAULT_RELAYS,
-  MARMOT_RELAYS,
-  effortLevelSchema,
-  permissionModeSchema,
-  type EffortLevel,
-  type PermissionMode,
-} from '@codedeck/protocol';
-import type { KV, Logger } from '../ports';
+import type { StoreApi } from 'zustand/vanilla';
+import { DEFAULT_RELAYS, MARMOT_RELAYS, isEffortLevel, isPermissionMode } from '../protocolConstants';
+import type { EffortLevel, PermissionMode } from '../nativeCoreTypes';
+import type { KV } from '../ports';
 
 export const SETTINGS_STORAGE_KEY = 'settings';
 
@@ -170,12 +164,8 @@ export function hydrateSettings(raw: string | undefined): SettingsData {
           : defaults.meshTestTarget,
       blossomServer:
         typeof parsed.blossomServer === 'string' ? parsed.blossomServer : defaults.blossomServer,
-      defaultMode: permissionModeSchema.safeParse(parsed.defaultMode).success
-        ? (parsed.defaultMode as PermissionMode)
-        : defaults.defaultMode,
-      defaultEffort: effortLevelSchema.safeParse(parsed.defaultEffort).success
-        ? (parsed.defaultEffort as EffortLevel)
-        : defaults.defaultEffort,
+      defaultMode: isPermissionMode(parsed.defaultMode) ? parsed.defaultMode : defaults.defaultMode,
+      defaultEffort: isEffortLevel(parsed.defaultEffort) ? parsed.defaultEffort : defaults.defaultEffort,
       defaultModel:
         typeof parsed.defaultModel === 'string' ? parsed.defaultModel : defaults.defaultModel,
       notificationsEnabled:
@@ -215,150 +205,6 @@ export interface SettingsStoreState extends SettingsData {
 }
 
 export type SettingsStore = StoreApi<SettingsStoreState>;
-
-export interface SettingsStoreDeps {
-  kv: KV;
-  /** The relay list changed — reconfigure the transport / reconnect. */
-  onRelaysChanged?(relays: readonly string[]): void;
-  storageKey?: string;
-  log?: Logger;
-}
-
-export function createSettingsStore(
-  deps: SettingsStoreDeps,
-  initial: SettingsData = defaultSettings(),
-): SettingsStore {
-  const storageKey = deps.storageKey ?? SETTINGS_STORAGE_KEY;
-
-  const store = createStore<SettingsStoreState>()((set, get) => {
-    const persist = (): void => {
-      const {
-        relays,
-        uiScale,
-        stayConnected,
-        torProxyEnabled,
-        meshTestTarget,
-        blossomServer,
-        defaultMode,
-        defaultEffort,
-        defaultModel,
-        notificationsEnabled,
-        showUsageBadge,
-        showCommitBadge,
-      } = get();
-      void deps.kv
-        .set(
-          storageKey,
-          JSON.stringify({
-            relays,
-            uiScale,
-            stayConnected,
-            torProxyEnabled,
-            meshTestTarget,
-            blossomServer,
-            defaultMode,
-            defaultEffort,
-            defaultModel,
-            notificationsEnabled,
-            showUsageBadge,
-            showCommitBadge,
-          }),
-        )
-        .catch((err) => deps.log?.(`[Settings] persist failed: ${err}`));
-    };
-
-    const setRelays = (relays: string[]): void => {
-      set({ relays });
-      persist();
-      deps.onRelaysChanged?.(relays);
-    };
-
-    return {
-      ...initial,
-
-      addRelay: (url) => {
-        const relays = get().relays;
-        if (relays.includes(url)) return;
-        setRelays([...relays, url]);
-      },
-
-      removeRelay: (url) => {
-        const relays = get().relays;
-        if (!relays.includes(url)) return;
-        setRelays(relays.filter((r) => r !== url));
-      },
-
-      addRelays: (urls) => {
-        const relays = get().relays;
-        // CDX-042/CDX-036: automatic merges (fed by pairing URLs) obey the
-        // dead-default scrub; `addRelay` (the user typing one in) deliberately
-        // does not. The scrub list is EMPTY since CDX-036 — this stays as the
-        // seam for any future dead default.
-        const incoming = withoutDeadRelays(urls);
-        const merged = [...relays, ...incoming.filter((u) => !relays.includes(u))];
-        if (merged.length === relays.length) return;
-        setRelays(merged);
-      },
-
-      setUiScale: (uiScale) => {
-        set({ uiScale: clampUiScale(uiScale) });
-        persist();
-      },
-
-      setStayConnected: (stayConnected) => {
-        set({ stayConnected });
-        persist();
-      },
-
-      setTorProxyEnabled: (torProxyEnabled) => {
-        set({ torProxyEnabled });
-        persist();
-      },
-
-      setMeshTestTarget: (meshTestTarget) => {
-        set({ meshTestTarget });
-        persist();
-      },
-
-      setBlossomServer: (blossomServer) => {
-        set({ blossomServer: blossomServer.trim() });
-        persist();
-      },
-
-      setDefaultMode: (defaultMode) => {
-        set({ defaultMode });
-        persist();
-      },
-
-      setDefaultEffort: (defaultEffort) => {
-        set({ defaultEffort });
-        persist();
-      },
-
-      setDefaultModel: (defaultModel) => {
-        set({ defaultModel: defaultModel.trim() });
-        persist();
-      },
-
-      setNotificationsEnabled: (notificationsEnabled) => {
-        set({ notificationsEnabled });
-        persist();
-      },
-
-      setShowUsageBadge: (showUsageBadge) => {
-        set({ showUsageBadge });
-        persist();
-      },
-
-      setShowCommitBadge: (showCommitBadge) => {
-        set({ showCommitBadge });
-        persist();
-      },
-    };
-  });
-
-  return store;
-}
 
 export async function loadPersistedSettings(
   kv: KV,

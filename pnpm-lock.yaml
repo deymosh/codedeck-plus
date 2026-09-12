@@ -48,9 +48,6 @@ importers:
 
   apps/mobile:
     dependencies:
-      '@codedeck/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
       '@tauri-apps/api':
         specifier: ^2.5.0
         version: 2.11.1
@@ -61,11 +58,11 @@ importers:
         specifier: ^2.2.0
         version: 2.4.9
       '@tauri-apps/plugin-http':
-        specifier: ^2.5.0
-        version: 2.5.9
+        specifier: ^2.6.0
+        version: 2.6.0
       '@tauri-apps/plugin-notification':
-        specifier: ^2.3.0
-        version: 2.3.3
+        specifier: ^2.4.0
+        version: 2.4.0
       nostr-tools:
         specifier: ^2.23.1
         version: 2.24.3(typescript@5.9.3)
@@ -211,6 +208,37 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.0.1))
+
+  tools/contract-harness:
+    dependencies:
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.3
+    devDependencies:
+      '@codedeck/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@codedeck/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@codedeck/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -776,11 +804,11 @@ packages:
   '@tauri-apps/plugin-deep-link@2.4.9':
     resolution: {integrity: sha512-u0SKOUHnJ1wqeqXsDFq2+kASCBj9xxbG0g9XZWPy9SOmU4wXtp6b/wiYpm6oH6/5fBTQsLqnLhIvqLBRpgHJlA==}
 
-  '@tauri-apps/plugin-http@2.5.9':
-    resolution: {integrity: sha512-lCiY0+vs4HvIUSvZrBs8TC3TiCB0MOPRmiUjTq4prW7SlcJE2jdLeT6KBsJrT9Tlplufl7W1pY6SFAO3gCWxDA==}
+  '@tauri-apps/plugin-http@2.6.0':
+    resolution: {integrity: sha512-QYXwbGb4hQ9/8Riv/ejU/kPFFnbBIrBcWwV1LIXv2xBKfoj8lkWfGkd9pkCSsBI/pljPtz+IPqfrE3t3bVl3mg==}
 
-  '@tauri-apps/plugin-notification@2.3.3':
-    resolution: {integrity: sha512-Zw+ZH18RJb41G4NrfHgIuofJiymusqN+q8fGUIIV7vyCH+5sSn5coqRv/MWB9qETsUs97vmU045q7OyseCV3Qg==}
+  '@tauri-apps/plugin-notification@2.4.0':
+    resolution: {integrity: sha512-xlJXMcUoKOjNupzDue5wrEsa1wytf+l/2gCAPhafHyP683Y3N7J/8clUWLZ3vpnwkpT2C1zcLMMQFjjecIG2xg==}
 
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
@@ -2739,11 +2767,11 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.11.1
 
-  '@tauri-apps/plugin-http@2.5.9':
+  '@tauri-apps/plugin-http@2.6.0':
     dependencies:
       '@tauri-apps/api': 2.11.1
 
-  '@tauri-apps/plugin-notification@2.3.3':
+  '@tauri-apps/plugin-notification@2.4.0':
     dependencies:
       '@tauri-apps/api': 2.11.1
 

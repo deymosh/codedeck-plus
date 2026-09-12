@@ -7,16 +7,12 @@
  * every component supports manually adding relays).
  */
 import { useEffect, useState } from 'react';
-import {
-  effortLevelSchema,
-  permissionModeSchema,
-  type EffortLevel,
-  type PermissionMode,
-} from '@codedeck/protocol';
+import { EFFORT_LEVELS, PERMISSION_MODES } from '../../core/protocolConstants';
+import type { EffortLevel, PermissionMode } from '../../core/nativeCoreTypes';
 import { MODE_LABELS } from '../../core/modeCycle';
 import { UI_SCALE_DEFAULT, UI_SCALE_MAX, UI_SCALE_MIN } from '../../core/stores/settings';
 import { tauriServiceApi } from '../../platform/foregroundService';
-import { useMachines, useQuickPrompts, useSettings, usePhoneCore } from '../coreContext';
+import { useConnection, useMachines, useQuickPrompts, useSettings, usePhoneCore } from '../coreContext';
 import { cx, shared as s } from '../shared';
 import { MachineCredentials } from './MachineCredentials';
 import { MachineProviders } from './MachineProviders';
@@ -25,13 +21,17 @@ import styles from './SettingsScreen.module.css';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-const MODE_OPTIONS = permissionModeSchema.options;
-const EFFORT_OPTIONS = effortLevelSchema.options;
+const MODE_OPTIONS = PERMISSION_MODES;
+const EFFORT_OPTIONS = EFFORT_LEVELS;
 
 export function SettingsScreen() {
   const core = usePhoneCore();
   const machines = useMachines((st) => st.machines);
   const relays = useSettings((st) => st.relays);
+  // Not a fully live push — see `ConnectionPayload`'s own doc comment — but
+  // refreshed on every reconnect-class transition, which is the case that
+  // actually matters for "is this relay dead."
+  const connectedRelays = useConnection((st) => st.connectedRelays);
   const uiScale = useSettings((st) => st.uiScale);
   const stayConnected = useSettings((st) => st.stayConnected);
   const torProxyEnabled = useSettings((st) => st.torProxyEnabled);
@@ -383,6 +383,12 @@ export function SettingsScreen() {
       <div className={styles.sectionTitle}>Relays</div>
       {relays.map((url) => (
         <div key={url} className={styles.relayRow}>
+          <span
+            className={styles.relayDot}
+            data-connected={connectedRelays.includes(url)}
+            data-testid="relay-status-dot"
+            title={connectedRelays.includes(url) ? 'Connected' : 'Not connected'}
+          />
           <span className={styles.relayUrl} title={url}>
             {url}
           </span>

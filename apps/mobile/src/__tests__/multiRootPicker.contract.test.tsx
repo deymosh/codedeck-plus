@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * CDX-031 end-to-end: a bridge started on TWO `--workspace` roots must let the
- * phone start a session in the SECOND root.
+ * CDX-031: a bridge started on TWO `--workspace` roots must let the phone
+ * start a session in the SECOND root.
  *
  * This settles the unconfirmed device observation of 2026-08-08 — bridge on
  * `gsd-proj` + `plain-proj`, and the NewSessionModal offered only "Default
@@ -12,204 +12,95 @@
  * at all. Every downstream link — codec, machines store, modal — was fine and
  * faithfully rendered the empty list it was given.
  *
- * The chain is exercised for real, not stubbed: real BridgeCore over the
- * in-memory relay → real 30515 heartbeat → the production phone core's
- * machines store → the actual NewSessionModal → back down to the SDK session
- * the bridge spawns. The only fakes are the relay and the Claude SDK.
+ * This used to drive the chain for real: a live `BridgeCore` over an
+ * in-memory relay → its actual 30515 heartbeat → the production phone core's
+ * machines store → `NewSessionModal` → back down to the SDK session the
+ * bridge spawns. That whole round trip through a real bridge is Rust's job to
+ * prove now (`crates/client-core`'s wire tests already cover `roots` staying
+ * absolute and in `--workspace` order — see `wire::events`); a TS test has no
+ * bridge process to drive anymore. What is still this file's job: given a
+ * `MachinesView` carrying two roots (the exact shape a real heartbeat would
+ * produce), does `NewSessionModal` offer both, and does picking the second
+ * one dispatch `Intent::CreateSession` with THAT root as `cwd`.
  */
-import { describe, it, expect, afterEach } from 'vitest';
-import { promises as fs, mkdirSync } from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
+import { describe, it, expect } from 'vitest';
+import { afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import {
-  BridgeCore,
-  generateKeypair,
-  type BridgeHost,
-  type PairingHandle,
-  type PairingPayload,
-} from '@codedeck/core';
-import { FakeSdkFacade, InMemoryRelay, ManualTimers, inMemoryPoolFactory } from '@codedeck/testkit';
-import type { RelayEvent, RelayFilter } from '@codedeck/testkit';
-import type { NostrEvent } from 'nostr-tools/core';
-import { createPhoneCore, memoryKV, parsePairingUrl, type PhoneCore, type PhoneTransport } from '../core';
+import { buildFakePhoneCore } from '../core/__tests__/nativeCoreFixture';
+import type { MachineView } from '../core/nativeCoreTypes';
 import { PhoneCoreProvider } from '../ui/coreContext';
 import { NewSessionModal } from '../ui/NewSessionModal';
 
-// --- Harness (same shape as phoneCore.contract.test.ts) ---
+afterEach(cleanup);
 
-function inMemoryTransport(relay: InMemoryRelay): PhoneTransport {
+const MACHINE = 'a'.repeat(64);
+const ROOT_A = '/work/gsd-proj';
+const ROOT_B = '/work/plain-proj';
+
+function machineWithRoots(roots: string[], folders: string[]): MachineView {
   return {
-    subscribe: (filter, params) => {
-      const sub = relay.subscribe(
-        [filter as RelayFilter],
-        (event) => params.onEvent(event as NostrEvent),
-        () => params.onEose?.(),
-      );
-      return { close: () => sub.close() };
-    },
-    publish: async (event) => relay.publish(event as RelayEvent),
+    pubkeyHex: MACHINE,
+    name: 'multiroot-machine',
+    capabilities: [],
+    folders,
+    roots,
+    protocolVersion: null,
+    machineOffline: false,
+    lastHeartbeatAt: null,
+    sessions: {},
   };
-}
-
-async function until(cond: () => boolean, label: string, timeoutMs = 3000): Promise<void> {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > timeoutMs) throw new Error(`until timed out: ${label}`);
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
-}
-
-interface World {
-  rootA: string;
-  rootB: string;
-  core: BridgeCore;
-  facade: FakeSdkFacade;
-  phone: PhoneCore;
-  machine: string;
-}
-
-const teardown: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  cleanup();
-  while (teardown.length > 0) await teardown.pop()!();
-});
-
-/**
- * A bridge on two workspace roots, paired with a live phone core.
- *
- * The roots mirror the device rig exactly: two PROJECT directories passed
- * straight to `--workspace`, not two containers of projects. `rootA` holds one
- * pickable child so `folders` is non-empty and the assertions below can tell
- * "the roots are missing" apart from "nothing was advertised at all"; `rootB`
- * is flat, the shape that produced the empty picker on the device.
- */
-async function makeWorld(): Promise<World> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'codedeck-multiroot-'));
-  const stateDir = path.join(dir, 'state');
-  const rootA = path.join(dir, 'gsd-proj');
-  const rootB = path.join(dir, 'plain-proj');
-  mkdirSync(stateDir, { recursive: true });
-  mkdirSync(path.join(rootA, 'projA'), { recursive: true });
-  mkdirSync(rootB, { recursive: true });
-
-  const storage = new Map<string, string>();
-  const relay = new InMemoryRelay();
-  const bridgeKeys = generateKeypair();
-  const facade = new FakeSdkFacade();
-
-  const host: BridgeHost = {
-    config: {
-      machineName: 'multiroot-machine',
-      host: 'cli',
-      relays: ['wss://in-memory.test'],
-      workspaceRoots: [rootA, rootB],
-    },
-    storage: {
-      get: async (k) => storage.get(k),
-      set: async (k, v) => { storage.set(k, v); },
-      delete: async (k) => { storage.delete(k); },
-    },
-    sessionStateDir: () => stateDir,
-    log: () => {},
-    notify: () => {},
-    presentPairing: (_payload: PairingPayload): PairingHandle => ({ close: () => {} }),
-    onShutdown: () => {},
-  };
-
-  const core = await BridgeCore.start({
-    host,
-    secretKey: bridgeKeys.secretKey,
-    facade,
-    poolFactory: inMemoryPoolFactory(relay),
-    heartbeatIntervalMs: 0,
-    syncTimers: new ManualTimers(),
-  });
-
-  const phone = await createPhoneCore({
-    kv: memoryKV(),
-    transport: inMemoryTransport(relay),
-    timers: new ManualTimers(),
-    random: () => 0,
-  });
-  phone.start();
-  await until(() => phone.connection.getState().status === 'connected', 'FSM connected');
-
-  const info = core.openPairingWindow();
-  const parsed = parsePairingUrl(info.url);
-  if (!parsed.ok) throw new Error(parsed.error);
-  phone.pairing.getState().beginPair(parsed.parts, 'Multiroot Phone');
-  await until(() => phone.pairing.getState().phase === 'paired', 'paired');
-  const machine = bridgeKeys.pubkeyHex;
-  await until(() => phone.machines.getState().machine(machine) !== undefined, 'greeting heartbeat');
-
-  teardown.push(async () => {
-    await phone.stop();
-    await core.shutdown();
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-
-  return { rootA, rootB, core, facade, phone, machine };
 }
 
 describe('two workspace roots → folder picker (CDX-031)', () => {
-  it('the heartbeat advertises both roots, and folders alone never could', async () => {
-    const { rootA, rootB, phone, machine } = await makeWorld();
-    const view = phone.machines.getState().machine(machine)!;
-
-    // The fix: absolute, in --workspace order, all the way to the store.
-    expect(view.roots).toEqual([rootA, rootB]);
-
-    // The regression this guards: `folders` lists what is INSIDE the roots. It
-    // carries rootA's child and cannot name either root, so a picker built
-    // from it alone can never reach root 2 — and with two flat project roots
-    // it would have been empty, which is exactly what the device showed.
-    expect(view.folders).toEqual(['projA']);
-    expect(view.folders).not.toContain(rootB);
-    expect(view.folders).not.toContain(path.basename(rootB));
-  });
-
-  it('the modal offers the second root, and creating there lands the session in it', async () => {
-    const { rootA, rootB, facade, phone, machine } = await makeWorld();
+  it('the modal offers the second root, and creating there dispatches cwd = that root', async () => {
+    const { phone: core, fake } = await buildFakePhoneCore({
+      // The regression this guards: `folders` lists what is INSIDE the roots
+      // (rootA's one child) and can name neither root itself — exactly what
+      // two flat project roots produce. `roots` is what the picker must use.
+      machines: { machines: { [MACHINE]: machineWithRoots([ROOT_A, ROOT_B], ['projA']) } },
+    });
 
     render(
-      <PhoneCoreProvider value={phone}>
-        <NewSessionModal machinePubkey={machine} onClose={() => {}} />
+      <PhoneCoreProvider value={core}>
+        <NewSessionModal machinePubkey={MACHINE} onClose={() => {}} />
       </PhoneCoreProvider>,
     );
 
     // One radio per root, valued with the absolute path the bridge can match.
-    expect((screen.getByDisplayValue(rootA) as HTMLInputElement).type).toBe('radio');
-    const secondRoot = screen.getByDisplayValue(rootB) as HTMLInputElement;
+    expect((screen.getByDisplayValue(ROOT_A) as HTMLInputElement).type).toBe('radio');
+    const secondRoot = screen.getByDisplayValue(ROOT_B) as HTMLInputElement;
     expect(secondRoot.type).toBe('radio');
     // Labelled by basename — the absolute path would ellipsize away on a phone.
-    expect(screen.getByText(path.basename(rootB))).toBeTruthy();
+    expect(screen.getByText('plain-proj')).toBeTruthy();
     expect(screen.getAllByTestId('root-option')).toHaveLength(2);
 
     // Pick the SECOND root and create — oracle (a) of the CDX-031 device step.
     fireEvent.click(secondRoot);
     fireEvent.click(screen.getByText('Create'));
 
-    await until(() => facade.sessions.size > 0, 'SDK session spawned');
-    const spawned = [...facade.sessions.values()][0]!;
-    expect(spawned.options.cwd).toBe(rootB);
-    expect(spawned.options.cwd).not.toBe(rootA);
+    expect(fake.dispatched).toContainEqual({
+      createSession: {
+        machine: MACHINE,
+        cwd: ROOT_B,
+        createCwd: null,
+        model: null,
+        defaultEffort: null,
+        providerId: null,
+        testSession: null,
+      },
+    });
   });
 
   it('a single-root bridge shows no root rows — Default already is that root', async () => {
     // Guard against the fix adding a redundant duplicate row everywhere: the
     // rows only appear when there is a choice to make.
-    const { phone, machine } = await makeWorld();
-    phone.machines.getState().applySessionList(
-      machine,
-      { type: 'sessions', machine: 'multiroot-machine', sessions: [], protocolVersion: 10, roots: ['/only/root'] },
-      Date.now(),
-    );
+    const { phone: core } = await buildFakePhoneCore({
+      machines: { machines: { [MACHINE]: machineWithRoots(['/only/root'], []) } },
+    });
 
     render(
-      <PhoneCoreProvider value={phone}>
-        <NewSessionModal machinePubkey={machine} onClose={() => {}} />
+      <PhoneCoreProvider value={core}>
+        <NewSessionModal machinePubkey={MACHINE} onClose={() => {}} />
       </PhoneCoreProvider>,
     );
 

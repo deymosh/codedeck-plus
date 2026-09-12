@@ -1,0 +1,14 @@
+# THROWAWAY F0 probe-2. A real Cargo workspace with two members, where
+# `client-core` carries BOTH the uniffi stack AND the MDK/MLS + SQLCipher stack
+# from `apps/mobile/src-tauri` — the exact "re-layout" the plan flags as the
+# risk (feature unification for `rusqlite`/`openssl-src`, and openmls coexisting
+# with uniffi proc-macros, when the crate is a workspace member and a cdylib).
+[workspace]
+members = ["crates/client-core", "crates/client-runtime-min"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+publish = false
+license = "MIT"

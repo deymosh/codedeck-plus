@@ -4,13 +4,21 @@
  * (sub-threshold snaps back, vertical scroll never triggers, ≥80px commits
  * with the slide-out) and the UndoToast (delete shows it, Undo restores the
  * card in the sidebar).
+ *
+ * The undo WINDOW itself — the 4s timer, the optimistic remove, restoring on
+ * undo, closing the session for real once the window lapses — is
+ * `client_runtime::Core`'s job now (`Intent::DeleteSession`/`UndoDelete`,
+ * `on_undo_timer`; see `crates/client-runtime`'s own tests for that FSM,
+ * including the regression test for the undo toast clearing itself when the
+ * window expires untapped). What this file still owns is the swipe gesture
+ * and the toast's render/wiring — so each scenario scripts the fake core's
+ * `deleteSession`/`undoDelete` dispatch to do what Rust would, then asserts
+ * the UI reacted correctly.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { RemoteSessionInfo } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
-import { UNDO_DELAY_MS } from '../../core/deleteController';
+import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { Sidebar } from '../Sidebar';
 import { UndoToast } from '../UndoToast';
@@ -22,31 +30,61 @@ afterEach(() => {
 
 const MACHINE = 'a'.repeat(64);
 
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
+async function makeCore(): Promise<{ phone: PhoneCore; fake: Awaited<ReturnType<typeof buildFakePhoneCore>>['fake'] }> {
+  const { phone, fake } = await buildFakePhoneCore({
+    machines: {
+      machines: {
+        [MACHINE]: {
+          pubkeyHex: MACHINE,
+          name: 'laptop',
+          capabilities: [],
+          folders: [],
+          roots: [],
+          protocolVersion: null,
+          machineOffline: false,
+          lastHeartbeatAt: null,
+          sessions: {
+            s1: {
+              info: {
+                id: 's1',
+                slug: 's1',
+                cwd: '/home/x/s1',
+                lastActivity: '2026-08-08T10:00:00.000Z',
+                lineCount: 0,
+                title: 'One',
+                project: 'proj-s1',
+              },
+              presence: 'live',
+              lastListedAt: Date.now(),
+            },
+          },
+        },
+      },
+    },
+  });
 
-const sessionInfo = (id: string, over: Partial<RemoteSessionInfo> = {}): RemoteSessionInfo => ({
-  id,
-  slug: id,
-  cwd: `/home/x/${id}`,
-  lastActivity: '2026-08-08T10:00:00.000Z',
-  lineCount: 0,
-  title: null,
-  project: `proj-${id}`,
-  ...over,
-});
+  // Scripts the optimistic-delete + undo-toast half of `Intent::DeleteSession`
+  // and `undoDelete`'s restore, the way `client_runtime::Core` really behaves
+  // — the fixture itself stays dumb (see nativeCoreFixture.ts's module doc).
+  const machineView = fake.views.machines.machines[MACHINE]!;
+  const savedSession = machineView.sessions['s1']!;
+  fake.onDispatch((intent) => {
+    if (typeof intent === 'object' && intent.deleteSession) {
+      const { sessionId, label } = intent.deleteSession;
+      const { [sessionId]: _removed, ...rest } = machineView.sessions;
+      fake.setView('machines', {
+        machines: { [MACHINE]: { ...machineView, sessions: rest } },
+      });
+      fake.setView('ui', { ...fake.views.ui, undoToast: { machine: MACHINE, sessionId, label: label ?? '' } });
+    } else if (intent === 'undoDelete') {
+      fake.setView('machines', {
+        machines: { [MACHINE]: { ...machineView, sessions: { ...machineView.sessions, s1: savedSession } } },
+      });
+      fake.setView('ui', { ...fake.views.ui, undoToast: null });
+    }
+  });
 
-async function makeCore(): Promise<PhoneCore> {
-  // Default realTimers: vi.useFakeTimers() (installed before any delete) puts
-  // both the hook's 200ms slide-out and the controller's 4s window on the
-  // fake clock.
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  core.machines.getState().applySessionUpsert(MACHINE, sessionInfo('s1', { title: 'One' }), 0);
-  vi.spyOn(core.api, 'closeSession').mockResolvedValue(true);
-  return core;
+  return { phone, fake };
 }
 
 const noop = (): void => {};
@@ -71,24 +109,25 @@ function swipe(el: Element, dx: number): void {
 
 describe('swipe-to-delete on session cards', () => {
   it('sub-threshold swipe snaps back — no delete, no toast', async () => {
-    const core = await makeCore();
+    const { phone } = await makeCore();
     vi.useFakeTimers();
-    renderSidebar(core);
+    renderSidebar(phone);
 
     const card = screen.getByTestId('session-card');
     swipe(card, -50);
 
     expect((card as HTMLElement).style.transform).toBe('translateX(0)');
-    act(() => vi.advanceTimersByTime(1_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
     expect(screen.getByTestId('session-card')).toBeTruthy();
     expect(screen.queryByTestId('undo-toast')).toBeNull();
-    expect(core.machines.getState().session(MACHINE, 's1')).toBeDefined();
   });
 
   it('vertical scroll never triggers the swipe', async () => {
-    const core = await makeCore();
+    const { phone } = await makeCore();
     vi.useFakeTimers();
-    renderSidebar(core);
+    renderSidebar(phone);
 
     const card = screen.getByTestId('session-card');
     fireEvent.touchStart(card, touch(200, 50));
@@ -96,62 +135,55 @@ describe('swipe-to-delete on session cards', () => {
     fireEvent.touchEnd(card);
 
     expect((card as HTMLElement).style.transform).toBe('');
-    act(() => vi.advanceTimersByTime(1_000));
-    expect(core.machines.getState().session(MACHINE, 's1')).toBeDefined();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(screen.getByTestId('session-card')).toBeTruthy();
     expect(screen.queryByTestId('undo-toast')).toBeNull();
   });
 
   it('≥80px swipe slides out, deletes the card, and shows the undo toast', async () => {
-    const core = await makeCore();
+    const { phone, fake } = await makeCore();
     vi.useFakeTimers();
-    renderSidebar(core);
+    renderSidebar(phone);
 
     const card = screen.getByTestId('session-card');
     swipe(card, -100);
 
     // Slide-out armed, delete not fired yet.
     expect((card as HTMLElement).style.transform).toBe('translateX(-100%)');
-    expect(core.machines.getState().session(MACHINE, 's1')).toBeDefined();
+    expect(fake.dispatched).toHaveLength(0);
 
-    act(() => vi.advanceTimersByTime(200));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
 
     expect(screen.queryByTestId('session-card')).toBeNull();
-    expect(core.machines.getState().session(MACHINE, 's1')).toBeUndefined();
+    expect(fake.dispatched).toContainEqual({
+      deleteSession: { machine: MACHINE, sessionId: 's1', label: 'One' },
+    });
     const toast = screen.getByTestId('undo-toast');
     expect(toast.textContent).toContain('Deleted "One"');
   });
 
   it('Undo within the window brings the card back into the sidebar', async () => {
-    const core = await makeCore();
+    const { phone, fake } = await makeCore();
     vi.useFakeTimers();
-    renderSidebar(core);
+    renderSidebar(phone);
 
     swipe(screen.getByTestId('session-card'), -120);
-    act(() => vi.advanceTimersByTime(200));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
     expect(screen.queryByTestId('session-card')).toBeNull();
 
     fireEvent.click(screen.getByText('Undo'));
+    await act(async () => {
+      await tick();
+    });
 
     expect(screen.getByTestId('session-card').textContent).toContain('One');
     expect(screen.queryByTestId('undo-toast')).toBeNull();
-    // Undo killed the deferred close-session.
-    act(() => vi.advanceTimersByTime(UNDO_DELAY_MS + 1_000));
-    expect(core.api.closeSession).not.toHaveBeenCalled();
-  });
-
-  it('letting the window lapse removes the toast and sends the close', async () => {
-    const core = await makeCore();
-    vi.useFakeTimers();
-    renderSidebar(core);
-
-    swipe(screen.getByTestId('session-card'), -120);
-    act(() => vi.advanceTimersByTime(200));
-    expect(screen.getByTestId('undo-toast')).toBeTruthy();
-
-    act(() => vi.advanceTimersByTime(UNDO_DELAY_MS));
-
-    expect(screen.queryByTestId('undo-toast')).toBeNull();
-    expect(core.api.closeSession).toHaveBeenCalledTimes(1);
-    expect(core.api.closeSession).toHaveBeenCalledWith(MACHINE, 's1');
+    expect(fake.dispatched).toContain('undoDelete');
   });
 });

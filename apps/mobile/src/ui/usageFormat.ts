@@ -6,7 +6,7 @@
  * rate-limit windows). Tasteful on tokens: whole-number %, compact token
  * counts, reset countdowns as tooltips — no redesign.
  */
-import type { UsageData } from '@codedeck/protocol';
+import type { UsageData } from '../core/nativeCoreTypes';
 
 /** Compact token count: 950 → "950", 84_200 → "84k", 1_240_000 → "1.2M". */
 export function formatTokens(n: number): string {
@@ -71,7 +71,12 @@ export interface UsageBadge {
 export function usageBadges(usage: UsageData | undefined, nowMs: number): UsageBadge[] {
   if (!usage?.available) return [];
   const badges: UsageBadge[] = [];
-  const windows: Array<[string, { utilization: number | null; resetsAt: string | null } | undefined]> = [
+  // fiveHour/sevenDay are Option<UsageWindow> with skip_serializing_if — the
+  // field is only ever omitted (undefined) or present, never literally
+  // `null`, but specta's generated type allows `null` defensively too.
+  const windows: Array<
+    [string, { utilization: number | null; resetsAt: string | null } | null | undefined]
+  > = [
     ['5h', usage.fiveHour],
     ['7d', usage.sevenDay],
   ];

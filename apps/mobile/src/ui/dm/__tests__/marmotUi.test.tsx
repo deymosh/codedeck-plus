@@ -2,133 +2,121 @@
 /**
  * Marmot UI (Phase 6, CDX-012): the unified conversation list carries BOTH
  * protocols with per-row tags, pending welcome cards accept into a joined
- * conversation, the start-chat sheet offers the Marmot path (with the honest
- * no-KeyPackage error), and the MarmotChatScreen renders MLS-tagged bubbles
- * over the marmot store.
+ * conversation, the start-chat sheet offers the Marmot path (with an honest
+ * failure message when it cannot), and the MarmotChatScreen renders
+ * MLS-tagged bubbles over the marmot store.
+ *
+ * The MDK/MLS engine this file used to drive through a fake `MarmotPlatform`
+ * seam (KeyPackage lookup, welcome accept, group message send/ingest) is
+ * `client_runtime`'s `MarmotEngineImpl` now — see that crate's own tests for
+ * the engine itself. `nativeMarmot.ts` also DOCUMENTS a real, deliberate
+ * simplification worth keeping visible here: `startChat`'s distinct
+ * `'no-key-package'`/`'failed'` outcomes collapse into a single `'failed'`
+ * (nothing in `CoreEvent::ActionFailed` distinguishes them yet), so the UI's
+ * old "no published Marmot KeyPackage" copy no longer has a path that
+ * produces it — the generic failure message does instead.
  */
 import { afterEach, describe, it, expect } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { NostrEvent } from 'nostr-tools/core';
-import type { PhoneCore } from '../../../core/createPhoneCore';
-import { createPhoneCore } from '../../../core/createPhoneCore';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { buildFakePhoneCore, tick } from '../../../core/__tests__/nativeCoreFixture';
+import type { FakeNativeCore } from '../../../core/__tests__/nativeCoreFixture';
 import { generateKeypair } from '../../../core/crypto';
-import { memoryKV, type PhoneTransport } from '../../../core/ports';
-import {
-  GROUP_MESSAGE_KIND,
-  KEY_PACKAGE_KIND,
-  type MarmotGroupInfo,
-  type MarmotIngested,
-  type MarmotPlatform,
-  type MarmotWelcomeInfo,
-} from '../../../core/stores/marmot';
+import type { MarmotView } from '../../../core/nativeCoreTypes';
 import { PhoneCoreProvider } from '../../coreContext';
 import { DmSection } from '../../DmSection';
 import { MarmotChatScreen } from '../MarmotChatScreen';
 
 afterEach(cleanup);
 
-const fakeEvent = (kind: number, tags: string[][] = [], id = 'e'.repeat(64)): NostrEvent => ({
-  id,
-  kind,
-  pubkey: 'f'.repeat(64),
-  created_at: Math.floor(Date.now() / 1000),
-  content: '',
-  tags,
-  sig: '0'.repeat(128),
-});
-
 const WELCOMER = 'a'.repeat(64);
 
-const WELCOME: MarmotWelcomeInfo = {
-  welcomeId: 'w1',
-  wrapperId: '1'.repeat(64),
-  groupId: 'g1',
-  hTag: 'h1',
-  name: 'CodeDeck DM',
-  welcomer: WELCOMER,
-  memberCount: 2,
-};
-
-function fakeSeam(mePubkey: () => string) {
-  const state = {
-    groups: [] as MarmotGroupInfo[],
-    pending: [] as MarmotWelcomeInfo[],
-    ingestScript: [] as MarmotIngested[],
-    sendCounter: 0,
+function emptyMarmotView(available = true): MarmotView {
+  return {
+    available,
+    conversations: [],
+    messages: {},
+    activeGroup: null,
+    eventsReceived: 0,
+    ignored: 0,
+    errors: 0,
+    buffered: 0,
+    pendingWelcomes: {},
   };
-  const seam: MarmotPlatform = {
-    init: async () => mePubkey(),
-    publishKeyPackage: async () => fakeEvent(KEY_PACKAGE_KIND, [['d', 'kp']]),
-    createGroup: async (peerPubkey) => ({
-      groupId: 'g-new',
-      hTag: 'h-new',
-      welcomeEvent: fakeEvent(1059, [['p', peerPubkey]], '2'.repeat(64)),
-    }),
-    send: async () => {
-      state.sendCounter++;
-      return {
-        event: fakeEvent(GROUP_MESSAGE_KIND, [['h', 'h1']], `${state.sendCounter}`.padStart(64, '0')),
-        rumorId: `rumor-${state.sendCounter}`,
-        createdAt: Math.floor(Date.now() / 1000),
-      };
-    },
-    ingest: async () => state.ingestScript.shift() ?? { type: 'none' },
-    pendingWelcomes: async () => state.pending,
-    acceptWelcome: async (welcomeId) => {
-      const group: MarmotGroupInfo = {
-        groupId: WELCOME.groupId,
-        hTag: WELCOME.hTag,
-        name: WELCOME.name,
-        members: [mePubkey(), WELCOME.welcomer],
-        admins: [],
-        active: true,
-      };
-      state.groups.push(group);
-      state.pending = state.pending.filter((w) => w.welcomeId !== welcomeId);
-      return group;
-    },
-    listGroups: async () => state.groups,
-  };
-  return { seam, state };
 }
 
-async function makeCore(): Promise<{
-  core: PhoneCore;
-  seamState: ReturnType<typeof fakeSeam>['state'];
-  published: NostrEvent[];
-}> {
-  const published: NostrEvent[] = [];
-  const transport: PhoneTransport = {
-    // EOSE promptly with no stored events — the KP lookup resolves fast.
-    subscribe: (_filter, params) => {
-      const t = setTimeout(() => params.onEose?.(), 0);
-      return { close: () => clearTimeout(t) };
-    },
-    publish: async (event) => {
-      published.push(event);
-      return true;
-    },
-  };
-  let me = '';
-  const fake = fakeSeam(() => me);
-  const core = await createPhoneCore({ kv: memoryKV(), transport, marmot: fake.seam });
-  me = core.identity.getState().pubkeyHex;
-  return { core, seamState: fake.state, published };
+/** Scripts the Intents this UI actually dispatches, the way a real
+ *  `client_runtime::Core` (backed by `MarmotEngineImpl`) would settle them. */
+function wireMarmot(fake: FakeNativeCore, opts: { acceptSucceeds?: boolean } = {}): void {
+  const acceptSucceeds = opts.acceptSucceeds ?? true;
+  fake.onDispatch((intent) => {
+    if (typeof intent !== 'object') return;
+    const view = fake.views.marmot ?? emptyMarmotView();
+    if (intent.acceptMarmotWelcome && acceptSucceeds) {
+      const { welcomeId } = intent.acceptMarmotWelcome;
+      const welcome = view.pendingWelcomes[welcomeId];
+      if (!welcome) return;
+      const { [welcomeId]: _accepted, ...restWelcomes } = view.pendingWelcomes;
+      fake.setView('marmot', {
+        ...view,
+        pendingWelcomes: restWelcomes,
+        conversations: [
+          ...view.conversations,
+          {
+            groupId: welcome.groupId,
+            hTag: welcome.hTag,
+            peerPubkey: welcome.welcomer,
+            name: welcome.name,
+            memberCount: welcome.memberCount,
+            lastMessageAt: Date.now(),
+            unreadCount: 0,
+            lastPreview: '',
+          },
+        ],
+      });
+    } else if (intent.selectMarmotGroup) {
+      const { groupId } = intent.selectMarmotGroup;
+      if (!groupId) return;
+      fake.setView('marmot', {
+        ...view,
+        conversations: view.conversations.map((c) => (c.groupId === groupId ? { ...c, unreadCount: 0 } : c)),
+      });
+    } else if (intent.sendMarmotMessage) {
+      const { groupId, text } = intent.sendMarmotMessage;
+      const existing = view.messages[groupId] ?? [];
+      fake.setView('marmot', {
+        ...view,
+        messages: {
+          ...view.messages,
+          [groupId]: [
+            ...existing,
+            { id: `r${existing.length + 1}`, groupId, senderPubkey: 'phone', content: text, at: Date.now(), status: 'sent' },
+          ],
+        },
+      });
+    }
+  });
 }
-
-const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10));
 
 describe('unified list + welcome cards', () => {
   it('shows both protocols with badges, and Accept turns an invite into a Marmot conversation', async () => {
-    const { core, seamState } = await makeCore();
-    seamState.pending.push(WELCOME);
-    core.marmot.getState().start();
-    await settle();
-
-    // A NIP-17 conversation beside the (future) Marmot one.
-    const nip17Peer = generateKeypair();
-    core.dm.getState().startConversation(nip17Peer.pubkeyHex);
-    core.dm.getState().setActivePeer(null);
+    const nip17Peer = generateKeypair().pubkeyHex;
+    const { phone: core, fake } = await buildFakePhoneCore({
+      dm: {
+        conversations: [{ peerPubkey: nip17Peer, protocol: 'nip17', lastMessageAt: Date.now(), unreadCount: 0, lastPreview: '' }],
+        messages: {},
+        activePeer: null,
+        eventsReceived: 0,
+        unwrapFailures: 0,
+        invalidRumors: 0,
+      },
+      marmot: {
+        ...emptyMarmotView(),
+        pendingWelcomes: {
+          w1: { welcomeId: 'w1', wrapperId: '1'.repeat(64), groupId: 'g1', hTag: 'h1', name: 'CodeDeck DM', welcomer: WELCOMER, memberCount: 2 },
+        },
+      },
+    });
+    wireMarmot(fake);
 
     render(
       <PhoneCoreProvider value={core}>
@@ -141,15 +129,14 @@ describe('unified list + welcome cards', () => {
     expect(card.textContent).toContain('Marmot (MLS) chat invite');
 
     // Accept → joined conversation appears in the SAME list, MLS-tagged.
-    fireEvent.click(screen.getByText('Accept'));
-    await waitFor(() => {
-      expect(core.marmot.getState().conversations['g1']).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Accept'));
+      await tick();
     });
-    await waitFor(() => {
-      const rows = screen.getByTestId('dm-section').querySelectorAll('[data-protocol]');
-      expect(rows).toHaveLength(2);
-    });
+    expect(core.marmot.getState().conversations['g1']).toBeTruthy();
+
     const rows = screen.getByTestId('dm-section').querySelectorAll('[data-protocol]');
+    expect(rows).toHaveLength(2);
     const protocols = [...rows].map((r) => r.getAttribute('data-protocol')).sort();
     expect(protocols).toEqual(['marmot', 'nip17']);
 
@@ -157,17 +144,17 @@ describe('unified list + welcome cards', () => {
     expect(badges).toContain('MLS');
     expect(badges).toContain('NIP-17');
 
-    // Tapping the Marmot row selects the group (panelMode flips to marmot).
+    // Tapping the Marmot row selects the group (panelMode flips to marmot,
+    // optimistically local — see nativeMarmot.ts's `setActiveGroup`).
     const marmotRow = [...rows].find((r) => r.getAttribute('data-protocol') === 'marmot')!;
     fireEvent.click(marmotRow as HTMLElement);
     expect(core.ui.getState().panelMode).toBe('marmot');
     expect(core.ui.getState().activeMarmotGroup).toBe('g1');
   });
 
-  it('the start sheet offers Marmot when available and surfaces the no-KeyPackage error honestly', async () => {
-    const { core } = await makeCore();
-    core.marmot.getState().start();
-    await settle();
+  it('the start sheet offers Marmot when available and surfaces a failure honestly when the chat cannot start', async () => {
+    const { phone: core, fake } = await buildFakePhoneCore({ marmot: emptyMarmotView(true) });
+    wireMarmot(fake); // no startMarmotChat handler → the lookup never succeeds
     expect(core.marmot.getState().available).toBe(true);
 
     render(
@@ -180,39 +167,32 @@ describe('unified list + welcome cards', () => {
     expect(marmotBtn.textContent).toContain('Marmot (MLS)');
 
     const peer = generateKeypair();
-    fireEvent.change(screen.getByPlaceholderText(/npub/), {
-      target: { value: peer.pubkeyHex },
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/npub/), {
+        target: { value: peer.pubkeyHex },
+      });
+      fireEvent.click(marmotBtn);
+      await tick();
     });
-    fireEvent.click(marmotBtn);
-    // The KP lookup EOSEs empty → the honest, actionable error.
-    await waitFor(() => {
-      expect(screen.getByText(/no published Marmot KeyPackage/)).toBeTruthy();
-    });
+    // `startChat`'s collapsed 'failed' reason (see this file's module doc).
+    expect(screen.getByText('Could not start the Marmot chat — try again')).toBeTruthy();
   });
 });
 
 describe('MarmotChatScreen', () => {
   it('renders MLS-tagged bubbles, marks read on open, sends via the engine', async () => {
-    const { core, seamState, published } = await makeCore();
-    core.marmot.getState().start();
-    await settle();
-
-    // A joined conversation with one unread incoming message.
-    seamState.ingestScript.push({ type: 'welcome', welcome: WELCOME });
-    core.marmot.getState().ingestGiftWrap(fakeEvent(1059, [], '3'.repeat(64)));
-    await settle();
-    await core.marmot.getState().acceptWelcome('w1');
-    seamState.ingestScript.push({
-      type: 'message',
-      groupId: 'g1',
-      id: 'r1',
-      sender: WELCOMER,
-      kind: 9,
-      content: 'hello over MLS',
-      createdAt: Math.floor(Date.now() / 1000),
+    const { phone: core, fake } = await buildFakePhoneCore({
+      marmot: {
+        ...emptyMarmotView(),
+        conversations: [
+          { groupId: 'g1', hTag: 'h1', peerPubkey: WELCOMER, name: 'CodeDeck DM', memberCount: 2, lastMessageAt: Date.now(), unreadCount: 1, lastPreview: 'hello over MLS' },
+        ],
+        messages: {
+          g1: [{ id: 'r1', groupId: 'g1', senderPubkey: WELCOMER, content: 'hello over MLS', at: Date.now(), status: 'delivered' }],
+        },
+      },
     });
-    core.marmot.getState().ingestGroupMessage(fakeEvent(GROUP_MESSAGE_KIND, [['h', 'h1']], '4'.repeat(64)));
-    await settle();
+    wireMarmot(fake);
     expect(core.marmot.getState().conversations['g1']!.unreadCount).toBe(1);
 
     render(
@@ -222,18 +202,19 @@ describe('MarmotChatScreen', () => {
     );
     expect(screen.getByText('hello over MLS')).toBeTruthy();
     expect(screen.getByTestId('protocol-badge').textContent).toBe('MLS');
-    // Opening marked it read + active.
+    // Opening selected the group, which the Router treats as reading it.
+    await act(async () => {
+      await tick();
+    });
     expect(core.marmot.getState().conversations['g1']!.unreadCount).toBe(0);
     expect(core.marmot.getState().activeGroup).toBe('g1');
 
-    // Sending publishes the engine's 445.
-    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hi back' } });
-    fireEvent.click(screen.getByText('Send'));
-    await waitFor(() => {
-      expect(published.some((e) => e.kind === GROUP_MESSAGE_KIND)).toBe(true);
+    // Sending dispatches Intent::SendMarmotMessage and the reply lands.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hi back' } });
+      fireEvent.click(screen.getByText('Send'));
+      await tick();
     });
-    await waitFor(() => {
-      expect(screen.getByText('hi back')).toBeTruthy();
-    });
+    expect(screen.getByText('hi back')).toBeTruthy();
   });
 });

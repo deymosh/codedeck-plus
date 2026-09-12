@@ -51,7 +51,7 @@ ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
 ENV PATH=${CARGO_HOME}/bin:${PATH}
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
-    && rustup target add aarch64-linux-android
+    && rustup target add aarch64-linux-android x86_64-linux-android
 
 # Gradle's rustBuildArm64Debug task shells out to `cargo tauri ...` (a Cargo
 # SUBCOMMAND, from the tauri-cli crate) -- separate from the npm
@@ -67,6 +67,11 @@ RUN cargo install tauri-cli --version "^2" --locked
 ENV TOOLBIN=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin
 ENV RANLIB_aarch64_linux_android=${TOOLBIN}/llvm-ranlib
 ENV AR_aarch64_linux_android=${TOOLBIN}/llvm-ar
+# Same for the x86_64 emulator ABI (`build-apk.sh ... --target x86_64`): the
+# vendored-OpenSSL `make install_dev` under rusqlite's bundled-sqlcipher needs
+# the NDK ar/ranlib for its target too, or it links host binutils and fails.
+ENV RANLIB_x86_64_linux_android=${TOOLBIN}/llvm-ranlib
+ENV AR_x86_64_linux_android=${TOOLBIN}/llvm-ar
 
 # --- Debug keystore, for signing "benchmark" (release-optimized, debug-
 # signed) builds so they can actually be installed — Android refuses to

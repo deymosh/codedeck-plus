@@ -1,8 +1,14 @@
 /**
  * Layering guard: production phone code (src/core, src/platform, src/ui, the
- * entrypoints) must NEVER import @codedeck/core or @codedeck/testkit — the
- * wire contract (@codedeck/protocol) is the only shared code. Bridge engine +
- * testkit are devDependencies for the contract tests only.
+ * entrypoints) must NEVER import @codedeck/core, @codedeck/testkit, or
+ * @codedeck/protocol. Bridge engine + testkit are devDependencies for the
+ * contract tests only; `core/nativeCoreTypes.ts` (generated from
+ * `crates/protocol`/`client-core`/`client-runtime`) is the source of truth for
+ * every wire TYPE this app uses, and `core/protocolConstants.ts` mirrors the
+ * small amount of RUNTIME behavior (effort/permission-mode validation,
+ * capability strings, default relays, the provider-base-url rule) the same
+ * way `core/crypto.ts` mirrors `@codedeck/core`'s crypto helpers — so the
+ * phone depends on neither package at runtime any more.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -29,7 +35,7 @@ function tsFilesUnder(dir: string): string[] {
 }
 
 describe('phone core layering', () => {
-  it('production phone code imports neither @codedeck/core nor @codedeck/testkit', () => {
+  it('production phone code imports none of @codedeck/core, @codedeck/testkit, @codedeck/protocol', () => {
     const files = productionDirs.flatMap((dir) => tsFilesUnder(dir));
     for (const name of readdirSync(srcDir)) {
       if (name.endsWith('.ts') || name.endsWith('.tsx')) {
@@ -44,6 +50,9 @@ describe('phone core layering', () => {
       );
       expect(source, `${file} must not import @codedeck/testkit`).not.toMatch(
         /from\s+['"]@codedeck\/testkit['"]/,
+      );
+      expect(source, `${file} must not import @codedeck/protocol`).not.toMatch(
+        /from\s+['"]@codedeck\/protocol['"]/,
       );
     }
   });

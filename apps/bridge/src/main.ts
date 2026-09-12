@@ -27,6 +27,11 @@ Commands:
   version       Print the version
 
 Options:
+  --test-mode             With run: no real Claude Code subprocess — sessions
+                          are served canned responses to /test-message,
+                          /test-tool, /test-plan, /test-question and
+                          /test-question-multiple. No claude executable or
+                          API key needed.
   --home <dir>            State/config directory (env CODEDECK_HOME, default ~/.codedeck)
   --machine-name <name>   Display name on the phone (env CODEDECK_MACHINE_NAME,
                           default "<hostname> (cli)")
@@ -59,6 +64,7 @@ async function main(): Promise<number> {
     all?: boolean;
     help?: boolean;
     version?: boolean;
+    'test-mode'?: boolean;
   };
   let positionals: string[];
   try {
@@ -76,6 +82,7 @@ async function main(): Promise<number> {
         all: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
+        'test-mode': { type: 'boolean' },
       },
     }));
   } catch (e) {
@@ -114,7 +121,7 @@ async function main(): Promise<number> {
   const io = { out: process.stdout, err: process.stderr };
   switch (command) {
     case 'run':
-      return cmdRun(resolved, io);
+      return cmdRun(resolved, io, { testMode: values['test-mode'] ?? false });
     case 'pair':
       return cmdPair(resolved, io);
     case 'status':

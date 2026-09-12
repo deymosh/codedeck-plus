@@ -2,6 +2,12 @@
  * Stay-connected controller (Phase 5c): toggle → service start/stop, the
  * notification text mirrors the TRUE connection-FSM status, permission is
  * requested before the first start, and boot reconciles a persisted toggle.
+ *
+ * The connection FSM and the settings store both moved to Rust (F2b) —
+ * `attachStayConnectedService` itself is untouched (it only reads
+ * `ConnectionStoreState`/`SettingsStoreState`), so this drives it against
+ * the native adapters + a tiny scripted fake `NativeCore` instead of the
+ * retired local reducer-backed stores.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -9,9 +15,12 @@ import {
   serviceNotificationText,
   type StayConnectedServiceApi,
 } from '../foregroundService';
-import { createConnectionStore } from '../../core/stores/connection';
-import { createSettingsStore, defaultSettings } from '../../core/stores/settings';
-import { memoryKV, type Timers } from '../../core/ports';
+import { createNativeConnectionStore } from '../../core/stores/nativeConnection';
+import { createNativeSettingsStore } from '../../core/stores/nativeSettings';
+import { createNativeMachinesStore } from '../../core/stores/nativeMachines';
+import type { ConnectionStatus } from '../../core/stores/connection';
+import type { NativeCore, NativeConnectionSnapshot } from '../nativeCore';
+import type { SettingsView, CoreEvent } from '../../core/nativeCoreTypes';
 
 const flush = async (): Promise<void> => {
   await Promise.resolve();
@@ -19,19 +28,88 @@ const flush = async (): Promise<void> => {
   await Promise.resolve();
 };
 
-const noopTimers: Timers = { set: () => 0, clear: () => {} };
+const defaultSettingsView = (stayConnected: boolean): SettingsView => ({
+  relays: [],
+  uiScale: 1,
+  stayConnected,
+  torProxyEnabled: false,
+  meshTestTarget: false,
+  blossomServer: '',
+  defaultMode: 'plan',
+  defaultEffort: '',
+  defaultModel: '',
+  notificationsEnabled: true,
+  showUsageBadge: true,
+  showCommitBadge: true,
+});
+
+/** A scripted `NativeCore`: `setConnectionStatus`/`setStayConnected` push a
+ *  new snapshot straight to whichever listeners are already subscribed —
+ *  the same round trip the real Tauri event stream drives, just synchronous. */
+function fakeNativeCore(stayConnected: boolean) {
+  let status: ConnectionStatus = 'idle';
+  let settings = defaultSettingsView(stayConnected);
+  let onConnectionCb: ((s: NativeConnectionSnapshot) => void) | null = null;
+  let onEventCb: ((e: CoreEvent) => void) | null = null;
+
+  const core: NativeCore = {
+    defaults: () => Promise.reject(new Error('unused')),
+    init: () => Promise.reject(new Error('unused')),
+    start: () => Promise.resolve(),
+    stop: () => Promise.resolve(),
+    pause: () => Promise.resolve(),
+    resume: () => Promise.resolve(),
+    setOnline: () => Promise.resolve(),
+    setMachines: () => Promise.reject(new Error('unused')),
+    setRelays: () => Promise.reject(new Error('unused')),
+    connectionStatus: () => Promise.resolve({ status, needsPairingCheck: false, connectedRelays: [] }),
+    onConnection: (cb) => {
+      onConnectionCb = cb;
+      return Promise.resolve(() => {
+        onConnectionCb = null;
+      });
+    },
+    onActionFailed: () => Promise.reject(new Error('unused')),
+    onResume: () => Promise.resolve(() => {}),
+    dispatch: (intent) => {
+      if (typeof intent === 'object' && intent.setStayConnected !== undefined) {
+        settings = { ...settings, stayConnected: intent.setStayConnected };
+        onEventCb?.({ stateChanged: { slice: 'settings' } });
+      }
+      return Promise.resolve();
+    },
+    machinesView: () => Promise.resolve({ machines: {} }),
+    settingsView: () => Promise.resolve(settings),
+    outboxView: () => Promise.resolve({ items: [] }),
+    pairingView: () => Promise.resolve(null),
+    dmView: () => Promise.resolve(null),
+    marmotView: () => Promise.resolve(null),
+    quickPromptsView: () => Promise.resolve({ prompts: [] }),
+    pendingSessionsView: () => Promise.resolve({ pending: {} }),
+    uiView: () => Promise.reject(new Error('unused')),
+    transcriptView: () => Promise.reject(new Error('unused')),
+    onCoreEvent: (cb) => {
+      onEventCb = cb;
+      return Promise.resolve(() => {
+        onEventCb = null;
+      });
+    },
+  };
+
+  return {
+    core,
+    setConnectionStatus: (next: ConnectionStatus): void => {
+      status = next;
+      onConnectionCb?.({ status, needsPairingCheck: false, connectedRelays: [] });
+    },
+  };
+}
 
 function makeWorld(stayConnected: boolean) {
-  const settings = createSettingsStore(
-    { kv: memoryKV() },
-    { ...defaultSettings(), stayConnected },
-  );
-  const connection = createConnectionStore({
-    timers: noopTimers,
-    now: () => 0,
-    random: () => 0,
-    handlers: { openSocket: () => {}, closeSocket: () => {}, refreshAndReconcile: () => {} },
-  });
+  const { core, setConnectionStatus } = fakeNativeCore(stayConnected);
+  const machines = createNativeMachinesStore({ core });
+  const settings = createNativeSettingsStore({ core });
+  const connection = createNativeConnectionStore({ core, machines });
   const calls: string[] = [];
   const service: StayConnectedServiceApi = {
     start: async () => void calls.push('start'),
@@ -49,7 +127,7 @@ function makeWorld(stayConnected: boolean) {
       return true;
     },
   });
-  return { settings, connection, calls, detach, permissionAsked: () => permissionAsked };
+  return { settings, connection, setConnectionStatus, calls, detach, permissionAsked: () => permissionAsked };
 }
 
 describe('serviceNotificationText — honest FSM words', () => {
@@ -86,11 +164,11 @@ describe('attachStayConnectedService', () => {
     await flush();
     w.calls.length = 0;
 
-    w.connection.getState().dispatch({ type: 'connect-requested' });
+    w.setConnectionStatus('connecting');
     await flush();
     expect(w.calls).toEqual(['state:Connecting…']);
 
-    w.connection.getState().dispatch({ type: 'socket-open', at: 1 });
+    w.setConnectionStatus('connected');
     await flush();
     expect(w.calls).toEqual(['state:Connecting…', 'state:Connected to relays']);
     w.detach();
@@ -98,7 +176,7 @@ describe('attachStayConnectedService', () => {
 
   it('status changes while the toggle is off push nothing', async () => {
     const w = makeWorld(false);
-    w.connection.getState().dispatch({ type: 'connect-requested' });
+    w.setConnectionStatus('connecting');
     await flush();
     expect(w.calls).toEqual([]);
     w.detach();

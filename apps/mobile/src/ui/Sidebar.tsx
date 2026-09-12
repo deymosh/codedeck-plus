@@ -11,7 +11,7 @@
  * createSession.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SessionState } from '@codedeck/protocol';
+import type { SessionState } from '../core/nativeCoreTypes';
 import {
   useConnection,
   useMachines,
@@ -119,6 +119,14 @@ function MachineGroup({
   const panelMode = useUi((st) => st.panelMode);
   const pending = usePendingSessions((st) => st.pending);
 
+  // `presence()` is a plain function on the connection store, not reactive
+  // state of its own — subscribe to the two pieces it actually reads
+  // (connection status, this machine's cached heartbeat) so a change to
+  // either re-renders this dot, rather than relying on some sibling
+  // component's unrelated subscription to force it (fragile: a future
+  // `React.memo` here would silently reintroduce a permanently-stuck dot).
+  useConnection((st) => st.status);
+  useMachines((st) => st.machines[machine.pubkeyHex]?.lastHeartbeatAt);
   const presence = core.connection.getState().presence(machine.pubkeyHex);
 
   // Shared with the swipe carousel (Phase 8) — order can never diverge.

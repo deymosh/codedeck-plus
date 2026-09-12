@@ -1,0 +1,35 @@
+[package]
+name = "client-core"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "client_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# uniffi stack (same as probe-1) — must coexist with openmls/mdk in one crate
+uniffi = { version = "0.28", features = ["cli"] }
+thiserror = "1"
+
+# MDK / MLS + SQLCipher stack, byte-for-byte the versions in
+# apps/mobile/src-tauri/Cargo.toml (CDX-012).
+mdk-core = "0.8"
+mdk-sqlite-storage = "0.8"
+mdk-storage-traits = "0.8"
+nostr = { version = "0.44", features = ["std", "nip44", "nip59"] }
+# The direct dep that upgrades mdk's `bundled-sqlcipher` to the vendored-OpenSSL
+# variant via feature unification, so SQLCipher cross-compiles self-contained
+# for Android. If the workspace layout breaks this unification, probe-2 fails.
+rusqlite = { version = "0.37", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"

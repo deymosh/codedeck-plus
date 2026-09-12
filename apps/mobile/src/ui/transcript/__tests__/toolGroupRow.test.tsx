@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import type { SeqEntry } from '../displayEntries';
 import { ToolGroupRow } from '../rows/ToolGroupRow';
 

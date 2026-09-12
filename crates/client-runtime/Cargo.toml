@@ -1,0 +1,48 @@
+[package]
+name = "client-runtime"
+description = "CodeDeck+ client async host — tokio reactor, Transport driver, lifecycle, ports. Bindings attach here."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "client_runtime"
+
+[features]
+# Turns on `client-core/marmot` (the MDK 0.8 / MLS + SQLCipher engine) and
+# compiles `MarmotEngineImpl`. Off by default so the pure-logic tests and the
+# byte-identical mobile build stay lean.
+marmot = ["client-core/marmot"]
+
+[dependencies]
+client-core = { path = "../client-core" }
+# Direct, not just transitive through client-core — makes the intended
+# layering (client-runtime depends on client-core AND protocol) explicit.
+protocol = { path = "../protocol" }
+serde = "1"
+serde_json = "1"
+# TS bindings are generated from these types, not hand-mirrored — see protocol's Cargo.toml.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+specta-typescript = "0.0.12"
+
+# Real relay transport (F1). Hand-rolled on these rather than a relay-pool crate
+# — see docs/CLIENT-CORE.md. rustls (not native-tls) so wss:// cross-compiles
+# for Android without OpenSSL.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-socks = "0.5"
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+url = "2"
+# DM image attachments: AES-256-GCM blob + SHA-256 blob id + BUD-02 auth b64.
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+# Inbound event parse + signature verification only (same version as client-core).
+# std for parse/verify; nip44 + nip59 for the NIP-17 DM gift-wrap path.
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44", "nip59"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util", "process"] }

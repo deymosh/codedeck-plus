@@ -129,6 +129,18 @@
   min-height: var(--tap-min);
 }
 
+.relayDot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--presence-offline);
+}
+
+.relayDot[data-connected='true'] {
+  background: var(--presence-live);
+}
+
 .relayUrl {
   flex: 1;
   min-width: 0;

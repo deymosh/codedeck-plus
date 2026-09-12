@@ -6,6 +6,7 @@
 import {
   BridgeCore,
   RealSdkFacade,
+  TestModeSdkFacade,
   listAllWorkspaceFolders,
   resolveClaudeExecutable,
   type MeshAdmin,
@@ -63,6 +64,12 @@ export interface CommandDeps {
   /** Pairing-window duration for `pair`, and for the window `run` opens when
    *  nothing is paired (default: core's 10 min). Tests use a short one. */
   pairingWindowMs?: number;
+  /** `run --test-mode`: no real Claude Code subprocess, no `claude` executable
+   *  required — sessions are served by `TestModeSdkFacade`, which answers a
+   *  handful of `/test-*` input commands with canned SDK messages so the rest
+   *  of the pipeline (permission broker, phone UI) can be exercised without
+   *  an API key. Ignored when `deps.facade` is already set explicitly. */
+  testMode?: boolean;
 }
 
 function defaultOnSignal(handler: (signal: string) => void): void {
@@ -142,12 +149,18 @@ async function startBridge(
   io: CommandIo,
   deps: CommandDeps,
 ): Promise<StartedBridge | number> {
-  const claude = resolveClaudeExecutable(resolved.config.claudePath);
-  if (!claude) {
-    io.err.write(`${CLAUDE_MISSING}\n`);
-    return 1;
+  // --test-mode never spawns a real `claude` — TestModeSdkFacade answers
+  // sessions itself, so there's nothing to resolve or require on PATH.
+  let claude = '(test-mode — no real Claude Code subprocess)';
+  if (!deps.testMode) {
+    const resolvedClaude = resolveClaudeExecutable(resolved.config.claudePath);
+    if (!resolvedClaude) {
+      io.err.write(`${CLAUDE_MISSING}\n`);
+      return 1;
+    }
+    claude = resolvedClaude;
+    resolved.config.claudePath = claude; // pass the resolved binary to every session
   }
-  resolved.config.claudePath = claude; // pass the resolved binary to every session
 
   let lock: Lock;
   try {
@@ -174,7 +187,7 @@ async function startBridge(
     const core = await BridgeCore.start({
       host,
       secretKey: keys.secretKey,
-      facade: deps.facade ?? new RealSdkFacade(),
+      facade: deps.facade ?? (deps.testMode ? new TestModeSdkFacade() : new RealSdkFacade()),
       ...(deps.poolFactory ? { poolFactory: deps.poolFactory } : {}),
       ...(deps.meshAdmin ? { meshAdmin: deps.meshAdmin } : {}),
       ...(deps.heartbeatIntervalMs !== undefined
@@ -183,7 +196,7 @@ async function startBridge(
     });
 
     io.out.write(
-      `codedeck-bridge running\n` +
+      `codedeck-bridge running${deps.testMode ? ' — TEST MODE (no real Claude Code sessions)' : ''}\n` +
       `  machine:    ${resolved.config.machineName} (host: ${resolved.config.host})\n` +
       `  npub:       ${keys.npub}\n` +
       `  relays:     ${resolved.config.relays.join(', ')}\n` +

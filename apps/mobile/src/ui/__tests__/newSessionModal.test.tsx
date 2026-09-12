@@ -4,12 +4,23 @@
  * heartbeat-advertised folders, Create passes exactly the chosen
  * cwd/model/defaultEffort to createSession, the free-text new-folder branch
  * maps to cwd + createCwd, and the zero-choice default sends no options.
+ *
+ * `applySessionList`/`applyModels`/`applyProviderProfiles` are no-ops on the
+ * native `machines` adapter now (the Rust Router folds every bridge message
+ * into `MachinesView` directly — see nativeMachines.ts's module doc); every
+ * "a heartbeat/answer lands" step below instead seeds the fake core's
+ * `machines` view directly via `updateMachine`, bumping `lastHeartbeatAt`
+ * exactly when simulating a NEW heartbeat (the modal's own retry effects key
+ * off that value changing, not off models/profiles changing).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { CAPABILITIES, type ProviderProfileInfo } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { CAPABILITIES } from '../../core/protocolConstants';
+import type { ProviderProfileInfo } from '../../core/nativeCoreTypes';
+import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
+import type { FakeNativeCore } from '../../core/__tests__/nativeCoreFixture';
+import type { MachineView } from '../../core/nativeCoreTypes';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { NewSessionModal } from '../NewSessionModal';
 
@@ -17,35 +28,50 @@ afterEach(cleanup);
 
 const MACHINE = 'a'.repeat(64);
 
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
+function baseMachine(capabilities: string[] = []): MachineView {
+  return {
+    pubkeyHex: MACHINE,
+    name: 'laptop',
+    capabilities,
+    folders: ['proj-a', 'proj-b'],
+    roots: [],
+    protocolVersion: null,
+    machineOffline: false,
+    lastHeartbeatAt: 1,
+    sessions: {},
+  };
+}
 
-async function makeCore(withModels = true, capabilities?: string[]): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  // Heartbeat carries folders (CDX-031's picker source) — and a model list.
-  core.machines.getState().applySessionList(
-    MACHINE,
-    {
-      type: 'sessions',
-      machine: 'laptop',
-      sessions: [],
-      protocolVersion: 10,
-      folders: ['proj-a', 'proj-b'],
-      ...(capabilities ? { capabilities } : {}),
-    },
-    Date.now(),
-  );
+async function makeCore(withModels = true, capabilities: string[] = []) {
+  const machine = baseMachine(capabilities);
   if (withModels) {
-    core.machines.getState().applyModels(MACHINE, {
-      type: 'models',
-      models: [{ id: 'model-x', label: 'Model X' }, { id: 'model-y' }],
-      defaultModel: 'model-x',
-    });
+    machine.models = [{ id: 'model-x', label: 'Model X' }, { id: 'model-y' }];
+    machine.defaultModel = 'model-x';
   }
-  return core;
+  return buildFakePhoneCore({ machines: { machines: { [MACHINE]: machine } } });
+}
+
+/** Patches the fake's cached machine view and, when `bumpHeartbeat` is true,
+ *  advances `lastHeartbeatAt` — the one thing the modal's retry effects key
+ *  off (see this file's module doc). */
+async function updateMachine(
+  fake: FakeNativeCore,
+  patch: Partial<MachineView>,
+  bumpHeartbeat = false,
+): Promise<void> {
+  const current = fake.views.machines.machines[MACHINE]!;
+  await act(async () => {
+    fake.setView('machines', {
+      machines: {
+        [MACHINE]: {
+          ...current,
+          ...patch,
+          ...(bumpHeartbeat ? { lastHeartbeatAt: (current.lastHeartbeatAt ?? 0) + 1 } : {}),
+        },
+      },
+    });
+    await tick();
+  });
 }
 
 function renderModal(core: PhoneCore, onClose = (): void => {}) {
@@ -58,7 +84,7 @@ function renderModal(core: PhoneCore, onClose = (): void => {}) {
 
 describe('NewSessionModal (CDX-031)', () => {
   it('lists the machine folders as radio options plus Default and New folder', async () => {
-    const core = await makeCore();
+    const { phone: core } = await makeCore();
     renderModal(core);
 
     expect(screen.getByText('New session on laptop', { selector: 'h1' })).toBeTruthy();
@@ -72,7 +98,7 @@ describe('NewSessionModal (CDX-031)', () => {
   // only place a model is ever chosen — it opening empty is now a regression,
   // not a cosmetic gap. The next two tests own that.
   it('the model select is populated from the machine model list (CDX-044)', async () => {
-    const core = await makeCore();
+    const { phone: core } = await makeCore();
     renderModal(core);
 
     const select = screen.getByLabelText('Model') as HTMLSelectElement;
@@ -85,18 +111,17 @@ describe('NewSessionModal (CDX-031)', () => {
   });
 
   it('a machine with no model list yet requests one on mount (CDX-044)', async () => {
-    const core = await makeCore(false);
-    const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);
+    const { phone: core, fake } = await makeCore(false);
     renderModal(core);
 
     // The modal never depends on some other screen having warmed the store.
-    expect(modelsRequest).toHaveBeenCalledWith(MACHINE);
+    expect(fake.dispatched).toContainEqual({ requestModels: { machine: MACHINE } });
     const select = screen.getByLabelText('Model') as HTMLSelectElement;
     expect(select.options[0]!.text).toBe('Default model (list unavailable)');
   });
 
   it('picked folder + model + effort pass through to createSession, then closes', async () => {
-    const core = await makeCore();
+    const { phone: core } = await makeCore();
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     const refresh = vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     const onClose = vi.fn();
@@ -118,7 +143,7 @@ describe('NewSessionModal (CDX-031)', () => {
   });
 
   it('new-folder free text maps to cwd + createCwd (and gates Create while empty)', async () => {
-    const core = await makeCore();
+    const { phone: core } = await makeCore();
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
@@ -136,7 +161,7 @@ describe('NewSessionModal (CDX-031)', () => {
   });
 
   it('zero choices → createSession with no options (bridge defaults)', async () => {
-    const core = await makeCore();
+    const { phone: core } = await makeCore();
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
@@ -147,9 +172,14 @@ describe('NewSessionModal (CDX-031)', () => {
 
   // CDX-047: Settings → Preferences pre-select the modal's model/effort.
   it('preferences pre-select model + effort, and Create carries them (CDX-047)', async () => {
-    const core = await makeCore();
-    core.settings.getState().setDefaultModel('model-y');
-    core.settings.getState().setDefaultEffort('high');
+    const { phone: core } = await buildFakePhoneCore({
+      machines: { machines: { [MACHINE]: { ...baseMachine(), models: [{ id: 'model-x', label: 'Model X' }, { id: 'model-y' }], defaultModel: 'model-x' } } },
+      settings: {
+        relays: [], uiScale: 1, stayConnected: true, torProxyEnabled: false, meshTestTarget: false,
+        blossomServer: '', defaultMode: 'default', defaultEffort: 'high', defaultModel: 'model-y',
+        notificationsEnabled: true, showUsageBadge: true, showCommitBadge: true,
+      },
+    });
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
@@ -162,8 +192,14 @@ describe('NewSessionModal (CDX-031)', () => {
   });
 
   it('a preferred model missing from THIS machine list still renders as the selection (CDX-047)', async () => {
-    const core = await makeCore();
-    core.settings.getState().setDefaultModel('model-elsewhere');
+    const { phone: core } = await buildFakePhoneCore({
+      machines: { machines: { [MACHINE]: { ...baseMachine(), models: [{ id: 'model-x', label: 'Model X' }, { id: 'model-y' }], defaultModel: 'model-x' } } },
+      settings: {
+        relays: [], uiScale: 1, stayConnected: true, torProxyEnabled: false, meshTestTarget: false,
+        blossomServer: '', defaultMode: 'default', defaultEffort: '', defaultModel: 'model-elsewhere',
+        notificationsEnabled: true, showUsageBadge: true, showCommitBadge: true,
+      },
+    });
     renderModal(core);
 
     const select = screen.getByLabelText('Model') as HTMLSelectElement;
@@ -172,8 +208,14 @@ describe('NewSessionModal (CDX-031)', () => {
   });
 
   it('the user in-modal choice overrides the preference (CDX-047)', async () => {
-    const core = await makeCore();
-    core.settings.getState().setDefaultModel('model-y');
+    const { phone: core } = await buildFakePhoneCore({
+      machines: { machines: { [MACHINE]: { ...baseMachine(), models: [{ id: 'model-x', label: 'Model X' }, { id: 'model-y' }], defaultModel: 'model-x' } } },
+      settings: {
+        relays: [], uiScale: 1, stayConnected: true, torProxyEnabled: false, meshTestTarget: false,
+        blossomServer: '', defaultMode: 'default', defaultEffort: '', defaultModel: 'model-y',
+        notificationsEnabled: true, showUsageBadge: true, showCommitBadge: true,
+      },
+    });
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
@@ -187,88 +229,62 @@ describe('NewSessionModal (CDX-031)', () => {
   // itself when the bridge cannot answer. ---
 
   it('the picker SURVIVES a refresh-sessions heartbeat (CDX-022 device failure)', async () => {
-    const core = await makeCore();
+    const { phone: core, fake } = await makeCore();
     renderModal(core);
     expect([...(screen.getByLabelText('Model') as HTMLSelectElement).options]).toHaveLength(3);
 
     // The exact device sequence: list lands, then a heartbeat arrives.
-    core.machines.getState().applySessionList(
-      MACHINE,
-      { type: 'sessions', machine: 'laptop', sessions: [], protocolVersion: 10 },
-      Date.now() + 1,
-    );
+    await updateMachine(fake, {}, true);
 
-    await vi.waitFor(() => {
-      const select = screen.getByLabelText('Model') as HTMLSelectElement;
-      expect([...select.options].map((o) => o.value)).toEqual(['', 'model-x', 'model-y']);
-      expect(select.options[0]!.text).toBe('Default model');
-    });
+    const select = screen.getByLabelText('Model') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'model-x', 'model-y']);
+    expect(select.options[0]!.text).toBe('Default model');
   });
 
   it('an empty answer renders the reason and keeps the retry alive (CDX-035)', async () => {
-    const core = await makeCore(false);
-    const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);
+    const { phone: core, fake } = await makeCore(false);
     renderModal(core);
-    expect(modelsRequest).toHaveBeenCalledTimes(1);
+    expect(fake.dispatched.filter((i) => typeof i === 'object' && 'requestModels' in i)).toHaveLength(1);
 
-    core.machines.getState().applyModels(MACHINE, {
-      type: 'models',
-      models: [],
-      error: 'No live Claude session answered — start or open a session and try again.',
+    await updateMachine(fake, {
+      models: undefined,
+      modelsError: 'No live Claude session answered — start or open a session and try again.',
     });
-    await vi.waitFor(() => {
-      expect(screen.getByTestId('models-error').textContent).toMatch(/No live Claude session answered/);
-    });
+    expect(screen.getByTestId('models-error').textContent).toMatch(/No live Claude session answered/);
     // Still "unavailable", NOT frozen on an empty list.
     expect((screen.getByLabelText('Model') as HTMLSelectElement).options[0]!.text).toBe(
       'Default model (list unavailable)',
     );
 
     // The next heartbeat re-asks — an empty answer never ends the retry.
-    core.machines.getState().applySessionList(
-      MACHINE,
-      { type: 'sessions', machine: 'laptop', sessions: [], protocolVersion: 10 },
-      Date.now() + 1,
-    );
-    await vi.waitFor(() => expect(modelsRequest).toHaveBeenCalledTimes(2));
+    await updateMachine(fake, {}, true);
+    expect(fake.dispatched.filter((i) => typeof i === 'object' && 'requestModels' in i)).toHaveLength(2);
 
     // A real answer populates the picker and clears the reason.
-    core.machines.getState().applyModels(MACHINE, {
-      type: 'models',
-      models: [{ id: 'model-x', label: 'Model X' }],
-    });
-    await vi.waitFor(() => {
-      expect(screen.queryByTestId('models-error')).toBeNull();
-      expect([...(screen.getByLabelText('Model') as HTMLSelectElement).options]).toHaveLength(2);
-    });
+    await updateMachine(fake, { models: [{ id: 'model-x', label: 'Model X' }], modelsError: undefined });
+    expect(screen.queryByTestId('models-error')).toBeNull();
+    expect([...(screen.getByLabelText('Model') as HTMLSelectElement).options]).toHaveLength(2);
   });
 
   it('a populated picker stops re-requesting and shows no apology (CDX-035)', async () => {
-    const core = await makeCore();
-    const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);
+    const { phone: core, fake } = await makeCore();
     renderModal(core);
-    expect(modelsRequest).not.toHaveBeenCalled();
+    expect(fake.dispatched.filter((i) => typeof i === 'object' && 'requestModels' in i)).toHaveLength(0);
 
     // A late empty answer records the reason but must not nag over a working
     // picker — nor wipe it (CDX-022).
-    core.machines.getState().applyModels(MACHINE, { type: 'models', models: [], error: 'transient' });
-    await Promise.resolve();
+    await updateMachine(fake, { modelsError: 'transient' });
     expect(screen.queryByTestId('models-error')).toBeNull();
     expect([...(screen.getByLabelText('Model') as HTMLSelectElement).options]).toHaveLength(3);
 
-    for (let i = 1; i <= 3; i++) {
-      core.machines.getState().applySessionList(
-        MACHINE,
-        { type: 'sessions', machine: 'laptop', sessions: [], protocolVersion: 10 },
-        Date.now() + i,
-      );
-    }
-    await Promise.resolve();
-    expect(modelsRequest).not.toHaveBeenCalled();
+    for (let i = 0; i < 3; i++) await updateMachine(fake, {}, true);
+    // Models are already set, so the retry effect never re-fires the request
+    // even though the heartbeat keeps advancing.
+    expect(fake.dispatched.filter((i) => typeof i === 'object' && 'requestModels' in i)).toHaveLength(0);
   });
 
   it('failed publish surfaces an error and stays open', async () => {
-    const core = await makeCore();
+    const { phone: core } = await makeCore();
     vi.spyOn(core.api, 'createSession').mockResolvedValue(false);
     const onClose = vi.fn();
     renderModal(core, onClose);
@@ -303,64 +319,58 @@ const PROFILES: ProviderProfileInfo[] = [
   },
 ];
 
-function applyProfiles(core: PhoneCore, profiles: ProviderProfileInfo[]): void {
-  core.machines
-    .getState()
-    .applyProviderProfiles(MACHINE, { type: 'provider-profiles', machine: 'laptop', profiles });
-}
-
 describe('NewSessionModal — provider profiles (CDX-062)', () => {
   it('no Provider select without the capability — even when profiles are somehow held', async () => {
-    const core = await makeCore(); // heartbeat WITHOUT 'custom-providers'
-    applyProfiles(core, PROFILES);
-    const request = vi.spyOn(core.api, 'requestProviderProfiles').mockResolvedValue(true);
+    const { phone: core, fake } = await makeCore(); // heartbeat WITHOUT 'custom-providers'
+    await updateMachine(fake, { providerProfiles: PROFILES });
     renderModal(core);
 
     expect(screen.queryByLabelText('Provider')).toBeNull();
     // Cap-gated sends: an old bridge must never see a profile request.
-    expect(request).not.toHaveBeenCalled();
+    expect(fake.dispatched.some((i) => typeof i === 'object' && 'requestProviderProfiles' in i)).toBe(false);
   });
 
   it('no Provider select while the cap is present but the list is empty or unfetched', async () => {
-    const core = await makeCore(true, CUSTOM_CAP);
+    const { phone: core, fake } = await makeCore(true, CUSTOM_CAP);
     renderModal(core);
     expect(screen.queryByLabelText('Provider')).toBeNull();
 
-    applyProfiles(core, []);
-    await Promise.resolve();
+    await updateMachine(fake, { providerProfiles: [] });
     expect(screen.queryByLabelText('Provider')).toBeNull();
   });
 
   it('requests the profile list on mount and per heartbeat while unfetched; stops once answered', async () => {
-    const core = await makeCore(true, CUSTOM_CAP);
-    const request = vi.spyOn(core.api, 'requestProviderProfiles').mockResolvedValue(true);
+    const { phone: core, fake } = await makeCore(true, CUSTOM_CAP);
     renderModal(core);
-    expect(request).toHaveBeenCalledWith(MACHINE);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(fake.dispatched).toContainEqual({ requestProviderProfiles: { machine: MACHINE } });
+    expect(
+      fake.dispatched.filter((i) => typeof i === 'object' && 'requestProviderProfiles' in i),
+    ).toHaveLength(1);
 
     // Next heartbeat, still no answer → ask again (à la the CDX-035 models loop).
-    core.machines.getState().applySessionList(
-      MACHINE,
-      { type: 'sessions', machine: 'laptop', sessions: [], protocolVersion: 10 },
-      Date.now() + 1,
-    );
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await updateMachine(fake, {}, true);
+    expect(
+      fake.dispatched.filter((i) => typeof i === 'object' && 'requestProviderProfiles' in i),
+    ).toHaveLength(2);
 
     // An answer — even an empty one — ends the loop (bridge storage is
-    // authoritative; there is no could-not-answer case).
-    applyProfiles(core, []);
-    core.machines.getState().applySessionList(
-      MACHINE,
-      { type: 'sessions', machine: 'laptop', sessions: [], protocolVersion: 10 },
-      Date.now() + 2,
-    );
-    await Promise.resolve();
-    expect(request).toHaveBeenCalledTimes(2);
+    // authoritative; there is no could-not-answer case). The answer and the
+    // heartbeat that carries it land together, so the retry effect sees
+    // `providerProfiles` already defined by the time it re-fires and does
+    // not send a third request.
+    await updateMachine(fake, { providerProfiles: [] }, true);
+    expect(
+      fake.dispatched.filter((i) => typeof i === 'object' && 'requestProviderProfiles' in i),
+    ).toHaveLength(2);
+    await updateMachine(fake, {}, true);
+    expect(
+      fake.dispatched.filter((i) => typeof i === 'object' && 'requestProviderProfiles' in i),
+    ).toHaveLength(2);
   });
 
   it('renders above Model with Anthropic first; choosing a profile swaps the Model options and preselects its default', async () => {
-    const core = await makeCore(true, CUSTOM_CAP);
-    applyProfiles(core, PROFILES);
+    const { phone: core, fake } = await makeCore(true, CUSTOM_CAP);
+    await updateMachine(fake, { providerProfiles: PROFILES });
     renderModal(core);
 
     const provider = screen.getByLabelText('Provider') as HTMLSelectElement;
@@ -386,8 +396,8 @@ describe('NewSessionModal — provider profiles (CDX-062)', () => {
   });
 
   it('create() carries providerId (and the chosen profile model)', async () => {
-    const core = await makeCore(true, CUSTOM_CAP);
-    applyProfiles(core, PROFILES);
+    const { phone: core, fake } = await makeCore(true, CUSTOM_CAP);
+    await updateMachine(fake, { providerProfiles: PROFILES });
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
@@ -403,15 +413,15 @@ describe('NewSessionModal — provider profiles (CDX-062)', () => {
   });
 
   it('a profile deleted while the sheet is open STILL sends its providerId (D3 — the bridge fails loudly, never a silent Anthropic fallback)', async () => {
-    const core = await makeCore(true, CUSTOM_CAP);
-    applyProfiles(core, PROFILES);
+    const { phone: core, fake } = await makeCore(true, CUSTOM_CAP);
+    await updateMachine(fake, { providerProfiles: PROFILES });
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
 
     fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'kimi' } });
     // The profile is deleted (broadcast lands) while the sheet is open.
-    applyProfiles(core, []);
+    await updateMachine(fake, { providerProfiles: [] });
     fireEvent.click(screen.getByText('Create'));
 
     // The dead id goes out anyway: the bridge answers pending → failed with a
@@ -424,9 +434,14 @@ describe('NewSessionModal — provider profiles (CDX-062)', () => {
   });
 
   it('switching back to Anthropic restores the machine list + settings preselect, and sends NO providerId', async () => {
-    const core = await makeCore(true, CUSTOM_CAP);
-    applyProfiles(core, PROFILES);
-    core.settings.getState().setDefaultModel('model-y');
+    const { phone: core } = await buildFakePhoneCore({
+      machines: { machines: { [MACHINE]: { ...baseMachine(CUSTOM_CAP), models: [{ id: 'model-x', label: 'Model X' }, { id: 'model-y' }], defaultModel: 'model-x', providerProfiles: PROFILES } } },
+      settings: {
+        relays: [], uiScale: 1, stayConnected: true, torProxyEnabled: false, meshTestTarget: false,
+        blossomServer: '', defaultMode: 'default', defaultEffort: '', defaultModel: 'model-y',
+        notificationsEnabled: true, showUsageBadge: true, showCommitBadge: true,
+      },
+    });
     const create = vi.spyOn(core.api, 'createSession').mockResolvedValue(true);
     vi.spyOn(core.api, 'refreshSessions').mockResolvedValue(true);
     renderModal(core);
@@ -446,26 +461,27 @@ describe('NewSessionModal — provider profiles (CDX-062)', () => {
   });
 
   it('REGRESSION: the Anthropic path keeps the CDX-035 retry + off-list synthetic option with provider UI present', async () => {
-    const core = await makeCore(false, CUSTOM_CAP);
-    applyProfiles(core, PROFILES);
-    core.settings.getState().setDefaultModel('model-elsewhere');
-    const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);
+    const { phone: core, fake } = await buildFakePhoneCore({
+      machines: { machines: { [MACHINE]: baseMachine(CUSTOM_CAP) } },
+      settings: {
+        relays: [], uiScale: 1, stayConnected: true, torProxyEnabled: false, meshTestTarget: false,
+        blossomServer: '', defaultMode: 'default', defaultEffort: '', defaultModel: 'model-elsewhere',
+        notificationsEnabled: true, showUsageBadge: true, showCommitBadge: true,
+      },
+    });
+    await updateMachine(fake, { providerProfiles: PROFILES });
     renderModal(core);
 
     // Models still requested on mount (provider profiles never satisfy it).
-    expect(modelsRequest).toHaveBeenCalledWith(MACHINE);
+    expect(fake.dispatched).toContainEqual({ requestModels: { machine: MACHINE } });
     // Synthetic off-list option keeps the preference honest on the Anthropic path.
     const model = screen.getByLabelText('Model') as HTMLSelectElement;
     expect(model.value).toBe('model-elsewhere');
     expect([...model.options].map((o) => o.value)).toContain('model-elsewhere');
 
     // CDX-035 empty-answer reason renders on the Anthropic path…
-    core.machines.getState().applyModels(MACHINE, {
-      type: 'models',
-      models: [],
-      error: 'no live SDK session answered',
-    });
-    await vi.waitFor(() => expect(screen.getByTestId('models-error')).toBeTruthy());
+    await updateMachine(fake, { modelsError: 'no live SDK session answered' });
+    expect(screen.getByTestId('models-error')).toBeTruthy();
 
     // …but a profile brings its own list, so the apology hides there.
     fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'kimi' } });

@@ -1,0 +1,8 @@
+target/
+.gradle/
+.kotlin/
+build/
+ui/build/
+ui/src/test/snapshots/
+local.properties
+gradle/wrapper/gradle-wrapper.jar

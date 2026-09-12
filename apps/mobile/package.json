@@ -16,12 +16,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@codedeck/protocol": "workspace:*",
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-barcode-scanner": "^2.4.5",
     "@tauri-apps/plugin-deep-link": "^2.2.0",
-    "@tauri-apps/plugin-http": "^2.5.0",
-    "@tauri-apps/plugin-notification": "^2.3.0",
+    "@tauri-apps/plugin-http": "^2.6.0",
+    "@tauri-apps/plugin-notification": "^2.4.0",
     "nostr-tools": "^2.23.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

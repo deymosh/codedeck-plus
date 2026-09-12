@@ -16,7 +16,7 @@
  * Timers and the clock are injected (`Timers` port / `now`) so every timing
  * rule runs on virtual time in tests.
  */
-import type { PermissionMode } from '@codedeck/protocol';
+import type { PermissionMode } from './nativeCoreTypes';
 import type { Timers } from './ports';
 
 /** Legacy cycle order (InputBar.tsx MODE_CYCLE). */

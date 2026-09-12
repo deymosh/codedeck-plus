@@ -1,14 +1,13 @@
 /**
  * Ports — the seams between the framework-free phone core and its environment.
  *
- * The core never touches localStorage, sockets, SQLite, or real timers
- * directly: everything is injected through these interfaces so the whole phone
- * core runs headless in vitest (CDX-009 Phase 3a) and swaps in Tauri-backed
- * implementations (SQLite via tauri-plugin-sql, real relay pool) in Phase 3b
- * without touching store logic.
+ * The core never touches localStorage or real timers directly: everything is
+ * injected through these interfaces so it runs headless in vitest (CDX-009
+ * Phase 3a). The socket/SQLite ports this module also described belonged to
+ * the local WebView composition (retired — see git history); `client-runtime`
+ * owns the transport and persistence now, reached through `NativeCore`
+ * (`platform/nativeCore.ts`), not through a port here.
  */
-import type { NostrEvent } from 'nostr-tools/core';
-import type { Filter } from 'nostr-tools/filter';
 
 // --- Key/value persistence port (NOT raw localStorage) ---
 
@@ -29,26 +28,15 @@ export function memoryKV(initial?: Record<string, string>): KV & { dump(): Map<s
   };
 }
 
-// --- Relay transport port ---
+// --- Publish verdicts ---
+//
+// The socket transport these once described (`PhoneTransport`, a nostr-tools
+// SimplePool wrapper) was the local WebView composition's own — retired with
+// it (see git history). `PublishVerdict`/`PublishResult`/
+// `PublishConfirmOptions` survive because `BridgeApiLike`'s two genuine gaps
+// (`uploadImageBlossom`/`uploadImageChunk` — see `services/bridgeApi.ts`'s
+// module doc) still type their return/options shape against them.
 
-export interface TransportSubscriptionParams {
-  onEvent(event: NostrEvent): void;
-  /** End of stored events — the client treats "all subscriptions EOSEd" as
-   *  socket-open for the connection FSM. */
-  onEose?(): void;
-  /** The underlying socket/subscription died (NOT a deliberate close()). */
-  onClose?(reason?: unknown): void;
-}
-
-export interface TransportSubscription {
-  close(): void;
-}
-
-/**
- * The socket seam. Production: nostr-tools SimplePool over the settings relay
- * list. Tests: a thin adapter over the testkit InMemoryRelay (structurally
- * typed — the phone core never imports @codedeck/testkit or @codedeck/core).
- */
 /**
  * CDX-086: what actually happened to a publish. The boolean this replaces
  * collapsed two opposite outcomes into `false`, and got one of them backwards:
@@ -85,23 +73,6 @@ export interface PublishConfirmOptions {
    */
   attempts?: number;
   signal?: AbortSignal;
-}
-
-export interface PhoneTransport {
-  subscribe(filter: Filter, params: TransportSubscriptionParams): TransportSubscription;
-  /** Resolves true when at least one relay accepted the event. */
-  publish(event: NostrEvent): Promise<boolean>;
-  /**
-   * Publish and report WHAT happened, retrying the same event within a budget.
-   * Optional so the ~20 in-memory test transports keep satisfying this
-   * interface; callers fall back to `publish` mapped onto a verdict.
-   */
-  publishConfirmed?(event: NostrEvent, opts?: PublishConfirmOptions): Promise<PublishResult>;
-  /** Replace the relay list (manual add/remove from settings). Optional:
-   *  in-memory test transports have no relay list. */
-  setRelays?(urls: readonly string[]): void;
-  /** Tear down every socket. After close() the transport must not call back. */
-  close?(): void;
 }
 
 // --- Async transcript storage port (in-memory now, SQLite in Phase 3b) ---

@@ -47,8 +47,34 @@ dexec() { MSYS_NO_PATHCONV=1 docker exec "$@"; }
 MODE="${1:-debug}"
 case "$MODE" in
   debug|release|benchmark) ;;
-  *) echo "usage: $0 [debug|release|benchmark]" >&2; exit 1 ;;
+  *) echo "usage: $0 [debug|release|benchmark] [--features <list>]" >&2; exit 1 ;;
 esac
+shift || true
+
+# Optional EXTRA cargo features for src-tauri, added on top of the default
+# feature set. `native-core` (the in-process Rust client-runtime hosting the
+# entire bridge protocol + store layer — F2b) is a default feature now, so
+# every build already includes it unless `--features` is used to pass
+# `--no-default-features`-equivalent flags via cargo-tauri's own CLI. This
+# flag remains for any future opt-in feature.
+CARGO_FEATURES=""
+# Android ABI(s). Default arm64 (real devices); `--target x86_64` builds for an
+# emulator on an x86 host (add both to cover both).
+TARGETS=(aarch64)
+_targets_set=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --features) CARGO_FEATURES="$2"; shift 2 ;;
+    --features=*) CARGO_FEATURES="${1#--features=}"; shift ;;
+    --target) [ -z "$_targets_set" ] && TARGETS=(); _targets_set=1; TARGETS+=("$2"); shift 2 ;;
+    --target=*) [ -z "$_targets_set" ] && TARGETS=(); _targets_set=1; TARGETS+=("${1#--target=}"); shift ;;
+    *) echo "usage: $0 [debug|release|benchmark] [--features <list>] [--target <abi>]..." >&2; exit 1 ;;
+  esac
+done
+FEATURE_ARGS=()
+[ -n "$CARGO_FEATURES" ] && FEATURE_ARGS=(--features "$CARGO_FEATURES")
+TARGET_ARGS=()
+for t in "${TARGETS[@]}"; do TARGET_ARGS+=(--target "$t"); done
 # benchmark builds the exact same artifact as release; only the post-build
 # signing step differs.
 GRADLE_MODE="release"; [ "$MODE" = "debug" ] && GRADLE_MODE="debug"
@@ -83,12 +109,13 @@ echo "==> Installing workspace deps"
 dexec -w /workspace "$CONTAINER" pnpm install --frozen-lockfile
 
 echo "==> Building ($GRADLE_MODE): Vite web assets, then cargo + Gradle"
+[ -n "$CARGO_FEATURES" ] && echo "    src-tauri cargo features: $CARGO_FEATURES"
 if [ "$GRADLE_MODE" = "debug" ]; then
   dexec -w /workspace/apps/mobile "$CONTAINER" \
-    pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64 --debug
+    pnpm dlx "@tauri-apps/cli@^2" android build "${TARGET_ARGS[@]}" --debug "${FEATURE_ARGS[@]+${FEATURE_ARGS[@]}}"
 else
   dexec -w /workspace/apps/mobile "$CONTAINER" \
-    pnpm dlx "@tauri-apps/cli@^2" android build --target aarch64
+    pnpm dlx "@tauri-apps/cli@^2" android build "${TARGET_ARGS[@]}" "${FEATURE_ARGS[@]+${FEATURE_ARGS[@]}}"
 fi
 
 OUT_DIR="apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/$GRADLE_MODE"
@@ -97,7 +124,9 @@ if [ "$GRADLE_MODE" = "release" ]; then
 else
   APK_NAME="app-universal-debug.apk"
 fi
-DEST="dist/codedeck-$MODE.apk"
+TARGET_TAG=""
+[ "${TARGETS[*]}" != "aarch64" ] && TARGET_TAG="-$(echo "${TARGETS[*]}" | tr ' ' '+')"
+DEST="dist/codedeck-$MODE${CARGO_FEATURES:+-$(echo "$CARGO_FEATURES" | tr ', ' '--')}${TARGET_TAG}.apk"
 
 if [ "$MODE" = "benchmark" ]; then
   echo "==> Re-signing with the baked-in debug keystore (zipalign + apksigner)"

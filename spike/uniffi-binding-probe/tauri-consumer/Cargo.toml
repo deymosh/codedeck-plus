@@ -1,0 +1,18 @@
+# THROWAWAY F0 spike — the OTHER half of probe-1: prove the same `client-core`
+# API a Kotlin app consumes via UniFFI is also clean to consume from a Tauri
+# (Rust) host via `#[tauri::command]`. `cargo check` only; no window is built.
+[package]
+name = "tauri-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+client-core-probe = { path = "../client-core-probe" }
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["sync"] }

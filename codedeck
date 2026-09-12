@@ -40,12 +40,21 @@ Mobile APK (apps/mobile/docker/build-apk.sh — see that file for details):
   apk debug                Full symbols, ~300MB, Android's own debug keystore
   apk release              Minified+stripped, UNSIGNED — Android won't install it
   apk benchmark            Same build as release, but signed so it installs
+                           (every build hosts the in-process Rust
+                           client-runtime by default — see [features] in
+                           apps/mobile/src-tauri/Cargo.toml)
 
 Workspace checks (run in a throwaway Node container — nothing installed
 locally is required):
   check                    typecheck + test, every package
   typecheck                typecheck only
   test                     test only
+
+Protocol bindings (run in a throwaway Rust container):
+  gen-protocol-types       Regenerate apps/mobile/src/core/
+                           nativeCoreTypes.generated.ts from Rust's
+                           View/Intent/CoreEvent types (source of truth —
+                           see gen_ts_bindings.rs). CI fails if this drifts.
 
 Upstream sync:
   sync                     Refresh vendor/* from upstream (scripts/sync-upstream.sh)
@@ -130,10 +139,11 @@ cmd_tor() {
 cmd_apk() {
   case "${1:-}" in
     debug|release|benchmark)
-      exec ./apps/mobile/docker/build-apk.sh "$1"
+      # extra args pass through, e.g. `./codedeck apk benchmark --target x86_64`
+      exec ./apps/mobile/docker/build-apk.sh "$@"
       ;;
     *)
-      echo "usage: $0 apk {debug|release|benchmark}" >&2
+      echo "usage: $0 apk {debug|release|benchmark} [--features <list>]" >&2
       exit 1
       ;;
   esac
@@ -188,6 +198,39 @@ cmd_sync() {
   exec ./scripts/sync-upstream.sh
 }
 
+# --- Regenerate apps/mobile/src/core/nativeCoreTypes.generated.ts from Rust
+# (see apps/mobile/src-tauri/tests/gen_ts_bindings.rs's own doc comment —
+# Rust's View/Intent/CoreEvent types are the source of truth, this file is a
+# build artifact). Runs the SAME command CI's drift check does, just without
+# the `git diff --exit-code`: this command's whole point is to update the
+# working tree, not fail on an already-known difference. ---
+cmd_gen_protocol_types() {
+  local name="codedeck-gen-protocol-types-$$"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker create --name "$name" rust:1-bookworm sleep infinity >/dev/null
+  docker start "$name" >/dev/null
+  trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+
+  local tarball
+  tarball="$(mktemp).tar.gz"
+  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
+      --exclude='node_modules' --exclude='*/node_modules' -czf "$tarball" .
+  docker cp "$tarball" "$name":/repo.tar.gz
+  rm -f "$tarball"
+
+  dexec "$name" mkdir -p /repo
+  dexec -w /repo "$name" tar -xzf /repo.tar.gz
+  echo "==> Installing Tauri Linux system deps"
+  dexec "$name" bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config" >/dev/null 2>&1
+  echo "==> Regenerating nativeCoreTypes.generated.ts"
+  dexec -w /repo/apps/mobile/src-tauri "$name" \
+    cargo test --locked --features native-core --test gen_ts_bindings -- --ignored
+
+  docker cp "$name":/repo/apps/mobile/src/core/nativeCoreTypes.generated.ts \
+    apps/mobile/src/core/nativeCoreTypes.generated.ts
+  echo "==> Wrote apps/mobile/src/core/nativeCoreTypes.generated.ts"
+}
+
 case "${1:-help}" in
   bridge) shift; cmd_bridge "$@" ;;
   tor) shift; cmd_tor "$@" ;;
@@ -195,6 +238,7 @@ case "${1:-help}" in
   check) run_in_workspace_container check ;;
   typecheck) run_in_workspace_container typecheck ;;
   test) run_in_workspace_container test ;;
+  gen-protocol-types) cmd_gen_protocol_types ;;
   sync) cmd_sync ;;
   help|-h|--help) usage ;;
   *)

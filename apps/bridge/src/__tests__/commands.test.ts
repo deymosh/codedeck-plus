@@ -65,14 +65,18 @@ interface Rig {
   keepAlives: Array<{ released: boolean }>;
 }
 
-function makeRig(failsafeExitMs: number): Rig {
+/** `testMode: true` skips the claude-executable stub — that's the point of
+ *  the flag: `--test-mode` runs with no `claude` on PATH at all. */
+function makeRig(failsafeExitMs: number, opts: { testMode?: boolean } = {}): Rig {
   const dir = path.join(os.tmpdir(), `codedeck-cmd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   dirs.push(dir);
   const homeDir = path.join(dir, 'home');
   const wsRoot = path.join(dir, 'ws');
   mkdirSync(wsRoot, { recursive: true });
-  const claudeStub = path.join(dir, 'claude');
-  writeFileSync(claudeStub, '#!/bin/sh\n'); // resolveClaudeExecutable needs a file
+  if (!opts.testMode) {
+    const claudeStub = path.join(dir, 'claude');
+    writeFileSync(claudeStub, '#!/bin/sh\n'); // resolveClaudeExecutable needs a file
+  }
 
   let signalHandler: ((sig: string) => void) | null = null;
   const exitHandlers: Array<() => void> = [];
@@ -86,7 +90,7 @@ function makeRig(failsafeExitMs: number): Rig {
   const relay = new InMemoryRelay();
   const keepAlives: Array<{ released: boolean }> = [];
   const deps: CommandDeps = {
-    facade: new FakeSdkFacade(),
+    ...(opts.testMode ? { testMode: true } : { facade: new FakeSdkFacade() }),
     poolFactory: inMemoryPoolFactory(relay),
     meshAdmin: disabledMeshAdmin(),
     heartbeatIntervalMs: 0,
@@ -182,6 +186,21 @@ describe('cmdRun lock lifecycle (CDX-033) + failsafe exit (CDX-023)', () => {
     } finally {
       held.release();
     }
+  });
+});
+
+describe('cmdRun --test-mode', () => {
+  it('starts with no claude executable at all and serves TestModeSdkFacade', async () => {
+    const rig = makeRig(50, { testMode: true });
+    const run = cmdRun(resolvedFor(rig), rig.io, rig.deps);
+    await waitFor(() => rig.signalReady());
+
+    expect(rig.io.err.text).not.toContain('claude` executable not found');
+    expect(rig.io.out.text).toContain('TEST MODE');
+
+    rig.signal('SIGTERM');
+    expect(await run).toBe(0);
+    rig.fireExit();
   });
 });
 

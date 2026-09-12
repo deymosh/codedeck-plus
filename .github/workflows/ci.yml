@@ -62,16 +62,17 @@ jobs:
           node apps/bridge/out/main.js version
           node apps/bridge/out/main.js doctor || true
 
-  # Rust coverage for src-tauri (Marmot loopback tests + sqlstore) and the
-  # tauri-plugin-* crates. Path-filtered so JS-only pushes stay fast.
+  # Rust coverage for src-tauri (Marmot loopback tests + sqlstore), the
+  # tauri-plugin-* crates, and the client-core / client-runtime workspace
+  # (migration F1). Path-filtered so JS-only pushes stay fast.
   cargo:
-    name: cargo test (src-tauri, desktop target)
+    name: cargo test (src-tauri + crates, desktop target)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
 
-      - name: Detect src-tauri changes
+      - name: Detect Rust changes
         id: filter
         uses: dorny/paths-filter@v4
         with:
@@ -79,9 +80,18 @@ jobs:
             rust:
               - 'apps/mobile/src-tauri/**'
               - 'apps/mobile/tauri-plugin-*/**'
+            core:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              # the shared codec conformance corpus (also consumed by pnpm test)
+              - 'packages/protocol/fixtures/**'
 
+      # `core` (crates/**) is included here too: a View/Intent/CoreEvent field
+      # change under crates/client-runtime with no apps/mobile/src-tauri edit
+      # still needs the TS-bindings drift check below, which builds src-tauri.
       - name: Install Tauri Linux system deps
-        if: steps.filter.outputs.rust == 'true'
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -89,11 +99,11 @@ jobs:
             librsvg2-dev patchelf
 
       - name: Install Rust
-        if: steps.filter.outputs.rust == 'true'
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-        if: steps.filter.outputs.rust == 'true'
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
         with:
           workspaces: apps/mobile/src-tauri
 
@@ -102,8 +112,58 @@ jobs:
         working-directory: apps/mobile/src-tauri
         env:
           CARGO_BUILD_JOBS: "4"
-        run: cargo test --locked
+        run: |
+          # F2b: native-core (the in-process client-runtime hosting the whole
+          # bridge protocol) is a default feature now — this already covers it.
+          cargo test --locked
+          # `--no-default-features` has no remaining production caller but is
+          # kept buildable (see [features] in Cargo.toml) — build it too so a
+          # break there fails CI, not a future opt-out build.
+          cargo build --locked --no-default-features
+
+      # Rust is the source of truth for apps/mobile/src/core/
+      # nativeCoreTypes.generated.ts (see gen_ts_bindings.rs's own doc
+      # comment) — regenerate it and fail if the committed copy drifted.
+      # Runs whenever src-tauri OR crates/** changed, since either can move
+      # the exported View/Intent/CoreEvent shapes.
+      - name: TS bindings drift check
+        if: steps.filter.outputs.rust == 'true' || steps.filter.outputs.core == 'true'
+        working-directory: apps/mobile/src-tauri
+        env:
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          cargo test --locked --features native-core --test gen_ts_bindings -- --ignored
+          git diff --exit-code -- ../src/core/nativeCoreTypes.generated.ts || {
+            echo "::error::apps/mobile/src/core/nativeCoreTypes.generated.ts is stale — a Rust type changed without regenerating it. Run: cargo test -p codedeck-mobile --features native-core --test gen_ts_bindings -- --ignored" >&2
+            exit 1
+          }
+
+      # --- client-core / client-runtime workspace (pure Rust, no system deps) ---
+      - name: Install Rust (client-core)
+        if: steps.filter.outputs.core == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.core == 'true'
+        with:
+          workspaces: .
+
+      - name: cargo test + clippy (crates)
+        if: steps.filter.outputs.core == 'true'
+        env:
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          # The Marmot engine (MDK 0.8 / MLS + SQLCipher) is behind `marmot`,
+          # off for the pure-logic run above. Build + test it too so the
+          # relocated engine and its `MarmotEngine` port impl fail CI here, not
+          # only in the src-tauri job.
+          cargo test -p client-core --features marmot --locked
+          cargo clippy -p client-runtime --features marmot --all-targets --locked -- -D warnings
 
       - name: No Rust changes — skipped
-        if: steps.filter.outputs.rust != 'true'
-        run: echo "src-tauri unchanged; cargo job skipped."
+        if: steps.filter.outputs.rust != 'true' && steps.filter.outputs.core != 'true'
+        run: echo "no Rust changes; cargo job skipped."

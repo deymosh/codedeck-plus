@@ -1,0 +1,35 @@
+# THROWAWAY F0 probe-3. The networking half of "sockets in a Rust core inside
+# the foreground service survive backgrounding, where sockets in the WebView do
+# not": a minimal Nostr relay client that subscribes to kind-30515 heartbeats
+# and counts deliveries, with reconnect. Consumed on Android via UniFFI (the
+# pattern probe-1 validated), driven on the host by tests.
+[package]
+name = "heartbeat-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+name = "heartbeat_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+uniffi = { version = "0.28", features = ["tokio", "cli"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[[bin]]
+name = "pulse-relay"
+path = "src/bin/pulse_relay.rs"
