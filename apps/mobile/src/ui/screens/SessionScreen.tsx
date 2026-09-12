@@ -24,7 +24,7 @@
  * header when a session needing attention lies left/right in carousel order.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { effortLevelSchema } from '@codedeck/protocol';
+import { EFFORT_LEVELS, isEffortLevel } from '../../core/protocolConstants';
 import type { UsageData } from '../../core/nativeCoreTypes';
 import { createModeCycle, MODE_LABELS } from '../../core/modeCycle';
 import { realTimers } from '../../core/ports';
@@ -48,8 +48,6 @@ import { useMediaQuery } from '../useMediaQuery';
 import styles from './SessionScreen.module.css';
 
 const sessionKeyOf = (machine: string, sessionId: string): string => `${machine} ${sessionId}`;
-
-const EFFORT_LEVELS = effortLevelSchema.options;
 
 /** The backstop is the send budget plus a grace, so the bounded stages inside
  *  always get to report their own, more specific error first. */
@@ -417,8 +415,8 @@ export function SessionScreen({
           aria-label="Effort"
           value={sessionInfo?.effortLevel ?? ''}
           onChange={(e) => {
-            const level = effortLevelSchema.safeParse(e.target.value);
-            if (level.success) void core.api.effortChange(machinePubkey, sessionId, level.data);
+            const level = e.target.value;
+            if (isEffortLevel(level)) void core.api.effortChange(machinePubkey, sessionId, level);
           }}
         >
           <option value="" disabled>

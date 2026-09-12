@@ -1,7 +1,7 @@
 /**
  * A stateful fake `NativeCore` for tests that render real UI against
  * `createPhoneCoreNative`, so every UI test doesn't hand-roll its own
- * scripted mock of the eleven-method `NativeCore` interface.
+ * scripted mock of the full `NativeCore` interface.
  *
  * Each `*View()` method serves a value out of `views` (seeded via the
  * constructor, mutated via `setView`); `setView` also fires the matching
@@ -36,9 +36,7 @@ import type {
   NativeConnectionSnapshot,
   NativeCore,
   NativeCoreConfig,
-  NativePublishVerdict,
 } from '../../platform/nativeCore';
-import type { BridgeToPhoneMessage } from '../nativeCoreTypes';
 
 export interface FakeNativeCoreViews {
   machines: MachinesView;
@@ -111,7 +109,6 @@ export interface FakeNativeCore {
   setTranscript(machine: string, sessionId: string, view: TranscriptRowsView): void;
   emitCoreEvent(event: CoreEvent): void;
   emitConnection(snapshot: NativeConnectionSnapshot): void;
-  emitMessage(machine: string, message: BridgeToPhoneMessage): void;
   emitActionFailed(kind: NativeActionFailed): void;
   /** Fire every registered `onResume` callback — simulates an Android
    *  resume / desktop focus, the same signal `hydrateFromCore` re-pulls on. */
@@ -141,7 +138,6 @@ export function fakeNativeCore(
 
   const coreEventHandlers = new Set<(event: CoreEvent) => void>();
   const connectionHandlers = new Set<(snapshot: NativeConnectionSnapshot) => void>();
-  const messageHandlers = new Set<(machine: string, message: BridgeToPhoneMessage) => void>();
   const actionFailedHandlers = new Set<(kind: NativeActionFailed) => void>();
   const resumeHandlers = new Set<() => void>();
   const dispatchHandlers = new Set<(intent: Intent) => void | Promise<void>>();
@@ -209,13 +205,7 @@ export function fakeNativeCore(
     setOnline: () => Promise.resolve(),
     setMachines: () => Promise.resolve(),
     setRelays: () => Promise.resolve(),
-    send: () => Promise.resolve(),
-    publish: () => Promise.resolve('accepted' satisfies NativePublishVerdict),
     connectionStatus: () => Promise.resolve(initialConnection),
-    onMessage: (cb) => {
-      messageHandlers.add(cb);
-      return Promise.resolve(() => messageHandlers.delete(cb));
-    },
     onConnection: (cb) => {
       connectionHandlers.add(cb);
       return Promise.resolve(() => connectionHandlers.delete(cb));
@@ -259,9 +249,6 @@ export function fakeNativeCore(
     },
     emitConnection: (snapshot) => {
       for (const cb of connectionHandlers) cb(snapshot);
-    },
-    emitMessage: (machine, message) => {
-      for (const cb of messageHandlers) cb(machine, message);
     },
     emitActionFailed: (kind) => {
       for (const cb of actionFailedHandlers) cb(kind);

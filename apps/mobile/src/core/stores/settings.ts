@@ -6,7 +6,7 @@
  * history — since `client_runtime::Core` owns the settings slice end to end.
  */
 import type { StoreApi } from 'zustand/vanilla';
-import { DEFAULT_RELAYS, MARMOT_RELAYS, effortLevelSchema, permissionModeSchema } from '@codedeck/protocol';
+import { DEFAULT_RELAYS, MARMOT_RELAYS, isEffortLevel, isPermissionMode } from '../protocolConstants';
 import type { EffortLevel, PermissionMode } from '../nativeCoreTypes';
 import type { KV } from '../ports';
 
@@ -164,12 +164,8 @@ export function hydrateSettings(raw: string | undefined): SettingsData {
           : defaults.meshTestTarget,
       blossomServer:
         typeof parsed.blossomServer === 'string' ? parsed.blossomServer : defaults.blossomServer,
-      defaultMode: permissionModeSchema.safeParse(parsed.defaultMode).success
-        ? (parsed.defaultMode as PermissionMode)
-        : defaults.defaultMode,
-      defaultEffort: effortLevelSchema.safeParse(parsed.defaultEffort).success
-        ? (parsed.defaultEffort as EffortLevel)
-        : defaults.defaultEffort,
+      defaultMode: isPermissionMode(parsed.defaultMode) ? parsed.defaultMode : defaults.defaultMode,
+      defaultEffort: isEffortLevel(parsed.defaultEffort) ? parsed.defaultEffort : defaults.defaultEffort,
       defaultModel:
         typeof parsed.defaultModel === 'string' ? parsed.defaultModel : defaults.defaultModel,
       notificationsEnabled:

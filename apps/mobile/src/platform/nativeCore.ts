@@ -2,29 +2,18 @@
  * nativeCore — the seam to the in-process Rust `client-runtime` (migration
  * F1 transport, F2b the full plan §2 View/Intent/CoreEvent surface).
  *
- * When the APK is built with `native-core` (apps/mobile/src-tauri, the
- * `corebridge` module) and the user opts in, the Nostr sockets + NIP-44 crypto
- * + connection FSM + every store (F2b: over real SQLite persistence) run in
- * the app process (inside the stay-connected foreground service), NOT in
- * this WebView. `dispatch` + the `*View()` queries + `onCoreEvent` are the
- * full re-point surface (plan §2); the earlier `send`/`publish`/`onMessage`
- * F1 methods stay for the transport-only path until `apps/mobile` actually
- * switches over to them.
- *
- * Every command result / event payload crosses the boundary as untyped JSON —
- * `decodeBridgeToPhone` re-validates each inbound F1 message so a Rust/JS
- * drift fails loudly at the seam, not deep in a store; `Intent`/`CoreEvent`/
- * the `*View` types (`nativeCoreTypes.ts`) are hand-mirrored from the Rust
- * side (each carries its own round-trip test there) rather than re-validated
- * here — there is no phone-side zod schema for them (yet). The identity
- * secret passes through `init` exactly once per run and is never logged.
+ * The Nostr sockets + NIP-44 crypto + connection FSM + every store run in the
+ * app process (inside the stay-connected foreground service), NOT in this
+ * WebView — `dispatch` + the `*View()` queries + `onCoreEvent` are the whole
+ * surface (plan §2). `Intent`/`CoreEvent`/the `*View` types (`nativeCoreTypes.ts`)
+ * are hand-mirrored from the Rust side (each carries its own round-trip test
+ * there) rather than re-validated here. The identity secret passes through
+ * `init` exactly once per run and is never logged.
  *
  * Kept isTauri-guarded with lazy imports (house style) so plain-browser dev and
  * the node test suite never touch `@tauri-apps/api`.
  */
-import { decodeBridgeToPhone } from '@codedeck/protocol';
 import type { Logger } from '../core/ports';
-import type { BridgeToPhoneMessage, PhoneToBridgeMessage } from '../core/nativeCoreTypes';
 import type {
   CoreEvent,
   DmView,
@@ -54,8 +43,6 @@ export type NativeActionFailed =
   | 'publish-rejected'
   | 'publish-unreachable';
 
-export type NativePublishVerdict = 'accepted' | 'unconfirmed' | 'rejected' | 'unreachable';
-
 export interface NativeConnectionSnapshot {
   status: NativeConnectionStatus;
   needsPairingCheck: boolean;
@@ -83,13 +70,7 @@ export interface NativeCore {
   setOnline(online: boolean): Promise<void>;
   setMachines(machines: string[]): Promise<void>;
   setRelays(relays: string[]): Promise<void>;
-  send(machine: string, message: PhoneToBridgeMessage): Promise<void>;
-  publish(machine: string, message: PhoneToBridgeMessage): Promise<NativePublishVerdict>;
   connectionStatus(): Promise<NativeConnectionSnapshot>;
-  /** Decoded bridge→phone messages. Resolves an unlisten. */
-  onMessage(
-    cb: (machine: string, message: BridgeToPhoneMessage) => void,
-  ): Promise<() => void>;
   onConnection(cb: (snapshot: NativeConnectionSnapshot) => void): Promise<() => void>;
   onActionFailed(cb: (kind: NativeActionFailed) => void): Promise<() => void>;
   /**
@@ -133,7 +114,6 @@ export type TauriListen = <T>(
 ) => Promise<() => void>;
 
 const EV_CONNECTION = 'core://connection';
-const EV_MESSAGE = 'core://message';
 const EV_ACTION_FAILED = 'core://action-failed';
 const EV_CORE_EVENT = 'core://event';
 /** Android resume + desktop focus — mirrors `platform/connectivity.ts`'s
@@ -189,20 +169,7 @@ export function nativeCoreOver(invoke: TauriInvoke, listen: TauriListen, log?: L
     setOnline: (online) => invoke<void>('core_set_online', { online }),
     setMachines: (machines) => invoke<void>('core_set_machines', { machines }),
     setRelays: (relays) => invoke<void>('core_set_relays', { relays }),
-    send: (machine, message) => invoke<void>('core_send', { machine, message }),
-    publish: async (machine, message) =>
-      (await invoke<string>('core_publish', { machine, message })) as NativePublishVerdict,
     connectionStatus: async () => asSnapshot(await invoke<unknown>('core_connection_status')),
-
-    onMessage: (cb) =>
-      listen<{ machine: string; message: unknown }>(EV_MESSAGE, ({ payload }) => {
-        const decoded = decodeBridgeToPhone(JSON.stringify(payload.message));
-        if (!decoded.ok) {
-          log?.(`[nativeCore] dropping undecodable core://message: ${decoded.error}`);
-          return;
-        }
-        cb(payload.machine, decoded.msg);
-      }),
 
     onConnection: (cb) =>
       listen<unknown>(EV_CONNECTION, ({ payload }) => cb(asSnapshot(payload))),

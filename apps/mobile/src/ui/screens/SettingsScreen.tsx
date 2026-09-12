@@ -7,7 +7,7 @@
  * every component supports manually adding relays).
  */
 import { useEffect, useState } from 'react';
-import { effortLevelSchema, permissionModeSchema } from '@codedeck/protocol';
+import { EFFORT_LEVELS, PERMISSION_MODES } from '../../core/protocolConstants';
 import type { EffortLevel, PermissionMode } from '../../core/nativeCoreTypes';
 import { MODE_LABELS } from '../../core/modeCycle';
 import { UI_SCALE_DEFAULT, UI_SCALE_MAX, UI_SCALE_MIN } from '../../core/stores/settings';
@@ -21,8 +21,8 @@ import styles from './SettingsScreen.module.css';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-const MODE_OPTIONS = permissionModeSchema.options;
-const EFFORT_OPTIONS = effortLevelSchema.options;
+const MODE_OPTIONS = PERMISSION_MODES;
+const EFFORT_OPTIONS = EFFORT_LEVELS;
 
 export function SettingsScreen() {
   const core = usePhoneCore();

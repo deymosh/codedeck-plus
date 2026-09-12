@@ -61,10 +61,7 @@ function fakeNativeCore(stayConnected: boolean) {
     setOnline: () => Promise.resolve(),
     setMachines: () => Promise.reject(new Error('unused')),
     setRelays: () => Promise.reject(new Error('unused')),
-    send: () => Promise.reject(new Error('unused')),
-    publish: () => Promise.reject(new Error('unused')),
     connectionStatus: () => Promise.resolve({ status, needsPairingCheck: false, connectedRelays: [] }),
-    onMessage: () => Promise.reject(new Error('unused')),
     onConnection: (cb) => {
       onConnectionCb = cb;
       return Promise.resolve(() => {

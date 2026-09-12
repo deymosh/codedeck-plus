@@ -16,7 +16,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@codedeck/protocol": "workspace:*",
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-barcode-scanner": "^2.4.5",
     "@tauri-apps/plugin-deep-link": "^2.2.0",

@@ -1,10 +1,8 @@
 /**
  * nativeCore seam tests — injected `invoke` / `listen` fakes prove the command
- * names, the argument shape, and that inbound `core://message` payloads are
- * re-validated through the real decoder before reaching a store.
+ * names and the argument shape each `NativeCore` method sends over `invoke`.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { encodeBridgeToPhone } from '@codedeck/protocol';
 import { nativeCoreOver, type TauriInvoke, type TauriListen } from '../nativeCore';
 
 function fakes() {
@@ -12,7 +10,6 @@ function fakes() {
   const listeners = new Map<string, (e: { payload: unknown }) => void>();
   const invoke: TauriInvoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     calls.push({ cmd, args });
-    if (cmd === 'core_publish') return 'accepted' as unknown as never;
     if (cmd === 'core_connection_status') {
       return { status: 'connected', needs_pairing_check: true } as unknown as never;
     }
@@ -43,10 +40,7 @@ describe('nativeCoreOver', () => {
     await core.setOnline(false);
     await core.setMachines(['m1']);
     await core.setRelays(['wss://r2']);
-    await core.send('m1', { type: 'refresh-sessions' });
-    const verdict = await core.publish('m1', { type: 'refresh-sessions' });
 
-    expect(verdict).toBe('accepted');
     expect(calls.map((c) => c.cmd)).toEqual([
       'core_init',
       'core_start',
@@ -56,8 +50,6 @@ describe('nativeCoreOver', () => {
       'core_set_online',
       'core_set_machines',
       'core_set_relays',
-      'core_send',
-      'core_publish',
     ]);
     expect(calls[0]!.args).toEqual({
       config: {
@@ -68,7 +60,6 @@ describe('nativeCoreOver', () => {
       },
     });
     expect(calls[5]!.args).toEqual({ online: false });
-    expect(calls[8]!.args).toEqual({ machine: 'm1', message: { type: 'refresh-sessions' } });
   });
 
   it('connectionStatus normalises snake_case + an unknown status', async () => {
@@ -79,22 +70,6 @@ describe('nativeCoreOver', () => {
       needsPairingCheck: true,
       connectedRelays: [],
     });
-  });
-
-  it('onMessage decodes the payload and drops an undecodable one', async () => {
-    const { listeners, invoke, listen } = fakes();
-    const core = nativeCoreOver(invoke, listen);
-    const seen: Array<[string, string]> = [];
-    await core.onMessage((machine, msg) => seen.push([machine, msg.type]));
-
-    const emit = listeners.get('core://message')!;
-    const good = JSON.parse(
-      encodeBridgeToPhone({ type: 'input-ack', sessionId: 's1', inputId: 'i1' }),
-    );
-    emit({ payload: { machine: 'm1', message: good } });
-    emit({ payload: { machine: 'm1', message: { type: 'not-a-real-type' } } });
-
-    expect(seen).toEqual([['m1', 'input-ack']]);
   });
 
   it('onConnection normalises each event payload', async () => {

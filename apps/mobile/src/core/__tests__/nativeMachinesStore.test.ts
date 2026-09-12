@@ -24,10 +24,7 @@ function fakeCore(initialView: MachinesView = { machines: {} }) {
     setOnline: () => Promise.reject(new Error('unused')),
     setMachines: () => Promise.reject(new Error('unused')),
     setRelays: () => Promise.reject(new Error('unused')),
-    send: () => Promise.reject(new Error('unused')),
-    publish: () => Promise.reject(new Error('unused')),
     connectionStatus: () => Promise.reject(new Error('unused')),
-    onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.reject(new Error('unused')),
     onActionFailed: () => Promise.reject(new Error('unused')),
     onResume: (cb: () => void) => {

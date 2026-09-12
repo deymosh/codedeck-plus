@@ -48,9 +48,6 @@ importers:
 
   apps/mobile:
     dependencies:
-      '@codedeck/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
       '@tauri-apps/api':
         specifier: ^2.5.0
         version: 2.11.1

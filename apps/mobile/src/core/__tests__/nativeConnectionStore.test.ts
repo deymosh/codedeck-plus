@@ -42,10 +42,7 @@ function fakeMachines(lastHeartbeatAt: number | null): MachinesStore {
     setOnline: () => Promise.reject(new Error('unused')),
     setMachines: () => Promise.reject(new Error('unused')),
     setRelays: () => Promise.reject(new Error('unused')),
-    send: () => Promise.reject(new Error('unused')),
-    publish: () => Promise.reject(new Error('unused')),
     connectionStatus: () => Promise.reject(new Error('unused')),
-    onMessage: () => Promise.reject(new Error('unused')),
     onConnection: () => Promise.reject(new Error('unused')),
     onActionFailed: () => Promise.reject(new Error('unused')),
     onResume: () => Promise.resolve(() => {}),
@@ -93,10 +90,7 @@ function fakeCore(initial: NativeConnectionSnapshot = { status: 'idle', needsPai
     },
     setMachines: () => Promise.reject(new Error('unused')),
     setRelays: () => Promise.reject(new Error('unused')),
-    send: () => Promise.reject(new Error('unused')),
-    publish: () => Promise.reject(new Error('unused')),
     connectionStatus: () => Promise.resolve(initial),
-    onMessage: () => Promise.reject(new Error('unused')),
     onConnection: (cb) => {
       onConnectionCb = cb;
       return Promise.resolve(() => {
