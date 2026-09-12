@@ -19,8 +19,9 @@
  *   caller already handed us the full `ParsedPairingUrl`, so it's cached
  *   locally and shown until the view reports `hasStaged: false`.
  *
- * `handlePairAck` is a no-op: the Rust `Router` folds a bridge pair-ack
- * into the pairing store directly, without this adapter's help.
+ * `PairingStoreState` has no pair-ack handler: the Rust `Router` folds a
+ * bridge pair-ack into the pairing store directly, without this adapter's
+ * help.
  */
 import { createStore } from 'zustand/vanilla';
 import { hexFromNpub } from '../crypto';
@@ -136,8 +137,6 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
         dispatch({ beginManualPairing: { npub: npub.trim(), token: token.trim(), label } });
         return { ok: true };
       },
-
-      handlePairAck: () => {},
 
       reset: () => {
         // Mirrors `pairing.ts`'s own `reset`: clear synchronously, same

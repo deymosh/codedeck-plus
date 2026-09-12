@@ -15,11 +15,8 @@ import type { StoreApi } from 'zustand/vanilla';
 import type {
   BridgeHostKind,
   GsdState,
-  ModelsMessage,
   ProviderProfileInfo,
-  ProviderProfilesMessage,
   RemoteSessionInfo,
-  SessionListMessage,
   UsageData,
 } from '../nativeCoreTypes';
 
@@ -75,38 +72,6 @@ export interface MachinesStoreState {
   /** sessionId → dismissedAtMs for user-deleted sessions in their undo/settle
    *  window. IN-MEMORY ONLY. Entries expire after a TTL Rust owns. */
   dismissedSessions: Record<string, number>;
-
-  registerMachine(machine: {
-    pubkeyHex: string;
-    name: string;
-    label?: string;
-    /** Host badge learned at pairing (pair-ack); heartbeats keep it current. */
-    host?: BridgeHostKind;
-  }): void;
-  removeMachine(pubkeyHex: string): void;
-  applySessionList(machinePubkey: string, msg: SessionListMessage, at: number): void;
-  applySessionUpsert(machinePubkey: string, info: RemoteSessionInfo, at: number): void;
-  applySessionReplaced(machinePubkey: string, oldSessionId: string, info: RemoteSessionInfo, at: number): void;
-  updateSessionInfo(machinePubkey: string, sessionId: string, patch: Partial<RemoteSessionInfo>): void;
-  /** Phase 6 stopgap: the FIRST user message titles an untitled session.
-   *  No-op when the session is unknown or already titled — a bridge-authored
-   *  title is never overwritten. */
-  noteFirstUserMessage(machinePubkey: string, sessionId: string, text: string): void;
-  /** Explicit user delete — one of exactly two removal paths. */
-  userRemoveSession(machinePubkey: string, sessionId: string): void;
-  /** Shield a user-deleted session from resurrection by stale heartbeats:
-   *  applySessionList filters non-expired dismissed ids BEFORE merging. */
-  dismissSession(sessionId: string, at: number): void;
-  /** Undo a delete: un-dismiss and re-insert the exact snapshotted view. */
-  restoreSession(machinePubkey: string, view: SessionView): void;
-  /** usage message → per-session snapshot (3c routing). */
-  applyUsage(machinePubkey: string, sessionId: string, usage: UsageData): void;
-  /** gsd-state message → stored per session (3c routing; rendered Phase 5). */
-  applyGsd(machinePubkey: string, sessionId: string, gsd: GsdState): void;
-  /** models message → per-machine model list (3c routing). */
-  applyModels(machinePubkey: string, msg: ModelsMessage): void;
-  /** provider-profiles message → per-machine redacted profile list (CDX-062). */
-  applyProviderProfiles(machinePubkey: string, msg: ProviderProfilesMessage): void;
 
   machine(pubkeyHex: string): MachineView | undefined;
   session(machinePubkey: string, sessionId: string): SessionView | undefined;

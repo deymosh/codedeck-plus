@@ -70,12 +70,6 @@ export interface ConnectionStoreState extends ConnectionState {
    *  socket is up." Empty on the pre-migration store (it had no per-relay
    *  concept); the native adapter is the only one that ever populates it. */
   connectedRelays: string[];
-  /** CDX-020: periodic dead-subscription check (the 30s sweep). Dispatches one
-   *  `socket-close` when connected but every machine heartbeat has gone stale,
-   *  so the FSM reconnects instead of the chip lying `connected` forever.
-   *  A no-op on the native adapter — `client_runtime::Core` runs its own
-   *  copy of this watchdog. */
-  checkHeartbeats(): void;
 }
 
 export type ConnectionStore = StoreApi<ConnectionStoreState>;

@@ -7,12 +7,11 @@
  * the exact same UI code, since the UI only ever depends on
  * `OutboxStoreState`'s shape.
  *
- * `confirm` / `fail` / `sweep` are deliberate no-ops here: those are the
- * Rust `Router`'s own job (an `input-ack`/`input-failed` message, and the
- * confirm-timeout sweep, both already fold into the outbox store on the
- * native side without anything on this side asking). Calling one is not an
- * error — TS callers that still invoke them on a bridge-message path get
- * silently overtaken by the next `stateChanged` refresh, same net effect.
+ * `sweep` is a deliberate no-op: the confirm-timeout sweep is the Rust
+ * `Router`'s own job now, already folding into the outbox store on the
+ * native side without anything on this side asking. `OutboxStoreState`
+ * carries no `confirm`/`fail` methods at all — those were the bridge-message
+ * ingest path (`input-ack`/`input-failed`), which is Rust's job the same way.
  *
  * `deps.core` is `platform/nativeCore.ts`'s `NativeCore` — this module is
  * NOT `isTauri`-guarded itself (that seam already is); it only needs `core`
@@ -98,10 +97,8 @@ export function createNativeOutboxStore(deps: NativeOutboxStoreDeps): OutboxStor
         );
       },
 
-      // The bridge-message → confirm/fail path is the Rust Router's job on
-      // this side (see the module doc comment) — nothing to do here.
-      confirm: () => {},
-      fail: () => {},
+      // The confirm-timeout sweep is the Rust Router's job on this side (see
+      // the module doc comment) — nothing to do here.
       sweep: () => {},
 
       retry: async (id) => {

@@ -27,14 +27,8 @@ export interface PendingSessionView {
 export interface PendingSessionsStoreState {
   pending: Record<string, PendingSessionView>;
 
-  applyPending(machine: string, msg: { pendingId: string; machine: string; createdAt: string }): void;
-  /** session-ready (or the session appearing in a list) resolves the placeholder. */
-  resolve(pendingId: string): void;
-  applyFailed(pendingId: string, reason: string): void;
   /** User dismisses a failed card. */
   dismiss(pendingId: string): void;
-  /** Drop never-resolved placeholders older than the sweep window. */
-  sweep(): void;
 
   pendingFor(machine: string): PendingSessionView[];
 }

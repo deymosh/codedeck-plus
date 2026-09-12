@@ -1,27 +1,14 @@
 /**
  * A native-backed `MachinesStore` (migration F2b) — same pattern as the other
  * native adapters: exposes the SAME `MachinesStoreState` read shape
- * `createMachinesStore` (`./machines.ts`) does, backed by a cached
- * `NativeCore.machinesView()`, refreshed on the machines slice's
- * `stateChanged` event.
+ * `./machines.ts` declares, backed by a cached `NativeCore.machinesView()`,
+ * refreshed on the machines slice's `stateChanged` event.
  *
- * Every WRITE method here is a no-op. Unlike the outbox/settings/pairing
- * adapters, nothing in native mode ever calls one of these:
- * - `registerMachine`/`applySessionList`/`applySessionUpsert`/
- *   `applySessionReplaced`/`updateSessionInfo`/`noteFirstUserMessage`/
- *   `removeMachine`/`applyUsage`/`applyGsd`/`applyModels`/
- *   `applyProviderProfiles` are called ONLY from `createPhoneCore.ts`'s
- *   ingest path today — the Rust `Router` folds every bridge message into
- *   `MachinesView`'s state directly, so that whole ingest path is superseded,
- *   not reused, once the phone re-points at the native core.
- * - `dismissSession`/`userRemoveSession`/`restoreSession` are called ONLY
- *   from `deleteController.ts` — superseded the same way by dispatching
- *   `Intent::DeleteSession`/`UndoDelete` directly, which the Rust core's own
- *   optimistic-delete + undo timer owns end to end (plan `core::` §1.2).
- *
- * These methods exist only so this adapter satisfies `MachinesStoreState`
- * for any code still typed against it — same reasoning as `nativePairing.ts`'s
- * `handlePairAck` no-op.
+ * `MachinesStoreState` carries no write methods: the Rust `Router` folds
+ * every bridge message into `MachinesView`'s state directly, and a user
+ * delete/undo dispatches `Intent::DeleteSession`/`UndoDelete`, which the
+ * Rust core's own optimistic-delete + undo timer owns end to end. There is
+ * nothing left in TS for this adapter to apply.
  */
 import { createStore } from 'zustand/vanilla';
 import { hydrateFromCore } from './nativeHydration';
@@ -117,26 +104,9 @@ export function createNativeMachinesStore(deps: NativeMachinesStoreDeps): Machin
       deps.log,
     );
 
-    const noop = (): void => {};
-
     return {
       machines: {},
       dismissedSessions: {},
-
-      registerMachine: noop,
-      removeMachine: noop,
-      applySessionList: noop,
-      applySessionUpsert: noop,
-      applySessionReplaced: noop,
-      updateSessionInfo: noop,
-      noteFirstUserMessage: noop,
-      userRemoveSession: noop,
-      dismissSession: noop,
-      restoreSession: noop,
-      applyUsage: noop,
-      applyGsd: noop,
-      applyModels: noop,
-      applyProviderProfiles: noop,
 
       machine: (pubkeyHex) => get().machines[pubkeyHex],
       session: (machinePubkey, sessionId) => get().machines[machinePubkey]?.sessions[sessionId],

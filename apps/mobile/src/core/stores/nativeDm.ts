@@ -5,17 +5,13 @@
  * the dm slice's `stateChanged` event, with every mutation going through
  * `NativeCore.dispatch`.
  *
- * `start`/`stop`/`ingest` are no-ops: the TS store's per-conversation
- * gift-wrap subscription (its own epoch guard, its own since-cursor) is a
- * transport-level concern the connection FSM used to drive directly. In
- * native mode there is no separate "DM subscription" to open/close from TS —
- * `client-runtime` multiplexes every kind of traffic over one socket and
- * owns the 1059 subscription itself for as long as the core is running.
- * `subscribed` mirrors that: there is no independent per-traffic-class
- * subscription health left to report (unlike the old per-filter WebView
- * transport), so this reflects the ONE thing that actually varies —
- * `connection`'s own status — rather than a hardcoded constant that could
- * never show a real disconnect.
+ * `client-runtime` multiplexes every kind of traffic over one socket and owns
+ * the 1059 subscription itself for as long as the core is running — there is
+ * no separate "DM subscription" left for this adapter to open or close, so
+ * `DmStoreState` carries no `start`/`stop`/`ingest` methods at all.
+ * `subscribed` reflects the ONE thing that actually varies — `connection`'s
+ * own status — rather than a hardcoded constant that could never show a real
+ * disconnect.
  *
  * Profile resolution (`resolveProfile`/`resolveAllProfiles`, backing the
  * `profiles`/`profileStatus` fields) is the one piece of `DmStoreState` this
@@ -116,10 +112,6 @@ export function createNativeDmStore(deps: NativeDmStoreDeps): DmStore {
       diagnostics: { eventsReceived: 0, unwrapFailures: 0, invalidRumors: 0 },
       profiles: {},
       profileStatus: {},
-
-      start: () => {},
-      stop: () => {},
-      ingest: () => {},
 
       send: async (peerPubkey, content) => {
         await dispatch({ sendDm: { peer: peerPubkey, text: content } });

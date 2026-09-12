@@ -11,7 +11,6 @@
  * TYPE survives here.
  */
 import type {
-  BridgeToPhoneMessage,
   CreateSessionMessage,
   DeviceConfig,
   EffortLevel,
@@ -40,14 +39,13 @@ export interface BridgeApiDiagnostics {
 
 /**
  * `BridgeApi`'s full public surface (see git history for the retired local
- * implementation) — everything a screen, a test, or the F1 in-process-
- * runtime branch could reach through `PhoneCore.api`, except `sendConfirmed`
- * (confirmed by search: it was only ever called from inside `bridgeApi.ts`
- * itself, by `uploadImageBlossom`/`uploadImageChunk`'s own bodies).
- * `createNativeBridgeApi`'s implementations of the never-called-in-native-
- * mode ones (`input`, `ingest`, `dispatchDecoded`, `diagnostics`) are no-ops:
- * Rust's own `Router` owns every inbound message and the outbox lifecycle
- * `input` used to drive under full F2b native mode.
+ * implementation) — everything a screen or a test reaches through
+ * `PhoneCore.api`, except `sendConfirmed` (confirmed by search: it was only
+ * ever called from inside `bridgeApi.ts` itself, by
+ * `uploadImageBlossom`/`uploadImageChunk`'s own bodies). Rust's own `Router`
+ * owns every inbound message and the outbox lifecycle end to end now, so this
+ * interface carries no inbound-decode or dispatch methods at all — only the
+ * outbound intents a screen actually sends.
  *
  * `createFolder`/`uploadImageBlossom`/`uploadImageChunk` are the three
  * genuine gaps — see each one's own doc below for why `createNativeBridgeApi`
@@ -59,17 +57,6 @@ export interface BridgeApiLike {
    *  question cards) — every real call site sends `permission-res`,
    *  `keypress`, or `question-input`, each with its own `Intent` already. */
   send(machinePubkey: string, msg: PhoneToBridgeMessage): Promise<boolean>;
-  input(machine: string, sessionId: string, text: string, inputId: string): Promise<boolean>;
-  /** Decrypt + decode one relay event and dispatch it — the WebView
-   *  transport's own inbound path. Not called under full F2b native mode
-   *  (Rust decrypts/decodes/dispatches internally, and this interface has
-   *  no reason to know the transport is Nostr at all); tests still call it
-   *  directly to simulate an incoming event, always via a cast — nothing
-   *  reads this parameter under native mode. */
-  ingest(event: unknown): void;
-  /** F1 in-process-runtime inbound routing (`main.tsx`) — a no-op under full
-   *  F2b native mode, where Rust's `Router` never hands anything back here. */
-  dispatchDecoded(msg: BridgeToPhoneMessage, machinePubkeyHex: string): void;
   createSession(
     machine: string,
     opts?: Omit<CreateSessionMessage, 'type' | 'v' | 'caps'>,

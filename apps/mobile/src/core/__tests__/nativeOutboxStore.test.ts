@@ -166,13 +166,11 @@ describe('createNativeOutboxStore', () => {
     expect(dispatched).toEqual([{ retryOutboxItem: { machine: 'm1', id: 'in-1' } }]);
   });
 
-  it('confirm / fail / sweep are no-ops — the Rust Router owns those transitions', async () => {
+  it('sweep is a no-op — the Rust Router owns the confirm-timeout transition', async () => {
     const { core, dispatched } = fakeCore();
     const store = createNativeOutboxStore({ core });
     await tick();
 
-    store.getState().confirm('in-1');
-    store.getState().fail('in-1', 'nope');
     store.getState().sweep();
     expect(dispatched).toEqual([]);
   });

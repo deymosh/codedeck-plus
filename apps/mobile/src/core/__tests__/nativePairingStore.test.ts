@@ -231,15 +231,6 @@ describe('createNativePairingStore', () => {
     expect(dispatched.at(-1)).toBe('resetPairing');
   });
 
-  it('handlePairAck is a no-op — the Rust Router owns that transition', async () => {
-    const { core, dispatched } = fakeCore();
-    const store = createNativePairingStore({ core });
-    await tick();
-
-    store.getState().handlePairAck('m1', { type: 'pair-ack', machine: 'laptop', ok: true });
-    expect(dispatched).toEqual([]);
-  });
-
   it('a stateChanged for a different slice does not trigger a refresh', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
     const store = createNativePairingStore({ core });

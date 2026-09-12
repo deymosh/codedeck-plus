@@ -5,10 +5,10 @@
  * on the marmot slice's `stateChanged` event, with every mutation going
  * through `NativeCore.dispatch`.
  *
- * `start`/`stop`/`ingestGiftWrap`/`ingestGroupMessage` are no-ops: the same
- * reasoning as `nativeDm.ts` — `client-runtime` owns the 445 subscription and
- * the MDK engine seam itself; there is no separate transport lifecycle or
- * raw-event ingest path left in TS to drive.
+ * Same reasoning as `nativeDm.ts` for the shape of what's left:
+ * `client-runtime` owns the 445 subscription and the MDK engine seam itself,
+ * so `MarmotStoreState` carries no transport lifecycle or raw-event ingest
+ * methods at all.
  *
  * `startChat`/`acceptWelcome` both mark an effect (`Intent::StartMarmotChat`/
  * `AcceptMarmotWelcome`) that the Rust core's own event loop processes
@@ -106,11 +106,6 @@ export function createNativeMarmotStore(deps: NativeMarmotStoreDeps): MarmotStor
       subscribed: deps.connection.getState().status === 'connected',
       diagnostics: { eventsReceived: 0, ignored: 0, errors: 0 },
       publishedKeyPackage: null,
-
-      start: () => {},
-      stop: () => {},
-      ingestGiftWrap: () => {},
-      ingestGroupMessage: () => {},
 
       send: async (groupId, text) => {
         await dispatch({ sendMarmotMessage: { groupId, text } });

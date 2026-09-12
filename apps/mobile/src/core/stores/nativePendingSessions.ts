@@ -5,13 +5,10 @@
  * cached `NativeCore.pendingSessionsView()`, refreshed on the
  * `pendingSessions` slice's `stateChanged` event.
  *
- * `applyPending`/`resolve`/`applyFailed`/`sweep` are no-ops — the same
- * reasoning as `nativeMachines.ts`'s: these exist only to satisfy the
- * `PendingSessionsStoreState` interface for any code still typed against it.
- * In native mode the Rust Router applies every `session-pending`/
- * `session-ready`/`session-failed` bridge message directly, and its own
- * periodic sweep runs alongside — there is no ingest path left in TS to
- * drive any of these from.
+ * `PendingSessionsStoreState` carries no apply/sweep methods: the Rust
+ * Router applies every `session-pending`/`session-ready`/`session-failed`
+ * bridge message directly, and its own periodic sweep runs alongside — there
+ * is no ingest path left in TS to drive any of that from.
  *
  * `dismiss` is the one user-facing mutator (a failed card's dismiss button)
  * and dispatches `Intent::DismissPendingSession`.
@@ -54,15 +51,8 @@ export function createNativePendingSessionsStore(deps: NativePendingSessionsStor
       deps.log,
     );
 
-    const noop = (): void => {};
-
     return {
       pending: {},
-
-      applyPending: noop,
-      resolve: noop,
-      applyFailed: noop,
-      sweep: noop,
 
       dismiss: (pendingId) => {
         deps.core

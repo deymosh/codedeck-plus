@@ -150,21 +150,15 @@ describe('createNativeTranscriptStore', () => {
     expect(store.getState().session('m1', 's1')?.localHigh).toBe(2);
   });
 
-  it('every write-shaped mutator besides hydrateSession is an inert no-op', async () => {
+  it('ensureSynced/retrySweep/flush are inert no-ops — Rust runs its own sync reconciliation', async () => {
     const { core, transcriptView } = fakeCore();
     const store = createNativeTranscriptStore({ core });
     await tick();
     transcriptView.mockClear();
 
     const s = store.getState();
-    await s.applyOutput('m1', 's1', 1, {} as never);
-    await s.applySyncBegin('m1', {} as never);
-    await s.applySyncChunk('m1', {} as never);
-    await s.applySyncEnd('m1', {} as never);
     await s.ensureSynced('m1', 's1', 10);
-    s.onReconnect();
     await s.retrySweep();
-    await s.removeSession('m1', 's1');
     await s.flush();
 
     expect(transcriptView).not.toHaveBeenCalled();

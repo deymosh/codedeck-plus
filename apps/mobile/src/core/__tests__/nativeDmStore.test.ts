@@ -34,7 +34,6 @@ function fakeConnection(status: ConnectionStoreState['status'] = 'connected'): C
     connectedRelays: [],
     dispatch: () => {},
     presence: () => 'offline',
-    checkHeartbeats: () => {},
   }));
 }
 
@@ -116,17 +115,6 @@ describe('createNativeDmStore', () => {
     expect(store.getState().messages[peer]?.[0]?.content).toBe('hi');
     expect(store.getState().activePeer).toBe(peer);
     expect(store.getState().diagnostics).toEqual({ eventsReceived: 3, unwrapFailures: 1, invalidRumors: 0 });
-  });
-
-  it('start/stop/ingest are no-ops — client-runtime owns the 1059 subscription', async () => {
-    const { core, dispatched } = fakeCore();
-    const store = createNativeDmStore({ core, connection: fakeConnection() });
-    await tick();
-
-    store.getState().start();
-    store.getState().stop();
-    store.getState().ingest({} as never);
-    expect(dispatched).toEqual([]);
   });
 
   it('subscribed reflects the shared connection status, not a hardcoded constant', async () => {

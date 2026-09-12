@@ -4,17 +4,19 @@
  * `TranscriptStore::read_range`) rather than a synchronous in-memory
  * snapshot every other adapter reads.
  *
- * Every WRITE method is a no-op: the Rust `Router` already applies every
- * `Output`/`SyncBegin`/`SyncChunk`/`SyncEnd`/`CloseSessionAck` bridge message
- * directly into the real, persistent `TranscriptStore` port, and already
- * runs its own sync-gap reconciliation on every session-list heartbeat
- * (`ensureSynced`'s whole job in TS). There is no ingest or sync-cycle path
- * left in TS to drive.
+ * The Rust `Router` already applies every `Output`/`SyncBegin`/`SyncChunk`/
+ * `SyncEnd`/`CloseSessionAck` bridge message directly into the real,
+ * persistent `TranscriptStore` port, so `TranscriptStoreState` carries no
+ * ingest methods for those at all — there is nothing left in TS to drive
+ * them from. `ensureSynced`/`retrySweep` DO stay real (the sync-request
+ * button and the periodic connectivity-driven retry both still call them),
+ * but Rust runs its own sync-gap reconciliation on every session-list
+ * heartbeat regardless, so both are no-ops here too.
  *
  * `hydrateSession` is the one write-shaped method this adapter actually
  * implements: it is how a caller says "I want this session's transcript
- * resident" — `createPhoneCore.ts` calls it for every known session at
- * boot today, and this adapter keeps that same contract, fetching a fresh
+ * resident" — `createPhoneCoreNative.ts` calls it for every known session
+ * at boot, and this adapter keeps that same contract, fetching a fresh
  * `TranscriptRowsView` and caching it into `sessions`. After that, `session`/
  * `entriesOf`/`haveRangesOf`/`hasContiguous` are synchronous reads over the
  * cache, same as the TS store's own reads — correct as long as hydration
@@ -114,14 +116,8 @@ export function createNativeTranscriptStore(deps: NativeTranscriptStoreDeps): Tr
       seqConflicts: [],
 
       hydrateSession: fetchAndCache,
-      applyOutput: noopAsync,
-      applySyncBegin: noopAsync,
-      applySyncChunk: noopAsync,
-      applySyncEnd: noopAsync,
       ensureSynced: noopAsync,
-      onReconnect: () => {},
       retrySweep: noopAsync,
-      removeSession: noopAsync,
 
       session: (machine, sessionId) => get().sessions[sessionKeyOf(machine, sessionId)],
       haveRangesOf: (machine, sessionId) =>

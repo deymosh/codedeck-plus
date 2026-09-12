@@ -13,7 +13,6 @@
  * TYPES survive here.
  */
 import type { StoreApi } from 'zustand/vanilla';
-import type { PairAckMessage } from '../nativeCoreTypes';
 import { hexFromNpub } from '../crypto';
 
 export interface ParsedPairingUrl {
@@ -176,8 +175,6 @@ export interface PairingStoreState {
   dismissStaged(): void;
   /** Manual fallback: bridge npub + token typed by the user. */
   beginManualPair(npub: string, token: string, label: string): { ok: boolean; error?: string };
-  /** pair-ack arrived (routed by bridgeApi). */
-  handlePairAck(machinePubkey: string, msg: PairAckMessage): void;
   /** Abandon/clear the flow (also after success, once the UI moved on). */
   reset(): void;
 }

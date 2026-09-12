@@ -11,26 +11,19 @@
  * already fully ported, so it gets a thin view now rather than waiting on
  * that bigger design.
  *
- * Most mutators are no-ops, for two different reasons:
- * - `selectMachine`, `markSessionUnread`, `clearSessionUnread`,
- *   `markCardResponded`, `applyCredentialsAck`, `applyDeviceConfigAck`,
- *   `applyProviderProfileAck`, and `setUndoToast` are ALREADY applied
- *   Rust-side as a side effect of some other Intent or bridge message
- *   (`Intent::RespondPermission` marks a card responded; `SessionReady`/
- *   heartbeats and the ack messages update unread/ack state via the
- *   `Router`; `Intent::DeleteSession`/`UndoDelete` own the undo toast).
- *   Every one of those paths already sets `ui_changed`, so the next refresh
- *   picks this adapter's cache up automatically — calling these directly is
- *   only ever redundant, never necessary. `selectMachine`'s own single call
- *   site (`createPhoneCore.ts`'s `removeMachine` cleanup) is itself
- *   superseded in native mode.
- * - `noteCredentialsSent`/`noteDeviceConfigSent`/`noteProviderProfileSent`
- *   have no Rust Intent to reach at all yet: sending a set-credentials /
- *   set-device-config / set-provider-profile command has not been ported
- *   (only receiving its ack has). The "saving…" optimistic state these
- *   normally show will not appear natively until that command-send surface
- *   exists — a real, currently-open gap, not an oversight to paper over
- *   with invented Rust surface here.
+ * `markCardResponded` is a no-op: `Intent::RespondPermission` already marks
+ * the card responded Rust-side and sets `ui_changed`, so the next refresh
+ * picks this up on its own — the call site's own local mark just avoids a
+ * one-frame flicker back to "unresponded" while that refresh is in flight.
+ *
+ * `noteCredentialsSent`/`noteDeviceConfigSent`/`noteProviderProfileSent` are
+ * no-ops for a different reason: they have no Rust Intent to reach at all
+ * yet — sending a set-credentials / set-device-config / set-provider-profile
+ * command has not been ported (only receiving its ack has, which the next
+ * view refresh already reflects). The "saving…" optimistic state these
+ * normally show will not appear natively until that command-send surface
+ * exists — a real, currently-open gap, not an oversight to paper over with
+ * invented Rust surface here.
  *
  * `selectSession`/`selectDmPeer`/`selectMarmotGroup`/`setPlanApprovalChoice`
  * are the genuinely user-facing mutations and dispatch real Intents,
@@ -128,8 +121,6 @@ export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
       providerProfileStatus: {},
       undoToast: null,
 
-      selectMachine: noop,
-
       selectSession: (machinePubkey, sessionId) => {
         set({ selectedMachine: machinePubkey, selectedSession: sessionId, panelMode: 'session' });
         dispatch({ selectSession: { machine: machinePubkey, sessionId } });
@@ -143,8 +134,6 @@ export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
         dispatch({ selectMarmotGroup: { groupId } });
       },
 
-      markSessionUnread: noop,
-      clearSessionUnread: noop,
       isSessionUnread: (machine, sessionId) =>
         get().unreadSessions.has(sessionKeyOf(machine, sessionId)),
 
@@ -157,13 +146,8 @@ export function createNativeUiStore(deps: NativeUiStoreDeps): UiStore {
       },
 
       noteCredentialsSent: noop,
-      applyCredentialsAck: noop,
       noteDeviceConfigSent: noop,
-      applyDeviceConfigAck: noop,
       noteProviderProfileSent: noop,
-      applyProviderProfileAck: noop,
-
-      setUndoToast: noop,
     };
   });
 

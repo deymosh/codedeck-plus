@@ -214,12 +214,4 @@ describe('createNativeConnectionStore', () => {
     expect(store.getState().presence('never-seen')).toBe('offline');
   });
 
-  it('checkHeartbeats is an inert no-op', async () => {
-    const { core, calls } = fakeCore();
-    const store = createNativeConnectionStore({ core, machines: fakeMachines(null) });
-    await tick();
-
-    expect(() => store.getState().checkHeartbeats()).not.toThrow();
-    expect(calls).toEqual([]);
-  });
 });

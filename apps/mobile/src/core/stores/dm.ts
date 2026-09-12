@@ -107,13 +107,6 @@ export interface DmStoreState {
   /** Transient per-pubkey resolution status for the UI (not persisted). */
   profileStatus: Record<string, DmProfileStatus>;
 
-  /** (Re)subscribe to gift wraps with the catch-up window + publish the
-   *  kind-10050 DM relay list. Called by the connection FSM's open-socket
-   *  effect; every call supersedes the previous epoch. */
-  start(): void;
-  /** Deliberate teardown (close-socket effect / shutdown). */
-  stop(): void;
-
   /** Send a NIP-17 DM: rumor once, wrap for recipient + self, publish both. */
   send(peerPubkey: string, content: string): Promise<DmMessage>;
   /** Re-send a failed message (replaces the failed entry on success). */
@@ -127,11 +120,6 @@ export interface DmStoreState {
   resolveProfile(pubkeyHex: string, opts?: { force?: boolean }): Promise<void>;
   /** Kick off resolution for every conversation peer + ourselves. */
   resolveAllProfiles(): void;
-
-  /** Ingest one kind-1059 event (the subscription's path; exposed for tests,
-   *  a no-op under native mode — Rust owns gift-wrap ingest entirely, so
-   *  this has no reason to know the transport is Nostr at all). */
-  ingest(event: unknown): void;
 }
 
 export type DmStore = StoreApi<DmStoreState>;

@@ -31,10 +31,6 @@ export interface OutboxStoreState {
 
   /** Create + publish one input. Resolves when the publish attempt settles. */
   send(machine: string, sessionId: string, text: string): Promise<OutboxItem>;
-  /** input-ack from the bridge. */
-  confirm(inputId: string): void;
-  /** input-failed from the bridge. */
-  fail(inputId: string, reason: string): void;
   /** Re-publish a failed item (user action). */
   retry(id: string): Promise<OutboxItem | undefined>;
   /** Time out unanswered sends: pending/published older than the timeout →

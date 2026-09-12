@@ -150,12 +150,6 @@ export interface MarmotStoreState {
    *  first publish). Drives the mint-once decision across app starts. */
   publishedKeyPackage: PublishedKeyPackage | null;
 
-  /** Init engine + reconcile groups + publish KP/10051 + (re)subscribe 445.
-   *  Called by the connection FSM's open-socket effect (same lifecycle as the
-   *  dm store); every call supersedes the previous epoch. */
-  start(): void;
-  stop(): void;
-
   /** Send into a group; optimistic echo with the rumor id. */
   send(groupId: string, text: string): Promise<MarmotMessage | null>;
   /** Re-send a failed message (replaces the failed entry on success). */
@@ -167,14 +161,6 @@ export interface MarmotStoreState {
 
   setActiveGroup(groupId: string | null): void;
   markRead(groupId: string): void;
-
-  /** Feed a kind-1059 whose rumor was NOT a NIP-17 DM (dm store routes these
-   *  here — Marmot welcomes travel gift-wrapped like DMs do). No-op under
-   *  native mode (Rust owns ingest entirely), so this has no reason to know
-   *  the transport is Nostr at all. */
-  ingestGiftWrap(event: unknown): void;
-  /** Feed one kind-445 (the subscription's path; exposed for tests). */
-  ingestGroupMessage(event: unknown): void;
 }
 
 export type MarmotStore = StoreApi<MarmotStoreState>;

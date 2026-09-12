@@ -86,36 +86,25 @@ export interface UiStoreState {
   /** Pending-delete undo toast. */
   undoToast: UndoToastState | null;
 
-  selectMachine(pubkeyHex: string | null): void;
   selectSession(machinePubkey: string, sessionId: string | null): void;
   /** Open a DM conversation (or null = the DM list) — panelMode follows. */
   selectDmPeer(peerPubkey: string | null): void;
   /** Open a Marmot group (or null = the list) — panelMode follows. */
   selectMarmotGroup(groupId: string | null): void;
-  markSessionUnread(machine: string, sessionId: string): void;
-  clearSessionUnread(machine: string, sessionId: string): void;
   isSessionUnread(machine: string, sessionId: string): boolean;
+  /** Optimistic local mark; Rust applies the same transition as a side effect
+   *  of `Intent::RespondPermission`, so the next refresh reflects it either
+   *  way — this just avoids a one-frame flicker back to "unresponded". */
   markCardResponded(machine: string, sessionId: string, cardId: string): void;
   isCardResponded(machine: string, sessionId: string, cardId: string): boolean;
   setPlanApprovalChoice(cardId: string, key: string): void;
 
   /** A set-credentials command left for this machine — show "saving…". */
   noteCredentialsSent(machinePubkey: string): void;
-  applyCredentialsAck(
-    machinePubkey: string,
-    ack: { success: boolean; hasAnthropicKey: boolean; hasGithubPat: boolean; keyValid?: boolean; error?: string },
-  ): void;
   /** A set-device-config command left for this machine — show "saving…". */
   noteDeviceConfigSent(machinePubkey: string): void;
-  applyDeviceConfigAck(machinePubkey: string, ack: { success: boolean; error?: string }): void;
   /** A set-provider-profile command left for this machine — show "saving…". */
   noteProviderProfileSent(machinePubkey: string, profileId: string): void;
-  applyProviderProfileAck(
-    machinePubkey: string,
-    ack: { profileId: string; success: boolean; tokenValid?: boolean; error?: string },
-  ): void;
-
-  setUndoToast(toast: UndoToastState | null): void;
 }
 
 export type UiStore = StoreApi<UiStoreState>;

@@ -155,26 +155,18 @@ describe('createNativeUiStore', () => {
     expect(dispatched).toEqual([{ setPlanApprovalChoice: { cardId: 'card1', key: '2' } }]);
   });
 
-  it('every other mutator is an inert no-op', async () => {
+  it('every remaining mutator is an inert no-op — Rust applies the real transition', async () => {
     const { core, dispatched } = fakeCore();
     const store = createNativeUiStore({ core });
     await tick();
 
     const s = store.getState();
-    s.selectMachine('m1');
-    s.markSessionUnread('m1', 's1');
-    s.clearSessionUnread('m1', 's1');
     s.markCardResponded('m1', 's1', 'card1');
     s.noteCredentialsSent('m1');
-    s.applyCredentialsAck('m1', { success: true, hasAnthropicKey: true, hasGithubPat: false });
     s.noteDeviceConfigSent('m1');
-    s.applyDeviceConfigAck('m1', { success: true });
     s.noteProviderProfileSent('m1', 'p1');
-    s.applyProviderProfileAck('m1', { profileId: 'p1', success: true });
-    s.setUndoToast({ machine: 'm1', sessionId: 's1', label: 'x' });
 
     expect(dispatched).toEqual([]);
-    expect(store.getState().selectedMachine).toBeNull();
     expect(store.getState().undoToast).toBeNull();
   });
 

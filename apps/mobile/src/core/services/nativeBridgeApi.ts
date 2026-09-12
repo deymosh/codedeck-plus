@@ -57,14 +57,11 @@ export function createNativeBridgeApi(deps: NativeBridgeApiDeps): BridgeApiLike 
   };
 
   return {
-    // Rust's Router owns inbound routing and the outbox lifecycle entirely
-    // under full F2b native mode, so none of these three are ever actually
-    // called — they exist only so BridgeApiLike is satisfied for the tests
-    // and the F1 in-process-runtime branch (main.tsx) still typed against it.
+    // Rust's Router owns inbound routing and the outbox lifecycle entirely,
+    // so `BridgeApiLike` carries no inbound-decode or dispatch methods for
+    // this adapter to implement — `diagnostics` stays zeroed because nothing
+    // here ever decrypts or decodes a wire message anymore.
     diagnostics: { decryptFailures: 0, decodeFailures: 0, invalid: [] },
-    input: () => Promise.resolve(false),
-    ingest: () => {},
-    dispatchDecoded: () => {},
 
     // The only real call sites (permission/plan-approval/question cards)
     // send exactly these three message types — each already has its own

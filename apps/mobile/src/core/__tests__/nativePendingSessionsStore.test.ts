@@ -81,21 +81,6 @@ describe('createNativePendingSessionsStore', () => {
     expect(store.getState().pending.p1?.machineName).toBe('devbox');
   });
 
-  it('applyPending/resolve/applyFailed/sweep are inert no-ops', async () => {
-    const { core, dispatched } = fakeCore();
-    const store = createNativePendingSessionsStore({ core });
-    await tick();
-
-    const before = store.getState().pending;
-    store.getState().applyPending('m1', { pendingId: 'p1', machine: 'devbox', createdAt: 't' });
-    store.getState().resolve('p1');
-    store.getState().applyFailed('p1', 'boom');
-    store.getState().sweep();
-
-    expect(dispatched).toEqual([]);
-    expect(store.getState().pending).toBe(before);
-  });
-
   it('dismiss dispatches dismissPendingSession', async () => {
     const { core, dispatched } = fakeCore();
     const store = createNativePendingSessionsStore({ core });

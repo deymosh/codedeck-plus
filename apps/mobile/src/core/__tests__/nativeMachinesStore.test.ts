@@ -200,29 +200,4 @@ describe('createNativeMachinesStore', () => {
     expect(store.getState().machinePubkeys()).toEqual(['pk1']);
   });
 
-  it('every write method is an inert no-op that never touches the cached state', async () => {
-    const { core } = fakeCore(machineView);
-    const store = createNativeMachinesStore({ core });
-    await tick();
-
-    const before = store.getState().machines;
-    const s = store.getState();
-    s.registerMachine({ pubkeyHex: 'new', name: 'new' });
-    s.removeMachine('pk1');
-    s.applySessionList('pk1', { machine: 'x', sessions: [] } as never, 0);
-    s.applySessionUpsert('pk1', { id: 's2' } as never, 0);
-    s.applySessionReplaced('pk1', 's1', { id: 's2' } as never, 0);
-    s.updateSessionInfo('pk1', 's1', {});
-    s.noteFirstUserMessage('pk1', 's1', 'hello');
-    s.userRemoveSession('pk1', 's1');
-    s.dismissSession('s1', 0);
-    s.restoreSession('pk1', {} as never);
-    s.applyUsage('pk1', 's1', {} as never);
-    s.applyGsd('pk1', 's1', {} as never);
-    s.applyModels('pk1', { machine: 'x', models: [] } as never);
-    s.applyProviderProfiles('pk1', { machine: 'x', profiles: [] } as never);
-
-    expect(core.dispatch).not.toHaveBeenCalled();
-    expect(store.getState().machines).toBe(before);
-  });
 });

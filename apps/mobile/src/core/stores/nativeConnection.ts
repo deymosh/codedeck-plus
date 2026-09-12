@@ -117,10 +117,6 @@ export function createNativeConnectionStore(deps: NativeConnectionStoreDeps): Co
         if (heartbeatAt === null || heartbeatAt === undefined) return 'offline';
         return now() - heartbeatAt <= HEARTBEAT_STALE_AFTER_MS ? 'live' : 'stale';
       },
-      // CDX-020's dead-subscription sweep is Rust's own StaleWatchdog now
-      // (client_runtime::core's Msg::StaleWatchdog) — main.tsx already only
-      // calls this when there is no native core at all.
-      checkHeartbeats: () => {},
     };
   });
 

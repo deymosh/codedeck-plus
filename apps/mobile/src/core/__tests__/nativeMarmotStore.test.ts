@@ -31,7 +31,6 @@ function fakeConnection(status: ConnectionStoreState['status'] = 'connected'): C
     connectedRelays: [],
     dispatch: () => {},
     presence: () => 'offline',
-    checkHeartbeats: () => {},
   }));
 }
 
@@ -130,18 +129,6 @@ describe('createNativeMarmotStore', () => {
     expect(store.getState().activeGroup).toBe('g1');
     expect(store.getState().diagnostics).toEqual({ eventsReceived: 2, ignored: 1, errors: 0 });
     expect(store.getState().pendingWelcomes.w1?.welcomer).toBe(peer);
-  });
-
-  it('start/stop/ingestGiftWrap/ingestGroupMessage are no-ops', async () => {
-    const { core, dispatched } = fakeCore();
-    const store = createNativeMarmotStore({ core, connection: fakeConnection() });
-    await tick();
-
-    store.getState().start();
-    store.getState().stop();
-    store.getState().ingestGiftWrap({} as never);
-    store.getState().ingestGroupMessage({} as never);
-    expect(dispatched).toEqual([]);
   });
 
   it('subscribed reflects the shared connection status, not a hardcoded constant', async () => {
