@@ -12,6 +12,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 
 /**
@@ -124,6 +125,21 @@ class StayConnectedService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    // Android 15+ (API 35): FGS_TYPE_DATA_SYNC is time-limited (see the
+    // ForegroundServiceStartNotAllowedException rationale above — the same
+    // ~6h/24h budget). When a RUNNING instance's window runs out mid-flight,
+    // the system calls this instead of just killing it, expecting stopSelf()
+    // back promptly. Not overriding this is exactly what produced the crash
+    // this comment now documents: ForegroundServiceDidNotStopInTimeException
+    // — the system's own force-stop didn't complete inside its timeout, so it
+    // tore down the whole process instead of just this service. There is
+    // nothing to save first: this service owns no sockets (see the class
+    // doc), so stopping it on the spot is always safe.
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf(startId)
+    }
 
     override fun onDestroy() {
         // Symmetric release — stop_service, swipe-kill, and system stop all
