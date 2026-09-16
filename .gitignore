@@ -26,3 +26,8 @@ tools/contract-harness/out/
 # Rust client workspace (migration F1)
 /target
 /crates/**/target
+
+# scripts/install-toolchain.sh's local Android SDK/NDK (Linux host builds,
+# apps/android/scripts/build-apk-local.sh) — project-scoped on purpose, never
+# a system path, so it never collides with another project's SDK/NDK version.
+/toolchain/

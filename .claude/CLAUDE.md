@@ -35,13 +35,41 @@ infrastructure the upstream did not design for:
 
 ## Commands
 
-**There is no Node/pnpm toolchain on the maintainer's host.** Everything runs
-through Docker via the `./codedeck` script (Git Bash on Windows, sh elsewhere).
-Do not assume `pnpm`/`node` on `PATH`.
+**Two supported ways to get a toolchain, pick by host OS — never assume
+`pnpm`/`node`/`cargo`/`java` are already on `PATH` without checking which
+applies:**
+
+- **Windows (the maintainer's usual host):** no toolchain on the host at
+  all. Everything runs through Docker via the `./codedeck` script (Git Bash).
+  For a single one-shot command this is fine as-is, but Windows bind mounts
+  and repeated tar-the-whole-repo-and-`docker cp`-it startup cost make
+  Docker slow for anything iterative (many builds/edits in a row, e.g. an
+  Android session): build the toolchain image ONCE, `docker create`+`start`
+  ONE long-lived container from it, then run each step as a separate
+  `docker exec` against that same container — same pattern already used for
+  `codedeck-rust`/`codedeck-node` throughout this repo's own Rust/TS
+  verification workflow — and only `docker rm -f` it once the whole session
+  of work is actually done. Don't spin up a fresh container (and re-tar the
+  repo into it) per command.
+- **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
+  or any bare Linux machine):** `scripts/install-toolchain.sh` installs a
+  COMPLETE toolchain — JDK, Rust (+ the Android targets), Node.js, the exact
+  pinned pnpm, and the Android SDK/NDK — into `./toolchain/` (gitignored),
+  independent of anything already on that machine (a different project's
+  Java/Rust/Node/Android-SDK version is never at risk, and a bare machine
+  with none of them works the same as one with all of them already
+  installed for something else). Run it once, then `source toolchain/env.sh`
+  in any shell that needs `cargo`/`node`/`pnpm`/`java`/`sdkmanager` from it.
+  `apps/android/scripts/build-apk-local.sh` uses this directly — no Docker,
+  no tar, no container, just the host. The one thing it does NOT cover:
+  apps/mobile's Tauri DESKTOP target needs system GUI libraries
+  (webkit2gtk/gtk3/etc.) — genuine OS packages, not vendorable; install
+  those via the distro's package manager if that specific build is needed.
 
 ```bash
-# Workspace verification — run these in a throwaway node container, nothing
-# installed locally is required. A change is not done until `check` is green.
+# Workspace verification — run these in a throwaway node container on
+# Windows (nothing installed locally is required), or directly with the
+# toolchain/ pnpm on Linux. A change is not done until `check` is green.
 ./codedeck check         # typecheck + test, every package
 ./codedeck typecheck     # typecheck only
 ./codedeck test          # test only
@@ -52,9 +80,13 @@ Do not assume `pnpm`/`node` on `PATH`.
 ./codedeck bridge pair   # print the most recent pairing QR/URL
 ./codedeck bridge down
 
-# Local Android APK (its own Android/Rust toolchain image — several GB first run)
-./codedeck apk debug     # fast, unstripped, Android debug keystore
-./codedeck apk benchmark # release-optimized .so, debug-signed so it installs
+# Local Android APK — Windows: Docker (its own toolchain image, several GB
+# first run); Linux: scripts/install-toolchain.sh once, then the *-local
+# variant, direct on the host, no Docker.
+./codedeck apk debug                         # fast, unstripped, Android debug keystore
+./codedeck apk benchmark                     # release-optimized .so, debug-signed so it installs
+apps/android/docker/build-apk.sh             # apps/android debug apk, Windows/Docker path
+apps/android/scripts/build-apk-local.sh      # apps/android debug apk, Linux/local path
 
 # Pull upstream into vendor/* for hand-merging
 ./codedeck sync
