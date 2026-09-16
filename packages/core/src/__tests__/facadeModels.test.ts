@@ -76,7 +76,9 @@ describe('firstSupportedModels (CDX-022)', () => {
 import {
   buildQueryOptions,
   FALLBACK_MODEL,
+  fetchGatewayModels,
   isProviderBoundSession,
+  modelSupports1mContext,
   type SdkSessionOptions,
 } from '../sdk/facade';
 
@@ -330,5 +332,137 @@ describe('claudeProjectDirs / sdkConversationExists (CDX-076)', () => {
       (id, cwd) => sdkConversationExists(id, cwd, { CLAUDE_CONFIG_DIR: configDir }),
     );
     expect((options as { sessionId?: string }).sessionId).toBe('never-ran');
+  });
+});
+
+describe('modelSupports1mContext', () => {
+  it('matches sonnet and opus, case-insensitively, prefix or not', () => {
+    expect(modelSupports1mContext('claude-sonnet-4-6')).toBe(true);
+    expect(modelSupports1mContext('claude-opus-5')).toBe(true);
+    // Real router shape (claude-code-router): "<provider>/<model>".
+    expect(modelSupports1mContext('Claude Code API/claude-sonnet-5')).toBe(true);
+    expect(modelSupports1mContext('CLAUDE-OPUS-4-6')).toBe(true);
+  });
+
+  it('does not match haiku or an absent model', () => {
+    expect(modelSupports1mContext('claude-haiku-4-5-20251001')).toBe(false);
+    expect(modelSupports1mContext(undefined)).toBe(false);
+  });
+});
+
+describe('buildQueryOptions (1M-context beta)', () => {
+  it('always adds the beta for a model that supports it — no toggle', () => {
+    const options = buildQueryOptions(baseOpts({ model: 'claude-sonnet-5' }));
+    expect(options.betas).toEqual(['context-1m-2025-08-07']);
+  });
+
+  it('omits it for a model that does not support it', () => {
+    const options = buildQueryOptions(baseOpts({ model: 'claude-haiku-4-5-20251001' }));
+    expect(options.betas).toBeUndefined();
+  });
+
+  it('gates on the resolved FALLBACK_MODEL when the phone left model unset', () => {
+    const options = buildQueryOptions(baseOpts());
+    expect(options.betas).toEqual(['context-1m-2025-08-07']);
+  });
+
+  it('omits it for a provider-bound session (fallbackModel: null, no resolvable model)', () => {
+    const options = buildQueryOptions(baseOpts({ fallbackModel: null }));
+    expect(options.betas).toBeUndefined();
+  });
+});
+
+describe('fetchGatewayModels', () => {
+  const originalFetch = global.fetch;
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    process.env = { ...originalEnv };
+  });
+
+  it('returns [] and never calls fetch when ANTHROPIC_BASE_URL or a token is missing', async () => {
+    delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    let called = false;
+    global.fetch = (async () => {
+      called = true;
+      throw new Error('must not be called');
+    }) as unknown as typeof fetch;
+
+    expect(await fetchGatewayModels()).toEqual([]);
+    expect(called).toBe(false);
+  });
+
+  it('sends a Bearer auth header and maps a router-prefixed model list, falling back to the id tail for the label', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://router.example:3458/';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok-123';
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const calls: [string, RequestInit | undefined][] = [];
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push([url, init]);
+      return {
+        ok: true,
+        json: async () => ({
+          // Real shape from a claude-code-router instance: some entries
+          // carry display_name, some don't.
+          data: [
+            { id: 'Claude Code API/claude-sonnet-5', object: 'model', display_name: 'Claude Sonnet 5' },
+            { id: 'Z.ai (Global) - Coding Plan/glm-5.2', object: 'model' },
+          ],
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    const models = await fetchGatewayModels();
+
+    expect(calls).toHaveLength(1);
+    const [url, init] = calls[0]!;
+    expect(url).toBe('http://router.example:3458/v1/models'); // trailing slash on the base URL stripped
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
+    expect(models).toEqual([
+      { id: 'Claude Code API/claude-sonnet-5', label: 'Claude Sonnet 5' },
+      { id: 'Z.ai (Global) - Coding Plan/glm-5.2', label: 'glm-5.2' },
+    ]);
+  });
+
+  it('prefers CLAUDE_CODE_OAUTH_TOKEN over ANTHROPIC_API_KEY when both are set', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://router.example';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-token';
+    process.env.ANTHROPIC_API_KEY = 'api-key';
+    let authHeader: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      authHeader = (init?.headers as Record<string, string>).Authorization;
+      return { ok: true, json: async () => ({ data: [] }) };
+    }) as unknown as typeof fetch;
+
+    await fetchGatewayModels();
+    expect(authHeader).toBe('Bearer oauth-token');
+  });
+
+  it('returns [] on a non-ok response rather than throwing', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://router.example';
+    process.env.ANTHROPIC_API_KEY = 'k';
+    global.fetch = (async () => ({ ok: false, status: 401, statusText: 'Unauthorized' })) as unknown as typeof fetch;
+
+    expect(await fetchGatewayModels()).toEqual([]);
+  });
+
+  it('returns [] on a network error rather than throwing', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://router.example';
+    process.env.ANTHROPIC_API_KEY = 'k';
+    global.fetch = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
+
+    expect(await fetchGatewayModels()).toEqual([]);
+  });
+
+  it('returns [] when the response has no "data" array', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://router.example';
+    process.env.ANTHROPIC_API_KEY = 'k';
+    global.fetch = (async () => ({ ok: true, json: async () => ({ unexpected: 'shape' }) })) as unknown as typeof fetch;
+
+    expect(await fetchGatewayModels()).toEqual([]);
   });
 });

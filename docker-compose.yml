@@ -18,6 +18,12 @@ services:
       - GIT_REPO=${GIT_REPO:-}
       - CODEDECK_RELAYS=${CODEDECK_RELAYS:-}
       - CODEDECK_TOR_PROXY_URL=${CODEDECK_TOR_PROXY_URL:-}
+      # LLM gateway / router (e.g. claude-code-router) instead of Anthropic
+      # directly — unset (the default) means the CLI talks to Anthropic as
+      # usual. See packages/core/src/sdk/facade.ts's ENABLE_GATEWAY_MODEL_DISCOVERY
+      # doc comment for why the second flag exists.
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}
     secrets:
       - source: claude_code_oauth_token
         target: claude_code_oauth_token
