@@ -147,6 +147,27 @@ pub enum UniffiIntent {
     RemoveMachine {
         pubkey_hex: String,
     },
+    /// Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
+    BeginPairing {
+        url: String,
+        label: String,
+    },
+    /// Manual npub + token fallback.
+    BeginManualPairing {
+        npub: String,
+        token: String,
+        label: String,
+    },
+    /// CDX-013: stage a deep-link URL for explicit confirmation before
+    /// dispatching the actual pair request.
+    StagePairing {
+        url: String,
+    },
+    ConfirmStagedPairing {
+        label: String,
+    },
+    DismissStagedPairing,
+    ResetPairing,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -232,6 +253,14 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::UpdateQuickPrompt { id, label, text } => Intent::UpdateQuickPrompt { id, label, text },
             UniffiIntent::RemoveQuickPrompt { id } => Intent::RemoveQuickPrompt { id },
             UniffiIntent::RemoveMachine { pubkey_hex } => Intent::RemoveMachine { pubkey_hex },
+            UniffiIntent::BeginPairing { url, label } => Intent::BeginPairing { url, label },
+            UniffiIntent::BeginManualPairing { npub, token, label } => {
+                Intent::BeginManualPairing { npub, token, label }
+            }
+            UniffiIntent::StagePairing { url } => Intent::StagePairing { url },
+            UniffiIntent::ConfirmStagedPairing { label } => Intent::ConfirmStagedPairing { label },
+            UniffiIntent::DismissStagedPairing => Intent::DismissStagedPairing,
+            UniffiIntent::ResetPairing => Intent::ResetPairing,
         })
     }
 }

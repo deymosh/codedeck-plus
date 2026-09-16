@@ -33,7 +33,7 @@ use client_runtime::client_core::notifications::session_key_of;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, SeqEntry,
 };
-use client_runtime::{MachinesView, OutboxView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView};
+use client_runtime::{MachinesView, OutboxView, PairingView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView};
 
 /// Renders any `Copy` wire enum (all `#[serde(rename_all = ...)]`, no data)
 /// to its exact wire spelling by reusing the real `Serialize` impl, the same
@@ -245,6 +245,47 @@ pub fn build_uniffi_quick_prompts_view(v: &QuickPromptsView) -> UniffiQuickPromp
             .iter()
             .map(|p| UniffiQuickPrompt { id: p.id.clone(), label: p.label.clone(), text: p.text.clone() })
             .collect(),
+    }
+}
+
+// --- pairing -----------------------------------------------------------
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPairingCandidateView {
+    pub pubkey_hex: String,
+    pub npub: String,
+    pub machine: String,
+    pub relays: Vec<String>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPairingView {
+    /// `idle` / `awaiting-ack` / `paired` / `failed` — `PairingView.phase`'s
+    /// own wire spelling (a `&'static str` on the real type; UniFFI's
+    /// `Record` derive needs an owned `String` to synthesize an
+    /// `FfiConverter` for it, same reason `ConnectionView`'s own doc comment
+    /// gives for not deriving directly on the real struct).
+    pub phase: String,
+    pub error: Option<String>,
+    /// CDX-040: the `failed` phase came from the phone's own deadline, not a nack.
+    pub timed_out: bool,
+    /// A deep-link URL awaiting explicit user confirmation (CDX-013).
+    pub has_staged: bool,
+    pub candidate: Option<UniffiPairingCandidateView>,
+}
+
+pub fn build_uniffi_pairing_view(v: &PairingView) -> UniffiPairingView {
+    UniffiPairingView {
+        phase: v.phase.to_string(),
+        error: v.error.clone(),
+        timed_out: v.timed_out,
+        has_staged: v.has_staged,
+        candidate: v.candidate.as_ref().map(|c| UniffiPairingCandidateView {
+            pubkey_hex: c.pubkey_hex.clone(),
+            npub: c.npub.clone(),
+            machine: c.machine.clone(),
+            relays: c.relays.clone(),
+        }),
     }
 }
 

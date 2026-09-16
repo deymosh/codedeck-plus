@@ -830,6 +830,8 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -864,6 +866,8 @@ internal interface UniffiLib : Library {
     fun uniffi_uniffi_bridge_fn_method_core_machines_view(`ptr`: Pointer,
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_outbox_view(`ptr`: Pointer,
+    ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_pairing_view(`ptr`: Pointer,
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_pause(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1025,6 +1029,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_outbox_view(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_pairing_view(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_pause(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view(
@@ -1082,6 +1088,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_outbox_view() != 39167.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_pairing_view() != 59865.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_pause() != 6384.toShort()) {
@@ -1542,6 +1551,8 @@ public interface CoreInterface {
     
     suspend fun `outboxView`(): UniffiOutboxView
     
+    suspend fun `pairingView`(): UniffiPairingView?
+    
     /**
      * The OS backgrounded the app — debounced, never tears a healthy socket.
      * Android's `platform/StayConnectedService.kt` calls this from a
@@ -1758,6 +1769,26 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiOutboxView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `pairingView`() : UniffiPairingView? {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_pairing_view(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeUniffiPairingView.lift(it) },
         // Error FFI converter
         UniffiNullRustCallStatusErrorHandler,
     )
@@ -2792,6 +2823,103 @@ public object FfiConverterTypeUniffiOutboxView: FfiConverterRustBuffer<UniffiOut
 
 
 
+data class UniffiPairingCandidateView (
+    var `pubkeyHex`: kotlin.String, 
+    var `npub`: kotlin.String, 
+    var `machine`: kotlin.String, 
+    var `relays`: List<kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiPairingCandidateView: FfiConverterRustBuffer<UniffiPairingCandidateView> {
+    override fun read(buf: ByteBuffer): UniffiPairingCandidateView {
+        return UniffiPairingCandidateView(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiPairingCandidateView) = (
+            FfiConverterString.allocationSize(value.`pubkeyHex`) +
+            FfiConverterString.allocationSize(value.`npub`) +
+            FfiConverterString.allocationSize(value.`machine`) +
+            FfiConverterSequenceString.allocationSize(value.`relays`)
+    )
+
+    override fun write(value: UniffiPairingCandidateView, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pubkeyHex`, buf)
+            FfiConverterString.write(value.`npub`, buf)
+            FfiConverterString.write(value.`machine`, buf)
+            FfiConverterSequenceString.write(value.`relays`, buf)
+    }
+}
+
+
+
+data class UniffiPairingView (
+    /**
+     * `idle` / `awaiting-ack` / `paired` / `failed` — `PairingView.phase`'s
+     * own wire spelling (a `&'static str` on the real type; UniFFI's
+     * `Record` derive needs an owned `String` to synthesize an
+     * `FfiConverter` for it, same reason `ConnectionView`'s own doc comment
+     * gives for not deriving directly on the real struct).
+     */
+    var `phase`: kotlin.String, 
+    var `error`: kotlin.String?, 
+    /**
+     * CDX-040: the `failed` phase came from the phone's own deadline, not a nack.
+     */
+    var `timedOut`: kotlin.Boolean, 
+    /**
+     * A deep-link URL awaiting explicit user confirmation (CDX-013).
+     */
+    var `hasStaged`: kotlin.Boolean, 
+    var `candidate`: UniffiPairingCandidateView?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiPairingView: FfiConverterRustBuffer<UniffiPairingView> {
+    override fun read(buf: ByteBuffer): UniffiPairingView {
+        return UniffiPairingView(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeUniffiPairingCandidateView.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiPairingView) = (
+            FfiConverterString.allocationSize(value.`phase`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterBoolean.allocationSize(value.`timedOut`) +
+            FfiConverterBoolean.allocationSize(value.`hasStaged`) +
+            FfiConverterOptionalTypeUniffiPairingCandidateView.allocationSize(value.`candidate`)
+    )
+
+    override fun write(value: UniffiPairingView, buf: ByteBuffer) {
+            FfiConverterString.write(value.`phase`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterBoolean.write(value.`timedOut`, buf)
+            FfiConverterBoolean.write(value.`hasStaged`, buf)
+            FfiConverterOptionalTypeUniffiPairingCandidateView.write(value.`candidate`, buf)
+    }
+}
+
+
+
 data class UniffiQuickPrompt (
     var `id`: kotlin.String, 
     var `label`: kotlin.String, 
@@ -3391,6 +3519,45 @@ sealed class UniffiIntent {
         companion object
     }
     
+    /**
+     * Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
+     */
+    data class BeginPairing(
+        val `url`: kotlin.String, 
+        val `label`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * Manual npub + token fallback.
+     */
+    data class BeginManualPairing(
+        val `npub`: kotlin.String, 
+        val `token`: kotlin.String, 
+        val `label`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * CDX-013: stage a deep-link URL for explicit confirmation before
+     * dispatching the actual pair request.
+     */
+    data class StagePairing(
+        val `url`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class ConfirmStagedPairing(
+        val `label`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    object DismissStagedPairing : UniffiIntent()
+    
+    
+    object ResetPairing : UniffiIntent()
+    
+    
 
     
     companion object
@@ -3510,6 +3677,23 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             28 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
+            29 -> UniffiIntent.BeginPairing(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            30 -> UniffiIntent.BeginManualPairing(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            31 -> UniffiIntent.StagePairing(
+                FfiConverterString.read(buf),
+                )
+            32 -> UniffiIntent.ConfirmStagedPairing(
+                FfiConverterString.read(buf),
+                )
+            33 -> UniffiIntent.DismissStagedPairing
+            34 -> UniffiIntent.ResetPairing
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -3735,6 +3919,49 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`pubkeyHex`)
             )
         }
+        is UniffiIntent.BeginPairing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`url`)
+                + FfiConverterString.allocationSize(value.`label`)
+            )
+        }
+        is UniffiIntent.BeginManualPairing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`npub`)
+                + FfiConverterString.allocationSize(value.`token`)
+                + FfiConverterString.allocationSize(value.`label`)
+            )
+        }
+        is UniffiIntent.StagePairing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`url`)
+            )
+        }
+        is UniffiIntent.ConfirmStagedPairing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`label`)
+            )
+        }
+        is UniffiIntent.DismissStagedPairing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiIntent.ResetPairing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
     }
 
     override fun write(value: UniffiIntent, buf: ByteBuffer) {
@@ -3901,6 +4128,37 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             is UniffiIntent.RemoveMachine -> {
                 buf.putInt(28)
                 FfiConverterString.write(value.`pubkeyHex`, buf)
+                Unit
+            }
+            is UniffiIntent.BeginPairing -> {
+                buf.putInt(29)
+                FfiConverterString.write(value.`url`, buf)
+                FfiConverterString.write(value.`label`, buf)
+                Unit
+            }
+            is UniffiIntent.BeginManualPairing -> {
+                buf.putInt(30)
+                FfiConverterString.write(value.`npub`, buf)
+                FfiConverterString.write(value.`token`, buf)
+                FfiConverterString.write(value.`label`, buf)
+                Unit
+            }
+            is UniffiIntent.StagePairing -> {
+                buf.putInt(31)
+                FfiConverterString.write(value.`url`, buf)
+                Unit
+            }
+            is UniffiIntent.ConfirmStagedPairing -> {
+                buf.putInt(32)
+                FfiConverterString.write(value.`label`, buf)
+                Unit
+            }
+            is UniffiIntent.DismissStagedPairing -> {
+                buf.putInt(33)
+                Unit
+            }
+            is UniffiIntent.ResetPairing -> {
+                buf.putInt(34)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4092,6 +4350,70 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiPairingCandidateView: FfiConverterRustBuffer<UniffiPairingCandidateView?> {
+    override fun read(buf: ByteBuffer): UniffiPairingCandidateView? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiPairingCandidateView.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiPairingCandidateView?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiPairingCandidateView.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiPairingCandidateView?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiPairingCandidateView.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiPairingView: FfiConverterRustBuffer<UniffiPairingView?> {
+    override fun read(buf: ByteBuffer): UniffiPairingView? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiPairingView.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiPairingView?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiPairingView.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiPairingView?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiPairingView.write(value, buf)
         }
     }
 }

@@ -42,13 +42,13 @@ use notifier::NotifierAdapter;
 pub use observer::CoreListener;
 use observer::UniffiObserver;
 pub use views::{
-    UniffiMachinesView, UniffiOutboxView, UniffiQuickPromptsView, UniffiSettingsView,
-    UniffiTranscriptRowsView, UniffiUiView,
+    UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,
+    UniffiQuickPromptsView, UniffiSettingsView, UniffiTranscriptRowsView, UniffiUiView,
 };
 use views::{
-    build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_quick_prompts_view,
-    build_uniffi_settings_view, build_uniffi_transcript_view, build_uniffi_ui_view,
-    responded_cards_for,
+    build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_pairing_view,
+    build_uniffi_quick_prompts_view, build_uniffi_settings_view, build_uniffi_transcript_view,
+    build_uniffi_ui_view, responded_cards_for,
 };
 
 uniffi::setup_scaffolding!();
@@ -179,6 +179,10 @@ impl Core {
 
     pub async fn quick_prompts_view(&self) -> UniffiQuickPromptsView {
         build_uniffi_quick_prompts_view(&self.handle.quick_prompts_view().await)
+    }
+
+    pub async fn pairing_view(&self) -> Option<UniffiPairingView> {
+        self.handle.pairing_view().await.map(|v| build_uniffi_pairing_view(&v))
     }
 
     /// The grouped, ready-to-render transcript for one session — see
