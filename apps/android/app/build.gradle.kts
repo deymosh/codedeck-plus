@@ -89,6 +89,10 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    // ProcessLifecycleOwner — app-level foreground/background ("is ANY activity
+    // visible"), not a per-Activity signal; StayConnectedService drives
+    // CoreBridge.pause()/resume() from it.
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)

@@ -794,6 +794,10 @@ internal open class UniffiVTableCallbackInterfaceCoreListener(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -828,8 +832,12 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_outbox_view(`ptr`: Pointer,
     ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_pause(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_uniffi_bridge_fn_method_core_quick_prompts_view(`ptr`: Pointer,
     ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_resume(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_uniffi_bridge_fn_method_core_settings_view(`ptr`: Pointer,
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -974,7 +982,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_outbox_view(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_pause(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_resume(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_settings_view(
     ): Short
@@ -1025,7 +1037,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_method_core_outbox_view() != 39167.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_pause() != 6384.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view() != 24028.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_resume() != 36642.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_settings_view() != 30582.toShort()) {
@@ -1471,7 +1489,21 @@ public interface CoreInterface {
     
     suspend fun `outboxView`(): UniffiOutboxView
     
+    /**
+     * The OS backgrounded the app — debounced, never tears a healthy socket.
+     * Android's `platform/StayConnectedService.kt` calls this from a
+     * `ProcessLifecycleOwner` observer, the same "app visibility" signal
+     * `apps/mobile`'s `document.visibilitychange` drove on the web/WebView
+     * side.
+     */
+    fun `pause`()
+    
     suspend fun `quickPromptsView`(): UniffiQuickPromptsView
+    
+    /**
+     * The OS foregrounded the app.
+     */
+    fun `resume`()
     
     suspend fun `settingsView`(): UniffiSettingsView?
     
@@ -1679,6 +1711,24 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     }
 
     
+    /**
+     * The OS backgrounded the app — debounced, never tears a healthy socket.
+     * Android's `platform/StayConnectedService.kt` calls this from a
+     * `ProcessLifecycleOwner` observer, the same "app visibility" signal
+     * `apps/mobile`'s `document.visibilitychange` drove on the web/WebView
+     * side.
+     */override fun `pause`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_pause(
+        it, _status)
+}
+    }
+    
+    
+
+    
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `quickPromptsView`() : UniffiQuickPromptsView {
         return uniffiRustCallAsync(
@@ -1697,6 +1747,20 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         UniffiNullRustCallStatusErrorHandler,
     )
     }
+
+    
+    /**
+     * The OS foregrounded the app.
+     */override fun `resume`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_resume(
+        it, _status)
+}
+    }
+    
+    
 
     
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")

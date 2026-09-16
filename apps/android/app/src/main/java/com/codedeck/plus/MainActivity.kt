@@ -1,55 +1,86 @@
 package com.codedeck.plus
 
-import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
 import com.codedeck.plus.core.CoreBridge
-import com.codedeck.plus.platform.readOrCreateIdentitySecretHex
+import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.Shell
 import com.codedeck.plus.ui.theme.CodeDeckTheme
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Owns the one `CoreBridge` for the process's lifetime, keyed to the real
- * persisted identity (`platform/SecureIdentityStore.kt`): generated once on
- * first launch, Keystore-encrypted at rest, and re-read on every subsequent
- * launch, so pairing survives a process death. Proves the FFI round trip
- * end to end: the `.so` loads, `Core.new` spawns, `start()` drives the
- * connection FSM, and `connection` reflects a real status change back into
- * Compose.
+ * Holds the [CoreBridge] reference handed back once [MainActivity] binds to
+ * [StayConnectedService] — the service, not this `ViewModel`, owns the
+ * `CoreBridge`'s actual lifecycle (see that class's own doc comment for why
+ * a plain `ViewModel` isn't enough: it survives configuration changes but
+ * not process death).
  */
-class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val identitySecretHex = readOrCreateIdentitySecretHex(getApplication())
+class MainViewModel : ViewModel() {
+    private val _bridge = MutableStateFlow<CoreBridge?>(null)
+    val bridge: StateFlow<CoreBridge?> = _bridge.asStateFlow()
 
-    val bridge = CoreBridge(relays = emptyList(), identitySecretHex = identitySecretHex)
-
-    init {
-        viewModelScope.launch { bridge.start() }
-    }
-
-    override fun onCleared() {
-        bridge.stop()
+    fun attach(bridge: CoreBridge) {
+        _bridge.value = bridge
     }
 }
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as? StayConnectedService.LocalBinder)?.getService() ?: return
+            viewModel.attach(service.bridge)
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {}
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ContextCompat.startForegroundService(this, Intent(this, StayConnectedService::class.java))
         setContent {
             CodeDeckTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    Shell(viewModel.bridge)
+                    val bridge by viewModel.bridge.collectAsState()
+                    val current = bridge
+                    if (current != null) {
+                        Shell(current)
+                    } else {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        bindService(Intent(this, StayConnectedService::class.java), connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        unbindService(connection)
+        super.onStop()
     }
 }

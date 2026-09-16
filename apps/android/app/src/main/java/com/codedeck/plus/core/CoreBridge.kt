@@ -75,6 +75,14 @@ class CoreBridge(relays: List<String>, identitySecretHex: String) : CoreListener
 
     fun stop() = core.stop()
 
+    /** The OS backgrounded the app — debounced, never tears a healthy socket.
+     *  Called from `platform/StayConnectedService.kt`'s `ProcessLifecycleOwner`
+     *  observer. */
+    fun pause() = core.pause()
+
+    /** The OS foregrounded the app. */
+    fun resume() = core.resume()
+
     suspend fun dispatch(intent: UniffiIntent) = core.dispatch(intent)
 
     /**

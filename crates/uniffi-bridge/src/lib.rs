@@ -125,6 +125,20 @@ impl Core {
         self.handle.stop();
     }
 
+    /// The OS backgrounded the app — debounced, never tears a healthy socket.
+    /// Android's `platform/StayConnectedService.kt` calls this from a
+    /// `ProcessLifecycleOwner` observer, the same "app visibility" signal
+    /// `apps/mobile`'s `document.visibilitychange` drove on the web/WebView
+    /// side.
+    pub fn pause(&self) {
+        self.handle.pause();
+    }
+
+    /// The OS foregrounded the app.
+    pub fn resume(&self) {
+        self.handle.resume();
+    }
+
     /// `suspend fun dispatch(intent: UniffiIntent)` in Kotlin. Fire-and-forget,
     /// same as the real `Intent` — errors surface later via
     /// `CoreListener::on_event(CoreEvent::ActionFailed)`, not a `Result` here.
