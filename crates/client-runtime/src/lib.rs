@@ -33,7 +33,7 @@ pub mod transport;
 pub mod view;
 
 pub use core::{
-    ActionFailed, Clock, Core, CoreConfig, CoreEvent, CoreObserver, CorePorts, Entropy, SliceId,
+    ActionFailedKind, Clock, Core, CoreConfig, CoreEvent, CoreObserver, CorePorts, Entropy, SliceId,
     SystemClock, TimeEntropy,
 };
 pub use dispatch::StoreId;

@@ -98,10 +98,15 @@ impl Entropy for TimeEntropy {
 // --- observer (seed of the F2 CoreEvent stream) --------------------------
 
 /// Why a user-visible action did not land. Semantic — the UI writes the copy.
+/// Named `ActionFailedKind`, not `ActionFailed`: a type with the same name as
+/// its own enclosing `CoreEvent::ActionFailed` variant makes UniFFI's Kotlin
+/// codegen resolve the field's type to the variant's own sealed subclass
+/// instead of this type, a compile error only caught by actually building the
+/// generated Kotlin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
-pub enum ActionFailed {
+pub enum ActionFailedKind {
     DecryptFailed,
     DecodeFailed,
     PublishRejected,
@@ -120,7 +125,7 @@ pub trait CoreObserver {
     fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, connected_relays: &[String]);
     /// A decoded bridge→phone message for the given machine.
     fn bridge_message(&self, machine: String, msg: BridgeToPhone);
-    fn action_failed(&self, _kind: ActionFailed) {}
+    fn action_failed(&self, _kind: ActionFailedKind) {}
     /// The semantic event stream (plan §2.3). No UI strings — the consumer
     /// decides how to surface each one and re-reads the named view slice.
     fn on_event(&self, _event: CoreEvent) {}
@@ -161,7 +166,7 @@ pub enum CoreEvent {
     /// The pair flow ended: `paired` true on success, false on nack / timeout.
     PairingSettled { paired: bool },
     /// A user-visible action did not land. Semantic — the UI writes the copy.
-    ActionFailed { kind: ActionFailed },
+    ActionFailed { kind: ActionFailedKind },
     /// New rows landed for this session (a live `Output`, or a `SyncChunk`
     /// filling a gap) — a dedicated, per-session event rather than a generic
     /// `StateChanged { slice: Transcript }`, since a blanket slice notify
@@ -919,15 +924,15 @@ impl Loop {
             }
             Ingested::DecryptFailed => {
                 self.dispatch(ConnectionEvent::DecryptFailure);
-                self.observer.action_failed(ActionFailed::DecryptFailed);
+                self.observer.action_failed(ActionFailedKind::DecryptFailed);
                 self.emit(CoreEvent::ActionFailed {
-                    kind: ActionFailed::DecryptFailed,
+                    kind: ActionFailedKind::DecryptFailed,
                 });
             }
             Ingested::DecodeFailed => {
-                self.observer.action_failed(ActionFailed::DecodeFailed);
+                self.observer.action_failed(ActionFailedKind::DecodeFailed);
                 self.emit(CoreEvent::ActionFailed {
-                    kind: ActionFailed::DecodeFailed,
+                    kind: ActionFailedKind::DecodeFailed,
                 });
             }
             Ingested::Buffered | Ingested::UnknownMachine => {}
@@ -1103,7 +1108,7 @@ impl Loop {
                 };
                 self.send_dm(peer, body).await;
             }
-            Err(_) => self.observer.action_failed(ActionFailed::PublishRejected),
+            Err(_) => self.observer.action_failed(ActionFailedKind::PublishRejected),
         }
     }
 
@@ -1420,7 +1425,7 @@ impl Loop {
     /// and add it locally (optimistic, status `sent`).
     async fn send_dm(&mut self, peer: String, text: String) {
         let Ok(wrapped) = wrap_dm(&self.identity, &peer, &text).await else {
-            self.observer.action_failed(ActionFailed::PublishRejected);
+            self.observer.action_failed(ActionFailedKind::PublishRejected);
             return;
         };
         self.publish_raw(wrapped.for_recipient);
@@ -1603,7 +1608,7 @@ impl Loop {
     fn publish_value(&self, event: serde_json::Value) {
         match serde_json::from_value::<protocol::nostr_event::SignedEvent>(event) {
             Ok(ev) => self.publish_raw(ev),
-            Err(_) => self.observer.action_failed(ActionFailed::PublishRejected),
+            Err(_) => self.observer.action_failed(ActionFailedKind::PublishRejected),
         }
     }
 
@@ -1645,7 +1650,7 @@ impl Loop {
         let out = match self.marmot_engine.send(&group_id, &text).await {
             Ok(out) => out,
             Err(_) => {
-                self.observer.action_failed(ActionFailed::PublishRejected);
+                self.observer.action_failed(ActionFailedKind::PublishRejected);
                 return;
             }
         };
@@ -1728,9 +1733,9 @@ impl Loop {
         use client_core::stores::marmot::{MarmotGroupInfo, KEY_PACKAGE_FETCH_TIMEOUT_MS};
 
         let fail = |this: &Self| {
-            this.observer.action_failed(ActionFailed::PublishRejected);
+            this.observer.action_failed(ActionFailedKind::PublishRejected);
             this.observer
-                .on_event(CoreEvent::ActionFailed { kind: ActionFailed::PublishRejected });
+                .on_event(CoreEvent::ActionFailed { kind: ActionFailedKind::PublishRejected });
         };
 
         if !self.stores.marmot.available {
@@ -1876,7 +1881,7 @@ impl Loop {
         let event = match build_command(&self.identity, &machine, &msg, now) {
             Ok(event) => event,
             Err(err) => {
-                self.observer.action_failed(ActionFailed::PublishRejected);
+                self.observer.action_failed(ActionFailedKind::PublishRejected);
                 let result = PublishResult {
                     verdict: PublishVerdict::Rejected,
                     detail: Some(egress_detail(&err)),
@@ -1900,8 +1905,8 @@ impl Loop {
                 .publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
                 .await;
             let failed = match result.verdict {
-                PublishVerdict::Rejected => Some(ActionFailed::PublishRejected),
-                PublishVerdict::Unreachable => Some(ActionFailed::PublishUnreachable),
+                PublishVerdict::Rejected => Some(ActionFailedKind::PublishRejected),
+                PublishVerdict::Unreachable => Some(ActionFailedKind::PublishUnreachable),
                 PublishVerdict::Accepted | PublishVerdict::Unconfirmed => None,
             };
             if let Some(kind) = failed {
@@ -1973,9 +1978,9 @@ impl Loop {
         let size_bytes = image.len() as u64;
 
         let fail = |this: &Self| {
-            this.observer.action_failed(ActionFailed::PublishRejected);
+            this.observer.action_failed(ActionFailedKind::PublishRejected);
             this.observer
-                .on_event(CoreEvent::ActionFailed { kind: ActionFailed::PublishRejected });
+                .on_event(CoreEvent::ActionFailed { kind: ActionFailedKind::PublishRejected });
         };
 
         // --- Stage 1: the bytes ---
@@ -2163,7 +2168,7 @@ mod tests {
         statuses: Mutex<Vec<(ConnectionStatus, bool)>>,
         connected_relays: Mutex<Vec<Vec<String>>>,
         messages: Mutex<Vec<(String, BridgeToPhone)>>,
-        failures: Mutex<Vec<ActionFailed>>,
+        failures: Mutex<Vec<ActionFailedKind>>,
         events: Mutex<Vec<CoreEvent>>,
     }
     impl CoreObserver for Spy {
@@ -2174,7 +2179,7 @@ mod tests {
         fn bridge_message(&self, machine: String, msg: BridgeToPhone) {
             self.messages.lock().unwrap().push((machine, msg));
         }
-        fn action_failed(&self, kind: ActionFailed) {
+        fn action_failed(&self, kind: ActionFailedKind) {
             self.failures.lock().unwrap().push(kind);
         }
         fn on_event(&self, event: CoreEvent) {
@@ -4202,7 +4207,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(CoreEvent::ActionFailed {
-                kind: ActionFailed::PublishRejected,
+                kind: ActionFailedKind::PublishRejected,
             })
             .unwrap(),
             serde_json::json!({ "actionFailed": { "kind": "publishRejected" } }),

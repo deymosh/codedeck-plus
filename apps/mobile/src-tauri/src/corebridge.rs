@@ -30,7 +30,7 @@ use client_runtime::protocol::commands::PhoneToBridge;
 use client_runtime::protocol::crypto::keypair_from_secret_hex;
 use client_runtime::protocol::events::BridgeToPhone;
 use client_runtime::core::{
-    ActionFailed, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
+    ActionFailedKind, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
 };
 use client_runtime::{
     Core, CoreConfig, CoreEvent, DmView, Intent, MachinesView, MarmotView, Notifier, OutboxView,
@@ -69,12 +69,12 @@ fn status_str(status: ConnectionStatus) -> &'static str {
     }
 }
 
-fn action_str(kind: ActionFailed) -> &'static str {
+fn action_str(kind: ActionFailedKind) -> &'static str {
     match kind {
-        ActionFailed::DecryptFailed => "decrypt-failed",
-        ActionFailed::DecodeFailed => "decode-failed",
-        ActionFailed::PublishRejected => "publish-rejected",
-        ActionFailed::PublishUnreachable => "publish-unreachable",
+        ActionFailedKind::DecryptFailed => "decrypt-failed",
+        ActionFailedKind::DecodeFailed => "decode-failed",
+        ActionFailedKind::PublishRejected => "publish-rejected",
+        ActionFailedKind::PublishUnreachable => "publish-unreachable",
     }
 }
 
@@ -126,7 +126,7 @@ impl CoreObserver for TauriObserver {
         );
     }
 
-    fn action_failed(&self, kind: ActionFailed) {
+    fn action_failed(&self, kind: ActionFailedKind) {
         let _ = self.app.emit(EV_ACTION_FAILED, action_str(kind));
     }
 

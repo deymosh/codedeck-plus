@@ -7,11 +7,11 @@
 use std::sync::Arc;
 
 use client_runtime::client_core::connection::ConnectionStatus;
-use client_runtime::{ActionFailed, ConnectionView, CoreEvent, CoreObserver};
+use client_runtime::{ActionFailedKind, ConnectionView, CoreEvent, CoreObserver};
 use protocol::events::BridgeToPhone;
 
 /// Implemented in Kotlin. Every payload here is a REAL `client_runtime` type
-/// (`ConnectionView`, `CoreEvent`, `ActionFailed` all derive `uniffi::Record`/
+/// (`ConnectionView`, `CoreEvent`, `ActionFailedKind` all derive `uniffi::Record`/
 /// `uniffi::Enum` directly — see that crate's `uniffi` feature) — no parallel
 /// DTO needed for the event stream, only for `Intent` (see `intent.rs`'s doc
 /// comment for why that one differs). `connected_relays` (the per-relay
@@ -22,7 +22,7 @@ use protocol::events::BridgeToPhone;
 pub trait CoreListener: Send + Sync {
     fn connection_changed(&self, view: ConnectionView);
     fn on_event(&self, event: CoreEvent);
-    fn action_failed(&self, kind: ActionFailed);
+    fn action_failed(&self, kind: ActionFailedKind);
 }
 
 pub struct UniffiObserver {
@@ -41,7 +41,7 @@ impl CoreObserver for UniffiObserver {
     /// needs it.
     fn bridge_message(&self, _machine: String, _msg: BridgeToPhone) {}
 
-    fn action_failed(&self, kind: ActionFailed) {
+    fn action_failed(&self, kind: ActionFailedKind) {
         self.listener.action_failed(kind);
     }
 

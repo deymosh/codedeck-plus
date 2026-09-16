@@ -20,7 +20,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use client_runtime::{ActionFailed, ConnectionView, CoreEvent};
+use client_runtime::{ActionFailedKind, ConnectionView, CoreEvent};
 use uniffi_bridge::{Core, CoreListener, UniffiIntent};
 
 #[derive(Default)]
@@ -36,7 +36,7 @@ impl CoreListener for RecordingListener {
     fn on_event(&self, event: CoreEvent) {
         self.events.lock().unwrap().push(event);
     }
-    fn action_failed(&self, _kind: ActionFailed) {}
+    fn action_failed(&self, _kind: ActionFailedKind) {}
 }
 
 fn fresh_identity_hex() -> String {
