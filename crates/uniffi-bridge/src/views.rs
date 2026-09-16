@@ -6,7 +6,9 @@
 //! is genuinely untyped bridge-supplied JSON) or fields the first Android
 //! slice has no screen for yet (`UiView`'s credentials/device-config/
 //! provider-profile/undo-toast bookkeeping is Settings/Credentials/Pairing
-//! territory, F4). Rather than deriving `uniffi::Record` on those real types
+//! territory, F4). (`SettingsData`'s `mesh_test_target` is likewise left
+//! out — Mesh is F6, off by default, out of this slice's scope.) Rather
+//! than deriving `uniffi::Record` on those real types
 //! — which would drag every transitive field into the FFI surface whether a
 //! screen exists for it or not — this module hand-builds a small,
 //! Android-specific projection of each, grown as later milestones need more
@@ -31,7 +33,7 @@ use client_runtime::client_core::notifications::session_key_of;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, SeqEntry,
 };
-use client_runtime::{MachinesView, OutboxView, TranscriptRowsView, UiView};
+use client_runtime::{MachinesView, OutboxView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView};
 
 /// Renders any `Copy` wire enum (all `#[serde(rename_all = ...)]`, no data)
 /// to its exact wire spelling by reusing the real `Serialize` impl, the same
@@ -183,6 +185,65 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
             .plan_approval_choices
             .iter()
             .map(|(k, val)| (k.clone(), val.clone()))
+            .collect(),
+    }
+}
+
+// --- settings --------------------------------------------------------------
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiSettingsView {
+    pub relays: Vec<String>,
+    pub ui_scale: f64,
+    pub stay_connected: bool,
+    pub tor_proxy_enabled: bool,
+    pub blossom_server: String,
+    /// `default` / `acceptEdits` / `plan` — `PermissionMode`'s own wire spelling.
+    pub default_mode: String,
+    pub default_effort: String,
+    pub default_model: String,
+    pub notifications_enabled: bool,
+    pub show_usage_badge: bool,
+    pub show_commit_badge: bool,
+}
+
+pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
+    let d = &v.0;
+    UniffiSettingsView {
+        relays: d.relays.clone(),
+        ui_scale: d.ui_scale,
+        stay_connected: d.stay_connected,
+        tor_proxy_enabled: d.tor_proxy_enabled,
+        blossom_server: d.blossom_server.clone(),
+        default_mode: wire_str(&d.default_mode),
+        default_effort: d.default_effort.clone(),
+        default_model: d.default_model.clone(),
+        notifications_enabled: d.notifications_enabled,
+        show_usage_badge: d.show_usage_badge,
+        show_commit_badge: d.show_commit_badge,
+    }
+}
+
+// --- quick prompts -----------------------------------------------------------
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiQuickPrompt {
+    pub id: String,
+    pub label: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiQuickPromptsView {
+    pub prompts: Vec<UniffiQuickPrompt>,
+}
+
+pub fn build_uniffi_quick_prompts_view(v: &QuickPromptsView) -> UniffiQuickPromptsView {
+    UniffiQuickPromptsView {
+        prompts: v
+            .prompts
+            .iter()
+            .map(|p| UniffiQuickPrompt { id: p.id.clone(), label: p.label.clone(), text: p.text.clone() })
             .collect(),
     }
 }

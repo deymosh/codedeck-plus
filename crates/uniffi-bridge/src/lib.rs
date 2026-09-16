@@ -37,11 +37,13 @@ pub use intent::{UniffiIntent, UniffiIntentError};
 pub use observer::CoreListener;
 use observer::UniffiObserver;
 pub use views::{
-    UniffiMachinesView, UniffiOutboxView, UniffiTranscriptRowsView, UniffiUiView,
+    UniffiMachinesView, UniffiOutboxView, UniffiQuickPromptsView, UniffiSettingsView,
+    UniffiTranscriptRowsView, UniffiUiView,
 };
 use views::{
-    build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_transcript_view,
-    build_uniffi_ui_view, responded_cards_for,
+    build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_quick_prompts_view,
+    build_uniffi_settings_view, build_uniffi_transcript_view, build_uniffi_ui_view,
+    responded_cards_for,
 };
 
 uniffi::setup_scaffolding!();
@@ -145,6 +147,14 @@ impl Core {
 
     pub async fn ui_view(&self) -> UniffiUiView {
         build_uniffi_ui_view(&self.handle.ui_view().await)
+    }
+
+    pub async fn settings_view(&self) -> Option<UniffiSettingsView> {
+        self.handle.settings_view().await.map(|v| build_uniffi_settings_view(&v))
+    }
+
+    pub async fn quick_prompts_view(&self) -> UniffiQuickPromptsView {
+        build_uniffi_quick_prompts_view(&self.handle.quick_prompts_view().await)
     }
 
     /// The grouped, ready-to-render transcript for one session — see

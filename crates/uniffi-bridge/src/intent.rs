@@ -94,6 +94,59 @@ pub enum UniffiIntent {
         machine: String,
         id: String,
     },
+    AddRelay {
+        url: String,
+    },
+    RemoveRelay {
+        url: String,
+    },
+    SetTorEnabled {
+        enabled: bool,
+    },
+    SetStayConnected {
+        enabled: bool,
+    },
+    SetBlossomServer {
+        url: String,
+    },
+    SetNotificationsEnabled {
+        enabled: bool,
+    },
+    /// `"default"` / `"acceptEdits"` / `"plan"` — same wire spelling as `SetMode`.
+    SetDefaultMode {
+        mode: String,
+    },
+    SetDefaultEffort {
+        level: String,
+    },
+    SetDefaultModel {
+        model: String,
+    },
+    SetUiScale {
+        scale: f64,
+    },
+    SetShowUsageBadge {
+        enabled: bool,
+    },
+    SetShowCommitBadge {
+        enabled: bool,
+    },
+    AddQuickPrompt {
+        id: String,
+        label: String,
+        text: String,
+    },
+    UpdateQuickPrompt {
+        id: String,
+        label: String,
+        text: String,
+    },
+    RemoveQuickPrompt {
+        id: String,
+    },
+    RemoveMachine {
+        pubkey_hex: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -161,6 +214,24 @@ impl TryFrom<UniffiIntent> for Intent {
                 Intent::SetPlanApprovalChoice { card_id, key }
             }
             UniffiIntent::RetryOutboxItem { machine, id } => Intent::RetryOutboxItem { machine, id },
+            UniffiIntent::AddRelay { url } => Intent::AddRelay { url },
+            UniffiIntent::RemoveRelay { url } => Intent::RemoveRelay { url },
+            UniffiIntent::SetTorEnabled { enabled } => Intent::SetTorEnabled(enabled),
+            UniffiIntent::SetStayConnected { enabled } => Intent::SetStayConnected(enabled),
+            UniffiIntent::SetBlossomServer { url } => Intent::SetBlossomServer(url),
+            UniffiIntent::SetNotificationsEnabled { enabled } => Intent::SetNotificationsEnabled(enabled),
+            UniffiIntent::SetDefaultMode { mode } => {
+                Intent::SetDefaultMode(parse_enum::<PermissionMode>("mode", &mode)?)
+            }
+            UniffiIntent::SetDefaultEffort { level } => Intent::SetDefaultEffort(level),
+            UniffiIntent::SetDefaultModel { model } => Intent::SetDefaultModel(model),
+            UniffiIntent::SetUiScale { scale } => Intent::SetUiScale(scale),
+            UniffiIntent::SetShowUsageBadge { enabled } => Intent::SetShowUsageBadge(enabled),
+            UniffiIntent::SetShowCommitBadge { enabled } => Intent::SetShowCommitBadge(enabled),
+            UniffiIntent::AddQuickPrompt { id, label, text } => Intent::AddQuickPrompt { id, label, text },
+            UniffiIntent::UpdateQuickPrompt { id, label, text } => Intent::UpdateQuickPrompt { id, label, text },
+            UniffiIntent::RemoveQuickPrompt { id } => Intent::RemoveQuickPrompt { id },
+            UniffiIntent::RemoveMachine { pubkey_hex } => Intent::RemoveMachine { pubkey_hex },
         })
     }
 }

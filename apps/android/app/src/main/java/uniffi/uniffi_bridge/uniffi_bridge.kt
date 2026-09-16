@@ -790,6 +790,10 @@ internal open class UniffiVTableCallbackInterfaceCoreListener(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -823,6 +827,10 @@ internal interface UniffiLib : Library {
     fun uniffi_uniffi_bridge_fn_method_core_machines_view(`ptr`: Pointer,
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_outbox_view(`ptr`: Pointer,
+    ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_quick_prompts_view(`ptr`: Pointer,
+    ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_settings_view(`ptr`: Pointer,
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -966,6 +974,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_outbox_view(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_settings_view(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_shutdown(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_start(
@@ -1011,6 +1023,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_outbox_view() != 39167.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view() != 24028.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_settings_view() != 30582.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_shutdown() != 57467.toShort()) {
@@ -1453,6 +1471,10 @@ public interface CoreInterface {
     
     suspend fun `outboxView`(): UniffiOutboxView
     
+    suspend fun `quickPromptsView`(): UniffiQuickPromptsView
+    
+    suspend fun `settingsView`(): UniffiSettingsView?
+    
     /**
      * Stops the loop and joins the dedicated thread — used by this crate's
      * own tests for a clean teardown between cases; a long-lived Android
@@ -1651,6 +1673,46 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiOutboxView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `quickPromptsView`() : UniffiQuickPromptsView {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_quick_prompts_view(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeUniffiQuickPromptsView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `settingsView`() : UniffiSettingsView? {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_settings_view(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalTypeUniffiSettingsView.lift(it) },
         // Error FFI converter
         UniffiNullRustCallStatusErrorHandler,
     )
@@ -2304,6 +2366,70 @@ public object FfiConverterTypeUniffiOutboxView: FfiConverterRustBuffer<UniffiOut
 
 
 
+data class UniffiQuickPrompt (
+    var `id`: kotlin.String, 
+    var `label`: kotlin.String, 
+    var `text`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiQuickPrompt: FfiConverterRustBuffer<UniffiQuickPrompt> {
+    override fun read(buf: ByteBuffer): UniffiQuickPrompt {
+        return UniffiQuickPrompt(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiQuickPrompt) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`label`) +
+            FfiConverterString.allocationSize(value.`text`)
+    )
+
+    override fun write(value: UniffiQuickPrompt, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`label`, buf)
+            FfiConverterString.write(value.`text`, buf)
+    }
+}
+
+
+
+data class UniffiQuickPromptsView (
+    var `prompts`: List<UniffiQuickPrompt>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiQuickPromptsView: FfiConverterRustBuffer<UniffiQuickPromptsView> {
+    override fun read(buf: ByteBuffer): UniffiQuickPromptsView {
+        return UniffiQuickPromptsView(
+            FfiConverterSequenceTypeUniffiQuickPrompt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiQuickPromptsView) = (
+            FfiConverterSequenceTypeUniffiQuickPrompt.allocationSize(value.`prompts`)
+    )
+
+    override fun write(value: UniffiQuickPromptsView, buf: ByteBuffer) {
+            FfiConverterSequenceTypeUniffiQuickPrompt.write(value.`prompts`, buf)
+    }
+}
+
+
+
 data class UniffiSessionSummary (
     var `id`: kotlin.String, 
     var `title`: kotlin.String?, 
@@ -2391,6 +2517,77 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalULong.write(value.`contextWindow`, buf)
             FfiConverterOptionalBoolean.write(value.`committed`, buf)
             FfiConverterOptionalULong.write(value.`seqHigh`, buf)
+    }
+}
+
+
+
+data class UniffiSettingsView (
+    var `relays`: List<kotlin.String>, 
+    var `uiScale`: kotlin.Double, 
+    var `stayConnected`: kotlin.Boolean, 
+    var `torProxyEnabled`: kotlin.Boolean, 
+    var `blossomServer`: kotlin.String, 
+    /**
+     * `default` / `acceptEdits` / `plan` — `PermissionMode`'s own wire spelling.
+     */
+    var `defaultMode`: kotlin.String, 
+    var `defaultEffort`: kotlin.String, 
+    var `defaultModel`: kotlin.String, 
+    var `notificationsEnabled`: kotlin.Boolean, 
+    var `showUsageBadge`: kotlin.Boolean, 
+    var `showCommitBadge`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiSettingsView> {
+    override fun read(buf: ByteBuffer): UniffiSettingsView {
+        return UniffiSettingsView(
+            FfiConverterSequenceString.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiSettingsView) = (
+            FfiConverterSequenceString.allocationSize(value.`relays`) +
+            FfiConverterDouble.allocationSize(value.`uiScale`) +
+            FfiConverterBoolean.allocationSize(value.`stayConnected`) +
+            FfiConverterBoolean.allocationSize(value.`torProxyEnabled`) +
+            FfiConverterString.allocationSize(value.`blossomServer`) +
+            FfiConverterString.allocationSize(value.`defaultMode`) +
+            FfiConverterString.allocationSize(value.`defaultEffort`) +
+            FfiConverterString.allocationSize(value.`defaultModel`) +
+            FfiConverterBoolean.allocationSize(value.`notificationsEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`showUsageBadge`) +
+            FfiConverterBoolean.allocationSize(value.`showCommitBadge`)
+    )
+
+    override fun write(value: UniffiSettingsView, buf: ByteBuffer) {
+            FfiConverterSequenceString.write(value.`relays`, buf)
+            FfiConverterDouble.write(value.`uiScale`, buf)
+            FfiConverterBoolean.write(value.`stayConnected`, buf)
+            FfiConverterBoolean.write(value.`torProxyEnabled`, buf)
+            FfiConverterString.write(value.`blossomServer`, buf)
+            FfiConverterString.write(value.`defaultMode`, buf)
+            FfiConverterString.write(value.`defaultEffort`, buf)
+            FfiConverterString.write(value.`defaultModel`, buf)
+            FfiConverterBoolean.write(value.`notificationsEnabled`, buf)
+            FfiConverterBoolean.write(value.`showUsageBadge`, buf)
+            FfiConverterBoolean.write(value.`showCommitBadge`, buf)
     }
 }
 
@@ -2681,6 +2878,93 @@ sealed class UniffiIntent {
         companion object
     }
     
+    data class AddRelay(
+        val `url`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class RemoveRelay(
+        val `url`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetTorEnabled(
+        val `enabled`: kotlin.Boolean) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetStayConnected(
+        val `enabled`: kotlin.Boolean) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetBlossomServer(
+        val `url`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetNotificationsEnabled(
+        val `enabled`: kotlin.Boolean) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * `"default"` / `"acceptEdits"` / `"plan"` — same wire spelling as `SetMode`.
+     */
+    data class SetDefaultMode(
+        val `mode`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetDefaultEffort(
+        val `level`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetDefaultModel(
+        val `model`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetUiScale(
+        val `scale`: kotlin.Double) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetShowUsageBadge(
+        val `enabled`: kotlin.Boolean) : UniffiIntent() {
+        companion object
+    }
+    
+    data class SetShowCommitBadge(
+        val `enabled`: kotlin.Boolean) : UniffiIntent() {
+        companion object
+    }
+    
+    data class AddQuickPrompt(
+        val `id`: kotlin.String, 
+        val `label`: kotlin.String, 
+        val `text`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class UpdateQuickPrompt(
+        val `id`: kotlin.String, 
+        val `label`: kotlin.String, 
+        val `text`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class RemoveQuickPrompt(
+        val `id`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    data class RemoveMachine(
+        val `pubkeyHex`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
 
     
     companion object
@@ -2746,6 +3030,58 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 )
             12 -> UniffiIntent.RetryOutboxItem(
                 FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            13 -> UniffiIntent.AddRelay(
+                FfiConverterString.read(buf),
+                )
+            14 -> UniffiIntent.RemoveRelay(
+                FfiConverterString.read(buf),
+                )
+            15 -> UniffiIntent.SetTorEnabled(
+                FfiConverterBoolean.read(buf),
+                )
+            16 -> UniffiIntent.SetStayConnected(
+                FfiConverterBoolean.read(buf),
+                )
+            17 -> UniffiIntent.SetBlossomServer(
+                FfiConverterString.read(buf),
+                )
+            18 -> UniffiIntent.SetNotificationsEnabled(
+                FfiConverterBoolean.read(buf),
+                )
+            19 -> UniffiIntent.SetDefaultMode(
+                FfiConverterString.read(buf),
+                )
+            20 -> UniffiIntent.SetDefaultEffort(
+                FfiConverterString.read(buf),
+                )
+            21 -> UniffiIntent.SetDefaultModel(
+                FfiConverterString.read(buf),
+                )
+            22 -> UniffiIntent.SetUiScale(
+                FfiConverterDouble.read(buf),
+                )
+            23 -> UniffiIntent.SetShowUsageBadge(
+                FfiConverterBoolean.read(buf),
+                )
+            24 -> UniffiIntent.SetShowCommitBadge(
+                FfiConverterBoolean.read(buf),
+                )
+            25 -> UniffiIntent.AddQuickPrompt(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            26 -> UniffiIntent.UpdateQuickPrompt(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            27 -> UniffiIntent.RemoveQuickPrompt(
+                FfiConverterString.read(buf),
+                )
+            28 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -2857,6 +3193,122 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`id`)
             )
         }
+        is UniffiIntent.AddRelay -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`url`)
+            )
+        }
+        is UniffiIntent.RemoveRelay -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`url`)
+            )
+        }
+        is UniffiIntent.SetTorEnabled -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`enabled`)
+            )
+        }
+        is UniffiIntent.SetStayConnected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`enabled`)
+            )
+        }
+        is UniffiIntent.SetBlossomServer -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`url`)
+            )
+        }
+        is UniffiIntent.SetNotificationsEnabled -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`enabled`)
+            )
+        }
+        is UniffiIntent.SetDefaultMode -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`mode`)
+            )
+        }
+        is UniffiIntent.SetDefaultEffort -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`level`)
+            )
+        }
+        is UniffiIntent.SetDefaultModel -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`model`)
+            )
+        }
+        is UniffiIntent.SetUiScale -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterDouble.allocationSize(value.`scale`)
+            )
+        }
+        is UniffiIntent.SetShowUsageBadge -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`enabled`)
+            )
+        }
+        is UniffiIntent.SetShowCommitBadge -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`enabled`)
+            )
+        }
+        is UniffiIntent.AddQuickPrompt -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`id`)
+                + FfiConverterString.allocationSize(value.`label`)
+                + FfiConverterString.allocationSize(value.`text`)
+            )
+        }
+        is UniffiIntent.UpdateQuickPrompt -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`id`)
+                + FfiConverterString.allocationSize(value.`label`)
+                + FfiConverterString.allocationSize(value.`text`)
+            )
+        }
+        is UniffiIntent.RemoveQuickPrompt -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`id`)
+            )
+        }
+        is UniffiIntent.RemoveMachine -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`pubkeyHex`)
+            )
+        }
     }
 
     override fun write(value: UniffiIntent, buf: ByteBuffer) {
@@ -2939,6 +3391,90 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 buf.putInt(12)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`id`, buf)
+                Unit
+            }
+            is UniffiIntent.AddRelay -> {
+                buf.putInt(13)
+                FfiConverterString.write(value.`url`, buf)
+                Unit
+            }
+            is UniffiIntent.RemoveRelay -> {
+                buf.putInt(14)
+                FfiConverterString.write(value.`url`, buf)
+                Unit
+            }
+            is UniffiIntent.SetTorEnabled -> {
+                buf.putInt(15)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetStayConnected -> {
+                buf.putInt(16)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetBlossomServer -> {
+                buf.putInt(17)
+                FfiConverterString.write(value.`url`, buf)
+                Unit
+            }
+            is UniffiIntent.SetNotificationsEnabled -> {
+                buf.putInt(18)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetDefaultMode -> {
+                buf.putInt(19)
+                FfiConverterString.write(value.`mode`, buf)
+                Unit
+            }
+            is UniffiIntent.SetDefaultEffort -> {
+                buf.putInt(20)
+                FfiConverterString.write(value.`level`, buf)
+                Unit
+            }
+            is UniffiIntent.SetDefaultModel -> {
+                buf.putInt(21)
+                FfiConverterString.write(value.`model`, buf)
+                Unit
+            }
+            is UniffiIntent.SetUiScale -> {
+                buf.putInt(22)
+                FfiConverterDouble.write(value.`scale`, buf)
+                Unit
+            }
+            is UniffiIntent.SetShowUsageBadge -> {
+                buf.putInt(23)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetShowCommitBadge -> {
+                buf.putInt(24)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.AddQuickPrompt -> {
+                buf.putInt(25)
+                FfiConverterString.write(value.`id`, buf)
+                FfiConverterString.write(value.`label`, buf)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is UniffiIntent.UpdateQuickPrompt -> {
+                buf.putInt(26)
+                FfiConverterString.write(value.`id`, buf)
+                FfiConverterString.write(value.`label`, buf)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is UniffiIntent.RemoveQuickPrompt -> {
+                buf.putInt(27)
+                FfiConverterString.write(value.`id`, buf)
+                Unit
+            }
+            is UniffiIntent.RemoveMachine -> {
+                buf.putInt(28)
+                FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3140,6 +3676,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiSettingsView?> {
+    override fun read(buf: ByteBuffer): UniffiSettingsView? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiSettingsView.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiSettingsView?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiSettingsView.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiSettingsView?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiSettingsView.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeConnectionView: FfiConverterRustBuffer<ConnectionView?> {
     override fun read(buf: ByteBuffer): ConnectionView? {
         if (buf.get().toInt() == 0) {
@@ -3246,6 +3814,34 @@ public object FfiConverterSequenceTypeUniffiOutboxItem: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiOutboxItem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiQuickPrompt: FfiConverterRustBuffer<List<UniffiQuickPrompt>> {
+    override fun read(buf: ByteBuffer): List<UniffiQuickPrompt> {
+        val len = buf.getInt()
+        return List<UniffiQuickPrompt>(len) {
+            FfiConverterTypeUniffiQuickPrompt.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiQuickPrompt>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiQuickPrompt.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiQuickPrompt>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiQuickPrompt.write(it, buf)
         }
     }
 }
