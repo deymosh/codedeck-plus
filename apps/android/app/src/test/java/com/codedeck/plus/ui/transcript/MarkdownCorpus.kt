@@ -1,11 +1,15 @@
-package probe
+package com.codedeck.plus.ui.transcript
 
-/** A fixed corpus of the transcript shapes CodeDeck renders today, distilled
- *  from `apps/mobile/src/ui/transcript/displayEntries.ts`. */
-object Corpus {
-
-    /** One assistant message exercising every GFM feature the React stack
-     *  (`react-markdown` + `remark-gfm` + `rehype-highlight`) handles. */
+/**
+ * A fixed corpus of the markdown shapes CodeDeck's transcript actually
+ * renders, distilled from `apps/mobile/src/ui/transcript/displayEntries.ts`
+ * and `rows/Markdown.tsx`'s pipeline (`react-markdown` + `remark-gfm` +
+ * `rehype-highlight`). Ported near-verbatim from
+ * `spike/markdown-compose-probe/ui/src/main/kotlin/probe/Corpus.kt` — the
+ * one place that spike's findings are exercised for real, in the app the
+ * verdict was about.
+ */
+object MarkdownCorpus {
     val ASSISTANT_MARKDOWN = """
         ## Refactor plan
 
@@ -55,10 +59,6 @@ object Corpus {
         }
         ```
 
-        ```json
-        { "kinds": [30515], "authors": ["aa"], "#p": ["bb"] }
-        ```
-
         ```diff
         - const sk = SecretKey::from_hex(&hex)?;
         + let sk = SecretKey::from_hex(&hex).map_err(bad_key)?;
@@ -66,17 +66,4 @@ object Corpus {
     """.trimIndent()
 
     val USER_MESSAGE = "port the connection reducer to rust, keep the jitter injected"
-
-    data class DiffLine(val kind: Char, val text: String) // ' ' '+' '-'
-
-    val DIFF_FILE = "packages/core/src/nostr/pool.ts"
-    val DIFF_LINES = listOf(
-        DiffLine(' ', "  const pool = new SimplePool();"),
-        DiffLine('-', "  pool.trackRelays = true;"),
-        DiffLine('+', "  pool.trackRelays = true;"),
-        DiffLine('+', "  pool.idleTimeout = 0x7fffffff; // CDX-020"),
-        DiffLine(' ', "  return pool;"),
-    )
-
-    val TOOL_GROUP = listOf("Read pool.ts", "Edit pool.ts", "Bash: ./codedeck check")
 }

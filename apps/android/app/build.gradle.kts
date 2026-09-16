@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.paparazzi)
 }
 
 android {
@@ -100,6 +101,13 @@ dependencies {
     // as a prerequisite; keep it in step with whatever `uniffi` crate version
     // crates/uniffi-bridge/Cargo.toml pins (currently 0.28).
     implementation("net.java.dev.jna:jna:5.19.0@aar")
+
+    // F3.3.2: Compose-native Markdown for assistant/plan transcript rows.
+    // GFM (tables, task lists, strikethrough, autolinks) is the renderer's
+    // own default AST handling, no separate "GFM module" — see
+    // ui/transcript/Markdown.kt's doc comment.
+    implementation(libs.markdown.renderer)
+    implementation(libs.markdown.renderer.m3)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
