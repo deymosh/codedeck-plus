@@ -88,6 +88,12 @@ pub enum UniffiIntent {
         card_id: String,
         key: String,
     },
+    /// F3.3.5: `OutboxRow`'s Retry button — re-publishes the same signed
+    /// event (idempotent; the bridge dedupes by id), not a fresh send.
+    RetryOutboxItem {
+        machine: String,
+        id: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -154,6 +160,7 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SetPlanApprovalChoice { card_id, key } => {
                 Intent::SetPlanApprovalChoice { card_id, key }
             }
+            UniffiIntent::RetryOutboxItem { machine, id } => Intent::RetryOutboxItem { machine, id },
         })
     }
 }

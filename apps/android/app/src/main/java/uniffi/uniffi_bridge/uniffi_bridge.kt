@@ -2671,6 +2671,16 @@ sealed class UniffiIntent {
         companion object
     }
     
+    /**
+     * F3.3.5: `OutboxRow`'s Retry button — re-publishes the same signed
+     * event (idempotent; the bridge dedupes by id), not a fresh send.
+     */
+    data class RetryOutboxItem(
+        val `machine`: kotlin.String, 
+        val `id`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
 
     
     companion object
@@ -2731,6 +2741,10 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterOptionalString.read(buf),
                 )
             11 -> UniffiIntent.SetPlanApprovalChoice(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            12 -> UniffiIntent.RetryOutboxItem(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
@@ -2835,6 +2849,14 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`key`)
             )
         }
+        is UniffiIntent.RetryOutboxItem -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`id`)
+            )
+        }
     }
 
     override fun write(value: UniffiIntent, buf: ByteBuffer) {
@@ -2911,6 +2933,12 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 buf.putInt(11)
                 FfiConverterString.write(value.`cardId`, buf)
                 FfiConverterString.write(value.`key`, buf)
+                Unit
+            }
+            is UniffiIntent.RetryOutboxItem -> {
+                buf.putInt(12)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`id`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
