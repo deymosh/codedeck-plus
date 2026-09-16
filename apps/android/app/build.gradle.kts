@@ -103,6 +103,12 @@ dependencies {
     // crates/uniffi-bridge/Cargo.toml pins (currently 0.28).
     implementation("net.java.dev.jna:jna:5.19.0@aar")
 
+    // Tink directly, not its deprecated androidx.security:security-crypto
+    // wrapper (frozen at 1.1.0-alpha07): platform/SecureIdentityStore.kt
+    // uses AndroidKeysetManager to keep the persisted bridge identity
+    // secret encrypted at rest under a Keystore-held master key.
+    implementation("com.google.crypto.tink:tink-android:1.19.0")
+
     // F3.3.2: Compose-native Markdown for assistant/plan transcript rows.
     // GFM (tables, task lists, strikethrough, autolinks) is the renderer's
     // own default AST handling, no separate "GFM module" — see
