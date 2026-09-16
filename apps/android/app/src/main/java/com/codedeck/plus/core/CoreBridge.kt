@@ -19,6 +19,7 @@ import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiMachinesView
 import uniffi.uniffi_bridge.UniffiNotifier
 import uniffi.uniffi_bridge.UniffiOutboxView
+import uniffi.uniffi_bridge.UniffiPairingView
 import uniffi.uniffi_bridge.UniffiQuickPromptsView
 import uniffi.uniffi_bridge.UniffiSettingsView
 import uniffi.uniffi_bridge.UniffiTranscriptRowsView
@@ -67,6 +68,9 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
     private val _quickPrompts = MutableStateFlow<UniffiQuickPromptsView?>(null)
     val quickPrompts: StateFlow<UniffiQuickPromptsView?> = _quickPrompts.asStateFlow()
 
+    private val _pairing = MutableStateFlow<UniffiPairingView?>(null)
+    val pairing: StateFlow<UniffiPairingView?> = _pairing.asStateFlow()
+
     private val core: Core = Core(relays, identitySecretHex, this, notifier)
 
     fun start() {
@@ -82,6 +86,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
         refreshOutbox()
         refreshSettings()
         refreshQuickPrompts()
+        refreshPairing()
     }
 
     fun stop() = core.stop()
@@ -131,6 +136,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
                 SliceId.OUTBOX -> refreshOutbox()
                 SliceId.SETTINGS -> refreshSettings()
                 SliceId.QUICK_PROMPTS -> refreshQuickPrompts()
+                SliceId.PAIRING -> refreshPairing()
                 else -> {}
             }
             else -> {}
@@ -161,5 +167,9 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
 
     private fun refreshQuickPrompts() {
         scope.launch { _quickPrompts.value = core.quickPromptsView() }
+    }
+
+    private fun refreshPairing() {
+        scope.launch { _pairing.value = core.pairingView() }
     }
 }

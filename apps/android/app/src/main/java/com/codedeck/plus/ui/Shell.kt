@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
@@ -44,6 +45,7 @@ fun Shell(bridge: CoreBridge) {
     val machinesView by bridge.machines.collectAsState()
     val connection by bridge.connection.collectAsState()
     val ui by bridge.ui.collectAsState()
+    val pairing by bridge.pairing.collectAsState()
     val scope = rememberCoroutineScope()
 
     val machines = machinesView?.machines ?: emptyList()
@@ -52,6 +54,27 @@ fun Shell(bridge: CoreBridge) {
 
     var newSessionFor by remember { mutableStateOf<String?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var pairingOpen by remember { mutableStateOf(false) }
+    // First run (no machines paired) starts on pairing — same as
+    // `apps/mobile`'s `App.tsx`. Waits for the first real `MachinesView`
+    // fetch (`machinesView != null`) rather than deciding off the empty
+    // pre-hydration list, so a phone that DOES have paired machines never
+    // flashes the pairing screen while `CoreBridge.start()`'s initial fetch
+    // is still in flight.
+    var pairingAutoOpenDecided by remember { mutableStateOf(false) }
+    LaunchedEffect(machinesView) {
+        if (!pairingAutoOpenDecided && machinesView != null) {
+            pairingAutoOpenDecided = true
+            if (machines.isEmpty()) pairingOpen = true
+        }
+    }
+    // A deep link (`codedeck://pair…`, F4.2.3) can stage or begin a pair
+    // from anywhere in the app — surface it the same way `App.tsx`'s own
+    // effect does, regardless of what's currently open.
+    LaunchedEffect(pairing?.phase, pairing?.staged) {
+        val p = pairing
+        if (p != null && (p.phase != "idle" || p.staged != null)) pairingOpen = true
+    }
 
     fun selectSession(machine: String, sessionId: String) {
         scope.launch { bridge.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
@@ -68,6 +91,8 @@ fun Shell(bridge: CoreBridge) {
         // drawer state) simply isn't composed underneath it, so returning
         // re-derives the drawer from the current selection as usual.
         SettingsScreen(bridge, onClose = { settingsOpen = false })
+    } else if (pairingOpen) {
+        PairingScreen(bridge, onClose = { pairingOpen = false })
     } else {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val isWide = maxWidth >= WIDE_BREAKPOINT
@@ -86,6 +111,7 @@ fun Shell(bridge: CoreBridge) {
                         onSelectSession = ::selectSession,
                         onNewSession = { newSessionFor = it },
                         onOpenSettings = { settingsOpen = true },
+                        onOpenPairing = { pairingOpen = true },
                         modifier = Modifier.width(Tokens.SidebarWidth),
                     )
                     MainPanel(
@@ -126,6 +152,7 @@ fun Shell(bridge: CoreBridge) {
                                 },
                                 onNewSession = { newSessionFor = it },
                                 onOpenSettings = { settingsOpen = true },
+                                onOpenPairing = { pairingOpen = true },
                             )
                         }
                     },

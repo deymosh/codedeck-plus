@@ -45,6 +45,7 @@ fun Sidebar(
     onSelectSession: (machine: String, sessionId: String) -> Unit,
     onNewSession: (machine: String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenPairing: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -59,14 +60,25 @@ fun Sidebar(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text("Sessions", color = Tokens.Text, fontSize = Tokens.TextLg)
-            Box(
-                Modifier
-                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.SurfaceRaised)
-                    .clickable(onClick = onOpenSettings)
-                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-            ) {
-                Text("Settings", color = Tokens.Text, fontSize = Tokens.TextSm)
+            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+                Box(
+                    Modifier
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(Tokens.RadiusSm))
+                        .background(Tokens.SurfaceRaised)
+                        .clickable(onClick = onOpenPairing)
+                        .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                ) {
+                    Text("Pair", color = Tokens.Text, fontSize = Tokens.TextSm)
+                }
+                Box(
+                    Modifier
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(Tokens.RadiusSm))
+                        .background(Tokens.SurfaceRaised)
+                        .clickable(onClick = onOpenSettings)
+                        .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                ) {
+                    Text("Settings", color = Tokens.Text, fontSize = Tokens.TextSm)
+                }
             }
         }
 
