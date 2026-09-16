@@ -167,3 +167,85 @@ jobs:
       - name: No Rust changes — skipped
         if: steps.filter.outputs.rust != 'true' && steps.filter.outputs.core != 'true'
         run: echo "no Rust changes; cargo job skipped."
+
+  # apps/android (F3.3): Gradle unit tests + Paparazzi screenshot verification
+  # + the UniFFI Kotlin bindings drift check. Path-filtered like the cargo job
+  # above, and for the same reason `core` (crates/**) is included there: a
+  # client-runtime/client-core change behind the `uniffi` feature can change
+  # what uniffi-bindgen generates without touching crates/uniffi-bridge or
+  # apps/android directly.
+  android:
+    name: Android (Gradle + Paparazzi + UniFFI bindings)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect Android/uniffi-bridge changes
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            android:
+              - 'apps/android/**'
+              - 'crates/uniffi-bridge/**'
+            core:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+
+      - name: Install Rust
+        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        with:
+          workspaces: .
+
+      - name: Set up JDK 21
+        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # `ubuntu-latest` runners ship with an Android SDK + cmdline-tools
+      # already installed at $ANDROID_HOME (release.yml's own "Install NDK"
+      # step relies on this same path) — just top up the one platform/
+      # build-tools pin this project needs. No NDK here: these are plain JVM
+      # unit tests (Robolectric-backed Paparazzi rendering), nothing links
+      # the real cross-compiled .so. `cargo build --lib` below only needs the
+      # HOST Linux cdylib for uniffi-bindgen's own metadata extraction.
+      - name: Install Android SDK platform 37 / build-tools
+        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --install "platforms;android-37.2" "build-tools;37.0.0" >/dev/null
+
+      # crates/uniffi-bridge/src/lib.rs's own doc comment: the Kotlin binding
+      # surface is a build artifact of uniffi-bindgen's library-mode
+      # generation, never hand-edited. Same shape as the TS bindings drift
+      # check above — mirrors `./codedeck gen-android-bindings` exactly.
+      - name: UniFFI Kotlin bindings drift check
+        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        run: |
+          cargo build --locked -p uniffi-bridge --lib
+          cargo run --locked -p uniffi-bridge --bin uniffi-bindgen -- \
+            generate --library target/debug/libuniffi_bridge.so --language kotlin \
+            --out-dir /tmp/uniffi-kotlin-out
+          rm -rf apps/android/app/src/main/java/uniffi
+          cp -r /tmp/uniffi-kotlin-out/uniffi apps/android/app/src/main/java/uniffi
+          git diff --exit-code -- apps/android/app/src/main/java/uniffi || {
+            echo "::error::apps/android/app/src/main/java/uniffi/** is stale — a Rust FFI type changed without regenerating it. Run: ./codedeck gen-android-bindings" >&2
+            exit 1
+          }
+
+      - name: Gradle test + Paparazzi verify
+        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        working-directory: apps/android
+        run: ./gradlew testDebugUnitTest verifyPaparazziDebug --console=plain
+
+      - name: No Android/uniffi-bridge changes — skipped
+        if: steps.filter.outputs.android != 'true' && steps.filter.outputs.core != 'true'
+        run: echo "no Android/uniffi-bridge changes; android job skipped."
