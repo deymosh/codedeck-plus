@@ -33,10 +33,17 @@ use crate::stores::CoreStores;
 // --- connection ---------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionView {
     /// `idle` | `connecting` | `connected` | `waiting-retry` | `offline` | `stopped`.
-    pub status: &'static str,
+    ///
+    /// Owned `String`, not `&'static str`: UniFFI's `uniffi::Record` derive
+    /// (F3) has no `FfiConverter` for a borrowed, 'static-lifetime string —
+    /// crossing the FFI boundary needs ownership. Same JSON wire shape either
+    /// way (serde serializes both identically), so this costs one allocation
+    /// per view read and changes no consumer-visible behavior.
+    pub status: String,
     /// The FSM wants a pairing re-check (CDX heartbeat-vs-pairing race).
     pub needs_pairing_check: bool,
 }
@@ -51,7 +58,8 @@ impl ConnectionView {
                 ConnectionStatus::WaitingRetry => "waiting-retry",
                 ConnectionStatus::Offline => "offline",
                 ConnectionStatus::Stopped => "stopped",
-            },
+            }
+            .to_string(),
             needs_pairing_check,
         }
     }

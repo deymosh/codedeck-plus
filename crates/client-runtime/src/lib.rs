@@ -11,6 +11,14 @@
 //! projections, the `CoreEvent` stream and the NIP-17 DM runtime behind one
 //! tokio event loop — the handle the bindings attach to.
 
+// UniFFI's `#[derive(uniffi::Record)]`/`uniffi::Enum` need a `UniFfiTag` in
+// THIS crate regardless of the fact that the actual `#[uniffi::export]`
+// surface lives in `crates/uniffi-bridge`, not here — a "types" crate with no
+// exported functions of its own still needs its own scaffolding call so its
+// derived types are referenceable from the crate that does the exporting.
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
 pub mod attachments;
 pub mod core;
 pub mod deadline;

@@ -1,0 +1,44 @@
+# F3: the Android binding surface. The one crate (besides apps/mobile/src-tauri
+# for Tauri) allowed to know about a specific host binding technology — here,
+# UniFFI. Wraps the real `client_runtime::core::Core` (no stand-in, unlike
+# spike/uniffi-binding-probe) behind `#[uniffi::export]`, compiled to the
+# `.so` `apps/android` loads via JNA-generated Kotlin bindings.
+[package]
+name = "uniffi-bridge"
+description = "CodeDeck+ Android bindings — UniFFI over the real client-runtime Core."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "uniffi_bridge"
+# cdylib: what Kotlin (JNA, via the generated bindings) loads at runtime.
+# lib:    so `tests/` can link and drive it directly, same as any other crate.
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+client-runtime = { path = "../client-runtime", features = ["uniffi"] }
+protocol = { path = "../protocol" }
+# Matches spike/uniffi-binding-probe's validated version. "cli" is the
+# `uniffi-bindgen` binary below; "tokio" lets `#[uniffi::export(async_runtime
+# = "tokio")]` export `async fn`s as Kotlin `suspend fun`s.
+uniffi = { version = "0.28", features = ["tokio", "cli"] }
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+serde = "1"
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "test-util"] }
+
+# Generates the Kotlin bindings (library mode — reads the already-built
+# cdylib's embedded metadata, no `.udl`):
+#   cargo run --bin uniffi-bindgen -- generate --library <path-to-.so> \
+#     --language kotlin --out-dir apps/android/app/src/main/java
+# Wired into `./codedeck gen-android-bindings`, mirroring
+# `./codedeck gen-protocol-types` for the specta/TS side.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

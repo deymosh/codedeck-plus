@@ -99,6 +99,7 @@ impl Entropy for TimeEntropy {
 
 /// Why a user-visible action did not land. Semantic — the UI writes the copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum ActionFailed {
     DecryptFailed,
@@ -128,6 +129,7 @@ pub trait CoreObserver {
 /// A read-projection slice (plan §2.1) — the granularity a consumer
 /// re-subscribes to on a [`CoreEvent::StateChanged`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase")]
 pub enum SliceId {
     Connection,
@@ -148,6 +150,7 @@ pub enum SliceId {
 /// tagged, camelCase (same convention as [`crate::intent::Intent`]) — e.g.
 /// `{"stateChanged": {"slice": "machines"}}`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CoreEvent {
     /// The named view slice changed — re-read it.
@@ -2864,7 +2867,7 @@ mod tests {
                 eose_all(&mut mock).await;
                 // let the EOSEs propagate through the transport → NostrClient →
                 // the FSM (a few extra spawn_local tasks now share the loop).
-                let mut status = "";
+                let mut status = String::new();
                 for _ in 0..10 {
                     settle().await;
                     status = core.connection_view().await.unwrap().status;
