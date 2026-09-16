@@ -20,6 +20,7 @@
 
 pub mod intent;
 pub mod observer;
+pub mod views;
 
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -35,6 +36,13 @@ use tokio::sync::oneshot;
 pub use intent::{UniffiIntent, UniffiIntentError};
 pub use observer::CoreListener;
 use observer::UniffiObserver;
+pub use views::{
+    UniffiMachinesView, UniffiOutboxView, UniffiTranscriptRowsView, UniffiUiView,
+};
+use views::{
+    build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_transcript_view,
+    build_uniffi_ui_view, responded_cards_for,
+};
 
 uniffi::setup_scaffolding!();
 
@@ -125,6 +133,28 @@ impl Core {
 
     pub async fn connection_view(&self) -> Option<ConnectionView> {
         self.handle.connection_view().await
+    }
+
+    pub async fn machines_view(&self) -> UniffiMachinesView {
+        build_uniffi_machines_view(&self.handle.machines_view().await)
+    }
+
+    pub async fn outbox_view(&self) -> UniffiOutboxView {
+        build_uniffi_outbox_view(&self.handle.outbox_view().await)
+    }
+
+    pub async fn ui_view(&self) -> UniffiUiView {
+        build_uniffi_ui_view(&self.handle.ui_view().await)
+    }
+
+    /// The grouped, ready-to-render transcript for one session — see
+    /// `views.rs`'s doc comment for why this crosses the already-ported
+    /// `presentation::display_entries` grouping rather than raw rows.
+    pub async fn transcript_view(&self, machine: String, session_id: String) -> UniffiTranscriptRowsView {
+        let raw = self.handle.transcript_view(machine.clone(), session_id.clone()).await;
+        let ui = self.handle.ui_view().await;
+        let responded = responded_cards_for(&ui, &machine, &session_id);
+        build_uniffi_transcript_view(&raw, responded)
     }
 
     /// Stops the loop and joins the dedicated thread — used by this crate's

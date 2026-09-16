@@ -782,6 +782,14 @@ internal open class UniffiVTableCallbackInterfaceCoreListener(
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -812,12 +820,20 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_dispatch(`ptr`: Pointer,`intent`: RustBuffer.ByValue,
     ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_machines_view(`ptr`: Pointer,
+    ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_outbox_view(`ptr`: Pointer,
+    ): Long
     fun uniffi_uniffi_bridge_fn_method_core_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_method_core_start(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_method_core_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_uniffi_bridge_fn_method_core_transcript_view(`ptr`: Pointer,`machine`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_ui_view(`ptr`: Pointer,
+    ): Long
     fun uniffi_uniffi_bridge_fn_clone_corelistener(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_uniffi_bridge_fn_free_corelistener(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -946,11 +962,19 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_dispatch(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_machines_view(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_outbox_view(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_shutdown(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_start(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_stop(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_transcript_view(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_ui_view(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_corelistener_connection_changed(
     ): Short
@@ -983,6 +1007,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_method_core_dispatch() != 24441.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_machines_view() != 61742.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_outbox_view() != 39167.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_shutdown() != 57467.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -990,6 +1020,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_stop() != 55423.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_transcript_view() != 23234.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_ui_view() != 59054.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_corelistener_connection_changed() != 48857.toShort()) {
@@ -1094,6 +1130,29 @@ object NoPointer
 /**
  * @suppress
  */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterULong: FfiConverter<ULong, Long> {
     override fun lift(value: Long): ULong {
         return value.toULong()
@@ -1111,6 +1170,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterDouble: FfiConverter<Double, Double> {
+    override fun lift(value: Double): Double {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Double {
+        return buf.getDouble()
+    }
+
+    override fun lower(value: Double): Double {
+        return value
+    }
+
+    override fun allocationSize(value: Double) = 8UL
+
+    override fun write(value: Double, buf: ByteBuffer) {
+        buf.putDouble(value)
     }
 }
 
@@ -1367,6 +1449,10 @@ public interface CoreInterface {
      */
     suspend fun `dispatch`(`intent`: UniffiIntent)
     
+    suspend fun `machinesView`(): UniffiMachinesView
+    
+    suspend fun `outboxView`(): UniffiOutboxView
+    
     /**
      * Stops the loop and joins the dedicated thread — used by this crate's
      * own tests for a clean teardown between cases; a long-lived Android
@@ -1377,6 +1463,15 @@ public interface CoreInterface {
     fun `start`()
     
     fun `stop`()
+    
+    /**
+     * The grouped, ready-to-render transcript for one session — see
+     * `views.rs`'s doc comment for why this crosses the already-ported
+     * `presentation::display_entries` grouping rather than raw rows.
+     */
+    suspend fun `transcriptView`(`machine`: kotlin.String, `sessionId`: kotlin.String): UniffiTranscriptRowsView
+    
+    suspend fun `uiView`(): UniffiUiView
     
     companion object
 }
@@ -1522,6 +1617,46 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     }
 
     
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `machinesView`() : UniffiMachinesView {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_machines_view(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeUniffiMachinesView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `outboxView`() : UniffiOutboxView {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_outbox_view(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeUniffiOutboxView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
     /**
      * Stops the loop and joins the dedicated thread — used by this crate's
      * own tests for a clean teardown between cases; a long-lived Android
@@ -1558,6 +1693,51 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     }
     
     
+
+    
+    /**
+     * The grouped, ready-to-render transcript for one session — see
+     * `views.rs`'s doc comment for why this crosses the already-ported
+     * `presentation::display_entries` grouping rather than raw rows.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `transcriptView`(`machine`: kotlin.String, `sessionId`: kotlin.String) : UniffiTranscriptRowsView {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_transcript_view(
+                thisPtr,
+                FfiConverterString.lower(`machine`),FfiConverterString.lower(`sessionId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeUniffiTranscriptRowsView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+    
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `uiView`() : UniffiUiView {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_ui_view(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeUniffiUiView.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
 
     
 
@@ -1969,6 +2149,347 @@ public object FfiConverterTypeCoreListener: FfiConverter<CoreListener, Pointer> 
 
 
 
+data class UniffiMachineSummary (
+    var `pubkeyHex`: kotlin.String, 
+    var `name`: kotlin.String, 
+    var `host`: kotlin.String?, 
+    var `sessions`: List<UniffiSessionSummary>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<UniffiMachineSummary> {
+    override fun read(buf: ByteBuffer): UniffiMachineSummary {
+        return UniffiMachineSummary(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeUniffiSessionSummary.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMachineSummary) = (
+            FfiConverterString.allocationSize(value.`pubkeyHex`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterOptionalString.allocationSize(value.`host`) +
+            FfiConverterSequenceTypeUniffiSessionSummary.allocationSize(value.`sessions`)
+    )
+
+    override fun write(value: UniffiMachineSummary, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pubkeyHex`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterOptionalString.write(value.`host`, buf)
+            FfiConverterSequenceTypeUniffiSessionSummary.write(value.`sessions`, buf)
+    }
+}
+
+
+
+data class UniffiMachinesView (
+    var `machines`: List<UniffiMachineSummary>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMachinesView: FfiConverterRustBuffer<UniffiMachinesView> {
+    override fun read(buf: ByteBuffer): UniffiMachinesView {
+        return UniffiMachinesView(
+            FfiConverterSequenceTypeUniffiMachineSummary.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMachinesView) = (
+            FfiConverterSequenceTypeUniffiMachineSummary.allocationSize(value.`machines`)
+    )
+
+    override fun write(value: UniffiMachinesView, buf: ByteBuffer) {
+            FfiConverterSequenceTypeUniffiMachineSummary.write(value.`machines`, buf)
+    }
+}
+
+
+
+data class UniffiOutboxItem (
+    var `id`: kotlin.String, 
+    var `machine`: kotlin.String, 
+    var `sessionId`: kotlin.String, 
+    var `text`: kotlin.String, 
+    /**
+     * `pending` / `published` / `confirmed` / `failed`.
+     */
+    var `state`: kotlin.String, 
+    var `createdAt`: kotlin.ULong, 
+    var `error`: kotlin.String?, 
+    var `attempts`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiOutboxItem: FfiConverterRustBuffer<UniffiOutboxItem> {
+    override fun read(buf: ByteBuffer): UniffiOutboxItem {
+        return UniffiOutboxItem(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiOutboxItem) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`machine`) +
+            FfiConverterString.allocationSize(value.`sessionId`) +
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterString.allocationSize(value.`state`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterUInt.allocationSize(value.`attempts`)
+    )
+
+    override fun write(value: UniffiOutboxItem, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`machine`, buf)
+            FfiConverterString.write(value.`sessionId`, buf)
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterString.write(value.`state`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterUInt.write(value.`attempts`, buf)
+    }
+}
+
+
+
+data class UniffiOutboxView (
+    var `items`: List<UniffiOutboxItem>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiOutboxView: FfiConverterRustBuffer<UniffiOutboxView> {
+    override fun read(buf: ByteBuffer): UniffiOutboxView {
+        return UniffiOutboxView(
+            FfiConverterSequenceTypeUniffiOutboxItem.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiOutboxView) = (
+            FfiConverterSequenceTypeUniffiOutboxItem.allocationSize(value.`items`)
+    )
+
+    override fun write(value: UniffiOutboxView, buf: ByteBuffer) {
+            FfiConverterSequenceTypeUniffiOutboxItem.write(value.`items`, buf)
+    }
+}
+
+
+
+data class UniffiSessionSummary (
+    var `id`: kotlin.String, 
+    var `title`: kotlin.String?, 
+    var `slug`: kotlin.String, 
+    var `cwd`: kotlin.String, 
+    var `project`: kotlin.String, 
+    /**
+     * `idle` / `running` / `waitingPermission` / `waitingQuestion` / `offline`,
+     * absent if the bridge never reported one.
+     */
+    var `state`: kotlin.String?, 
+    /**
+     * `live` / `stale` / `offline` — the machines store's own listing presence.
+     */
+    var `presence`: kotlin.String, 
+    var `lastActivity`: kotlin.String, 
+    var `model`: kotlin.String?, 
+    var `permissionMode`: kotlin.String?, 
+    var `effortLevel`: kotlin.String?, 
+    var `contextPercentage`: kotlin.Double?, 
+    var `contextWindow`: kotlin.ULong?, 
+    var `committed`: kotlin.Boolean?, 
+    var `seqHigh`: kotlin.ULong?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<UniffiSessionSummary> {
+    override fun read(buf: ByteBuffer): UniffiSessionSummary {
+        return UniffiSessionSummary(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiSessionSummary) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterOptionalString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`slug`) +
+            FfiConverterString.allocationSize(value.`cwd`) +
+            FfiConverterString.allocationSize(value.`project`) +
+            FfiConverterOptionalString.allocationSize(value.`state`) +
+            FfiConverterString.allocationSize(value.`presence`) +
+            FfiConverterString.allocationSize(value.`lastActivity`) +
+            FfiConverterOptionalString.allocationSize(value.`model`) +
+            FfiConverterOptionalString.allocationSize(value.`permissionMode`) +
+            FfiConverterOptionalString.allocationSize(value.`effortLevel`) +
+            FfiConverterOptionalDouble.allocationSize(value.`contextPercentage`) +
+            FfiConverterOptionalULong.allocationSize(value.`contextWindow`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`committed`) +
+            FfiConverterOptionalULong.allocationSize(value.`seqHigh`)
+    )
+
+    override fun write(value: UniffiSessionSummary, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterOptionalString.write(value.`title`, buf)
+            FfiConverterString.write(value.`slug`, buf)
+            FfiConverterString.write(value.`cwd`, buf)
+            FfiConverterString.write(value.`project`, buf)
+            FfiConverterOptionalString.write(value.`state`, buf)
+            FfiConverterString.write(value.`presence`, buf)
+            FfiConverterString.write(value.`lastActivity`, buf)
+            FfiConverterOptionalString.write(value.`model`, buf)
+            FfiConverterOptionalString.write(value.`permissionMode`, buf)
+            FfiConverterOptionalString.write(value.`effortLevel`, buf)
+            FfiConverterOptionalDouble.write(value.`contextPercentage`, buf)
+            FfiConverterOptionalULong.write(value.`contextWindow`, buf)
+            FfiConverterOptionalBoolean.write(value.`committed`, buf)
+            FfiConverterOptionalULong.write(value.`seqHigh`, buf)
+    }
+}
+
+
+
+data class UniffiTranscriptRowsView (
+    /**
+     * `serde_json::to_string` of
+     * `Vec<client_core::presentation::display_entries::DisplayEntry>` —
+     * see this module's doc comment for why a JSON blob, not a `Record`.
+     */
+    var `displayEntriesJson`: kotlin.String, 
+    /**
+     * `serde_json::to_string` of a `PendingPermissionSummary`, present iff a
+     * permission request is still unanswered and unresolved.
+     */
+    var `pendingPermissionJson`: kotlin.String?, 
+    /**
+     * `idle` / `requested` / `syncing` / `complete` / `failed`.
+     */
+    var `syncState`: kotlin.String, 
+    var `contiguous`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiTranscriptRowsView: FfiConverterRustBuffer<UniffiTranscriptRowsView> {
+    override fun read(buf: ByteBuffer): UniffiTranscriptRowsView {
+        return UniffiTranscriptRowsView(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiTranscriptRowsView) = (
+            FfiConverterString.allocationSize(value.`displayEntriesJson`) +
+            FfiConverterOptionalString.allocationSize(value.`pendingPermissionJson`) +
+            FfiConverterString.allocationSize(value.`syncState`) +
+            FfiConverterBoolean.allocationSize(value.`contiguous`)
+    )
+
+    override fun write(value: UniffiTranscriptRowsView, buf: ByteBuffer) {
+            FfiConverterString.write(value.`displayEntriesJson`, buf)
+            FfiConverterOptionalString.write(value.`pendingPermissionJson`, buf)
+            FfiConverterString.write(value.`syncState`, buf)
+            FfiConverterBoolean.write(value.`contiguous`, buf)
+    }
+}
+
+
+
+data class UniffiUiView (
+    var `selectedMachine`: kotlin.String?, 
+    var `selectedSession`: kotlin.String?, 
+    /**
+     * `sessionKey (machine + " " + sessionId)` -> responded card ids.
+     */
+    var `respondedCards`: Map<kotlin.String, List<kotlin.String>>, 
+    var `planApprovalChoices`: Map<kotlin.String, kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiUiView: FfiConverterRustBuffer<UniffiUiView> {
+    override fun read(buf: ByteBuffer): UniffiUiView {
+        return UniffiUiView(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterMapStringSequenceString.read(buf),
+            FfiConverterMapStringString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiUiView) = (
+            FfiConverterOptionalString.allocationSize(value.`selectedMachine`) +
+            FfiConverterOptionalString.allocationSize(value.`selectedSession`) +
+            FfiConverterMapStringSequenceString.allocationSize(value.`respondedCards`) +
+            FfiConverterMapStringString.allocationSize(value.`planApprovalChoices`)
+    )
+
+    override fun write(value: UniffiUiView, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`selectedMachine`, buf)
+            FfiConverterOptionalString.write(value.`selectedSession`, buf)
+            FfiConverterMapStringSequenceString.write(value.`respondedCards`, buf)
+            FfiConverterMapStringString.write(value.`planApprovalChoices`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -2126,6 +2647,29 @@ sealed class UniffiIntent {
         companion object
     }
     
+    /**
+     * F3.3: selects (or, with `session_id: None`, deselects) a session in
+     * the shared `UiView` — the sidebar's tap-to-open and the shell's
+     * "no selection" empty state both read `UiView::selected_session` back.
+     */
+    data class SelectSession(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String?) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * F3.3: records which plan-approval option the user tapped so the
+     * resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
+     * actual answer (`Keypress` with `context: "plan-approval"`), not
+     * instead of it — same contract the TS `PlanApprovalCard.tsx` had.
+     */
+    data class SetPlanApprovalChoice(
+        val `cardId`: kotlin.String, 
+        val `key`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
 
     
     companion object
@@ -2178,6 +2722,14 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 )
             9 -> UniffiIntent.SetMode(
                 FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            10 -> UniffiIntent.SelectSession(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            11 -> UniffiIntent.SetPlanApprovalChoice(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
@@ -2266,6 +2818,22 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`mode`)
             )
         }
+        is UniffiIntent.SelectSession -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterOptionalString.allocationSize(value.`sessionId`)
+            )
+        }
+        is UniffiIntent.SetPlanApprovalChoice -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`cardId`)
+                + FfiConverterString.allocationSize(value.`key`)
+            )
+        }
     }
 
     override fun write(value: UniffiIntent, buf: ByteBuffer) {
@@ -2332,6 +2900,18 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`mode`, buf)
                 Unit
             }
+            is UniffiIntent.SelectSession -> {
+                buf.putInt(10)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterOptionalString.write(value.`sessionId`, buf)
+                Unit
+            }
+            is UniffiIntent.SetPlanApprovalChoice -> {
+                buf.putInt(11)
+                FfiConverterString.write(value.`cardId`, buf)
+                FfiConverterString.write(value.`key`, buf)
+                Unit
+            }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 }
@@ -2395,6 +2975,102 @@ public object FfiConverterTypeUniffiIntentError : FfiConverterRustBuffer<UniffiI
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalDouble: FfiConverterRustBuffer<kotlin.Double?> {
+    override fun read(buf: ByteBuffer): kotlin.Double? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterDouble.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Double?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterDouble.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Double?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterDouble.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
+        }
+    }
 }
 
 
@@ -2485,6 +3161,168 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiMachineSummary: FfiConverterRustBuffer<List<UniffiMachineSummary>> {
+    override fun read(buf: ByteBuffer): List<UniffiMachineSummary> {
+        val len = buf.getInt()
+        return List<UniffiMachineSummary>(len) {
+            FfiConverterTypeUniffiMachineSummary.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiMachineSummary>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiMachineSummary.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiMachineSummary>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiMachineSummary.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiOutboxItem: FfiConverterRustBuffer<List<UniffiOutboxItem>> {
+    override fun read(buf: ByteBuffer): List<UniffiOutboxItem> {
+        val len = buf.getInt()
+        return List<UniffiOutboxItem>(len) {
+            FfiConverterTypeUniffiOutboxItem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiOutboxItem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiOutboxItem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiOutboxItem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiOutboxItem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiSessionSummary: FfiConverterRustBuffer<List<UniffiSessionSummary>> {
+    override fun read(buf: ByteBuffer): List<UniffiSessionSummary> {
+        val len = buf.getInt()
+        return List<UniffiSessionSummary>(len) {
+            FfiConverterTypeUniffiSessionSummary.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiSessionSummary>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiSessionSummary.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiSessionSummary>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiSessionSummary.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.String, kotlin.String>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, kotlin.String> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, kotlin.String>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterString.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, kotlin.String>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterString.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterString.write(v, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<kotlin.String, List<kotlin.String>>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, List<kotlin.String>> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, List<kotlin.String>>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterSequenceString.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, List<kotlin.String>>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterSequenceString.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, List<kotlin.String>>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterSequenceString.write(v, buf)
         }
     }
 }

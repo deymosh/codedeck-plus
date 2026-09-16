@@ -30,20 +30,34 @@
 use std::collections::{BTreeSet, HashMap};
 
 use protocol::common::{OutputEntry, OutputEntryType};
+use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq)]
+// `Serialize` (F3.3): these cross the UniFFI boundary as one JSON blob per
+// session (`crates/uniffi-bridge`'s `UniffiTranscriptRowsView.display_entries_json`)
+// rather than as a UniFFI `Record` — `OutputEntry.metadata` is arbitrary
+// `serde_json::Value`, which `#[derive(uniffi::Record)]` cannot express, so
+// the whole grouped list rides as JSON the same way an individual row's
+// `OutputEntry` already does. `camelCase` matches every other wire/view type
+// in this codebase; `tag = "kind"` on `DisplayEntry` gives Kotlin's
+// `kotlinx.serialization` polymorphic decoder a discriminant to match its
+// sealed-class hierarchy against.
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SeqEntry {
     pub seq: u64,
     pub entry: OutputEntry,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QuestionOption {
     pub label: String,
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QuestionSpecView {
     pub entry: OutputEntry,
     pub header: Option<String>,
@@ -53,7 +67,8 @@ pub struct QuestionSpecView {
 
 /// One rendered row. `seq` is the stable key — the seq of the first entry
 /// making up this item.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DisplayEntry {
     UserMessage {
         seq: u64,
@@ -452,7 +467,8 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
     b.display
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PendingPermissionSummary {
     pub request_id: String,
     pub tool_name: String,

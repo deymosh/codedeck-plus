@@ -73,6 +73,21 @@ pub enum UniffiIntent {
         /// `"default"` / `"acceptEdits"` / `"plan"` — the wire's own spelling.
         mode: String,
     },
+    /// F3.3: selects (or, with `session_id: None`, deselects) a session in
+    /// the shared `UiView` — the sidebar's tap-to-open and the shell's
+    /// "no selection" empty state both read `UiView::selected_session` back.
+    SelectSession {
+        machine: String,
+        session_id: Option<String>,
+    },
+    /// F3.3: records which plan-approval option the user tapped so the
+    /// resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
+    /// actual answer (`Keypress` with `context: "plan-approval"`), not
+    /// instead of it — same contract the TS `PlanApprovalCard.tsx` had.
+    SetPlanApprovalChoice {
+        card_id: String,
+        key: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -133,6 +148,12 @@ impl TryFrom<UniffiIntent> for Intent {
                 session_id,
                 mode: parse_enum::<PermissionMode>("mode", &mode)?,
             },
+            UniffiIntent::SelectSession { machine, session_id } => {
+                Intent::SelectSession { machine, session_id }
+            }
+            UniffiIntent::SetPlanApprovalChoice { card_id, key } => {
+                Intent::SetPlanApprovalChoice { card_id, key }
+            }
         })
     }
 }
