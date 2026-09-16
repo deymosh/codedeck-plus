@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,8 +49,35 @@ import uniffi.uniffi_bridge.UniffiOutboxItem
  * [visibleOutboxItems]), plus a sync-gap placeholder while a cycle fills a
  * known gap.
  */
+/**
+ * Wraps the actual content in `key(sessionId)` — a session switch is a
+ * REMOUNT (CDX-086's own fix, mirrored here exactly as
+ * `rememberTranscriptPin`'s doc comment describes), so every `remember`
+ * below (pin state, expanded groups, question-group progress) resets fresh
+ * per session without needing every future caller to remember to wrap this
+ * itself.
+ */
 @Composable
 fun TranscriptList(
+    displayEntries: List<DisplayEntry>,
+    outboxItems: List<UniffiOutboxItem>,
+    machine: String,
+    sessionId: String,
+    syncState: String,
+    contiguous: Boolean,
+    respondedCards: Set<String>,
+    planApprovalChoices: Map<String, String>,
+    dispatch: (UniffiIntent) -> Unit,
+    modifier: Modifier = Modifier,
+) = key(sessionId) {
+    TranscriptListContent(
+        displayEntries, outboxItems, machine, sessionId, syncState, contiguous,
+        respondedCards, planApprovalChoices, dispatch, modifier,
+    )
+}
+
+@Composable
+private fun TranscriptListContent(
     displayEntries: List<DisplayEntry>,
     outboxItems: List<UniffiOutboxItem>,
     machine: String,

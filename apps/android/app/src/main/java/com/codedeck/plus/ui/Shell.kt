@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.uniffi_bridge.UniffiIntent
@@ -63,10 +63,8 @@ fun Shell(bridge: CoreBridge) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val isWide = maxWidth >= WIDE_BREAKPOINT
 
-        // F3.3.6 wires the real `SessionScreen` here; a placeholder keeps
-        // this milestone's shell independently buildable and testable.
         val sessionContent: @Composable (String, String) -> Unit = { machine, sessionId ->
-            Text("Session $machine / $sessionId", color = Tokens.Text, modifier = Modifier)
+            SessionScreen(bridge, machine, sessionId, modifier = Modifier.fillMaxSize())
         }
 
         if (isWide) {
