@@ -60,8 +60,14 @@ export const commands = {
 	error: string | null,
 	/**  CDX-040: the `Failed` came from the phone's own deadline, not a nack. */
 	timedOut: boolean,
-	/**  A deep-link URL awaiting explicit user confirmation (CDX-013). */
-	hasStaged: boolean,
+	/**
+	 *  A deep-link URL awaiting explicit user confirmation (CDX-013), with
+	 *  enough of its parsed content to show what it wants to pair with
+	 *  before the user confirms — the same narrow shape `candidate` uses,
+	 *  dropping the one-time token and mesh-join fields `ParsedPairingUrl`
+	 *  itself still carries (mesh join is F6, out of scope for this view).
+	 */
+	staged: PairingCandidateView | null,
 	/**  The candidate under negotiation, if any. */
 	candidate: PairingCandidateView | null,
 } | null, string>(__TAURI_INVOKE("core_pairing_view")),
@@ -1510,8 +1516,14 @@ export type PairingView = {
 	error: string | null,
 	/**  CDX-040: the `Failed` came from the phone's own deadline, not a nack. */
 	timedOut: boolean,
-	/**  A deep-link URL awaiting explicit user confirmation (CDX-013). */
-	hasStaged: boolean,
+	/**
+	 *  A deep-link URL awaiting explicit user confirmation (CDX-013), with
+	 *  enough of its parsed content to show what it wants to pair with
+	 *  before the user confirms — the same narrow shape `candidate` uses,
+	 *  dropping the one-time token and mesh-join fields `ParsedPairingUrl`
+	 *  itself still carries (mesh join is F6, out of scope for this view).
+	 */
+	staged: PairingCandidateView | null,
 	/**  The candidate under negotiation, if any. */
 	candidate: PairingCandidateView | null,
 };
