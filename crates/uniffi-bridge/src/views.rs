@@ -269,8 +269,9 @@ pub struct UniffiPairingView {
     pub error: Option<String>,
     /// CDX-040: the `failed` phase came from the phone's own deadline, not a nack.
     pub timed_out: bool,
-    /// A deep-link URL awaiting explicit user confirmation (CDX-013).
-    pub has_staged: bool,
+    /// A deep-link URL awaiting explicit user confirmation (CDX-013), with
+    /// enough of its parsed content to show what it wants to pair with.
+    pub staged: Option<UniffiPairingCandidateView>,
     pub candidate: Option<UniffiPairingCandidateView>,
 }
 
@@ -279,7 +280,12 @@ pub fn build_uniffi_pairing_view(v: &PairingView) -> UniffiPairingView {
         phase: v.phase.to_string(),
         error: v.error.clone(),
         timed_out: v.timed_out,
-        has_staged: v.has_staged,
+        staged: v.staged.as_ref().map(|s| UniffiPairingCandidateView {
+            pubkey_hex: s.pubkey_hex.clone(),
+            npub: s.npub.clone(),
+            machine: s.machine.clone(),
+            relays: s.relays.clone(),
+        }),
         candidate: v.candidate.as_ref().map(|c| UniffiPairingCandidateView {
             pubkey_hex: c.pubkey_hex.clone(),
             npub: c.npub.clone(),

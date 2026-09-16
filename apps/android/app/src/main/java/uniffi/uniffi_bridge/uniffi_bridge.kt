@@ -2878,9 +2878,10 @@ data class UniffiPairingView (
      */
     var `timedOut`: kotlin.Boolean, 
     /**
-     * A deep-link URL awaiting explicit user confirmation (CDX-013).
+     * A deep-link URL awaiting explicit user confirmation (CDX-013), with
+     * enough of its parsed content to show what it wants to pair with.
      */
-    var `hasStaged`: kotlin.Boolean, 
+    var `staged`: UniffiPairingCandidateView?, 
     var `candidate`: UniffiPairingCandidateView?
 ) {
     
@@ -2896,7 +2897,7 @@ public object FfiConverterTypeUniffiPairingView: FfiConverterRustBuffer<UniffiPa
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeUniffiPairingCandidateView.read(buf),
             FfiConverterOptionalTypeUniffiPairingCandidateView.read(buf),
         )
     }
@@ -2905,7 +2906,7 @@ public object FfiConverterTypeUniffiPairingView: FfiConverterRustBuffer<UniffiPa
             FfiConverterString.allocationSize(value.`phase`) +
             FfiConverterOptionalString.allocationSize(value.`error`) +
             FfiConverterBoolean.allocationSize(value.`timedOut`) +
-            FfiConverterBoolean.allocationSize(value.`hasStaged`) +
+            FfiConverterOptionalTypeUniffiPairingCandidateView.allocationSize(value.`staged`) +
             FfiConverterOptionalTypeUniffiPairingCandidateView.allocationSize(value.`candidate`)
     )
 
@@ -2913,7 +2914,7 @@ public object FfiConverterTypeUniffiPairingView: FfiConverterRustBuffer<UniffiPa
             FfiConverterString.write(value.`phase`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
             FfiConverterBoolean.write(value.`timedOut`, buf)
-            FfiConverterBoolean.write(value.`hasStaged`, buf)
+            FfiConverterOptionalTypeUniffiPairingCandidateView.write(value.`staged`, buf)
             FfiConverterOptionalTypeUniffiPairingCandidateView.write(value.`candidate`, buf)
     }
 }

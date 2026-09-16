@@ -208,8 +208,12 @@ pub struct PairingView {
     pub error: Option<String>,
     /// CDX-040: the `Failed` came from the phone's own deadline, not a nack.
     pub timed_out: bool,
-    /// A deep-link URL awaiting explicit user confirmation (CDX-013).
-    pub has_staged: bool,
+    /// A deep-link URL awaiting explicit user confirmation (CDX-013), with
+    /// enough of its parsed content to show what it wants to pair with
+    /// before the user confirms — the same narrow shape `candidate` uses,
+    /// dropping the one-time token and mesh-join fields `ParsedPairingUrl`
+    /// itself still carries (mesh join is F6, out of scope for this view).
+    pub staged: Option<PairingCandidateView>,
     /// The candidate under negotiation, if any.
     pub candidate: Option<PairingCandidateView>,
 }
@@ -234,7 +238,12 @@ impl PairingView {
             },
             error: p.error.clone(),
             timed_out: p.timed_out,
-            has_staged: p.staged.is_some(),
+            staged: p.staged.as_ref().map(|s| PairingCandidateView {
+                pubkey_hex: s.pubkey_hex.clone(),
+                npub: s.npub.clone(),
+                machine: s.machine.clone(),
+                relays: s.relays.clone(),
+            }),
             candidate: p.candidate.as_ref().map(|c| PairingCandidateView {
                 pubkey_hex: c.pubkey_hex.clone(),
                 npub: c.npub.clone(),
