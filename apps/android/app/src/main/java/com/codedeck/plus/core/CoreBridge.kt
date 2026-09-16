@@ -19,6 +19,8 @@ import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiMachinesView
 import uniffi.uniffi_bridge.UniffiNotifier
 import uniffi.uniffi_bridge.UniffiOutboxView
+import uniffi.uniffi_bridge.UniffiQuickPromptsView
+import uniffi.uniffi_bridge.UniffiSettingsView
 import uniffi.uniffi_bridge.UniffiTranscriptRowsView
 import uniffi.uniffi_bridge.UniffiUiView
 
@@ -59,6 +61,12 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
     private val _outbox = MutableStateFlow<UniffiOutboxView?>(null)
     val outbox: StateFlow<UniffiOutboxView?> = _outbox.asStateFlow()
 
+    private val _settings = MutableStateFlow<UniffiSettingsView?>(null)
+    val settings: StateFlow<UniffiSettingsView?> = _settings.asStateFlow()
+
+    private val _quickPrompts = MutableStateFlow<UniffiQuickPromptsView?>(null)
+    val quickPrompts: StateFlow<UniffiQuickPromptsView?> = _quickPrompts.asStateFlow()
+
     private val core: Core = Core(relays, identitySecretHex, this, notifier)
 
     fun start() {
@@ -72,6 +80,8 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
         refreshMachines()
         refreshUi()
         refreshOutbox()
+        refreshSettings()
+        refreshQuickPrompts()
     }
 
     fun stop() = core.stop()
@@ -119,6 +129,8 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
                 SliceId.MACHINES -> refreshMachines()
                 SliceId.UI -> refreshUi()
                 SliceId.OUTBOX -> refreshOutbox()
+                SliceId.SETTINGS -> refreshSettings()
+                SliceId.QUICK_PROMPTS -> refreshQuickPrompts()
                 else -> {}
             }
             else -> {}
@@ -141,5 +153,13 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
 
     private fun refreshOutbox() {
         scope.launch { _outbox.value = core.outboxView() }
+    }
+
+    private fun refreshSettings() {
+        scope.launch { _settings.value = core.settingsView() }
+    }
+
+    private fun refreshQuickPrompts() {
+        scope.launch { _quickPrompts.value = core.quickPromptsView() }
     }
 }

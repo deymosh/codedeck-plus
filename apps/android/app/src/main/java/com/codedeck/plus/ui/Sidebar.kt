@@ -44,6 +44,7 @@ fun Sidebar(
     selectedSession: String?,
     onSelectSession: (machine: String, sessionId: String) -> Unit,
     onNewSession: (machine: String) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -52,7 +53,22 @@ fun Sidebar(
             .background(Tokens.Surface)
             .padding(Tokens.Space3),
     ) {
-        Text("Sessions", color = Tokens.Text, fontSize = Tokens.TextLg)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Sessions", color = Tokens.Text, fontSize = Tokens.TextLg)
+            Box(
+                Modifier
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(Tokens.RadiusSm))
+                    .background(Tokens.SurfaceRaised)
+                    .clickable(onClick = onOpenSettings)
+                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+            ) {
+                Text("Settings", color = Tokens.Text, fontSize = Tokens.TextSm)
+            }
+        }
 
         if (connectionStatus != null && connectionStatus != "connected") {
             Row(

@@ -998,7 +998,14 @@ data class ConnectionView (
     /**
      * The FSM wants a pairing re-check (CDX heartbeat-vs-pairing race).
      */
-    var `needsPairingCheck`: kotlin.Boolean
+    var `needsPairingCheck`: kotlin.Boolean, 
+    /**
+     * URLs of relays with a live, EOSE'd subscription right now — the
+     * per-relay status dot Settings renders next to each relay's URL.
+     * A relay absent from this list isn't necessarily unreachable, just not
+     * currently subscribed (e.g. mid-reconnect).
+     */
+    var `connectedRelays`: List<kotlin.String>
 ) {
     
     companion object
@@ -1012,17 +1019,20 @@ public object FfiConverterTypeConnectionView: FfiConverterRustBuffer<ConnectionV
         return ConnectionView(
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: ConnectionView) = (
             FfiConverterString.allocationSize(value.`status`) +
-            FfiConverterBoolean.allocationSize(value.`needsPairingCheck`)
+            FfiConverterBoolean.allocationSize(value.`needsPairingCheck`) +
+            FfiConverterSequenceString.allocationSize(value.`connectedRelays`)
     )
 
     override fun write(value: ConnectionView, buf: ByteBuffer) {
             FfiConverterString.write(value.`status`, buf)
             FfiConverterBoolean.write(value.`needsPairingCheck`, buf)
+            FfiConverterSequenceString.write(value.`connectedRelays`, buf)
     }
 }
 
@@ -1358,6 +1368,34 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }

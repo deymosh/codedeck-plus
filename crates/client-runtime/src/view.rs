@@ -46,10 +46,15 @@ pub struct ConnectionView {
     pub status: String,
     /// The FSM wants a pairing re-check (CDX heartbeat-vs-pairing race).
     pub needs_pairing_check: bool,
+    /// URLs of relays with a live, EOSE'd subscription right now — the
+    /// per-relay status dot Settings renders next to each relay's URL.
+    /// A relay absent from this list isn't necessarily unreachable, just not
+    /// currently subscribed (e.g. mid-reconnect).
+    pub connected_relays: Vec<String>,
 }
 
 impl ConnectionView {
-    pub fn new(status: ConnectionStatus, needs_pairing_check: bool) -> Self {
+    pub fn new(status: ConnectionStatus, needs_pairing_check: bool, connected_relays: Vec<String>) -> Self {
         Self {
             status: match status {
                 ConnectionStatus::Idle => "idle",
@@ -61,6 +66,7 @@ impl ConnectionView {
             }
             .to_string(),
             needs_pairing_check,
+            connected_relays,
         }
     }
 }
@@ -458,12 +464,12 @@ mod tests {
     #[test]
     fn connection_view_maps_the_status_string() {
         assert_eq!(
-            ConnectionView::new(ConnectionStatus::WaitingRetry, true).status,
+            ConnectionView::new(ConnectionStatus::WaitingRetry, true, vec![]).status,
             "waiting-retry"
         );
-        let json = serde_json::to_string(&ConnectionView::new(ConnectionStatus::Connected, false))
+        let json = serde_json::to_string(&ConnectionView::new(ConnectionStatus::Connected, false, vec![]))
             .unwrap();
-        assert_eq!(json, r#"{"status":"connected","needsPairingCheck":false}"#);
+        assert_eq!(json, r#"{"status":"connected","needsPairingCheck":false,"connectedRelays":[]}"#);
     }
 
     #[tokio::test]

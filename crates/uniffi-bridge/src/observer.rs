@@ -14,10 +14,10 @@ use protocol::events::BridgeToPhone;
 /// (`ConnectionView`, `CoreEvent`, `ActionFailedKind` all derive `uniffi::Record`/
 /// `uniffi::Enum` directly — see that crate's `uniffi` feature) — no parallel
 /// DTO needed for the event stream, only for `Intent` (see `intent.rs`'s doc
-/// comment for why that one differs). `connected_relays` (the per-relay
-/// status dot's data) isn't on `ConnectionView` yet — add it there, the same
-/// real type, the day Android's Settings screen needs it; don't grow a
-/// parallel view here to route around that.
+/// comment for why that one differs). `ConnectionView.connected_relays` (the
+/// per-relay status dot's data, F4.1.5) is the same real type too — added
+/// straight to `ConnectionView` once Android's Settings screen actually
+/// needed it, exactly as this comment used to say to do.
 #[uniffi::export(with_foreign)]
 pub trait CoreListener: Send + Sync {
     fn connection_changed(&self, view: ConnectionView);
@@ -30,8 +30,9 @@ pub struct UniffiObserver {
 }
 
 impl CoreObserver for UniffiObserver {
-    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, _connected_relays: &[String]) {
-        self.listener.connection_changed(ConnectionView::new(status, needs_pairing_check));
+    fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, connected_relays: &[String]) {
+        self.listener
+            .connection_changed(ConnectionView::new(status, needs_pairing_check, connected_relays.to_vec()));
     }
 
     /// Deferred (not dropped): F3's first slice drives the app through

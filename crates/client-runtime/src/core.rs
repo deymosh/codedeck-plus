@@ -1292,9 +1292,11 @@ impl Loop {
                 let _ = reply.send(PairingView::from_stores(&self.stores));
             }
             ViewQuery::Connection(reply) => {
+                let connected: Vec<String> = self.ws.connected_relays().into_iter().collect();
                 let _ = reply.send(ConnectionView::new(
                     self.conn.status,
                     self.conn.needs_pairing_check,
+                    connected,
                 ));
             }
             ViewQuery::Dm(reply) => {
