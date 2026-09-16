@@ -180,6 +180,76 @@ export interface ModelsQueryHandle {
 export const SUPPORTED_MODELS_TIMEOUT_MS = 3_000;
 
 /**
+ * Bypass `query.supportedModels()` and ask a gateway directly for its model
+ * list. Gated by `ENABLE_GATEWAY_MODEL_DISCOVERY` (operator opt-in, same as
+ * `ANTHROPIC_BASE_URL` — see that constant's doc comment for the confirmed
+ * root cause this works around).
+ *
+ * Auth: `CLAUDE_CODE_OAUTH_TOKEN` (subscription token, `claude setup-token`)
+ * else `ANTHROPIC_API_KEY` — the SAME two the CLI subprocess itself would use
+ * to talk to `ANTHROPIC_BASE_URL` (see `bridge.ts`'s `sessionEnvFromCredentials`
+ * priority). Deliberately NOT the per-machine `anthropicApiKey` a paired
+ * phone can set via `Intent`/`SetCredentials` — a gateway is bridge-operator
+ * infrastructure (one `ANTHROPIC_BASE_URL` for the whole bridge process,
+ * config'd like any other env var), not a per-phone credential; conflating
+ * the two would mean "whichever machine happened to set credentials most
+ * recently" silently deciding which token authenticates a gateway call that
+ * has nothing to do with that machine.
+ *
+ * A router's `/v1/models` entry is commonly `<provider>/<model>` (seen
+ * verbatim from a real claude-code-router instance: `"Claude Code
+ * API/claude-sonnet-5"`, `"Z.ai (Global) - Coding Plan/glm-5.2"`) — the
+ * prefix is the router's OWN channel-selection key, required verbatim as
+ * `Options.model` on a later request so the router knows which upstream to
+ * use. Keep `id` exactly as the gateway sent it; only `label` is cosmetic.
+ */
+export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
+  const baseUrl = process.env.ANTHROPIC_BASE_URL;
+  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
+  if (!baseUrl || !token) {
+    console.error('[SdkFacade] fetchGatewayModels: ANTHROPIC_BASE_URL or an auth token is not set');
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/models`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-version': '2023-06-01',
+      },
+      // Generous relative to SUPPORTED_MODELS_TIMEOUT_MS: a cold gateway
+      // enumerating several upstream providers is slower than one live CLI
+      // answering a control request.
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+      console.error(`[SdkFacade] fetchGatewayModels: gateway returned ${response.status} ${response.statusText}`);
+      return [];
+    }
+
+    const body: unknown = await response.json();
+    const list = (body as { data?: unknown } | null)?.data;
+    if (!Array.isArray(list)) {
+      console.error('[SdkFacade] fetchGatewayModels: response has no "data" array');
+      return [];
+    }
+    return list
+      .filter((m): m is { id: string; display_name?: string } => typeof (m as { id?: unknown })?.id === 'string')
+      .map((m) => ({
+        id: m.id,
+        // A router-prefixed id ("Claude Code API/claude-sonnet-5") with no
+        // display_name still deserves a readable fallback label — strip
+        // everything up to the last "/" rather than showing the raw id.
+        label: m.display_name || m.id.split('/').pop() || m.id,
+      }));
+  } catch (err) {
+    console.error('[SdkFacade] fetchGatewayModels: request failed:', err);
+    return [];
+  }
+}
+
+/**
  * Ask every live handle for its model list and return the FIRST non-empty
  * answer (CDX-022). The old behavior — return whatever the first handle in
  * insertion order said — meant one dead handle (a failed resume-on-boot query
@@ -370,6 +440,73 @@ export function sdkConversationExists(
 }
 
 /**
+ * Gateway model discovery mode — operator opt-in, off by default (the phone
+ * still gets a model list either way; this only changes WHERE it comes from).
+ *
+ * `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` is the SDK/CLI's OWN flag for
+ * telling the Claude Code CLI subprocess to discover models from a gateway's
+ * `/v1/models` and cache them to `~/.claude/cache/gateway-models.json`. Its
+ * name suggests `firstSupportedModels()` (which drives `query.supportedModels()`
+ * on a live session) would then just work — it does not, on a cold bridge
+ * start, because of a confirmed upstream bug (reproduced against SDK 0.3.169
+ * and 0.3.191; documented by the VS Code Copilot Chat team after they hit the
+ * exact same thing routing Claude through their own proxy and gave up on this
+ * flag entirely — see "Phase 18" of
+ * https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/node/claude/roadmap.md):
+ * the CLI's `initialize()` does NOT await the gateway fetch (fire-and-forget —
+ * a deliberately delayed fake gateway showed `initialize()` resolving ~1.5s
+ * before the response arrives), and `supportedModels()` is a ONE-SHOT snapshot
+ * captured at `initialize()` time with no refresh push once discovery lands
+ * later. Net effect: the FIRST query after every bridge restart sees only the
+ * CLI's hardcoded built-in aliases (`default`/`sonnet`/`haiku`/…), and the
+ * gateway's real model list only appears starting from the SECOND session —
+ * exactly the "model list looks wrong right after a restart" shape.
+ *
+ * `fetchGatewayModels()` below sidesteps the bug the same way VS Code's own
+ * proxy does: never route model discovery through `query.supportedModels()`'s
+ * cache at all when this flag is set — call the gateway's `/v1/models`
+ * directly, synchronously, every time the phone asks. Still gated behind this
+ * SAME env var (rather than always-on whenever `ANTHROPIC_BASE_URL` is set)
+ * because a plain, non-gateway `ANTHROPIC_BASE_URL` override (a private relay
+ * to the real Anthropic API, say) has no reason to expose a router-flavored
+ * `/v1/models` shape (see `fetchGatewayModels`'s doc comment on `<provider>/
+ * <model>` ids) — this is specifically for routers, opted into explicitly.
+ */
+export const ENABLE_GATEWAY_MODEL_DISCOVERY = process.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === '1';
+
+/**
+ * 1M-token context window — always requested for a model that supports it,
+ * no toggle. The SDK's `Options.betas` accepts `'context-1m-2025-08-07'`
+ * (sdk.d.ts, `SdkBeta`) to request the extended window, but nothing in this
+ * file ever set it — every eligible session was created with the model's
+ * DEFAULT 200K window regardless of what the phone's model picker showed.
+ * This is not gateway-specific: VS Code's own Copilot Chat hit the identical
+ * gap calling Anthropic directly (github.com/microsoft/vscode/issues/298901,
+ * "capped at 200K tokens even when talking to the Anthropic API directly").
+ * That issue proposed a user-facing opt-in setting instead of always-on —
+ * deliberately not what this does: CodeDeck has no per-session token-cost
+ * negotiation UI for the maintainer to gate behind, and the 1M window is
+ * what "use the full model" means from the phone's point of view. Applied
+ * per-session in `buildQueryOptions`, gated by model id
+ * (`modelSupports1mContext`) — sending an unsupported model a beta header it
+ * doesn't recognize is harmless per Anthropic's usual unknown-beta handling,
+ * but naming the actual boundary here means a future model family that
+ * genuinely can't take it fails loudly in review, not silently in the field.
+ */
+
+/** Model families the `context-1m-2025-08-07` beta is documented for
+ *  (sdk.d.ts says "Sonnet 4/4.5 only"; Anthropic's own docs also list Opus —
+ *  matched broadly by family name rather than an exact, fast-drifting model
+ *  id list, since a router's id is often `<provider>/<model>` — see
+ *  `fetchGatewayModels`). Haiku is deliberately excluded: nothing in
+ *  Anthropic's own documentation lists a Haiku tier for this beta. */
+export function modelSupports1mContext(model: string | undefined): boolean {
+  if (!model) return false;
+  const m = model.toLowerCase();
+  return m.includes('sonnet') || m.includes('opus');
+}
+
+/**
  * Build the SDK `Options` for one session spawn — extracted pure from the
  * RealSdkSessionHandle constructor so the mapping (notably the CDX-062
  * `fallbackModel` tri-state) is unit-testable without spawning anything.
@@ -404,6 +541,12 @@ export function buildQueryOptions(
   // `session_id` remains the authoritative sdk id the runner persists and
   // resumes, exactly as it already does for a CLI-chosen id.
   const claimOwnId = !opts.resume && !conversationExists(opts.sessionId, opts.cwd, opts.env);
+  // The model actually being requested for THIS session — an explicit pick,
+  // or whatever it falls back to when the phone left it unset. Either way is
+  // the right thing to gate the 1M-context beta on: a session that resolves
+  // to the fallback Sonnet is exactly as eligible as one that named it.
+  const requestedModel = opts.model ?? (fallbackModel ?? undefined);
+  const betas = modelSupports1mContext(requestedModel) ? (['context-1m-2025-08-07'] as const) : undefined;
   return {
     ...(opts.resume ? { resume: opts.resume } : claimOwnId ? { sessionId: opts.sessionId } : {}),
     cwd: opts.cwd,
@@ -421,6 +564,7 @@ export function buildQueryOptions(
       ? { pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable }
       : {}),
     ...(opts.env ? { env: opts.env } : {}),
+    ...(betas ? { betas: [...betas] } : {}),
   };
 }
 
@@ -556,6 +700,12 @@ export class RealSdkFacade implements SdkFacade {
   }
 
   async supportedModels(): Promise<SdkModelDescriptor[]> {
+    // See ENABLE_GATEWAY_MODEL_DISCOVERY's doc comment for why this bypasses
+    // query.supportedModels() entirely rather than trying to use it.
+    if (ENABLE_GATEWAY_MODEL_DISCOVERY) {
+      return fetchGatewayModels();
+    }
+
     // supportedModels() is a control request on a live Query — try EVERY live
     // session's query, first non-empty answer wins (CDX-022: a dead handle
     // must not poison the list). With no live session there is nothing to ask;
