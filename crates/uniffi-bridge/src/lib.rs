@@ -13,12 +13,15 @@
 //! to clone and `Send` (just an `mpsc::UnboundedSender`), so every exported
 //! method below can be called from any thread without hopping onto that one.
 //!
-//! F3.1's ports are all in-memory (`CorePorts::default()`) — no persistence,
-//! no real network. Real SQLite/WS/HTTP ports are F3.2+'s job, once
-//! `apps/android` exists to actually need them; wiring them here first with
-//! nothing to drive them would be untested plumbing.
+//! F3.1's ports were all in-memory (`CorePorts::default()`) — no persistence,
+//! no real network. F4.1.4 added the first real port, `notifier` (see
+//! `notifier.rs`), the same "wire a port only once something actually drives
+//! it" rule the rest still follow: real SQLite/WS/HTTP ports are still
+//! `CorePorts::default()`'s in-memory/no-op stand-ins until a screen needs
+//! them.
 
 pub mod intent;
+pub mod notifier;
 pub mod observer;
 pub mod views;
 
@@ -34,6 +37,8 @@ use protocol::crypto::keypair_from_secret_hex;
 use tokio::sync::oneshot;
 
 pub use intent::{UniffiIntent, UniffiIntentError};
+pub use notifier::UniffiNotifier;
+use notifier::NotifierAdapter;
 pub use observer::CoreListener;
 use observer::UniffiObserver;
 pub use views::{
@@ -75,6 +80,7 @@ impl Core {
         relays: Vec<String>,
         identity_secret_hex: String,
         listener: Arc<dyn CoreListener>,
+        notifier: Arc<dyn UniffiNotifier>,
     ) -> Result<Arc<Self>, CoreInitError> {
         let identity = keypair_from_secret_hex(&identity_secret_hex)
             .map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
@@ -94,7 +100,11 @@ impl Core {
                     let observer: Rc<dyn CoreObserver> = Rc::new(UniffiObserver { listener });
                     let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                     let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
-                    let core = RealCore::spawn(config, CorePorts::default(), observer, clock, entropy).await;
+                    let ports = CorePorts {
+                        notifier: Rc::new(NotifierAdapter { notifier }),
+                        ..CorePorts::default()
+                    };
+                    let core = RealCore::spawn(config, ports, observer, clock, entropy).await;
                     let _ = ready_tx.send(core);
                     // Keep the LocalSet alive (drives the loop/timers/socket
                     // tasks) until `Core::stop()` fires the shutdown signal —

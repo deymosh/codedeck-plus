@@ -679,6 +679,12 @@ internal interface UniffiCallbackInterfaceCoreListenerMethod1 : com.sun.jna.Call
 internal interface UniffiCallbackInterfaceCoreListenerMethod2 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`kind`: RustBufferActionFailedKind.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceUniffiNotifierMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUniffiNotifierMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 @Structure.FieldOrder("connectionChanged", "onEvent", "actionFailed", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceCoreListener(
     @JvmField internal var `connectionChanged`: UniffiCallbackInterfaceCoreListenerMethod0? = null,
@@ -701,6 +707,32 @@ internal open class UniffiVTableCallbackInterfaceCoreListener(
     }
 
 }
+@Structure.FieldOrder("notify", "cancel", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
+    @JvmField internal var `notify`: UniffiCallbackInterfaceUniffiNotifierMethod0? = null,
+    @JvmField internal var `cancel`: UniffiCallbackInterfaceUniffiNotifierMethod1? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `notify`: UniffiCallbackInterfaceUniffiNotifierMethod0? = null,
+        `cancel`: UniffiCallbackInterfaceUniffiNotifierMethod1? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceUniffiNotifier(`notify`,`cancel`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceUniffiNotifier) {
+        `notify` = other.`notify`
+        `cancel` = other.`cancel`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
 
 
 
@@ -809,6 +841,7 @@ internal interface UniffiLib : Library {
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceCoreListener.register(lib)
+                uniffiCallbackInterfaceUniffiNotifier.register(lib)
                 }
         }
         
@@ -822,7 +855,7 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_uniffi_bridge_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_uniffi_bridge_fn_method_core_connection_view(`ptr`: Pointer,
     ): Long
@@ -861,6 +894,16 @@ internal interface UniffiLib : Library {
     fun uniffi_uniffi_bridge_fn_method_corelistener_on_event(`ptr`: Pointer,`event`: RustBufferCoreEvent.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_method_corelistener_action_failed(`ptr`: Pointer,`kind`: RustBufferActionFailedKind.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_clone_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_uniffi_bridge_fn_free_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_init_callback_vtable_uniffinotifier(`vtable`: UniffiVTableCallbackInterfaceUniffiNotifier,
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(`ptr`: Pointer,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_method_uniffinotifier_cancel(`ptr`: Pointer,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun ffi_uniffi_bridge_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1006,6 +1049,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_corelistener_action_failed(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_constructor_core_new(
     ): Short
     fun ffi_uniffi_bridge_uniffi_contract_version(
@@ -1073,7 +1120,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_method_corelistener_action_failed() != 63877.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 59792.toShort()) {
+    if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify() != 58966.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel() != 41559.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 44994.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1552,11 +1605,11 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
      * (this call is sync — Kotlin sees a plain constructor, not a suspend
      * fun) until the real `client_runtime::Core` has hydrated and is ready.
      */
-    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener) :
+    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier) :
         this(
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_constructor_core_new(
-        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),_status)
+        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),_status)
 }
     )
 
@@ -2267,6 +2320,315 @@ public object FfiConverterTypeCoreListener: FfiConverter<CoreListener, Pointer> 
     override fun allocationSize(value: CoreListener) = 8UL
 
     override fun write(value: CoreListener, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
+ * `tag` is the same per-session/per-peer key `client-core`'s own notification
+ * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
+ * for `cancel`-by-tag, not for anything UniFFI needs to interpret.
+ */
+public interface UniffiNotifier {
+    
+    fun `notify`(`title`: kotlin.String, `body`: kotlin.String, `tag`: kotlin.String?)
+    
+    fun `cancel`(`tag`: kotlin.String)
+    
+    companion object
+}
+
+/**
+ * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
+ * `tag` is the same per-session/per-peer key `client-core`'s own notification
+ * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
+ * for `cancel`-by-tag, not for anything UniFFI needs to interpret.
+ */
+open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_free_uniffinotifier(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_clone_uniffinotifier(pointer!!, status)
+        }
+    }
+
+    override fun `notify`(`title`: kotlin.String, `body`: kotlin.String, `tag`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(
+        it, FfiConverterString.lower(`title`),FfiConverterString.lower(`body`),FfiConverterOptionalString.lower(`tag`),_status)
+}
+    }
+    
+    
+
+    override fun `cancel`(`tag`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffinotifier_cancel(
+        it, FfiConverterString.lower(`tag`),_status)
+}
+    }
+    
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceUniffiNotifier {
+    internal object `notify`: UniffiCallbackInterfaceUniffiNotifierMethod0 {
+        override fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiNotifier.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`notify`(
+                    FfiConverterString.lift(`title`),
+                    FfiConverterString.lift(`body`),
+                    FfiConverterOptionalString.lift(`tag`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `cancel`: UniffiCallbackInterfaceUniffiNotifierMethod1 {
+        override fun callback(`uniffiHandle`: Long,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiNotifier.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`cancel`(
+                    FfiConverterString.lift(`tag`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeUniffiNotifier.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceUniffiNotifier.UniffiByValue(
+        `notify`,
+        `cancel`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_uniffi_bridge_fn_init_callback_vtable_uniffinotifier(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiNotifier: FfiConverter<UniffiNotifier, Pointer> {
+    internal val handleMap = UniffiHandleMap<UniffiNotifier>()
+
+    override fun lower(value: UniffiNotifier): Pointer {
+        return Pointer(handleMap.insert(value))
+    }
+
+    override fun lift(value: Pointer): UniffiNotifier {
+        return UniffiNotifierImpl(value)
+    }
+
+    override fun read(buf: ByteBuffer): UniffiNotifier {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: UniffiNotifier) = 8UL
+
+    override fun write(value: UniffiNotifier, buf: ByteBuffer) {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))

@@ -17,6 +17,7 @@ import uniffi.uniffi_bridge.Core
 import uniffi.uniffi_bridge.CoreListener
 import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiMachinesView
+import uniffi.uniffi_bridge.UniffiNotifier
 import uniffi.uniffi_bridge.UniffiOutboxView
 import uniffi.uniffi_bridge.UniffiTranscriptRowsView
 import uniffi.uniffi_bridge.UniffiUiView
@@ -37,7 +38,7 @@ import uniffi.uniffi_bridge.UniffiUiView
  * shape `MainActivity.kt`'s `MainViewModel` already uses `viewModelScope`
  * for.
  */
-class CoreBridge(relays: List<String>, identitySecretHex: String) : CoreListener {
+class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: UniffiNotifier) : CoreListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _connection = MutableStateFlow<ConnectionView?>(null)
@@ -58,7 +59,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String) : CoreListener
     private val _outbox = MutableStateFlow<UniffiOutboxView?>(null)
     val outbox: StateFlow<UniffiOutboxView?> = _outbox.asStateFlow()
 
-    private val core: Core = Core(relays, identitySecretHex, this)
+    private val core: Core = Core(relays, identitySecretHex, this, notifier)
 
     fun start() {
         core.start()

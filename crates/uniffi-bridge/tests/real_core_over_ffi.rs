@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use client_runtime::{ActionFailedKind, ConnectionView, CoreEvent};
-use uniffi_bridge::{Core, CoreListener, UniffiIntent};
+use uniffi_bridge::{Core, CoreListener, UniffiIntent, UniffiNotifier};
 
 #[derive(Default)]
 struct RecordingListener {
@@ -39,6 +39,16 @@ impl CoreListener for RecordingListener {
     fn action_failed(&self, _kind: ActionFailedKind) {}
 }
 
+/// Nothing in these tests drives a notification — a no-op stand-in for the
+/// `UniffiNotifier` `Core::new` now requires, same role `RecordingListener`
+/// plays for `CoreListener` where a test cares about deliveries and this one
+/// doesn't.
+struct NoopNotifier;
+impl UniffiNotifier for NoopNotifier {
+    fn notify(&self, _title: String, _body: String, _tag: Option<String>) {}
+    fn cancel(&self, _tag: String) {}
+}
+
 fn fresh_identity_hex() -> String {
     protocol::crypto::generate_keypair().secret_hex()
 }
@@ -46,7 +56,8 @@ fn fresh_identity_hex() -> String {
 #[test]
 fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
     let listener = Arc::new(RecordingListener::default());
-    let core = Core::new(vec![], fresh_identity_hex(), listener.clone()).expect("core spawns");
+    let core = Core::new(vec![], fresh_identity_hex(), listener.clone(), Arc::new(NoopNotifier))
+        .expect("core spawns");
 
     // spawn: the real Core hydrated and answers a view query.
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -90,7 +101,10 @@ fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
 #[test]
 fn dropping_an_in_flight_dispatch_future_does_not_lose_the_intent() {
     let listener = Arc::new(RecordingListener::default());
-    let core = Arc::new(Core::new(vec![], fresh_identity_hex(), listener.clone()).expect("core spawns"));
+    let core = Arc::new(
+        Core::new(vec![], fresh_identity_hex(), listener.clone(), Arc::new(NoopNotifier))
+            .expect("core spawns"),
+    );
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {

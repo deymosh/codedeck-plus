@@ -67,7 +67,8 @@ class StayConnectedService : Service() {
     override fun onCreate() {
         super.onCreate()
         val identitySecretHex = readOrCreateIdentitySecretHex(applicationContext)
-        bridge = CoreBridge(relays = emptyList(), identitySecretHex = identitySecretHex)
+        val notifier = Notifier(applicationContext)
+        bridge = CoreBridge(relays = emptyList(), identitySecretHex = identitySecretHex, notifier = notifier)
         bridge.start()
         connectivity = Connectivity(applicationContext)
         acquireLocks()
