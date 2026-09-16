@@ -55,6 +55,10 @@ Protocol bindings (run in a throwaway Rust container):
                            nativeCoreTypes.generated.ts from Rust's
                            View/Intent/CoreEvent types (source of truth —
                            see gen_ts_bindings.rs). CI fails if this drifts.
+  gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
+                           from crates/uniffi-bridge via uniffi-bindgen
+                           (source of truth — see that crate's own doc
+                           comment). CI fails if this drifts.
 
 Upstream sync:
   sync                     Refresh vendor/* from upstream (scripts/sync-upstream.sh)
@@ -166,7 +170,8 @@ run_in_workspace_container() {
   local tarball
   tarball="$(mktemp).tar.gz"
   tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-      --exclude='node_modules' --exclude='*/node_modules' -czf "$tarball" .
+      --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
+      --exclude='.pnpm-store' -czf "$tarball" .
   docker cp "$tarball" "$name":/repo.tar.gz
   rm -f "$tarball"
 
@@ -214,7 +219,8 @@ cmd_gen_protocol_types() {
   local tarball
   tarball="$(mktemp).tar.gz"
   tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-      --exclude='node_modules' --exclude='*/node_modules' -czf "$tarball" .
+      --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
+      --exclude='.pnpm-store' -czf "$tarball" .
   docker cp "$tarball" "$name":/repo.tar.gz
   rm -f "$tarball"
 
@@ -231,6 +237,48 @@ cmd_gen_protocol_types() {
   echo "==> Wrote apps/mobile/src/core/nativeCoreTypes.generated.ts"
 }
 
+
+# --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
+# crates/uniffi-bridge/src/lib.rs's own doc comment — the Kotlin binding
+# surface is a build artifact of `uniffi-bindgen`'s library-mode generation,
+# never hand-edited). Same shape as cmd_gen_protocol_types: builds the cdylib
+# for the HOST target (the generated Kotlin source is architecture-
+# independent — it only reads the crate's embedded UniFFI metadata, not the
+# target triple), runs the bindgen binary, copies the output back. Does NOT
+# cross-compile the actual .so for an Android ABI — that's a separate,
+# NDK-dependent build step (apps/android's own Gradle Rust task, once it
+# exists), out of scope for a pure Kotlin-source regeneration command. ---
+cmd_gen_android_bindings() {
+  local name="codedeck-gen-android-bindings-$$"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker create --name "$name" rust:1-bookworm sleep infinity >/dev/null
+  docker start "$name" >/dev/null
+  trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+
+  local tarball
+  tarball="$(mktemp).tar.gz"
+  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
+      --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
+      --exclude='.pnpm-store' -czf "$tarball" .
+  docker cp "$tarball" "$name":/repo.tar.gz
+  rm -f "$tarball"
+
+  dexec "$name" mkdir -p /repo
+  dexec -w /repo "$name" tar -xzf /repo.tar.gz
+  echo "==> Building crates/uniffi-bridge (host target)"
+  dexec -w /repo "$name" cargo build --locked -p uniffi-bridge --lib
+  echo "==> Running uniffi-bindgen (Kotlin, library mode)"
+  dexec -w /repo "$name" cargo run --locked -p uniffi-bridge --bin uniffi-bindgen -- \
+    generate --library target/debug/libuniffi_bridge.so --language kotlin \
+    --out-dir /tmp/uniffi-kotlin-out
+
+  local dest="apps/android/app/src/main/java/uniffi"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  docker cp "$name":/tmp/uniffi-kotlin-out/uniffi/. "$dest"
+  echo "==> Wrote $dest/**"
+}
+
 case "${1:-help}" in
   bridge) shift; cmd_bridge "$@" ;;
   tor) shift; cmd_tor "$@" ;;
@@ -239,6 +287,7 @@ case "${1:-help}" in
   typecheck) run_in_workspace_container typecheck ;;
   test) run_in_workspace_container test ;;
   gen-protocol-types) cmd_gen_protocol_types ;;
+  gen-android-bindings) cmd_gen_android_bindings ;;
   sync) cmd_sync ;;
   help|-h|--help) usage ;;
   *)
