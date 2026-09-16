@@ -4,21 +4,14 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.ui.Shell
 import com.codedeck.plus.ui.theme.CodeDeckTheme
-import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import java.security.SecureRandom
 
@@ -52,17 +45,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             CodeDeckTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ConnectionStatusScreen(viewModel)
+                    Shell(viewModel.bridge)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ConnectionStatusScreen(viewModel: MainViewModel) {
-    val connection by viewModel.bridge.connection.collectAsState()
-    Box(modifier = Modifier.fillMaxSize().padding(Tokens.Space4), contentAlignment = Alignment.Center) {
-        Text(text = "core: ${connection?.status ?: "spawning…"}", color = Tokens.Text)
     }
 }

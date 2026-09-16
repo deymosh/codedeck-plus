@@ -53,8 +53,9 @@ pub struct UniffiSessionSummary {
     pub slug: String,
     pub cwd: String,
     pub project: String,
-    /// `idle` / `running` / `waitingPermission` / `waitingQuestion` / `offline`,
-    /// absent if the bridge never reported one.
+    /// `idle` / `running` / `waiting_permission` / `waiting_question` /
+    /// `offline` (`SessionState`'s own `snake_case` wire spelling), absent if
+    /// the bridge never reported one.
     pub state: Option<String>,
     /// `live` / `stale` / `offline` — the machines store's own listing presence.
     pub presence: String,

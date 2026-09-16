@@ -2311,8 +2311,9 @@ data class UniffiSessionSummary (
     var `cwd`: kotlin.String, 
     var `project`: kotlin.String, 
     /**
-     * `idle` / `running` / `waitingPermission` / `waitingQuestion` / `offline`,
-     * absent if the bridge never reported one.
+     * `idle` / `running` / `waiting_permission` / `waiting_question` /
+     * `offline` (`SessionState`'s own `snake_case` wire spelling), absent if
+     * the bridge never reported one.
      */
     var `state`: kotlin.String?, 
     /**
