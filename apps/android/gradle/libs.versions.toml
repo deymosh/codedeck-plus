@@ -11,6 +11,10 @@ activityCompose = "1.13.0"
 composeBom = "2026.09.00"
 navigation = "2.9.8"
 coroutines = "1.11.0"
+# F3.3.4: decodes the JSON `crates/uniffi-bridge`'s `views.rs` crosses for
+# the already-grouped transcript (`display_entries_json`) and the pending-
+# permission summary — see `ui/transcript/DisplayEntries.kt`.
+kotlinxSerialization = "1.9.0"
 junit = "4.13.2"
 androidxTestExtJunit = "1.3.0"
 androidxTestRunner = "1.7.0"
@@ -47,6 +51,7 @@ androidx-material3 = { group = "androidx.compose.material3", name = "material3" 
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 junit = { module = "junit:junit", version.ref = "junit" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
@@ -70,6 +75,7 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 # built in (applying it is now a hard error — "no longer required since AGP
 # 9.0").
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 # F3.3.2: Paparazzi 1.3.1+ supports application modules (not just library
 # modules, its original limitation) — 1.3.5 is spike/markdown-compose-probe's
 # proven version, on an older Kotlin/AGP pair than this project's real one;
