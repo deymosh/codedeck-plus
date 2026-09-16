@@ -116,8 +116,15 @@ export const commands = {
  */
 export type AckState = "saving" | "saved" | "failed";
 
-/**  Why a user-visible action did not land. Semantic — the UI writes the copy. */
-export type ActionFailed = "decryptFailed" | "decodeFailed" | "publishRejected" | "publishUnreachable";
+/**
+ *  Why a user-visible action did not land. Semantic — the UI writes the copy.
+ *  Named `ActionFailedKind`, not `ActionFailed`: a type with the same name as
+ *  its own enclosing `CoreEvent::ActionFailed` variant makes UniFFI's Kotlin
+ *  codegen resolve the field's type to the variant's own sealed subclass
+ *  instead of this type, a compile error only caught by actually building the
+ *  generated Kotlin.
+ */
+export type ActionFailedKind = "decryptFailed" | "decodeFailed" | "publishRejected" | "publishUnreachable";
 
 export type AppUnderTest = "kubo" | "veil" | "custom";
 
@@ -283,7 +290,7 @@ export type CoreEvent =
 } }) & { actionFailed?: never; folderAck?: never; outboxSettled?: never; stateChanged?: never; transcriptAppended?: never } | 
 /**  A user-visible action did not land. Semantic — the UI writes the copy. */
 ({ actionFailed: {
-	kind: ActionFailed,
+	kind: ActionFailedKind,
 } }) & { folderAck?: never; outboxSettled?: never; pairingSettled?: never; stateChanged?: never; transcriptAppended?: never } | 
 /**
  *  New rows landed for this session (a live `Output`, or a `SyncChunk`
