@@ -151,6 +151,7 @@ export function startOpenCodeServer(opts: StartOpenCodeServerOptions): Promise<O
           settled = true;
           clearTimeout(timer);
           proc.stdout?.off('data', onData);
+          proc.stderr?.off('data', onStderr);
           resolve({
             url,
             pid: proc.pid,
@@ -160,19 +161,28 @@ export function startOpenCodeServer(opts: StartOpenCodeServerOptions): Promise<O
         }
       }
     };
+    // Named (not inline) so it can be `.off()`'d at every settle point below —
+    // otherwise it outlives this function's promise and keeps appending every
+    // stderr chunk from the spawned process into `output` for as long as the
+    // bridge keeps the server running, which is unboundedly long.
+    const onStderr = (chunk: Buffer): void => { output += chunk.toString(); };
     proc.stdout?.on('data', onData);
-    proc.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    proc.stderr?.on('data', onStderr);
 
     proc.once('error', (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      proc.stdout?.off('data', onData);
+      proc.stderr?.off('data', onStderr);
       reject(err);
     });
     proc.once('exit', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      proc.stdout?.off('data', onData);
+      proc.stderr?.off('data', onStderr);
       const trimmed = output.trim();
       reject(new Error(`opencode serve exited with code ${code}${trimmed ? `: ${trimmed}` : ''}`));
     });

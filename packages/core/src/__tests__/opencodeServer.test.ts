@@ -127,4 +127,34 @@ describe('startOpenCodeServer', () => {
     await handle.close();
     expect(fake.killed).toEqual([]);
   });
+
+  it('unhooks both the stdout and stderr listeners once ready, not just stdout', async () => {
+    const fake = new FakeChildProcess();
+    const spawnFn = vi.fn(() => fake) as unknown as SpawnFn;
+
+    const pending = startOpenCodeServer({ command: '/bin/opencode', spawnFn });
+    expect(fake.stdout.listenerCount('data')).toBe(1);
+    expect(fake.stderr.listenerCount('data')).toBe(1);
+
+    fake.stdout.emit('data', Buffer.from('opencode server listening on http://127.0.0.1:1234\n'));
+    await pending;
+
+    // Left dangling, a stderr listener with no reference kept would grow
+    // `output` unboundedly for the process's whole lifetime — it must be
+    // removed at the same point the stdout listener already was.
+    expect(fake.stdout.listenerCount('data')).toBe(0);
+    expect(fake.stderr.listenerCount('data')).toBe(0);
+  });
+
+  it('unhooks the stderr listener on an immediate process error too', async () => {
+    const fake = new FakeChildProcess();
+    const spawnFn = vi.fn(() => fake) as unknown as SpawnFn;
+
+    const pending = startOpenCodeServer({ command: '/no/such/opencode', spawnFn });
+    fake.emit('error', new Error('ENOENT'));
+    await expect(pending).rejects.toThrow('ENOENT');
+
+    expect(fake.stdout.listenerCount('data')).toBe(0);
+    expect(fake.stderr.listenerCount('data')).toBe(0);
+  });
 });
