@@ -52,6 +52,22 @@ export interface BridgeConfig {
    *  socks5h://127.0.0.1:9050 (a local Tor daemon) — for a bridge whose only
    *  route to its relay(s) is Tor. Unset = direct connection (default). */
   torProxyUrl?: string;
+  /** External OpenCode server to connect to (`http://host:port`). Wins over
+   *  `openCodeAutoStart` if both are set. Unset + `openCodeAutoStart` unset =
+   *  no OpenCode backend at all (Claude Code only, the default). */
+  openCodeServerUrl?: string;
+  /** Have the bridge spawn its own `opencode serve` process at boot and use
+   *  it as the OpenCode backend, instead of connecting to one running
+   *  elsewhere. Ignored when `openCodeServerUrl` is set. Default: false. */
+  openCodeAutoStart?: boolean;
+  /** Explicit path to the `opencode` executable for auto-start. Otherwise
+   *  resolved from CODEDECK_OPENCODE_PATH + PATH + well-known install
+   *  locations; when nothing resolves, auto-start is skipped with an
+   *  actionable log and the bridge boots Claude-Code-only. */
+  openCodePath?: string;
+  /** Port for the auto-started OpenCode server. Default: 0 (OS-assigned
+   *  ephemeral port — avoids collisions with no config needed). */
+  openCodePort?: number;
 }
 
 export interface KeyValueStorage {

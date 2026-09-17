@@ -27,6 +27,12 @@ export interface CliFlags {
   service?: boolean;
   /** SOCKS5 proxy URL for all relay connections (e.g. a local Tor daemon). */
   torProxy?: string;
+  /** External OpenCode server URL (wins over --opencode-auto-start). */
+  openCodeServerUrl?: string;
+  /** Have the bridge spawn and manage its own OpenCode server. */
+  openCodeAutoStart?: boolean;
+  /** Explicit path to the `opencode` executable, for auto-start. */
+  openCodePath?: string;
 }
 
 /** Shape of `$CODEDECK_HOME/config.json` (all optional). */
@@ -50,6 +56,16 @@ interface FileConfig {
   transcriptKeepLast?: number;
   /** SOCKS5 proxy URL for all relay connections (e.g. socks5h://127.0.0.1:9050). */
   torProxyUrl?: string;
+  /** External OpenCode server to connect to. Wins over openCodeAutoStart. */
+  openCodeServerUrl?: string;
+  /** Spawn and manage an OpenCode server ourselves instead of connecting to
+   *  an external one. Ignored when openCodeServerUrl is set. */
+  openCodeAutoStart?: boolean;
+  /** Explicit `opencode` binary path, for auto-start. Otherwise resolved from
+   *  CODEDECK_OPENCODE_PATH + PATH + well-known install locations. */
+  openCodePath?: string;
+  /** Port for the auto-started OpenCode server (0 = OS-assigned ephemeral). */
+  openCodePort?: number;
 }
 
 export interface ResolvedCliConfig {
@@ -141,6 +157,20 @@ export function loadCliConfig(
       ? Math.max(0, Math.floor(Number(transcriptKeepLastRaw)))
       : undefined;
   const torProxyUrl = flags.torProxy ?? env.CODEDECK_TOR_PROXY_URL ?? file.torProxyUrl;
+  const openCodeServerUrl =
+    flags.openCodeServerUrl ?? env.CODEDECK_OPENCODE_SERVER_URL ?? file.openCodeServerUrl;
+  const openCodeAutoStart =
+    flags.openCodeAutoStart !== undefined
+      ? flags.openCodeAutoStart
+      : env.CODEDECK_OPENCODE_AUTO_START !== undefined
+        ? env.CODEDECK_OPENCODE_AUTO_START !== '0' && env.CODEDECK_OPENCODE_AUTO_START !== 'false'
+        : file.openCodeAutoStart;
+  const openCodePath = flags.openCodePath ?? env.CODEDECK_OPENCODE_PATH ?? file.openCodePath;
+  const openCodePortRaw = env.CODEDECK_OPENCODE_PORT ?? file.openCodePort;
+  const openCodePort =
+    openCodePortRaw !== undefined && Number.isFinite(Number(openCodePortRaw))
+      ? Math.max(0, Math.floor(Number(openCodePortRaw)))
+      : undefined;
 
   return {
     homeDir,
@@ -161,6 +191,10 @@ export function loadCliConfig(
       ...(blossomRegisterToken ? { blossomRegisterToken } : {}),
       ...(transcriptKeepLast !== undefined ? { transcriptKeepLast } : {}),
       ...(torProxyUrl ? { torProxyUrl } : {}),
+      ...(openCodeServerUrl ? { openCodeServerUrl } : {}),
+      ...(openCodeAutoStart !== undefined ? { openCodeAutoStart } : {}),
+      ...(openCodePath ? { openCodePath } : {}),
+      ...(openCodePort !== undefined ? { openCodePort } : {}),
     },
   };
 }

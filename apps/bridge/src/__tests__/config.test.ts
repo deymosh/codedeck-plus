@@ -121,4 +121,71 @@ describe('loadCliConfig', () => {
     writeFileSync(path.join(home, 'config.json'), '{not json');
     expect(() => loadCliConfig({ home }, {})).toThrow(/invalid JSON in .*config\.json/);
   });
+
+  describe('OpenCode fields', () => {
+    it('are undefined by default', () => {
+      const { config } = loadCliConfig({ home }, {});
+      expect(config.openCodeServerUrl).toBeUndefined();
+      expect(config.openCodeAutoStart).toBeUndefined();
+      expect(config.openCodePath).toBeUndefined();
+      expect(config.openCodePort).toBeUndefined();
+    });
+
+    it('read from the config file', () => {
+      writeConfig({
+        openCodeServerUrl: 'http://file.example:4096',
+        openCodeAutoStart: true,
+        openCodePath: '/opt/opencode',
+        openCodePort: 4097,
+      });
+      const { config } = loadCliConfig({ home }, {});
+      expect(config.openCodeServerUrl).toBe('http://file.example:4096');
+      expect(config.openCodeAutoStart).toBe(true);
+      expect(config.openCodePath).toBe('/opt/opencode');
+      expect(config.openCodePort).toBe(4097);
+    });
+
+    it('env overrides the config file', () => {
+      writeConfig({
+        openCodeServerUrl: 'http://file.example:4096',
+        openCodeAutoStart: false,
+        openCodePath: '/opt/opencode',
+        openCodePort: 4097,
+      });
+      const { config } = loadCliConfig({ home }, {
+        CODEDECK_OPENCODE_SERVER_URL: 'http://env.example:5000',
+        CODEDECK_OPENCODE_AUTO_START: '1',
+        CODEDECK_OPENCODE_PATH: '/env/opencode',
+        CODEDECK_OPENCODE_PORT: '5001',
+      });
+      expect(config.openCodeServerUrl).toBe('http://env.example:5000');
+      expect(config.openCodeAutoStart).toBe(true);
+      expect(config.openCodePath).toBe('/env/opencode');
+      expect(config.openCodePort).toBe(5001);
+    });
+
+    it('CODEDECK_OPENCODE_AUTO_START="0"/"false" resolve to false', () => {
+      expect(loadCliConfig({ home }, { CODEDECK_OPENCODE_AUTO_START: '0' }).config.openCodeAutoStart).toBe(false);
+      expect(loadCliConfig({ home }, { CODEDECK_OPENCODE_AUTO_START: 'false' }).config.openCodeAutoStart).toBe(false);
+    });
+
+    it('flags override env (server-url, auto-start, path)', () => {
+      const { config } = loadCliConfig(
+        {
+          home,
+          openCodeServerUrl: 'http://flag.example:6000',
+          openCodeAutoStart: true,
+          openCodePath: '/flag/opencode',
+        },
+        {
+          CODEDECK_OPENCODE_SERVER_URL: 'http://env.example:5000',
+          CODEDECK_OPENCODE_AUTO_START: '0',
+          CODEDECK_OPENCODE_PATH: '/env/opencode',
+        },
+      );
+      expect(config.openCodeServerUrl).toBe('http://flag.example:6000');
+      expect(config.openCodeAutoStart).toBe(true);
+      expect(config.openCodePath).toBe('/flag/opencode');
+    });
+  });
 });

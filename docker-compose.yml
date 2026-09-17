@@ -24,6 +24,17 @@ services:
       # doc comment for why the second flag exists.
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}
+      # OpenCode — a second, optional session backend (see docs/OPENCODE.md).
+      # CODEDECK_OPENCODE_SERVER_URL points at an OpenCode server running
+      # elsewhere; CODEDECK_OPENCODE_AUTO_START has this container spawn and
+      # manage its own `opencode serve` instead (the external URL wins if both
+      # are set). Either way, provider credentials for whatever backend
+      # OpenCode is configured to use (e.g. ANTHROPIC_API_KEY, or a one-time
+      # `docker compose exec codedeck-bridge opencode auth login`) are yours
+      # to supply — CodeDeck+ does not manage OpenCode's own credentials.
+      - CODEDECK_OPENCODE_SERVER_URL=${CODEDECK_OPENCODE_SERVER_URL:-}
+      - CODEDECK_OPENCODE_AUTO_START=${CODEDECK_OPENCODE_AUTO_START:-}
+      - CODEDECK_OPENCODE_PORT=${CODEDECK_OPENCODE_PORT:-}
     secrets:
       - source: claude_code_oauth_token
         target: claude_code_oauth_token

@@ -9,6 +9,9 @@ import {
   RealSdkFacade,
   listAllWorkspaceFolders,
   resolveClaudeExecutable,
+  resolveOpenCodePath,
+  startOpenCodeServer,
+  type BridgeConfig,
   type MeshAdmin,
   type PairingCloseReason,
   type PoolFactory,
@@ -134,6 +137,23 @@ const CLAUDE_MISSING =
   'Install Claude Code (https://claude.com/claude-code), or point the bridge at it with\n' +
   'CODEDECK_CLAUDE_PATH=/path/to/claude (or --claude-path, or "claudePath" in config.json).';
 
+/** Static (non-connecting, non-spawning) description of the OpenCode config
+ *  for `status` — never starts a subprocess or opens a socket, matching
+ *  cmdStatus's "report without touching the relay" contract. */
+function describeOpenCodeConfig(config: BridgeConfig): string {
+  if (config.openCodeServerUrl) {
+    return `external ${config.openCodeServerUrl}` +
+      (config.openCodeAutoStart ? ' (auto-start also set — external wins)' : '');
+  }
+  if (config.openCodeAutoStart) {
+    const bin = resolveOpenCodePath(config.openCodePath);
+    return bin
+      ? `auto-start configured (${bin})`
+      : 'auto-start configured but `opencode` NOT FOUND (set CODEDECK_OPENCODE_PATH)';
+  }
+  return '(not configured)';
+}
+
 interface StartedBridge {
   core: BridgeCore;
   host: CliHost;
@@ -176,13 +196,51 @@ async function startBridge(
       out: io.out,
       err: io.err,
     });
-    // OpenCode is a second, optional backend: absent CODEDECK_OPENCODE_SERVER_URL
-    // (and no test-injected deps.openCodeFacade), the bridge runs Claude-Code-only
-    // exactly as before — no OpenCodeFacade is constructed at all.
-    const openCodeServerUrl = process.env.CODEDECK_OPENCODE_SERVER_URL;
-    const openCodeFacade =
-      deps.openCodeFacade ??
-      (openCodeServerUrl ? new OpenCodeFacade({ baseUrl: openCodeServerUrl }) : undefined);
+    // OpenCode is a second, optional backend: absent both openCodeServerUrl
+    // and openCodeAutoStart (and no test-injected deps.openCodeFacade), the
+    // bridge runs Claude-Code-only exactly as before — no OpenCodeFacade is
+    // constructed at all, and nothing is spawned.
+    let openCodeFacade: SdkFacade | undefined = deps.openCodeFacade;
+    let openCodeStatus = deps.openCodeFacade ? 'configured (test double)' : '(not configured)';
+    if (!deps.openCodeFacade) {
+      const { openCodeServerUrl, openCodeAutoStart, openCodePath, openCodePort } = resolved.config;
+      if (openCodeServerUrl) {
+        if (openCodeAutoStart) {
+          host.log('warn', 'OpenCode: both an external server URL and auto-start are configured — using the external server, auto-start ignored.');
+        }
+        openCodeFacade = new OpenCodeFacade({ baseUrl: openCodeServerUrl });
+        openCodeStatus = `external ${openCodeServerUrl}`;
+      } else if (openCodeAutoStart) {
+        const bin = resolveOpenCodePath(openCodePath);
+        if (!bin) {
+          host.log(
+            'warn',
+            'OpenCode: auto-start is enabled but the `opencode` executable was not found. ' +
+            'Install it (npm i -g opencode-ai), or point the bridge at it with ' +
+            'CODEDECK_OPENCODE_PATH=/path/to/opencode (or --opencode-path, or "openCodePath" ' +
+            'in config.json). Continuing without an OpenCode backend.',
+          );
+          openCodeStatus = 'auto-start failed — see log';
+        } else {
+          try {
+            const server = await startOpenCodeServer({
+              command: bin,
+              ...(openCodePort !== undefined ? { port: openCodePort } : {}),
+            });
+            openCodeFacade = new OpenCodeFacade({ baseUrl: server.url });
+            openCodeStatus = `embedded ${server.url} (pid ${server.pid ?? '?'})`;
+            host.onShutdown(() => server.close());
+          } catch (e) {
+            host.log(
+              'warn',
+              `OpenCode: failed to start the embedded server: ${e instanceof Error ? e.message : e}. ` +
+              'Continuing without an OpenCode backend.',
+            );
+            openCodeStatus = 'auto-start failed — see log';
+          }
+        }
+      }
+    }
     const core = await BridgeCore.start({
       host,
       secretKey: keys.secretKey,
@@ -202,7 +260,7 @@ async function startBridge(
       `  relays:     ${resolved.config.relays.join(', ')}\n` +
       `  workspaces: ${resolved.config.workspaceRoots.join(', ')}\n` +
       `  claude:     ${claude}\n` +
-      `  opencode:   ${openCodeFacade ? (openCodeServerUrl ?? 'configured (test double)') : '(not configured)'}\n` +
+      `  opencode:   ${openCodeStatus}\n` +
       `  paired:     ${core.pairedPhones().length} phone(s)\n` +
       formatProviderProfiles(state.providerProfiles()).map((l) => `${l}\n`).join(''),
     );
@@ -358,6 +416,7 @@ export async function cmdStatus(resolved: ResolvedCliConfig, io: CommandIo): Pro
     `  relays:     ${config.relays.join(', ')}`,
     `  workspaces: ${config.workspaceRoots.join(', ')}`,
     `  claude:     ${claude ?? 'NOT FOUND (install Claude Code or set CODEDECK_CLAUDE_PATH)'}`,
+    `  opencode:   ${describeOpenCodeConfig(config)}`,
     `  bridge:     ${holder !== null ? `running (pid ${holder})` : 'not running'}`,
     `  paired:     ${phones.length} phone(s)`,
     ...phones.map((p) => `    - ${p.label} ${p.npub} (paired ${p.pairedAt})`),

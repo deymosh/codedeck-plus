@@ -51,6 +51,7 @@ Home directory: `--home` / `CODEDECK_HOME`, default `~/.codedeck`.
 | `blossomRegisterEndpoint` / `blossomRegisterToken` | `CODEDECK_BLOSSOM_REGISTER_ENDPOINT` / `..._TOKEN` | CDX-093: auto-register paired phones on the Blossom media server so image upload does not fall back to relay chunking. Same admin contract, same https enforcement, separate token — the two servers share a KV but not a write policy |
 | `nvpnPath`, `meshAdminEnabled`, `adbPath` | `CODEDECK_NVPN_PATH`, `CODEDECK_MESH_ADMIN`, `CODEDECK_ADB_PATH` | Mesh + on-device test tooling (optional) |
 | `transcriptKeepLast` | `CODEDECK_TRANSCRIPT_KEEP_LAST` | Per-session transcript retention cap (default 5000 entries; 0 disables) |
+| `openCodeServerUrl`, `openCodeAutoStart`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_SERVER_URL`, `CODEDECK_OPENCODE_AUTO_START`, `CODEDECK_OPENCODE_PATH`, `CODEDECK_OPENCODE_PORT` | Optional second OpenCode session backend — external server or bridge-managed. See [`docs/OPENCODE.md`](../../docs/OPENCODE.md) |
 
 Secrets: the bridge identity key and phone-set credentials live in
 `<home>/state.json` (mode 0600, dir 0700). `config.json` is chmod'd 0600 on

@@ -23,6 +23,7 @@ export * from './sdk/facade';
 export * from './sdk/adapter';
 export * from './sdk/opencodeFacade';
 export * from './sdk/opencodeAdapter';
+export * from './sdk/opencodeServer';
 export * from './sdk/usage';
 export * from './workspace/folders';
 export * from './workspace/gsdState';

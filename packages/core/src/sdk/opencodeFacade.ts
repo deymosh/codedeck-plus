@@ -22,7 +22,7 @@
  *  - setPermissionMode()/setEffort() are documented no-ops (see their doc
  *    comments) — OpenCode has no session-scoped analog for either.
  */
-import { createOpencode, createOpencodeClient } from '@opencode-ai/sdk';
+import { createOpencodeClient } from '@opencode-ai/sdk';
 import type {
   Event,
   OpencodeClient,
@@ -46,14 +46,16 @@ type ToolPart = Extract<Part, { type: 'tool' }>;
 
 export interface OpenCodeFacadeOptions {
   /**
-   * External OpenCode server to talk to (`createOpencodeClient({ baseUrl })`).
-   * When omitted, an embedded server is spawned lazily on first use via
-   * `createOpencode()` and kept for the facade's lifetime. The bridge's own
-   * wiring (apps/bridge/src/commands.ts) only ever uses the external-URL
-   * mode, driven by `CODEDECK_OPENCODE_SERVER_URL` — never auto-spawning a
-   * subprocess server on every bridge boot.
+   * OpenCode server to talk to (`createOpencodeClient({ baseUrl })`). Always
+   * required — this facade only ever speaks to a URL; it never spawns a
+   * server itself. The bridge's own wiring (apps/bridge/src/commands.ts)
+   * decides WHICH URL to pass: either an external server the user pointed it
+   * at (`CODEDECK_OPENCODE_SERVER_URL`), or one it spawned itself via
+   * `sdk/opencodeServer.ts`'s `startOpenCodeServer()` when auto-start is
+   * configured. Keeping that decision out of this class is deliberate — one
+   * place resolves "how do we get a URL", this class only uses the result.
    */
-  baseUrl?: string;
+  baseUrl: string;
 }
 
 /** `model/providerID` split — OpenCode's prompt body wants `{providerID,
@@ -485,18 +487,16 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
 }
 
 export class OpenCodeFacade implements SdkFacade {
-  private readonly baseUrl?: string;
+  private readonly baseUrl: string;
   private clientPromise: Promise<OpencodeClient> | null = null;
 
-  constructor(opts: OpenCodeFacadeOptions = {}) {
+  constructor(opts: OpenCodeFacadeOptions) {
     this.baseUrl = opts.baseUrl;
   }
 
   private getClient(): Promise<OpencodeClient> {
     if (!this.clientPromise) {
-      this.clientPromise = this.baseUrl
-        ? Promise.resolve(createOpencodeClient({ baseUrl: this.baseUrl }))
-        : createOpencode().then(({ client }) => client);
+      this.clientPromise = Promise.resolve(createOpencodeClient({ baseUrl: this.baseUrl }));
     }
     return this.clientPromise;
   }
