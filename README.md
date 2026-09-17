@@ -35,6 +35,8 @@ Pairing is a one-time QR scan; it survives restarts and reinstalls on both ends.
 - Transcripts that survive restarts, offline gaps and reinstalls (ranged sync)
 - Per-session model and effort, plus custom AI provider profiles (Kimi K3,
   OpenRouter, any Anthropic-compatible endpoint)
+- Optional [OpenCode](https://opencode.ai) backend, selectable per session
+  alongside Claude Code
 - Encrypted Nostr DMs — NIP-17 and Marmot (MLS) side by side
 - Project/folder management on every paired bridge host
 

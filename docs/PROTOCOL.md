@@ -160,8 +160,8 @@ numbers. Phones render no cost/subscription figures for these sessions.
 The bridge advertises `protocolVersion` + `capabilities[]` on every heartbeat;
 phones stamp commands with `v` (+ optional `caps`). Gate features on
 **capability strings** (`sync/1`, `folders`, `gsd`, `images`, `device-actions`,
-`usage`, `models`, `diff`, `custom-providers`, `chunked`), never on version
-comparisons.
+`opencode`, `usage`, `models`, `diff`, `custom-providers`, `chunked`), never on
+version comparisons.
 
 Not every string is a runtime gate — see the three-tier note at the top of
 `packages/protocol/src/capabilities.ts`:
@@ -173,6 +173,11 @@ Not every string is a runtime gate — see the three-tier note at the top of
   on payload data (`folders[]`/`roots[]`, `gsd.available`, the `usage`/`models`
   responses) or the feature just always runs (`sync/1`). `device-actions` too:
   implemented on the bridge, but no phone UI sends `create-session.testSession`.
+  `opencode` is a presence marker with one twist: unlike every other marker
+  here, the bridge does not always include it — it is added to the heartbeat
+  only when a working OpenCode backend is actually configured (see
+  `docs/OPENCODE.md`), so its presence also gates whether the phone shows the
+  session-backend picker.
 - **TRANSPORT BEACON** — `chunked`: advertised on both sides, gated by neither.
 
 ## Oversize-event fragmentation (`chunk`)
