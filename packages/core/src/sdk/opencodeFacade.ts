@@ -89,6 +89,7 @@ class OpenCodeMessageQueue {
   private queue: SdkMessage[] = [];
   private waiters: Array<() => void> = [];
   private closed = false;
+  private error: unknown;
 
   push(msg: SdkMessage): void {
     if (this.closed) return;
@@ -101,13 +102,27 @@ class OpenCodeMessageQueue {
     while (this.waiters.length > 0) this.waiters.shift()?.();
   }
 
+  /** Same as close(), but drain()'s `for await` throws `err` once the
+   *  buffered messages are exhausted, instead of returning cleanly — the only
+   *  way SessionRunner.consume() (session/runner.ts) can tell a broken stream
+   *  (network drop, OpenCode server restart) from a graceful end, which is
+   *  what routes it into handleStreamError()'s up-to-2-restarts logic instead
+   *  of ending the session outright on the first blip. */
+  closeWithError(err: unknown): void {
+    this.error = err;
+    this.close();
+  }
+
   async *drain(): AsyncGenerator<SdkMessage, void, unknown> {
     for (;;) {
       if (this.queue.length > 0) {
         yield this.queue.shift()!;
         continue;
       }
-      if (this.closed) return;
+      if (this.closed) {
+        if (this.error !== undefined) throw this.error;
+        return;
+      }
       await new Promise<void>((resolve) => this.waiters.push(resolve));
     }
   }
@@ -185,7 +200,15 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         signal: this.abortController.signal,
       });
 
-      const session = await this.resolveSession(client, opts);
+      const { session, resumeLost } = await this.resolveSession(client, opts);
+
+      // Report the fallback to a fresh session BEFORE the init message, so the
+      // phone sees "memory was lost" ahead of "session started" rather than
+      // the other way round. Mirrors the same envelope-per-concern pattern
+      // this class already uses for errors/init — see OpenCodeResumeLostMessage.
+      if (resumeLost) {
+        this.queue.push({ type: 'opencode-resume-lost' } as unknown as SdkMessage);
+      }
 
       this.queue.push({
         type: 'system',
@@ -195,12 +218,17 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         permissionMode: opts.permissionMode,
       } as unknown as SdkMessage);
 
-      // Consume the event stream for the rest of this handle's life. Whether
-      // it ends gracefully (server closed the connection) or throws (network
-      // drop, server restart), the queue must close either way — a graceful
-      // end that only `.catch()`-closed the queue would leave messages()'s
-      // `for await` waiting on a stream nothing will ever push to again.
-      void this.consumeEvents(client, stream, session.id).finally(() => this.queue.close());
+      // Consume the event stream for the rest of this handle's life. A clean
+      // end (server closed the connection) closes the queue normally; a
+      // rejection (network drop, server restart) closes it WITH the error, so
+      // messages()'s `for await` (session/runner.ts's SessionRunner.consume())
+      // throws instead of ending "cleanly" — that distinction is what routes a
+      // broken stream into handleStreamError()'s restart logic instead of
+      // ending the session outright on the first network blip.
+      void this.consumeEvents(client, stream, session.id).then(
+        () => this.queue.close(),
+        (err) => this.queue.closeWithError(err),
+      );
 
       return { client, session };
     } catch (err) {
@@ -215,19 +243,32 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  through SessionRegistry, same as Claude Code's sdkSessionId). Verify it
    *  still exists server-side before trusting it — a session the server no
    *  longer knows about (deleted, server restarted with no persistence) falls
-   *  through to creating a fresh one rather than failing the whole session. */
-  private async resolveSession(client: OpencodeClient, opts: SdkSessionOptions): Promise<Session> {
+   *  through to creating a fresh one rather than failing the whole session.
+   *  `resumeLost` tells the caller whether that fallback happened, so it can
+   *  push a user-visible notice (init() does) instead of the silent swap this
+   *  used to be — a lost resume target means the model no longer remembers
+   *  earlier turns, the same fact Claude Code's CDX-056/073 mechanism always
+   *  surfaces to the phone. */
+  private async resolveSession(
+    client: OpencodeClient,
+    opts: SdkSessionOptions,
+  ): Promise<{ session: Session; resumeLost: boolean }> {
     if (opts.resume) {
       const { data, error } = await client.session.get({
         path: { id: opts.resume },
         query: { directory: this.cwd },
       });
-      if (!error && data) return data;
+      if (!error && data) return { session: data, resumeLost: false };
       console.error(
         `[OpenCodeFacade] resume ${opts.resume} not found server-side ` +
           `(${error ? JSON.stringify(error) : 'no session returned'}) — starting a fresh session instead`,
       );
+      return { session: await this.createSessionRemote(client, opts), resumeLost: true };
     }
+    return { session: await this.createSessionRemote(client, opts), resumeLost: false };
+  }
+
+  private async createSessionRemote(client: OpencodeClient, opts: SdkSessionOptions): Promise<Session> {
     const { data, error } = await client.session.create({
       query: { directory: this.cwd },
       body: { title: opts.sessionId },
@@ -277,6 +318,33 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
             subtype: 'session_state_changed',
             state: 'idle',
           } as unknown as SdkMessage);
+          break;
+        }
+        // Turn-boundary signal, the OpenCode counterpart of Claude Code's own
+        // SDK-emitted session_state_changed('running') — without it,
+        // SessionRunner.sessionState (session/runner.ts) got stuck at 'idle'
+        // after the FIRST turn (only 'session.idle' above ever fired), so the
+        // phone's "thinking…" indicator never showed again from the second
+        // turn onward. `status.type === 'idle'` overlaps with 'session.idle'
+        // above; both just assign the same state, so the overlap is harmless.
+        case 'session.status': {
+          if (event.properties.sessionID !== sessionId) continue;
+          const status = event.properties.status.type;
+          if (status !== 'busy' && status !== 'idle') break;
+          this.queue.push({
+            type: 'system',
+            subtype: 'session_state_changed',
+            state: status === 'busy' ? 'running' : 'idle',
+          } as unknown as SdkMessage);
+          break;
+        }
+        case 'session.diff': {
+          if (event.properties.sessionID !== sessionId) continue;
+          // Gating on the phone's 'diff' capability happens in
+          // opencodeAdapter.ts (opts.emitDiffEntries), same as Claude Code's
+          // adapter.ts — pushed unconditionally here, exactly like every other
+          // event this switch turns into a queue message.
+          this.queue.push({ type: 'opencode-diff', files: event.properties.diff } as unknown as SdkMessage);
           break;
         }
         case 'session.error': {

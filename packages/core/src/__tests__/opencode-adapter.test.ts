@@ -9,9 +9,11 @@ import type {
   OpenCodeStateMessage,
   OpenCodePartMessage,
   OpenCodeErrorMessage,
+  OpenCodeResumeLostMessage,
+  OpenCodeDiffMessage,
 } from '../sdk/opencodeAdapter';
 import type { SdkMessage } from '../sdk/facade';
-import type { Part } from '@opencode-ai/sdk';
+import type { FileDiff, Part } from '@opencode-ai/sdk';
 
 function asSdkMessage(msg: unknown): SdkMessage {
   return msg as SdkMessage;
@@ -235,6 +237,71 @@ describe('opencodeMessageToEntries', () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]!.entryType).toBe('error');
       expect(entries[0]!.content).toBe('provider auth failed');
+    });
+  });
+
+  describe('resume-lost messages', () => {
+    it('converts a lost resume target into a visible system entry, same special marker as a Claude Code restart', () => {
+      const msg: OpenCodeResumeLostMessage = { type: 'opencode-resume-lost' };
+      const entries = opencodeMessageToEntries(asSdkMessage(msg));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.entryType).toBe('system');
+      expect(entries[0]!.content).toMatch(/does not remember earlier turns/);
+      expect(entries[0]!.metadata?.special).toBe('session_restart');
+    });
+  });
+
+  describe('diff messages', () => {
+    function fileDiff(over: Partial<FileDiff> = {}): FileDiff {
+      return { file: 'src/a.ts', before: 'line1\nline2\nline3', after: 'line1\nCHANGED\nline3', additions: 1, deletions: 1, ...over };
+    }
+
+    it('is gated on opts.emitDiffEntries — no entries without it', () => {
+      const msg: OpenCodeDiffMessage = { type: 'opencode-diff', files: [fileDiff()] };
+      expect(opencodeMessageToEntries(asSdkMessage(msg))).toEqual([]);
+      expect(opencodeMessageToEntries(asSdkMessage(msg), { emitDiffEntries: false })).toEqual([]);
+    });
+
+    it('renders one diff entry per file, with real add/del/context lines (not a flat before/after dump)', () => {
+      const msg: OpenCodeDiffMessage = { type: 'opencode-diff', files: [fileDiff()] };
+      const entries = opencodeMessageToEntries(asSdkMessage(msg), { emitDiffEntries: true });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.entryType).toBe('diff');
+      expect(entries[0]!.diff?.path).toBe('src/a.ts');
+      const lines = entries[0]!.diff?.lines ?? [];
+      expect(lines).toEqual([
+        { type: 'context', text: 'line1' },
+        { type: 'del', text: 'line2' },
+        { type: 'add', text: 'CHANGED' },
+        { type: 'context', text: 'line3' },
+      ]);
+      expect(entries[0]!.content).toBe(' line1\n-line2\n+CHANGED\n line3');
+    });
+
+    it('emits one entry per file for a multi-file diff event', () => {
+      const msg: OpenCodeDiffMessage = {
+        type: 'opencode-diff',
+        files: [fileDiff({ file: 'a.ts' }), fileDiff({ file: 'b.ts' })],
+      };
+      const entries = opencodeMessageToEntries(asSdkMessage(msg), { emitDiffEntries: true });
+      expect(entries.map((e) => e.diff?.path)).toEqual(['a.ts', 'b.ts']);
+    });
+
+    it('falls back to a flat del/add rendering (no LCS) for a file above the line-count guard', () => {
+      const bigBefore = Array.from({ length: 2001 }, (_, i) => `l${i}`).join('\n');
+      const bigAfter = Array.from({ length: 2001 }, (_, i) => `l${i}x`).join('\n');
+      const msg: OpenCodeDiffMessage = {
+        type: 'opencode-diff',
+        files: [fileDiff({ file: 'huge.ts', before: bigBefore, after: bigAfter })],
+      };
+      const entries = opencodeMessageToEntries(asSdkMessage(msg), { emitDiffEntries: true });
+      const lines = entries[0]!.diff?.lines ?? [];
+      // Flat fallback: no LCS ran, so no 'context' lines at all — and since the
+      // 'del' block (2001 lines) alone exceeds the MAX_DIFF_LINES=200 wire cap,
+      // the truncated output is entirely 'del'.
+      expect(lines.length).toBe(200);
+      expect(lines.every((l) => l.type === 'del')).toBe(true);
+      expect(entries[0]!.diff?.truncated).toBe(true);
     });
   });
 
