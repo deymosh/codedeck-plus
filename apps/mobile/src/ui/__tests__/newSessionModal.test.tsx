@@ -243,11 +243,16 @@ describe('NewSessionModal (CDX-031)', () => {
     });
   });
 
-  it('a populated picker stops re-requesting and shows no apology (CDX-035)', async () => {
+  it('a populated picker still refreshes once on open, then stops nagging (CDX-035)', async () => {
     const core = await makeCore();
     const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);
     renderModal(core);
-    expect(modelsRequest).not.toHaveBeenCalled();
+    // The cached list renders immediately, but a provider's catalog can
+    // change between sessions, so opening the modal always asks once more —
+    // the answer, if different, replaces the picker without ever emptying it
+    // in between.
+    expect(modelsRequest).toHaveBeenCalledTimes(1);
+    expect([...(screen.getByLabelText('Model') as HTMLSelectElement).options]).toHaveLength(3);
 
     // A late empty answer records the reason but must not nag over a working
     // picker — nor wipe it (CDX-022).
@@ -264,7 +269,21 @@ describe('NewSessionModal (CDX-031)', () => {
       );
     }
     await Promise.resolve();
-    expect(modelsRequest).not.toHaveBeenCalled();
+    // Once-per-open freshness ask already happened; subsequent heartbeats
+    // must not turn into a poll loop while the picker stays populated.
+    expect(modelsRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('switching backend re-asks fresh even though the previous backend was already populated', async () => {
+    const core = await makeCore(true, [CAPABILITIES.opencode]);
+    const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);
+    renderModal(core);
+    expect(modelsRequest).toHaveBeenCalledTimes(1);
+    expect(modelsRequest).toHaveBeenLastCalledWith(MACHINE);
+
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'opencode' } });
+    expect(modelsRequest).toHaveBeenCalledTimes(2);
+    expect(modelsRequest).toHaveBeenLastCalledWith(MACHINE, 'opencode');
   });
 
   it('failed publish surfaces an error and stays open', async () => {

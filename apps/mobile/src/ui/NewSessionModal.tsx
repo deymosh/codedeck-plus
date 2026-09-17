@@ -17,7 +17,7 @@
  * Create sends only the fields the user actually chose — createSession's
  * options are all optional on the wire.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CAPABILITIES,
   effortLevelSchema,
@@ -74,16 +74,28 @@ export function NewSessionModal({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Ask for the machine's model list, and KEEP asking while we still have none
-  // (CDX-035). An empty answer no longer sets `models` — it only records a
-  // reason — so the retry stays alive instead of freezing on an empty picker.
-  // Heartbeats are the clock: no timers, at most one request per heartbeat,
-  // and it stops the instant a list lands.
+  // Ask for the machine's model list. Two reasons can trigger the same call:
+  // - a provider's catalog can change between sessions (a router adding/
+  //   dropping models, a new custom-provider key), so a cached list from an
+  //   earlier pairing/session would silently go stale for the picker's whole
+  //   lifetime otherwise — worth one extra round-trip every time this modal
+  //   opens or the backend toggles, even when we already have a list to show
+  //   meanwhile;
+  // - and, same as before (CDX-035), a retry on every heartbeat while we
+  //   still have NO list at all — an empty answer no longer sets `models`,
+  //   it only records a reason, so this keeps the retry alive instead of
+  //   freezing on an empty picker. Heartbeats are the clock: no timers, at
+  //   most one retry request per heartbeat, and it stops the instant a list
+  //   lands.
   const heartbeatAt = machine?.lastHeartbeatAt;
+  const freshAskedFor = useRef<string | null>(null);
   useEffect(() => {
     const m = core.machines.getState().machine(machinePubkey);
     const haveList = backend === 'opencode' ? m?.openCodeModels : m?.models;
-    if (!haveList) {
+    const freshKey = `${machinePubkey}:${backend}`;
+    const needsFreshAsk = freshAskedFor.current !== freshKey;
+    if (needsFreshAsk || !haveList) {
+      freshAskedFor.current = freshKey;
       if (backend === 'opencode') void core.api.modelsRequest(machinePubkey, 'opencode');
       else void core.api.modelsRequest(machinePubkey);
     }
