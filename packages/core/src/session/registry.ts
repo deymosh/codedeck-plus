@@ -22,6 +22,7 @@ import type {
   EffortLevel,
   PermissionMode,
   RemoteSessionInfo,
+  SessionBackend,
   SessionState,
 } from '@codedeck/protocol';
 
@@ -49,7 +50,7 @@ export interface SessionRecord {
    *  the same way `providerId` does — a bridge restart must reattach an
    *  OpenCode session to `openCodeFacade`, not silently fall back to Claude
    *  Code. */
-  backend?: 'claude-code' | 'opencode';
+  backend?: SessionBackend;
   effortLevel?: EffortLevel;
   permissionMode?: PermissionMode;
   title: string | null;
@@ -263,6 +264,7 @@ export class SessionRegistry {
       // CDX-062: providerLabel is NOT resolved here — the orchestrator owns
       // the live profile lookup at publish time (label survives deletion).
       if (rec.providerId !== undefined) { info.providerId = rec.providerId; }
+      if (rec.backend !== undefined) { info.backend = rec.backend; }
       if (rec.committed) { info.committed = true; }
       if (rec.contextWindow !== undefined) { info.contextWindow = rec.contextWindow; }
       if (rec.contextPercentage !== undefined) { info.contextPercentage = rec.contextPercentage; }

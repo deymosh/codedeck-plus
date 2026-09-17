@@ -23,6 +23,7 @@ import type {
   EffortLevel,
   OutputEntry,
   PermissionMode,
+  SessionBackend,
   SessionState,
   UsageData,
 } from '@codedeck/protocol';
@@ -123,7 +124,7 @@ export interface SessionRunnerOptions {
    *  the right facade after a restart instead of defaulting back to Claude
    *  Code. Purely declarative here: the runner never branches on it except to
    *  round-trip it into the record and default `translateMessage`. */
-  backend?: 'claude-code' | 'opencode';
+  backend?: SessionBackend;
   effortLevel?: EffortLevel;
   /** Attach on-device test tooling semantics (secret-path hard deny in the broker). */
   testSession?: boolean;
@@ -193,7 +194,7 @@ export class SessionRunner {
   private model?: string;
   /** CDX-062: the profile id this session is bound to (absent = Anthropic). */
   private _providerId?: string;
-  private _backend?: 'claude-code' | 'opencode';
+  private _backend?: SessionBackend;
   private effortLevel?: EffortLevel;
   /** The SDK's own session id — the --resume target. Updated from every init message. */
   private sdkSessionId: string | null = null;
@@ -329,7 +330,7 @@ export class SessionRunner {
   }
 
   /** Agent backend this session runs on (undefined means 'claude-code'). */
-  get backend(): 'claude-code' | 'opencode' | undefined {
+  get backend(): SessionBackend | undefined {
     return this._backend;
   }
 

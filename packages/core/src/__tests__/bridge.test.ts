@@ -1584,6 +1584,31 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     expect(resumed.facade.sessions.has('oc-persisted-1')).toBe(false);
     await waitFor(() => resumed.core.registry.get('oc-persisted-1')?.state === 'idle');
   });
+
+  it("models-request with backend: 'opencode' answers from openCodeFacade's list, not the default facade's, and echoes backend", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    openCodeFacade.models = [{ id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet (via OpenCode)' }];
+    const ctx = await start({ coreOpts: { openCodeFacade } });
+    ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
+
+    sendCommand(ctx, { type: 'models-request', backend: 'opencode' });
+    await waitFor(() => ofType(ctx, 'models').length === 1);
+    const msg = ofType(ctx, 'models')[0]!;
+    expect(msg.models).toEqual([{ id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet (via OpenCode)' }]);
+    expect(msg.backend).toBe('opencode');
+  });
+
+  it("models-request with backend: 'opencode' and NO openCodeFacade configured → empty list + reason, never the default facade's list", async () => {
+    const ctx = await start(); // no openCodeFacade
+    ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
+
+    sendCommand(ctx, { type: 'models-request', backend: 'opencode' });
+    await waitFor(() => ofType(ctx, 'models').length === 1);
+    const msg = ofType(ctx, 'models')[0]!;
+    expect(msg.models).toEqual([]);
+    expect(msg.error).toMatch(/no OpenCode backend configured/);
+    expect(msg.backend).toBe('opencode');
+  });
 });
 
 // --- CDX-071: env sanitization for provider-bound sessions ---

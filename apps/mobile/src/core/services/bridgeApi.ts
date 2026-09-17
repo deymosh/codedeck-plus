@@ -29,6 +29,7 @@ import {
   type FolderAckMessage,
   type PermissionMode,
   type PhoneToBridgeMessage,
+  type SessionBackend,
   type SetProviderProfileMessage,
   type UploadImageMessage,
 } from '@codedeck/protocol';
@@ -309,8 +310,8 @@ export class BridgeApi {
     return this.send(machine, { type: 'gsd-request', sessionId });
   }
 
-  modelsRequest(machine: string): Promise<boolean> {
-    return this.send(machine, { type: 'models-request' });
+  modelsRequest(machine: string, backend?: SessionBackend): Promise<boolean> {
+    return this.send(machine, { type: 'models-request', ...(backend ? { backend } : {}) });
   }
 
   /** Store credentials on the bridge host (CDX-011): explicit null DELETES a

@@ -12,6 +12,7 @@ import {
   permissionModeSchema,
   providerBaseUrlSchema,
   providerModelSchema,
+  sessionBackendSchema,
 } from './common';
 
 const versionFields = {
@@ -129,7 +130,7 @@ export const createSessionMessageSchema = z.object({
    *  working unchanged. Send 'opencode' only when the bridge advertises the
    *  'opencode' capability — an old bridge's zod silently strips the unknown
    *  field and would run the session on Claude Code instead. */
-  backend: z.enum(['claude-code', 'opencode']).optional(),
+  backend: sessionBackendSchema.optional(),
 });
 
 export const refreshSessionsMessageSchema = z.object({
@@ -214,10 +215,13 @@ export const gsdRequestMessageSchema = z.object({
   sessionId: z.string().min(1),
 });
 
-/** v10 (CDB-030): ask the bridge for the SDK's live supported-model list. */
+/** v10 (CDB-030): ask the bridge for the SDK's live supported-model list.
+ *  `backend` scopes the request to a specific agent backend's model list;
+ *  omitted means 'claude-code' (today's only backend, unchanged behaviour). */
 export const modelsRequestMessageSchema = z.object({
   ...versionFields,
   type: z.literal('models-request'),
+  backend: sessionBackendSchema.optional(),
 });
 
 // --- Credentials / device config / pairing ---

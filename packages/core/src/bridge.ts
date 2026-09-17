@@ -39,6 +39,7 @@ import {
   type ProviderModel,
   type ProviderProfileInfo,
   type RemoteSessionInfo,
+  type SessionBackend,
   type SessionListMessage,
   type SetCredentialsMessage,
   type SetDeviceConfigMessage,
@@ -478,6 +479,12 @@ export interface BridgeCoreOptions {
   deviceActions?: DeviceActions;
   now?: () => number;
 }
+
+/** Shared by handleCreateSession and the models-request handler — both must
+ *  refuse a `backend: 'opencode'` request identically when this bridge has
+ *  no working OpenCode facade configured. */
+const OPENCODE_NOT_CONFIGURED_REASON =
+  'This bridge has no OpenCode backend configured (CODEDECK_OPENCODE_SERVER_URL is unset).';
 
 export class BridgeCore {
   readonly keypair: Keypair;
@@ -1371,8 +1378,20 @@ export class BridgeCore {
 
       onCreateFolder: (msg) => this.handleCreateFolder(msg),
 
-      onModelsRequest: async () => {
-        const models = await this.facade.supportedModels();
+      onModelsRequest: async (msg) => {
+        const backend = msg.backend;
+        const backendField = backend ? { backend } : {};
+        if (backend === 'opencode' && !this.openCodeFacade) {
+          this.log(`[BridgeCore] models-request: ${OPENCODE_NOT_CONFIGURED_REASON}`);
+          await this.publishToPhones({
+            type: 'models',
+            models: [],
+            error: OPENCODE_NOT_CONFIGURED_REASON,
+            ...backendField,
+          });
+          return;
+        }
+        const models = await this.facadeFor(backend).supportedModels();
         // CDX-022/CDX-035: an empty list means "no live SDK session answered",
         // not "the SDK supports zero models". CDX-022 made us publish NOTHING
         // (so the phone kept retrying instead of freezing on an empty picker),
@@ -1381,12 +1400,15 @@ export class BridgeCore {
         // and keeps re-requesting — an empty answer is no longer
         // indistinguishable from a lost message.
         if (models.length === 0) {
-          const error = 'No live Claude session answered — start or open a session and try again.';
+          const error =
+            backend === 'opencode'
+              ? 'The OpenCode server reported no configured models (or the request failed) — check its provider configuration.'
+              : 'No live Claude session answered — start or open a session and try again.';
           this.log(`[BridgeCore] models-request: ${error}`);
-          await this.publishToPhones({ type: 'models', models: [], error });
+          await this.publishToPhones({ type: 'models', models: [], error, ...backendField });
           return;
         }
-        await this.publishToPhones({ type: 'models', models });
+        await this.publishToPhones({ type: 'models', models, ...backendField });
       },
 
       onUploadImage: (msg) => {
@@ -1481,7 +1503,7 @@ export class BridgeCore {
     // shape the unknown-providerId case above uses, rather than letting
     // makeRunner build a runner around a facade that doesn't exist.
     if (msg.backend === 'opencode' && !this.openCodeFacade) {
-      const reason = 'This bridge has no OpenCode backend configured (CODEDECK_OPENCODE_SERVER_URL is unset).';
+      const reason = OPENCODE_NOT_CONFIGURED_REASON;
       this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
       await this.publishToPhones({ type: 'session-failed', pendingId: sessionId, reason });
       return;
@@ -1916,6 +1938,15 @@ export class BridgeCore {
 
   // --- Runner wiring ---
 
+  /** Resolve which SdkFacade a `backend` value routes to. `undefined` and
+   *  'claude-code' both mean the default facade. Callers requesting
+   *  'opencode' must have already confirmed `openCodeFacade` is configured
+   *  (see makeRunner's `backend` doc comment) — the non-null assertion here
+   *  mirrors that existing contract rather than adding a new one. */
+  private facadeFor(backend?: SessionBackend): SdkFacade {
+    return backend === 'opencode' ? this.openCodeFacade! : this.facade;
+  }
+
   private makeRunner(opts: {
     sessionId: string;
     cwd: string;
@@ -1933,7 +1964,7 @@ export class BridgeCore {
      *  `facade.createSession()` already turns into a loud per-session error
      *  entry (`failResumedSpawn`) instead of a bridge crash — the same path a
      *  resumed session with a since-deleted provider profile already takes. */
-    backend?: 'claude-code' | 'opencode';
+    backend?: SessionBackend;
     effortLevel?: CreateSessionMessage['defaultEffort'];
     testSession?: boolean;
     resume?: boolean;
@@ -1973,10 +2004,10 @@ export class BridgeCore {
     return new SessionRunner({
       sessionId: opts.sessionId,
       cwd: opts.cwd,
-      // See this method's `backend` doc comment above for why a non-null
-      // assertion here is safe even when `openCodeFacade` turns out to be
+      // See this method's `backend` doc comment above for why facadeFor's
+      // non-null assertion is safe even when `openCodeFacade` turns out to be
       // unconfigured.
-      facade: backend === 'opencode' ? this.openCodeFacade! : this.facade,
+      facade: this.facadeFor(backend),
       transcript: this.transcript,
       registry: this.registry,
       broker: this.broker,
