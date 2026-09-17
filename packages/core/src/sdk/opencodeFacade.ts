@@ -42,6 +42,8 @@ import type {
   SdkSessionOptions,
 } from './facade';
 
+type ToolPart = Extract<Part, { type: 'tool' }>;
+
 export interface OpenCodeFacadeOptions {
   /**
    * External OpenCode server to talk to (`createOpencodeClient({ baseUrl })`).
@@ -126,10 +128,12 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  most once, when it reaches a stable (non-streaming) state; see
    *  shouldEmitPart. */
   private readonly emittedPartIds = new Set<string>();
-  /** Tool callIDs whose 'running' transition was already emitted, so a
-   *  metadata-only update to a still-running call doesn't re-emit a second
-   *  tool_use entry for the same call. */
-  private readonly emittedToolRunning = new Set<string>();
+  /** Tool callID -> last part status an entry was emitted for. A callID that
+   *  reached a terminal status (completed/error) never emits again — without
+   *  this guard a duplicate late message.part.updated for an already-finished
+   *  call would re-emit a second tool_result; a repeat of the same status
+   *  (e.g. two 'running' updates) is suppressed the same way. */
+  private readonly emittedToolStatus = new Map<string, ToolPart['state']['status']>();
   /** Permission ids already replied to — permission.updated could in theory
    *  refire; a second reply to an already-answered permission is rejected by
    *  the server anyway, but this avoids the wasted round trip and a second
@@ -163,40 +167,46 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     clientPromise: Promise<OpencodeClient>,
     opts: SdkSessionOptions,
   ): Promise<{ client: OpencodeClient; session: Session }> {
-    const client = await clientPromise;
-    // Subscribe BEFORE resolving/creating the session so no event in the gap
-    // between "session exists" and "we started listening" is missed. The
-    // stream is directory-scoped (a server can host multiple projects); this
-    // handle further filters by sessionID once it is known.
-    const { stream } = await client.event.subscribe({
-      query: { directory: this.cwd },
-      signal: this.abortController.signal,
-    });
-
-    let session: Session;
+    // Everything in this method up to (and including) starting consumeEvents
+    // can fail before the queue has any consumer telling it to close — any
+    // rejection here must close the queue itself, or messages()'s `for await`
+    // (session/runner.ts) hangs forever with no error ever surfacing, since
+    // probeReady() is skipped entirely for resumed sessions.
     try {
-      session = await this.resolveSession(client, opts);
+      const client = await clientPromise;
+      // Subscribe BEFORE resolving/creating the session so no event in the gap
+      // between "session exists" and "we started listening" is missed. The
+      // stream is directory-scoped (a server can host multiple projects); this
+      // handle further filters by sessionID once it is known.
+      const { stream } = await client.event.subscribe({
+        query: { directory: this.cwd },
+        signal: this.abortController.signal,
+      });
+
+      const session = await this.resolveSession(client, opts);
+
+      this.queue.push({
+        type: 'system',
+        subtype: 'init',
+        session_id: session.id,
+        ...(opts.model ? { model: opts.model } : {}),
+        permissionMode: opts.permissionMode,
+      } as unknown as SdkMessage);
+
+      // Consume the event stream for the rest of this handle's life. Whether
+      // it ends gracefully (server closed the connection) or throws (network
+      // drop, server restart), the queue must close either way — a graceful
+      // end that only `.catch()`-closed the queue would leave messages()'s
+      // `for await` waiting on a stream nothing will ever push to again.
+      void this.consumeEvents(client, stream, session.id).finally(() => this.queue.close());
+
+      return { client, session };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.queue.push({ type: 'opencode-error', content: message } as unknown as SdkMessage);
+      this.queue.close();
       throw err;
     }
-
-    this.queue.push({
-      type: 'system',
-      subtype: 'init',
-      session_id: session.id,
-      ...(opts.model ? { model: opts.model } : {}),
-      permissionMode: opts.permissionMode,
-    } as unknown as SdkMessage);
-
-    // Consume the event stream for the rest of this handle's life. A stream
-    // error (network drop, server restart) just ends the queue — the runner
-    // reads that the same way it would read the message stream simply
-    // ending.
-    void this.consumeEvents(client, stream, session.id).catch(() => this.queue.close());
-
-    return { client, session };
   }
 
   /** `opts.resume` names a previously seen OpenCode session id (round-tripped
@@ -211,6 +221,10 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         query: { directory: this.cwd },
       });
       if (!error && data) return data;
+      console.error(
+        `[OpenCodeFacade] resume ${opts.resume} not found server-side ` +
+          `(${error ? JSON.stringify(error) : 'no session returned'}) — starting a fresh session instead`,
+      );
     }
     const { data, error } = await client.session.create({
       query: { directory: this.cwd },
@@ -302,12 +316,12 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         return true;
       }
       case 'tool': {
-        if (part.state.status === 'pending') return false;
-        if (part.state.status === 'running') {
-          if (this.emittedToolRunning.has(part.callID)) return false;
-          this.emittedToolRunning.add(part.callID);
-          return true;
-        }
+        const status = part.state.status;
+        if (status === 'pending') return false;
+        const last = this.emittedToolStatus.get(part.callID);
+        if (last === 'completed' || last === 'error') return false;
+        if (last === status) return false;
+        this.emittedToolStatus.set(part.callID, status);
         return true;
       }
       default:

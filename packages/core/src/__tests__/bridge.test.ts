@@ -1547,6 +1547,43 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     expect(failed.reason).toMatch(/no OpenCode backend configured/);
     expect(ctx.facade.sessions.size).toBe(0);
   });
+
+  it('heartbeat advertises the opencode capability only when openCodeFacade is configured', async () => {
+    const withoutOpenCode = await start();
+    expect(ofType(withoutOpenCode, 'sessions')[0]!.capabilities).not.toContain('opencode');
+
+    const openCodeFacade = new FakeSdkFacade();
+    const withOpenCode = await start({ coreOpts: { openCodeFacade } });
+    expect(ofType(withOpenCode, 'sessions')[0]!.capabilities).toContain('opencode');
+  });
+
+  it("resume-on-boot: a persisted backend: 'opencode' session reattaches to openCodeFacade, not the default facade", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    const resumed = await start({
+      coreOpts: { openCodeFacade },
+      seedRegistry: async (stateDir) => {
+        const registry = new SessionRegistry(stateDir);
+        await registry.upsert({
+          sessionId: 'oc-persisted-1',
+          sdkSessionId: 'oc-sdk-persisted',
+          backend: 'opencode',
+          cwd: '/work/proj',
+          title: 'Old OpenCode work',
+          project: 'proj',
+          createdAt: '2026-08-05T00:00:00Z',
+          lastActivity: '2026-08-05T00:00:00Z',
+          state: 'offline',
+        });
+      },
+    });
+
+    await waitFor(() => openCodeFacade.sessions.has('oc-persisted-1'));
+    expect(openCodeFacade.session('oc-persisted-1').options.resume).toBe('oc-sdk-persisted');
+    // The default (Claude Code) facade never saw this session — routing is
+    // driven by the persisted record's backend, not just facade availability.
+    expect(resumed.facade.sessions.has('oc-persisted-1')).toBe(false);
+    await waitFor(() => resumed.core.registry.get('oc-persisted-1')?.state === 'idle');
+  });
 });
 
 // --- CDX-071: env sanitization for provider-bound sessions ---
