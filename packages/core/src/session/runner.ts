@@ -26,20 +26,27 @@ import type {
   SessionState,
   UsageData,
 } from '@codedeck/protocol';
-import type {
-  SdkAuthStatusMessage,
-  SdkCanUseTool,
-  SdkContextUsage,
-  SdkFacade,
-  SdkMessage,
-  SdkSessionHandle,
-  SdkSessionOptions,
-  SdkSystemMessage,
+import {
+  modelSupports1mContext,
+  type SdkAuthStatusMessage,
+  type SdkCanUseTool,
+  type SdkContextUsage,
+  type SdkFacade,
+  type SdkMessage,
+  type SdkSessionHandle,
+  type SdkSessionOptions,
+  type SdkSystemMessage,
 } from '../sdk/facade';
 import { sdkMessageToEntries } from '../sdk/adapter';
 import { normalizeUsage } from '../sdk/usage';
 
 const execFileAsync = promisify(execFile);
+
+/** Anthropic's plain (non-beta) context window, shared by every Sonnet/Opus
+ *  tier today. Used only to detect when the `context-1m-2025-08-07` beta was
+ *  requested but the API answered with the ordinary window anyway — see the
+ *  `result` handler below. */
+const PLAIN_CONTEXT_WINDOW = 200_000;
 
 /**
  * Read the current git HEAD commit hash for a working directory (ported).
@@ -224,6 +231,10 @@ export class SessionRunner {
   // --- Context usage (ported) ---
   private contextWindow?: number;
   private contextPercentage?: number;
+  /** Set once the 1M-beta-vs-reported-window mismatch has been logged for this
+   *  session, so a long-running session doesn't repeat the same warning on
+   *  every turn. */
+  private loggedContextMismatch = false;
 
   constructor(opts: SessionRunnerOptions) {
     this.sessionId = opts.sessionId;
@@ -626,6 +637,24 @@ export class SessionRunner {
             await this.registry.update(this.sessionId, { contextWindow: cw });
           }
           this.events.onStateChanged?.(this.sessionId);
+        }
+        // buildQueryOptions requests the 1M-context beta for every Sonnet/Opus
+        // session (facade.ts), but this repo has no visibility past the SDK
+        // subprocess turning that into a request header — a gateway/router
+        // sitting at ANTHROPIC_BASE_URL (e.g. Claude Code Router) can silently
+        // drop it. `cw` above is the API's own authoritative answer, so a
+        // plain-tier window here is the one place that mismatch is provable
+        // rather than guessed at. Logged once per session, not every turn.
+        if (!this.loggedContextMismatch && cw > 0 && cw <= PLAIN_CONTEXT_WINDOW
+          && modelSupports1mContext(this.model)) {
+          this.loggedContextMismatch = true;
+          this.events.log(
+            `[Runner] Session ${this.sessionId} requested the 1M-context beta for `
+            + `model "${this.model}" but the API reported a ${cw}-token window — the `
+            + 'beta was likely not honored. If this bridge routes through a gateway '
+            + 'or router (e.g. Claude Code Router), verify it forwards the '
+            + '"anthropic-beta: context-1m-2025-08-07" header to Anthropic.',
+          );
         }
       }
       // Refresh the SDK's authoritative context-usage % — context only changes
