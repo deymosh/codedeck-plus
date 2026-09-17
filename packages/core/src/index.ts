@@ -21,6 +21,8 @@ export * from './session/runner';
 export * from './sync/server';
 export * from './sdk/facade';
 export * from './sdk/adapter';
+export * from './sdk/opencodeFacade';
+export * from './sdk/opencodeAdapter';
 export * from './sdk/usage';
 export * from './workspace/folders';
 export * from './workspace/gsdState';

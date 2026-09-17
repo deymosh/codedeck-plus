@@ -1503,6 +1503,52 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
   });
 });
 
+describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
+  const started: Ctx[] = [];
+
+  async function start(partial?: Parameters<typeof startCore>[0]): Promise<Ctx> {
+    const ctx = await startCore(partial);
+    started.push(ctx);
+    return ctx;
+  }
+
+  afterEach(async () => {
+    while (started.length > 0) {
+      const ctx = started.pop()!;
+      await ctx.core.shutdown();
+      await fs.rm(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("create-session with backend: 'opencode' routes to the configured openCodeFacade, not the default facade", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    const ctx = await start({ coreOpts: { openCodeFacade } });
+
+    sendCommand(ctx, { type: 'create-session', backend: 'opencode' });
+    await waitFor(() => openCodeFacade.sessions.size >= 1 && ofType(ctx, 'session-pending').length >= 1);
+
+    // Routed to openCodeFacade, and the default (Claude Code) facade never saw it.
+    expect(openCodeFacade.sessions.size).toBe(1);
+    expect(ctx.facade.sessions.size).toBe(0);
+
+    const sessionId = [...openCodeFacade.sessions.keys()].at(-1)!;
+    openCodeFacade.emit(sessionId, initMsg(`sdk-${sessionId}`));
+    await waitFor(() => ofType(ctx, 'session-ready').some((m) => m.pendingId === sessionId));
+  });
+
+  it("create-session with backend: 'opencode' and NO openCodeFacade configured → session-pending then immediate session-failed (no spawn)", async () => {
+    const ctx = await start(); // startCore never sets openCodeFacade unless asked
+
+    sendCommand(ctx, { type: 'create-session', backend: 'opencode' });
+    await waitFor(() => ofType(ctx, 'session-failed').length === 1);
+    const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
+    const failed = ofType(ctx, 'session-failed')[0]!;
+    expect(failed.pendingId).toBe(pendingId);
+    expect(failed.reason).toMatch(/no OpenCode backend configured/);
+    expect(ctx.facade.sessions.size).toBe(0);
+  });
+});
+
 // --- CDX-071: env sanitization for provider-bound sessions ---
 
 /**

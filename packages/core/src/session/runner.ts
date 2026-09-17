@@ -117,6 +117,13 @@ export interface SessionRunnerOptions {
    * spawn and persisted in the registry record (resume rehydrates it).
    */
   providerId?: string;
+  /** Agent backend this session runs on. Absent means 'claude-code' (today's
+   *  only backend) — persisted in the registry record and rehydrated on
+   *  resume the same way `providerId` is, so `bridge.ts`'s resumeOnBoot picks
+   *  the right facade after a restart instead of defaulting back to Claude
+   *  Code. Purely declarative here: the runner never branches on it except to
+   *  round-trip it into the record and default `translateMessage`. */
+  backend?: 'claude-code' | 'opencode';
   effortLevel?: EffortLevel;
   /** Attach on-device test tooling semantics (secret-path hard deny in the broker). */
   testSession?: boolean;
@@ -148,6 +155,14 @@ export interface SessionRunnerOptions {
    * phones reject the unknown entryType.
    */
   emitDiffEntries?: () => boolean;
+  /**
+   * Per-backend SDK-message-to-OutputEntry translator, injected the same way
+   * `emitDiffEntries` is — defaults to `sdkMessageToEntries` (Claude Code).
+   * `bridge.ts`'s `makeRunner` passes `opencodeMessageToEntries` for an
+   * OpenCode session; the runner itself never branches on backend to decide
+   * which one to call.
+   */
+  translateMessage?: (msg: SdkMessage, opts?: { emitDiffEntries?: boolean }) => OutputEntry[];
 }
 
 export class SessionRunner {
@@ -167,6 +182,7 @@ export class SessionRunner {
   private readonly claudePath?: string;
   private readonly sessionEnv?: (ctx: { providerId?: string }) => Record<string, string> | undefined;
   private readonly emitDiffEntries?: () => boolean;
+  private readonly translateMessage: (msg: SdkMessage, opts?: { emitDiffEntries?: boolean }) => OutputEntry[];
 
   private handle: SdkSessionHandle | null = null;
   private _phase: RunnerPhase = 'pending';
@@ -177,6 +193,7 @@ export class SessionRunner {
   private model?: string;
   /** CDX-062: the profile id this session is bound to (absent = Anthropic). */
   private _providerId?: string;
+  private _backend?: 'claude-code' | 'opencode';
   private effortLevel?: EffortLevel;
   /** The SDK's own session id — the --resume target. Updated from every init message. */
   private sdkSessionId: string | null = null;
@@ -247,6 +264,7 @@ export class SessionRunner {
     this.permissionMode = opts.permissionMode ?? 'plan';
     this.model = opts.model;
     this._providerId = opts.providerId;
+    this._backend = opts.backend;
     this.effortLevel = opts.effortLevel;
     this.testSession = !!opts.testSession;
     this.isResume = !!opts.resume;
@@ -254,6 +272,7 @@ export class SessionRunner {
     this.claudePath = opts.pathToClaudeCodeExecutable;
     this.sessionEnv = opts.sessionEnv;
     this.emitDiffEntries = opts.emitDiffEntries;
+    this.translateMessage = opts.translateMessage ?? sdkMessageToEntries;
     this.gitHead = opts.gitHead ?? gitHeadHash;
     this.createdAt = new Date().toISOString();
     this.lastActivity = this.createdAt;
@@ -272,6 +291,7 @@ export class SessionRunner {
         this.model = rec.model ?? this.model;
         // CDX-062: the provider binding survives resume-on-boot via the record.
         this._providerId = rec.providerId ?? this._providerId;
+        this._backend = rec.backend ?? this._backend;
         this.effortLevel = rec.effortLevel ?? this.effortLevel;
         this.title = rec.title;
         this.projectOverride = rec.project;
@@ -306,6 +326,11 @@ export class SessionRunner {
    *  The orchestrator gates usage publishing and model changes on it. */
   get providerId(): string | undefined {
     return this._providerId;
+  }
+
+  /** Agent backend this session runs on (undefined means 'claude-code'). */
+  get backend(): 'claude-code' | 'opencode' | undefined {
+    return this._backend;
   }
 
   get alive(): boolean {
@@ -663,7 +688,7 @@ export class SessionRunner {
       this.bg('context refresh', this.refreshContextPercentage());
     }
 
-    const entries = sdkMessageToEntries(msg, {
+    const entries = this.translateMessage(msg, {
       emitDiffEntries: this.emitDiffEntries?.() === true,
     }).filter((entry) => {
       // CDX-082: drop an SDK echo of a message we already authored an entry for.
@@ -1312,6 +1337,7 @@ export class SessionRunner {
       cwd: this.cwd,
       ...(this.model ? { model: this.model } : {}),
       ...(this._providerId ? { providerId: this._providerId } : {}),
+      ...(this._backend ? { backend: this._backend } : {}),
       ...(this.effortLevel ? { effortLevel: this.effortLevel } : {}),
       permissionMode: this.permissionMode,
       title: this.title,

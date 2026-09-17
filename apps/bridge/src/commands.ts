@@ -5,6 +5,7 @@
  */
 import {
   BridgeCore,
+  OpenCodeFacade,
   RealSdkFacade,
   listAllWorkspaceFolders,
   resolveClaudeExecutable,
@@ -48,6 +49,10 @@ export interface CommandIo {
  *  Production callers pass nothing and get the real thing. */
 export interface CommandDeps {
   facade?: SdkFacade;
+  /** Injectable for tests; production constructs one from
+   *  `CODEDECK_OPENCODE_SERVER_URL` (see `startBridge`) when that env var is
+   *  set, and passes no OpenCode facade at all otherwise. */
+  openCodeFacade?: SdkFacade;
   poolFactory?: PoolFactory;
   meshAdmin?: MeshAdmin;
   heartbeatIntervalMs?: number;
@@ -171,10 +176,18 @@ async function startBridge(
       out: io.out,
       err: io.err,
     });
+    // OpenCode is a second, optional backend: absent CODEDECK_OPENCODE_SERVER_URL
+    // (and no test-injected deps.openCodeFacade), the bridge runs Claude-Code-only
+    // exactly as before — no OpenCodeFacade is constructed at all.
+    const openCodeServerUrl = process.env.CODEDECK_OPENCODE_SERVER_URL;
+    const openCodeFacade =
+      deps.openCodeFacade ??
+      (openCodeServerUrl ? new OpenCodeFacade({ baseUrl: openCodeServerUrl }) : undefined);
     const core = await BridgeCore.start({
       host,
       secretKey: keys.secretKey,
       facade: deps.facade ?? new RealSdkFacade(),
+      ...(openCodeFacade ? { openCodeFacade } : {}),
       ...(deps.poolFactory ? { poolFactory: deps.poolFactory } : {}),
       ...(deps.meshAdmin ? { meshAdmin: deps.meshAdmin } : {}),
       ...(deps.heartbeatIntervalMs !== undefined
@@ -189,6 +202,7 @@ async function startBridge(
       `  relays:     ${resolved.config.relays.join(', ')}\n` +
       `  workspaces: ${resolved.config.workspaceRoots.join(', ')}\n` +
       `  claude:     ${claude}\n` +
+      `  opencode:   ${openCodeFacade ? (openCodeServerUrl ?? 'configured (test double)') : '(not configured)'}\n` +
       `  paired:     ${core.pairedPhones().length} phone(s)\n` +
       formatProviderProfiles(state.providerProfiles()).map((l) => `${l}\n`).join(''),
     );

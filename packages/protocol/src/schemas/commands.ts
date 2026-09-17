@@ -124,6 +124,12 @@ export const createSessionMessageSchema = z.object({
    *  an old bridge's zod silently strips the unknown field and would run the
    *  session on Anthropic instead. */
   providerId: z.string().min(1).optional(),
+  /** Select the agent backend for this session. Omitted means 'claude-code'
+   *  (today's behavior), so a phone that has never seen this field keeps
+   *  working unchanged. Send 'opencode' only when the bridge advertises the
+   *  'opencode' capability — an old bridge's zod silently strips the unknown
+   *  field and would run the session on Claude Code instead. */
+  backend: z.enum(['claude-code', 'opencode']).optional(),
 });
 
 export const refreshSessionsMessageSchema = z.object({

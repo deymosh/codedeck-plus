@@ -43,6 +43,13 @@ export interface SessionRecord {
   /** CDX-062: id of the custom provider profile this session was bound to at
    *  creation (absent = Anthropic). Survives resume-on-boot + auto-restart. */
   providerId?: string;
+  /** Agent backend this session was created on. Absent means 'claude-code'
+   *  (sessions created before the OpenCode backend existed have no value
+   *  here and must keep resolving to Claude Code). Survives resume-on-boot
+   *  the same way `providerId` does — a bridge restart must reattach an
+   *  OpenCode session to `openCodeFacade`, not silently fall back to Claude
+   *  Code. */
+  backend?: 'claude-code' | 'opencode';
   effortLevel?: EffortLevel;
   permissionMode?: PermissionMode;
   title: string | null;
