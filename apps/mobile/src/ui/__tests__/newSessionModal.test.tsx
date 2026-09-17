@@ -274,6 +274,26 @@ describe('NewSessionModal (CDX-031)', () => {
     expect(modelsRequest).toHaveBeenCalledTimes(1);
   });
 
+  it('switching to OpenCode resets the Model select to Default rather than keeping the Claude-Code-shaped default', async () => {
+    const core = await makeCore(true, [CAPABILITIES.opencode]);
+    core.settings.getState().setDefaultModel('model-x');
+    renderModal(core);
+
+    const modelSelect = screen.getByLabelText('Model') as HTMLSelectElement;
+    // Claude Code's world: the saved default is selected.
+    expect(modelSelect.value).toBe('model-x');
+
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'opencode' } });
+    // OpenCode model ids are `<providerID>/<modelID>` — 'model-x' has no such
+    // shape, so keeping it selected would either be silently dropped
+    // server-side or misread as a provider/model split. Must reset to the
+    // bridge/OpenCode default instead.
+    expect(modelSelect.value).toBe('');
+
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: '' } });
+    expect(modelSelect.value).toBe('model-x');
+  });
+
   it('switching backend re-asks fresh even though the previous backend was already populated', async () => {
     const core = await makeCore(true, [CAPABILITIES.opencode]);
     const modelsRequest = vi.spyOn(core.api, 'modelsRequest').mockResolvedValue(true);

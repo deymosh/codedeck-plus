@@ -163,7 +163,12 @@ export function NewSessionModal({
   const changeBackend = (value: '' | SessionBackend): void => {
     setBackend(value);
     setProviderId('');
-    setModel(core.settings.getState().defaultModel);
+    // OpenCode model ids are `<providerID>/<modelID>` (splitModelId,
+    // opencodeFacade.ts) — the saved Claude-Code-shaped default has no such
+    // split, so reusing it here would either be silently discarded server
+    // side or misread as a provider/model split. Reset to the bridge/OpenCode
+    // default (the Model select's own "Default model" option) instead.
+    setModel(value === 'opencode' ? '' : core.settings.getState().defaultModel);
   };
 
   const create = async (): Promise<void> => {
