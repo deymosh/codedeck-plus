@@ -415,11 +415,16 @@ describe('SessionRunner', () => {
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
       .some(({ entry }) => entry.metadata?.role === 'user'));
 
+    // Echo VERBATIM what the backend actually received (session.inputs[0]) —
+    // the meta-request suffix included, exactly like a real echoing backend
+    // (OpenCode) does. Echoing only the clean typed text is not what any real
+    // backend does and is exactly the case that used to slip past the dedup
+    // filter (it compared against the un-suffixed text, never a match).
     session.emit({
       type: 'user',
       session_id: 's1',
       parent_tool_use_id: null,
-      message: { role: 'user', content: 'hello there' },
+      message: { role: 'user', content: session.inputs[0] },
       uuid: 'u-echo',
     } as unknown as SdkMessage);
     session.emit(assistantMsg('s1', ['ack']));

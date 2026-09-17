@@ -1076,7 +1076,15 @@ export class SessionRunner {
      * it a lower seq than anything the reply produces. `tryAppend` because a
      * failed append must not cost the user the actual send.
      */
-    this.authoredUserTexts.push(typed);
+    // `text`, not `typed`: this must match whatever an echo would actually
+    // carry. Claude Code never echoes (see above), so it never mattered which
+    // one was stored — but OpenCode's event stream DOES echo the prompt it
+    // received verbatim, meta-request suffix included, and the dedup filter
+    // in handleMessage() compares against this array by exact string equality.
+    // Storing the pre-suffix `typed` here left every OpenCode session's first
+    // usable turn showing a duplicate user entry (the authored one, clean,
+    // plus the echoed one with the raw <!-- emit-session-meta --> comment).
+    this.authoredUserTexts.push(text);
     if (this.authoredUserTexts.length > 16) this.authoredUserTexts.shift();
     void this.tryAppend([{
       entryType: 'text',
