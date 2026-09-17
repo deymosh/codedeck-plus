@@ -23,6 +23,7 @@ services:
       - CODEDECK_OPENCODE_SERVER_URL=${CODEDECK_OPENCODE_SERVER_URL:-}
       - CODEDECK_OPENCODE_AUTO_START=${CODEDECK_OPENCODE_AUTO_START:-}
       - CODEDECK_OPENCODE_PORT=${CODEDECK_OPENCODE_PORT:-}
+      - CODEDECK_GSD_AUTO_INSTALL=${CODEDECK_GSD_AUTO_INSTALL:-}
     secrets:
       - source: claude_code_oauth_token
         target: claude_code_oauth_token

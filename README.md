@@ -134,6 +134,10 @@ CODEDECK_TOR_PROXY_URL=
 CODEDECK_OPENCODE_SERVER_URL=
 CODEDECK_OPENCODE_AUTO_START=
 CODEDECK_OPENCODE_PORT=
+
+# Optional — installs gsd-core (github.com/open-gsd/gsd-core) globally on
+# startup. Off by default: see .env.example for why.
+CODEDECK_GSD_AUTO_INSTALL=
 ```
 
 Docker Compose reads the root `.env` file as its environment configuration. It
