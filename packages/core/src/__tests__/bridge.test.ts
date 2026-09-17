@@ -1548,6 +1548,24 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     expect(ctx.facade.sessions.size).toBe(0);
   });
 
+  it("create-session with backend: 'opencode' AND a providerId → session-failed, even with a valid profile and openCodeFacade configured", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    const ctx = await start({
+      coreOpts: { openCodeFacade },
+      seedStorage: (storage) => seedProfiles(storage, kimiProfile()),
+    });
+
+    sendCommand(ctx, { type: 'create-session', backend: 'opencode', providerId: 'kimi' });
+    await waitFor(() => ofType(ctx, 'session-failed').length === 1);
+    const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
+    const failed = ofType(ctx, 'session-failed')[0]!;
+    expect(failed.pendingId).toBe(pendingId);
+    expect(failed.reason).toMatch(/Custom provider profiles are not supported with the OpenCode backend/);
+    // Neither facade ever saw a spawn attempt.
+    expect(openCodeFacade.sessions.size).toBe(0);
+    expect(ctx.facade.sessions.size).toBe(0);
+  });
+
   it('heartbeat advertises the opencode capability only when openCodeFacade is configured', async () => {
     const withoutOpenCode = await start();
     expect(ofType(withoutOpenCode, 'sessions')[0]!.capabilities).not.toContain('opencode');

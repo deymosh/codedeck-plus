@@ -1479,6 +1479,24 @@ export class BridgeCore {
       createdAt: new Date().toISOString(),
     });
 
+    // A custom provider profile materializes as subprocess env (ANTHROPIC_API_KEY
+    // / ANTHROPIC_BASE_URL) the SDK's own Claude Code CLI spawn picks up — the
+    // OpenCode facade never spawns a subprocess per session (it speaks HTTP to
+    // an already-running `opencode serve`), so it has nothing to inject a
+    // per-session credential into and silently ignores both `providerId` and
+    // the env SessionRunner would have computed for it. Refuse the combination
+    // here rather than let a session start that is attributed to a provider
+    // profile it never actually used. The mobile UI already hides the provider
+    // picker once OpenCode is selected (NewSessionModal.tsx), but nothing else
+    // stops a hand-crafted or future client from sending both.
+    if (msg.providerId && msg.backend === 'opencode') {
+      const reason =
+        'Custom provider profiles are not supported with the OpenCode backend — OpenCode always uses its own configured providers.';
+      this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
+      await this.publishToPhones({ type: 'session-failed', pendingId: sessionId, reason });
+      return;
+    }
+
     // CDX-062: an unknown or token-less profile can never spawn — keep the
     // two-phase contract (pending already went out) and fail immediately with
     // a reason instead of a doomed spawn.
