@@ -92,6 +92,17 @@ function nonEmpty(list: string[] | undefined): string[] | undefined {
   return Array.isArray(list) && list.length > 0 ? list : undefined;
 }
 
+/** Parses a CODEDECK_* boolean-flag env var: '0'/'false' -> false, any other
+ *  non-empty value -> true. An unset OR empty-string value resolves to
+ *  `undefined` ("fall through to the next source"), not `true` — Compose's
+ *  `${VAR:-}` interpolation defines the var as '' for every operator who
+ *  never set it, so treating '' as "present and truthy" would silently
+ *  enable the flag on every default `docker compose up`. */
+function envBool(value: string | undefined): boolean | undefined {
+  if (value === undefined || value === '') return undefined;
+  return value !== '0' && value !== 'false';
+}
+
 export function loadCliConfig(
   flags: CliFlags = {},
   env: NodeJS.ProcessEnv = process.env,
@@ -137,10 +148,7 @@ export function loadCliConfig(
   const claudePath = flags.claudePath ?? env.CODEDECK_CLAUDE_PATH ?? file.claudePath;
   const nvpnPath = env.CODEDECK_NVPN_PATH ?? file.nvpnPath;
   const adbPath = env.CODEDECK_ADB_PATH ?? file.adbPath;
-  const meshAdminEnabled =
-    env.CODEDECK_MESH_ADMIN !== undefined
-      ? env.CODEDECK_MESH_ADMIN !== '0' && env.CODEDECK_MESH_ADMIN !== 'false'
-      : file.meshAdminEnabled;
+  const meshAdminEnabled = envBool(env.CODEDECK_MESH_ADMIN) ?? file.meshAdminEnabled;
   const relayRegisterEndpoint =
     flags.relayRegisterEndpoint ?? env.CODEDECK_RELAY_REGISTER_ENDPOINT ?? file.relayRegisterEndpoint;
   const relayRegisterToken =
@@ -160,11 +168,7 @@ export function loadCliConfig(
   const openCodeServerUrl =
     flags.openCodeServerUrl ?? env.CODEDECK_OPENCODE_SERVER_URL ?? file.openCodeServerUrl;
   const openCodeAutoStart =
-    flags.openCodeAutoStart !== undefined
-      ? flags.openCodeAutoStart
-      : env.CODEDECK_OPENCODE_AUTO_START !== undefined
-        ? env.CODEDECK_OPENCODE_AUTO_START !== '0' && env.CODEDECK_OPENCODE_AUTO_START !== 'false'
-        : file.openCodeAutoStart;
+    flags.openCodeAutoStart ?? envBool(env.CODEDECK_OPENCODE_AUTO_START) ?? file.openCodeAutoStart;
   const openCodePath = flags.openCodePath ?? env.CODEDECK_OPENCODE_PATH ?? file.openCodePath;
   const openCodePortRaw = env.CODEDECK_OPENCODE_PORT ?? file.openCodePort;
   const openCodePort =

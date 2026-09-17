@@ -169,6 +169,13 @@ describe('loadCliConfig', () => {
       expect(loadCliConfig({ home }, { CODEDECK_OPENCODE_AUTO_START: 'false' }).config.openCodeAutoStart).toBe(false);
     });
 
+    it('CODEDECK_OPENCODE_AUTO_START="" (unset in docker-compose.yml\'s ${VAR:-}) is treated as unset, not enabled', () => {
+      expect(loadCliConfig({ home }, { CODEDECK_OPENCODE_AUTO_START: '' }).config.openCodeAutoStart).toBeUndefined();
+      // A config.json value must still shine through an empty (unset) env var.
+      writeConfig({ openCodeAutoStart: true });
+      expect(loadCliConfig({ home }, { CODEDECK_OPENCODE_AUTO_START: '' }).config.openCodeAutoStart).toBe(true);
+    });
+
     it('flags override env (server-url, auto-start, path)', () => {
       const { config } = loadCliConfig(
         {
