@@ -1503,6 +1503,132 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
   });
 });
 
+describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
+  const started: Ctx[] = [];
+
+  async function start(partial?: Parameters<typeof startCore>[0]): Promise<Ctx> {
+    const ctx = await startCore(partial);
+    started.push(ctx);
+    return ctx;
+  }
+
+  afterEach(async () => {
+    while (started.length > 0) {
+      const ctx = started.pop()!;
+      await ctx.core.shutdown();
+      await fs.rm(ctx.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("create-session with backend: 'opencode' routes to the configured openCodeFacade, not the default facade", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    const ctx = await start({ coreOpts: { openCodeFacade } });
+
+    sendCommand(ctx, { type: 'create-session', backend: 'opencode' });
+    await waitFor(() => openCodeFacade.sessions.size >= 1 && ofType(ctx, 'session-pending').length >= 1);
+
+    // Routed to openCodeFacade, and the default (Claude Code) facade never saw it.
+    expect(openCodeFacade.sessions.size).toBe(1);
+    expect(ctx.facade.sessions.size).toBe(0);
+
+    const sessionId = [...openCodeFacade.sessions.keys()].at(-1)!;
+    openCodeFacade.emit(sessionId, initMsg(`sdk-${sessionId}`));
+    await waitFor(() => ofType(ctx, 'session-ready').some((m) => m.pendingId === sessionId));
+  });
+
+  it("create-session with backend: 'opencode' and NO openCodeFacade configured → session-pending then immediate session-failed (no spawn)", async () => {
+    const ctx = await start(); // startCore never sets openCodeFacade unless asked
+
+    sendCommand(ctx, { type: 'create-session', backend: 'opencode' });
+    await waitFor(() => ofType(ctx, 'session-failed').length === 1);
+    const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
+    const failed = ofType(ctx, 'session-failed')[0]!;
+    expect(failed.pendingId).toBe(pendingId);
+    expect(failed.reason).toMatch(/no OpenCode backend configured/);
+    expect(ctx.facade.sessions.size).toBe(0);
+  });
+
+  it("create-session with backend: 'opencode' AND a providerId → session-failed, even with a valid profile and openCodeFacade configured", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    const ctx = await start({
+      coreOpts: { openCodeFacade },
+      seedStorage: (storage) => seedProfiles(storage, kimiProfile()),
+    });
+
+    sendCommand(ctx, { type: 'create-session', backend: 'opencode', providerId: 'kimi' });
+    await waitFor(() => ofType(ctx, 'session-failed').length === 1);
+    const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
+    const failed = ofType(ctx, 'session-failed')[0]!;
+    expect(failed.pendingId).toBe(pendingId);
+    expect(failed.reason).toMatch(/Custom provider profiles are not supported with the OpenCode backend/);
+    // Neither facade ever saw a spawn attempt.
+    expect(openCodeFacade.sessions.size).toBe(0);
+    expect(ctx.facade.sessions.size).toBe(0);
+  });
+
+  it('heartbeat advertises the opencode capability only when openCodeFacade is configured', async () => {
+    const withoutOpenCode = await start();
+    expect(ofType(withoutOpenCode, 'sessions')[0]!.capabilities).not.toContain('opencode');
+
+    const openCodeFacade = new FakeSdkFacade();
+    const withOpenCode = await start({ coreOpts: { openCodeFacade } });
+    expect(ofType(withOpenCode, 'sessions')[0]!.capabilities).toContain('opencode');
+  });
+
+  it("resume-on-boot: a persisted backend: 'opencode' session reattaches to openCodeFacade, not the default facade", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    const resumed = await start({
+      coreOpts: { openCodeFacade },
+      seedRegistry: async (stateDir) => {
+        const registry = new SessionRegistry(stateDir);
+        await registry.upsert({
+          sessionId: 'oc-persisted-1',
+          sdkSessionId: 'oc-sdk-persisted',
+          backend: 'opencode',
+          cwd: '/work/proj',
+          title: 'Old OpenCode work',
+          project: 'proj',
+          createdAt: '2026-08-05T00:00:00Z',
+          lastActivity: '2026-08-05T00:00:00Z',
+          state: 'offline',
+        });
+      },
+    });
+
+    await waitFor(() => openCodeFacade.sessions.has('oc-persisted-1'));
+    expect(openCodeFacade.session('oc-persisted-1').options.resume).toBe('oc-sdk-persisted');
+    // The default (Claude Code) facade never saw this session — routing is
+    // driven by the persisted record's backend, not just facade availability.
+    expect(resumed.facade.sessions.has('oc-persisted-1')).toBe(false);
+    await waitFor(() => resumed.core.registry.get('oc-persisted-1')?.state === 'idle');
+  });
+
+  it("models-request with backend: 'opencode' answers from openCodeFacade's list, not the default facade's, and echoes backend", async () => {
+    const openCodeFacade = new FakeSdkFacade();
+    openCodeFacade.models = [{ id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet (via OpenCode)' }];
+    const ctx = await start({ coreOpts: { openCodeFacade } });
+    ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
+
+    sendCommand(ctx, { type: 'models-request', backend: 'opencode' });
+    await waitFor(() => ofType(ctx, 'models').length === 1);
+    const msg = ofType(ctx, 'models')[0]!;
+    expect(msg.models).toEqual([{ id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet (via OpenCode)' }]);
+    expect(msg.backend).toBe('opencode');
+  });
+
+  it("models-request with backend: 'opencode' and NO openCodeFacade configured → empty list + reason, never the default facade's list", async () => {
+    const ctx = await start(); // no openCodeFacade
+    ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
+
+    sendCommand(ctx, { type: 'models-request', backend: 'opencode' });
+    await waitFor(() => ofType(ctx, 'models').length === 1);
+    const msg = ofType(ctx, 'models')[0]!;
+    expect(msg.models).toEqual([]);
+    expect(msg.error).toMatch(/no OpenCode backend configured/);
+    expect(msg.backend).toBe('opencode');
+  });
+});
+
 // --- CDX-071: env sanitization for provider-bound sessions ---
 
 /**

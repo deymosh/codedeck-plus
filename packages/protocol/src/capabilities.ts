@@ -60,6 +60,14 @@ export const CAPABILITIES = {
    *  sessions are driven from the paired laptop). Advertised so a bridge that
    *  can host them is identifiable. */
   deviceActions: 'device-actions',
+  /** PRESENCE MARKER, conditionally advertised. OpenCode backend support
+   *  (`create-session.backend: 'opencode'`). Unlike every other marker in this
+   *  file, the bridge does NOT always include this string — it is added to the
+   *  heartbeat only when the bridge has a working OpenCode facade configured
+   *  (see `BridgeCoreOptions.openCodeFacade` / `CODEDECK_OPENCODE_SERVER_URL`),
+   *  because a bridge without one would otherwise advertise a backend it can't
+   *  actually run. The phone shows the backend picker when present. */
+  opencode: 'opencode',
   /** PRESENCE MARKER. Subscription usage snapshots (usage-request / usage).
    *  Phone requests unconditionally; the badge is gated by a local setting. */
   usage: 'usage',
@@ -108,11 +116,14 @@ export const CAPABILITIES = {
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 
-/** Every capability the reference bridge implementation ships with. Advertised
- *  wholesale on the heartbeat; only `images` and `customProviders` are read by
- *  the phone as gates, the rest are presence markers (see the tier note above). */
-export const ALL_BRIDGE_CAPABILITIES: readonly Capability[] =
-  Object.values(CAPABILITIES);
+/** Every capability the reference bridge implementation ships with, EXCEPT
+ *  `opencode` (conditionally advertised — see its doc comment above). Only
+ *  `images` and `customProviders` are read by the phone as gates, the rest are
+ *  presence markers (see the tier note above). A running bridge computes its
+ *  actual heartbeat list from this plus `opencode` when configured. */
+export const ALL_BRIDGE_CAPABILITIES: readonly Capability[] = Object.values(
+  CAPABILITIES,
+).filter((c) => c !== CAPABILITIES.opencode);
 
 /** Capabilities the reference PHONE implementation stamps on outgoing command
  *  `caps` (feature strings the phone can RENDER — see `diff` above). The bridge

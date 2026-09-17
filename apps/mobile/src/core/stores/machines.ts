@@ -69,6 +69,13 @@ export interface MachineView {
    *  an empty `models` + `error`). Rendered next to the picker; cleared by the
    *  next non-empty answer. */
   modelsError?: string;
+  /** OpenCode's own model list — kept separate from `models` (Claude Code's)
+   *  because the two backends can have entirely different supported models;
+   *  a phone with both fetched must not let one clobber the other. Mirrors
+   *  `models` exactly, just scoped by `msg.backend === 'opencode'`. */
+  openCodeModels?: Array<{ id: string; label?: string }>;
+  /** Mirrors `modelsError`, scoped to the OpenCode list (see CDX-035 above). */
+  openCodeModelsError?: string;
   /** CDX-062: the bridge's REDACTED custom-provider profile list (each entry
    *  carries `hasToken`, never the token). Bridge-authoritative + in-memory
    *  only: serializeMachines strips it (the phone persists zero profile
@@ -509,19 +516,34 @@ export function createMachinesStore(
           // SDK supports zero models" — it carries a reason and must never
           // overwrite a good list we already hold. A NON-empty answer is
           // always authoritative (a genuinely changed list still replaces the
-          // old one) and clears any stored reason.
+          // old one) and clears any stored reason. `backend` picks which pair
+          // of fields this applies to — Claude Code's and OpenCode's model
+          // lists are tracked separately (see `openCodeModels`'s doc comment)
+          // so one backend's answer never clobbers the other's.
+          const isOpenCode = msg.backend === 'opencode';
           if (msg.models.length === 0) {
             const next = { ...machine };
-            if (msg.error !== undefined) next.modelsError = msg.error;
-            else delete next.modelsError;
+            if (isOpenCode) {
+              if (msg.error !== undefined) next.openCodeModelsError = msg.error;
+              else delete next.openCodeModelsError;
+            } else {
+              if (msg.error !== undefined) next.modelsError = msg.error;
+              else delete next.modelsError;
+            }
+            return next;
+          }
+          const models = msg.models.map((m) => ({
+            id: m.id,
+            ...(m.label !== undefined ? { label: m.label } : {}),
+          }));
+          if (isOpenCode) {
+            const next: MachineView = { ...machine, openCodeModels: models };
+            delete next.openCodeModelsError;
             return next;
           }
           const next: MachineView = {
             ...machine,
-            models: msg.models.map((m) => ({
-              id: m.id,
-              ...(m.label !== undefined ? { label: m.label } : {}),
-            })),
+            models,
             ...(msg.defaultModel !== undefined ? { defaultModel: msg.defaultModel } : {}),
           };
           delete next.modelsError;

@@ -17,8 +17,13 @@
  * Create sends only the fields the user actually chose — createSession's
  * options are all optional on the wire.
  */
-import { useEffect, useState } from 'react';
-import { CAPABILITIES, effortLevelSchema, type EffortLevel } from '@codedeck/protocol';
+import { useEffect, useRef, useState } from 'react';
+import {
+  CAPABILITIES,
+  effortLevelSchema,
+  type EffortLevel,
+  type SessionBackend,
+} from '@codedeck/protocol';
 import { useMachines, usePhoneCore } from './coreContext';
 import { ScreenOverlay } from './ScreenOverlay';
 import { cx, shared as s } from './shared';
@@ -58,6 +63,10 @@ export function NewSessionModal({
   // default". Initializers only — the user's in-modal choice always wins.
   const [model, setModel] = useState(() => core.settings.getState().defaultModel);
   const [effort, setEffort] = useState<string>(() => core.settings.getState().defaultEffort);
+  // '' = Claude Code (the only backend before OpenCode existed), matching the
+  // '' -means-default convention every other field in this modal already
+  // uses. Only offered when the bridge advertises the 'opencode' capability.
+  const [backend, setBackend] = useState<'' | SessionBackend>('');
   // CDX-062: '' = the plain Anthropic path (exactly the pre-CDX-062 modal);
   // a profile id binds the session to that stored provider at create time
   // (CDX-044 owner rule: the choice exists ONLY here, never in-session).
@@ -65,17 +74,32 @@ export function NewSessionModal({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Ask for the machine's model list, and KEEP asking while we still have none
-  // (CDX-035). An empty answer no longer sets `models` — it only records a
-  // reason — so the retry stays alive instead of freezing on an empty picker.
-  // Heartbeats are the clock: no timers, at most one request per heartbeat,
-  // and it stops the instant a list lands.
+  // Ask for the machine's model list. Two reasons can trigger the same call:
+  // - a provider's catalog can change between sessions (a router adding/
+  //   dropping models, a new custom-provider key), so a cached list from an
+  //   earlier pairing/session would silently go stale for the picker's whole
+  //   lifetime otherwise — worth one extra round-trip every time this modal
+  //   opens or the backend toggles, even when we already have a list to show
+  //   meanwhile;
+  // - and, same as before (CDX-035), a retry on every heartbeat while we
+  //   still have NO list at all — an empty answer no longer sets `models`,
+  //   it only records a reason, so this keeps the retry alive instead of
+  //   freezing on an empty picker. Heartbeats are the clock: no timers, at
+  //   most one retry request per heartbeat, and it stops the instant a list
+  //   lands.
   const heartbeatAt = machine?.lastHeartbeatAt;
+  const freshAskedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!core.machines.getState().machine(machinePubkey)?.models) {
-      void core.api.modelsRequest(machinePubkey);
+    const m = core.machines.getState().machine(machinePubkey);
+    const haveList = backend === 'opencode' ? m?.openCodeModels : m?.models;
+    const freshKey = `${machinePubkey}:${backend}`;
+    const needsFreshAsk = freshAskedFor.current !== freshKey;
+    if (needsFreshAsk || !haveList) {
+      freshAskedFor.current = freshKey;
+      if (backend === 'opencode') void core.api.modelsRequest(machinePubkey, 'opencode');
+      else void core.api.modelsRequest(machinePubkey);
     }
-  }, [core, machinePubkey, heartbeatAt]);
+  }, [core, machinePubkey, heartbeatAt, backend]);
 
   // CDX-062: same heartbeat-clocked loop for provider profiles — but ONLY when
   // the bridge advertises the capability (an old bridge's zod rejects the
@@ -111,11 +135,18 @@ export function NewSessionModal({
   // would be silently stripped by an old bridge's zod and the session would
   // run on Anthropic (wrong provider, wrong account's bill).
   const providerProfiles =
-    machine.capabilities.includes(CAPABILITIES.customProviders) && machine.providerProfiles
+    backend !== 'opencode' &&
+    machine.capabilities.includes(CAPABILITIES.customProviders) &&
+    machine.providerProfiles
       ? machine.providerProfiles
       : [];
   const activeProfile =
     providerId !== '' ? providerProfiles.find((p) => p.id === providerId) : undefined;
+  // OpenCode has its own model list, unrelated to Claude Code's — custom
+  // provider profiles are an Anthropic-compatible-credential concept
+  // OpenCodeFacade never reads, so the Model select must never mix the two.
+  const modelsList = backend === 'opencode' ? machine.openCodeModels : machine.models;
+  const modelsErr = backend === 'opencode' ? machine.openCodeModelsError : machine.modelsError;
 
   /** Provider changed: the Model options swap wholesale, so the old selection
    *  is meaningless — preselect the profile's default (or "Default model"),
@@ -124,6 +155,20 @@ export function NewSessionModal({
     setProviderId(id);
     const profile = id === '' ? undefined : providerProfiles.find((p) => p.id === id);
     setModel(profile ? (profile.defaultModel ?? '') : core.settings.getState().defaultModel);
+  };
+
+  /** Backend changed: Provider/Model belong to the previous backend's world
+   *  (a custom provider profile means nothing to OpenCode; the model lists
+   *  are tracked separately), so both reset with the switch. */
+  const changeBackend = (value: '' | SessionBackend): void => {
+    setBackend(value);
+    setProviderId('');
+    // OpenCode model ids are `<providerID>/<modelID>` (splitModelId,
+    // opencodeFacade.ts) — the saved Claude-Code-shaped default has no such
+    // split, so reusing it here would either be silently discarded server
+    // side or misread as a provider/model split. Reset to the bridge/OpenCode
+    // default (the Model select's own "Default model" option) instead.
+    setModel(value === 'opencode' ? '' : core.settings.getState().defaultModel);
   };
 
   const create = async (): Promise<void> => {
@@ -143,6 +188,7 @@ export function NewSessionModal({
         // session-pending → session-failed with a named reason — D3 forbids a
         // silent fallback onto the Anthropic key (wrong account's bill).
         ...(providerId !== '' ? { providerId } : {}),
+        ...(backend === 'opencode' ? { backend } : {}),
       });
       if (!sent) {
         setError('Could not reach a relay — check the connection and try again.');
@@ -225,9 +271,30 @@ export function NewSessionModal({
           (and git-initialized) on the machine.
         </div>
 
+        {/* Rendered only when the bridge advertises the 'opencode' capability
+          * — an old bridge's zod would reject the field anyway, so hiding the
+          * picker keeps the modal honest about what this bridge can do. */}
+        {machine.capabilities.includes(CAPABILITIES.opencode) && (
+          <>
+            <div className={styles.sectionTitle}>Backend</div>
+            <select
+              className={styles.select}
+              aria-label="Backend"
+              value={backend}
+              onChange={(e) => changeBackend(e.target.value as '' | SessionBackend)}
+            >
+              <option value="">Claude Code</option>
+              <option value="opencode">OpenCode</option>
+            </select>
+          </>
+        )}
+
         {/* CDX-062: Provider above Model — rendered only when the bridge
           * advertises 'custom-providers' AND stores at least one profile.
-          * '' = Anthropic, the pre-CDX-062 path, untouched. */}
+          * '' = Anthropic, the pre-CDX-062 path, untouched. OpenCode sessions
+          * never see this: custom provider profiles are an
+          * Anthropic-compatible-credential concept OpenCodeFacade never reads,
+          * so showing it would silently do nothing and mislead the user. */}
         {providerProfiles.length > 0 && (
           <>
             <div className={styles.sectionTitle}>Provider</div>
@@ -271,8 +338,8 @@ export function NewSessionModal({
             value={model}
             onChange={(e) => setModel(e.target.value)}
           >
-            <option value="">{machine.models ? 'Default model' : 'Default model (list unavailable)'}</option>
-            {(machine.models ?? []).map((m) => (
+            <option value="">{modelsList ? 'Default model' : 'Default model (list unavailable)'}</option>
+            {(modelsList ?? []).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label ?? m.id}
               </option>
@@ -280,7 +347,7 @@ export function NewSessionModal({
             {/* The preferred default model (CDX-047) may not be in THIS
               * machine's list — keep the pre-selection honest instead of the
               * controlled select silently showing nothing. */}
-            {model !== '' && !(machine.models ?? []).some((m) => m.id === model) && (
+            {model !== '' && !(modelsList ?? []).some((m) => m.id === model) && (
               <option value={model}>{model}</option>
             )}
           </select>
@@ -288,10 +355,11 @@ export function NewSessionModal({
         {/* CDX-035: the bridge's own reason for an empty answer, so an
           * unavailable list is explained instead of silently blank. Only when
           * we have NO list — a usable picker needs no apology — and only on
-          * the Anthropic path (a provider profile brings its own list). */}
-        {!activeProfile && !machine.models && machine.modelsError && (
+          * the plain (non-profile) path (a provider profile brings its own
+          * list). */}
+        {!activeProfile && !modelsList && modelsErr && (
           <div className={s.muted} role="status" data-testid="models-error">
-            {machine.modelsError}
+            {modelsErr}
           </div>
         )}
 

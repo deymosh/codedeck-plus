@@ -415,11 +415,16 @@ describe('SessionRunner', () => {
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
       .some(({ entry }) => entry.metadata?.role === 'user'));
 
+    // Echo VERBATIM what the backend actually received (session.inputs[0]) —
+    // the meta-request suffix included, exactly like a real echoing backend
+    // (OpenCode) does. Echoing only the clean typed text is not what any real
+    // backend does and is exactly the case that used to slip past the dedup
+    // filter (it compared against the un-suffixed text, never a match).
     session.emit({
       type: 'user',
       session_id: 's1',
       parent_tool_use_id: null,
-      message: { role: 'user', content: 'hello there' },
+      message: { role: 'user', content: session.inputs[0] },
       uuid: 'u-echo',
     } as unknown as SdkMessage);
     session.emit(assistantMsg('s1', ['ack']));
@@ -1220,6 +1225,54 @@ describe('SessionRunner — usage / context usage / git detection (CDX-005 remai
     expect(info.contextPercentage).toBe(37);
     expect(info.contextWindow).toBe(1_000_000);
     void runner;
+  });
+
+  it('warns once when the 1M beta was requested but the API reported the plain window', async () => {
+    const logs: string[] = [];
+    ctx.events.log = (m) => { logs.push(m); };
+    const runner = makeRunner(ctx, { sessionId: 's1' });
+    runner.start();
+    const session = ctx.facade.session('s1');
+    session.emit(initMsg('sdk-s1', { model: 'claude-sonnet-5' }));
+    await waitFor(() => runner.phase === 'ready');
+
+    session.emit(resultMsg({ modelUsage: { 'claude-sonnet-5': { contextWindow: 200_000 } } }));
+    await waitFor(() => logs.some((l) => /1M-context beta/.test(l)));
+    expect(logs.filter((l) => /1M-context beta/.test(l))).toHaveLength(1);
+    expect(logs.find((l) => /1M-context beta/.test(l))).toMatch(/Claude Code Router/);
+
+    // A second result at the same (still-plain) window does not log again.
+    session.emit(resultMsg({ modelUsage: { 'claude-sonnet-5': { contextWindow: 200_000 } } }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(logs.filter((l) => /1M-context beta/.test(l))).toHaveLength(1);
+  });
+
+  it('does not warn when the reported window matches the 1M beta', async () => {
+    const logs: string[] = [];
+    ctx.events.log = (m) => { logs.push(m); };
+    const runner = makeRunner(ctx, { sessionId: 's1' });
+    runner.start();
+    const session = ctx.facade.session('s1');
+    session.emit(initMsg('sdk-s1', { model: 'claude-sonnet-5' }));
+    await waitFor(() => runner.phase === 'ready');
+
+    session.emit(resultMsg({ modelUsage: { 'claude-sonnet-5': { contextWindow: 1_000_000 } } }));
+    await waitFor(() => ctx.registry.get('s1')?.contextWindow === 1_000_000);
+    expect(logs.some((l) => /1M-context beta/.test(l))).toBe(false);
+  });
+
+  it('does not warn for a model that never requested the beta', async () => {
+    const logs: string[] = [];
+    ctx.events.log = (m) => { logs.push(m); };
+    const runner = makeRunner(ctx, { sessionId: 's1' });
+    runner.start();
+    const session = ctx.facade.session('s1');
+    session.emit(initMsg('sdk-s1', { model: 'claude-haiku-4-5' }));
+    await waitFor(() => runner.phase === 'ready');
+
+    session.emit(resultMsg({ modelUsage: { 'claude-haiku-4-5': { contextWindow: 200_000 } } }));
+    await waitFor(() => ctx.registry.get('s1')?.contextWindow === 200_000);
+    expect(logs.some((l) => /1M-context beta/.test(l))).toBe(false);
   });
 
   it('detectCommit flips committed once HEAD advances past the start hash (poll path)', async () => {

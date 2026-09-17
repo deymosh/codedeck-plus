@@ -16,6 +16,12 @@ CLAUDE_CODE_OAUTH_TOKEN=$(read_secret claude_code_oauth_token CLAUDE_CODE_OAUTH_
 GITHUB_TOKEN=$(read_secret github_token GITHUB_TOKEN)
 export CLAUDE_CODE_OAUTH_TOKEN
 
+# /data is the only volume this image persists — the Dockerfile points
+# XDG_CONFIG_HOME/XDG_DATA_HOME there so OpenCode's own config/auth (e.g. a
+# one-time `opencode auth login`) survives container recreation, but a fresh
+# volume won't already contain those subdirectories.
+mkdir -p "${XDG_CONFIG_HOME:-/data/.config}" "${XDG_DATA_HOME:-/data/.local/share}"
+
 # 1. Install gsd-core globally for Claude integration
 npx --yes @opengsd/gsd-core@1.12.0 --claude --global
 

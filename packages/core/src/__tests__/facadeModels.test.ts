@@ -75,7 +75,7 @@ describe('firstSupportedModels (CDX-022)', () => {
 
 import {
   buildQueryOptions,
-  FALLBACK_MODEL,
+  DEFAULT_MODEL_ASSUMPTION,
   fetchGatewayModels,
   isProviderBoundSession,
   modelSupports1mContext,
@@ -93,9 +93,9 @@ function baseOpts(over: Partial<SdkSessionOptions> = {}): SdkSessionOptions {
 }
 
 describe('buildQueryOptions (CDX-062 fallbackModel tri-state)', () => {
-  it('undefined → the historical FALLBACK_MODEL constant (unchanged default)', () => {
+  it('undefined → the option is OMITTED entirely (no automatic silent degrade)', () => {
     const options = buildQueryOptions(baseOpts());
-    expect(options.fallbackModel).toBe(FALLBACK_MODEL);
+    expect('fallbackModel' in options).toBe(false);
   });
 
   it('null → the option is OMITTED entirely (custom providers have no such model)', () => {
@@ -361,9 +361,13 @@ describe('buildQueryOptions (1M-context beta)', () => {
     expect(options.betas).toBeUndefined();
   });
 
-  it('gates on the resolved FALLBACK_MODEL when the phone left model unset', () => {
+  it('gates on DEFAULT_MODEL_ASSUMPTION when the phone left model unset, independent of fallbackModel', () => {
     const options = buildQueryOptions(baseOpts());
+    expect(modelSupports1mContext(DEFAULT_MODEL_ASSUMPTION)).toBe(true);
     expect(options.betas).toEqual(['context-1m-2025-08-07']);
+    // Confirms the two concerns are decoupled: no fallbackModel is sent...
+    expect('fallbackModel' in options).toBe(false);
+    // ...yet the beta is still requested for this "Default model" session.
   });
 
   it('omits it for a provider-bound session (fallbackModel: null, no resolvable model)', () => {

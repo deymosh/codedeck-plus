@@ -17,6 +17,7 @@ import {
   permissionModeSchema,
   providerProfileInfoSchema,
   remoteSessionInfoSchema,
+  sessionBackendSchema,
   usageDataSchema,
 } from './common';
 import { seqRangeSchema } from './commands';
@@ -214,6 +215,10 @@ export const modelsMessageSchema = z.object({
    *  it already had, and keeps re-requesting. Optional: older bridges omit it
    *  and older phones ignore it, so the wire stays compatible both ways. */
   error: z.string().optional(),
+  /** Echoes the request's `backend` — lets a phone with two in-flight
+   *  requests (one per backend) tell which answer is which. Absent means
+   *  'claude-code'. */
+  backend: sessionBackendSchema.optional(),
 });
 
 // --- Credentials / device config / pairing ---

@@ -15,10 +15,20 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Global Node tools installation (npm): pnpm and @anthropic-ai/claude-code.
+# 2. Global Node tools installation (npm): pnpm, @anthropic-ai/claude-code,
+#    and opencode-ai (the `opencode` CLI — pinned to match the
+#    @opencode-ai/sdk version the bridge talks to it with).
 #    ("ws" used to be force-installed here as a workaround — it is now a
 #    proper dependency of @codedeck/core, declared in packages/core/package.json.)
-RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code@2.1.258
+RUN npm install -g pnpm@10.8.0 @anthropic-ai/claude-code@2.1.258 opencode-ai@1.18.31
+
+# OpenCode stores its own config/auth under XDG_CONFIG_HOME/XDG_DATA_HOME
+# (default ~/.config, ~/.local/share). Redirect both under /data — the only
+# volume this image persists (see the ~/.codedeck symlink below) — so a
+# one-time `docker compose exec codedeck-bridge opencode auth login` survives
+# container recreation instead of silently vanishing.
+ENV XDG_CONFIG_HOME=/data/.config
+ENV XDG_DATA_HOME=/data/.local/share
 
 # 3. Create user safely (handling pre-existing UID/GID 1000 from node base image)
 RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROUP_ID} | cut -d: -f1); \

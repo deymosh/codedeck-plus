@@ -8,6 +8,13 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export const effortLevelSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'auto']);
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
 
+/** Agent backend a session runs on / a model list is scoped to. Absent
+ *  wherever this is optional means 'claude-code' — the only backend that
+ *  existed before OpenCode support, so an old peer that has never seen this
+ *  field keeps working unchanged. */
+export const sessionBackendSchema = z.enum(['claude-code', 'opencode']);
+export type SessionBackend = z.infer<typeof sessionBackendSchema>;
+
 export const sessionStateSchema = z.enum([
   'idle',
   'running',
@@ -47,6 +54,9 @@ export const remoteSessionInfoSchema = z.object({
   /** CDX-062: human-readable provider label, resolved bridge-side at publish
    *  time — so the display name survives even after the profile is deleted. */
   providerLabel: z.string().optional(),
+  /** Agent backend this session runs on. Absent means 'claude-code' (see
+   *  sessionBackendSchema's doc comment). */
+  backend: sessionBackendSchema.optional(),
 });
 export type RemoteSessionInfo = z.infer<typeof remoteSessionInfoSchema>;
 
