@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::BridgeHostKind;
-use protocol::common::{GsdState, ProviderProfileInfo, RemoteSessionInfo, UsageData};
+use protocol::common::{GsdState, ProviderProfileInfo, RemoteSessionInfo, SessionBackend, UsageData};
 use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
 /// A user-dismissed session id keeps suppressing incoming lists for this long
@@ -211,6 +211,15 @@ pub struct MachineView {
     pub default_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models_error: Option<String>,
+    /// OpenCode's model list, tracked separately from `models` because the two
+    /// backends can have entirely different supported models — a `models`
+    /// answer for one must never clobber the other's list. No `default_model`
+    /// counterpart: OpenCode answers never carry one (port of
+    /// `apps/mobile/src/core/stores/machines.ts`'s `openCodeModels`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_code_models: Option<Vec<ModelEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_code_models_error: Option<String>,
     /// Stripped by `serialize_machines` before persisting and forced back to
     /// `None` by `hydrate_machines` on load (CDX-062) — but present here so it
     /// serializes normally into the live `MachinesView` an IPC boundary reads.
@@ -235,6 +244,8 @@ impl MachineView {
             models: None,
             default_model: None,
             models_error: None,
+            open_code_models: None,
+            open_code_models_error: None,
             provider_profiles: None,
         }
     }
@@ -516,15 +527,28 @@ impl MachinesState {
 
     /// CDX-035: an EMPTY `models` is a "could not answer" report (it carries a
     /// reason) — it must never overwrite a good list. A non-empty answer is
-    /// always authoritative and clears any stored reason.
+    /// always authoritative and clears any stored reason. `msg.backend` picks
+    /// which pair of fields this applies to — Claude Code's and OpenCode's
+    /// model lists are tracked separately (see `open_code_models`'s doc
+    /// comment) so one backend's answer never clobbers the other's.
     pub fn apply_models(&mut self, machine_pubkey: &str, msg: &ModelsMsg) {
         // Machines the phone hasn't paired can still receive a models answer
         // (3c routing) — create the record if needed, matching the TS
         // `withMachine` that would drop it. Actually the TS drops it; mirror
         // that: only touch a known machine.
+        let is_open_code = msg.backend == Some(SessionBackend::Opencode);
         self.with_machine(machine_pubkey, |m| {
             if msg.models.is_empty() {
-                m.models_error = msg.error.clone();
+                if is_open_code {
+                    m.open_code_models_error = msg.error.clone();
+                } else {
+                    m.models_error = msg.error.clone();
+                }
+                return;
+            }
+            if is_open_code {
+                m.open_code_models = Some(msg.models.clone());
+                m.open_code_models_error = None;
                 return;
             }
             m.models = Some(msg.models.clone());
@@ -876,6 +900,58 @@ mod tests {
         assert_eq!(st.machine("pk").unwrap().models_error.as_deref(), Some("no live SDK"));
         // a later good answer clears the error
         st.apply_models("pk", &models_msg(&["opus", "sonnet"], None));
+        assert_eq!(st.machine("pk").unwrap().models_error, None);
+    }
+
+    #[test]
+    fn opencode_models_are_tracked_separately_from_claude_code_models() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[], NONE()), 10);
+        st.apply_models("pk", &models_msg(&["opus"], Some("opus")));
+        st.apply_models(
+            "pk",
+            &ModelsMsg {
+                models: vec![ModelEntry { id: "gpt".into(), label: None }],
+                default_model: None,
+                error: None,
+                backend: Some(SessionBackend::Opencode),
+            },
+        );
+        // OpenCode's answer landed in its own field, untouched Claude Code fields.
+        assert_eq!(st.machine("pk").unwrap().models.as_ref().unwrap()[0].id, "opus");
+        assert_eq!(st.machine("pk").unwrap().default_model.as_deref(), Some("opus"));
+        assert_eq!(st.machine("pk").unwrap().open_code_models.as_ref().unwrap()[0].id, "gpt");
+    }
+
+    #[test]
+    fn an_empty_opencode_models_response_never_wipes_its_own_good_list() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[], NONE()), 10);
+        st.apply_models(
+            "pk",
+            &ModelsMsg {
+                models: vec![ModelEntry { id: "gpt".into(), label: None }],
+                default_model: None,
+                error: None,
+                backend: Some(SessionBackend::Opencode),
+            },
+        );
+        st.apply_models(
+            "pk",
+            &ModelsMsg {
+                models: vec![],
+                default_model: None,
+                error: Some("opencode offline".into()),
+                backend: Some(SessionBackend::Opencode),
+            },
+        );
+        assert_eq!(st.machine("pk").unwrap().open_code_models.as_ref().unwrap()[0].id, "gpt");
+        assert_eq!(
+            st.machine("pk").unwrap().open_code_models_error.as_deref(),
+            Some("opencode offline")
+        );
+        // the Claude Code fields were never touched by any of this.
+        assert_eq!(st.machine("pk").unwrap().models, None);
         assert_eq!(st.machine("pk").unwrap().models_error, None);
     }
 
