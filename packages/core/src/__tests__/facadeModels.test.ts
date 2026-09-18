@@ -351,28 +351,46 @@ describe('modelSupports1mContext', () => {
 });
 
 describe('buildQueryOptions (1M-context beta)', () => {
-  it('always adds the beta for a model that supports it — no toggle', () => {
+  // Verified against a real test gateway (ANTHROPIC_BASE_URL → a router) with
+  // the actual SDK: `betas` alone left modelUsage[model].contextWindow at
+  // 200000 for a native-1M model — exactly this bug. Sending the model with
+  // a `[1m]` suffix reported the full 1000000 and completed normally, for
+  // both a native-1M model and a legacy one. Both mechanisms are asserted
+  // below; the suffix is the one that actually works behind a gateway.
+  it('always adds the beta AND the [1m] model-id suffix for a model that supports it — no toggle', () => {
     const options = buildQueryOptions(baseOpts({ model: 'claude-sonnet-5' }));
     expect(options.betas).toEqual(['context-1m-2025-08-07']);
+    expect(options.model).toBe('claude-sonnet-5[1m]');
   });
 
-  it('omits it for a model that does not support it', () => {
+  it('does not double-suffix a model id that already carries the marker', () => {
+    const options = buildQueryOptions(baseOpts({ model: 'claude-opus-5[1m]' }));
+    expect(options.model).toBe('claude-opus-5[1m]');
+  });
+
+  it('omits both for a model that does not support it — model id is untouched', () => {
     const options = buildQueryOptions(baseOpts({ model: 'claude-haiku-4-5-20251001' }));
     expect(options.betas).toBeUndefined();
+    expect(options.model).toBe('claude-haiku-4-5-20251001');
   });
 
   it('gates on DEFAULT_MODEL_ASSUMPTION when the phone left model unset, independent of fallbackModel', () => {
     const options = buildQueryOptions(baseOpts());
     expect(modelSupports1mContext(DEFAULT_MODEL_ASSUMPTION)).toBe(true);
     expect(options.betas).toEqual(['context-1m-2025-08-07']);
+    // The assumed model is now sent explicitly (suffixed) too — before this
+    // fix Options.model was omitted entirely for a "Default model" session,
+    // leaving the CLI to pick its own default with no 1M signal at all.
+    expect(options.model).toBe(`${DEFAULT_MODEL_ASSUMPTION}[1m]`);
     // Confirms the two concerns are decoupled: no fallbackModel is sent...
     expect('fallbackModel' in options).toBe(false);
     // ...yet the beta is still requested for this "Default model" session.
   });
 
-  it('omits it for a provider-bound session (fallbackModel: null, no resolvable model)', () => {
+  it('omits both for a provider-bound session (fallbackModel: null, no resolvable model)', () => {
     const options = buildQueryOptions(baseOpts({ fallbackModel: null }));
     expect(options.betas).toBeUndefined();
+    expect('model' in options).toBe(false);
   });
 });
 

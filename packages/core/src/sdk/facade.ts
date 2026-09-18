@@ -488,34 +488,58 @@ export const ENABLE_GATEWAY_MODEL_DISCOVERY = process.env.CLAUDE_CODE_ENABLE_GAT
 
 /**
  * 1M-token context window — always requested for a model that supports it,
- * no toggle. The SDK's `Options.betas` accepts `'context-1m-2025-08-07'`
- * (sdk.d.ts, `SdkBeta`) to request the extended window, but nothing in this
- * file ever set it — every eligible session was created with the model's
- * DEFAULT 200K window regardless of what the phone's model picker showed.
- * This is not gateway-specific: VS Code's own Copilot Chat hit the identical
- * gap calling Anthropic directly (github.com/microsoft/vscode/issues/298901,
- * "capped at 200K tokens even when talking to the Anthropic API directly").
- * That issue proposed a user-facing opt-in setting instead of always-on —
- * deliberately not what this does: CodeDeck has no per-session token-cost
- * negotiation UI for the maintainer to gate behind, and the 1M window is
- * what "use the full model" means from the phone's point of view. Applied
- * per-session in `buildQueryOptions`, gated by model id
- * (`modelSupports1mContext`) — sending an unsupported model a beta header it
- * doesn't recognize is harmless per Anthropic's usual unknown-beta handling,
- * but naming the actual boundary here means a future model family that
- * genuinely can't take it fails loudly in review, not silently in the field.
+ * no toggle. This is not gateway-specific: VS Code's own Copilot Chat hit
+ * the identical gap calling Anthropic directly
+ * (github.com/microsoft/vscode/issues/298901, "capped at 200K tokens even
+ * when talking to the Anthropic API directly"). That issue proposed a
+ * user-facing opt-in setting instead of always-on — deliberately not what
+ * this does: CodeDeck has no per-session token-cost negotiation UI for the
+ * maintainer to gate behind, and the 1M window is what "use the full model"
+ * means from the phone's point of view.
+ *
+ * Two mechanisms exist, and only one works once `ANTHROPIC_BASE_URL` points
+ * at a gateway/router (this bridge's normal deployment shape):
+ * `Options.betas: ['context-1m-2025-08-07']` (sdk.d.ts's `SdkBeta`) and a
+ * `[1m]` suffix on `Options.model` (e.g. `claude-sonnet-5[1m]`) — documented
+ * at code.claude.com/docs/en/model-config: "Claude Code strips the suffix
+ * before sending the model ID to your provider" (so it never reaches the
+ * gateway literally) and "When `ANTHROPIC_BASE_URL` points at a gateway,
+ * Claude Code can't verify 1M support. To use the full window, select
+ * Sonnet 5 (1M context) in the model picker, which maps to `sonnet[1m]`."
+ * Verified directly against this project's own test gateway with the real
+ * SDK: `betas` alone left `modelUsage[model].contextWindow` at 200000 for a
+ * native-1M model (Sonnet 5) exactly as the bug reports; adding the `[1m]`
+ * suffix to `Options.model` reported the full 1000000 and completed
+ * normally, for both a native-1M model and a legacy one. Both mechanisms are
+ * set below — the suffix is the one that actually works behind a gateway,
+ * `betas` is kept for the direct-to-Anthropic-API case and as a no-op
+ * safety net elsewhere.
+ *
+ * Gated by model id (`modelSupports1mContext`) — sending an unsupported
+ * model a beta header/suffix it doesn't recognize is harmless per
+ * Anthropic's usual unknown-beta handling, but naming the actual boundary
+ * here means a future model family that genuinely can't take it fails loudly
+ * in review, not silently in the field.
  */
 
-/** Model families the `context-1m-2025-08-07` beta is documented for
- *  (sdk.d.ts says "Sonnet 4/4.5 only"; Anthropic's own docs also list Opus —
- *  matched broadly by family name rather than an exact, fast-drifting model
- *  id list, since a router's id is often `<provider>/<model>` — see
- *  `fetchGatewayModels`). Haiku is deliberately excluded: nothing in
- *  Anthropic's own documentation lists a Haiku tier for this beta. */
+/** Model families the 1M context window is documented for (sdk.d.ts says
+ *  "Sonnet 4/4.5 only" for the beta; Anthropic's own docs also list Opus,
+ *  and Sonnet 5 is 1M-native — matched broadly by family name rather than an
+ *  exact, fast-drifting model id list, since a router's id is often
+ *  `<provider>/<model>` — see `fetchGatewayModels`). Haiku is deliberately
+ *  excluded: nothing in Anthropic's own documentation lists a Haiku tier for
+ *  this. */
 export function modelSupports1mContext(model: string | undefined): boolean {
   if (!model) return false;
   const m = model.toLowerCase();
   return m.includes('sonnet') || m.includes('opus');
+}
+
+/** Append the CLI's `[1m]` model-id marker (case-insensitive, never doubled
+ *  — see `modelSupports1mContext`'s doc comment for why this is the
+ *  mechanism that actually works behind a gateway). */
+function with1mSuffix(model: string): string {
+  return /\[1m\]$/i.test(model) ? model : `${model}[1m]`;
 }
 
 /**
@@ -566,7 +590,19 @@ export function buildQueryOptions(
   // whether automatic fallback is enabled for that session.
   const requestedModel = opts.model
     ?? (isProviderBoundSession(opts) ? undefined : DEFAULT_MODEL_ASSUMPTION);
-  const betas = modelSupports1mContext(requestedModel) ? (['context-1m-2025-08-07'] as const) : undefined;
+  const wants1m = modelSupports1mContext(requestedModel);
+  const betas = wants1m ? (['context-1m-2025-08-07'] as const) : undefined;
+  // The model actually sent as Options.model: suffixed with `[1m]` when
+  // eligible (the mechanism that works behind a gateway — see
+  // modelSupports1mContext's doc comment), otherwise exactly `requestedModel`.
+  // Forwarded whenever `requestedModel` is defined, not just when the caller
+  // supplied `opts.model` — a "Default model" session is exactly as eligible
+  // for the 1M window as one that named Sonnet explicitly (DEFAULT_MODEL_
+  // ASSUMPTION's doc comment already says as much for `betas`; this is the
+  // same reasoning for the mechanism that actually works).
+  const modelToSend = requestedModel === undefined
+    ? undefined
+    : wants1m ? with1mSuffix(requestedModel) : requestedModel;
   return {
     ...(opts.resume ? { resume: opts.resume } : claimOwnId ? { sessionId: opts.sessionId } : {}),
     cwd: opts.cwd,
@@ -577,7 +613,7 @@ export function buildQueryOptions(
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     tools: { type: 'preset', preset: 'claude_code' },
     ...(fallbackModel !== null ? { fallbackModel } : {}),
-    ...(opts.model ? { model: opts.model } : {}),
+    ...(modelToSend ? { model: modelToSend } : {}),
     ...(optionsEffort ? { effort: optionsEffort } : {}),
     ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
     ...(opts.pathToClaudeCodeExecutable
