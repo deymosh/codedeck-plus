@@ -35,14 +35,26 @@ export function isPermissionMode(value: unknown): value is PermissionMode {
 
 /**
  * See `crates/protocol/src/capabilities.rs`'s doc comment for the three-tier
- * gate/marker/beacon distinction. Only the one string the phone UI actually
- * reads (`customProviders`, a hard gate) is given a key here; add more only
- * as a real call site needs them, keeping this from drifting into a second,
- * unused copy of the full set.
+ * gate/marker/beacon distinction. Only strings the phone UI actually reads
+ * are given a key here — `customProviders` (a hard gate) and `opencode` (a
+ * presence marker, conditionally advertised only when a machine has an
+ * OpenCode facade configured) — add more only as a real call site needs
+ * them, keeping this from drifting into a second, unused copy of the full
+ * set.
  */
-export const CAPABILITIES: { customProviders: string } = {
+export const CAPABILITIES: { customProviders: string; opencode: string } = {
   customProviders: 'custom-providers',
+  opencode: 'opencode',
 };
+
+/**
+ * Not yet mirrored by `crates/protocol` on this branch (native-android
+ * predates OpenCode support) — hand-written here rather than generated so
+ * the OpenCode backend picker has a real type to build against. Replace
+ * with an import from `nativeCoreTypes` once `crates/protocol` gains a
+ * `SessionBackend` enum and bindings are regenerated.
+ */
+export type SessionBackend = 'claude-code' | 'opencode';
 
 export let DEFAULT_RELAYS: string[] = [
   'wss://relay2.descendant.io',

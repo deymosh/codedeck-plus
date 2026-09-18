@@ -60,6 +60,13 @@ export interface MachineView {
    *  an empty `models` + `error`). Rendered next to the picker; cleared by the
    *  next non-empty answer. */
   modelsError?: string;
+  /** OpenCode's own model list — kept separate from `models` (Claude Code's)
+   *  because the two backends can have entirely different supported models;
+   *  a phone with both fetched must not let one clobber the other. Mirrors
+   *  `models` exactly, just scoped by `msg.backend === 'opencode'`. */
+  openCodeModels?: Array<{ id: string; label?: string }>;
+  /** Mirrors `modelsError`, scoped to the OpenCode list (see CDX-035 above). */
+  openCodeModelsError?: string;
   /** CDX-062: the bridge's REDACTED custom-provider profile list (each entry
    *  carries `hasToken`, never the token). Bridge-authoritative + in-memory
    *  only: `undefined` = "not fetched this boot" and drives the re-request

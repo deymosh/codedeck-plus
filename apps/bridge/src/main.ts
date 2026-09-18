@@ -41,6 +41,13 @@ Options:
   --claude-path <path>    Path to the claude executable (env CODEDECK_CLAUDE_PATH)
   --tor-proxy <url>       SOCKS5 proxy for all relay connections, e.g.
                           socks5h://127.0.0.1:9050 (env CODEDECK_TOR_PROXY_URL)
+  --opencode-server-url <url>  External OpenCode server to connect to
+                          (env CODEDECK_OPENCODE_SERVER_URL). Wins over
+                          --opencode-auto-start if both are set.
+  --opencode-auto-start   Spawn and manage our own OpenCode server instead of
+                          connecting to an external one (env CODEDECK_OPENCODE_AUTO_START)
+  --opencode-path <path>  Path to the opencode executable, for auto-start
+                          (env CODEDECK_OPENCODE_PATH)
   --service               Advertise as a systemd service (auto-detected via INVOCATION_ID)
   --all                   With unpair: remove every paired phone
   -h, --help              Show this help
@@ -48,7 +55,8 @@ Options:
 
 Config file: <home>/config.json — { "machineName", "relays", "workspaceRoots",
 "claudePath", "relayRegisterEndpoint", "relayRegisterToken",
-"blossomRegisterEndpoint", "blossomRegisterToken", "torProxyUrl" }.
+"blossomRegisterEndpoint", "blossomRegisterToken", "torProxyUrl",
+"openCodeServerUrl", "openCodeAutoStart", "openCodePath", "openCodePort" }.
 Precedence: flags > environment > config file > defaults.
 State: <home>/state.json (bridge secret key + pairings, mode 0600).`;
 
@@ -60,6 +68,9 @@ async function main(): Promise<number> {
     workspace?: string[];
     'claude-path'?: string;
     'tor-proxy'?: string;
+    'opencode-server-url'?: string;
+    'opencode-auto-start'?: boolean;
+    'opencode-path'?: string;
     service?: boolean;
     all?: boolean;
     help?: boolean;
@@ -78,6 +89,9 @@ async function main(): Promise<number> {
         workspace: { type: 'string', multiple: true },
         'claude-path': { type: 'string' },
         'tor-proxy': { type: 'string' },
+        'opencode-server-url': { type: 'string' },
+        'opencode-auto-start': { type: 'boolean' },
+        'opencode-path': { type: 'string' },
         service: { type: 'boolean' },
         all: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
@@ -107,6 +121,9 @@ async function main(): Promise<number> {
     ...(values.workspace?.length ? { workspaces: values.workspace } : {}),
     ...(values['claude-path'] ? { claudePath: values['claude-path'] } : {}),
     ...(values['tor-proxy'] ? { torProxy: values['tor-proxy'] } : {}),
+    ...(values['opencode-server-url'] ? { openCodeServerUrl: values['opencode-server-url'] } : {}),
+    ...(values['opencode-auto-start'] ? { openCodeAutoStart: true } : {}),
+    ...(values['opencode-path'] ? { openCodePath: values['opencode-path'] } : {}),
     ...(values.service ? { service: true } : {}),
   };
 

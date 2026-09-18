@@ -310,11 +310,14 @@ function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): Out
 
 // --- Diff extraction (CDX-050) ---
 
-/** Wire caps: keep a diff entry comfortably inside one relay event. */
-const MAX_DIFF_LINES = 200;
-const MAX_DIFF_LINE_CHARS = 500;
+/** Wire caps: keep a diff entry comfortably inside one relay event. Exported
+ *  so opencodeAdapter.ts's own diff rendering (OpenCode's FileDiff carries
+ *  whole-file before/after text, not a snippet) shares the same truncation
+ *  budget instead of picking its own. */
+export const MAX_DIFF_LINES = 200;
+export const MAX_DIFF_LINE_CHARS = 500;
 
-function toDiffLines(text: string, type: DiffLine['type']): DiffLine[] {
+export function toDiffLines(text: string, type: DiffLine['type']): DiffLine[] {
   return text.split('\n').map((line) => ({
     type,
     text: line.length > MAX_DIFF_LINE_CHARS ? line.slice(0, MAX_DIFF_LINE_CHARS) + '…' : line,
@@ -371,8 +374,10 @@ export function extractDiff(
   };
 }
 
-/** Plain-text +/− rendering of the diff — the entry's `content` fallback. */
-function renderDiffFallback(diff: DiffData): string {
+/** Plain-text +/− rendering of the diff — the entry's `content` fallback.
+ *  Exported for opencodeAdapter.ts's diff entries to share the same
+ *  rendering rather than duplicating it. */
+export function renderDiffFallback(diff: DiffData): string {
   const prefix = { add: '+', del: '-', context: ' ' } as const;
   return diff.lines.map((l) => prefix[l.type] + l.text).join('\n');
 }

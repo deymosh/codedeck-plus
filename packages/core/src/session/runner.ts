@@ -23,23 +23,31 @@ import type {
   EffortLevel,
   OutputEntry,
   PermissionMode,
+  SessionBackend,
   SessionState,
   UsageData,
 } from '@codedeck/protocol';
-import type {
-  SdkAuthStatusMessage,
-  SdkCanUseTool,
-  SdkContextUsage,
-  SdkFacade,
-  SdkMessage,
-  SdkSessionHandle,
-  SdkSessionOptions,
-  SdkSystemMessage,
+import {
+  modelSupports1mContext,
+  type SdkAuthStatusMessage,
+  type SdkCanUseTool,
+  type SdkContextUsage,
+  type SdkFacade,
+  type SdkMessage,
+  type SdkSessionHandle,
+  type SdkSessionOptions,
+  type SdkSystemMessage,
 } from '../sdk/facade';
 import { sdkMessageToEntries } from '../sdk/adapter';
 import { normalizeUsage } from '../sdk/usage';
 
 const execFileAsync = promisify(execFile);
+
+/** Anthropic's plain (non-beta) context window, shared by every Sonnet/Opus
+ *  tier today. Used only to detect when the `context-1m-2025-08-07` beta was
+ *  requested but the API answered with the ordinary window anyway — see the
+ *  `result` handler below. */
+const PLAIN_CONTEXT_WINDOW = 200_000;
 
 /**
  * Read the current git HEAD commit hash for a working directory (ported).
@@ -110,6 +118,13 @@ export interface SessionRunnerOptions {
    * spawn and persisted in the registry record (resume rehydrates it).
    */
   providerId?: string;
+  /** Agent backend this session runs on. Absent means 'claude-code' (today's
+   *  only backend) — persisted in the registry record and rehydrated on
+   *  resume the same way `providerId` is, so `bridge.ts`'s resumeOnBoot picks
+   *  the right facade after a restart instead of defaulting back to Claude
+   *  Code. Purely declarative here: the runner never branches on it except to
+   *  round-trip it into the record and default `translateMessage`. */
+  backend?: SessionBackend;
   effortLevel?: EffortLevel;
   /** Attach on-device test tooling semantics (secret-path hard deny in the broker). */
   testSession?: boolean;
@@ -141,6 +156,14 @@ export interface SessionRunnerOptions {
    * phones reject the unknown entryType.
    */
   emitDiffEntries?: () => boolean;
+  /**
+   * Per-backend SDK-message-to-OutputEntry translator, injected the same way
+   * `emitDiffEntries` is — defaults to `sdkMessageToEntries` (Claude Code).
+   * `bridge.ts`'s `makeRunner` passes `opencodeMessageToEntries` for an
+   * OpenCode session; the runner itself never branches on backend to decide
+   * which one to call.
+   */
+  translateMessage?: (msg: SdkMessage, opts?: { emitDiffEntries?: boolean }) => OutputEntry[];
 }
 
 export class SessionRunner {
@@ -160,6 +183,7 @@ export class SessionRunner {
   private readonly claudePath?: string;
   private readonly sessionEnv?: (ctx: { providerId?: string }) => Record<string, string> | undefined;
   private readonly emitDiffEntries?: () => boolean;
+  private readonly translateMessage: (msg: SdkMessage, opts?: { emitDiffEntries?: boolean }) => OutputEntry[];
 
   private handle: SdkSessionHandle | null = null;
   private _phase: RunnerPhase = 'pending';
@@ -170,6 +194,7 @@ export class SessionRunner {
   private model?: string;
   /** CDX-062: the profile id this session is bound to (absent = Anthropic). */
   private _providerId?: string;
+  private _backend?: SessionBackend;
   private effortLevel?: EffortLevel;
   /** The SDK's own session id — the --resume target. Updated from every init message. */
   private sdkSessionId: string | null = null;
@@ -224,6 +249,10 @@ export class SessionRunner {
   // --- Context usage (ported) ---
   private contextWindow?: number;
   private contextPercentage?: number;
+  /** Set once the 1M-beta-vs-reported-window mismatch has been logged for this
+   *  session, so a long-running session doesn't repeat the same warning on
+   *  every turn. */
+  private loggedContextMismatch = false;
 
   constructor(opts: SessionRunnerOptions) {
     this.sessionId = opts.sessionId;
@@ -236,6 +265,7 @@ export class SessionRunner {
     this.permissionMode = opts.permissionMode ?? 'plan';
     this.model = opts.model;
     this._providerId = opts.providerId;
+    this._backend = opts.backend;
     this.effortLevel = opts.effortLevel;
     this.testSession = !!opts.testSession;
     this.isResume = !!opts.resume;
@@ -243,6 +273,7 @@ export class SessionRunner {
     this.claudePath = opts.pathToClaudeCodeExecutable;
     this.sessionEnv = opts.sessionEnv;
     this.emitDiffEntries = opts.emitDiffEntries;
+    this.translateMessage = opts.translateMessage ?? sdkMessageToEntries;
     this.gitHead = opts.gitHead ?? gitHeadHash;
     this.createdAt = new Date().toISOString();
     this.lastActivity = this.createdAt;
@@ -261,6 +292,7 @@ export class SessionRunner {
         this.model = rec.model ?? this.model;
         // CDX-062: the provider binding survives resume-on-boot via the record.
         this._providerId = rec.providerId ?? this._providerId;
+        this._backend = rec.backend ?? this._backend;
         this.effortLevel = rec.effortLevel ?? this.effortLevel;
         this.title = rec.title;
         this.projectOverride = rec.project;
@@ -295,6 +327,11 @@ export class SessionRunner {
    *  The orchestrator gates usage publishing and model changes on it. */
   get providerId(): string | undefined {
     return this._providerId;
+  }
+
+  /** Agent backend this session runs on (undefined means 'claude-code'). */
+  get backend(): SessionBackend | undefined {
+    return this._backend;
   }
 
   get alive(): boolean {
@@ -627,6 +664,24 @@ export class SessionRunner {
           }
           this.events.onStateChanged?.(this.sessionId);
         }
+        // buildQueryOptions requests the 1M-context beta for every Sonnet/Opus
+        // session (facade.ts), but this repo has no visibility past the SDK
+        // subprocess turning that into a request header — a gateway/router
+        // sitting at ANTHROPIC_BASE_URL (e.g. Claude Code Router) can silently
+        // drop it. `cw` above is the API's own authoritative answer, so a
+        // plain-tier window here is the one place that mismatch is provable
+        // rather than guessed at. Logged once per session, not every turn.
+        if (!this.loggedContextMismatch && cw > 0 && cw <= PLAIN_CONTEXT_WINDOW
+          && modelSupports1mContext(this.model)) {
+          this.loggedContextMismatch = true;
+          this.events.log(
+            `[Runner] Session ${this.sessionId} requested the 1M-context beta for `
+            + `model "${this.model}" but the API reported a ${cw}-token window — the `
+            + 'beta was likely not honored. If this bridge routes through a gateway '
+            + 'or router (e.g. Claude Code Router), verify it forwards the '
+            + '"anthropic-beta: context-1m-2025-08-07" header to Anthropic.',
+          );
+        }
       }
       // Refresh the SDK's authoritative context-usage % — context only changes
       // at turn boundaries, so per-result is the right cadence. Fire-and-forget
@@ -634,7 +689,7 @@ export class SessionRunner {
       this.bg('context refresh', this.refreshContextPercentage());
     }
 
-    const entries = sdkMessageToEntries(msg, {
+    const entries = this.translateMessage(msg, {
       emitDiffEntries: this.emitDiffEntries?.() === true,
     }).filter((entry) => {
       // CDX-082: drop an SDK echo of a message we already authored an entry for.
@@ -1021,7 +1076,15 @@ export class SessionRunner {
      * it a lower seq than anything the reply produces. `tryAppend` because a
      * failed append must not cost the user the actual send.
      */
-    this.authoredUserTexts.push(typed);
+    // `text`, not `typed`: this must match whatever an echo would actually
+    // carry. Claude Code never echoes (see above), so it never mattered which
+    // one was stored — but OpenCode's event stream DOES echo the prompt it
+    // received verbatim, meta-request suffix included, and the dedup filter
+    // in handleMessage() compares against this array by exact string equality.
+    // Storing the pre-suffix `typed` here left every OpenCode session's first
+    // usable turn showing a duplicate user entry (the authored one, clean,
+    // plus the echoed one with the raw <!-- emit-session-meta --> comment).
+    this.authoredUserTexts.push(text);
     if (this.authoredUserTexts.length > 16) this.authoredUserTexts.shift();
     void this.tryAppend([{
       entryType: 'text',
@@ -1283,6 +1346,7 @@ export class SessionRunner {
       cwd: this.cwd,
       ...(this.model ? { model: this.model } : {}),
       ...(this._providerId ? { providerId: this._providerId } : {}),
+      ...(this._backend ? { backend: this._backend } : {}),
       ...(this.effortLevel ? { effortLevel: this.effortLevel } : {}),
       permissionMode: this.permissionMode,
       title: this.title,

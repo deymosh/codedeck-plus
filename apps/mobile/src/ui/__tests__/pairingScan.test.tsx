@@ -52,7 +52,7 @@ async function makeCore() {
         },
         error: null,
         timedOut: false,
-        hasStaged: false,
+        staged: null,
       });
     } else if (typeof intent === 'object' && intent.beginManualPairing) {
       fake.setView('pairing', {
@@ -60,7 +60,7 @@ async function makeCore() {
         candidate: { pubkeyHex: '', npub: intent.beginManualPairing.npub, machine: '', relays: [] },
         error: null,
         timedOut: false,
-        hasStaged: false,
+        staged: null,
       });
     }
   });
@@ -142,7 +142,7 @@ describe('PairingScreen QR scan', () => {
         candidate: { pubkeyHex: bridge.pubkeyHex, npub: npubEncode(bridge.pubkeyHex), machine: 'laptop', relays: [] },
         error: null,
         timedOut: false,
-        hasStaged: false,
+        staged: null,
       });
       await tick();
     });
@@ -184,7 +184,7 @@ describe('PairingScreen QR scan', () => {
         candidate: null,
         error: 'the pairing window may have closed',
         timedOut: true,
-        hasStaged: false,
+        staged: null,
       });
       await tick();
     });

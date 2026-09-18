@@ -21,6 +21,7 @@ import type {
   UploadImageMessage,
 } from '../nativeCoreTypes';
 import type { PublishConfirmOptions, PublishResult } from '../ports';
+import type { SessionBackend } from '../protocolConstants';
 
 export interface InvalidPayloadRecord {
   eventId: string;
@@ -84,7 +85,7 @@ export interface BridgeApiLike {
   modelChange(machine: string, sessionId: string, model: string): Promise<boolean>;
   usageRequest(machine: string, sessionId: string): Promise<boolean>;
   gsdRequest(machine: string, sessionId: string): Promise<boolean>;
-  modelsRequest(machine: string): Promise<boolean>;
+  modelsRequest(machine: string, backend?: SessionBackend): Promise<boolean>;
   setCredentials(
     machine: string,
     creds: { anthropicApiKey?: string | null; githubPat?: string | null },

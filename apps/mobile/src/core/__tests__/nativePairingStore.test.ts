@@ -3,7 +3,8 @@
  * `PairingStoreState` shape `createPairingStore` does: URL reconstruction
  * for `beginPair`/`stagePair` (the Rust intent needs the raw URL, the
  * caller only has parsed parts), the staged-URL cache (the Rust view only
- * reports a boolean), the sync npub/token format pre-check on
+ * reports a `PairingCandidateView`, not the full parsed URL), the sync
+ * npub/token format pre-check on
  * `beginManualPair`, and view refresh on the pairing slice's
  * `stateChanged`.
  */
@@ -19,7 +20,7 @@ import type { NativeCore } from '../../platform/nativeCore';
 // would fail validation before ever reaching the assertions below.
 const bridge = generateKeypair();
 
-function fakeCore(initialView: PairingView = { phase: 'idle', error: null, timedOut: false, hasStaged: false, candidate: null }) {
+function fakeCore(initialView: PairingView = { phase: 'idle', error: null, timedOut: false, staged: null, candidate: null }) {
   let view: PairingView | null = initialView;
   const dispatched: Intent[] = [];
   let coreEventListener: ((e: CoreEvent) => void) | null = null;
@@ -91,7 +92,7 @@ describe('createNativePairingStore', () => {
       phase: 'awaiting-ack',
       error: null,
       timedOut: false,
-      hasStaged: false,
+      staged: null,
       candidate: { pubkeyHex: 'bb'.repeat(32), npub: 'npub1x', machine: 'laptop', relays: ['wss://r'] },
     });
     const store = createNativePairingStore({ core });
@@ -143,26 +144,32 @@ describe('createNativePairingStore', () => {
     expect(dispatched).toEqual([{ stagePairing: { url: expect.stringContaining('codedeck://pair') } }]);
   });
 
-  it('the cached staged URL survives a stateChanged refresh while hasStaged stays true', async () => {
+  it('the cached staged URL survives a stateChanged refresh while the view still reports staged', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
     const store = createNativePairingStore({ core });
     await tick();
 
     store.getState().stagePair(urlParts);
-    setView({ phase: 'idle', error: null, timedOut: false, hasStaged: true, candidate: null });
+    setView({
+      phase: 'idle',
+      error: null,
+      timedOut: false,
+      staged: { pubkeyHex: urlParts.pubkeyHex, npub: urlParts.npub, machine: urlParts.machine, relays: urlParts.relays },
+      candidate: null,
+    });
     emitStateChanged('pairing');
     await tick();
 
     expect(store.getState().staged).toEqual(urlParts);
   });
 
-  it('the cached staged URL is dropped once the view reports hasStaged: false', async () => {
+  it('the cached staged URL is dropped once the view reports staged: null', async () => {
     const { core, setView, emitStateChanged } = fakeCore();
     const store = createNativePairingStore({ core });
     await tick();
 
     store.getState().stagePair(urlParts);
-    setView({ phase: 'idle', error: null, timedOut: false, hasStaged: false, candidate: null });
+    setView({ phase: 'idle', error: null, timedOut: false, staged: null, candidate: null });
     emitStateChanged('pairing');
     await tick();
 
@@ -234,7 +241,7 @@ describe('createNativePairingStore', () => {
     const store = createNativePairingStore({ core });
     await tick();
 
-    setView({ phase: 'paired', error: null, timedOut: false, hasStaged: false, candidate: null });
+    setView({ phase: 'paired', error: null, timedOut: false, staged: null, candidate: null });
     emitStateChanged('machines');
     await tick();
 

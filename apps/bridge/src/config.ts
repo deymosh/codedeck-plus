@@ -27,6 +27,12 @@ export interface CliFlags {
   service?: boolean;
   /** SOCKS5 proxy URL for all relay connections (e.g. a local Tor daemon). */
   torProxy?: string;
+  /** External OpenCode server URL (wins over --opencode-auto-start). */
+  openCodeServerUrl?: string;
+  /** Have the bridge spawn and manage its own OpenCode server. */
+  openCodeAutoStart?: boolean;
+  /** Explicit path to the `opencode` executable, for auto-start. */
+  openCodePath?: string;
 }
 
 /** Shape of `$CODEDECK_HOME/config.json` (all optional). */
@@ -50,6 +56,16 @@ interface FileConfig {
   transcriptKeepLast?: number;
   /** SOCKS5 proxy URL for all relay connections (e.g. socks5h://127.0.0.1:9050). */
   torProxyUrl?: string;
+  /** External OpenCode server to connect to. Wins over openCodeAutoStart. */
+  openCodeServerUrl?: string;
+  /** Spawn and manage an OpenCode server ourselves instead of connecting to
+   *  an external one. Ignored when openCodeServerUrl is set. */
+  openCodeAutoStart?: boolean;
+  /** Explicit `opencode` binary path, for auto-start. Otherwise resolved from
+   *  CODEDECK_OPENCODE_PATH + PATH + well-known install locations. */
+  openCodePath?: string;
+  /** Port for the auto-started OpenCode server (0 = OS-assigned ephemeral). */
+  openCodePort?: number;
 }
 
 export interface ResolvedCliConfig {
@@ -74,6 +90,17 @@ function splitList(value: string | undefined): string[] | undefined {
 
 function nonEmpty(list: string[] | undefined): string[] | undefined {
   return Array.isArray(list) && list.length > 0 ? list : undefined;
+}
+
+/** Parses a CODEDECK_* boolean-flag env var: '0'/'false' -> false, any other
+ *  non-empty value -> true. An unset OR empty-string value resolves to
+ *  `undefined` ("fall through to the next source"), not `true` — Compose's
+ *  `${VAR:-}` interpolation defines the var as '' for every operator who
+ *  never set it, so treating '' as "present and truthy" would silently
+ *  enable the flag on every default `docker compose up`. */
+function envBool(value: string | undefined): boolean | undefined {
+  if (value === undefined || value === '') return undefined;
+  return value !== '0' && value !== 'false';
 }
 
 export function loadCliConfig(
@@ -121,10 +148,7 @@ export function loadCliConfig(
   const claudePath = flags.claudePath ?? env.CODEDECK_CLAUDE_PATH ?? file.claudePath;
   const nvpnPath = env.CODEDECK_NVPN_PATH ?? file.nvpnPath;
   const adbPath = env.CODEDECK_ADB_PATH ?? file.adbPath;
-  const meshAdminEnabled =
-    env.CODEDECK_MESH_ADMIN !== undefined
-      ? env.CODEDECK_MESH_ADMIN !== '0' && env.CODEDECK_MESH_ADMIN !== 'false'
-      : file.meshAdminEnabled;
+  const meshAdminEnabled = envBool(env.CODEDECK_MESH_ADMIN) ?? file.meshAdminEnabled;
   const relayRegisterEndpoint =
     flags.relayRegisterEndpoint ?? env.CODEDECK_RELAY_REGISTER_ENDPOINT ?? file.relayRegisterEndpoint;
   const relayRegisterToken =
@@ -141,6 +165,16 @@ export function loadCliConfig(
       ? Math.max(0, Math.floor(Number(transcriptKeepLastRaw)))
       : undefined;
   const torProxyUrl = flags.torProxy ?? env.CODEDECK_TOR_PROXY_URL ?? file.torProxyUrl;
+  const openCodeServerUrl =
+    flags.openCodeServerUrl ?? env.CODEDECK_OPENCODE_SERVER_URL ?? file.openCodeServerUrl;
+  const openCodeAutoStart =
+    flags.openCodeAutoStart ?? envBool(env.CODEDECK_OPENCODE_AUTO_START) ?? file.openCodeAutoStart;
+  const openCodePath = flags.openCodePath ?? env.CODEDECK_OPENCODE_PATH ?? file.openCodePath;
+  const openCodePortRaw = env.CODEDECK_OPENCODE_PORT ?? file.openCodePort;
+  const openCodePort =
+    openCodePortRaw !== undefined && Number.isFinite(Number(openCodePortRaw))
+      ? Math.max(0, Math.floor(Number(openCodePortRaw)))
+      : undefined;
 
   return {
     homeDir,
@@ -161,6 +195,10 @@ export function loadCliConfig(
       ...(blossomRegisterToken ? { blossomRegisterToken } : {}),
       ...(transcriptKeepLast !== undefined ? { transcriptKeepLast } : {}),
       ...(torProxyUrl ? { torProxyUrl } : {}),
+      ...(openCodeServerUrl ? { openCodeServerUrl } : {}),
+      ...(openCodeAutoStart !== undefined ? { openCodeAutoStart } : {}),
+      ...(openCodePath ? { openCodePath } : {}),
+      ...(openCodePort !== undefined ? { openCodePort } : {}),
     },
   };
 }

@@ -35,6 +35,8 @@ Pairing is a one-time QR scan; it survives restarts and reinstalls on both ends.
 - Transcripts that survive restarts, offline gaps and reinstalls (ranged sync)
 - Per-session model and effort, plus custom AI provider profiles (Kimi K3,
   OpenRouter, any Anthropic-compatible endpoint)
+- Optional [OpenCode](https://opencode.ai) backend, selectable per session
+  alongside Claude Code
 - Encrypted Nostr DMs — NIP-17 and Marmot (MLS) side by side
 - Project/folder management on every paired bridge host
 
@@ -76,7 +78,8 @@ codedeck-plus/
 │   ├── entrypoint.sh
 │   └── main.js          # container entry shim (WebSocket global → built bridge CLI)
 ├── docs/
-│   └── PROTOCOL.md      # the wire contract (packages/protocol/src/ is authoritative)
+│   ├── PROTOCOL.md      # the wire contract (packages/protocol/src/ is authoritative)
+│   └── OPENCODE.md      # the optional OpenCode session backend: setup, both config modes
 ├── scripts/
 │   └── sync-upstream.sh  # pulls upstream into vendor/*, for hand-merging
 ├── .github/workflows/   # ci.yml (typecheck + test + build + cargo) · release.yml (tag → release)
@@ -126,6 +129,15 @@ GIT_REPO=https://github.com/your-username/your-repo.git
 # Optional — see .env.example for the full explanation of each:
 CODEDECK_RELAYS=
 CODEDECK_TOR_PROXY_URL=
+
+# Optional — a second, OpenCode-backed session type. See docs/OPENCODE.md.
+CODEDECK_OPENCODE_SERVER_URL=
+CODEDECK_OPENCODE_AUTO_START=
+CODEDECK_OPENCODE_PORT=
+
+# Optional — installs gsd-core (github.com/open-gsd/gsd-core) globally on
+# startup. Off by default: see .env.example for why.
+CODEDECK_GSD_AUTO_INSTALL=
 ```
 
 Docker Compose reads the root `.env` file as its environment configuration. It
@@ -188,6 +200,7 @@ the full runbook.
 - [`apps/bridge/README.md`](apps/bridge/README.md) — the bridge CLI: commands, config, systemd
 - [`apps/mobile/README.md`](apps/mobile/README.md) — the Android app: stack, layout, building an APK
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v10 wire contract
+- [`docs/OPENCODE.md`](docs/OPENCODE.md) — the optional OpenCode session backend: external server vs. bridge-managed, config, Docker setup
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 
 ## Upstream

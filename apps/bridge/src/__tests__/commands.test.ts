@@ -128,7 +128,10 @@ function tokenFromOutput(rig: Rig): string {
 const pairingUrlCount = (rig: Rig): number =>
   (rig.io.out.text.match(/Pairing URL: /g) ?? []).length;
 
-function resolvedFor(rig: Rig): ReturnType<typeof loadCliConfig> {
+function resolvedFor(
+  rig: Rig,
+  extraFlags: Parameters<typeof loadCliConfig>[0] = {},
+): ReturnType<typeof loadCliConfig> {
   const dir = path.dirname(rig.homeDir);
   return loadCliConfig(
     {
@@ -136,6 +139,7 @@ function resolvedFor(rig: Rig): ReturnType<typeof loadCliConfig> {
       machineName: 'cmd-test',
       workspaces: [path.join(dir, 'ws')],
       claudePath: path.join(dir, 'claude'),
+      ...extraFlags,
     },
     {},
   );
@@ -305,6 +309,28 @@ describe('cmdRun with no phones paired (CDX-038)', () => {
     expect(rig.io.out.text).not.toContain('No phones paired yet');
     expect(rig.io.out.text).not.toContain('Pairing URL: ');
     expect(rig.io.out.text).toContain('paired:     1 phone(s)');
+
+    rig.signal('SIGTERM');
+    expect(await run).toBe(0);
+    rig.fireExit();
+  });
+});
+
+describe('OpenCode auto-start graceful degradation', () => {
+  it('boots Claude-Code-only with one log line when the opencode binary cannot be resolved', async () => {
+    const rig = makeRig(50);
+    const resolved = resolvedFor(rig, {
+      openCodeAutoStart: true,
+      openCodePath: path.join(path.dirname(rig.homeDir), 'no-such-opencode-binary'),
+    });
+    const run = cmdRun(resolved, rig.io, rig.deps);
+    await waitFor(() => rig.signalReady());
+
+    expect(rig.io.err.text).toContain('OpenCode: auto-start is enabled but the `opencode` executable was not found');
+    expect(rig.io.out.text).toContain('opencode:   auto-start failed — see log');
+    // The bridge itself is unaffected — same "No phones paired yet" boot path
+    // as every other cmdRun test.
+    expect(rig.io.out.text).toContain('No phones paired yet');
 
     rig.signal('SIGTERM');
     expect(await run).toBe(0);

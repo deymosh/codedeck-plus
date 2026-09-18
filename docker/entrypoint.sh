@@ -16,8 +16,24 @@ CLAUDE_CODE_OAUTH_TOKEN=$(read_secret claude_code_oauth_token CLAUDE_CODE_OAUTH_
 GITHUB_TOKEN=$(read_secret github_token GITHUB_TOKEN)
 export CLAUDE_CODE_OAUTH_TOKEN
 
-# 1. Install gsd-core globally for Claude integration
-npx --yes @opengsd/gsd-core@1.12.0 --claude --global
+# /data is the only volume this image persists — the Dockerfile points
+# XDG_CONFIG_HOME/XDG_DATA_HOME there so OpenCode's own config/auth (e.g. a
+# one-time `opencode auth login`) survives container recreation, but a fresh
+# volume won't already contain those subdirectories.
+mkdir -p "${XDG_CONFIG_HOME:-/data/.config}" "${XDG_DATA_HOME:-/data/.local/share}"
+
+# 1. Optionally install gsd-core globally for Claude integration. Off by
+#    default (this is a real network call to the npm registry on every
+#    container boot, and GSD already degrades gracefully to a blank snapshot
+#    when gsd-tools is missing — see packages/core/src/workspace/gsdState.ts).
+#    Opt in with CODEDECK_GSD_AUTO_INSTALL=1, mirroring the
+#    CODEDECK_OPENCODE_AUTO_START convention. An unset/empty value (Compose's
+#    `${VAR:-}` default for every operator who never touched it) and an
+#    explicit "0"/"false" both mean disabled.
+case "${CODEDECK_GSD_AUTO_INSTALL:-}" in
+  ''|0|false) ;;
+  *) npx --yes @opengsd/gsd-core@1.12.0 --claude --global ;;
+esac
 
 # 2. Make Git authentication available to Claude and interactive shells via a
 # helper that reads the runtime secret without persisting the token.

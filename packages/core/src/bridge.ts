@@ -39,6 +39,7 @@ import {
   type ProviderModel,
   type ProviderProfileInfo,
   type RemoteSessionInfo,
+  type SessionBackend,
   type SessionListMessage,
   type SetCredentialsMessage,
   type SetDeviceConfigMessage,
@@ -69,6 +70,7 @@ import { PermissionBroker, type PermissionCard } from './session/permissions';
 import { SessionRunner, type SessionRunnerEvents } from './session/runner';
 import { SyncServer, type SyncTimers } from './sync/server';
 import type { SdkFacade } from './sdk/facade';
+import { opencodeMessageToEntries } from './sdk/opencodeAdapter';
 import {
   createProjectFolder,
   listAllWorkspaceFolders,
@@ -442,6 +444,13 @@ export interface BridgeCoreOptions {
   /** The bridge identity keypair's secret key. */
   secretKey: Uint8Array;
   facade: SdkFacade;
+  /** OpenCode backend facade — absent means this bridge cannot run
+   *  `create-session.backend: 'opencode'`. When present, the `opencode`
+   *  capability is added to the heartbeat and `handleCreateSession`/
+   *  `resumeOnBoot`/`makeRunner` route a session with `backend: 'opencode'`
+   *  here instead of to `facade`. See apps/bridge/src/commands.ts for the
+   *  `CODEDECK_OPENCODE_SERVER_URL`-driven construction. */
+  openCodeFacade?: SdkFacade;
   /** Injectable relay pool for tests. Defaults to the real BridgePool. */
   poolFactory?: PoolFactory;
   /** Heartbeat republish interval; 0 disables the timer (tests). */
@@ -471,6 +480,12 @@ export interface BridgeCoreOptions {
   now?: () => number;
 }
 
+/** Shared by handleCreateSession and the models-request handler — both must
+ *  refuse a `backend: 'opencode'` request identically when this bridge has
+ *  no working OpenCode facade configured. */
+const OPENCODE_NOT_CONFIGURED_REASON =
+  'This bridge has no OpenCode backend configured (CODEDECK_OPENCODE_SERVER_URL is unset).';
+
 export class BridgeCore {
   readonly keypair: Keypair;
   /** Mesh (nvpn) admin — public so hosts can put mesh manual-join info in the
@@ -490,6 +505,7 @@ export class BridgeCore {
 
   private readonly host: BridgeHost;
   private readonly facade: SdkFacade;
+  private readonly openCodeFacade?: SdkFacade;
   private readonly poolFactory: PoolFactory;
   private readonly heartbeatIntervalMs: number;
   private readonly syncTimers?: SyncTimers;
@@ -538,6 +554,7 @@ export class BridgeCore {
   private constructor(options: BridgeCoreOptions) {
     this.host = options.host;
     this.facade = options.facade;
+    this.openCodeFacade = options.openCodeFacade;
     this.keypair = keypairFromSecret(options.secretKey);
     this.poolFactory = options.poolFactory ?? ((o, c) => new BridgePool(o, c));
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
@@ -806,6 +823,7 @@ export class BridgeCore {
         // CDX-062: the runner also rehydrates this from the record itself;
         // passing it keeps makeRunner's wiring explicit.
         ...(record.providerId ? { providerId: record.providerId } : {}),
+        ...(record.backend ? { backend: record.backend } : {}),
         resume: true,
       });
       this.runners.set(record.sessionId, runner);
@@ -1173,10 +1191,17 @@ export class BridgeCore {
       host: this.host.config.host,
       sessions: this.remoteSessions(),
       protocolVersion: PROTOCOL_VERSION,
-      // The full set. Only `images` and `custom-providers` are read by the phone
-      // as gates; the rest are presence markers the phone detects via payload
-      // data instead (see the tier note in capabilities.ts).
-      capabilities: [...ALL_BRIDGE_CAPABILITIES],
+      // The full set, plus `opencode` only when this bridge actually has a
+      // working OpenCode facade configured — see CAPABILITIES.opencode's doc
+      // comment for why this one string is conditional while every other
+      // marker here is unconditional. Only `images` and `custom-providers`
+      // are read by the phone as gates; the rest are presence markers the
+      // phone detects via payload data instead (see the tier note in
+      // capabilities.ts).
+      capabilities: [
+        ...ALL_BRIDGE_CAPABILITIES,
+        ...(this.openCodeFacade ? [CAPABILITIES.opencode] : []),
+      ],
       folders: this.workspaceFolders(),
       // CDX-031: `folders` lists what is INSIDE the roots, so with several
       // `--workspace` roots the phone could reach every root's subfolders but
@@ -1353,8 +1378,20 @@ export class BridgeCore {
 
       onCreateFolder: (msg) => this.handleCreateFolder(msg),
 
-      onModelsRequest: async () => {
-        const models = await this.facade.supportedModels();
+      onModelsRequest: async (msg) => {
+        const backend = msg.backend;
+        const backendField = backend ? { backend } : {};
+        if (backend === 'opencode' && !this.openCodeFacade) {
+          this.log(`[BridgeCore] models-request: ${OPENCODE_NOT_CONFIGURED_REASON}`);
+          await this.publishToPhones({
+            type: 'models',
+            models: [],
+            error: OPENCODE_NOT_CONFIGURED_REASON,
+            ...backendField,
+          });
+          return;
+        }
+        const models = await this.facadeFor(backend).supportedModels();
         // CDX-022/CDX-035: an empty list means "no live SDK session answered",
         // not "the SDK supports zero models". CDX-022 made us publish NOTHING
         // (so the phone kept retrying instead of freezing on an empty picker),
@@ -1363,12 +1400,15 @@ export class BridgeCore {
         // and keeps re-requesting — an empty answer is no longer
         // indistinguishable from a lost message.
         if (models.length === 0) {
-          const error = 'No live Claude session answered — start or open a session and try again.';
+          const error =
+            backend === 'opencode'
+              ? 'The OpenCode server reported no configured models (or the request failed) — check its provider configuration.'
+              : 'No live Claude session answered — start or open a session and try again.';
           this.log(`[BridgeCore] models-request: ${error}`);
-          await this.publishToPhones({ type: 'models', models: [], error });
+          await this.publishToPhones({ type: 'models', models: [], error, ...backendField });
           return;
         }
-        await this.publishToPhones({ type: 'models', models });
+        await this.publishToPhones({ type: 'models', models, ...backendField });
       },
 
       onUploadImage: (msg) => {
@@ -1439,6 +1479,24 @@ export class BridgeCore {
       createdAt: new Date().toISOString(),
     });
 
+    // A custom provider profile materializes as subprocess env (ANTHROPIC_API_KEY
+    // / ANTHROPIC_BASE_URL) the SDK's own Claude Code CLI spawn picks up — the
+    // OpenCode facade never spawns a subprocess per session (it speaks HTTP to
+    // an already-running `opencode serve`), so it has nothing to inject a
+    // per-session credential into and silently ignores both `providerId` and
+    // the env SessionRunner would have computed for it. Refuse the combination
+    // here rather than let a session start that is attributed to a provider
+    // profile it never actually used. The mobile UI already hides the provider
+    // picker once OpenCode is selected (NewSessionModal.tsx), but nothing else
+    // stops a hand-crafted or future client from sending both.
+    if (msg.providerId && msg.backend === 'opencode') {
+      const reason =
+        'Custom provider profiles are not supported with the OpenCode backend — OpenCode always uses its own configured providers.';
+      this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
+      await this.publishToPhones({ type: 'session-failed', pendingId: sessionId, reason });
+      return;
+    }
+
     // CDX-062: an unknown or token-less profile can never spawn — keep the
     // two-phase contract (pending already went out) and fail immediately with
     // a reason instead of a doomed spawn.
@@ -1458,6 +1516,17 @@ export class BridgeCore {
       return;
     }
 
+    // 'opencode' requested but this bridge has no working OpenCodeFacade
+    // configured — fail immediately with the same two-phase pending→failed
+    // shape the unknown-providerId case above uses, rather than letting
+    // makeRunner build a runner around a facade that doesn't exist.
+    if (msg.backend === 'opencode' && !this.openCodeFacade) {
+      const reason = OPENCODE_NOT_CONFIGURED_REASON;
+      this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
+      await this.publishToPhones({ type: 'session-failed', pendingId: sessionId, reason });
+      return;
+    }
+
     // CDX-062: provider-bound sessions default their model from the profile
     // (the SDK's own default is an Anthropic model the provider doesn't have).
     const model = msg.model ?? profile?.defaultModel ?? profile?.models[0]?.id;
@@ -1467,6 +1536,7 @@ export class BridgeCore {
       cwd,
       ...(model ? { model } : {}),
       ...(msg.providerId ? { providerId: msg.providerId } : {}),
+      ...(msg.backend ? { backend: msg.backend } : {}),
       ...(msg.defaultEffort ? { effortLevel: msg.defaultEffort } : {}),
       ...(msg.testSession ? { testSession: true } : {}),
     });
@@ -1886,12 +1956,33 @@ export class BridgeCore {
 
   // --- Runner wiring ---
 
+  /** Resolve which SdkFacade a `backend` value routes to. `undefined` and
+   *  'claude-code' both mean the default facade. Callers requesting
+   *  'opencode' must have already confirmed `openCodeFacade` is configured
+   *  (see makeRunner's `backend` doc comment) — the non-null assertion here
+   *  mirrors that existing contract rather than adding a new one. */
+  private facadeFor(backend?: SessionBackend): SdkFacade {
+    return backend === 'opencode' ? this.openCodeFacade! : this.facade;
+  }
+
   private makeRunner(opts: {
     sessionId: string;
     cwd: string;
     model?: string;
     /** CDX-062: bind the session to a stored custom provider profile. */
     providerId?: string;
+    /** Agent backend for this session; undefined means 'claude-code'. Callers
+     *  are responsible for confirming `openCodeFacade` is configured before
+     *  requesting 'opencode' from a FRESH session (handleCreateSession does
+     *  this up front, keeping the two-phase pending→failed contract clean —
+     *  see its own doc comment). resumeOnBoot has no such gate: a record from
+     *  before `CODEDECK_OPENCODE_SERVER_URL` was unset reaches here anyway,
+     *  and the facade lookup below resolves to `undefined`, which
+     *  `SessionRunner.start()`'s existing try/catch around
+     *  `facade.createSession()` already turns into a loud per-session error
+     *  entry (`failResumedSpawn`) instead of a bridge crash — the same path a
+     *  resumed session with a since-deleted provider profile already takes. */
+    backend?: SessionBackend;
     effortLevel?: CreateSessionMessage['defaultEffort'];
     testSession?: boolean;
     resume?: boolean;
@@ -1901,6 +1992,10 @@ export class BridgeCore {
     // control off the default surface (ported gate). Screenshots are
     // downscaled + delivered to the phone inline via the session's transcript
     // (unique seq — same path as permission cards).
+    // NOTE: device MCP tools are Claude-Code-only for now — OpenCodeFacade
+    // never reads `SdkSessionOptions.mcpServers`, so building this for an
+    // OpenCode test session is inert rather than harmful; a real device MCP
+    // bridge for OpenCode is a documented gap, not implemented here.
     const mcpServers = opts.testSession
       ? {
           device: createDeviceMcpServer({
@@ -1923,10 +2018,14 @@ export class BridgeCore {
           }),
         }
       : undefined;
+    const backend = opts.backend;
     return new SessionRunner({
       sessionId: opts.sessionId,
       cwd: opts.cwd,
-      facade: this.facade,
+      // See this method's `backend` doc comment above for why facadeFor's
+      // non-null assertion is safe even when `openCodeFacade` turns out to be
+      // unconfigured.
+      facade: this.facadeFor(backend),
       transcript: this.transcript,
       registry: this.registry,
       broker: this.broker,
@@ -1934,6 +2033,8 @@ export class BridgeCore {
       permissionMode: 'plan',
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.providerId ? { providerId: opts.providerId } : {}),
+      ...(backend ? { backend } : {}),
+      ...(backend === 'opencode' ? { translateMessage: opencodeMessageToEntries } : {}),
       ...(opts.effortLevel ? { effortLevel: opts.effortLevel } : {}),
       ...(opts.testSession ? { testSession: true } : {}),
       ...(mcpServers ? { mcpServers } : {}),

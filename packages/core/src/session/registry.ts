@@ -22,6 +22,7 @@ import type {
   EffortLevel,
   PermissionMode,
   RemoteSessionInfo,
+  SessionBackend,
   SessionState,
 } from '@codedeck/protocol';
 
@@ -43,6 +44,13 @@ export interface SessionRecord {
   /** CDX-062: id of the custom provider profile this session was bound to at
    *  creation (absent = Anthropic). Survives resume-on-boot + auto-restart. */
   providerId?: string;
+  /** Agent backend this session was created on. Absent means 'claude-code'
+   *  (sessions created before the OpenCode backend existed have no value
+   *  here and must keep resolving to Claude Code). Survives resume-on-boot
+   *  the same way `providerId` does — a bridge restart must reattach an
+   *  OpenCode session to `openCodeFacade`, not silently fall back to Claude
+   *  Code. */
+  backend?: SessionBackend;
   effortLevel?: EffortLevel;
   permissionMode?: PermissionMode;
   title: string | null;
@@ -256,6 +264,7 @@ export class SessionRegistry {
       // CDX-062: providerLabel is NOT resolved here — the orchestrator owns
       // the live profile lookup at publish time (label survives deletion).
       if (rec.providerId !== undefined) { info.providerId = rec.providerId; }
+      if (rec.backend !== undefined) { info.backend = rec.backend; }
       if (rec.committed) { info.committed = true; }
       if (rec.contextWindow !== undefined) { info.contextWindow = rec.contextWindow; }
       if (rec.contextPercentage !== undefined) { info.contextPercentage = rec.contextPercentage; }

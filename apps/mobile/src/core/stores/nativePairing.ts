@@ -14,10 +14,11 @@
  *   "spec"). `buildPairingUrl` reconstructs it — mirrors
  *   `packages/core`'s pairing URL BUILDER byte for byte (relay/machine/
  *   token/mesh params individually `encodeURIComponent`'d, `npub` raw).
- * - The Rust `PairingView` reports `hasStaged: boolean`, not the staged
- *   URL's parsed details the confirm screen displays — `stagePair`'s
- *   caller already handed us the full `ParsedPairingUrl`, so it's cached
- *   locally and shown until the view reports `hasStaged: false`.
+ * - The Rust `PairingView` reports `staged: PairingCandidateView | null`,
+ *   not the staged URL's full parsed details (`token`/`netid`/`meshAdmin`)
+ *   the confirm screen displays — `stagePair`'s caller already handed us
+ *   the full `ParsedPairingUrl`, so it's cached locally and shown until
+ *   the view reports `staged: null`.
  *
  * `PairingStoreState` has no pair-ack handler: the Rust `Router` folds a
  * bridge pair-ack into the pairing store directly, without this adapter's
@@ -60,7 +61,7 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
     const refresh = async (): Promise<void> => {
       const view = await deps.core.pairingView();
       if (!view) return;
-      if (!view.hasStaged) stagedCache = null;
+      if (!view.staged) stagedCache = null;
       set({
         // `PairingView.phase` crosses the wire as a plain Rust `&'static
         // str`, not a literal-union type (specta has no way to see the
@@ -70,7 +71,7 @@ export function createNativePairingStore(deps: NativePairingStoreDeps): PairingS
         candidate: toCandidate(view.candidate),
         error: view.error,
         timedOut: view.timedOut,
-        staged: view.hasStaged ? stagedCache : null,
+        staged: view.staged ? stagedCache : null,
       });
     };
 
