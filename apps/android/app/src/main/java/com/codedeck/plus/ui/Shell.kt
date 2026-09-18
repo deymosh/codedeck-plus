@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.ui.screens.NewSessionScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
@@ -35,10 +36,10 @@ private val WIDE_BREAKPOINT = 700.dp
  * App shell (F3.3.3) — port of `apps/mobile/src/ui/App.tsx`'s core
  * composition: a machine-grouped `Sidebar` beside (wide) or over (narrow:
  * `ModalNavigationDrawer`, Compose's own native drawer gestures replacing
- * the hand-rolled scrim+drawer div) `MainPanel`. Settings is a full-screen
- * replacement of this whole shell while open (F4.1.5), not an overlay;
- * Pairing overlays, the undo toast, and the keyboard-inset controllers are
- * still later F4 work.
+ * the hand-rolled scrim+drawer div) `MainPanel`. Settings, Pairing, and
+ * New Session are all full-screen replacements of this whole shell while
+ * open (F4.1.5, F4.4), not overlays; the undo toast and the keyboard-inset
+ * controllers are still later F4 work.
  */
 @Composable
 fun Shell(bridge: CoreBridge) {
@@ -80,11 +81,6 @@ fun Shell(bridge: CoreBridge) {
         scope.launch { bridge.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
-    fun createSession(machine: String) {
-        scope.launch { bridge.dispatch(UniffiIntent.CreateSession(machine)) }
-        newSessionFor = null
-    }
-
     if (settingsOpen) {
         // Full-screen replacement, not an overlay: while Settings is open it
         // owns the window — the wide/narrow split (and the narrow branch's
@@ -93,6 +89,8 @@ fun Shell(bridge: CoreBridge) {
         SettingsScreen(bridge, onClose = { settingsOpen = false })
     } else if (pairingOpen) {
         PairingScreen(bridge, onClose = { pairingOpen = false })
+    } else if (newSessionFor != null) {
+        NewSessionScreen(bridge, machinePubkey = newSessionFor!!, onClose = { newSessionFor = null })
     } else {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val isWide = maxWidth >= WIDE_BREAKPOINT
@@ -168,13 +166,5 @@ fun Shell(bridge: CoreBridge) {
                 }
             }
         }
-    }
-
-    newSessionFor?.let { machine ->
-        NewSessionSheet(
-            machinePubkey = machine,
-            onCreate = ::createSession,
-            onDismiss = { newSessionFor = null },
-        )
     }
 }
