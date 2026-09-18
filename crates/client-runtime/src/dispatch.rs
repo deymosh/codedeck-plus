@@ -792,6 +792,7 @@ mod tests {
             seq_high,
             provider_id: None,
             provider_label: None,
+            backend: None,
         }
     }
 
@@ -1287,6 +1288,7 @@ mod tests {
                     }],
                     default_model: Some("sonnet".into()),
                     error: None,
+                    backend: None,
                 }),
             )
             .await;
@@ -1322,6 +1324,7 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
+                backend: None,
             },
             0,
         );

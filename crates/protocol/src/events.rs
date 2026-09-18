@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::capabilities::BridgeHostKind;
 use super::common::{
     AuthStatus, EffortLevel, GsdState, OutputEntry, PermissionMode, ProviderProfileInfo,
-    RemoteSessionInfo, UsageData,
+    RemoteSessionInfo, SessionBackend, UsageData,
 };
 use crate::ranges::SeqRange;
 
@@ -209,6 +209,11 @@ pub struct ModelsMsg {
     /// `models`; the phone keeps its list and keeps re-requesting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Echoes the request's `backend` — lets a phone with two in-flight
+    /// requests (one per backend) tell which answer is which. Absent means
+    /// `ClaudeCode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<SessionBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -377,6 +382,7 @@ mod tests {
         }}));
         rt(&json!({"type":"models","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
         rt(&json!({"type":"models","models":[],"error":"sdk offline"}));
+        rt(&json!({"type":"models","models":[{"id":"m1"}],"backend":"opencode"}));
         rt(&json!({"type":"credentials-ack","machine":"m","success":true,"hasAnthropicKey":true,"hasGithubPat":false,"keyValid":true}));
         rt(&json!({"type":"device-config-ack","success":false,"error":"unreachable"}));
         rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));

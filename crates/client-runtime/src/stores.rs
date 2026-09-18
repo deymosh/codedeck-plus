@@ -278,6 +278,7 @@ mod tests {
             seq_high: None,
             provider_id: None,
             provider_label: None,
+            backend: None,
         };
         machines.apply_session_upsert("m", &info, 0);
         kv.set(MACHINES_KEY, &serialize_machines(&machines.machines)).await;

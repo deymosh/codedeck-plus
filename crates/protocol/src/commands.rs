@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{DeviceConfig, EffortLevel, PermissionMode, ProviderModel};
+use super::common::{DeviceConfig, EffortLevel, PermissionMode, ProviderModel, SessionBackend};
 use super::tristate::Tristate;
 use crate::ranges::SeqRange;
 
@@ -148,12 +148,31 @@ pub struct CreateSessionMsg {
     pub create_cwd: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
+    /// Select the agent backend for this session. Omitted means
+    /// `ClaudeCode` (today's behavior), so a phone that has never seen this
+    /// field keeps working unchanged. Send `Opencode` only when the bridge
+    /// advertises the `opencode` capability — an old bridge's zod silently
+    /// strips the unknown field and would run the session on Claude Code
+    /// instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<SessionBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct BareMsg {
     #[serde(flatten)]
     pub version: VersionFields,
+}
+
+/// v10 (CDB-030): ask the bridge for the SDK's live supported-model list.
+/// `backend` scopes the request to a specific agent backend's model list;
+/// omitted means `ClaudeCode` (today's only backend, unchanged behaviour).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ModelsRequestMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<SessionBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -296,7 +315,7 @@ pub enum PhoneToBridge {
     UploadImage(UploadImageMsg),
     UsageRequest(SessionIdMsg),
     GsdRequest(SessionIdMsg),
-    ModelsRequest(BareMsg),
+    ModelsRequest(ModelsRequestMsg),
     SetCredentials(SetCredentialsMsg),
     SetDeviceConfig(SetDeviceConfigMsg),
     PairRequest(PairRequestMsg),
@@ -342,7 +361,7 @@ mod tests {
         rt(&json!({"type":"model","sessionId":"s","model":"claude-x"}));
         rt(&json!({"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]}));
         rt(&json!({"type":"sync-ack","syncId":"y","range":[1,50]}));
-        rt(&json!({"type":"create-session","defaultEffort":"high","cwd":"proj","createCwd":true,"providerId":"p"}));
+        rt(&json!({"type":"create-session","defaultEffort":"high","cwd":"proj","createCwd":true,"providerId":"p","backend":"opencode"}));
         rt(&json!({"type":"refresh-sessions"}));
         rt(&json!({"type":"close-session","sessionId":"s"}));
         rt(&json!({"type":"interrupt","sessionId":"s"}));
@@ -352,6 +371,7 @@ mod tests {
         rt(&json!({"type":"usage-request","sessionId":"s"}));
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request"}));
+        rt(&json!({"type":"models-request","backend":"opencode"}));
         rt(&json!({"type":"set-device-config","config":{"label":"dev","appUnderTest":"kubo"}}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"type":"provider-profiles-request"}));
@@ -393,6 +413,19 @@ mod tests {
             assert_eq!(p.auth_token, Tristate::Set("tok".into()));
             assert_eq!(p.models[0].id, "m1");
         }, _ => panic!() }
+    }
+
+    #[test]
+    fn backend_absent_means_claude_code() {
+        let m = rt(&json!({"type":"create-session"}));
+        assert!(matches!(m, PhoneToBridge::CreateSession(CreateSessionMsg { backend: None, .. })));
+        let m = rt(&json!({"type":"create-session","backend":"claude-code"}));
+        match m {
+            PhoneToBridge::CreateSession(c) => assert_eq!(c.backend, Some(SessionBackend::ClaudeCode)),
+            _ => panic!(),
+        }
+        let m = rt(&json!({"type":"models-request"}));
+        assert!(matches!(m, PhoneToBridge::ModelsRequest(ModelsRequestMsg { backend: None, .. })));
     }
 
     #[test]

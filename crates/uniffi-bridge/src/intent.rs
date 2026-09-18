@@ -201,6 +201,7 @@ impl TryFrom<UniffiIntent> for Intent {
                 default_effort: None,
                 provider_id: None,
                 test_session: None,
+                backend: None,
             },
             UniffiIntent::RespondPermission { machine, session_id, request_id, allow, modifier } => {
                 Intent::RespondPermission {

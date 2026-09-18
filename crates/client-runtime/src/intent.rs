@@ -17,11 +17,11 @@ use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
     BareMsg, CreateFolderMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext,
-    KeypressMsg, ModeChangeMsg, ModelChangeMsg, PermissionModifier, PermissionResMsg,
-    PhoneToBridge, ProviderProfileWrite, QuestionInputMsg, SessionIdMsg, SetCredentialsMsg,
-    SetDeviceConfigMsg, SetProviderProfileMsg, VersionFields,
+    KeypressMsg, ModeChangeMsg, ModelChangeMsg, ModelsRequestMsg, PermissionModifier,
+    PermissionResMsg, PhoneToBridge, ProviderProfileWrite, QuestionInputMsg, SessionIdMsg,
+    SetCredentialsMsg, SetDeviceConfigMsg, SetProviderProfileMsg, VersionFields,
 };
-use protocol::common::{DeviceConfig, EffortLevel, PermissionMode};
+use protocol::common::{DeviceConfig, EffortLevel, PermissionMode, SessionBackend};
 use protocol::tristate::Tristate;
 use serde::{Deserialize, Serialize};
 
@@ -248,12 +248,14 @@ pub enum Intent {
         default_effort: Option<EffortLevel>,
         provider_id: Option<String>,
         test_session: Option<bool>,
+        backend: Option<SessionBackend>,
     },
     RefreshSessions {
         machine: String,
     },
     RequestModels {
         machine: String,
+        backend: Option<SessionBackend>,
     },
     RequestUsage {
         machine: String,
@@ -640,6 +642,7 @@ pub fn apply(
             default_effort,
             provider_id,
             test_session,
+            backend,
         } => r.send(
             &machine,
             PhoneToBridge::CreateSession(CreateSessionMsg {
@@ -650,14 +653,19 @@ pub fn apply(
                 cwd,
                 create_cwd,
                 provider_id,
+                backend,
             }),
         ),
         Intent::RefreshSessions { machine } => {
             r.send(&machine, PhoneToBridge::RefreshSessions(BareMsg { version: v() }))
         }
-        Intent::RequestModels { machine } => {
-            r.send(&machine, PhoneToBridge::ModelsRequest(BareMsg { version: v() }))
-        }
+        Intent::RequestModels { machine, backend } => r.send(
+            &machine,
+            PhoneToBridge::ModelsRequest(ModelsRequestMsg {
+                version: v(),
+                backend,
+            }),
+        ),
         Intent::RequestUsage {
             machine,
             session_id,
@@ -1080,6 +1088,7 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
+                backend: None,
             },
             0,
         );
@@ -1134,6 +1143,7 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
+                backend: None,
             },
             0,
         );

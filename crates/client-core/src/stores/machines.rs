@@ -571,6 +571,7 @@ mod tests {
             seq_high: None,
             provider_id: None,
             provider_label: None,
+            backend: None,
         }
     }
 
@@ -825,6 +826,7 @@ mod tests {
                 .collect(),
             default_model: default.map(str::to_string),
             error: None,
+            backend: None,
         }
     }
 
@@ -860,7 +862,12 @@ mod tests {
         st.apply_models("pk", &models_msg(&["opus"], None));
         st.apply_models(
             "pk",
-            &ModelsMsg { models: vec![], default_model: None, error: Some("no live SDK".into()) },
+            &ModelsMsg {
+                models: vec![],
+                default_model: None,
+                error: Some("no live SDK".into()),
+                backend: None,
+            },
         );
         assert_eq!(
             st.machine("pk").unwrap().models.as_ref().unwrap()[0].id,

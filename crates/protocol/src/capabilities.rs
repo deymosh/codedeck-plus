@@ -47,11 +47,21 @@ pub const DIFF: &str = "diff";
 // ALL provider UI and send on it; an old bridge silently strips the unknown
 // `providerId` and runs the session on the wrong provider/account.
 pub const CUSTOM_PROVIDERS: &str = "custom-providers";
+// PRESENCE MARKER, conditionally advertised. OpenCode backend support
+// (`create-session.backend: Opencode`). Unlike every other marker in this
+// file, the bridge does NOT always include this string — it is added to the
+// heartbeat only when the bridge has a working OpenCode facade configured,
+// because a bridge without one would otherwise advertise a backend it can't
+// actually run. The client shows the backend picker when present. Not part
+// of [`ALL_BRIDGE_CAPABILITIES`] for that reason.
+pub const OPENCODE: &str = "opencode";
 // TRANSPORT BEACON — oversize-event `chunk` fragmentation. Advertised on both
 // sides, gated by neither.
 pub const CHUNKED: &str = "chunked";
 
-/// Every capability the reference bridge ships with (advertised wholesale).
+/// Every capability the reference bridge ships with, EXCEPT [`OPENCODE`]
+/// (conditionally advertised — see its doc comment above). A running bridge
+/// computes its actual heartbeat list from this plus `OPENCODE` when configured.
 pub const ALL_BRIDGE_CAPABILITIES: [&str; 10] = [
     SYNC_1, FOLDERS, GSD, IMAGES, DEVICE_ACTIONS, USAGE, MODELS, DIFF, CUSTOM_PROVIDERS, CHUNKED,
 ];
@@ -103,6 +113,12 @@ mod tests {
         assert_eq!(ALL_BRIDGE_CAPABILITIES.len(), 10);
         assert!(ALL_BRIDGE_CAPABILITIES.contains(&"sync/1"));
         assert!(ALL_BRIDGE_CAPABILITIES.contains(&"custom-providers"));
+    }
+
+    #[test]
+    fn opencode_is_conditionally_advertised_not_wholesale() {
+        assert_eq!(OPENCODE, "opencode");
+        assert!(!ALL_BRIDGE_CAPABILITIES.contains(&OPENCODE));
     }
 
     #[test]

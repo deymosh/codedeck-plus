@@ -32,6 +32,22 @@ pub enum EffortLevel {
     Auto,
 }
 
+/// Agent backend a session runs on / a model list is scoped to. Absent
+/// wherever this is optional means `ClaudeCode` — the only backend that
+/// existed before OpenCode support, so an old peer that has never seen this
+/// field keeps working unchanged. Port of
+/// `packages/protocol/src/schemas/common.ts`'s `sessionBackendSchema`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionBackend {
+    ClaudeCode,
+    /// Spelled as one word (not `OpenCode`) so `kebab-case` renders it
+    /// `"opencode"`, matching the TS schema's `z.enum(['claude-code',
+    /// 'opencode'])` — a camel-split `OpenCode` would kebab-case wrongly to
+    /// `"open-code"`.
+    Opencode,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
@@ -139,6 +155,10 @@ pub struct RemoteSessionInfo {
     pub provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_label: Option<String>,
+    /// Agent backend this session runs on. Absent means `ClaudeCode` (see
+    /// `SessionBackend`'s doc comment).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<SessionBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -346,6 +366,8 @@ mod tests {
         assert_eq!(serde_json::to_string(&OutputEntryType::ToolUse).unwrap(), r#""tool_use""#);
         assert_eq!(serde_json::to_string(&DiffLineType::Del).unwrap(), r#""del""#);
         assert_eq!(serde_json::to_string(&DeviceRole::TestTarget).unwrap(), r#""test-target""#);
+        assert_eq!(serde_json::to_string(&SessionBackend::ClaudeCode).unwrap(), r#""claude-code""#);
+        assert_eq!(serde_json::to_string(&SessionBackend::Opencode).unwrap(), r#""opencode""#);
     }
 
     #[test]
@@ -381,11 +403,12 @@ mod tests {
             "id":"s","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":42,
             "title":"T","project":"p","permissionMode":"plan","effortLevel":"high",
             "model":"m","contextWindow":200000,"contextPercentage":37.5,"committed":true,
-            "state":"running","seqHigh":917,"providerId":"pid","providerLabel":"Prov"
+            "state":"running","seqHigh":917,"providerId":"pid","providerLabel":"Prov","backend":"opencode"
         });
         let v: RemoteSessionInfo = serde_json::from_value(full).unwrap();
         assert_eq!(v.permission_mode, Some(PermissionMode::Plan));
         assert_eq!(v.seq_high, Some(917));
+        assert_eq!(v.backend, Some(SessionBackend::Opencode));
     }
 
     #[test]

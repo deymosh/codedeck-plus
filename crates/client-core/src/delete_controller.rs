@@ -213,6 +213,7 @@ mod tests {
             seq_high: None,
             provider_id: None,
             provider_label: None,
+            backend: None,
         }
     }
 

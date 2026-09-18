@@ -17,6 +17,7 @@
       { "type": "sync-ack", "syncId": "y", "range": [1, 50] },
       { "type": "create-session" },
       { "type": "create-session", "defaultEffort": "high", "model": "m", "testSession": true, "cwd": "proj", "createCwd": true, "providerId": "p" },
+      { "type": "create-session", "backend": "opencode" },
       { "type": "refresh-sessions" },
       { "type": "refresh-sessions", "v": 10 },
       { "type": "close-session", "sessionId": "s" },
@@ -28,6 +29,7 @@
       { "type": "usage-request", "sessionId": "s" },
       { "type": "gsd-request", "sessionId": "s" },
       { "type": "models-request" },
+      { "type": "models-request", "backend": "opencode" },
       { "type": "set-credentials" },
       { "type": "set-credentials", "anthropicApiKey": null, "githubPat": "ghp_x" },
       { "type": "set-credentials", "anthropicApiKey": "sk-ant-x" },
@@ -47,13 +49,14 @@
       { "type": "keypress", "sessionId": "s", "key": "x", "context": "banana" },
       { "type": "sync-ack", "syncId": "y", "range": [1] },
       { "type": "teleport", "sessionId": "s" },
-      { "type": "create-session", "defaultEffort": "wild" }
+      { "type": "create-session", "defaultEffort": "wild" },
+      { "type": "create-session", "backend": "codex" }
     ]
   },
   "bridgeToPhone": {
     "valid": [
       { "type": "sessions", "machine": "m", "sessions": [], "protocolVersion": 10 },
-      { "type": "sessions", "machine": "m", "host": "service", "sessions": [{ "id": "s", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "state": "running", "seqHigh": 10 }], "authStatus": { "hasAnthropicKey": true, "hasGithubPat": false, "hasEnvKey": false }, "protocolVersion": 10, "capabilities": ["sync/1", "diff", "chunked"], "folders": ["a", "b"], "roots": ["/w"], "removedSessions": ["old"], "machineOffline": true },
+      { "type": "sessions", "machine": "m", "host": "service", "sessions": [{ "id": "s", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "state": "running", "seqHigh": 10, "backend": "opencode" }], "authStatus": { "hasAnthropicKey": true, "hasGithubPat": false, "hasEnvKey": false }, "protocolVersion": 10, "capabilities": ["sync/1", "diff", "chunked"], "folders": ["a", "b"], "roots": ["/w"], "removedSessions": ["old"], "machineOffline": true },
       { "type": "output", "sessionId": "s", "seq": 7, "entry": { "entryType": "text", "content": "hello", "timestamp": "2026-08-05T00:00:00.000Z" } },
       { "type": "output", "sessionId": "s", "seq": 8, "entry": { "entryType": "diff", "content": "+a\n-b", "timestamp": "t", "diff": { "path": "f.rs", "lines": [{ "type": "add", "text": "a" }, { "type": "del", "text": "b" }, { "type": "context", "text": " c" }], "truncated": true } } },
       { "type": "output", "sessionId": "s", "seq": 9, "entry": { "entryType": "thinking", "content": "hmm", "timestamp": "t", "metadata": { "special": "x" } } },
@@ -78,6 +81,7 @@
       { "type": "gsd-state", "sessionId": "s", "gsd": { "installed": true, "available": true, "hasGit": true, "situation": "x", "summary": "y", "milestone": null, "currentPhase": "2", "totalPhases": 5, "percent": 40.0, "phases": [{ "number": "1", "name": "plan", "diskStatus": "ok", "plans": 2, "summaries": 1, "recentlyTouched": true, "action": null, "command": null, "planCount": 2, "needsYou": null }], "actions": [{ "id": "a", "label": "go", "command": "gsd go", "recommended": true }], "recommended": "a", "paused": false, "blockers": [], "verifyFailed": false, "execution": { "phase": "2", "plansTotal": 3, "plansDone": 1, "currentPlan": "p2", "tasksDone": 4, "tasksTotal": null, "lastTask": "t" } } },
       { "type": "models", "models": [{ "id": "m1", "label": "M1" }, { "id": "m2" }], "defaultModel": "m1" },
       { "type": "models", "models": [], "error": "sdk offline" },
+      { "type": "models", "models": [{ "id": "m1" }], "backend": "opencode" },
       { "type": "credentials-ack", "machine": "m", "success": true, "hasAnthropicKey": true, "hasGithubPat": false, "keyValid": true },
       { "type": "device-config-ack", "success": false, "error": "unreachable" },
       { "type": "device-config-ack", "success": true, "reachable": true },
