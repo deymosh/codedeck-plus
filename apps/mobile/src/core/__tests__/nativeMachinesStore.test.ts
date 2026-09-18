@@ -96,6 +96,7 @@ const machineView: MachinesView = {
       },
       models: [{ id: 'opus' }],
       defaultModel: 'opus',
+      openCodeModels: [{ id: 'gpt' }],
       providerProfiles: [
         {
           id: 'prof1',
@@ -120,6 +121,7 @@ describe('createNativeMachinesStore', () => {
     expect(pk1?.protocolVersion).toBe(10);
     expect(pk1?.lastHeartbeatAt).toBe(1234);
     expect(pk1?.models).toEqual([{ id: 'opus' }]);
+    expect(pk1?.openCodeModels).toEqual([{ id: 'gpt' }]);
     expect(pk1?.providerProfiles?.[0]?.id).toBe('prof1');
     expect(store.getState().session('pk1', 's1')?.presence).toBe('live');
     expect(store.getState().machinePubkeys()).toEqual(['pk1']);
@@ -149,6 +151,7 @@ describe('createNativeMachinesStore', () => {
     expect(pk2?.lastHeartbeatAt).toBeNull();
     expect(pk2?.host).toBeUndefined();
     expect(pk2?.models).toBeUndefined();
+    expect(pk2?.openCodeModels).toBeUndefined();
     expect(pk2?.providerProfiles).toBeUndefined();
   });
 

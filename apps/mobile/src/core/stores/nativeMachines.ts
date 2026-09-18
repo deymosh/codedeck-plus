@@ -63,6 +63,14 @@ function toMachineView(view: NativeMachineView): MachineView {
       : {}),
     ...(view.defaultModel != null ? { defaultModel: view.defaultModel } : {}),
     ...(view.modelsError != null ? { modelsError: view.modelsError } : {}),
+    ...(view.openCodeModels != null
+      ? {
+          openCodeModels: view.openCodeModels.map((m) =>
+            nullsToUndefined<NonNullable<MachineView['openCodeModels']>[number]>(m),
+          ),
+        }
+      : {}),
+    ...(view.openCodeModelsError != null ? { openCodeModelsError: view.openCodeModelsError } : {}),
     ...(view.providerProfiles != null
       ? {
           providerProfiles: view.providerProfiles.map((p) =>

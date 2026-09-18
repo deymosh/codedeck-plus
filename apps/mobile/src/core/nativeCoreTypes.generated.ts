@@ -1213,6 +1213,15 @@ export type MachineView_Deserialize = {
 	defaultModel?: string | null,
 	modelsError?: string | null,
 	/**
+	 *  OpenCode's model list, tracked separately from `models` because the two
+	 *  backends can have entirely different supported models — a `models`
+	 *  answer for one must never clobber the other's list. No `default_model`
+	 *  counterpart: OpenCode answers never carry one (port of
+	 *  `apps/mobile/src/core/stores/machines.ts`'s `openCodeModels`).
+	 */
+	openCodeModels?: ModelEntry_Deserialize[] | null,
+	openCodeModelsError?: string | null,
+	/**
 	 *  Stripped by `serialize_machines` before persisting and forced back to
 	 *  `None` by `hydrate_machines` on load (CDX-062) — but present here so it
 	 *  serializes normally into the live `MachinesView` an IPC boundary reads.
@@ -1243,6 +1252,15 @@ export type MachineView_Serialize = {
 	models?: ModelEntry_Serialize[] | null,
 	defaultModel?: string | null,
 	modelsError?: string | null,
+	/**
+	 *  OpenCode's model list, tracked separately from `models` because the two
+	 *  backends can have entirely different supported models — a `models`
+	 *  answer for one must never clobber the other's list. No `default_model`
+	 *  counterpart: OpenCode answers never carry one (port of
+	 *  `apps/mobile/src/core/stores/machines.ts`'s `openCodeModels`).
+	 */
+	openCodeModels?: ModelEntry_Serialize[] | null,
+	openCodeModelsError?: string | null,
 	/**
 	 *  Stripped by `serialize_machines` before persisting and forced back to
 	 *  `None` by `hydrate_machines` on load (CDX-062) — but present here so it
