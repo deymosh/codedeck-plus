@@ -16,12 +16,18 @@ android {
     }
 
     defaultConfig {
-        // Same applicationId as apps/mobile/src-tauri's Tauri-generated app —
-        // deliberate (see the migration plan's F3 "Convivencia" note):
-        // installing one replaces the other on a test device during F3/F4,
-        // so the eventual F5 cutover is a plain swap, not a fresh install
-        // losing local state.
-        applicationId = "com.codedeck.plus"
+        // Deliberately DIFFERENT from apps/mobile/src-tauri's applicationId
+        // (com.codedeck.plus) while this app is still catching up to feature
+        // parity: installing this one must not replace or lose the Tauri
+        // app's local state on a test device. The plan's F3 "Convivencia"
+        // note originally called for the SAME applicationId so an eventual
+        // F5 cutover would be a plain swap — revert to "com.codedeck.plus"
+        // (and drop this note) only once this app is actually finished and
+        // ready to replace the Tauri one. `namespace` above stays
+        // com.codedeck.plus on purpose — it only affects the generated R
+        // class / Kotlin package, not app identity, so it doesn't need to
+        // track this.
+        applicationId = "com.codedeck.native"
         // 26, not apps/mobile's 24: the JNA runtime uniffi-bindgen's
         // generated Kotlin depends on uses MethodHandle.invoke/invokeExact,
         // unsupported by D8 below API 26 (confirmed by a failed dex build at
