@@ -11,9 +11,13 @@
 # already present for something else.
 #
 # The only things this script assumes are already on the machine: bash,
-# curl, tar, unzip, and a glibc-or-compatible Linux (the prebuilt JDK/Rust/
+# curl, tar, and a glibc-or-compatible Linux (the prebuilt JDK/Rust/
 # Node/Android-SDK binaries below aren't musl builds). It cannot vendor
-# THOSE — they're what fetches everything else.
+# THOSE — they're what fetches everything else. It prefers the system
+# `xz`/`unzip` binaries for archive extraction but falls back to python3's
+# stdlib (`lzma`/`zipfile`) when they're missing — confirmed to happen on a
+# real sandbox that had curl/tar/python3 but no `xz` or `unzip` and no
+# root/apt access to install them.
 #
 # One real exception this script does NOT cover: building apps/mobile's
 # Tauri DESKTOP target on Linux needs system GUI libraries (webkit2gtk,
@@ -48,6 +52,50 @@ if [ "$(uname -s)" != "Linux" ]; then
   echo "path instead: apps/android/docker/build-apk.sh." >&2
   exit 1
 fi
+
+# Extraction helpers: prefer the system `xz`/`unzip` binaries (faster, and
+# `tar -xJf` needs `xz` on PATH even though `xz` itself never appears in the
+# command line — GNU tar shells out to it for `.tar.xz`) but fall back to
+# python3's stdlib `lzma`/`zipfile` modules, which need no external binary,
+# for a host that has curl/tar/python3 but neither `xz` nor `unzip` and no
+# root/apt access to add them.
+extract_tar_xz() {
+  local archive="$1" dest="$2"
+  if command -v xz >/dev/null 2>&1 || command -v unxz >/dev/null 2>&1; then
+    tar -xJf "$archive" -C "$dest" --strip-components=1
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import lzma, sys, tarfile
+archive, dest = sys.argv[1], sys.argv[2]
+with lzma.open(archive) as f, tarfile.open(fileobj=f) as tar:
+    members = []
+    for m in tar.getmembers():
+        # emulate --strip-components=1: drop the top-level directory entry,
+        # rename everything else past its first path segment
+        _, _, rest = m.name.partition("/")
+        if not rest:
+            continue
+        m.name = rest
+        members.append(m)
+    tar.extractall(dest, members=members)
+' "$archive" "$dest"
+  else
+    echo "error: extracting $archive needs either the xz/unxz binary or python3, neither is on PATH" >&2
+    exit 1
+  fi
+}
+
+extract_zip() {
+  local archive="$1" dest="$2"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$archive" -d "$dest"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$archive" "$dest"
+  else
+    echo "error: extracting $archive needs either the unzip binary or python3, neither is on PATH" >&2
+    exit 1
+  fi
+}
 
 TOOLCHAIN_DIR="$PWD/toolchain"
 JDK_DIR="$TOOLCHAIN_DIR/jdk"
@@ -116,7 +164,7 @@ if [ ! -x "$NODE_DIR/bin/node" ]; then
   tmp="$(mktemp -d)"
   curl -fsSL -o "$tmp/node.tar.xz" "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$node_file"
   mkdir -p "$NODE_DIR"
-  tar -xJf "$tmp/node.tar.xz" -C "$NODE_DIR" --strip-components=1
+  extract_tar_xz "$tmp/node.tar.xz" "$NODE_DIR"
   rm -rf "$tmp"
 else
   echo "==> Node.js already installed, skipping"
@@ -140,7 +188,7 @@ if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
   curl -fsSL -o "$tmp/cmdline-tools.zip" \
     "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
   mkdir -p "$ANDROID_HOME/cmdline-tools"
-  unzip -q "$tmp/cmdline-tools.zip" -d "$ANDROID_HOME/cmdline-tools"
+  extract_zip "$tmp/cmdline-tools.zip" "$ANDROID_HOME/cmdline-tools"
   mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
   rm -rf "$tmp"
 else
