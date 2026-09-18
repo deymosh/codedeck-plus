@@ -22,7 +22,7 @@
 
 use client_runtime::intent::Intent;
 use protocol::commands::{KeypressContext, PermissionModifier};
-use protocol::common::PermissionMode;
+use protocol::common::{EffortLevel, PermissionMode, SessionBackend};
 
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum UniffiIntent {
@@ -43,7 +43,29 @@ pub enum UniffiIntent {
     RefreshSessions {
         machine: String,
     },
+    /// `backend`: `"claude-code"` / `"opencode"` / absent (defaults to Claude
+    /// Code) — see this module's doc comment for why wire enums cross as
+    /// plain strings. Send `"opencode"` only when the machine's
+    /// `capabilities` includes `"opencode"`.
     CreateSession {
+        machine: String,
+        cwd: Option<String>,
+        create_cwd: Option<bool>,
+        model: Option<String>,
+        /// `"low"` / `"medium"` / `"high"` / `"xhigh"` / `"max"` — the wire's
+        /// own spelling, same convention as `mode`.
+        default_effort: Option<String>,
+        provider_id: Option<String>,
+        backend: Option<String>,
+    },
+    /// Ask the bridge for a backend's live supported-model list; the answer
+    /// lands in the matching `UniffiMachineSummary` field (`models` /
+    /// `open_code_models`).
+    RequestModels {
+        machine: String,
+        backend: Option<String>,
+    },
+    RequestProviderProfiles {
         machine: String,
     },
     RespondPermission {
@@ -193,16 +215,29 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::Interrupt { machine, session_id } => Intent::Interrupt { machine, session_id },
             UniffiIntent::CloseSession { machine, session_id } => Intent::CloseSession { machine, session_id },
             UniffiIntent::RefreshSessions { machine } => Intent::RefreshSessions { machine },
-            UniffiIntent::CreateSession { machine } => Intent::CreateSession {
+            UniffiIntent::CreateSession {
                 machine,
-                cwd: None,
-                create_cwd: None,
-                model: None,
-                default_effort: None,
-                provider_id: None,
+                cwd,
+                create_cwd,
+                model,
+                default_effort,
+                provider_id,
+                backend,
+            } => Intent::CreateSession {
+                machine,
+                cwd,
+                create_cwd,
+                model,
+                default_effort: default_effort.map(|e| parse_enum::<EffortLevel>("default_effort", &e)).transpose()?,
+                provider_id,
                 test_session: None,
-                backend: None,
+                backend: backend.map(|b| parse_enum::<SessionBackend>("backend", &b)).transpose()?,
             },
+            UniffiIntent::RequestModels { machine, backend } => Intent::RequestModels {
+                machine,
+                backend: backend.map(|b| parse_enum::<SessionBackend>("backend", &b)).transpose()?,
+            },
+            UniffiIntent::RequestProviderProfiles { machine } => Intent::RequestProviderProfiles { machine },
             UniffiIntent::RespondPermission { machine, session_id, request_id, allow, modifier } => {
                 Intent::RespondPermission {
                     machine,

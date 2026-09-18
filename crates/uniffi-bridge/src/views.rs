@@ -71,12 +71,54 @@ pub struct UniffiSessionSummary {
     pub seq_high: Option<u64>,
 }
 
+/// One selectable model, as reported by either backend's live SDK
+/// (`MachineView.models`/`open_code_models`) or a custom provider profile's
+/// own list (`ProviderProfileInfo.models`) — the same shape in every case,
+/// so one record covers all three.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiModelEntry {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+fn to_uniffi_model_entries(models: &[protocol::events::ModelEntry]) -> Vec<UniffiModelEntry> {
+    models.iter().map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone() }).collect()
+}
+
+/// A custom AI provider profile the bridge has stored — gated on the
+/// `custom-providers` capability, same as the TS `NewSessionModal.tsx`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiProviderProfileInfo {
+    pub id: String,
+    pub label: String,
+    pub base_url: String,
+    pub models: Vec<UniffiModelEntry>,
+    pub default_model: Option<String>,
+    pub has_token: bool,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiMachineSummary {
     pub pubkey_hex: String,
     pub name: String,
     pub host: Option<String>,
     pub sessions: Vec<UniffiSessionSummary>,
+    /// Bridge heartbeat capability strings, e.g. `"opencode"` /
+    /// `"custom-providers"` — the new-session screen gates its backend and
+    /// provider pickers on these, the same wire strings the reference
+    /// `NewSessionModal.tsx` gates on.
+    pub capabilities: Vec<String>,
+    pub folders: Vec<String>,
+    pub roots: Vec<String>,
+    /// Claude Code's live model list, requested via `RequestModels`.
+    pub models: Vec<UniffiModelEntry>,
+    pub default_model: Option<String>,
+    pub models_error: Option<String>,
+    /// OpenCode's live model list — tracked separately (see `MachineView`'s
+    /// own doc comment) since the two backends can support different models.
+    pub open_code_models: Vec<UniffiModelEntry>,
+    pub open_code_models_error: Option<String>,
+    pub provider_profiles: Vec<UniffiProviderProfileInfo>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -115,6 +157,32 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             committed: info.committed,
                             seq_high: info.seq_high,
                         }
+                    })
+                    .collect(),
+                capabilities: m.capabilities.clone(),
+                folders: m.folders.clone(),
+                roots: m.roots.clone(),
+                models: m.models.as_deref().map(to_uniffi_model_entries).unwrap_or_default(),
+                default_model: m.default_model.clone(),
+                models_error: m.models_error.clone(),
+                open_code_models: m.open_code_models.as_deref().map(to_uniffi_model_entries).unwrap_or_default(),
+                open_code_models_error: m.open_code_models_error.clone(),
+                provider_profiles: m
+                    .provider_profiles
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| UniffiProviderProfileInfo {
+                        id: p.id.clone(),
+                        label: p.label.clone(),
+                        base_url: p.base_url.clone(),
+                        models: p
+                            .models
+                            .iter()
+                            .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone() })
+                            .collect(),
+                        default_model: p.default_model.clone(),
+                        has_token: p.has_token,
                     })
                     .collect(),
             })
