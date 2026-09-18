@@ -528,11 +528,32 @@ export const ENABLE_GATEWAY_MODEL_DISCOVERY = process.env.CLAUDE_CODE_ENABLE_GAT
  *  exact, fast-drifting model id list, since a router's id is often
  *  `<provider>/<model>` — see `fetchGatewayModels`). Haiku is deliberately
  *  excluded: nothing in Anthropic's own documentation lists a Haiku tier for
- *  this. */
+ *  this.
+ *
+ *  `glm-5.3` (matches both the flagship and `glm-5.3-flash`, from Z.ai's own
+ *  model cards: the GLM family's 1M window started at GLM-5.2, up from
+ *  GLM-5.1's 200K, and 5.3/5.3-Flash inherit it) is included on the same
+ *  provider-documentation basis — NOT because a live gateway call reports it.
+ *  Verified live against this project's own test gateway (Claude Code Router
+ *  fronting Z.ai) that `modelUsage[model].contextWindow` reads back 1000000
+ *  for ANY model id carrying the `[1m]` suffix, including `glm-4.7-flash[1m]`
+ *  — a model with no 1M tier on Z.ai's side. That is Claude Code itself
+ *  self-reporting its own client-side assumption (CCR's `/v1/models` carries
+ *  no context-length field, so Claude Code treats every non-`claude-*` id as
+ *  a third-party model and simply believes the literal `[1m]` marker,
+ *  correct or not — see code.claude.com/docs/en/model-config and
+ *  github.com/musistudio/claude-code-router/issues/1597); it is not a
+ *  capability negotiated with the gateway or the upstream provider. This
+ *  function's return value therefore cannot be verified by calling the SDK
+ *  live — only by checking each family's actually-published spec, the same
+ *  way this entry was added. Do not add another family here on the strength
+ *  of a live 1000000 readback alone; that reading is a foregone conclusion
+ *  for any suffixed id and proves nothing about real provider support.
+ *  `glm-4.7-flash` is deliberately excluded for exactly that reason. */
 export function modelSupports1mContext(model: string | undefined): boolean {
   if (!model) return false;
   const m = model.toLowerCase();
-  return m.includes('sonnet') || m.includes('opus');
+  return m.includes('sonnet') || m.includes('opus') || m.includes('glm-5.3');
 }
 
 /** Append the CLI's `[1m]` model-id marker (case-insensitive, never doubled

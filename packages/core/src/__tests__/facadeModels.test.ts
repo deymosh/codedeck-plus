@@ -348,6 +348,13 @@ describe('modelSupports1mContext', () => {
     expect(modelSupports1mContext('claude-haiku-4-5-20251001')).toBe(false);
     expect(modelSupports1mContext(undefined)).toBe(false);
   });
+
+  it('matches glm-5.3 and glm-5.3-flash (Z.ai\'s own 1M-tier docs), not glm-4.7-flash', () => {
+    // Real gateway shape (claude-code-router fronting Z.ai): "<provider>/<model>".
+    expect(modelSupports1mContext('Z.ai (Global) - Coding Plan/glm-5.3')).toBe(true);
+    expect(modelSupports1mContext('Z.ai (Global) - Coding Plan/glm-5.3-flash')).toBe(true);
+    expect(modelSupports1mContext('Z.ai (Global) - Coding Plan/glm-4.7-flash')).toBe(false);
+  });
 });
 
 describe('buildQueryOptions (1M-context beta)', () => {
