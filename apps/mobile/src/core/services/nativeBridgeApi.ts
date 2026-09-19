@@ -40,6 +40,7 @@
  */
 import type { NativeCore } from '../../platform/nativeCore';
 import type { BridgeApiLike } from './bridgeApi';
+import type { SessionBackend } from '../protocolConstants';
 import type { FolderAckMessage, Intent, PhoneToBridgeMessage } from '../nativeCoreTypes';
 
 export interface NativeBridgeApiDeps {
@@ -110,6 +111,7 @@ export function createNativeBridgeApi(deps: NativeBridgeApiDeps): BridgeApiLike 
           defaultEffort: opts.defaultEffort ?? null,
           providerId: opts.providerId ?? null,
           testSession: opts.testSession ?? null,
+          backend: opts.backend ?? null,
         },
       }),
     refreshSessions: (machine) => dispatch({ refreshSessions: { machine } }),
@@ -128,7 +130,8 @@ export function createNativeBridgeApi(deps: NativeBridgeApiDeps): BridgeApiLike 
     modelChange: (machine, sessionId, model) => dispatch({ setModel: { machine, sessionId, model } }),
     usageRequest: (machine, sessionId) => dispatch({ requestUsage: { machine, sessionId } }),
     gsdRequest: (machine, sessionId) => dispatch({ requestGsd: { machine, sessionId } }),
-    modelsRequest: (machine) => dispatch({ requestModels: { machine } }),
+    modelsRequest: (machine, backend?: SessionBackend) =>
+      dispatch({ requestModels: { machine, backend: backend ?? null } }),
 
     setCredentials: (machine, creds) =>
       dispatch({
