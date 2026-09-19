@@ -897,6 +897,9 @@ fn begin_pairing(
         r.persist(id);
     }
     r.resubscribe |= out.resubscribe;
+    if out.relays_changed.is_some() {
+        r.relays_changed = out.relays_changed;
+    }
     if out.pair_deadline.is_some() {
         r.pair_deadline = out.pair_deadline;
     }
@@ -1243,6 +1246,42 @@ mod tests {
         assert!(s2.pairing.candidate.is_none());
         assert!(s2.pairing.error.is_some());
         assert_eq!(bad, IntentResult::default());
+    }
+
+    #[tokio::test]
+    async fn begin_pairing_from_a_url_merges_its_relays_before_the_pair_request_send() {
+        let (mut s, kp) = stores().await;
+        let bridge = protocol::crypto::generate_keypair();
+        assert!(
+            !s.settings.data.relays.iter().any(|r| r == "wss://new-relay.example"),
+            "test relay must not already be a default"
+        );
+
+        let url = format!(
+            "codedeck://pair?npub={}&relays=wss%3A%2F%2Fnew-relay.example&machine=bridge&token=tok",
+            bridge.npub
+        );
+        let out = apply(
+            &mut s,
+            Intent::BeginPairing { url, label: "my phone".into() },
+            &kp,
+            ctx(),
+        );
+
+        // The relay is merged into settings and signalled to the loop
+        // (`interpret_intent` applies `relays_changed` before `out.sends`,
+        // so the transport is already pointed at it once the pair-request
+        // below is actually dispatched).
+        assert!(s.settings.data.relays.iter().any(|r| r == "wss://new-relay.example"));
+        assert!(out
+            .relays_changed
+            .as_ref()
+            .is_some_and(|relays| relays.iter().any(|r| r == "wss://new-relay.example")));
+        assert!(out.persist.contains(&StoreId::Settings));
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::PairRequest(_) }] if *machine == bridge.pubkey_hex
+        ));
     }
 
     #[tokio::test]

@@ -20,6 +20,7 @@ use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
 use client_core::stores::transcript::SyncEffect;
+use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
 use protocol::commands::{
     ModeChangeMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
@@ -72,6 +73,11 @@ pub struct RouteResult {
     pub transcript_removed: Vec<(String, String)>,
     /// The relay subscription authors filter changed — resubscribe.
     pub resubscribe: bool,
+    /// A new relay list — the loop reconfigures the transport with it. Only
+    /// ever set by `OnPaired` learning relays from the pair-ack (a staged
+    /// pairing's own relay learning surfaces earlier, through
+    /// `IntentResult::relays_changed` — see `PairingEffectsOut::relays_changed`).
+    pub relays_changed: Option<Vec<String>>,
     /// Arm / clear the pair-ack deadline timer.
     pub pair_deadline: Option<PairDeadline>,
     /// CDX-028 one-QR mesh join: `(admin_npub, network_id)`.
@@ -643,6 +649,13 @@ pub struct PairingEffectsOut {
     pub sends: Vec<Send>,
     pub persist: Vec<StoreId>,
     pub resubscribe: bool,
+    /// A new relay list learned from the pairing candidate (the pairing URL's
+    /// own `relays` param, or — for a manual-npub pairing — the ack's
+    /// `relays` field). The loop must apply this to the live transport
+    /// before any queued send (in particular `SendPairRequest`) actually
+    /// goes out, or a bridge reachable only over a relay the phone didn't
+    /// already have never sees the request.
+    pub relays_changed: Option<Vec<String>>,
     pub pair_deadline: Option<PairDeadline>,
     pub mesh_join: Option<(String, String)>,
     /// `Some(true)` paired, `Some(false)` nack / timeout, `None` still pending.
@@ -656,6 +669,9 @@ impl PairingEffectsOut {
             r.persist(id);
         }
         r.resubscribe |= self.resubscribe;
+        if self.relays_changed.is_some() {
+            r.relays_changed = self.relays_changed;
+        }
         if self.pair_deadline.is_some() {
             r.pair_deadline = self.pair_deadline;
         }
@@ -692,7 +708,24 @@ pub fn apply_pairing_effects(
         match effect {
             PairingEffect::DisarmDeadline => out.pair_deadline = Some(PairDeadline::Clear),
             PairingEffect::ArmDeadline { ms } => out.pair_deadline = Some(PairDeadline::Arm { ms }),
-            PairingEffect::NotifyCandidate(_) => out.resubscribe = true,
+            PairingEffect::NotifyCandidate(candidate) => {
+                out.resubscribe = true;
+                // Learn the pairing URL's relays now, BEFORE `SendPairRequest`
+                // below is processed — a bridge reachable only over a relay
+                // the phone didn't already have would otherwise never see
+                // the request (the pair-ack timeout's "phone and bridge may
+                // not share a relay" case).
+                if !candidate.relays.is_empty() {
+                    for effect in stores.settings.add_relays(&candidate.relays) {
+                        match effect {
+                            SettingsEffect::RelaysChanged(relays) => {
+                                out.relays_changed = Some(relays);
+                                out.persist.push(StoreId::Settings);
+                            }
+                        }
+                    }
+                }
+            }
             PairingEffect::SendPairRequest { to, label, token } => {
                 out.sends.push(Send {
                     machine: to,
@@ -717,7 +750,13 @@ pub fn apply_pairing_effects(
                     host,
                 );
                 if !candidate.relays.is_empty() {
-                    stores.settings.add_relays(&candidate.relays);
+                    for effect in stores.settings.add_relays(&candidate.relays) {
+                        match effect {
+                            SettingsEffect::RelaysChanged(relays) => {
+                                out.relays_changed = Some(relays);
+                            }
+                        }
+                    }
                     out.persist.push(StoreId::Settings);
                 }
                 if let (Some(admin), Some(netid)) =
@@ -1246,6 +1285,51 @@ mod tests {
         assert!(out.resubscribe);
         assert!(out.persist.contains(&StoreId::Machines));
         assert!(out.persist.contains(&StoreId::Settings));
+        assert!(out
+            .relays_changed
+            .as_ref()
+            .is_some_and(|relays| relays.iter().any(|r| r == "wss://learned.example")));
+    }
+
+    #[tokio::test]
+    async fn a_pair_ack_with_no_new_relays_leaves_relays_changed_unset() {
+        use client_core::stores::pairing::{PairingCandidate, PairingPhase, PairingState};
+        use protocol::capabilities::BridgeHostKind;
+        use protocol::events::PairAckMsg;
+
+        let (mut s, ts, kp) = stores().await;
+        let already_known = s.settings.data.relays.first().cloned().unwrap();
+        s.pairing = PairingState {
+            phase: PairingPhase::AwaitingAck,
+            candidate: Some(PairingCandidate {
+                pubkey_hex: MACHINE.into(),
+                npub: "npub1candidate".into(),
+                machine: "(manual)".into(),
+                relays: vec![already_known],
+                token: "tok".into(),
+                netid: None,
+                mesh_admin: None,
+            }),
+            error: None,
+            timed_out: false,
+            staged: None,
+        };
+
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::PairAck(PairAckMsg {
+                    machine: "laptop".into(),
+                    ok: true,
+                    reason: None,
+                    relays: None,
+                    host: Some(BridgeHostKind::Cli),
+                }),
+            )
+            .await;
+
+        assert_eq!(out.relays_changed, None);
     }
 
     #[tokio::test]

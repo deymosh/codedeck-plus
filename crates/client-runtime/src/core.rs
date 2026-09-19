@@ -953,6 +953,12 @@ impl Loop {
             self.persist_store(id).await;
             self.state_changed(slice_of(id));
         }
+        // Ahead of the sends below — same reasoning as `interpret_intent`:
+        // a relay learned from the pairing candidate must reach the
+        // transport before any send that depends on it goes out.
+        if let Some(relays) = r.relays_changed {
+            self.nostr.set_relays(&relays);
+        }
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
         }
@@ -1117,18 +1123,23 @@ impl Loop {
             self.persist_store(id).await;
             self.state_changed(slice_of(id));
         }
-        for RouteSend { machine, msg } in r.sends {
-            self.on_send(machine, msg, None);
-        }
-        if let Some(o) = r.outbox_send {
-            self.on_send_tracked(o.id, o.machine, o.msg);
-        }
+        // Relay/subscription reconfiguration runs BEFORE the sends below: a
+        // pairing-driven relay merge (`AddRelays`, or the pairing FSM's own
+        // `NotifyCandidate` relay learning) must reach the transport before
+        // a queued `SendPairRequest` is dispatched, or a bridge reachable
+        // only over the newly-learned relay never sees the request.
         if let Some(relays) = r.relays_changed {
             self.nostr.set_relays(&relays);
         }
         if r.resubscribe {
             self.refresh_authors();
             self.state_changed(SliceId::Machines);
+        }
+        for RouteSend { machine, msg } in r.sends {
+            self.on_send(machine, msg, None);
+        }
+        if let Some(o) = r.outbox_send {
+            self.on_send_tracked(o.id, o.machine, o.msg);
         }
         match r.pair_deadline {
             Some(PairDeadline::Arm { ms }) => {
