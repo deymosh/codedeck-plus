@@ -19,10 +19,13 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import com.codedeck.plus.core.CoreBridge
@@ -90,7 +93,14 @@ class MainActivity : ComponentActivity() {
                     val bridge by viewModel.bridge.collectAsState()
                     val current = bridge
                     if (current != null) {
-                        Shell(current)
+                        // Density and fontScale multiply together so dp spacing
+                        // and sp text scale as one, like the TSX multiplier.
+                        val settings by current.settings.collectAsState()
+                        val scale = settings?.uiScale?.toFloat() ?: 1f
+                        val d = LocalDensity.current
+                        CompositionLocalProvider(
+                            LocalDensity provides Density(d.density * scale, d.fontScale * scale),
+                        ) { Shell(current) }
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()

@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
@@ -53,8 +54,22 @@ import uniffi.uniffi_bridge.UniffiSettingsView
 import uniffi.uniffi_bridge.UniffiUiView
 import java.util.UUID
 
-/** The complete default-mode set — `PermissionMode`'s own wire spellings. */
-private val MODE_OPTIONS = listOf("default", "acceptEdits", "plan")
+/** The default-mode picker's options — wire values whose display text is
+ *  `modeCycle.ts`'s MODE_LABELS (PLAN / YOLO / EDITS), the same mapping
+ *  `SessionScreen.kt`'s own `MODE_LABELS` copy carries; duplicated per-file
+ *  like the constants below (no UniFFI export for protocol defaults). */
+private val MODE_OPTIONS =
+    listOf(
+        PickerOption("plan", "PLAN"),
+        PickerOption("default", "YOLO"),
+        PickerOption("acceptEdits", "EDITS"),
+    )
+
+/** UI-scale slider bounds and default — `core/stores/settings.ts`'s
+ *  UI_SCALE_MIN / UI_SCALE_MAX / UI_SCALE_DEFAULT. */
+private const val UI_SCALE_MIN = 0.85f
+private const val UI_SCALE_MAX = 1.4f
+private const val UI_SCALE_DEFAULT = 1f
 
 /** The effort ladder's wire spellings — `protocolConstants.ts`'s
  *  `EFFORT_LEVELS`, duplicated per-file for the same reason `MODE_OPTIONS`
@@ -169,69 +184,113 @@ private fun SettingsBody(
                             onValueChangeFinished = {
                                 dispatch(UniffiIntent.SetUiScale(sliderPosition.toDouble()))
                             },
-                            valueRange = 0.5f..2f,
+                            valueRange = UI_SCALE_MIN..UI_SCALE_MAX,
+                            // Ten steps between the bounds = twelve stops, exactly
+                            // the TSX slider's 0.05 increments.
+                            steps = 10,
                             modifier = Modifier.weight(1f),
                         )
                         Text(
-                            "${(sliderPosition * 100).toInt()}%",
+                            "${Math.round(sliderPosition * 100)}%",
                             color = Tokens.TextMuted,
                             fontSize = Tokens.TextSm,
                         )
+                        val atDefault = sliderPosition == UI_SCALE_DEFAULT
+                        Text(
+                            "Reset",
+                            color = if (atDefault) Tokens.TextDim else Tokens.TextMuted,
+                            fontSize = Tokens.TextSm,
+                            modifier =
+                                (if (atDefault) {
+                                    Modifier
+                                } else {
+                                    Modifier.clickable {
+                                        sliderPosition = UI_SCALE_DEFAULT
+                                        dispatch(UniffiIntent.SetUiScale(1.0))
+                                    }
+                                }).padding(Tokens.Space2),
+                        )
                     }
+                    Text(
+                        "The whole interface previews live. Base size adapts to the " +
+                            "screen automatically; this multiplies it.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
+                    )
                 }
 
                 // --- Preferences (defaults for new sessions) ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Preferences")
-                    Text("Default mode", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                        MODE_OPTIONS.forEach { mode ->
-                            Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                                    .background(
-                                        if (mode == view.defaultMode) Tokens.SurfaceHover else Tokens.SurfaceRaised,
-                                    )
-                                    .clickable { dispatch(UniffiIntent.SetDefaultMode(mode)) }
-                                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-                            ) {
-                                Text(
-                                    mode,
-                                    color = if (mode == view.defaultMode) Tokens.Text else Tokens.TextMuted,
-                                    fontSize = Tokens.TextSm,
-                                )
-                            }
-                        }
+                    // The TSX's `.prefRow` — the label takes the free width and
+                    // the control sits at the row's right edge, never stacked.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                    ) {
+                        Text(
+                            "Default mode",
+                            color = Tokens.TextMuted,
+                            fontSize = Tokens.TextSm,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SelectField(
+                            options = MODE_OPTIONS,
+                            selected = view.defaultMode,
+                            onSelect = { dispatch(UniffiIntent.SetDefaultMode(it)) },
+                        )
                     }
-                    Text("Default effort", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                    SelectField(
-                        options =
-                            listOf(PickerOption("", "Default (auto)")) +
-                                EFFORT_OPTIONS.map { PickerOption(it, it) },
-                        selected = view.defaultEffort,
-                        onSelect = { dispatch(UniffiIntent.SetDefaultEffort(it)) },
-                    )
-
-                    Text("Default model", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                    val modelUnion = machines.flatMap { it.models }.distinctBy { it.id }
-                    val storedModel = view.defaultModel
-                    SelectField(
-                        options = buildList {
-                            add(PickerOption("", "Bridge default"))
-                            modelUnion.forEach { entry ->
-                                add(PickerOption(entry.id, entry.label ?: entry.id))
-                            }
-                            // The stored default may name a machine that has
-                            // since unpaired — keep it visible and selectable
-                            // so the user can see, keep, or clear it (the TSX's
-                            // trailing stale-model `<option>`).
-                            if (storedModel != "" && modelUnion.none { it.id == storedModel }) {
-                                add(PickerOption(storedModel, storedModel))
-                            }
-                        },
-                        selected = storedModel,
-                        onSelect = { dispatch(UniffiIntent.SetDefaultModel(it)) },
-                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                    ) {
+                        Text(
+                            "Default effort",
+                            color = Tokens.TextMuted,
+                            fontSize = Tokens.TextSm,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SelectField(
+                            options =
+                                listOf(PickerOption("", "Default (auto)")) +
+                                    EFFORT_OPTIONS.map { PickerOption(it, it) },
+                            selected = view.defaultEffort,
+                            onSelect = { dispatch(UniffiIntent.SetDefaultEffort(it)) },
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                    ) {
+                        Text(
+                            "Default model",
+                            color = Tokens.TextMuted,
+                            fontSize = Tokens.TextSm,
+                            modifier = Modifier.weight(1f),
+                        )
+                        val modelUnion = machines.flatMap { it.models }.distinctBy { it.id }
+                        val storedModel = view.defaultModel
+                        SelectField(
+                            options = buildList {
+                                add(PickerOption("", "Bridge default"))
+                                modelUnion.forEach { entry ->
+                                    add(PickerOption(entry.id, entry.label ?: entry.id))
+                                }
+                                // The stored default may name a machine that has
+                                // since unpaired — keep it visible and selectable
+                                // so the user can see, keep, or clear it (the TSX's
+                                // trailing stale-model `<option>`).
+                                if (storedModel != "" && modelUnion.none { it.id == storedModel }) {
+                                    add(PickerOption(storedModel, storedModel))
+                                }
+                            },
+                            selected = storedModel,
+                            onSelect = { dispatch(UniffiIntent.SetDefaultModel(it)) },
+                        )
+                    }
                     // The TSX's muted paragraph under the three pickers.
                     Text(
                         "Applied to new sessions: the mode is switched right after the " +
@@ -246,17 +305,17 @@ private fun SettingsBody(
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Notifications & badges")
                     SwitchRow(
-                        label = "Notifications",
+                        label = "Notifications (system notifications and the attention chime)",
                         checked = view.notificationsEnabled,
                         onChange = { dispatch(UniffiIntent.SetNotificationsEnabled(it)) },
                     )
                     SwitchRow(
-                        label = "Show usage badge",
+                        label = "Show usage badge (5h/7d limits in the session header)",
                         checked = view.showUsageBadge,
                         onChange = { dispatch(UniffiIntent.SetShowUsageBadge(it)) },
                     )
                     SwitchRow(
-                        label = "Show commit badge",
+                        label = "Show commit badge on session cards",
                         checked = view.showCommitBadge,
                         onChange = { dispatch(UniffiIntent.SetShowCommitBadge(it)) },
                     )
@@ -308,6 +367,14 @@ private fun SettingsBody(
                             onCheckedChange = { dispatch(UniffiIntent.SetStayConnected(it)) },
                         )
                     }
+                    Text(
+                        "Android only: a foreground service holds the process and radio " +
+                            "awake (persistent notification shows the live connection state). " +
+                            "It asks for notification permission on first start. Off = the OS " +
+                            "may pause CodeDeck in the background; it resyncs when you return.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
+                    )
                 }
 
                 // --- Route through Orbot ---
@@ -318,17 +385,50 @@ private fun SettingsBody(
                         checked = view.torProxyEnabled,
                         onChange = { dispatch(UniffiIntent.SetTorEnabled(it)) },
                     )
+                    Text(
+                        "Android only. Requires Orbot installed and running with its SOCKS " +
+                            "proxy enabled (127.0.0.1:9050 by default) — this does not launch " +
+                            "or manage Orbot itself. Fully applied on the next app restart; " +
+                            "toggling while running only affects NEW connections, not ones " +
+                            "already open.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
+                    )
                 }
 
                 // --- Messages ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Messages")
-                    OutlinedTextField(
-                        value = view.blossomServer,
-                        onValueChange = { dispatch(UniffiIntent.SetBlossomServer(it)) },
-                        label = { Text("Blossom server") },
-                        placeholder = { Text("Default") },
-                        modifier = Modifier.fillMaxWidth(),
+                    // Local draft persisted on blur only — the same shape as the
+                    // TSX's `onBlur` (re-keyed on the stored value so an echo or
+                    // an external change snaps the draft back to the truth).
+                    var blossomDraft by remember(view.blossomServer) { mutableStateOf(view.blossomServer) }
+                    var blossomHadFocus by remember { mutableStateOf(false) }
+                    Box(Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = blossomDraft,
+                            onValueChange = { blossomDraft = it },
+                            placeholder = { Text("https://blossom.descendant.io (image upload server)") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { focus ->
+                                    if (focus.isFocused) {
+                                        blossomHadFocus = true
+                                    } else if (blossomHadFocus) {
+                                        // onFocusChanged also reports the initial attach
+                                        // as unfocused — only a field that held focus writes.
+                                        blossomHadFocus = false
+                                        dispatch(UniffiIntent.SetBlossomServer(blossomDraft.trim()))
+                                    }
+                                },
+                        )
+                    }
+                    Text(
+                        "Blossom server for image attachments in DMs and session messages " +
+                            "(images are encrypted before upload; the key travels only inside " +
+                            "the encrypted message). Empty = the built-in default.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
                     )
                 }
 
@@ -379,6 +479,12 @@ private fun SettingsBody(
                             Text("Add")
                         }
                     }
+                    Text(
+                        "Shortcuts shown above the session input; tapping one inserts its " +
+                            "text into the draft (it never sends by itself).",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
+                    )
                 }
 
                 // --- Relays ---
@@ -398,26 +504,46 @@ private fun SettingsBody(
                         }
                     }
                     var addRelayDraft by remember { mutableStateOf("") }
+                    var relayError by remember { mutableStateOf<String?>(null) }
+                    relayError?.let { error ->
+                        Text(error, color = Tokens.Danger, fontSize = Tokens.TextSm)
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
                     ) {
                         OutlinedTextField(
                             value = addRelayDraft,
-                            onValueChange = { addRelayDraft = it },
-                            placeholder = { Text("wss://…") },
+                            onValueChange = {
+                                addRelayDraft = it
+                                relayError = null
+                            },
+                            placeholder = { Text("wss://relay.example.com") },
                             modifier = Modifier.weight(1f),
                         )
                         Button(
                             onClick = {
-                                dispatch(UniffiIntent.AddRelay(addRelayDraft.trim()))
-                                addRelayDraft = ""
+                                val url = addRelayDraft.trim()
+                                // The TSX's `^wss?://.+` gate on the trimmed input —
+                                // same error copy, and no add when it fails.
+                                if (!Regex("^wss?://.+").matches(url)) {
+                                    relayError = "relay URLs start with wss:// (or ws:// for local dev)"
+                                } else {
+                                    relayError = null
+                                    dispatch(UniffiIntent.AddRelay(url))
+                                    addRelayDraft = ""
+                                }
                             },
                             enabled = addRelayDraft.isNotBlank(),
                         ) {
                             Text("Add")
                         }
                     }
+                    Text(
+                        "Removing the last relay is blocked — the phone needs at least one.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
+                    )
                 }
 
                 // --- Machines (F4.3) ---
@@ -487,7 +613,8 @@ private fun MachineSection(
 
         if (confirmRemove) {
             Text(
-                "Remove ${machine.name}? You'll need to pair with it again to reconnect.",
+                "Remove ${machine.name} from this phone? Its sessions keep running on " +
+                    "the machine; this forgets the pairing and the local transcripts.",
                 color = Tokens.Danger,
                 fontSize = Tokens.TextSm,
             )
