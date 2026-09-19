@@ -20,8 +20,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -43,6 +41,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.platform.StayConnectedService
+import com.codedeck.plus.ui.components.PickerOption
+import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.uniffi_bridge.UniffiCredentialsAck
@@ -75,11 +75,6 @@ private const val UI_SCALE_DEFAULT = 1f
  *  `EFFORT_LEVELS`, duplicated per-file for the same reason `MODE_OPTIONS`
  *  above is (no UniFFI export for protocol defaults on this FFI surface). */
 private val EFFORT_OPTIONS = listOf("low", "medium", "high", "xhigh", "max", "auto")
-
-/** One choice in a [SelectField] dropdown — value is what gets dispatched,
- *  label is what the user reads (they differ for the model union, where the
- *  label is the entry's human name and the value its wire id). */
-private data class PickerOption(val value: String, val label: String)
 
 /** Same capability string `NewSessionScreen.kt` gates its own provider picker
  *  on — duplicated per-file rather than shared, matching that file's own
@@ -648,50 +643,6 @@ private fun MachineSection(
 @Composable
 private fun SectionHeading(title: String) {
     Text(title, color = Tokens.TextMuted, fontSize = Tokens.TextMd)
-}
-
-/** A `<select>`-style dropdown — the same trigger-plus-[DropdownMenu] idiom
- *  `SessionScreen.kt`'s `EffortSelector` established (bordered trigger text
- *  that opens the option list on tap). `selected` not matching any option
- *  (a stored value from before a ladder/union changed) falls back to showing
- *  the raw value in the trigger rather than silently showing nothing. */
-@Composable
-private fun SelectField(
-    options: List<PickerOption>,
-    selected: String,
-    enabled: Boolean = true,
-    onSelect: (String) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    val currentLabel = options.firstOrNull { it.value == selected }?.label ?: selected
-    Box {
-        Text(
-            currentLabel,
-            color = when {
-                !enabled -> Tokens.TextDim
-                selected == "" -> Tokens.TextMuted
-                else -> Tokens.Text
-            },
-            fontSize = Tokens.TextSm,
-            modifier = Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.SurfaceInput)
-                .clickable(enabled = enabled) { open = true }
-                .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label, color = Tokens.Text, fontSize = Tokens.TextSm) },
-                    onClick = {
-                        open = false
-                        onSelect(option.value)
-                    },
-                )
-            }
-        }
-    }
 }
 
 @Composable

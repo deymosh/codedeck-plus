@@ -1,7 +1,6 @@
 package com.codedeck.plus.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,7 +10,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -24,6 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.codedeck.plus.ui.components.PickerOption
+import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
 import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiMachineSummary
@@ -318,11 +318,17 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
 
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                     Text("Default model", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                    DefaultModelRow("First model", defaultModel == "") { defaultModel = "" }
-                    validModels.forEach { m ->
-                        val id = m.id.trim()
-                        DefaultModelRow(m.label.trim().ifEmpty { id }, defaultModel == id) { defaultModel = id }
-                    }
+                    SelectField(
+                        options = buildList {
+                            add(PickerOption("", "First model"))
+                            validModels.forEach { m ->
+                                val id = m.id.trim()
+                                add(PickerOption(id, m.label.trim().ifEmpty { id }))
+                            }
+                        },
+                        selected = defaultModel,
+                        onSelect = { defaultModel = it },
+                    )
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
@@ -354,22 +360,5 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
             }
             Text(text, color = if (status.state == "failed") Tokens.Danger else Tokens.TextMuted, fontSize = Tokens.TextSm)
         }
-    }
-}
-
-@Composable
-private fun DefaultModelRow(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
-            .background(if (selected) Tokens.SurfaceHover else Tokens.SurfaceRaised)
-            .clickable(onClick = onClick)
-            .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Text(label, color = Tokens.Text, fontSize = Tokens.TextSm)
     }
 }

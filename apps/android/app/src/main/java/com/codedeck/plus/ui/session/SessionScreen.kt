@@ -20,7 +20,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,8 +34,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -63,6 +60,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.SessionKey
+import com.codedeck.plus.ui.components.PickerOption
+import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.getOrderedSessionKeys
 import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.sessionKeyOf
@@ -808,34 +807,18 @@ private fun NavChevron(glyph: String, onClick: () -> Unit) {
 }
 
 /** Effort dropdown — the reference's `<select>`: shows the current level
- *  ("effort…" until the bridge reports one), opens the ladder on tap. */
+ *  ("effort…" until the bridge reports one), opens the ladder on tap. A thin
+ *  wrapper over the shared [SelectField]: the placeholder carries the muted
+ *  "effort…" trigger for the not-yet-reported state without putting a
+ *  phantom "effort…" entry into the ladder itself. */
 @Composable
 private fun EffortSelector(current: String?, onSelect: (String) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Text(
-            current ?: "effort…",
-            color = if (current != null) Tokens.Text else Tokens.TextMuted,
-            fontSize = Tokens.TextSm,
-            modifier = Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.SurfaceInput)
-                .clickable { open = true }
-                .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            EFFORT_LEVELS.forEach { level ->
-                DropdownMenuItem(
-                    text = { Text(level, color = Tokens.Text, fontSize = Tokens.TextSm) },
-                    onClick = {
-                        open = false
-                        onSelect(level)
-                    },
-                )
-            }
-        }
-    }
+    SelectField(
+        options = EFFORT_LEVELS.map { PickerOption(it, it) },
+        selected = current ?: "",
+        placeholder = "effort…",
+        onSelect = onSelect,
+    )
 }
 
 /** The PLAN → YOLO → EDITS cycle button. While a request is in flight the

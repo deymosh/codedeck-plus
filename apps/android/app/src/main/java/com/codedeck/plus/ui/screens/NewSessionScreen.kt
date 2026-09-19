@@ -36,12 +36,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.ui.actionFailedCopy
+import com.codedeck.plus.ui.components.PickerOption
+import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import uniffi.client_runtime.ActionFailedKind
 import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
 import uniffi.uniffi_bridge.UniffiIntent
@@ -67,15 +69,6 @@ private const val BACKEND_OPENCODE = "opencode"
  *  so this bounded wait over [CoreBridge.events] is the confirmation. */
 private const val CREATE_CONFIRM_TIMEOUT_MS = 10_000L
 
-/** Human copy for a failed create — the UI writes the words, the event only
- *  carries the semantic kind. */
-private fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
-    ActionFailedKind.PUBLISH_UNREACHABLE -> "Could not reach a relay — check the connection and try again."
-    ActionFailedKind.PUBLISH_REJECTED -> "The relay rejected the request — try again."
-    ActionFailedKind.DECRYPT_FAILED -> "Could not decrypt the bridge's reply — try again."
-    ActionFailedKind.DECODE_FAILED -> "Could not read the bridge's reply — try again."
-}
-
 /** Last path segment of an absolute workspace root — port of
  *  `NewSessionModal.tsx`'s `rootLabel`. */
 private fun rootLabel(root: String): String {
@@ -90,12 +83,10 @@ private fun rootLabel(root: String): String {
  * port of `apps/mobile/src/ui/NewSessionModal.tsx`'s folder/backend/provider/
  * model/effort picker.
  *
- * Every picker here renders as a radio-style row list (this file's own
- * [SelectableRow], the same "each screen owns its small private helpers"
- * precedent `Sidebar.kt`'s `PresenceDot` and `SettingsScreen.kt`'s
- * `SectionHeading` already set) rather than a native dropdown — the model
- * list in particular can run long, and a scrollable row list reads better
- * on a phone than a cramped `Spinner` popup.
+ * Backend, provider, model, and effort render as the shared `SelectField`
+ * dropdown (`ui/components/SelectField.kt`), the native app's equivalent of
+ * the TSX reference's `<select>` elements; only Folder is a radio-row list
+ * ([SelectableRow]) — the one section the reference also renders as a list.
  *
  * One deliberate narrowing from the TSX reference: that screen retries its
  * `modelsRequest` on every heartbeat while no list has landed yet
@@ -329,8 +320,14 @@ private fun NewSessionBody(
                 if (machine.capabilities.contains(CAP_OPENCODE)) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                         SectionHeading("Backend")
-                        SelectableRow("Claude Code", backend == "") { changeBackend("") }
-                        SelectableRow("OpenCode", backend == BACKEND_OPENCODE) { changeBackend(BACKEND_OPENCODE) }
+                        SelectField(
+                            options = listOf(
+                                PickerOption("", "Claude Code"),
+                                PickerOption(BACKEND_OPENCODE, "OpenCode"),
+                            ),
+                            selected = backend,
+                            onSelect = ::changeBackend,
+                        )
                     }
                 }
 
@@ -340,10 +337,12 @@ private fun NewSessionBody(
                 if (providerProfiles.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                         SectionHeading("Provider")
-                        SelectableRow("Anthropic", providerId == "") { changeProvider("") }
-                        providerProfiles.forEach { profile ->
-                            SelectableRow(profile.label, providerId == profile.id) { changeProvider(profile.id) }
-                        }
+                        SelectField(
+                            options = listOf(PickerOption("", "Anthropic")) +
+                                providerProfiles.map { PickerOption(it.id, it.label) },
+                            selected = providerId,
+                            onSelect = ::changeProvider,
+                        )
                     }
                 }
 
@@ -351,16 +350,25 @@ private fun NewSessionBody(
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                     SectionHeading("Model")
                     val modelOptions = activeProfile?.models ?: modelsList
-                    SelectableRow("Default model", model == "") { model = "" }
-                    modelOptions.forEach { m ->
-                        SelectableRow(m.label ?: m.id, model == m.id) { model = m.id }
-                    }
-                    // The preferred default model (CDX-047) may not be in
-                    // THIS machine's list — keep the pre-selection honest
-                    // instead of a controlled picker silently showing nothing.
-                    if (model != "" && modelOptions.none { it.id == model }) {
-                        SelectableRow(model, selected = true) {}
-                    }
+                    SelectField(
+                        options = buildList {
+                            add(PickerOption("", "Default model"))
+                            modelOptions.forEach { m ->
+                                add(PickerOption(m.id, m.label ?: m.id))
+                            }
+                            // The preferred default model (CDX-047) may not be in
+                            // THIS machine's list — keep the pre-selection honest
+                            // instead of a controlled picker silently showing
+                            // nothing (the same trailing synthetic option
+                            // `SettingsScreen.kt`'s model picker appends for a
+                            // stale stored value).
+                            if (model != "" && modelOptions.none { it.id == model }) {
+                                add(PickerOption(model, model))
+                            }
+                        },
+                        selected = model,
+                        onSelect = { model = it },
+                    )
                     // CDX-035: the bridge's own reason for an empty answer, so
                     // an unavailable list is explained instead of silently
                     // blank — only on the plain (non-profile) path, a
@@ -373,10 +381,12 @@ private fun NewSessionBody(
                 // --- Effort ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                     SectionHeading("Effort")
-                    SelectableRow("Default effort", effort == "") { effort = "" }
-                    EFFORT_LEVELS.forEach { level ->
-                        SelectableRow(level, effort == level) { effort = level }
-                    }
+                    SelectField(
+                        options = listOf(PickerOption("", "Default effort")) +
+                            EFFORT_LEVELS.map { PickerOption(it, it) },
+                        selected = effort,
+                        onSelect = { effort = it },
+                    )
                 }
 
                 // Same banner placement (and tone) as the TSX's
