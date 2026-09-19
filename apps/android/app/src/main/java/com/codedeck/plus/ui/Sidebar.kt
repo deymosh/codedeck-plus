@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.theme.connectionColor
@@ -230,7 +231,11 @@ fun Sidebar(
 
                 orderedMachines(machines).forEach { machine ->
                     item(key = "${machine.pubkeyHex}-header", contentType = "header") {
-                        MachineHeader(machine, onNewSession = { onNewSession(machine.pubkeyHex) })
+                        MachineHeader(
+                            machine,
+                            connectionStatus = connectionStatus,
+                            onNewSession = { onNewSession(machine.pubkeyHex) },
+                        )
                     }
                     val machinePending = pendingSessions
                         .filter { it.machine == machine.pubkeyHex }
@@ -274,6 +279,11 @@ fun Sidebar(
                                         bridge.dispatch(UniffiIntent.DeleteSession(m, id, label))
                                     }
                                 },
+                                // Same vertical rhythm PendingSessionCard already
+                                // uses — without it, adjacent cards in one
+                                // machine group touched with no visible gap
+                                // (device-observed 2026-09-19).
+                                modifier = Modifier.padding(vertical = Tokens.Space1),
                             )
                         }
                     }
@@ -283,18 +293,49 @@ fun Sidebar(
     }
 }
 
+/**
+ * Port of `Sidebar.tsx`'s `.groupHeading`: a presence dot, the machine name
+ * in caps (`text-transform: uppercase`, bold, letter-spaced, muted — this
+ * whole row is a label, not body text), an optional host badge, and the "+".
+ */
 @Composable
-private fun MachineHeader(machine: UniffiMachineSummary, onNewSession: () -> Unit) {
+private fun MachineHeader(machine: UniffiMachineSummary, connectionStatus: String?, onNewSession: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = Tokens.Space2),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        // Machine-level presence isn't part of `UniffiMachinesView` yet (it
-        // lives on `ConnectionView` per-machine, not surfaced to Android
-        // until a screen needs it) — the sidebar's own state-colored session
-        // rows carry the signal that actually matters for this slice.
-        Text(machine.name, color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
+        // True per-machine presence (mobile's `connection.presence(pubkey)`,
+        // driven by that machine's own last heartbeat) isn't part of
+        // `UniffiMachinesView` yet — only the overall bridge connection
+        // status is. A phone with one bridge paired reads the same either
+        // way; this dot is that honest proxy, not a claim of per-machine
+        // heartbeat freshness.
+        PresenceDot(connectionColor(connectionStatus))
+        Text(
+            machine.name.uppercase(),
+            color = Tokens.TextMuted,
+            fontSize = Tokens.TextXs,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.05.em,
+            modifier = Modifier.weight(1f),
+        )
+        // Which host binary published this machine's heartbeat — "cli" /
+        // "vscode" / "service" (protocol's own `host` enum) — absent on an
+        // older bridge that predates the field.
+        machine.host?.let { host ->
+            Text(
+                host.uppercase(),
+                color = Tokens.TextMuted,
+                fontSize = Tokens.TextXs,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.05.em,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .background(Tokens.Text.copy(alpha = 0.03f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
         Box(
             Modifier
                 .clip(RoundedCornerShape(Tokens.RadiusSm))
@@ -324,6 +365,7 @@ private fun SwipeToDeleteSessionCard(
     showCommitBadge: Boolean,
     onClick: () -> Unit,
     onDelete: (machine: String, sessionId: String, label: String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     // The dismiss state's confirm lambda is captured on first composition —
     // re-read the callback through `rememberUpdatedState` so a swipe always
@@ -347,7 +389,7 @@ private fun SwipeToDeleteSessionCard(
     )
     SwipeToDismissBox(
         state = dismissState,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         enableDismissFromStartToEnd = false,
         enableDismissFromEndToStart = true,
         backgroundContent = {

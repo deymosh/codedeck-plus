@@ -734,25 +734,56 @@ private fun SessionHeaderRow1(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(connectionStatus ?: "…", color = Tokens.TextDim, fontSize = Tokens.TextXs)
+        // Boxed like the reference's `.header .boxed` badges (CDX-045: the
+        // top bar speaks in rectangular chips, not plain inline text) —
+        // was bare muted text here with no visual weight of its own.
+        Text(
+            connectionStatus ?: "…",
+            color = Tokens.TextDim,
+            fontSize = Tokens.TextXs,
+            modifier = Modifier
+                .clip(RoundedCornerShape(Tokens.RadiusSm))
+                .background(Tokens.Text.copy(alpha = 0.03f))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
         if (model != null) {
-            val ctx = contextBadge(contextPercentage, contextWindow)?.let { " · $it" } ?: ""
-            // A custom-provider model label (`Z.ai (Global) - Coding Plan/glm-5.3-flash`)
-            // can run far longer than a plain Claude Code model id. Unlike `cwd`
-            // above, this Text had no line/width bound, so a long label wrapped
-            // to two lines and claimed most of the Row's width — leaving the
-            // fixed-width "Stop" Text after it so little room that Compose wrapped
-            // it one character per line (device-observed 2026-09-19). Capping the
-            // width and ellipsizing, the same treatment `cwd` already gets, keeps
-            // every sibling after it usable regardless of label length.
-            Text(
-                "$model$ctx",
-                color = Tokens.TextMuted,
-                fontSize = Tokens.TextXs,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 120.dp),
-            )
+            // Port of the reference's `.ctxBox`: model tag (accent, bold) and
+            // context (muted, dimmer) are two SEPARATE Texts in one bordered
+            // chip, not one interpolated string. They used to share a single
+            // Text's ellipsis budget — a long custom-provider label (`Z.ai
+            // (Global) - Coding Plan/glm-5.3-flash`) filled it entirely and
+            // silently ate the context suffix along with it, so context
+            // never showed on a session with a long model name
+            // (device-observed 2026-09-19). Each piece now truncates on its
+            // own: a long model name can no longer crowd context out.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
+                    .background(Tokens.Text.copy(alpha = 0.03f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    model,
+                    color = Tokens.Accent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = Tokens.TextXs,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 90.dp),
+                )
+                contextBadge(contextPercentage, contextWindow)?.let { ctx ->
+                    Text(
+                        " · $ctx",
+                        color = Tokens.TextMuted,
+                        fontSize = Tokens.TextXs,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 110.dp),
+                    )
+                }
+            }
         }
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {

@@ -3,7 +3,9 @@ package com.codedeck.plus.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -14,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
@@ -54,22 +57,47 @@ fun SelectField(
     val currentLabel = options.firstOrNull { it.value == selected }?.label
         ?: if (selected.isEmpty()) placeholder else selected
     Box {
-        Text(
-            currentLabel,
-            color = when {
-                !enabled -> Tokens.TextDim
-                selected == "" -> Tokens.TextMuted
-                else -> Tokens.Text
-            },
-            fontSize = Tokens.TextSm,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
             modifier = Modifier
                 .clip(RoundedCornerShape(Tokens.RadiusSm))
                 .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
                 .background(Tokens.SurfaceInput)
                 .clickable(enabled = enabled) { open = true }
                 .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        ) {
+            Text(
+                currentLabel,
+                color = when {
+                    !enabled -> Tokens.TextDim
+                    selected == "" -> Tokens.TextMuted
+                    else -> Tokens.Text
+                },
+                fontSize = Tokens.TextSm,
+            )
+            // The trigger otherwise looks like plain bordered text, not
+            // something tappable — a small affordance glyph, the same plain-
+            // Unicode-glyph idiom this app already uses for its other
+            // chrome (Sidebar's "+", NavChevron's "‹"/"›") rather than
+            // pulling in a Material icon for one character.
+            Text("▾", color = if (enabled) Tokens.TextMuted else Tokens.TextDim, fontSize = Tokens.TextXs)
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            // Material3's own menu Surface renders here, but on this app's
+            // near-black theme its default container barely reads as a
+            // separate surface from the screen behind it — the popup looked
+            // like a flat, borderless smear (device-observed 2026-09-19).
+            // Layering this app's own SurfaceRaised + border on top gives it
+            // the same visual weight as every other elevated surface in the
+            // app (cards, the machine-add button, PermissionCard, …).
+            modifier = Modifier
+                .clip(RoundedCornerShape(Tokens.RadiusMd))
+                .background(Tokens.SurfaceRaised)
+                .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusMd)),
+        ) {
             options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(option.label, color = Tokens.Text, fontSize = Tokens.TextSm) },
