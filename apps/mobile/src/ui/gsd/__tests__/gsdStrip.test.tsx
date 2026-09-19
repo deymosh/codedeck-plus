@@ -6,9 +6,9 @@
  */
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { GsdState, RemoteSessionInfo } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../../core/ports';
+import type { GsdState, RemoteSessionInfo } from '../../../core/nativeCoreTypes';
+import { buildFakePhoneCore } from '../../../core/__tests__/nativeCoreFixture';
+import type { PhoneCore } from '../../../core/phoneCore';
 import { PhoneCoreProvider } from '../../coreContext';
 import { GsdStrip } from '../GsdStrip';
 import { phaseStages, stripSummary } from '../gsdStages';
@@ -17,11 +17,6 @@ afterEach(cleanup);
 
 const MACHINE = 'a'.repeat(64);
 const SESSION = 'session-1';
-
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
 
 const sessionInfo = (state?: RemoteSessionInfo['state']): RemoteSessionInfo => ({
   id: SESSION,
@@ -60,15 +55,32 @@ const gsdState = (partial?: Partial<GsdState>): GsdState => ({
   ...partial,
 });
 
-async function makeCore(
-  gsd: GsdState | null,
-  state?: RemoteSessionInfo['state'],
-): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  core.machines.getState().applySessionUpsert(MACHINE, sessionInfo(state), 0);
-  if (gsd) core.machines.getState().applyGsd(MACHINE, SESSION, gsd);
-  return core;
+async function makeCore(gsd: GsdState | null, state?: RemoteSessionInfo['state']): Promise<PhoneCore> {
+  const { phone } = await buildFakePhoneCore({
+    machines: {
+      machines: {
+        [MACHINE]: {
+          pubkeyHex: MACHINE,
+          name: 'laptop',
+          capabilities: [],
+          folders: [],
+          roots: [],
+          protocolVersion: null,
+          machineOffline: false,
+          lastHeartbeatAt: null,
+          sessions: {
+            [SESSION]: {
+              info: sessionInfo(state),
+              presence: 'live',
+              lastListedAt: 0,
+              ...(gsd ? { gsd } : {}),
+            },
+          },
+        },
+      },
+    },
+  });
+  return phone;
 }
 
 function renderStrip(core: PhoneCore) {

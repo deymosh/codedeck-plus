@@ -1,0 +1,14 @@
+[package]
+name = "client-runtime-min"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "client_runtime_min"
+
+[dependencies]
+# a second workspace member that depends on client-core — so feature
+# unification across the workspace is genuinely exercised, not just one crate
+client-core = { path = "../client-core" }

@@ -2,7 +2,7 @@
  * Assistant text (markdown). `isPlan` marks a special='plan' entry — the plan
  * body stays readable after approval, visually framed as a plan document.
  */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import { Markdown } from './Markdown';
 import styles from './rows.module.css';
 

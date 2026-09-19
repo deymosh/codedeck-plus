@@ -1,5 +1,5 @@
 /** User input echoed by the SDK (text entry, metadata.role === 'user'). */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import { Markdown } from './Markdown';
 import styles from './rows.module.css';
 

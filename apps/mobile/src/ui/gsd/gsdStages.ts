@@ -12,7 +12,7 @@
  * NOTE (memory: codedeck-gsd-stage-strip): all of this renders bridge-computed
  * state from gsd-tools — the phone never parses .planning/ markdown.
  */
-import type { GsdAction, GsdPhase, GsdState } from '@codedeck/protocol';
+import type { GsdAction, GsdPhase, GsdState } from '../../core/nativeCoreTypes';
 
 export type StageMark = '✓' | '◆' | '○' | '·';
 

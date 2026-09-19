@@ -8,6 +8,12 @@
 //! here in Rust, JS keeps owning transport (events as JSON over `marmot_*`
 //! commands). Desktop gets Marmot for free — same code.
 
+#[cfg(feature = "native-core")]
+pub mod corebridge;
+#[cfg(feature = "native-core")]
+pub mod native_http;
+#[cfg(feature = "native-core")]
+pub mod native_ports;
 pub mod marmot;
 pub mod sqlstore;
 
@@ -32,6 +38,54 @@ pub fn run() {
             sqlstore::sql_open,
             sqlstore::sql_execute,
             sqlstore::sql_select,
+            #[cfg(feature = "native-core")]
+            corebridge::core_available,
+            #[cfg(feature = "native-core")]
+            corebridge::core_defaults,
+            #[cfg(feature = "native-core")]
+            corebridge::core_init,
+            #[cfg(feature = "native-core")]
+            corebridge::core_start,
+            #[cfg(feature = "native-core")]
+            corebridge::core_stop,
+            #[cfg(feature = "native-core")]
+            corebridge::core_pause,
+            #[cfg(feature = "native-core")]
+            corebridge::core_resume,
+            #[cfg(feature = "native-core")]
+            corebridge::core_set_online,
+            #[cfg(feature = "native-core")]
+            corebridge::core_set_machines,
+            #[cfg(feature = "native-core")]
+            corebridge::core_set_relays,
+            #[cfg(feature = "native-core")]
+            corebridge::core_send,
+            #[cfg(feature = "native-core")]
+            corebridge::core_publish,
+            #[cfg(feature = "native-core")]
+            corebridge::core_connection_status,
+            #[cfg(feature = "native-core")]
+            corebridge::core_dispatch,
+            #[cfg(feature = "native-core")]
+            corebridge::core_machines_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_settings_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_outbox_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_pairing_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_dm_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_marmot_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_quick_prompts_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_pending_sessions_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_ui_view,
+            #[cfg(feature = "native-core")]
+            corebridge::core_transcript_view,
         ])
         .plugin(tauri_plugin_deep_link::init())
         // CDX-029: Rust-side fetch escape hatch — Blossom's upload preflight
@@ -40,8 +94,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_codedeck_stt::init())
         .plugin(tauri_plugin_background_relay::init())
-        .plugin(tauri_plugin_tor_proxy::init())
         .plugin(tauri_plugin_mesh::init());
+    // F1: the in-process Rust client-runtime handle (behind the `native-core`
+    // feature). Inert until the WebView calls `core_init`.
+    #[cfg(feature = "native-core")]
+    let builder = builder.manage(corebridge::CoreBridge::default());
     // CDX-011: QR camera scan for pairing — the plugin exists on mobile only
     // (desktop pairing pastes the URL / uses the codedeck:// deep link).
     #[cfg(mobile)]

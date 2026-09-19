@@ -2,6 +2,7 @@ packages:
   - packages/*
   - apps/bridge
   - apps/mobile
+  - tools/*
 
 onlyBuiltDependencies:
   - better-sqlite3

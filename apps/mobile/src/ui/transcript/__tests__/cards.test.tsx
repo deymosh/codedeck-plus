@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, it, expect } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { PhoneToBridgeMessage } from '@codedeck/protocol';
+import type { PhoneToBridgeMessage } from '../../../core/nativeCoreTypes';
 import type {
   PermissionRequestDisplay,
   PlanApprovalDisplay,

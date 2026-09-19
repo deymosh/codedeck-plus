@@ -8,9 +8,9 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import type { RemoteSessionInfo } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import type { RemoteSessionInfo } from '../../core/nativeCoreTypes';
+import { buildFakePhoneCore } from '../../core/__tests__/nativeCoreFixture';
+import type { MachineView } from '../../core/nativeCoreTypes';
 import { PhoneCoreProvider } from '../coreContext';
 import { getOrderedSessionKeys } from '../getOrderedSessionKeys';
 import { Sidebar } from '../Sidebar';
@@ -19,11 +19,6 @@ afterEach(cleanup);
 
 const M_ALPHA = 'a'.repeat(64);
 const M_BETA = 'b'.repeat(64);
-
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
 
 const sessionInfo = (id: string, lastActivity: string): RemoteSessionInfo => ({
   id,
@@ -35,24 +30,43 @@ const sessionInfo = (id: string, lastActivity: string): RemoteSessionInfo => ({
   project: `proj-${id}`,
 });
 
-/** Two machines registered "wrong way round" (beta first), sessions upserted
- *  in scrambled activity order. */
-async function makeCore(): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  const m = core.machines.getState();
-  m.registerMachine({ pubkeyHex: M_BETA, name: 'zeppelin' });
-  m.registerMachine({ pubkeyHex: M_ALPHA, name: 'anvil' });
-  m.applySessionUpsert(M_BETA, sessionInfo('b-old', '2026-08-08T08:00:00.000Z'), 0);
-  m.applySessionUpsert(M_BETA, sessionInfo('b-new', '2026-08-08T11:00:00.000Z'), 0);
-  m.applySessionUpsert(M_ALPHA, sessionInfo('a-mid', '2026-08-08T10:00:00.000Z'), 0);
-  m.applySessionUpsert(M_ALPHA, sessionInfo('a-new', '2026-08-08T12:00:00.000Z'), 0);
-  m.applySessionUpsert(M_ALPHA, sessionInfo('a-old', '2026-08-08T09:00:00.000Z'), 0);
-  return core;
+const machine = (pubkeyHex: string, name: string, sessions: RemoteSessionInfo[]): MachineView => ({
+  pubkeyHex,
+  name,
+  capabilities: [],
+  folders: [],
+  roots: [],
+  protocolVersion: null,
+  machineOffline: false,
+  lastHeartbeatAt: null,
+  sessions: Object.fromEntries(
+    sessions.map((info) => [info.id, { info, presence: 'live' as const, lastListedAt: 0 }]),
+  ),
+});
+
+/** Two machines registered "wrong way round" (beta first), sessions in
+ *  scrambled activity order. */
+function machines(): Record<string, MachineView> {
+  return {
+    [M_BETA]: machine(M_BETA, 'zeppelin', [
+      sessionInfo('b-old', '2026-08-08T08:00:00.000Z'),
+      sessionInfo('b-new', '2026-08-08T11:00:00.000Z'),
+    ]),
+    [M_ALPHA]: machine(M_ALPHA, 'anvil', [
+      sessionInfo('a-mid', '2026-08-08T10:00:00.000Z'),
+      sessionInfo('a-new', '2026-08-08T12:00:00.000Z'),
+      sessionInfo('a-old', '2026-08-08T09:00:00.000Z'),
+    ]),
+  };
 }
 
 describe('getOrderedSessionKeys', () => {
+  // `getOrderedSessionKeys` reads the TS store's own `MachineView` shape
+  // (`core/stores/machines.ts`), not the wire `nativeCoreTypes.MachineView`
+  // these fixtures build — go through a fake core so `nativeMachines.ts`'s
+  // real `toMachineView` conversion produces the type it actually wants.
   it('orders machines by name asc, sessions by lastActivity desc', async () => {
-    const core = await makeCore();
+    const { phone: core } = await buildFakePhoneCore({ machines: { machines: machines() } });
     const keys = getOrderedSessionKeys(core.machines.getState().machines);
     expect(keys).toEqual([
       { machine: M_ALPHA, sessionId: 'a-new' },
@@ -64,21 +78,17 @@ describe('getOrderedSessionKeys', () => {
   });
 
   it('pending sessions never appear (they live outside machine.sessions)', async () => {
-    const core = await makeCore();
-    core.pendingSessions
-      .getState()
-      .applyPending(M_ALPHA, {
-        pendingId: 'p1',
-        machine: M_ALPHA,
-        createdAt: '2026-08-08T12:30:00.000Z',
-      });
+    // Pending sessions are a wholly separate view (`PendingSessionsView`) now
+    // — they were never part of `machine.sessions` even before the port, so
+    // this guard needs nothing beyond the plain machines record above.
+    const { phone: core } = await buildFakePhoneCore({ machines: { machines: machines() } });
     const keys = getOrderedSessionKeys(core.machines.getState().machines);
     expect(keys).toHaveLength(5);
     expect(keys.some((k) => k.sessionId === 'p1')).toBe(false);
   });
 
   it('divergence guard: sidebar session-card order equals the shared order', async () => {
-    const core = await makeCore();
+    const { phone: core } = await buildFakePhoneCore({ machines: { machines: machines() } });
     render(
       <PhoneCoreProvider value={core}>
         <Sidebar onOpenSettings={() => {}} onOpenPairing={() => {}} />

@@ -180,6 +180,40 @@ function stateMsg(sdkSessionId: string, state: 'idle' | 'running'): SdkMessage {
   } as unknown as SdkMessage;
 }
 
+/**
+ * Emit an SDK message and wait for BOTH the durable transcript write AND the
+ * bridge's live-output publish to catch up before returning.
+ *
+ * `seqHigh` bumps synchronously at append call time, but `onOutput` (which
+ * drives the live 24515 publish) fires only after the write flushes (CDX-060)
+ * — asynchronously, and with no bound on how far behind it can lag under
+ * load. A wait keyed on `seqHigh` alone can resolve while some of that
+ * publishing is still in flight. Ephemeral kinds are delivered only to
+ * whoever is subscribed at the exact instant `publish()` runs, so a caller
+ * that reconnects the phone right after such a `seqHigh`-only wait can catch
+ * one of those late publishes as a live push — output the test meant the
+ * phone to have stayed dark for, arriving by a channel no `dropChunkIf`/
+ * `dropNextSyncChunks` rule ever sees. Waiting on the relay's own publish
+ * count too closes that window.
+ */
+async function emitAndSettle(
+  world: World,
+  core: BridgeCore,
+  facade: FakeSdkFacade,
+  sessionId: string,
+  msg: SdkMessage,
+  expectedSeqHigh: number,
+): Promise<void> {
+  const newEntries = expectedSeqHigh - core.transcript.seqHigh(sessionId);
+  const publishesBefore = world.relay.publishCount;
+  facade.emit(sessionId, msg);
+  await world.sim.until(
+    () => core.transcript.seqHigh(sessionId) === expectedSeqHigh
+      && world.relay.publishCount >= publishesBefore + newEntries,
+    { label: `${newEntries} entries persisted and published` },
+  );
+}
+
 /** Drive create-session → SDK init → session-ready via the simulator. */
 async function createReadySession(
   world: World,
@@ -316,10 +350,10 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
       // exactly the one resumed session, no duplicates.
       expect(facade2.sessions.size).toBe(1);
 
-      facade2.emit(sessionId, assistantMsg(`sdk-${sessionId}`, 'missed-1', 'missed-2'));
-      await world.sim.until(
-        () => core2.transcript.seqHigh(sessionId) === preRestartHigh + 2,
-        { label: 'post-restart output persisted' },
+      await emitAndSettle(
+        world, core2, facade2, sessionId,
+        assistantMsg(`sdk-${sessionId}`, 'missed-1', 'missed-2'),
+        preRestartHigh + 2,
       );
 
       // Phone reconnects and — per the plan's connect procedure — refreshes the
@@ -360,11 +394,11 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
     // Build a 61-entry transcript (init + 60 texts) while the phone is dark →
     // two sync chunks ([1,50], [51,61]).
     world.sim.disconnect();
-    facade.emit(sessionId, assistantMsg(
-      `sdk-${sessionId}`,
-      ...Array.from({ length: 60 }, (_, i) => `entry-${i + 1}`),
-    ));
-    await world.sim.until(() => core.transcript.seqHigh(sessionId) === 61, { label: '61 entries persisted' });
+    await emitAndSettle(
+      world, core, facade, sessionId,
+      assistantMsg(`sdk-${sessionId}`, ...Array.from({ length: 60 }, (_, i) => `entry-${i + 1}`)),
+      61,
+    );
 
     world.sim.connect();
     world.sim.dropNextSyncChunks = 1; // lose the first chunk on the wire
@@ -394,11 +428,11 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
     const sessionId = await createReadySession(world, facade);
 
     world.sim.disconnect();
-    facade.emit(sessionId, assistantMsg(
-      `sdk-${sessionId}`,
-      ...Array.from({ length: 60 }, (_, i) => `entry-${i + 1}`),
-    ));
-    await world.sim.until(() => core.transcript.seqHigh(sessionId) === 61, { label: '61 entries persisted' });
+    await emitAndSettle(
+      world, core, facade, sessionId,
+      assistantMsg(`sdk-${sessionId}`, ...Array.from({ length: 60 }, (_, i) => `entry-${i + 1}`)),
+      61,
+    );
 
     world.sim.connect();
     // Lose chunk [1,50] on the initial pass AND both retry passes; [51,61]

@@ -5,10 +5,11 @@
  * App (wide inline sidebar vs narrow drawer + scrim).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { RemoteSessionInfo } from '@codedeck/protocol';
-import { createPhoneCore, type PhoneCore } from '../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../core/ports';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import type { RemoteSessionInfo } from '../../core/nativeCoreTypes';
+import { buildFakePhoneCore, tick } from '../../core/__tests__/nativeCoreFixture';
+import type { MachineView, PendingSessionView, SettingsView } from '../../core/nativeCoreTypes';
+import type { PhoneCore } from '../../core/phoneCore';
 import { PhoneCoreProvider } from '../coreContext';
 import { App } from '../App';
 import { MainPanel } from '../MainPanel';
@@ -18,11 +19,6 @@ afterEach(cleanup);
 
 const MACHINE = 'a'.repeat(64);
 const PEER = 'b'.repeat(64);
-
-const nullTransport: PhoneTransport = {
-  subscribe: () => ({ close: () => {} }),
-  publish: async () => true,
-};
 
 // virtua (TranscriptView) needs ResizeObserver; jsdom has none.
 beforeAll(() => {
@@ -61,12 +57,70 @@ const sessionInfo = (id: string, over: Partial<RemoteSessionInfo> = {}): RemoteS
   ...over,
 });
 
-async function makeCore(withMachine = true): Promise<PhoneCore> {
-  const core = await createPhoneCore({ kv: memoryKV(), transport: nullTransport });
-  if (withMachine) {
-    core.machines.getState().registerMachine({ pubkeyHex: MACHINE, name: 'laptop' });
-  }
-  return core;
+const defaultSettings: SettingsView = {
+  relays: [],
+  uiScale: 1,
+  stayConnected: true,
+  torProxyEnabled: false,
+  meshTestTarget: false,
+  blossomServer: '',
+  defaultMode: 'default',
+  defaultEffort: '',
+  defaultModel: '',
+  notificationsEnabled: true,
+  showUsageBadge: true,
+  showCommitBadge: true,
+};
+
+interface MakeCoreOpts {
+  withMachine?: boolean;
+  sessions?: Record<string, RemoteSessionInfo>;
+  unreadSessions?: string[];
+  pending?: Record<string, PendingSessionView>;
+  settings?: Partial<SettingsView>;
+}
+
+/** `unreadSessions`/session keys here are plain session ids (all on `MACHINE`) —
+ *  the fixture's `ui` view wants `machine:sessionId` keys, built here. */
+async function makeCoreAndFake(opts: MakeCoreOpts = {}) {
+  const { withMachine = true, sessions = {}, unreadSessions = [], pending = {}, settings } = opts;
+  const machine: MachineView = {
+    pubkeyHex: MACHINE,
+    name: 'laptop',
+    capabilities: [],
+    folders: [],
+    roots: [],
+    protocolVersion: null,
+    machineOffline: false,
+    lastHeartbeatAt: null,
+    sessions: Object.fromEntries(
+      Object.entries(sessions).map(([id, info]) => [id, { info, presence: 'live' as const, lastListedAt: 0 }]),
+    ),
+  };
+  return buildFakePhoneCore({
+    machines: { machines: withMachine ? { [MACHINE]: machine } : {} },
+    ui: {
+      selectedMachine: null,
+      selectedSession: null,
+      panelMode: 'session',
+      activeDmPeer: null,
+      activeMarmotGroup: null,
+      unreadSessions: unreadSessions.map((id) => `${MACHINE} ${id}`),
+      respondedCards: {},
+      planApprovalChoices: {},
+      credentialsStatus: {},
+      deviceConfigStatus: {},
+      providerProfileStatus: {},
+      undoToast: null,
+    },
+    pendingSessions: { pending },
+    settings: { ...defaultSettings, ...settings },
+  });
+}
+
+async function makeCore(opts: MakeCoreOpts = {}): Promise<PhoneCore> {
+  const { phone } = await makeCoreAndFake(opts);
+  return phone;
 }
 
 const noop = (): void => {};
@@ -81,33 +135,26 @@ function renderSidebar(core: PhoneCore, over: Partial<Parameters<typeof Sidebar>
 
 describe('Sidebar', () => {
   it('committed badge shows by default and hides when "Show commit badge" is OFF (CDX-048)', async () => {
-    const core = await makeCore();
-    core.machines.getState().applySessionUpsert(
-      MACHINE,
-      sessionInfo('s1', { title: 'One', committed: true }),
-      0,
-    );
-    renderSidebar(core);
+    const on = await makeCore({ sessions: { s1: sessionInfo('s1', { title: 'One', committed: true }) } });
+    renderSidebar(on);
     expect(screen.getByText('committed')).toBeTruthy();
     cleanup();
 
-    core.settings.getState().setShowCommitBadge(false);
-    renderSidebar(core);
+    const off = await makeCore({
+      sessions: { s1: sessionInfo('s1', { title: 'One', committed: true }) },
+      settings: { showCommitBadge: false },
+    });
+    renderSidebar(off);
     expect(screen.queryByText('committed')).toBeNull();
   });
 
   it('renders machine group with sessions sorted by lastActivity desc', async () => {
-    const core = await makeCore();
-    core.machines.getState().applySessionUpsert(
-      MACHINE,
-      sessionInfo('older', { title: 'Older', lastActivity: '2026-08-08T09:00:00.000Z' }),
-      0,
-    );
-    core.machines.getState().applySessionUpsert(
-      MACHINE,
-      sessionInfo('newer', { title: 'Newer', lastActivity: '2026-08-08T11:00:00.000Z' }),
-      0,
-    );
+    const core = await makeCore({
+      sessions: {
+        older: sessionInfo('older', { title: 'Older', lastActivity: '2026-08-08T09:00:00.000Z' }),
+        newer: sessionInfo('newer', { title: 'Newer', lastActivity: '2026-08-08T11:00:00.000Z' }),
+      },
+    });
     renderSidebar(core);
 
     expect(screen.getByText('laptop')).toBeTruthy();
@@ -120,28 +167,43 @@ describe('Sidebar', () => {
   });
 
   it('attention dot: waiting_permission and unread sessions breathe; idle does not', async () => {
-    const core = await makeCore();
-    core.machines.getState().applySessionUpsert(
-      MACHINE,
-      sessionInfo('waiting', { state: 'waiting_permission' }),
-      0,
-    );
-    core.machines.getState().applySessionUpsert(MACHINE, sessionInfo('quiet', { state: 'idle' }), 0);
-    core.machines.getState().applySessionUpsert(MACHINE, sessionInfo('unread', { state: 'idle' }), 0);
-    core.ui.getState().markSessionUnread(MACHINE, 'unread');
+    const core = await makeCore({
+      sessions: {
+        waiting: sessionInfo('waiting', { state: 'waiting_permission' }),
+        quiet: sessionInfo('quiet', { state: 'idle' }),
+        unread: sessionInfo('unread', { state: 'idle' }),
+      },
+      unreadSessions: ['unread'],
+    });
     renderSidebar(core);
 
     expect(screen.getAllByLabelText('Needs attention')).toHaveLength(2);
   });
 
   it('tapping a card selects the session (panelMode session, unread cleared) and closes the drawer', async () => {
-    const core = await makeCore();
-    core.machines.getState().applySessionUpsert(MACHINE, sessionInfo('s1', { title: 'One' }), 0);
-    core.ui.getState().markSessionUnread(MACHINE, 's1');
+    const { phone: core, fake } = await makeCoreAndFake({
+      sessions: { s1: sessionInfo('s1', { title: 'One' }) },
+      unreadSessions: ['s1'],
+    });
+    // `selectSession` clears the session's unread mark Rust-side as a side
+    // effect of the same Intent (see `Intent::SelectSession`'s own Rust test
+    // for that behaviour) — scripted here per nativeCoreFixture.ts's module
+    // doc, so this test only proves the UI reacts once the view says so.
+    fake.onDispatch((intent) => {
+      if (typeof intent === 'object' && intent.selectSession) {
+        fake.setView('ui', {
+          ...fake.views.ui,
+          unreadSessions: fake.views.ui.unreadSessions.filter((k) => k !== `${MACHINE} s1`),
+        });
+      }
+    });
     const onSelected = vi.fn();
     renderSidebar(core, { onSessionSelected: onSelected });
 
     fireEvent.click(screen.getByTestId('session-card'));
+    await act(async () => {
+      await tick();
+    });
 
     const ui = core.ui.getState();
     expect(ui.selectedMachine).toBe(MACHINE);
@@ -174,24 +236,38 @@ describe('Sidebar', () => {
   });
 
   it('pending cards render and a failed one dismisses', async () => {
-    const core = await makeCore();
-    core.pendingSessions
-      .getState()
-      .applyPending(MACHINE, { pendingId: 'p1', machine: 'laptop', createdAt: '2026-08-08' });
-    core.pendingSessions
-      .getState()
-      .applyPending(MACHINE, { pendingId: 'p2', machine: 'laptop', createdAt: '2026-08-08' });
-    core.pendingSessions.getState().applyFailed('p2', 'spawn exploded');
+    const pending: Record<string, PendingSessionView> = {
+      p1: { pendingId: 'p1', machine: MACHINE, machineName: 'laptop', createdAt: '2026-08-08', state: 'pending', seenAt: 0 },
+      p2: {
+        pendingId: 'p2',
+        machine: MACHINE,
+        machineName: 'laptop',
+        createdAt: '2026-08-08',
+        state: 'failed',
+        reason: 'spawn exploded',
+        seenAt: 1,
+      },
+    };
+    const { phone: core, fake } = await makeCoreAndFake({ pending });
+    fake.onDispatch((intent) => {
+      if (typeof intent === 'object' && intent.dismissPendingSession) {
+        const { [intent.dismissPendingSession.pendingId]: _dismissed, ...rest } = fake.views.pendingSessions.pending;
+        fake.setView('pendingSessions', { pending: rest });
+      }
+    });
     renderSidebar(core);
 
     expect(screen.getByText('Starting session…')).toBeTruthy();
     expect(screen.getByText('spawn exploded')).toBeTruthy();
     fireEvent.click(screen.getByText('Dismiss'));
+    await act(async () => {
+      await tick();
+    });
     expect(screen.queryByText('spawn exploded')).toBeNull();
   });
 
   it('no machines → empty state with a Pair a machine action', async () => {
-    const core = await makeCore(false);
+    const core = await makeCore({ withMachine: false });
     const onOpenPairing = vi.fn();
     renderSidebar(core, { onOpenPairing });
 
@@ -234,8 +310,7 @@ describe('MainPanel', () => {
   });
 
   it('panelMode session + selection → SessionScreen', async () => {
-    const core = await makeCore();
-    core.machines.getState().applySessionUpsert(MACHINE, sessionInfo('s1'), 0);
+    const core = await makeCore({ sessions: { s1: sessionInfo('s1') } });
     core.ui.getState().selectSession(MACHINE, 's1');
     renderPanel(core);
 
@@ -306,8 +381,7 @@ describe('App shell', () => {
 
   it('narrow: selecting a session closes the drawer and shows the session', async () => {
     mockMatchMedia(false);
-    const core = await makeCore();
-    core.machines.getState().applySessionUpsert(MACHINE, sessionInfo('s1', { title: 'One' }), 0);
+    const core = await makeCore({ sessions: { s1: sessionInfo('s1', { title: 'One' }) } });
     renderApp(core);
 
     fireEvent.click(within(screen.getByTestId('sidebar')).getByTestId('session-card'));
@@ -319,7 +393,7 @@ describe('App shell', () => {
 
   it('no machines → pairing overlay auto-opens (first-run), closable', async () => {
     mockMatchMedia(true);
-    const core = await makeCore(false);
+    const core = await makeCore({ withMachine: false });
     renderApp(core);
 
     expect(screen.getByTestId('screen-overlay')).toBeTruthy();

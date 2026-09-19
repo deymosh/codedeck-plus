@@ -1,0 +1,65 @@
+[package]
+name = "client-core"
+description = "CodeDeck+ shared client logic (pure). Protocol codec, crypto, reducers, stores."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "client_core"
+
+[features]
+default = []
+# NIP-17: the `stores::dm` state machine here is dep-free and always compiled;
+# `dm` gates the gift-wrap crypto, which lives in `client-runtime`.
+dm = []
+# Marmot: `marmot_engine` (the MDK 0.8 / MLS + SQLCipher engine, ported verbatim
+# from `apps/mobile/src-tauri/src/marmot.rs`). OFF keeps `client-core` pure
+# (nostr + serde). ON pulls the MDK / rusqlite / SQLCipher stack — exactly what
+# `apps/mobile/src-tauri` carries today. `client-runtime`'s own `marmot` feature
+# turns this on to implement its `MarmotEngine` port.
+marmot = [
+    "dep:mdk-core",
+    "dep:mdk-sqlite-storage",
+    "dep:mdk-storage-traits",
+    "dep:rusqlite",
+    "dep:sha2",
+    "nostr/nip59",
+]
+
+[dependencies]
+# The wire contract (codec, schemas, ranges, chunking, NIP-42/crypto
+# primitives) — the single source of truth; client-core never redefines a
+# wire type. See `crates/protocol`'s own doc comment for the dependency rule
+# (protocol depends on nothing in this workspace, so a future Rust bridge can
+# consume it too without reorganizing anything here).
+protocol = { path = "../protocol" }
+# NIP-44 v2 + keys, verified against this crate in the F0 uniffi probe.
+# default-features = false keeps the tree tight (see spike/uniffi-binding-probe).
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
+thiserror = "1"
+hex = "0.4"
+# Already in the workspace tree via `nostr`; used for the image-upload path.
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# TS bindings are generated from these types, not hand-mirrored — see protocol's Cargo.toml.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+specta-typescript = "0.0.12"
+
+# --- Marmot engine (feature "marmot" only) — the exact versions
+# apps/mobile/src-tauri pins (CDX-012). MDK's rusqlite pins "bundled-sqlcipher";
+# the direct rusqlite dep upgrades it to the vendored-OpenSSL variant so
+# SQLCipher cross-compiles self-contained for Android.
+mdk-core = { version = "0.8", optional = true }
+mdk-sqlite-storage = { version = "0.8", optional = true }
+mdk-storage-traits = { version = "0.8", optional = true }
+rusqlite = { version = "0.37", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+# Feature `marmot` loopback tests only (`marmot_engine::tests`).
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros"] }

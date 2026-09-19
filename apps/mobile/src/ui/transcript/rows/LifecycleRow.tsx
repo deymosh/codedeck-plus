@@ -1,5 +1,5 @@
 /** Session lifecycle marker (special='session_restart'): a centered divider line. */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import styles from './rows.module.css';
 
 export function LifecycleRow({ entry }: { entry: OutputEntry }) {

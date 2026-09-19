@@ -78,7 +78,10 @@ export function GsdStrip({
   const exec = executionLine(gsd);
   const chips = recoveryChips(gsd);
   const action = recommendedAction(gsd);
-  const pct = Math.max(0, Math.min(100, gsd.percent));
+  // A bare f64 renders as `number | null` (serde_json maps NaN/Infinity to
+  // null) even though this field isn't Optional in Rust — same precedent as
+  // nativeSettings.ts's uiScale.
+  const pct = Math.max(0, Math.min(100, gsd.percent ?? 0));
   // Mid-execute or blocked, the recommended action is stale or double-fires.
   const showAction = !busy && !exec && action !== null;
   const summary = waiting ? 'Waiting on you' : (exec ?? stripSummary(gsd));
