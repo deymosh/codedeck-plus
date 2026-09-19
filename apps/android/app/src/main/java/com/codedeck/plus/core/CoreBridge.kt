@@ -172,8 +172,9 @@ class CoreBridge(
 
     override fun actionFailed(kind: ActionFailedKind) {
         // Also surfaced as a CoreEvent.ActionFailed on `events` (client-runtime
-        // emits both) — nothing extra to do here yet. A dedicated toast/banner
-        // channel is a screen-level concern, added when a screen exists.
+        // emits both) — that flow is what `ui/ActionFailedBanner.kt`, mounted
+        // once at the shell's root, watches to show the transient failure
+        // banner, so nothing extra is needed in this callback.
     }
 
     private fun refreshMachines() {

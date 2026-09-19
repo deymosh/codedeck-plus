@@ -201,5 +201,10 @@ fun Shell(bridge: CoreBridge) {
         // the shell's root so it is visible on whichever screen is showing.
         // Emits nothing (and intercepts nothing) while no window is open.
         UndoToast(bridge, Modifier.align(Alignment.BottomCenter))
+        // Global action-failed banner — same "visible from any screen"
+        // placement, but pinned top-center: the bottom edge is the undo
+        // toast's slot, so the two can never collide and neither needs
+        // mutual-exclusion state. Emits nothing while no failure is showing.
+        ActionFailedBanner(bridge, Modifier.align(Alignment.TopCenter))
     }
 }

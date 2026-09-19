@@ -30,14 +30,20 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  * here. This file's own Paparazzi golden (`MarkdownParityTest`) is the
  * guardrail against a future renderer bump silently regressing either one.
  *
- * Known follow-up, disclosed rather than silently accepted: a wide table's
- * columns clip at the transcript's width instead of scrolling or wrapping
- * (visible in the golden) — the TS renderer's table just grows past its
- * container width inside the page's own scroll region, which Compose has no
- * equivalent of without an explicit horizontal-scroll wrapper. Narrow rows
- * of this codebase's actual corpus (session/file paths, short labels) don't
- * hit it; a wide one will. Left for a later pass rather than blocking this
- * milestone on table-column layout.
+ * Wide tables already scroll horizontally through the library's own default:
+ * 0.43.0's `MarkdownTable` (`compose/elements/MarkdownTable.kt`) wraps its
+ * column stack in `horizontalScroll` with `requiredWidth(columns *
+ * tableCellWidth)` whenever that nominal width exceeds the available one —
+ * every multi-column table at phone width (the default cell width is 160 dp).
+ * Residual narrowing vs the TS renderer, disclosed: cells stay equal-width,
+ * sized by column count rather than content, and cell text is single-line
+ * with ellipsis — a long cell truncates instead of widening its column.
+ * Changing that means overriding the table's headerBlock/rowBlock, i.e.
+ * redesigning the table, deliberately not done here. A plain outer
+ * `horizontalScroll` wrapper (via `markdownComponents(table = …)`) was
+ * evaluated and rejected as redundant: the default renderer already scrolls,
+ * and the wrapper's unbounded width constraints would flip the library's own
+ * scroll decision (its `maxWidth <= tableWidth` test) for narrow tables.
  *
  * `immediate = true`: transcript rows are already-received text, not a
  * live-typed editor buffer — synchronous parsing costs one frame on a cold
