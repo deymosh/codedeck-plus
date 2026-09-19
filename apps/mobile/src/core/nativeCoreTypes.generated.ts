@@ -351,6 +351,15 @@ export type CreateSessionMsg_Deserialize = {
 	cwd?: string | null,
 	createCwd?: boolean | null,
 	providerId?: string | null,
+	/**
+	 *  Select the agent backend for this session. Omitted means
+	 *  `ClaudeCode` (today's behavior), so a phone that has never seen this
+	 *  field keeps working unchanged. Send `Opencode` only when the bridge
+	 *  advertises the `opencode` capability — an old bridge's zod silently
+	 *  strips the unknown field and would run the session on Claude Code
+	 *  instead.
+	 */
+	backend?: SessionBackend | null,
 } & VersionFields_Deserialize;
 
 export type CreateSessionMsg_Serialize = {
@@ -360,6 +369,15 @@ export type CreateSessionMsg_Serialize = {
 	cwd?: string | null,
 	createCwd?: boolean | null,
 	providerId?: string | null,
+	/**
+	 *  Select the agent backend for this session. Omitted means
+	 *  `ClaudeCode` (today's behavior), so a phone that has never seen this
+	 *  field keeps working unchanged. Send `Opencode` only when the bridge
+	 *  advertises the `opencode` capability — an old bridge's zod silently
+	 *  strips the unknown field and would run the session on Claude Code
+	 *  instead.
+	 */
+	backend?: SessionBackend | null,
 } & VersionFields_Serialize;
 
 export type CredentialsAck = CredentialsAck_Serialize | CredentialsAck_Deserialize;
@@ -781,10 +799,12 @@ export type Intent_Deserialize =
 	defaultEffort: EffortLevel | null,
 	providerId: string | null,
 	testSession: boolean | null,
+	backend: SessionBackend | null,
 } }) & { acceptMarmotWelcome?: never; addQuickPrompt?: never; addRelay?: never; addRelays?: never; answerQuestion?: never; beginManualPairing?: never; beginPairing?: never; closeSession?: never; confirmStagedPairing?: never; createFolder?: never; deleteSession?: never; dismissPendingSession?: never; interrupt?: never; keypress?: never; markDmRead?: never; markMarmotRead?: never; refreshSessions?: never; removeMachine?: never; removeQuickPrompt?: never; removeRelay?: never; requestGsd?: never; requestModels?: never; requestProviderProfiles?: never; requestUsage?: never; respondPermission?: never; retryOutboxItem?: never; selectDmPeer?: never; selectMarmotGroup?: never; selectSession?: never; sendDm?: never; sendDmImage?: never; sendInput?: never; sendMarmotMessage?: never; sendSessionImage?: never; setBlossomServer?: never; setCredentials?: never; setDefaultEffort?: never; setDefaultMode?: never; setDefaultModel?: never; setDeviceConfig?: never; setEffort?: never; setMeshTestTarget?: never; setMode?: never; setModel?: never; setNotificationsEnabled?: never; setPlanApprovalChoice?: never; setProviderProfile?: never; setShowCommitBadge?: never; setShowUsageBadge?: never; setStayConnected?: never; setTorEnabled?: never; setUiScale?: never; stagePairing?: never; startDmConversation?: never; startMarmotChat?: never; updateQuickPrompt?: never } | ({ refreshSessions: {
 	machine: string,
 } }) & { acceptMarmotWelcome?: never; addQuickPrompt?: never; addRelay?: never; addRelays?: never; answerQuestion?: never; beginManualPairing?: never; beginPairing?: never; closeSession?: never; confirmStagedPairing?: never; createFolder?: never; createSession?: never; deleteSession?: never; dismissPendingSession?: never; interrupt?: never; keypress?: never; markDmRead?: never; markMarmotRead?: never; removeMachine?: never; removeQuickPrompt?: never; removeRelay?: never; requestGsd?: never; requestModels?: never; requestProviderProfiles?: never; requestUsage?: never; respondPermission?: never; retryOutboxItem?: never; selectDmPeer?: never; selectMarmotGroup?: never; selectSession?: never; sendDm?: never; sendDmImage?: never; sendInput?: never; sendMarmotMessage?: never; sendSessionImage?: never; setBlossomServer?: never; setCredentials?: never; setDefaultEffort?: never; setDefaultMode?: never; setDefaultModel?: never; setDeviceConfig?: never; setEffort?: never; setMeshTestTarget?: never; setMode?: never; setModel?: never; setNotificationsEnabled?: never; setPlanApprovalChoice?: never; setProviderProfile?: never; setShowCommitBadge?: never; setShowUsageBadge?: never; setStayConnected?: never; setTorEnabled?: never; setUiScale?: never; stagePairing?: never; startDmConversation?: never; startMarmotChat?: never; updateQuickPrompt?: never } | ({ requestModels: {
 	machine: string,
+	backend: SessionBackend | null,
 } }) & { acceptMarmotWelcome?: never; addQuickPrompt?: never; addRelay?: never; addRelays?: never; answerQuestion?: never; beginManualPairing?: never; beginPairing?: never; closeSession?: never; confirmStagedPairing?: never; createFolder?: never; createSession?: never; deleteSession?: never; dismissPendingSession?: never; interrupt?: never; keypress?: never; markDmRead?: never; markMarmotRead?: never; refreshSessions?: never; removeMachine?: never; removeQuickPrompt?: never; removeRelay?: never; requestGsd?: never; requestProviderProfiles?: never; requestUsage?: never; respondPermission?: never; retryOutboxItem?: never; selectDmPeer?: never; selectMarmotGroup?: never; selectSession?: never; sendDm?: never; sendDmImage?: never; sendInput?: never; sendMarmotMessage?: never; sendSessionImage?: never; setBlossomServer?: never; setCredentials?: never; setDefaultEffort?: never; setDefaultMode?: never; setDefaultModel?: never; setDeviceConfig?: never; setEffort?: never; setMeshTestTarget?: never; setMode?: never; setModel?: never; setNotificationsEnabled?: never; setPlanApprovalChoice?: never; setProviderProfile?: never; setShowCommitBadge?: never; setShowUsageBadge?: never; setStayConnected?: never; setTorEnabled?: never; setUiScale?: never; stagePairing?: never; startDmConversation?: never; startMarmotChat?: never; updateQuickPrompt?: never } | ({ requestUsage: {
 	machine: string,
 	sessionId: string,
@@ -1022,10 +1042,12 @@ export type Intent_Serialize =
 	defaultEffort: EffortLevel | null,
 	providerId: string | null,
 	testSession: boolean | null,
+	backend: SessionBackend | null,
 } }) & { acceptMarmotWelcome?: never; addQuickPrompt?: never; addRelay?: never; addRelays?: never; answerQuestion?: never; beginManualPairing?: never; beginPairing?: never; closeSession?: never; confirmStagedPairing?: never; createFolder?: never; deleteSession?: never; dismissPendingSession?: never; interrupt?: never; keypress?: never; markDmRead?: never; markMarmotRead?: never; refreshSessions?: never; removeMachine?: never; removeQuickPrompt?: never; removeRelay?: never; requestGsd?: never; requestModels?: never; requestProviderProfiles?: never; requestUsage?: never; respondPermission?: never; retryOutboxItem?: never; selectDmPeer?: never; selectMarmotGroup?: never; selectSession?: never; sendDm?: never; sendDmImage?: never; sendInput?: never; sendMarmotMessage?: never; sendSessionImage?: never; setBlossomServer?: never; setCredentials?: never; setDefaultEffort?: never; setDefaultMode?: never; setDefaultModel?: never; setDeviceConfig?: never; setEffort?: never; setMeshTestTarget?: never; setMode?: never; setModel?: never; setNotificationsEnabled?: never; setPlanApprovalChoice?: never; setProviderProfile?: never; setShowCommitBadge?: never; setShowUsageBadge?: never; setStayConnected?: never; setTorEnabled?: never; setUiScale?: never; stagePairing?: never; startDmConversation?: never; startMarmotChat?: never; updateQuickPrompt?: never } | ({ refreshSessions: {
 	machine: string,
 } }) & { acceptMarmotWelcome?: never; addQuickPrompt?: never; addRelay?: never; addRelays?: never; answerQuestion?: never; beginManualPairing?: never; beginPairing?: never; closeSession?: never; confirmStagedPairing?: never; createFolder?: never; createSession?: never; deleteSession?: never; dismissPendingSession?: never; interrupt?: never; keypress?: never; markDmRead?: never; markMarmotRead?: never; removeMachine?: never; removeQuickPrompt?: never; removeRelay?: never; requestGsd?: never; requestModels?: never; requestProviderProfiles?: never; requestUsage?: never; respondPermission?: never; retryOutboxItem?: never; selectDmPeer?: never; selectMarmotGroup?: never; selectSession?: never; sendDm?: never; sendDmImage?: never; sendInput?: never; sendMarmotMessage?: never; sendSessionImage?: never; setBlossomServer?: never; setCredentials?: never; setDefaultEffort?: never; setDefaultMode?: never; setDefaultModel?: never; setDeviceConfig?: never; setEffort?: never; setMeshTestTarget?: never; setMode?: never; setModel?: never; setNotificationsEnabled?: never; setPlanApprovalChoice?: never; setProviderProfile?: never; setShowCommitBadge?: never; setShowUsageBadge?: never; setStayConnected?: never; setTorEnabled?: never; setUiScale?: never; stagePairing?: never; startDmConversation?: never; startMarmotChat?: never; updateQuickPrompt?: never } | ({ requestModels: {
 	machine: string,
+	backend: SessionBackend | null,
 } }) & { acceptMarmotWelcome?: never; addQuickPrompt?: never; addRelay?: never; addRelays?: never; answerQuestion?: never; beginManualPairing?: never; beginPairing?: never; closeSession?: never; confirmStagedPairing?: never; createFolder?: never; createSession?: never; deleteSession?: never; dismissPendingSession?: never; interrupt?: never; keypress?: never; markDmRead?: never; markMarmotRead?: never; refreshSessions?: never; removeMachine?: never; removeQuickPrompt?: never; removeRelay?: never; requestGsd?: never; requestProviderProfiles?: never; requestUsage?: never; respondPermission?: never; retryOutboxItem?: never; selectDmPeer?: never; selectMarmotGroup?: never; selectSession?: never; sendDm?: never; sendDmImage?: never; sendInput?: never; sendMarmotMessage?: never; sendSessionImage?: never; setBlossomServer?: never; setCredentials?: never; setDefaultEffort?: never; setDefaultMode?: never; setDefaultModel?: never; setDeviceConfig?: never; setEffort?: never; setMeshTestTarget?: never; setMode?: never; setModel?: never; setNotificationsEnabled?: never; setPlanApprovalChoice?: never; setProviderProfile?: never; setShowCommitBadge?: never; setShowUsageBadge?: never; setStayConnected?: never; setTorEnabled?: never; setUiScale?: never; stagePairing?: never; startDmConversation?: never; startMarmotChat?: never; updateQuickPrompt?: never } | ({ requestUsage: {
 	machine: string,
 	sessionId: string,
@@ -1403,6 +1425,12 @@ export type ModelsMsg_Deserialize = {
 	 *  `models`; the phone keeps its list and keeps re-requesting.
 	 */
 	error?: string | null,
+	/**
+	 *  Echoes the request's `backend` — lets a phone with two in-flight
+	 *  requests (one per backend) tell which answer is which. Absent means
+	 *  `ClaudeCode`.
+	 */
+	backend?: SessionBackend | null,
 };
 
 export type ModelsMsg_Serialize = {
@@ -1413,7 +1441,38 @@ export type ModelsMsg_Serialize = {
 	 *  `models`; the phone keeps its list and keeps re-requesting.
 	 */
 	error?: string | null,
+	/**
+	 *  Echoes the request's `backend` — lets a phone with two in-flight
+	 *  requests (one per backend) tell which answer is which. Absent means
+	 *  `ClaudeCode`.
+	 */
+	backend?: SessionBackend | null,
 };
+
+/**
+ *  v10 (CDB-030): ask the bridge for the SDK's live supported-model list.
+ *  `backend` scopes the request to a specific agent backend's model list;
+ *  omitted means `ClaudeCode` (today's only backend, unchanged behaviour).
+ */
+export type ModelsRequestMsg = ModelsRequestMsg_Serialize | ModelsRequestMsg_Deserialize;
+
+/**
+ *  v10 (CDB-030): ask the bridge for the SDK's live supported-model list.
+ *  `backend` scopes the request to a specific agent backend's model list;
+ *  omitted means `ClaudeCode` (today's only backend, unchanged behaviour).
+ */
+export type ModelsRequestMsg_Deserialize = {
+	backend?: SessionBackend | null,
+} & VersionFields_Deserialize;
+
+/**
+ *  v10 (CDB-030): ask the bridge for the SDK's live supported-model list.
+ *  `backend` scopes the request to a specific agent backend's model list;
+ *  omitted means `ClaudeCode` (today's only backend, unchanged behaviour).
+ */
+export type ModelsRequestMsg_Serialize = {
+	backend?: SessionBackend | null,
+} & VersionFields_Serialize;
 
 export type OutboxItem = {
 	/**  Also the wire `inputId` echoed back by `input-ack`. */
@@ -1662,7 +1721,7 @@ export type PhoneToBridge_Deserialize = ({ input: {
 	type: "gsd-request",
 } & SessionIdMsg_Deserialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "models-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "models-request": {
 	type: "models-request",
-} & BareMsg_Deserialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "set-credentials": {
+} & ModelsRequestMsg_Deserialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "set-credentials": {
 	type: "set-credentials",
 } & SetCredentialsMsg_Deserialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "models-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "set-device-config": {
 	type: "set-device-config",
@@ -1711,7 +1770,7 @@ export type PhoneToBridge_Serialize = ({ input: {
 	type: "gsd-request",
 } & SessionIdMsg_Serialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "models-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "models-request": {
 	type: "models-request",
-} & BareMsg_Serialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "set-credentials": {
+} & ModelsRequestMsg_Serialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-credentials"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "set-credentials": {
 	type: "set-credentials",
 } & SetCredentialsMsg_Serialize }) & { "close-session"?: never; "create-folder"?: never; "create-session"?: never; "gsd-request"?: never; "models-request"?: never; "pair-request"?: never; "permission-res"?: never; "provider-profiles-request"?: never; "question-input"?: never; "refresh-sessions"?: never; "set-device-config"?: never; "set-provider-profile"?: never; "sync-ack"?: never; "sync-request"?: never; "upload-image"?: never; "usage-request"?: never; effort?: never; input?: never; interrupt?: never; keypress?: never; mode?: never; model?: never } | ({ "set-device-config": {
 	type: "set-device-config",
@@ -1925,6 +1984,11 @@ export type RemoteSessionInfo_Deserialize = {
 	/**  CDX-062: bound provider profile id (absent = Anthropic). */
 	providerId?: string | null,
 	providerLabel?: string | null,
+	/**
+	 *  Agent backend this session runs on. Absent means `ClaudeCode` (see
+	 *  `SessionBackend`'s doc comment).
+	 */
+	backend?: SessionBackend | null,
 };
 
 export type RemoteSessionInfo_Serialize = {
@@ -1948,7 +2012,28 @@ export type RemoteSessionInfo_Serialize = {
 	/**  CDX-062: bound provider profile id (absent = Anthropic). */
 	providerId?: string | null,
 	providerLabel?: string | null,
+	/**
+	 *  Agent backend this session runs on. Absent means `ClaudeCode` (see
+	 *  `SessionBackend`'s doc comment).
+	 */
+	backend?: SessionBackend | null,
 };
+
+/**
+ *  Agent backend a session runs on / a model list is scoped to. Absent
+ *  wherever this is optional means `ClaudeCode` — the only backend that
+ *  existed before OpenCode support, so an old peer that has never seen this
+ *  field keeps working unchanged. Port of
+ *  `packages/protocol/src/schemas/common.ts`'s `sessionBackendSchema`.
+ */
+export type SessionBackend = "claude-code" | 
+/**
+ *  Spelled as one word (not `OpenCode`) so `kebab-case` renders it
+ *  `"opencode"`, matching the TS schema's `z.enum(['claude-code',
+ *  'opencode'])` — a camel-split `OpenCode` would kebab-case wrongly to
+ *  `"open-code"`.
+ */
+"opencode";
 
 export type SessionFailedMsg = {
 	pendingId: string,
