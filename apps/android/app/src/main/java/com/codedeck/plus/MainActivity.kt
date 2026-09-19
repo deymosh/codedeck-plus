@@ -10,10 +10,13 @@ import android.os.Bundle
 import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
@@ -62,13 +65,28 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Draws behind the status/navigation bars on every supported API
+        // level — targetSdk 35+ enforces this regardless. The app consumes
+        // the bar + keyboard insets itself (the root Surface below); without
+        // that, headers render under the clock/battery area and the keyboard
+        // covers the composer.
+        enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        // Launched unconditionally of the "stay connected" setting: this
+        // service hosts the CoreBridge the whole app runs on, so it must
+        // exist whenever the app does. It reconciles its own foreground
+        // state against the setting (see StayConnectedService).
         ContextCompat.startForegroundService(this, Intent(this, StayConnectedService::class.java))
         setContent {
             CodeDeckTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .systemBarsPadding()
+                        .imePadding(),
+                ) {
                     val bridge by viewModel.bridge.collectAsState()
                     val current = bridge
                     if (current != null) {
