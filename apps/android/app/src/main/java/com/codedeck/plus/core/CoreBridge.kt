@@ -1,5 +1,6 @@
 package com.codedeck.plus.core
 
+import com.codedeck.plus.platform.CoreHttpFetch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -79,7 +80,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
     private val _pairing = MutableStateFlow<UniffiPairingView?>(null)
     val pairing: StateFlow<UniffiPairingView?> = _pairing.asStateFlow()
 
-    private val core: Core = Core(relays, identitySecretHex, this, notifier)
+    private val core: Core = Core(relays, identitySecretHex, this, notifier, CoreHttpFetch())
 
     fun start() {
         core.start()

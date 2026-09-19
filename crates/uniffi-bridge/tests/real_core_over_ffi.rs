@@ -56,8 +56,14 @@ fn fresh_identity_hex() -> String {
 #[test]
 fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
     let listener = Arc::new(RecordingListener::default());
-    let core = Core::new(vec![], fresh_identity_hex(), listener.clone(), Arc::new(NoopNotifier))
-        .expect("core spawns");
+    let core = Core::new(
+        vec![],
+        fresh_identity_hex(),
+        listener.clone(),
+        Arc::new(NoopNotifier),
+        None,
+    )
+    .expect("core spawns");
 
     // spawn: the real Core hydrated and answers a view query.
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -102,8 +108,14 @@ fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
 fn dropping_an_in_flight_dispatch_future_does_not_lose_the_intent() {
     let listener = Arc::new(RecordingListener::default());
     let core = Arc::new(
-        Core::new(vec![], fresh_identity_hex(), listener.clone(), Arc::new(NoopNotifier))
-            .expect("core spawns"),
+        Core::new(
+            vec![],
+            fresh_identity_hex(),
+            listener.clone(),
+            Arc::new(NoopNotifier),
+            None,
+        )
+        .expect("core spawns"),
     );
     let rt = tokio::runtime::Runtime::new().unwrap();
 

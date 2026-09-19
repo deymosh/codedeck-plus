@@ -679,6 +679,15 @@ internal interface UniffiCallbackInterfaceCoreListenerMethod1 : com.sun.jna.Call
 internal interface UniffiCallbackInterfaceCoreListenerMethod2 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`kind`: RustBufferActionFailedKind.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`proxy`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceUniffiNotifierMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
@@ -703,6 +712,28 @@ internal open class UniffiVTableCallbackInterfaceCoreListener(
         `connectionChanged` = other.`connectionChanged`
         `onEvent` = other.`onEvent`
         `actionFailed` = other.`actionFailed`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+@Structure.FieldOrder("put", "get", "setProxy", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceUniffiHttpFetch(
+    @JvmField internal var `put`: UniffiCallbackInterfaceUniffiHttpFetchMethod0? = null,
+    @JvmField internal var `get`: UniffiCallbackInterfaceUniffiHttpFetchMethod1? = null,
+    @JvmField internal var `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod2? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `put`: UniffiCallbackInterfaceUniffiHttpFetchMethod0? = null,
+        `get`: UniffiCallbackInterfaceUniffiHttpFetchMethod1? = null,
+        `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod2? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceUniffiHttpFetch(`put`,`get`,`setProxy`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceUniffiHttpFetch) {
+        `put` = other.`put`
+        `get` = other.`get`
+        `setProxy` = other.`setProxy`
         `uniffiFree` = other.`uniffiFree`
     }
 
@@ -840,6 +871,15 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -851,6 +891,7 @@ internal interface UniffiLib : Library {
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceCoreListener.register(lib)
+                uniffiCallbackInterfaceUniffiHttpFetch.register(lib)
                 uniffiCallbackInterfaceUniffiNotifier.register(lib)
                 }
         }
@@ -865,7 +906,7 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_uniffi_bridge_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_uniffi_bridge_fn_method_core_connection_view(`ptr`: Pointer,
     ): Long
@@ -910,6 +951,18 @@ internal interface UniffiLib : Library {
     fun uniffi_uniffi_bridge_fn_method_corelistener_on_event(`ptr`: Pointer,`event`: RustBufferCoreEvent.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_method_corelistener_action_failed(`ptr`: Pointer,`kind`: RustBufferActionFailedKind.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_clone_uniffihttpfetch(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_uniffi_bridge_fn_free_uniffihttpfetch(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_init_callback_vtable_uniffihttpfetch(`vtable`: UniffiVTableCallbackInterfaceUniffiHttpFetch,
+    ): Unit
+    fun uniffi_uniffi_bridge_fn_method_uniffihttpfetch_put(`ptr`: Pointer,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_uniffi_bridge_fn_method_uniffihttpfetch_get(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_uniffi_bridge_fn_method_uniffihttpfetch_set_proxy(`ptr`: Pointer,`proxy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_clone_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
@@ -1079,6 +1132,12 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_corelistener_action_failed(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_put(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_get(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_set_proxy(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel(
@@ -1165,13 +1224,22 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_method_corelistener_action_failed() != 63877.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_put() != 61026.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_get() != 38743.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_set_proxy() != 38239.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify() != 58966.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel() != 41559.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 44994.toShort()) {
+    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 63633.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1260,6 +1328,29 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
 
 /**
  * @suppress
@@ -1430,6 +1521,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
     }
 }
 
@@ -1688,11 +1798,11 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
      * (this call is sync — Kotlin sees a plain constructor, not a suspend
      * fun) until the real `client_runtime::Core` has hydrated and is ready.
      */
-    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier) :
+    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?) :
         this(
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_constructor_core_new(
-        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),_status)
+        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),_status)
 }
     )
 
@@ -2570,6 +2680,393 @@ public object FfiConverterTypeCoreListener: FfiConverter<CoreListener, Pointer> 
 
 
 /**
+ * The Kotlin side of the `HttpFetch` port (`crates/client-runtime/src/
+ * attachments.rs`) — the real transport for Blossom image upload/download.
+ * Same shape as `UniffiNotifier` in `notifier.rs`: the core decides WHAT to
+ * fetch (URLs, headers, BUD-02 auth headers it signs itself); this trait
+ * only carries the byte-moving call across the FFI boundary.
+ *
+ * Every method is blocking from Rust's point of view and is invoked on a
+ * worker thread (`HttpFetchAdapter` hops to `spawn_blocking` first) — the
+ * implementation must not touch Android main-thread state and may take
+ * minutes on a slow Tor path. Failures throw `UniffiHttpException.Failed`
+ * (the generated Kotlin shape of [`UniffiHttpError`]): the adapter flattens
+ * the message into the `Result::Err` string the `HttpFetch` port carries.
+ */
+public interface UniffiHttpFetch {
+    
+    fun `put`(`url`: kotlin.String, `headers`: List<UniffiHttpHeader>, `body`: kotlin.ByteArray): UniffiHttpResponse
+    
+    fun `get`(`url`: kotlin.String): UniffiHttpResponse
+    
+    /**
+     * Rebuild the underlying client through the (possibly new) SOCKS5 proxy,
+     * or `None` to go direct — the HTTP twin of the WS transport's own
+     * proxy switch. The string is the SAME bare `host:port` form every
+     * other consumer of `CoreConfig::proxy` sees (e.g. `127.0.0.1:9050` for
+     * Orbot) — NO `socks5://` scheme prefix: the WS transport feeds it to
+     * `Socks5Stream::connect` (a socket address) and Tauri's
+     * `ReqwestHttpFetch` prepends the scheme itself, so an implementation
+     * parses `host:port` into its own proxy type rather than treating it
+     * as a URL.
+     */
+    fun `setProxy`(`proxy`: kotlin.String?)
+    
+    companion object
+}
+
+/**
+ * The Kotlin side of the `HttpFetch` port (`crates/client-runtime/src/
+ * attachments.rs`) — the real transport for Blossom image upload/download.
+ * Same shape as `UniffiNotifier` in `notifier.rs`: the core decides WHAT to
+ * fetch (URLs, headers, BUD-02 auth headers it signs itself); this trait
+ * only carries the byte-moving call across the FFI boundary.
+ *
+ * Every method is blocking from Rust's point of view and is invoked on a
+ * worker thread (`HttpFetchAdapter` hops to `spawn_blocking` first) — the
+ * implementation must not touch Android main-thread state and may take
+ * minutes on a slow Tor path. Failures throw `UniffiHttpException.Failed`
+ * (the generated Kotlin shape of [`UniffiHttpError`]): the adapter flattens
+ * the message into the `Result::Err` string the `HttpFetch` port carries.
+ */
+open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_free_uniffihttpfetch(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_clone_uniffihttpfetch(pointer!!, status)
+        }
+    }
+
+    
+    @Throws(UniffiHttpException::class)override fun `put`(`url`: kotlin.String, `headers`: List<UniffiHttpHeader>, `body`: kotlin.ByteArray): UniffiHttpResponse {
+            return FfiConverterTypeUniffiHttpResponse.lift(
+    callWithPointer {
+    uniffiRustCallWithError(UniffiHttpException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffihttpfetch_put(
+        it, FfiConverterString.lower(`url`),FfiConverterSequenceTypeUniffiHttpHeader.lower(`headers`),FfiConverterByteArray.lower(`body`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(UniffiHttpException::class)override fun `get`(`url`: kotlin.String): UniffiHttpResponse {
+            return FfiConverterTypeUniffiHttpResponse.lift(
+    callWithPointer {
+    uniffiRustCallWithError(UniffiHttpException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffihttpfetch_get(
+        it, FfiConverterString.lower(`url`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Rebuild the underlying client through the (possibly new) SOCKS5 proxy,
+     * or `None` to go direct — the HTTP twin of the WS transport's own
+     * proxy switch. The string is the SAME bare `host:port` form every
+     * other consumer of `CoreConfig::proxy` sees (e.g. `127.0.0.1:9050` for
+     * Orbot) — NO `socks5://` scheme prefix: the WS transport feeds it to
+     * `Socks5Stream::connect` (a socket address) and Tauri's
+     * `ReqwestHttpFetch` prepends the scheme itself, so an implementation
+     * parses `host:port` into its own proxy type rather than treating it
+     * as a URL.
+     */override fun `setProxy`(`proxy`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffihttpfetch_set_proxy(
+        it, FfiConverterOptionalString.lower(`proxy`),_status)
+}
+    }
+    
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceUniffiHttpFetch {
+    internal object `put`: UniffiCallbackInterfaceUniffiHttpFetchMethod0 {
+        override fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiHttpFetch.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`put`(
+                    FfiConverterString.lift(`url`),
+                    FfiConverterSequenceTypeUniffiHttpHeader.lift(`headers`),
+                    FfiConverterByteArray.lift(`body`),
+                )
+            }
+            val writeReturn = { value: UniffiHttpResponse -> uniffiOutReturn.setValue(FfiConverterTypeUniffiHttpResponse.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: UniffiHttpException -> FfiConverterTypeUniffiHttpError.lower(e) }
+            )
+        }
+    }
+    internal object `get`: UniffiCallbackInterfaceUniffiHttpFetchMethod1 {
+        override fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiHttpFetch.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`get`(
+                    FfiConverterString.lift(`url`),
+                )
+            }
+            val writeReturn = { value: UniffiHttpResponse -> uniffiOutReturn.setValue(FfiConverterTypeUniffiHttpResponse.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: UniffiHttpException -> FfiConverterTypeUniffiHttpError.lower(e) }
+            )
+        }
+    }
+    internal object `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod2 {
+        override fun callback(`uniffiHandle`: Long,`proxy`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiHttpFetch.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`setProxy`(
+                    FfiConverterOptionalString.lift(`proxy`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeUniffiHttpFetch.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceUniffiHttpFetch.UniffiByValue(
+        `put`,
+        `get`,
+        `setProxy`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_uniffi_bridge_fn_init_callback_vtable_uniffihttpfetch(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiHttpFetch: FfiConverter<UniffiHttpFetch, Pointer> {
+    internal val handleMap = UniffiHandleMap<UniffiHttpFetch>()
+
+    override fun lower(value: UniffiHttpFetch): Pointer {
+        return Pointer(handleMap.insert(value))
+    }
+
+    override fun lift(value: Pointer): UniffiHttpFetch {
+        return UniffiHttpFetchImpl(value)
+    }
+
+    override fun read(buf: ByteBuffer): UniffiHttpFetch {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: UniffiHttpFetch) = 8UL
+
+    override fun write(value: UniffiHttpFetch, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
  * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
  * `tag` is the same per-session/per-peer key `client-core`'s own notification
  * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
@@ -3090,6 +3587,84 @@ public object FfiConverterTypeUniffiGsdState: FfiConverterRustBuffer<UniffiGsdSt
             FfiConverterSequenceString.write(value.`blockers`, buf)
             FfiConverterBoolean.write(value.`verifyFailed`, buf)
             FfiConverterOptionalTypeUniffiGsdExecution.write(value.`execution`, buf)
+    }
+}
+
+
+
+/**
+ * One request header. A plain Rust `(String, String)` tuple is not a
+ * UniFFI-crossable type in 0.28 (no `FfiConverter` for tuples in
+ * proc-macro mode), so the ordered header list crosses as this record
+ * instead — order and duplicates preserved, same as the core's own
+ * `Vec<(String, String)>` shape.
+ */
+data class UniffiHttpHeader (
+    var `name`: kotlin.String, 
+    var `value`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiHttpHeader: FfiConverterRustBuffer<UniffiHttpHeader> {
+    override fun read(buf: ByteBuffer): UniffiHttpHeader {
+        return UniffiHttpHeader(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiHttpHeader) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`value`)
+    )
+
+    override fun write(value: UniffiHttpHeader, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`value`, buf)
+    }
+}
+
+
+
+/**
+ * One completed HTTP exchange, as the [`UniffiHttpFetch`] callback reports
+ * it back across the FFI. Non-2xx statuses are still a `Result::Ok` here —
+ * the caller distinguishes success from failure by `status` and reads the
+ * server's error body; only a failure to reach the server at all is an
+ * `Err`.
+ */
+data class UniffiHttpResponse (
+    var `status`: kotlin.UShort, 
+    var `body`: kotlin.ByteArray
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiHttpResponse: FfiConverterRustBuffer<UniffiHttpResponse> {
+    override fun read(buf: ByteBuffer): UniffiHttpResponse {
+        return UniffiHttpResponse(
+            FfiConverterUShort.read(buf),
+            FfiConverterByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiHttpResponse) = (
+            FfiConverterUShort.allocationSize(value.`status`) +
+            FfiConverterByteArray.allocationSize(value.`body`)
+    )
+
+    override fun write(value: UniffiHttpResponse, buf: ByteBuffer) {
+            FfiConverterUShort.write(value.`status`, buf)
+            FfiConverterByteArray.write(value.`body`, buf)
     }
 }
 
@@ -4203,7 +4778,9 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
  */
 data class UniffiUsageWindow (
     /**
-     * 0.0..=1.0; `None` when the bridge has no number.
+     * Percentage 0..=100, not a fraction — the wire carries it pre-scaled
+     * (the reference's usage badges round it directly and warn at 75/90).
+     * `None` when the bridge has no number.
      */
     var `utilization`: kotlin.Double?, 
     /**
@@ -4323,6 +4900,73 @@ public object FfiConverterTypeCoreInitError : FfiConverterRustBuffer<CoreInitExc
 
 
 
+
+
+/**
+ * Why a [`UniffiHttpFetch`] call failed to complete. A bare `String` is not
+ * a UniFFI-throwable type (codegen rejects it), so the message travels in
+ * this single-variant enum — `HttpFetchAdapter` flattens it back to the
+ * plain string the `HttpFetch` port carries. The field is named `detail`
+ * like every other error here: a `message` field collides with Kotlin's
+ * own `Exception.message` in the generated subclass.
+ */
+sealed class UniffiHttpException: kotlin.Exception() {
+    
+    class Failed(
+        
+        val `detail`: kotlin.String
+        ) : UniffiHttpException() {
+        override val message
+            get() = "detail=${ `detail` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<UniffiHttpException> {
+        override fun lift(error_buf: RustBuffer.ByValue): UniffiHttpException = FfiConverterTypeUniffiHttpError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiHttpError : FfiConverterRustBuffer<UniffiHttpException> {
+    override fun read(buf: ByteBuffer): UniffiHttpException {
+        
+
+        return when(buf.getInt()) {
+            1 -> UniffiHttpException.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: UniffiHttpException): ULong {
+        return when(value) {
+            is UniffiHttpException.Failed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
+        }
+    }
+
+    override fun write(value: UniffiHttpException, buf: ByteBuffer) {
+        when(value) {
+            is UniffiHttpException.Failed -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`detail`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
 sealed class UniffiIntent {
     
     data class SendInput(
@@ -4330,6 +4974,33 @@ sealed class UniffiIntent {
         val `sessionId`: kotlin.String, 
         val `text`: kotlin.String, 
         val `inputId`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * Attach an image to `session_id`'s next input (CDX-029). The loop
+     * uploads it to the configured Blossom server through the `UniffiHttpFetch`
+     * port, falling back to relay chunks, then publishes the `upload-image`
+     * command — no outbox item, no local echo (the transcript shows it once
+     * the bridge injects it, like any other output).
+     */
+    data class SendSessionImage(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String, 
+        /**
+         * Caption carried on the input the bridge runs after the upload.
+         */
+        val `text`: kotlin.String, 
+        /**
+         * Raw image bytes (a Kotlin `ByteArray` across the FFI).
+         */
+        val `image`: kotlin.ByteArray, 
+        val `filename`: kotlin.String, 
+        /**
+         * IANA media type of `image` (e.g. `"image/png"`), forwarded to the
+         * bridge verbatim — the attachment command carries it as-is.
+         */
+        val `mimeType`: kotlin.String) : UniffiIntent() {
         companion object
     }
     
@@ -4688,18 +5359,26 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            2 -> UniffiIntent.Interrupt(
+            2 -> UniffiIntent.SendSessionImage(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterByteArray.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            3 -> UniffiIntent.CloseSession(
+            3 -> UniffiIntent.Interrupt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            4 -> UniffiIntent.RefreshSessions(
+            4 -> UniffiIntent.CloseSession(
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            5 -> UniffiIntent.CreateSession(
+            5 -> UniffiIntent.RefreshSessions(
+                FfiConverterString.read(buf),
+                )
+            6 -> UniffiIntent.CreateSession(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterOptionalBoolean.read(buf),
@@ -4708,150 +5387,150 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterOptionalString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            6 -> UniffiIntent.RequestModels(
+            7 -> UniffiIntent.RequestModels(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            7 -> UniffiIntent.RequestUsage(
+            8 -> UniffiIntent.RequestUsage(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            8 -> UniffiIntent.RequestGsd(
+            9 -> UniffiIntent.RequestGsd(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            9 -> UniffiIntent.RequestProviderProfiles(
+            10 -> UniffiIntent.RequestProviderProfiles(
                 FfiConverterString.read(buf),
                 )
-            10 -> UniffiIntent.SetCredentials(
+            11 -> UniffiIntent.SetCredentials(
                 FfiConverterString.read(buf),
                 FfiConverterTypeUniffiTristate.read(buf),
                 FfiConverterTypeUniffiTristate.read(buf),
                 )
-            11 -> UniffiIntent.SetProviderProfile(
+            12 -> UniffiIntent.SetProviderProfile(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalTypeUniffiProviderProfileWrite.read(buf),
                 )
-            12 -> UniffiIntent.RespondPermission(
+            13 -> UniffiIntent.RespondPermission(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterBoolean.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            13 -> UniffiIntent.AnswerQuestion(
+            14 -> UniffiIntent.AnswerQuestion(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
                 )
-            14 -> UniffiIntent.Keypress(
+            15 -> UniffiIntent.Keypress(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            15 -> UniffiIntent.SetMode(
+            16 -> UniffiIntent.SetMode(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            16 -> UniffiIntent.SetEffort(
+            17 -> UniffiIntent.SetEffort(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            17 -> UniffiIntent.SelectSession(
+            18 -> UniffiIntent.SelectSession(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            18 -> UniffiIntent.SetPlanApprovalChoice(
+            19 -> UniffiIntent.SetPlanApprovalChoice(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            19 -> UniffiIntent.RetryOutboxItem(
+            20 -> UniffiIntent.RetryOutboxItem(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            20 -> UniffiIntent.DeleteSession(
+            21 -> UniffiIntent.DeleteSession(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            21 -> UniffiIntent.UndoDelete
-            22 -> UniffiIntent.AddRelay(
+            22 -> UniffiIntent.UndoDelete
+            23 -> UniffiIntent.AddRelay(
                 FfiConverterString.read(buf),
                 )
-            23 -> UniffiIntent.RemoveRelay(
+            24 -> UniffiIntent.RemoveRelay(
                 FfiConverterString.read(buf),
                 )
-            24 -> UniffiIntent.SetTorEnabled(
+            25 -> UniffiIntent.SetTorEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            25 -> UniffiIntent.SetStayConnected(
+            26 -> UniffiIntent.SetStayConnected(
                 FfiConverterBoolean.read(buf),
                 )
-            26 -> UniffiIntent.SetBlossomServer(
+            27 -> UniffiIntent.SetBlossomServer(
                 FfiConverterString.read(buf),
                 )
-            27 -> UniffiIntent.SetNotificationsEnabled(
+            28 -> UniffiIntent.SetNotificationsEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            28 -> UniffiIntent.SetDefaultMode(
+            29 -> UniffiIntent.SetDefaultMode(
                 FfiConverterString.read(buf),
                 )
-            29 -> UniffiIntent.SetDefaultEffort(
+            30 -> UniffiIntent.SetDefaultEffort(
                 FfiConverterString.read(buf),
                 )
-            30 -> UniffiIntent.SetDefaultModel(
+            31 -> UniffiIntent.SetDefaultModel(
                 FfiConverterString.read(buf),
                 )
-            31 -> UniffiIntent.SetUiScale(
+            32 -> UniffiIntent.SetUiScale(
                 FfiConverterDouble.read(buf),
                 )
-            32 -> UniffiIntent.SetShowUsageBadge(
+            33 -> UniffiIntent.SetShowUsageBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            33 -> UniffiIntent.SetShowCommitBadge(
+            34 -> UniffiIntent.SetShowCommitBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            34 -> UniffiIntent.AddQuickPrompt(
+            35 -> UniffiIntent.AddQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            35 -> UniffiIntent.UpdateQuickPrompt(
+            36 -> UniffiIntent.UpdateQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            36 -> UniffiIntent.RemoveQuickPrompt(
+            37 -> UniffiIntent.RemoveQuickPrompt(
                 FfiConverterString.read(buf),
                 )
-            37 -> UniffiIntent.DismissPendingSession(
+            38 -> UniffiIntent.DismissPendingSession(
                 FfiConverterString.read(buf),
                 )
-            38 -> UniffiIntent.RemoveMachine(
+            39 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
-            39 -> UniffiIntent.BeginPairing(
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
-                )
-            40 -> UniffiIntent.BeginManualPairing(
-                FfiConverterString.read(buf),
+            40 -> UniffiIntent.BeginPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            41 -> UniffiIntent.StagePairing(
+            41 -> UniffiIntent.BeginManualPairing(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            42 -> UniffiIntent.ConfirmStagedPairing(
+            42 -> UniffiIntent.StagePairing(
                 FfiConverterString.read(buf),
                 )
-            43 -> UniffiIntent.DismissStagedPairing
-            44 -> UniffiIntent.ResetPairing
+            43 -> UniffiIntent.ConfirmStagedPairing(
+                FfiConverterString.read(buf),
+                )
+            44 -> UniffiIntent.DismissStagedPairing
+            45 -> UniffiIntent.ResetPairing
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -4865,6 +5544,18 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`sessionId`)
                 + FfiConverterString.allocationSize(value.`text`)
                 + FfiConverterString.allocationSize(value.`inputId`)
+            )
+        }
+        is UniffiIntent.SendSessionImage -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`sessionId`)
+                + FfiConverterString.allocationSize(value.`text`)
+                + FfiConverterByteArray.allocationSize(value.`image`)
+                + FfiConverterString.allocationSize(value.`filename`)
+                + FfiConverterString.allocationSize(value.`mimeType`)
             )
         }
         is UniffiIntent.Interrupt -> {
@@ -5218,25 +5909,35 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`inputId`, buf)
                 Unit
             }
-            is UniffiIntent.Interrupt -> {
+            is UniffiIntent.SendSessionImage -> {
                 buf.putInt(2)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
+                FfiConverterString.write(value.`text`, buf)
+                FfiConverterByteArray.write(value.`image`, buf)
+                FfiConverterString.write(value.`filename`, buf)
+                FfiConverterString.write(value.`mimeType`, buf)
                 Unit
             }
-            is UniffiIntent.CloseSession -> {
+            is UniffiIntent.Interrupt -> {
                 buf.putInt(3)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
-            is UniffiIntent.RefreshSessions -> {
+            is UniffiIntent.CloseSession -> {
                 buf.putInt(4)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`sessionId`, buf)
+                Unit
+            }
+            is UniffiIntent.RefreshSessions -> {
+                buf.putInt(5)
                 FfiConverterString.write(value.`machine`, buf)
                 Unit
             }
             is UniffiIntent.CreateSession -> {
-                buf.putInt(5)
+                buf.putInt(6)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`cwd`, buf)
                 FfiConverterOptionalBoolean.write(value.`createCwd`, buf)
@@ -5247,44 +5948,44 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.RequestModels -> {
-                buf.putInt(6)
+                buf.putInt(7)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`backend`, buf)
                 Unit
             }
             is UniffiIntent.RequestUsage -> {
-                buf.putInt(7)
-                FfiConverterString.write(value.`machine`, buf)
-                FfiConverterString.write(value.`sessionId`, buf)
-                Unit
-            }
-            is UniffiIntent.RequestGsd -> {
                 buf.putInt(8)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
-            is UniffiIntent.RequestProviderProfiles -> {
+            is UniffiIntent.RequestGsd -> {
                 buf.putInt(9)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`sessionId`, buf)
+                Unit
+            }
+            is UniffiIntent.RequestProviderProfiles -> {
+                buf.putInt(10)
                 FfiConverterString.write(value.`machine`, buf)
                 Unit
             }
             is UniffiIntent.SetCredentials -> {
-                buf.putInt(10)
+                buf.putInt(11)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterTypeUniffiTristate.write(value.`anthropicApiKey`, buf)
                 FfiConverterTypeUniffiTristate.write(value.`githubPat`, buf)
                 Unit
             }
             is UniffiIntent.SetProviderProfile -> {
-                buf.putInt(11)
+                buf.putInt(12)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`profileId`, buf)
                 FfiConverterOptionalTypeUniffiProviderProfileWrite.write(value.`profile`, buf)
                 Unit
             }
             is UniffiIntent.RespondPermission -> {
-                buf.putInt(12)
+                buf.putInt(13)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -5293,7 +5994,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.AnswerQuestion -> {
-                buf.putInt(13)
+                buf.putInt(14)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`text`, buf)
@@ -5301,7 +6002,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.Keypress -> {
-                buf.putInt(14)
+                buf.putInt(15)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`key`, buf)
@@ -5309,166 +6010,166 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.SetMode -> {
-                buf.putInt(15)
+                buf.putInt(16)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`mode`, buf)
                 Unit
             }
             is UniffiIntent.SetEffort -> {
-                buf.putInt(16)
+                buf.putInt(17)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`level`, buf)
                 Unit
             }
             is UniffiIntent.SelectSession -> {
-                buf.putInt(17)
+                buf.putInt(18)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.SetPlanApprovalChoice -> {
-                buf.putInt(18)
+                buf.putInt(19)
                 FfiConverterString.write(value.`cardId`, buf)
                 FfiConverterString.write(value.`key`, buf)
                 Unit
             }
             is UniffiIntent.RetryOutboxItem -> {
-                buf.putInt(19)
+                buf.putInt(20)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DeleteSession -> {
-                buf.putInt(20)
+                buf.putInt(21)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterOptionalString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.UndoDelete -> {
-                buf.putInt(21)
+                buf.putInt(22)
                 Unit
             }
             is UniffiIntent.AddRelay -> {
-                buf.putInt(22)
-                FfiConverterString.write(value.`url`, buf)
-                Unit
-            }
-            is UniffiIntent.RemoveRelay -> {
                 buf.putInt(23)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
-            is UniffiIntent.SetTorEnabled -> {
+            is UniffiIntent.RemoveRelay -> {
                 buf.putInt(24)
-                FfiConverterBoolean.write(value.`enabled`, buf)
+                FfiConverterString.write(value.`url`, buf)
                 Unit
             }
-            is UniffiIntent.SetStayConnected -> {
+            is UniffiIntent.SetTorEnabled -> {
                 buf.putInt(25)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.SetBlossomServer -> {
+            is UniffiIntent.SetStayConnected -> {
                 buf.putInt(26)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetBlossomServer -> {
+                buf.putInt(27)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.SetNotificationsEnabled -> {
-                buf.putInt(27)
+                buf.putInt(28)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultMode -> {
-                buf.putInt(28)
+                buf.putInt(29)
                 FfiConverterString.write(value.`mode`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultEffort -> {
-                buf.putInt(29)
+                buf.putInt(30)
                 FfiConverterString.write(value.`level`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultModel -> {
-                buf.putInt(30)
+                buf.putInt(31)
                 FfiConverterString.write(value.`model`, buf)
                 Unit
             }
             is UniffiIntent.SetUiScale -> {
-                buf.putInt(31)
+                buf.putInt(32)
                 FfiConverterDouble.write(value.`scale`, buf)
                 Unit
             }
             is UniffiIntent.SetShowUsageBadge -> {
-                buf.putInt(32)
-                FfiConverterBoolean.write(value.`enabled`, buf)
-                Unit
-            }
-            is UniffiIntent.SetShowCommitBadge -> {
                 buf.putInt(33)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.AddQuickPrompt -> {
+            is UniffiIntent.SetShowCommitBadge -> {
                 buf.putInt(34)
-                FfiConverterString.write(value.`id`, buf)
-                FfiConverterString.write(value.`label`, buf)
-                FfiConverterString.write(value.`text`, buf)
+                FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.UpdateQuickPrompt -> {
+            is UniffiIntent.AddQuickPrompt -> {
                 buf.putInt(35)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
-            is UniffiIntent.RemoveQuickPrompt -> {
+            is UniffiIntent.UpdateQuickPrompt -> {
                 buf.putInt(36)
+                FfiConverterString.write(value.`id`, buf)
+                FfiConverterString.write(value.`label`, buf)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is UniffiIntent.RemoveQuickPrompt -> {
+                buf.putInt(37)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DismissPendingSession -> {
-                buf.putInt(37)
+                buf.putInt(38)
                 FfiConverterString.write(value.`pendingId`, buf)
                 Unit
             }
             is UniffiIntent.RemoveMachine -> {
-                buf.putInt(38)
+                buf.putInt(39)
                 FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
             is UniffiIntent.BeginPairing -> {
-                buf.putInt(39)
+                buf.putInt(40)
                 FfiConverterString.write(value.`url`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.BeginManualPairing -> {
-                buf.putInt(40)
+                buf.putInt(41)
                 FfiConverterString.write(value.`npub`, buf)
                 FfiConverterString.write(value.`token`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.StagePairing -> {
-                buf.putInt(41)
+                buf.putInt(42)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ConfirmStagedPairing -> {
-                buf.putInt(42)
+                buf.putInt(43)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.DismissStagedPairing -> {
-                buf.putInt(43)
+                buf.putInt(44)
                 Unit
             }
             is UniffiIntent.ResetPairing -> {
-                buf.putInt(44)
+                buf.putInt(45)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -5778,6 +6479,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiHttpFetch: FfiConverterRustBuffer<UniffiHttpFetch?> {
+    override fun read(buf: ByteBuffer): UniffiHttpFetch? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiHttpFetch.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiHttpFetch?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiHttpFetch.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiHttpFetch?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiHttpFetch.write(value, buf)
         }
     }
 }
@@ -6182,6 +6915,34 @@ public object FfiConverterSequenceTypeUniffiGsdPhase: FfiConverterRustBuffer<Lis
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiGsdPhase.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiHttpHeader: FfiConverterRustBuffer<List<UniffiHttpHeader>> {
+    override fun read(buf: ByteBuffer): List<UniffiHttpHeader> {
+        val len = buf.getInt()
+        return List<UniffiHttpHeader>(len) {
+            FfiConverterTypeUniffiHttpHeader.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiHttpHeader>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiHttpHeader.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiHttpHeader>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiHttpHeader.write(it, buf)
         }
     }
 }

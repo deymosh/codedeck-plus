@@ -1,14 +1,15 @@
 //! `UniffiIntent` — a hand-mapped, deliberately partial mirror of
 //! `client_runtime::intent::Intent` for the surface F3's first vertical slice
 //! actually drives (send input, interrupt, close/refresh/create a session,
-//! respond to a permission/question/keypress card, change mode).
+//! respond to a permission/question/keypress card, change mode), grown since
+//! with the session image upload (Blossom-first, relay-chunk fallback).
 //!
 //! This is a disclosed narrowing, not an oversight: `uniffi::Enum` is
 //! all-or-nothing for the whole enum it's derived on, and the real `Intent`
-//! has 49 variants, several carrying `protocol` wire payloads (e.g.
-//! `SendSessionImage(SessionImageSend)`, `SetProviderProfile`'s tristate
-//! writes) that would need their own UniFFI derive rollout disproportionate
-//! to what F3 needs today. Every other boundary type this crate touches
+//! has 49 variants — the ones still excluded here (the DM/Marmot intents,
+//! the DM-image path, a few settings intents) carry payloads that would need
+//! their own UniFFI derive rollout disproportionate to what the driving
+//! milestones have needed so far. Every other boundary type this crate touches
 //! (`CoreEvent`, `ConnectionView`) is the REAL `client_runtime` type — see
 //! that crate's `uniffi` feature — so this file is the one place with
 //! parallel DTOs, and it grows (never shrinks) as later F3/F4 milestones
@@ -20,7 +21,7 @@
 //! al.) rather than a hand-duplicated match — a typo lands as a clear
 //! `UniffiIntentError`, not a silent wrong mapping.
 
-use client_runtime::intent::Intent;
+use client_runtime::intent::{Intent, SessionImageSend};
 use protocol::commands::{KeypressContext, PermissionModifier, ProviderProfileWrite};
 use protocol::common::{EffortLevel, PermissionMode, ProviderModel, SessionBackend};
 use protocol::tristate::Tristate;
@@ -74,6 +75,23 @@ pub enum UniffiIntent {
         session_id: String,
         text: String,
         input_id: String,
+    },
+    /// Attach an image to `session_id`'s next input (CDX-029). The loop
+    /// uploads it to the configured Blossom server through the `UniffiHttpFetch`
+    /// port, falling back to relay chunks, then publishes the `upload-image`
+    /// command — no outbox item, no local echo (the transcript shows it once
+    /// the bridge injects it, like any other output).
+    SendSessionImage {
+        machine: String,
+        session_id: String,
+        /// Caption carried on the input the bridge runs after the upload.
+        text: String,
+        /// Raw image bytes (a Kotlin `ByteArray` across the FFI).
+        image: Vec<u8>,
+        filename: String,
+        /// IANA media type of `image` (e.g. `"image/png"`), forwarded to the
+        /// bridge verbatim — the attachment command carries it as-is.
+        mime_type: String,
     },
     Interrupt {
         machine: String,
@@ -307,6 +325,16 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SendInput { machine, session_id, text, input_id } => {
                 Intent::SendInput { machine, session_id, text, input_id }
             }
+            UniffiIntent::SendSessionImage { machine, session_id, text, image, filename, mime_type } => {
+                Intent::SendSessionImage(SessionImageSend {
+                    machine,
+                    session_id,
+                    text,
+                    image,
+                    filename,
+                    mime_type,
+                })
+            }
             UniffiIntent::Interrupt { machine, session_id } => Intent::Interrupt { machine, session_id },
             UniffiIntent::CloseSession { machine, session_id } => Intent::CloseSession { machine, session_id },
             UniffiIntent::RefreshSessions { machine } => Intent::RefreshSessions { machine },
@@ -451,6 +479,30 @@ mod tests {
                 text: "hi".into(),
                 input_id: "i1".into(),
             }
+        );
+    }
+
+    #[test]
+    fn send_session_image_maps_field_for_field() {
+        let intent = UniffiIntent::SendSessionImage {
+            machine: "m".into(),
+            session_id: "s".into(),
+            text: "look at this".into(),
+            image: vec![0x89, b'P', b'N', b'G'],
+            filename: "cat.png".into(),
+            mime_type: "image/png".into(),
+        };
+        let mapped: Intent = intent.try_into().unwrap();
+        assert_eq!(
+            mapped,
+            Intent::SendSessionImage(SessionImageSend {
+                machine: "m".into(),
+                session_id: "s".into(),
+                text: "look at this".into(),
+                image: vec![0x89, b'P', b'N', b'G'],
+                filename: "cat.png".into(),
+                mime_type: "image/png".into(),
+            })
         );
     }
 
