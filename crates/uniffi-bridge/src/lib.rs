@@ -23,6 +23,7 @@
 //! `NoHttpFetch`), so Blossom image uploads route through the app's own
 //! network stack.
 
+mod android_log;
 pub mod db;
 pub mod intent;
 pub mod notifier;
@@ -244,6 +245,15 @@ pub struct Core {
     join: Mutex<Option<JoinHandle<()>>>,
 }
 
+// TEMPORARY (see `diag.rs`) — proves/disproves a premature Kotlin-side GC of
+// the `Arc<Core>` UniFFI object as the reason the dedicated core thread stops
+// running shortly after construction.
+impl Drop for Core {
+    fn drop(&mut self) {
+        log::info!("Core::drop: uniffi Core object dropped — its dedicated thread is about to see shutdown_rx close");
+    }
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl Core {
     /// Builds the identity, spawns the dedicated core thread, and blocks
@@ -267,6 +277,8 @@ impl Core {
         proxy: Option<String>,
         tor: bool,
     ) -> Result<Arc<Self>, CoreInitError> {
+        android_log::install();
+        log::info!("Core::new: relays={relays:?} tor={tor} proxy={proxy:?} db_path={db_path}");
         let identity = keypair_from_secret_hex(&identity_secret_hex)
             .map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
         let identity_npub = identity.npub.clone();
@@ -278,6 +290,7 @@ impl Core {
         let join = std::thread::Builder::new()
             .name("codedeck-uniffi-core".to_string())
             .spawn(move || {
+                log::debug!("core thread: started");
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -291,10 +304,12 @@ impl Core {
                     let conn = match open_native_db(&db_path) {
                         Ok(conn) => Rc::new(RefCell::new(conn)),
                         Err(e) => {
+                            log::error!("core thread: open_native_db failed: {e}");
                             let _ = ready_tx.send(Err(format!("open native db: {e}")));
                             return;
                         }
                     };
+                    log::debug!("core thread: db opened, spawning RealCore");
                     // Real, persistent Kv + TranscriptStore — pairing,
                     // machines, sessions, settings, and identity all survive
                     // a process restart from here on, instead of resetting on
@@ -311,13 +326,20 @@ impl Core {
                         ..CorePorts::default()
                     };
                     let core = RealCore::spawn(config, ports, observer, clock, entropy).await;
+                    log::info!("core thread: RealCore::spawn ready");
                     let _ = ready_tx.send(Ok(core));
                     // Keep the LocalSet alive (drives the loop/timers/socket
                     // tasks) until `Core::stop()` fires the shutdown signal —
                     // unlike Tauri's `core_init` (whose host process owns the
                     // thread for its whole lifetime), this crate's own tests
-                    // need a clean, joinable teardown.
-                    let _ = shutdown_rx.await;
+                    // need a clean, joinable teardown. Logged because this
+                    // thread ending is exactly what would silently strand
+                    // every relay socket and every future Kotlin call: a
+                    // caller that unexpectedly drops its `Arc<Core>` (see the
+                    // `Drop` impl above) or ever adds an unwanted early
+                    // `Core::stop()` shows up here.
+                    let shutdown_result = shutdown_rx.await;
+                    log::warn!("core thread: shutdown_rx resolved ({shutdown_result:?}) — LocalSet exiting, core is now dead");
                 })
             })
             .map_err(|e| CoreInitError::ThreadSpawn { detail: e.to_string() })?;

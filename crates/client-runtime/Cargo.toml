@@ -37,6 +37,10 @@ client-core = { path = "../client-core" }
 protocol = { path = "../protocol" }
 serde = "1"
 serde_json = "1"
+# Facade only, zero-cost with no backend installed — every binding (Tauri,
+# UniFFI/Android) wires its own backend onto these same call sites; see
+# `crates/uniffi-bridge/src/android_log.rs` for the Android one.
+log = "0.4"
 # TS bindings are generated from these types, not hand-mirrored — see protocol's Cargo.toml.
 specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
 specta-typescript = "0.0.12"

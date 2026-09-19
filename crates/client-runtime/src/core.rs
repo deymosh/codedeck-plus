@@ -708,10 +708,12 @@ impl Loop {
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Start => {
+                    log::info!("core: Start (status was {:?})", self.conn.status);
                     self.dispatch(ConnectionEvent::ConnectRequested);
                     self.arm_stale_watchdog();
                 }
                 Msg::Stop => {
+                    log::info!("core: Stop (status was {:?})", self.conn.status);
                     self.dispatch(ConnectionEvent::DisconnectRequested);
                     abort(&mut self.stale_timer);
                 }
@@ -828,12 +830,18 @@ impl Loop {
     fn apply(&mut self, effect: ConnectionEffect) {
         match effect {
             ConnectionEffect::OpenSocket => {
+                log::info!(
+                    "connection: OpenSocket — dialing {} configured relay(s), proxy={:?}",
+                    self.ws.relay_count(),
+                    self.ws.current_proxy(),
+                );
                 self.ws.ensure_connected();
                 self.nostr.connect();
                 self.start_dm_sub();
                 let _ = self.self_tx.send(Msg::MarmotStart);
             }
             ConnectionEffect::CloseSocket => {
+                log::info!("connection: CloseSocket");
                 self.nostr.disconnect();
                 self.stop_dm_sub();
                 self.stop_marmot_sub();

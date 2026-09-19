@@ -135,9 +135,18 @@ impl WsTransport {
                 .cloned()
                 .collect()
         };
+        log::debug!("ws: ensure_connected — {} relay(s) need a fresh dial: {relays:?}", relays.len());
         for relay in relays {
             self.spawn_relay(relay);
         }
+    }
+
+    /// How many relays this transport was configured with — a boot-time
+    /// sanity check (see the `apply()` call site): zero here with a
+    /// non-empty Settings relay list means the two disagree about what the
+    /// user actually has persisted, not that every dial failed.
+    pub fn relay_count(&self) -> usize {
+        self.state.borrow().relays.len()
     }
 
     /// Relays with a live socket right now — for a per-relay status
@@ -253,13 +262,16 @@ impl WsTransport {
 
     async fn run_relay(self, relay: String, mut rx: mpsc::UnboundedReceiver<Out>) {
         let proxy = self.state.borrow().proxy.clone();
+        log::debug!("ws: dialing {relay} (proxy={proxy:?})");
         let mut ws = match dial(&relay, proxy).await {
             Ok(ws) => ws,
             Err(err) => {
+                log::warn!("ws: dial failed for {relay}: {err}");
                 self.on_relay_dead(&relay, format!("dial failed: {err}"));
                 return;
             }
         };
+        log::info!("ws: {relay} connected");
         self.on_relay_up(&relay);
 
         let mut ping = tokio::time::interval(PING_EVERY);
@@ -321,6 +333,7 @@ impl WsTransport {
     }
 
     fn on_relay_dead(&self, relay: &str, reason: String) {
+        log::info!("ws: {relay} disconnected ({reason})");
         let actions = {
             let mut st = self.state.borrow_mut();
             st.conns.remove(relay);

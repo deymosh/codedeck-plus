@@ -34,6 +34,22 @@ thiserror = "1"
 # feature, just a real embedded SQLite that cross-compiles to Android without
 # a system SQLite dev package.
 rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
+# Every log:: call site in this crate AND in client-runtime/client-core routes
+# through this facade — see `android_log.rs` for who installs the backend.
+log = "0.4"
+
+# `android_log.rs`'s actual logcat backend + panic-to-logcat hook — Android
+# only, so `cargo test` on the host (Linux/Mac/Windows CI, `tests/*.rs`) never
+# links against `liblog.so`.
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+log-panics = { version = "2", features = ["with-backtrace"] }
+
+# Host-side stand-in so the SAME log:: call sites are exercisable under
+# `cargo test -- --nocapture` with `RUST_LOG=debug`, without pulling
+# `android_logger` into a build that will never run on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+env_logger = "0.11"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "test-util"] }

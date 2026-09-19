@@ -31,6 +31,9 @@ pub struct UniffiObserver {
 
 impl CoreObserver for UniffiObserver {
     fn connection_changed(&self, status: ConnectionStatus, needs_pairing_check: bool, connected_relays: &[String]) {
+        log::info!(
+            "connection_changed: status={status:?} needs_pairing_check={needs_pairing_check} connected_relays={connected_relays:?}"
+        );
         self.listener
             .connection_changed(ConnectionView::new(status, needs_pairing_check, connected_relays.to_vec()));
     }
@@ -43,6 +46,7 @@ impl CoreObserver for UniffiObserver {
     fn bridge_message(&self, _machine: String, _msg: BridgeToPhone) {}
 
     fn action_failed(&self, kind: ActionFailedKind) {
+        log::warn!("action_failed: {kind:?}");
         self.listener.action_failed(kind);
     }
 
