@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -352,9 +353,14 @@ private fun SwipeToDeleteSessionCard(
         backgroundContent = {
             // Full-width danger panel behind the card; "Delete" hugs the
             // right edge and is revealed as the opaque card slides left.
+            // Clipped to the SAME corner radius as `SessionCard` below —
+            // without it, this panel's sharp corners peeked out from behind
+            // the card's rounded ones as a thin red outline even at rest,
+            // fully swiped away or not (device-observed 2026-09-19).
             Row(
                 Modifier
                     .fillMaxSize()
+                    .clip(RoundedCornerShape(Tokens.RadiusMd))
                     .background(Tokens.Danger),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
@@ -398,9 +404,18 @@ private fun SessionCard(
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
         Box(
+            // Full-height, fixed-WIDTH accent bar — modifier order matters
+            // here: `.size(3.dp)` sets an exact 3x3dp box outright, and a
+            // `.fillMaxHeight()` chained after it has nothing left to
+            // stretch (the enclosing `.size()` already fixed both
+            // dimensions). The result was a tiny 3dp square floating
+            // mid-row instead of a bar spanning the card (device-observed
+            // 2026-09-19, the odd gray dot between the title and subtitle
+            // lines). `.fillMaxHeight()` first, `.width()` after, is the
+            // standard Compose idiom for a row-height divider/accent bar.
             Modifier
-                .size(3.dp)
                 .fillMaxHeight()
+                .width(3.dp)
                 .background(stateColor(session.state)),
         )
         Column(Modifier.weight(1f)) {
