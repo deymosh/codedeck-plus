@@ -16,6 +16,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -26,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -737,6 +738,22 @@ private fun SessionHeaderRow1(
         // Boxed like the reference's `.header .boxed` badges (CDX-045: the
         // top bar speaks in rectangular chips, not plain inline text) —
         // was bare muted text here with no visual weight of its own.
+        //
+        // Kept deliberately, despite crowding the model chip on long model
+        // names: this is the phone↔relay SOCKET state (`ConnectionStatus` in
+        // `apps/mobile/src/core/stores/connection.ts`: idle / connecting /
+        // connected / waiting-retry / offline / stopped), which carries
+        // information the session's own `state` pill above genuinely does
+        // not — `state` describes the bridge-side session process, so a
+        // session can read "running" while the relay link is down and every
+        // transcript row on screen is local cache (`crates/uniffi-bridge`'s
+        // views serve the machines store; nothing about viewing this screen
+        // requires a live connection). The reference keeps this same chip in
+        // its own header (`SessionScreen.tsx` renders `{connectionStatus}`
+        // right after the cwd span), and on a phone it is the ONLY
+        // relay-health surface in view: the sidebar's `connection:` banner
+        // lives in the navigation drawer, which `Shell.kt` closes the moment
+        // a session is opened (narrow layout).
         Text(
             connectionStatus ?: "…",
             color = Tokens.TextDim,
@@ -749,41 +766,16 @@ private fun SessionHeaderRow1(
         if (model != null) {
             // Port of the reference's `.ctxBox`: model tag (accent, bold) and
             // context (muted, dimmer) are two SEPARATE Texts in one bordered
-            // chip, not one interpolated string. They used to share a single
-            // Text's ellipsis budget — a long custom-provider label (`Z.ai
-            // (Global) - Coding Plan/glm-5.3-flash`) filled it entirely and
-            // silently ate the context suffix along with it, so context
-            // never showed on a session with a long model name
-            // (device-observed 2026-09-19). Each piece now truncates on its
-            // own: a long model name can no longer crowd context out.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.Text.copy(alpha = 0.03f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            ) {
-                Text(
-                    model,
-                    color = Tokens.Accent,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = Tokens.TextXs,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 90.dp),
-                )
-                contextBadge(contextPercentage, contextWindow)?.let { ctx ->
-                    Text(
-                        " · $ctx",
-                        color = Tokens.TextMuted,
-                        fontSize = Tokens.TextXs,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 110.dp),
-                    )
-                }
-            }
+            // chip, not one interpolated string sharing a single Text's
+            // ellipsis budget — a long custom-provider label (`Z.ai (Global)
+            // - Coding Plan/glm-5.3-flash`) used to fill it entirely and
+            // silently eat the context suffix along with it
+            // (device-observed 2026-09-19).
+            ModelContextChip(
+                model = model,
+                contextPercentage = contextPercentage,
+                contextWindow = contextWindow,
+            )
         }
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {
@@ -1005,6 +997,123 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
             fontSize = Tokens.TextSm,
             modifier = Modifier.clickable { onRespond(false) }.padding(Tokens.Space2),
         )
+    }
+}
+
+// --- Compact model tag for the header badge (port of
+// `apps/mobile/src/ui/modelLabel.ts`, itself the old app's `modelLabel`):
+// the ctxBox shares a narrow header row with the cwd, the connection chip
+// and the usage box, so the model shows as a terse tag ("O5", "S4.6") rather
+// than the SDK's raw id.
+
+/** Known model id → compact tag — `modelLabel.ts`'s TAGS table. */
+private val MODEL_TAGS = listOf(
+    "claude-opus-5" to "O5",
+    "claude-opus-4-8" to "O4.8",
+    "claude-opus-4-7" to "O4.7",
+    "claude-sonnet-5" to "S5",
+    "claude-sonnet-4-6" to "S4.6",
+    "claude-haiku-4-5-20251001" to "H4.5",
+    "claude-fable-5" to "F5",
+)
+
+/** `claude-opus-5[1m]` / `claude-opus-5-1m` → `claude-opus-5`: the 1M-ness
+ *  is already legible in the context figure beside the tag (`90k/1M`). */
+private fun stripContextMarker(id: String): String = id
+    .replace(Regex("\\[1m]", RegexOption.IGNORE_CASE), "")
+    .replace(Regex("-1m\\b", RegexOption.IGNORE_CASE), "")
+
+/**
+ * Compact tag for a model id; `?` when the session has no model recorded —
+ * honest rather than guessing. Known ids map through [MODEL_TAGS]; an
+ * unknown/custom model (a provider profile's id, a new release) gets its
+ * `claude-` vendor prefix and any `-YYYYMMDD` date suffix stripped. Non-
+ * claude ids (an OpenCode `<provider>/<model>` id, for one) pass through
+ * UNCHANGED — the header pairs this with the chip's marquee below for
+ * exactly those.
+ */
+internal fun modelLabel(id: String?): String {
+    if (id.isNullOrEmpty()) return "?"
+    val base = stripContextMarker(id)
+    MODEL_TAGS.firstOrNull { (modelId) -> modelId == base }?.let { return it.second }
+    return base.replace(Regex("^claude-"), "").replace(Regex("-\\d{8}$"), "")
+}
+
+/**
+ * The header's model+context chip — port of the reference's `.ctxBox`
+ * (model tag accent/bold, then the `pct% · used/window` figure, muted).
+ *
+ * The model tag renders [modelLabel], the reference's own header convention
+ * (`SessionScreen.tsx` shows `modelLabel(…)`, not the raw id) — claude ids
+ * collapse to tags like O5/S4.6 outright. But modelLabel deliberately passes
+ * NON-claude ids through unchanged (the custom-provider label above has no
+ * `claude-` prefix and no date suffix, so it comes back at full length), so
+ * the tag carries `basicMarquee` — inert on a short tag, scrolling only a
+ * genuinely-overflowing long one.
+ *
+ * The sizing policy is a hand-rolled [Layout] rather than a `Row` because
+ * it is a PRIORITY, not a split: the context figure is what the user reads,
+ * so its Text measures FIRST at its full intrinsic width and never
+ * truncates; the model tag gets whatever width is left (bounded, marquee
+ * takes over). A `Row` cannot express this — plain children split by
+ * measurement order (both truncate when tight: the long-model case squeezed
+ * context to a fragment even while it marqueed, device-observed
+ * 2026-09-19), and `weight(1f)` on the tag would make this chip itself
+ * expand to all leftover header width (a Row with a weighted child fills
+ * its constraints), starving the weighted `cwd` next to it. The chip stays
+ * wrap-content: its measured width is exactly the two children plus
+ * padding, whatever that comes to.
+ */
+@Composable
+private fun ModelContextChip(
+    model: String,
+    contextPercentage: Double?,
+    contextWindow: Long?,
+) {
+    Layout(
+        content = {
+            Text(
+                modelLabel(model),
+                color = Tokens.Accent,
+                fontWeight = FontWeight.Bold,
+                fontSize = Tokens.TextXs,
+                maxLines = 1,
+                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE),
+            )
+            contextBadge(contextPercentage, contextWindow)?.let { ctx ->
+                Text(
+                    " · $ctx",
+                    color = Tokens.TextMuted,
+                    fontSize = Tokens.TextXs,
+                    maxLines = 1,
+                )
+            }
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(Tokens.RadiusSm))
+            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
+            .background(Tokens.Text.copy(alpha = 0.03f)),
+    ) { measurables, constraints ->
+        val hpad = 6.dp.roundToPx()
+        val vpad = 2.dp.roundToPx()
+        val inner = (constraints.maxWidth - hpad * 2).coerceAtLeast(0)
+        // Context (the second child, when the badge produced one) measures
+        // first at its full intrinsic width — it never truncates.
+        val contextPlaceable = measurables.getOrNull(1)
+            ?.measure(constraints.copy(minWidth = 0, maxWidth = inner))
+        val contextWidth = contextPlaceable?.width ?: 0
+        // The model tag gets whatever is left, where the marquee takes over
+        // instead of an ellipsis.
+        val modelMaxWidth = (inner - contextWidth).coerceAtLeast(0)
+        val modelPlaceable = measurables[0].measure(
+            constraints.copy(minWidth = 0, maxWidth = modelMaxWidth),
+        )
+        val width = modelPlaceable.width + contextWidth + hpad * 2
+        val height = maxOf(modelPlaceable.height, contextPlaceable?.height ?: 0) + vpad * 2
+        layout(width, height) {
+            modelPlaceable.place(hpad, vpad)
+            contextPlaceable?.place(hpad + modelPlaceable.width, vpad)
+        }
     }
 }
 
