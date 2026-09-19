@@ -23,11 +23,14 @@
 //! `NoHttpFetch`), so Blossom image uploads route through the app's own
 //! network stack.
 
+pub mod db;
 pub mod intent;
 pub mod notifier;
 pub mod observer;
 pub mod views;
 
+use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -40,6 +43,8 @@ use client_runtime::{
 };
 use protocol::crypto::keypair_from_secret_hex;
 use tokio::sync::oneshot;
+
+use db::{open_native_db, KvSqlite, TranscriptStoreSqlite};
 
 pub use intent::{UniffiIntent, UniffiIntentError};
 pub use notifier::UniffiNotifier;
@@ -198,6 +203,8 @@ pub enum CoreInitError {
     BadIdentity { detail: String },
     #[error("core thread failed to start: {detail}")]
     ThreadSpawn { detail: String },
+    #[error("failed to open the local database: {detail}")]
+    DbOpen { detail: String },
 }
 
 #[derive(uniffi::Object)]
@@ -214,19 +221,30 @@ impl Core {
     /// (this call is sync — Kotlin sees a plain constructor, not a suspend
     /// fun) until the real `client_runtime::Core` has hydrated and is ready.
     #[uniffi::constructor]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         relays: Vec<String>,
         identity_secret_hex: String,
         listener: Arc<dyn CoreListener>,
         notifier: Arc<dyn UniffiNotifier>,
         http: Option<Arc<dyn UniffiHttpFetch>>,
+        // Absolute path to the app's SQLite file — Kotlin resolves this via
+        // `Context.getDatabasePath`, same role as `corebridge.rs`'s
+        // `AppHandle::path().app_config_dir()`. Opened on the dedicated core
+        // thread below (`rusqlite::Connection` isn't `Send`), not here.
+        db_path: String,
+        // SOCKS5 `host:port` (Orbot) — `None`/`tor: false` at first boot
+        // before Settings has ever been touched.
+        proxy: Option<String>,
+        tor: bool,
     ) -> Result<Arc<Self>, CoreInitError> {
         let identity = keypair_from_secret_hex(&identity_secret_hex)
             .map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
         let identity_npub = identity.npub.clone();
-        let config = CoreConfig::new(relays, identity, None, false);
+        let config = CoreConfig::new(relays, identity, proxy, tor);
+        let db_path = PathBuf::from(db_path);
 
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<RealCore>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<RealCore, String>>();
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let join = std::thread::Builder::new()
             .name("codedeck-uniffi-core".to_string())
@@ -240,7 +258,22 @@ impl Core {
                     let observer: Rc<dyn CoreObserver> = Rc::new(UniffiObserver { listener });
                     let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                     let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
+
+                    let conn = match open_native_db(&db_path) {
+                        Ok(conn) => Rc::new(RefCell::new(conn)),
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(format!("open native db: {e}")));
+                            return;
+                        }
+                    };
+                    // Real, persistent Kv + TranscriptStore — pairing,
+                    // machines, sessions, settings, and identity all survive
+                    // a process restart from here on, instead of resetting on
+                    // every app relaunch the way `CorePorts::default()`'s
+                    // in-memory stand-ins did.
                     let ports = CorePorts {
+                        kv: Rc::new(KvSqlite::new(conn.clone())),
+                        transcript_store: Rc::new(TranscriptStoreSqlite::new(conn)),
                         notifier: Rc::new(NotifierAdapter { notifier }),
                         http: match http {
                             Some(cb) => Rc::new(HttpFetchAdapter(cb)),
@@ -249,7 +282,7 @@ impl Core {
                         ..CorePorts::default()
                     };
                     let core = RealCore::spawn(config, ports, observer, clock, entropy).await;
-                    let _ = ready_tx.send(core);
+                    let _ = ready_tx.send(Ok(core));
                     // Keep the LocalSet alive (drives the loop/timers/socket
                     // tasks) until `Core::stop()` fires the shutdown signal —
                     // unlike Tauri's `core_init` (whose host process owns the
@@ -262,7 +295,8 @@ impl Core {
 
         let handle = ready_rx
             .recv()
-            .map_err(|_| CoreInitError::ThreadSpawn { detail: "core thread exited before it was ready".into() })?;
+            .map_err(|_| CoreInitError::ThreadSpawn { detail: "core thread exited before it was ready".into() })?
+            .map_err(|detail| CoreInitError::DbOpen { detail })?;
 
         Ok(Arc::new(Self {
             handle,
@@ -391,14 +425,26 @@ mod tests {
         fn cancel(&self, _tag: String) {}
     }
 
+    /// `_dir` must outlive the `Core` under test — dropping it early deletes
+    /// the file the core thread's `rusqlite::Connection` still has open.
+    fn temp_db_path() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("codedeck-test.db");
+        (dir, path.to_string_lossy().into_owned())
+    }
+
     #[test]
     fn identity_npub_is_the_bech32_form_of_the_constructor_identity() {
+        let (_dir, db_path) = temp_db_path();
         let core = Core::new(
             vec![],
             SEC_PHONE.to_string(),
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
+            db_path,
+            None,
+            false,
         )
         .expect("core spawns");
         let expected = keypair_from_secret_hex(SEC_PHONE).unwrap();
@@ -408,5 +454,56 @@ mod tests {
         assert_eq!(npub, expected.npub);
 
         core.shutdown();
+    }
+
+    /// The whole point of a real (not `CorePorts::default()`'s in-memory)
+    /// `Kv`: a relay added in one process lifetime is still there after the
+    /// app (and its `Core`) restarts, against the same db file.
+    #[tokio::test]
+    async fn settings_persist_across_a_restart_against_the_same_db_file() {
+        let (_dir, db_path) = temp_db_path();
+        let core = Core::new(
+            vec!["wss://relay-a.example".to_string()],
+            SEC_PHONE.to_string(),
+            Arc::new(NoopListener),
+            Arc::new(NoopTestNotifier),
+            None,
+            db_path.clone(),
+            None,
+            false,
+        )
+        .expect("core spawns");
+
+        core.dispatch(UniffiIntent::AddRelay { url: "wss://relay-b.example".to_string() })
+            .await
+            .expect("dispatch succeeds");
+        // The store's persist-to-kv runs on the core's own loop, not inline
+        // with `dispatch`'s send — give it a moment before tearing the core
+        // down under it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        core.shutdown();
+
+        let core2 = Core::new(
+            // Deliberately a DIFFERENT relay list than what's persisted — a
+            // real device only ever passes `db_path`'s own settings.relays at
+            // boot, but this proves the persisted value wins over whatever
+            // the constructor argument says once a db file already exists.
+            vec!["wss://relay-a.example".to_string()],
+            SEC_PHONE.to_string(),
+            Arc::new(NoopListener),
+            Arc::new(NoopTestNotifier),
+            None,
+            db_path,
+            None,
+            false,
+        )
+        .expect("core re-spawns against the same db");
+        let settings = core2.settings_view().await.expect("settings hydrated from the db");
+        assert!(
+            settings.relays.iter().any(|r| r == "wss://relay-b.example"),
+            "{:?}",
+            settings.relays
+        );
+        core2.shutdown();
     }
 }

@@ -53,15 +53,27 @@ fn fresh_identity_hex() -> String {
     protocol::crypto::generate_keypair().secret_hex()
 }
 
+/// `TempDir` must outlive the `Core` under test — dropping it early deletes
+/// the file the core thread's `rusqlite::Connection` still has open.
+fn temp_db_path() -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("codedeck-test.db");
+    (dir, path.to_string_lossy().into_owned())
+}
+
 #[test]
 fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
     let listener = Arc::new(RecordingListener::default());
+    let (_dir, db_path) = temp_db_path();
     let core = Core::new(
         vec![],
         fresh_identity_hex(),
         listener.clone(),
         Arc::new(NoopNotifier),
         None,
+        db_path,
+        None,
+        false,
     )
     .expect("core spawns");
 
@@ -107,6 +119,7 @@ fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
 #[test]
 fn dropping_an_in_flight_dispatch_future_does_not_lose_the_intent() {
     let listener = Arc::new(RecordingListener::default());
+    let (_dir, db_path) = temp_db_path();
     let core = Arc::new(
         Core::new(
             vec![],
@@ -114,6 +127,9 @@ fn dropping_an_in_flight_dispatch_future_does_not_lose_the_intent() {
             listener.clone(),
             Arc::new(NoopNotifier),
             None,
+            db_path,
+            None,
+            false,
         )
         .expect("core spawns"),
     );

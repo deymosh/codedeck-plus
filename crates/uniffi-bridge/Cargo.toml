@@ -29,9 +29,15 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync", "ti
 serde = "1"
 serde_json = "1"
 thiserror = "1"
+# Plain `bundled` (no SQLCipher/OpenSSL) — this port stores no Marmot/MLS
+# key material, so it doesn't need `client-core`'s `bundled-sqlcipher-vendored-openssl`
+# feature, just a real embedded SQLite that cross-compiles to Android without
+# a system SQLite dev package.
+rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "test-util"] }
+tempfile = "3"
 
 # Generates the Kotlin bindings (library mode — reads the already-built
 # cdylib's embedded metadata, no `.udl`):
