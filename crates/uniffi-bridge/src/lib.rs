@@ -43,15 +43,30 @@ pub use observer::CoreListener;
 use observer::UniffiObserver;
 pub use views::{
     UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,
-    UniffiQuickPromptsView, UniffiSettingsView, UniffiTranscriptRowsView, UniffiUiView,
+    UniffiPendingSessionsView, UniffiQuickPromptsView, UniffiSettingsView, UniffiTranscriptRowsView,
+    UniffiUiView,
 };
 use views::{
     build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_pairing_view,
-    build_uniffi_quick_prompts_view, build_uniffi_settings_view, build_uniffi_transcript_view,
-    build_uniffi_ui_view, responded_cards_for,
+    build_uniffi_pending_sessions_view, build_uniffi_quick_prompts_view, build_uniffi_settings_view,
+    build_uniffi_transcript_view, build_uniffi_ui_view, responded_cards_for,
 };
 
 uniffi::setup_scaffolding!();
+
+/// CDX-071 gate for a custom provider's base URL, exposed as a plain
+/// function so Android validates against the same rule the bridge itself
+/// enforces rather than a hand-duplicated regex.
+#[uniffi::export]
+fn is_valid_provider_base_url(raw: String) -> bool {
+    protocol::common::is_valid_provider_base_url(&raw)
+}
+
+/// The error string to show next to [`is_valid_provider_base_url`]'s gate.
+#[uniffi::export]
+fn provider_base_url_error() -> String {
+    protocol::common::PROVIDER_BASE_URL_ERROR.to_string()
+}
 
 /// Returned by `Core::new` when the supplied identity secret doesn't parse —
 /// the one thing that can go wrong before the background thread even starts.
@@ -179,6 +194,13 @@ impl Core {
 
     pub async fn quick_prompts_view(&self) -> UniffiQuickPromptsView {
         build_uniffi_quick_prompts_view(&self.handle.quick_prompts_view().await)
+    }
+
+    /// The two-phase session-creation placeholders — "starting…" cards and
+    /// their failure states. Not persisted; re-fetch after a
+    /// `CoreEvent` state change touching this slice.
+    pub async fn pending_sessions_view(&self) -> UniffiPendingSessionsView {
+        build_uniffi_pending_sessions_view(&self.handle.pending_sessions_view().await)
     }
 
     pub async fn pairing_view(&self) -> Option<UniffiPairingView> {

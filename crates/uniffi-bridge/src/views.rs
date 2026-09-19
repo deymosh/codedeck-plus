@@ -3,11 +3,16 @@
 //! UniFFI's `Record` derive needs concrete, homogeneously-typed fields, but
 //! several real view types either carry arbitrary JSON
 //! (`TranscriptRowView.entry` is `serde_json::Value` — `OutputEntry.metadata`
-//! is genuinely untyped bridge-supplied JSON) or fields the first Android
-//! slice has no screen for yet (`UiView`'s credentials/device-config/
-//! provider-profile/undo-toast bookkeeping is Settings/Credentials/Pairing
-//! territory, F4). (`SettingsData`'s `mesh_test_target` is likewise left
-//! out — Mesh is F6, off by default, out of this slice's scope.) Rather
+//! is genuinely untyped bridge-supplied JSON) or fields no Android screen has
+//! a use for yet (`UiView`'s device-config map is Mesh territory — the
+//! `SetDeviceConfig` test loop — deferred with the rest of it;
+//! `SettingsData`'s `mesh_test_target` likewise — Mesh is F6, off by default,
+//! out of this crate's scope). The rest of `UiView` this surface needs IS
+//! projected: the credentials/provider-profile status maps — see
+//! `UniffiCredentialsAck`/`UniffiProviderProfileAck` below — and the undo
+//! toast + unread set — see `UniffiUndoToast`/`UniffiUiView.unread_sessions`
+//! (the undo toast is the delete-controller's, nothing to do with Mesh).
+//! Rather
 //! than deriving `uniffi::Record` on those real types
 //! — which would drag every transitive field into the FFI surface whether a
 //! screen exists for it or not — this module hand-builds a small,
@@ -33,7 +38,11 @@ use client_runtime::client_core::notifications::session_key_of;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, SeqEntry,
 };
-use client_runtime::{MachinesView, OutboxView, PairingView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView};
+use client_runtime::{
+    MachinesView, OutboxView, PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
+    TranscriptRowsView, UiView,
+};
+use protocol::common::{GsdAction, GsdExecution, GsdPhase, GsdState, UsageData, UsageWindow};
 
 /// Renders any `Copy` wire enum (all `#[serde(rename_all = ...)]`, no data)
 /// to its exact wire spelling by reusing the real `Serialize` impl, the same
@@ -69,6 +78,174 @@ pub struct UniffiSessionSummary {
     pub context_window: Option<u64>,
     pub committed: Option<bool>,
     pub seq_high: Option<u64>,
+    /// Usage snapshot (5h/7d limits, cost) — requested via
+    /// `UniffiIntent::RequestUsage`, absent until the bridge answers.
+    pub usage: Option<UniffiUsageData>,
+    /// GSD workflow state — requested via `UniffiIntent::RequestGsd`,
+    /// absent until the bridge answers.
+    pub gsd: Option<UniffiGsdState>,
+}
+
+/// One usage-limit window (5h / 7d / …) — mirrors
+/// `protocol::common::UsageWindow` field for field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiUsageWindow {
+    /// 0.0..=1.0; `None` when the bridge has no number.
+    pub utilization: Option<f64>,
+    /// When the window resets (the wire's own timestamp spelling).
+    pub resets_at: Option<String>,
+}
+
+/// A session's usage snapshot — mirrors `protocol::common::UsageData` field
+/// for field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiUsageData {
+    pub available: bool,
+    pub subscription_type: Option<String>,
+    pub five_hour: Option<UniffiUsageWindow>,
+    pub seven_day: Option<UniffiUsageWindow>,
+    pub seven_day_opus: Option<UniffiUsageWindow>,
+    pub seven_day_sonnet: Option<UniffiUsageWindow>,
+    pub session_cost_usd: Option<f64>,
+    pub fetched_at: String,
+}
+
+/// One GSD workflow phase — mirrors `protocol::common::GsdPhase` field for
+/// field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiGsdPhase {
+    pub number: String,
+    pub name: String,
+    pub disk_status: String,
+    pub plans: u64,
+    pub summaries: u64,
+    pub recently_touched: bool,
+    pub action: Option<String>,
+    pub command: Option<String>,
+    pub plan_count: Option<i64>,
+    pub needs_you: Option<i64>,
+}
+
+/// GSD's in-flight execution line — mirrors `protocol::common::GsdExecution`
+/// field for field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiGsdExecution {
+    pub phase: String,
+    pub plans_total: u64,
+    pub plans_done: u64,
+    pub current_plan: Option<String>,
+    pub tasks_done: u64,
+    pub tasks_total: Option<i64>,
+    pub last_task: Option<String>,
+}
+
+/// One GSD recovery/action chip — mirrors `protocol::common::GsdAction`
+/// field for field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiGsdAction {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+    pub recommended: bool,
+}
+
+/// A session's GSD workflow state — mirrors `protocol::common::GsdState`
+/// field for field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiGsdState {
+    pub installed: bool,
+    pub available: bool,
+    pub has_git: bool,
+    pub situation: String,
+    pub summary: String,
+    pub milestone: Option<String>,
+    pub current_phase: Option<String>,
+    pub total_phases: Option<i64>,
+    pub percent: f64,
+    pub phases: Vec<UniffiGsdPhase>,
+    pub actions: Vec<UniffiGsdAction>,
+    pub recommended: Option<String>,
+    pub paused: bool,
+    pub blockers: Vec<String>,
+    pub verify_failed: bool,
+    pub execution: Option<UniffiGsdExecution>,
+}
+
+fn to_uniffi_usage_window(w: &UsageWindow) -> UniffiUsageWindow {
+    UniffiUsageWindow {
+        utilization: w.utilization,
+        resets_at: w.resets_at.clone(),
+    }
+}
+
+fn to_uniffi_usage_data(u: &UsageData) -> UniffiUsageData {
+    UniffiUsageData {
+        available: u.available,
+        subscription_type: u.subscription_type.clone(),
+        five_hour: u.five_hour.as_ref().map(to_uniffi_usage_window),
+        seven_day: u.seven_day.as_ref().map(to_uniffi_usage_window),
+        seven_day_opus: u.seven_day_opus.as_ref().map(to_uniffi_usage_window),
+        seven_day_sonnet: u.seven_day_sonnet.as_ref().map(to_uniffi_usage_window),
+        session_cost_usd: u.session_cost_usd,
+        fetched_at: u.fetched_at.clone(),
+    }
+}
+
+fn to_uniffi_gsd_phase(p: &GsdPhase) -> UniffiGsdPhase {
+    UniffiGsdPhase {
+        number: p.number.clone(),
+        name: p.name.clone(),
+        disk_status: p.disk_status.clone(),
+        plans: p.plans,
+        summaries: p.summaries,
+        recently_touched: p.recently_touched,
+        action: p.action.clone(),
+        command: p.command.clone(),
+        plan_count: p.plan_count,
+        needs_you: p.needs_you,
+    }
+}
+
+fn to_uniffi_gsd_execution(e: &GsdExecution) -> UniffiGsdExecution {
+    UniffiGsdExecution {
+        phase: e.phase.clone(),
+        plans_total: e.plans_total,
+        plans_done: e.plans_done,
+        current_plan: e.current_plan.clone(),
+        tasks_done: e.tasks_done,
+        tasks_total: e.tasks_total,
+        last_task: e.last_task.clone(),
+    }
+}
+
+fn to_uniffi_gsd_action(a: &GsdAction) -> UniffiGsdAction {
+    UniffiGsdAction {
+        id: a.id.clone(),
+        label: a.label.clone(),
+        command: a.command.clone(),
+        recommended: a.recommended,
+    }
+}
+
+fn to_uniffi_gsd_state(g: &GsdState) -> UniffiGsdState {
+    UniffiGsdState {
+        installed: g.installed,
+        available: g.available,
+        has_git: g.has_git,
+        situation: g.situation.clone(),
+        summary: g.summary.clone(),
+        milestone: g.milestone.clone(),
+        current_phase: g.current_phase.clone(),
+        total_phases: g.total_phases,
+        percent: g.percent,
+        phases: g.phases.iter().map(to_uniffi_gsd_phase).collect(),
+        actions: g.actions.iter().map(to_uniffi_gsd_action).collect(),
+        recommended: g.recommended.clone(),
+        paused: g.paused,
+        blockers: g.blockers.clone(),
+        verify_failed: g.verify_failed,
+        execution: g.execution.as_ref().map(to_uniffi_gsd_execution),
+    }
 }
 
 /// One selectable model, as reported by either backend's live SDK
@@ -156,6 +333,8 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             context_window: info.context_window,
                             committed: info.committed,
                             seq_high: info.seq_high,
+                            usage: s.usage.as_ref().map(to_uniffi_usage_data),
+                            gsd: s.gsd.as_ref().map(to_uniffi_gsd_state),
                         }
                     })
                     .collect(),
@@ -231,19 +410,66 @@ pub fn build_uniffi_outbox_view(v: &OutboxView) -> UniffiOutboxView {
 
 // --- ui (selection + optimistic card bookkeeping this slice needs) ---------
 
+/// Fire-and-answer round-trip ack for `SetCredentials` (CDX-011) — mirrors
+/// `client_core::stores::ui::CredentialsAck` field for field. `state` is
+/// `"saving"` / `"saved"` / `"failed"`, the same wire spelling `wire_str`
+/// gives every other status enum crossing this boundary.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiCredentialsAck {
+    pub state: String,
+    pub at: u64,
+    pub has_anthropic_key: Option<bool>,
+    pub has_github_pat: Option<bool>,
+    pub key_valid: Option<bool>,
+    pub error: Option<String>,
+}
+
+/// Fire-and-answer round-trip ack for `SetProviderProfile` (CDX-062) —
+/// mirrors `client_core::stores::ui::ProviderProfileAck` field for field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiProviderProfileAck {
+    pub state: String,
+    pub at: u64,
+    pub profile_id: Option<String>,
+    pub token_valid: Option<bool>,
+    pub error: Option<String>,
+}
+
+/// The bottom "Deleted X — Undo" toast after an optimistic session delete —
+/// mirrors `client_core::stores::ui::UndoToast` field for field. Present
+/// only while the 4 s undo window is open; the hide lands as the next
+/// `UniffiUiView` re-fetch (the countdown itself belongs to the runtime's
+/// delete controller, not to this projection).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiUndoToast {
+    pub machine: String,
+    pub session_id: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiUiView {
     pub selected_machine: Option<String>,
     pub selected_session: Option<String>,
+    /// Session keys with an unread dot — same `machine + " " + sessionId`
+    /// format `session_key_of` produces.
+    pub unread_sessions: Vec<String>,
     /// `sessionKey (machine + " " + sessionId)` -> responded card ids.
     pub responded_cards: HashMap<String, Vec<String>>,
     pub plan_approval_choices: HashMap<String, String>,
+    /// Keyed by machine pubkey.
+    pub credentials_status: HashMap<String, UniffiCredentialsAck>,
+    /// Keyed by machine pubkey.
+    pub provider_profile_status: HashMap<String, UniffiProviderProfileAck>,
+    /// Present while a delete's undo window is open.
+    pub undo_toast: Option<UniffiUndoToast>,
 }
 
 pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
     UniffiUiView {
         selected_machine: v.selected_machine.clone(),
         selected_session: v.selected_session.clone(),
+        unread_sessions: v.unread_sessions.iter().cloned().collect(),
         responded_cards: v
             .responded_cards
             .iter()
@@ -254,6 +480,44 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
             .iter()
             .map(|(k, val)| (k.clone(), val.clone()))
             .collect(),
+        credentials_status: v
+            .credentials_status
+            .iter()
+            .map(|(k, a)| {
+                (
+                    k.clone(),
+                    UniffiCredentialsAck {
+                        state: wire_str(&a.state),
+                        at: a.at,
+                        has_anthropic_key: a.has_anthropic_key,
+                        has_github_pat: a.has_github_pat,
+                        key_valid: a.key_valid,
+                        error: a.error.clone(),
+                    },
+                )
+            })
+            .collect(),
+        provider_profile_status: v
+            .provider_profile_status
+            .iter()
+            .map(|(k, a)| {
+                (
+                    k.clone(),
+                    UniffiProviderProfileAck {
+                        state: wire_str(&a.state),
+                        at: a.at,
+                        profile_id: a.profile_id.clone(),
+                        token_valid: a.token_valid,
+                        error: a.error.clone(),
+                    },
+                )
+            })
+            .collect(),
+        undo_toast: v.undo_toast.clone().map(|t| UniffiUndoToast {
+            machine: t.machine,
+            session_id: t.session_id,
+            label: t.label,
+        }),
     }
 }
 
@@ -312,6 +576,56 @@ pub fn build_uniffi_quick_prompts_view(v: &QuickPromptsView) -> UniffiQuickPromp
             .prompts
             .iter()
             .map(|p| UniffiQuickPrompt { id: p.id.clone(), label: p.label.clone(), text: p.text.clone() })
+            .collect(),
+    }
+}
+
+// --- pending sessions -------------------------------------------------------
+
+/// One optimistic new-session placeholder — mirrors
+/// `client_core::stores::pending_sessions::PendingSessionView` field for
+/// field. The bridge publishes `session-pending` on create and resolves the
+/// placeholder with `session-ready`; a `session-failed` flips it to a
+/// visible error card that stays until the user dismisses it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPendingSession {
+    pub pending_id: String,
+    /// Machine pubkey hex (`""` for a failure we saw no `session-pending` for).
+    pub machine: String,
+    /// Machine display name from the message (not the pubkey).
+    pub machine_name: String,
+    pub created_at: String,
+    /// `pending` / `failed`.
+    pub state: String,
+    /// Set once `state == "failed"`.
+    pub reason: Option<String>,
+    /// ms timestamp the placeholder appeared (sweep bookkeeping).
+    pub seen_at: u64,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPendingSessionsView {
+    /// Every held placeholder, in the real view's `pending_id`-keyed
+    /// `BTreeMap` order. Not persisted (a placeholder that never resolves is
+    /// meaningless after a restart) — a state-changed notification for this
+    /// slice is the only signal a consumer gets that it changed.
+    pub pending: Vec<UniffiPendingSession>,
+}
+
+pub fn build_uniffi_pending_sessions_view(v: &PendingSessionsView) -> UniffiPendingSessionsView {
+    UniffiPendingSessionsView {
+        pending: v
+            .pending
+            .values()
+            .map(|p| UniffiPendingSession {
+                pending_id: p.pending_id.clone(),
+                machine: p.machine.clone(),
+                machine_name: p.machine_name.clone(),
+                created_at: p.created_at.clone(),
+                state: wire_str(&p.state),
+                reason: p.reason.clone(),
+                seen_at: p.seen_at,
+            })
             .collect(),
     }
 }

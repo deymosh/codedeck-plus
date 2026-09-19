@@ -37,30 +37,39 @@ import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
+import uniffi.uniffi_bridge.UniffiCredentialsAck
 import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.uniffi_bridge.UniffiMachineSummary
+import uniffi.uniffi_bridge.UniffiProviderProfileAck
 import uniffi.uniffi_bridge.UniffiQuickPrompt
 import uniffi.uniffi_bridge.UniffiSettingsView
+import uniffi.uniffi_bridge.UniffiUiView
 import java.util.UUID
 
 /** The complete default-mode set — `PermissionMode`'s own wire spellings. */
 private val MODE_OPTIONS = listOf("default", "acceptEdits", "plan")
+
+/** Same capability string `NewSessionScreen.kt` gates its own provider picker
+ *  on — duplicated per-file rather than shared, matching that file's own
+ *  precedent (this codebase has no shared capability-constants file yet). */
+private const val CAP_CUSTOM_PROVIDERS = "custom-providers"
 
 /**
  * F4.1.5 — the settings screen, rendered as a full-screen replacement the
  * shell swaps in (not an overlay): port of `apps/mobile/src/ui/screens/
  * SettingsScreen.tsx`'s global-preference surface — UI scale, defaults for
  * new sessions, notifications/badges, stay-connected, Orbot routing, the
- * blossom server, the quick-prompt editor, and relay management with
- * per-relay connection dots. Deliberately absent: mesh (deferred to F6,
- * off by default upstream) and the per-machine credentials/providers blocks
- * (F4.3) — no placeholder UI for either; they appear when those milestones
- * do.
+ * blossom server, the quick-prompt editor, relay management with per-relay
+ * connection dots, and (F4.3) per-machine credentials/AI-provider blocks.
+ * Deliberately absent: mesh (deferred to F6, off by default upstream).
  */
 @Composable
 fun SettingsScreen(bridge: CoreBridge, onClose: () -> Unit) {
     val settings by bridge.settings.collectAsState()
     val quickPrompts by bridge.quickPrompts.collectAsState()
     val connection by bridge.connection.collectAsState()
+    val machinesView by bridge.machines.collectAsState()
+    val ui by bridge.ui.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun dispatch(intent: UniffiIntent) {
@@ -80,6 +89,8 @@ fun SettingsScreen(bridge: CoreBridge, onClose: () -> Unit) {
             view = view,
             quickPrompts = quickPrompts?.prompts.orEmpty(),
             connectedRelays = connection?.connectedRelays?.toSet().orEmpty(),
+            machines = machinesView?.machines.orEmpty(),
+            ui = ui,
             dispatch = ::dispatch,
             onClose = onClose,
         )
@@ -91,6 +102,8 @@ private fun SettingsBody(
     view: UniffiSettingsView,
     quickPrompts: List<UniffiQuickPrompt>,
     connectedRelays: Set<String>,
+    machines: List<UniffiMachineSummary>,
+    ui: UniffiUiView?,
     dispatch: (UniffiIntent) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -330,7 +343,101 @@ private fun SettingsBody(
                         }
                     }
                 }
+
+                // --- Machines (F4.3) ---
+                if (machines.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
+                        SectionHeading("Machines")
+                        machines.sortedBy { it.name }.forEach { machine ->
+                            key(machine.pubkeyHex) {
+                                MachineSection(
+                                    machine = machine,
+                                    credentialsStatus = ui?.credentialsStatus?.get(machine.pubkeyHex),
+                                    providerProfileStatus = ui?.providerProfileStatus?.get(machine.pubkeyHex),
+                                    dispatch = dispatch,
+                                )
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun MachineSection(
+    machine: UniffiMachineSummary,
+    credentialsStatus: UniffiCredentialsAck?,
+    providerProfileStatus: UniffiProviderProfileAck?,
+    dispatch: (UniffiIntent) -> Unit,
+) {
+    var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .background(Tokens.Surface)
+            .padding(Tokens.Space3),
+        verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+            Text(machine.name, color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
+            val host = machine.host
+            if (host != null) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(Tokens.RadiusSm))
+                        .background(Tokens.SurfaceRaised)
+                        .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                ) {
+                    Text(host, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+                }
+            }
+        }
+        Text(
+            "${machine.pubkeyHex.take(16)}…${machine.pubkeyHex.takeLast(8)}",
+            color = Tokens.TextDim,
+            fontSize = Tokens.TextXs,
+            fontFamily = Tokens.FontMono,
+        )
+
+        MachineCredentials(machine.pubkeyHex, credentialsStatus, dispatch)
+
+        if (machine.capabilities.contains(CAP_CUSTOM_PROVIDERS)) {
+            MachineProviders(machine, providerProfileStatus, dispatch)
+        }
+
+        if (confirmRemove) {
+            Text(
+                "Remove ${machine.name}? You'll need to pair with it again to reconnect.",
+                color = Tokens.Danger,
+                fontSize = Tokens.TextSm,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                Text(
+                    "Remove machine",
+                    color = Tokens.Danger,
+                    fontSize = Tokens.TextSm,
+                    modifier = Modifier
+                        .clickable { dispatch(UniffiIntent.RemoveMachine(machine.pubkeyHex)) }
+                        .padding(Tokens.Space2),
+                )
+                Text(
+                    "Cancel",
+                    color = Tokens.TextMuted,
+                    fontSize = Tokens.TextSm,
+                    modifier = Modifier.clickable { confirmRemove = false }.padding(Tokens.Space2),
+                )
+            }
+        } else {
+            Text(
+                "Remove machine…",
+                color = Tokens.Danger,
+                fontSize = Tokens.TextSm,
+                modifier = Modifier.clickable { confirmRemove = true }.padding(Tokens.Space2),
+            )
         }
     }
 }
