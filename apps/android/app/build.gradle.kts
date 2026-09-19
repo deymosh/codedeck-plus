@@ -104,6 +104,10 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.bundles.compose)
+    // Chrome/composer icons (mic, attach, pair, settings, menu, close). The
+    // full extended set is large, but release builds R8-minify (above) and
+    // drop every unused icon; debug builds simply carry the dead weight.
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
     // JNA: the FFI bridge uniffi-bindgen's generated Kotlin uses to call into

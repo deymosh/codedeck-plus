@@ -15,8 +15,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
@@ -128,14 +131,15 @@ private fun SettingsBody(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Settings", color = Tokens.Text, fontSize = Tokens.TextLg, modifier = Modifier.weight(1f))
-                Text(
-                    "×",
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextXl,
+                Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = "Close",
+                    tint = Tokens.TextMuted,
                     modifier = Modifier
                         .clip(RoundedCornerShape(Tokens.RadiusSm))
                         .clickable(onClick = onClose)
-                        .padding(Tokens.Space2),
+                        .padding(Tokens.Space2)
+                        .size(20.dp),
                 )
             }
 

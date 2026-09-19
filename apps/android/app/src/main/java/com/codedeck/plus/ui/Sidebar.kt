@@ -22,6 +22,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -111,18 +115,28 @@ fun Sidebar(
                         .clip(RoundedCornerShape(Tokens.RadiusSm))
                         .background(Tokens.SurfaceRaised)
                         .clickable(onClick = onOpenPairing)
-                        .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                        .padding(Tokens.Space2),
                 ) {
-                    Text("Pair", color = Tokens.Text, fontSize = Tokens.TextSm)
+                    Icon(
+                        Icons.Outlined.AddCircleOutline,
+                        contentDescription = "Pair a machine",
+                        tint = Tokens.Text,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(Tokens.RadiusSm))
                         .background(Tokens.SurfaceRaised)
                         .clickable(onClick = onOpenSettings)
-                        .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                        .padding(Tokens.Space2),
                 ) {
-                    Text("Settings", color = Tokens.Text, fontSize = Tokens.TextSm)
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = "Settings",
+                        tint = Tokens.Text,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }
