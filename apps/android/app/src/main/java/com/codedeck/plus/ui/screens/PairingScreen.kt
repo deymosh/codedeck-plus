@@ -1,5 +1,9 @@
 package com.codedeck.plus.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,7 +36,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.Dispatchers
@@ -50,11 +56,10 @@ private const val PHONE_LABEL = "Android"
 /**
  * F4.2.2 — pairing screen, rendered as a full-screen replacement the shell
  * swaps in (same pattern `SettingsScreen.kt` established): port of
- * `apps/mobile/src/ui/screens/PairingScreen.tsx`'s flow states minus the
- * in-app QR camera (F4.2.4 adds `CameraX`/ML Kit and wires its result into
- * the same [UniffiIntent.BeginPairing] this screen's "Pair with link"
- * button already dispatches — a scanned QR is parsed exactly like a pasted
- * link, one path, so this screen needs no change when that lands).
+ * `apps/mobile/src/ui/screens/PairingScreen.tsx`'s flow states, including
+ * the in-app QR camera scan (F4.2.4, [PairingScanView]). Its decoded text
+ * lands in the same `url` field a manual paste fills and is dispatched via
+ * the same [UniffiIntent.BeginPairing] — one path, no scan-specific parsing.
  *
  * A scanned/pasted/deep-linked URL is never parsed on this side: the raw
  * string crosses straight into [UniffiIntent.BeginPairing]/
@@ -62,6 +67,12 @@ private const val PHONE_LABEL = "Android"
  * parse_pairing_url` does the real parsing, surfacing failure via
  * `phase == "failed"` / `error` — unlike the TSX screen, which parses
  * client-side before dispatch (see that file's own `parsePairingUrl`).
+ *
+ * The pairing-link text is state at THIS level, not inside [PairingForm]:
+ * the reference's screen-level state holds it across every phase branch, so
+ * whatever the camera or a paste put there is still in the field when a
+ * failed pairing returns the form — PairingForm leaves composition on each
+ * phase swap and would drop it.
  *
  * "This phone's npub" asks the live core for its own identity
  * ([CoreBridge.identityNpub] — the core derived it at construction from the
@@ -105,42 +116,90 @@ private fun PairingBody(
     dispatch: (UniffiIntent) -> Unit,
     onClose: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var url by remember { mutableStateOf("") }
+    var scanOpen by remember { mutableStateOf(false) }
+
+    val cameraPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        // Denied — including Android's instant deny once "don't ask again"
+        // was picked — just leaves the form untouched; the paste path
+        // remains, and the next tap re-requests like the reference does.
+        if (granted) scanOpen = true
+    }
+
+    fun startScan() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            scanOpen = true
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(Tokens.Space3),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Pair a machine", color = Tokens.Text, fontSize = Tokens.TextLg, modifier = Modifier.weight(1f))
-                Icon(
-                    Icons.Outlined.Close,
-                    contentDescription = "Close",
-                    tint = Tokens.TextMuted,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
-                        .clickable(onClick = onClose)
-                        .padding(Tokens.Space2)
-                        .size(20.dp),
-                )
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(Tokens.Space3),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Pair a machine", color = Tokens.Text, fontSize = Tokens.TextLg, modifier = Modifier.weight(1f))
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Close",
+                        tint = Tokens.TextMuted,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(Tokens.RadiusSm))
+                            .clickable(onClick = onClose)
+                            .padding(Tokens.Space2)
+                            .size(20.dp),
+                    )
+                }
+
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
+                    verticalArrangement = Arrangement.spacedBy(Tokens.Space4),
+                ) {
+                    val staged = view.staged
+                    when {
+                        // CDX-013: a deep link arrived without direct user action —
+                        // show what it wants to pair with and require an explicit
+                        // tap. Nothing has been sent to the bridge yet.
+                        staged != null && view.phase == "idle" -> StagedConfirm(staged.machine, staged.npub, staged.relays, dispatch)
+                        view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine, dispatch)
+                        view.phase == "paired" -> Paired(view.candidate?.machine, dispatch, onClose)
+                        else -> PairingForm(
+                            view = view,
+                            selfNpub = selfNpub,
+                            url = url,
+                            onUrlChange = { url = it },
+                            onScanTap = { startScan() },
+                            dispatch = dispatch,
+                        )
+                    }
+                }
             }
 
-            Column(
-                Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
-                verticalArrangement = Arrangement.spacedBy(Tokens.Space4),
-            ) {
-                val staged = view.staged
-                when {
-                    // CDX-013: a deep link arrived without direct user action —
-                    // show what it wants to pair with and require an explicit
-                    // tap. Nothing has been sent to the bridge yet.
-                    staged != null && view.phase == "idle" -> StagedConfirm(staged.machine, staged.npub, staged.relays, dispatch)
-                    view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine, dispatch)
-                    view.phase == "paired" -> Paired(view.candidate?.machine, dispatch, onClose)
-                    else -> PairingForm(view, selfNpub, dispatch)
-                }
+            // Rendered only while open AND after CAMERA is granted (the
+            // launcher above gates it), so PairingScanView's binding effect
+            // runs exactly once per granted+open window.
+            if (scanOpen) {
+                PairingScanView(
+                    onDecoded = { decoded ->
+                        // One path, same as a paste: the raw string fills the
+                        // visible field AND crosses into BeginPairing
+                        // unparsed — the Rust side parses, and its failure
+                        // surfaces as this view's "failed" phase.
+                        url = decoded
+                        dispatch(UniffiIntent.BeginPairing(decoded.trim(), PHONE_LABEL))
+                        scanOpen = false
+                    },
+                    onDismiss = { scanOpen = false },
+                )
             }
         }
     }
@@ -229,9 +288,11 @@ private fun Paired(machine: String?, dispatch: (UniffiIntent) -> Unit, onClose: 
 private fun PairingForm(
     view: UniffiPairingView,
     selfNpub: String?,
+    url: String,
+    onUrlChange: (String) -> Unit,
+    onScanTap: () -> Unit,
     dispatch: (UniffiIntent) -> Unit,
 ) {
-    var url by remember { mutableStateOf("") }
     var manualNpub by remember { mutableStateOf("") }
     var manualToken by remember { mutableStateOf("") }
 
@@ -240,11 +301,15 @@ private fun PairingForm(
             Banner("Pairing failed: ${view.error ?: "rejected"}. Open a fresh pairing window on the bridge and try again.", Tokens.Danger)
         }
 
+        Button(onClick = onScanTap) {
+            Text("Scan pairing QR")
+        }
+
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
             Text("Pairing link (from the bridge QR / codedeck pair)", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
             OutlinedTextField(
                 value = url,
-                onValueChange = { url = it },
+                onValueChange = onUrlChange,
                 placeholder = { Text("codedeck://pair?npub=…") },
                 modifier = Modifier.fillMaxWidth(),
             )

@@ -123,6 +123,19 @@ dependencies {
     // secret encrypted at rest under a Keystore-held master key.
     implementation("com.google.crypto.tink:tink-android:1.19.0")
 
+    // Pairing-QR camera scan (ui/screens/PairingScanView.kt): CameraX for the
+    // preview/analysis pipeline, ML Kit's BUNDLED barcode model (no Play
+    // Services needed at runtime) restricted to QR by its scanner options.
+    // Neither library is covered by the Compose BOM, so they are pinned
+    // explicitly; release R8 strips the parts and model weight the scan
+    // surface doesn't touch, debug builds just carry them (same trade as the
+    // icons dependency above).
+    val camerax = "1.6.2"
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
     // F3.3.2: Compose-native Markdown for assistant/plan transcript rows.
     // GFM (tables, task lists, strikethrough, autolinks) is the renderer's
     // own default AST handling, no separate "GFM module" — see

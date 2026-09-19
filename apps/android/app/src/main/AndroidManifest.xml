@@ -7,6 +7,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Camera is only for the pairing-QR scan (ui/screens/PairingScanView.kt);
+         requested on the first scan tap, never at launch. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Camera-less devices can still install and run: a scan tap on one
+         falls into the denied/unavailable no-scan path instead of the app
+         being filtered out of stores. -->
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
 
     <application
         android:allowBackup="true"
