@@ -94,6 +94,19 @@ fn persisted_relays(db_path: String) -> Vec<String> {
     }
 }
 
+/// The other half of the same pre-init read, for [`Core::new`]'s `tor`
+/// argument — see [`persisted_relays`]'s doc comment for why a caller must
+/// read this itself rather than relying on anything `Core::spawn` does once
+/// it's already running. `false` (the shipped default) on any read failure,
+/// same fallback shape as `persisted_relays`.
+#[uniffi::export]
+fn persisted_tor_proxy_enabled(db_path: String) -> bool {
+    match open_native_db(&PathBuf::from(db_path)) {
+        Ok(conn) => db::tor_proxy_enabled_from_kv(&conn),
+        Err(_) => false,
+    }
+}
+
 /// One request header. A plain Rust `(String, String)` tuple is not a
 /// UniFFI-crossable type in 0.28 (no `FfiConverter` for tuples in
 /// proc-macro mode), so the ordered header list crosses as this record
@@ -554,6 +567,29 @@ mod tests {
 
         let relays = persisted_relays(db_path);
         assert!(relays.iter().any(|r| r == "wss://relay-b.example"), "{relays:?}");
+    }
+
+    #[tokio::test]
+    async fn persisted_tor_proxy_enabled_reflects_a_toggle_from_a_prior_core_lifetime() {
+        let (_dir, db_path) = temp_db_path();
+        let core = Core::new(
+            vec![],
+            SEC_PHONE.to_string(),
+            Arc::new(NoopListener),
+            Arc::new(NoopTestNotifier),
+            None,
+            db_path.clone(),
+            None,
+            false,
+        )
+        .expect("core spawns");
+        assert!(!persisted_tor_proxy_enabled(db_path.clone()));
+
+        core.dispatch(UniffiIntent::SetTorEnabled { enabled: true }).await.expect("dispatch succeeds");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        core.shutdown();
+
+        assert!(persisted_tor_proxy_enabled(db_path));
     }
 
     #[test]

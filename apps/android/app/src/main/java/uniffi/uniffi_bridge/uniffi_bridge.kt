@@ -880,6 +880,10 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -906,7 +910,7 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_uniffi_bridge_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_uniffi_bridge_fn_method_core_connection_view(`ptr`: Pointer,
     ): Long
@@ -975,6 +979,10 @@ internal interface UniffiLib : Library {
     fun uniffi_uniffi_bridge_fn_method_uniffinotifier_cancel(`ptr`: Pointer,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_uniffi_bridge_fn_func_persisted_relays(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_uniffi_bridge_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_uniffi_bridge_fn_func_provider_base_url_error(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1092,6 +1100,10 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_uniffi_bridge_checksum_func_is_valid_provider_base_url(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_func_persisted_relays(
+    ): Short
+    fun uniffi_uniffi_bridge_checksum_func_persisted_tor_proxy_enabled(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_func_provider_base_url_error(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_connection_view(
@@ -1162,6 +1174,12 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_func_is_valid_provider_base_url() != 63450.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_func_persisted_relays() != 26756.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_func_persisted_tor_proxy_enabled() != 6597.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_func_provider_base_url_error() != 21815.toShort()) {
@@ -1239,7 +1257,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel() != 41559.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 63633.toShort()) {
+    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 43449.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1798,11 +1816,11 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
      * (this call is sync — Kotlin sees a plain constructor, not a suspend
      * fun) until the real `client_runtime::Core` has hydrated and is ready.
      */
-    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?) :
+    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
         this(
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_constructor_core_new(
-        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),_status)
+        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),FfiConverterString.lower(`dbPath`),FfiConverterOptionalString.lower(`proxy`),FfiConverterBoolean.lower(`tor`),_status)
 }
     )
 
@@ -4840,6 +4858,14 @@ sealed class CoreInitException: kotlin.Exception() {
             get() = "detail=${ `detail` }"
     }
     
+    class DbOpen(
+        
+        val `detail`: kotlin.String
+        ) : CoreInitException() {
+        override val message
+            get() = "detail=${ `detail` }"
+    }
+    
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<CoreInitException> {
         override fun lift(error_buf: RustBuffer.ByValue): CoreInitException = FfiConverterTypeCoreInitError.lift(error_buf)
@@ -4862,6 +4888,9 @@ public object FfiConverterTypeCoreInitError : FfiConverterRustBuffer<CoreInitExc
             2 -> CoreInitException.ThreadSpawn(
                 FfiConverterString.read(buf),
                 )
+            3 -> CoreInitException.DbOpen(
+                FfiConverterString.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -4878,6 +4907,11 @@ public object FfiConverterTypeCoreInitError : FfiConverterRustBuffer<CoreInitExc
                 4UL
                 + FfiConverterString.allocationSize(value.`detail`)
             )
+            is CoreInitException.DbOpen -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
         }
     }
 
@@ -4890,6 +4924,11 @@ public object FfiConverterTypeCoreInitError : FfiConverterRustBuffer<CoreInitExc
             }
             is CoreInitException.ThreadSpawn -> {
                 buf.putInt(2)
+                FfiConverterString.write(value.`detail`, buf)
+                Unit
+            }
+            is CoreInitException.DbOpen -> {
+                buf.putInt(3)
                 FfiConverterString.write(value.`detail`, buf)
                 Unit
             }
@@ -7355,6 +7394,41 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_is_valid_provider_base_url(
         FfiConverterString.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The relay list to pass into [`Core::new`]'s `relays` argument. Pure read,
+         * safe to call before any `Core` exists — opens (and migrates, if it doesn't
+         * exist yet) the same db file `Core::new` will open, so this always reflects
+         * whatever the user actually has persisted (or the shipped defaults, on a
+         * fresh install) instead of a caller-guessed list. `Core::spawn` dials its
+         * WebSocket transport from the constructor argument alone, not from its own
+         * later hydration read, so skipping this call is what leaves a host with no
+         * relays at all — see `db::relays_from_kv`'s doc comment for the full story.
+         */ fun `persistedRelays`(`dbPath`: kotlin.String): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_persisted_relays(
+        FfiConverterString.lower(`dbPath`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The other half of the same pre-init read, for [`Core::new`]'s `tor`
+         * argument — see [`persisted_relays`]'s doc comment for why a caller must
+         * read this itself rather than relying on anything `Core::spawn` does once
+         * it's already running. `false` (the shipped default) on any read failure,
+         * same fallback shape as `persisted_relays`.
+         */ fun `persistedTorProxyEnabled`(`dbPath`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_persisted_tor_proxy_enabled(
+        FfiConverterString.lower(`dbPath`),_status)
 }
     )
     }

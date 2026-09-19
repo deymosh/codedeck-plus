@@ -56,6 +56,13 @@ pub fn open_native_db(path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
+fn settings_from_kv(conn: &Connection) -> client_runtime::client_core::stores::settings::SettingsData {
+    let raw: Option<String> = conn
+        .query_row("SELECT value FROM kv WHERE key = ?", [SETTINGS_KEY], |row| row.get(0))
+        .ok();
+    hydrate_settings(raw.as_deref())
+}
+
 /// The relay list `Core::new` will hydrate from this SAME db file once it
 /// opens it — read standalone, before any `Core` exists, so the Android host
 /// can pass a real persisted (or default, on a fresh install) relay list into
@@ -67,10 +74,16 @@ pub fn open_native_db(path: &Path) -> Result<Connection, String> {
 /// short of the caller pre-reading this row would put a persisted relay list
 /// on the wire at boot.
 pub fn relays_from_kv(conn: &Connection) -> Vec<String> {
-    let raw: Option<String> = conn
-        .query_row("SELECT value FROM kv WHERE key = ?", [SETTINGS_KEY], |row| row.get(0))
-        .ok();
-    hydrate_settings(raw.as_deref()).relays
+    settings_from_kv(conn).relays
+}
+
+/// Same rationale as [`relays_from_kv`], for the OTHER boot-time value
+/// `Core::new`'s `tor` argument needs: whether the user had Orbot routing on
+/// last time settings were saved. `Core::spawn`'s own `config.tor` check
+/// (which primes the HTTP port's proxy before the first request) only helps
+/// if the caller actually passes `true` here when that's what was persisted.
+pub fn tor_proxy_enabled_from_kv(conn: &Connection) -> bool {
+    settings_from_kv(conn).tor_proxy_enabled
 }
 
 /// The `OutputEntry` discriminator, extracted defensively (the port keeps the
@@ -350,6 +363,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(relays_from_kv(&conn), vec!["wss://custom.example".to_string()]);
+    }
+
+    #[test]
+    fn tor_proxy_enabled_from_kv_defaults_to_off() {
+        let (_dir, conn) = open_temp();
+        assert!(!tor_proxy_enabled_from_kv(&conn));
+    }
+
+    #[test]
+    fn tor_proxy_enabled_from_kv_reads_a_persisted_settings_row() {
+        let (_dir, conn) = open_temp();
+        conn.execute(
+            "INSERT INTO kv (key, value) VALUES (?, ?)",
+            rusqlite::params![
+                SETTINGS_KEY,
+                serde_json::json!({ "torProxyEnabled": true }).to_string(),
+            ],
+        )
+        .unwrap();
+        assert!(tor_proxy_enabled_from_kv(&conn));
     }
 
     /// An existing install's `codedeck.db` (the WebView's own schema, CDX-012)
