@@ -90,7 +90,9 @@ pub struct UniffiSessionSummary {
 /// `protocol::common::UsageWindow` field for field.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiUsageWindow {
-    /// 0.0..=1.0; `None` when the bridge has no number.
+    /// Percentage 0..=100, not a fraction — the wire carries it pre-scaled
+    /// (the reference's usage badges round it directly and warn at 75/90).
+    /// `None` when the bridge has no number.
     pub utilization: Option<f64>,
     /// When the window resets (the wire's own timestamp spelling).
     pub resets_at: Option<String>,
