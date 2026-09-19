@@ -111,8 +111,8 @@ fun Shell(bridge: CoreBridge) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val isWide = maxWidth >= WIDE_BREAKPOINT
 
-                val sessionContent: @Composable (String, String) -> Unit = { machine, sessionId ->
-                    SessionScreen(bridge, machine, sessionId, modifier = Modifier.fillMaxSize())
+                val sessionContent: @Composable (String, String, (() -> Unit)?) -> Unit = { machine, sessionId, onMenu ->
+                    SessionScreen(bridge, machine, sessionId, onMenu = onMenu, modifier = Modifier.fillMaxSize())
                 }
 
                 if (isWide) {

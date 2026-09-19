@@ -5,18 +5,18 @@ import androidx.compose.animation.core.EaseIn
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -67,22 +67,9 @@ fun MainPanel(
     onOpenSidebar: () -> Unit,
     onSwipeNavigate: (machine: String, sessionId: String) -> Unit,
     modifier: Modifier = Modifier,
-    sessionContent: @Composable (machine: String, sessionId: String) -> Unit,
+    sessionContent: @Composable (machine: String, sessionId: String, onMenu: (() -> Unit)?) -> Unit,
 ) {
     Column(modifier.fillMaxSize().background(Tokens.Bg)) {
-        if (!isWide) {
-            Row(
-                Modifier.fillMaxWidth().padding(Tokens.Space2),
-                horizontalArrangement = Arrangement.Start,
-            ) {
-                Text(
-                    "☰",
-                    color = Tokens.Text,
-                    fontSize = Tokens.TextLg,
-                    modifier = Modifier.clickable(onClick = onOpenSidebar).padding(Tokens.Space2),
-                )
-            }
-        }
         if (selectedMachine != null && selectedSession != null) {
             val currentIndex = orderedSessionKeys.indexOfFirst {
                 it.machine == selectedMachine && it.sessionId == selectedSession
@@ -97,7 +84,14 @@ fun MainPanel(
                 },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                sessionContent(selectedMachine, selectedSession)
+                // Narrow shells reach the drawer from the session header's own
+                // menu button (the reference's `onMenu` prop), not a separate
+                // top bar — wide shells have the sidebar permanently visible.
+                sessionContent(
+                    selectedMachine,
+                    selectedSession,
+                    if (!isWide) onOpenSidebar else null,
+                )
             }
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -108,7 +102,15 @@ fun MainPanel(
                             onClick = onOpenSidebar,
                             modifier = Modifier.padding(top = Tokens.Space3),
                         ) {
-                            Text("☰ Sessions")
+                            Icon(
+                                Icons.Outlined.Menu,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                "Sessions",
+                                modifier = Modifier.padding(start = Tokens.Space2),
+                            )
                         }
                     }
                 }

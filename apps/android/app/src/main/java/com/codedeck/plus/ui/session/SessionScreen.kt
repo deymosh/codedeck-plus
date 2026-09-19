@@ -1,6 +1,11 @@
 package com.codedeck.plus.ui.session
 
+import android.app.Activity
+import android.content.Intent
 import android.os.SystemClock
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -18,11 +23,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -83,8 +93,8 @@ private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
  * effort selector, mode-cycle button, send-failed badge, full title, usage
  * box, Stop while running, attention chevrons), the GSD strip, the
  * transcript, the always-visible pending-permission bar, the quick-prompt
- * bar, and the input bar. Port of `SessionScreen.tsx` — image attachment and
- * mic/STT are the remaining deliberate gaps.
+ * bar, and the input bar. Port of `SessionScreen.tsx` — image attachment is
+ * the remaining deliberate gap.
  *
  * The header's ‹/› chevrons mark sessions needing attention (blocked on the
  * user, or unread) left/right in the shared sidebar display order; tapping
@@ -93,7 +103,13 @@ private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
  * tap itself.
  */
 @Composable
-fun SessionScreen(bridge: CoreBridge, machine: String, sessionId: String, modifier: Modifier = Modifier) {
+fun SessionScreen(
+    bridge: CoreBridge,
+    machine: String,
+    sessionId: String,
+    onMenu: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     val connection by bridge.connection.collectAsState()
     val machinesView by bridge.machines.collectAsState()
     val uiView by bridge.ui.collectAsState()
@@ -122,6 +138,35 @@ fun SessionScreen(bridge: CoreBridge, machine: String, sessionId: String, modifi
 
     var draft by remember(machine, sessionId) { mutableStateOf("") }
     val inputFocus = remember { FocusRequester() }
+
+    // Mic/STT: hand the whole interaction to the ANDROID SYSTEM speech
+    // recognizer — its activity holds RECORD_AUDIO itself, so this app
+    // declares and requests no mic permission. Recognized text APPENDS to
+    // the draft (same appendToDraft contract as quick prompts — never an
+    // auto-send); cancel, a missing recognizer, or an empty result just
+    // refocuses the input, never an error surface (the reference's
+    // `recognizeSpeech()` null fallback).
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val text = if (result.resultCode == Activity.RESULT_OK) {
+            result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+        } else {
+            ""
+        }
+        if (text.isNotEmpty()) draft = appendToDraft(draft, text) else inputFocus.requestFocus()
+    }
+    fun dictate() {
+        micLauncher.launch(
+            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            },
+        )
+    }
 
     fun dispatch(intent: UniffiIntent) {
         scope.launch { bridge.dispatch(intent) }
@@ -234,6 +279,7 @@ fun SessionScreen(bridge: CoreBridge, machine: String, sessionId: String, modifi
             attentionLeft = attentionLeft,
             attentionRight = attentionRight,
             onJumpAttention = ::jumpAttention,
+            onMenu = onMenu,
             running = session?.state == "running",
             onStop = { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) },
         )
@@ -328,6 +374,16 @@ fun SessionScreen(bridge: CoreBridge, machine: String, sessionId: String, modifi
                 placeholder = { Text("Message the session…") },
                 modifier = Modifier.weight(1f).focusRequester(inputFocus),
             )
+            Icon(
+                Icons.Outlined.Mic,
+                contentDescription = "Dictate with voice",
+                tint = Tokens.TextMuted,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .clickable(onClick = ::dictate)
+                    .padding(Tokens.Space2)
+                    .size(20.dp),
+            )
             Button(onClick = ::send, enabled = draft.isNotBlank()) {
                 Text("Send")
             }
@@ -361,6 +417,7 @@ private fun SessionHeaderRow1(
     attentionLeft: Boolean,
     attentionRight: Boolean,
     onJumpAttention: (Int) -> Unit,
+    onMenu: (() -> Unit)?,
     running: Boolean,
     onStop: () -> Unit,
 ) {
@@ -371,6 +428,18 @@ private fun SessionHeaderRow1(
     ) {
         if (attentionLeft) {
             NavChevron("‹") { onJumpAttention(-1) }
+        }
+        if (onMenu != null) {
+            Icon(
+                Icons.Outlined.Menu,
+                contentDescription = "Open sessions",
+                tint = Tokens.Text,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .clickable(onClick = onMenu)
+                    .padding(Tokens.Space2)
+                    .size(20.dp),
+            )
         }
         if (state != null) {
             Text(
