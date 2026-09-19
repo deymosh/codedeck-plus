@@ -78,6 +78,22 @@ fn provider_base_url_error() -> String {
     protocol::common::PROVIDER_BASE_URL_ERROR.to_string()
 }
 
+/// The relay list to pass into [`Core::new`]'s `relays` argument. Pure read,
+/// safe to call before any `Core` exists — opens (and migrates, if it doesn't
+/// exist yet) the same db file `Core::new` will open, so this always reflects
+/// whatever the user actually has persisted (or the shipped defaults, on a
+/// fresh install) instead of a caller-guessed list. `Core::spawn` dials its
+/// WebSocket transport from the constructor argument alone, not from its own
+/// later hydration read, so skipping this call is what leaves a host with no
+/// relays at all — see `db::relays_from_kv`'s doc comment for the full story.
+#[uniffi::export]
+fn persisted_relays(db_path: String) -> Vec<String> {
+    match open_native_db(&PathBuf::from(db_path)) {
+        Ok(conn) => db::relays_from_kv(&conn),
+        Err(_) => client_runtime::client_core::stores::settings::default_settings().relays,
+    }
+}
+
 /// One request header. A plain Rust `(String, String)` tuple is not a
 /// UniFFI-crossable type in 0.28 (no `FfiConverter` for tuples in
 /// proc-macro mode), so the ordered header list crosses as this record
@@ -505,5 +521,49 @@ mod tests {
             settings.relays
         );
         core2.shutdown();
+    }
+
+    /// `Core::spawn` dials its transport from the `relays` constructor
+    /// argument alone (never from its own hydration read), so a caller MUST
+    /// pre-read this before restarting `Core` — this proves `persisted_relays`
+    /// is that read: it survives a shutdown/restart cycle without a `Core`
+    /// running at all, matching what `settings_view()` on a live core reports.
+    #[tokio::test]
+    async fn persisted_relays_reflects_a_relay_added_in_a_prior_core_lifetime() {
+        let (_dir, db_path) = temp_db_path();
+        // The constructor `relays` argument only ever seeds the WS transport
+        // dial list — the settings STORE hydrates purely from the db, so a
+        // fresh db starts from `default_settings()` regardless of what's
+        // passed here. `AddRelay` mutates that store, not this argument.
+        let core = Core::new(
+            vec!["wss://relay-a.example".to_string()],
+            SEC_PHONE.to_string(),
+            Arc::new(NoopListener),
+            Arc::new(NoopTestNotifier),
+            None,
+            db_path.clone(),
+            None,
+            false,
+        )
+        .expect("core spawns");
+        core.dispatch(UniffiIntent::AddRelay { url: "wss://relay-b.example".to_string() })
+            .await
+            .expect("dispatch succeeds");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        core.shutdown();
+
+        let relays = persisted_relays(db_path);
+        assert!(relays.iter().any(|r| r == "wss://relay-b.example"), "{relays:?}");
+    }
+
+    #[test]
+    fn persisted_relays_falls_back_to_defaults_for_a_path_that_does_not_exist_yet() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("fresh.db").to_string_lossy().into_owned();
+        let relays = persisted_relays(db_path);
+        assert_eq!(
+            relays,
+            client_runtime::client_core::stores::settings::default_settings().relays
+        );
     }
 }
