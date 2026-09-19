@@ -319,6 +319,15 @@ impl Core {
             identity: config.identity.clone(),
             proxy: if config.tor { config.proxy.clone() } else { None },
         });
+        // The HTTP port's own boot-time proxy — mirrors `WsConfig.proxy` above.
+        // Without this, a host that starts with Tor already on (e.g. Android
+        // reading a persisted `tor_proxy_enabled: true` before this call) has
+        // its Blossom uploads leak direct until the phone happens to toggle
+        // `Intent::SetTorEnabled`, which is the only other place `http.set_proxy`
+        // is ever called.
+        if config.tor {
+            ports.http.set_proxy(config.proxy.as_deref());
+        }
         let nostr = NostrClient::new(
             ws.clone(),
             Rc::clone(&host),
@@ -2296,6 +2305,104 @@ mod tests {
         {
             Box::pin(async { Err("no server".to_string()) })
         }
+    }
+
+    /// Records every `set_proxy` call — used to check the HTTP port's own
+    /// boot-time proxy wiring, the twin of `WsConfig.proxy` above.
+    #[derive(Default)]
+    struct RecordingHttp {
+        proxy_calls: RefCell<Vec<Option<String>>>,
+    }
+    impl crate::attachments::HttpFetch for RecordingHttp {
+        fn put(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: Vec<u8>,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(async { Err("not used".to_string()) })
+        }
+        fn get(
+            &self,
+            _url: &str,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(async { Err("not used".to_string()) })
+        }
+        fn set_proxy(&self, proxy: Option<&str>) {
+            self.proxy_calls.borrow_mut().push(proxy.map(str::to_string));
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_applies_the_boot_time_proxy_to_the_http_port_when_tor_is_on() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let spy = Rc::new(Spy::default());
+                let recording = Rc::new(RecordingHttp::default());
+                let ports = CorePorts {
+                    http: Rc::clone(&recording) as Rc<dyn crate::attachments::HttpFetch>,
+                    ..CorePorts::default()
+                };
+                let _core = Core::spawn(
+                    CoreConfig {
+                        relays: vec![mock.url.clone()],
+                        identity: phone,
+                        proxy: Some("127.0.0.1:9050".to_string()),
+                        tor: true,
+                        reconnect: fast_reconnect(),
+                    },
+                    ports,
+                    spy,
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+
+                assert_eq!(
+                    recording.proxy_calls.borrow().as_slice(),
+                    [Some("127.0.0.1:9050".to_string())]
+                );
+            })
+            .await;
+    }
+
+    /// A host that starts with Tor off must not have leaked the proxy address
+    /// to the HTTP port at all — `tor_proxy_address` is remembered for a later
+    /// `Intent::SetTorEnabled(true)`, but the port itself stays direct until then.
+    #[tokio::test]
+    async fn spawn_leaves_the_http_port_direct_when_tor_is_off() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let spy = Rc::new(Spy::default());
+                let recording = Rc::new(RecordingHttp::default());
+                let ports = CorePorts {
+                    http: Rc::clone(&recording) as Rc<dyn crate::attachments::HttpFetch>,
+                    ..CorePorts::default()
+                };
+                let _core = Core::spawn(
+                    CoreConfig {
+                        relays: vec![mock.url.clone()],
+                        identity: phone,
+                        proxy: Some("127.0.0.1:9050".to_string()),
+                        tor: false,
+                        reconnect: fast_reconnect(),
+                    },
+                    ports,
+                    spy,
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+
+                assert!(recording.proxy_calls.borrow().is_empty());
+            })
+            .await;
     }
 
     /// Decrypt + decode a relay `EVENT` frame as a `PhoneToBridge` command from
