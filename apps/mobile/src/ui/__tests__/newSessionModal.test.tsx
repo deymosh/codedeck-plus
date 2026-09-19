@@ -115,7 +115,7 @@ describe('NewSessionModal (CDX-031)', () => {
     renderModal(core);
 
     // The modal never depends on some other screen having warmed the store.
-    expect(fake.dispatched).toContainEqual({ requestModels: { machine: MACHINE } });
+    expect(fake.dispatched).toContainEqual({ requestModels: { machine: MACHINE, backend: null } });
     const select = screen.getByLabelText('Model') as HTMLSelectElement;
     expect(select.options[0]!.text).toBe('Default model (list unavailable)');
   });
@@ -520,7 +520,7 @@ describe('NewSessionModal — provider profiles (CDX-062)', () => {
     renderModal(core);
 
     // Models still requested on mount (provider profiles never satisfy it).
-    expect(fake.dispatched).toContainEqual({ requestModels: { machine: MACHINE } });
+    expect(fake.dispatched).toContainEqual({ requestModels: { machine: MACHINE, backend: null } });
     // Synthetic off-list option keeps the preference honest on the Anthropic path.
     const model = screen.getByLabelText('Model') as HTMLSelectElement;
     expect(model.value).toBe('model-elsewhere');

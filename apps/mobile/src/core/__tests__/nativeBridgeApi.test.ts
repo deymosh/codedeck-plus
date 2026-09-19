@@ -56,7 +56,7 @@ function fakeCore(shouldFail = false) {
 
 describe('createNativeBridgeApi', () => {
   it.each([
-    ['createSession', ['m', {}], { createSession: { machine: 'm', cwd: null, createCwd: null, model: null, defaultEffort: null, providerId: null, testSession: null } }],
+    ['createSession', ['m', {}], { createSession: { machine: 'm', cwd: null, createCwd: null, model: null, defaultEffort: null, providerId: null, testSession: null, backend: null } }],
     ['refreshSessions', ['m'], { refreshSessions: { machine: 'm' } }],
     ['closeSession', ['m', 's1'], { closeSession: { machine: 'm', sessionId: 's1' } }],
     ['interrupt', ['m', 's1'], { interrupt: { machine: 'm', sessionId: 's1' } }],
@@ -68,7 +68,7 @@ describe('createNativeBridgeApi', () => {
     ['modelChange', ['m', 's1', 'opus'], { setModel: { machine: 'm', sessionId: 's1', model: 'opus' } }],
     ['usageRequest', ['m', 's1'], { requestUsage: { machine: 'm', sessionId: 's1' } }],
     ['gsdRequest', ['m', 's1'], { requestGsd: { machine: 'm', sessionId: 's1' } }],
-    ['modelsRequest', ['m'], { requestModels: { machine: 'm' } }],
+    ['modelsRequest', ['m'], { requestModels: { machine: 'm', backend: null } }],
     ['requestProviderProfiles', ['m'], { requestProviderProfiles: { machine: 'm' } }],
   ] as const)('%s dispatches %j', async (method, args, expected) => {
     const { core, dispatched } = fakeCore();

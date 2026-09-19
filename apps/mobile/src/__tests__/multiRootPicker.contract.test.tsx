@@ -87,6 +87,7 @@ describe('two workspace roots → folder picker (CDX-031)', () => {
         defaultEffort: null,
         providerId: null,
         testSession: null,
+        backend: null,
       },
     });
   });
