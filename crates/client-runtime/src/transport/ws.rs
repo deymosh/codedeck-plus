@@ -107,8 +107,33 @@ pub struct WsTransport {
     state: Rc<RefCell<State>>,
 }
 
+/// `rustls` 0.23 dropped its old "exactly one crypto backend feature is
+/// compiled in, so pick that one" auto-detection: with neither `ring` nor
+/// `aws-lc-rs` unambiguously selected across the dependency graph — which is
+/// exactly what `tokio-tungstenite`'s `rustls-tls-webpki-roots` feature
+/// leaves this crate with — building the default `wss://` connector inside
+/// [`dial`] now panics on the FIRST TLS handshake instead of silently
+/// picking one, and it does so inside a `spawn_local`'d per-relay task, so
+/// the panic never reaches the connection FSM or the UI: every relay just
+/// stays permanently unconnected with no visible error (device-verified
+/// 2026-09-19, `adb logcat` + a fresh emulator install — even the built-in
+/// public defaults never connected). Installing a provider explicitly, once,
+/// before the first dial is the fix `rustls` itself documents; `ring` (not
+/// `aws-lc-rs`) matches what this workspace already vendors for `nostr`'s own
+/// crypto and cross-compiles to Android without a C++ toolchain.
+fn install_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // Already installed (e.g. a host embedding this transport alongside
+        // another rustls user) is not an error — every dial just uses
+        // whichever provider got there first.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 impl WsTransport {
     pub fn new(config: WsConfig) -> Self {
+        install_crypto_provider();
         Self {
             state: Rc::new(RefCell::new(State {
                 relays: config.relays,
