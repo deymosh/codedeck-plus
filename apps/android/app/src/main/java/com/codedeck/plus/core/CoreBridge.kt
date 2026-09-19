@@ -20,6 +20,7 @@ import uniffi.uniffi_bridge.UniffiMachinesView
 import uniffi.uniffi_bridge.UniffiNotifier
 import uniffi.uniffi_bridge.UniffiOutboxView
 import uniffi.uniffi_bridge.UniffiPairingView
+import uniffi.uniffi_bridge.UniffiPendingSessionsView
 import uniffi.uniffi_bridge.UniffiQuickPromptsView
 import uniffi.uniffi_bridge.UniffiSettingsView
 import uniffi.uniffi_bridge.UniffiTranscriptRowsView
@@ -68,6 +69,13 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
     private val _quickPrompts = MutableStateFlow<UniffiQuickPromptsView?>(null)
     val quickPrompts: StateFlow<UniffiQuickPromptsView?> = _quickPrompts.asStateFlow()
 
+    /** Placeholder cards for sessions the bridge announced but that never
+     *  became real (`pending`) or failed to start (`failed`, stays until the
+     *  user dismisses) — the sidebar renders them above/interleaved with the
+     *  real session cards. */
+    private val _pendingSessions = MutableStateFlow<UniffiPendingSessionsView?>(null)
+    val pendingSessions: StateFlow<UniffiPendingSessionsView?> = _pendingSessions.asStateFlow()
+
     private val _pairing = MutableStateFlow<UniffiPairingView?>(null)
     val pairing: StateFlow<UniffiPairingView?> = _pairing.asStateFlow()
 
@@ -86,6 +94,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
         refreshOutbox()
         refreshSettings()
         refreshQuickPrompts()
+        refreshPendingSessions()
         refreshPairing()
     }
 
@@ -136,6 +145,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
                 SliceId.OUTBOX -> refreshOutbox()
                 SliceId.SETTINGS -> refreshSettings()
                 SliceId.QUICK_PROMPTS -> refreshQuickPrompts()
+                SliceId.PENDING_SESSIONS -> refreshPendingSessions()
                 SliceId.PAIRING -> refreshPairing()
                 else -> {}
             }
@@ -167,6 +177,10 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
 
     private fun refreshQuickPrompts() {
         scope.launch { _quickPrompts.value = core.quickPromptsView() }
+    }
+
+    private fun refreshPendingSessions() {
+        scope.launch { _pendingSessions.value = core.pendingSessionsView() }
     }
 
     private fun refreshPairing() {
