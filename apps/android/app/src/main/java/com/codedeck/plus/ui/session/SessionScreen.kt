@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -443,6 +444,7 @@ fun SessionScreen(
             connectionStatus = connection?.status,
             model = session?.model,
             contextPercentage = session?.contextPercentage,
+            contextWindow = session?.contextWindow?.toLong(),
             showUsageBadge = settings?.showUsageBadge ?: false,
             usage = session?.usage,
             attentionLeft = attentionLeft,
@@ -646,7 +648,17 @@ fun SessionScreen(
  *  while one is in flight, else the last confirmed mode. */
 private class ModeCycleUi {
     var pending by mutableStateOf<String?>(null)
-    var lastTapAtMs = Long.MIN_VALUE
+    // `SystemClock.elapsedRealtime()` is always >= 0, so 0L reads as "the
+    // cooldown last fired at boot" and always lets the very first tap
+    // through. `Long.MIN_VALUE` looked like a stronger "never tapped"
+    // sentinel but isn't one: `now - Long.MIN_VALUE` overflows `Long` (wraps
+    // to a huge NEGATIVE number, not a huge positive one), which made
+    // `tapMode()`'s cooldown check pass on every single call — the very
+    // first tap always looked like it was still inside the cooldown window
+    // and returned before ever updating this field, so the mode button did
+    // nothing for the rest of the screen's lifetime (device-observed
+    // 2026-09-19: PLAN/YOLO/EDITS never responded to any tap).
+    var lastTapAtMs = 0L
     var revertJob: Job? = null
 }
 
@@ -673,6 +685,7 @@ private fun SessionHeaderRow1(
     connectionStatus: String?,
     model: String?,
     contextPercentage: Double?,
+    contextWindow: Long?,
     showUsageBadge: Boolean,
     usage: UniffiUsageData?,
     attentionLeft: Boolean,
@@ -723,8 +736,23 @@ private fun SessionHeaderRow1(
         )
         Text(connectionStatus ?: "…", color = Tokens.TextDim, fontSize = Tokens.TextXs)
         if (model != null) {
-            val ctx = contextPercentage?.let { " · ${it.toInt()}%" } ?: ""
-            Text("$model$ctx", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+            val ctx = contextBadge(contextPercentage, contextWindow)?.let { " · $it" } ?: ""
+            // A custom-provider model label (`Z.ai (Global) - Coding Plan/glm-5.3-flash`)
+            // can run far longer than a plain Claude Code model id. Unlike `cwd`
+            // above, this Text had no line/width bound, so a long label wrapped
+            // to two lines and claimed most of the Row's width — leaving the
+            // fixed-width "Stop" Text after it so little room that Compose wrapped
+            // it one character per line (device-observed 2026-09-19). Capping the
+            // width and ellipsizing, the same treatment `cwd` already gets, keeps
+            // every sibling after it usable regardless of label length.
+            Text(
+                "$model$ctx",
+                color = Tokens.TextMuted,
+                fontSize = Tokens.TextXs,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 120.dp),
+            )
         }
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {
@@ -951,6 +979,37 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
 
 // --- Subscription-usage presentation helpers (port of `ui/usageFormat.ts`'s
 // header subset).
+
+/** Compact token count: 950 → "950", 84_200 → "84k", 1_240_000 → "1.2M" —
+ *  port of `apps/mobile/src/ui/usageFormat.ts`'s `formatTokens`. */
+private fun formatTokens(n: Long): String = when {
+    n < 0 -> "?"
+    n < 1_000 -> n.toString()
+    n < 1_000_000 -> "${(n / 1000.0).roundToInt()}k"
+    else -> {
+        val millions = n / 1_000_000.0
+        // Whole millions print without a trailing ".0" (JS's own number-to-
+        // string coercion does this for free; Kotlin's Double interpolation
+        // doesn't, so it's spelled out here) — one decimal place otherwise.
+        val rounded = if (millions >= 10) millions.roundToInt().toDouble() else (millions * 10).roundToInt() / 10.0
+        val label = if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+        "${label}M"
+    }
+}
+
+/** "pct% · used/window" (bare "pct%" when the window is unknown) — port of
+ *  `usageFormat.ts`'s `contextBadge`. The header previously showed only the
+ *  bare percentage (missing the reference's own `used/window` token count
+ *  entirely) even though `UniffiSessionSummary.contextWindow` already
+ *  carries the denominator — nothing upstream was missing, this call site
+ *  just wasn't reading it (device-observed 2026-09-19). */
+private fun contextBadge(contextPercentage: Double?, contextWindow: Long?): String? {
+    if (contextPercentage == null || !contextPercentage.isFinite()) return null
+    val pct = contextPercentage.roundToInt().coerceIn(0, 100)
+    if (contextWindow == null || contextWindow <= 0) return "$pct%"
+    val used = (pct / 100.0 * contextWindow).roundToInt().toLong()
+    return "$pct% · ${formatTokens(used)}/${formatTokens(contextWindow)}"
+}
 
 private data class UsageBadgeData(val text: String, val resetCountdown: String?, val critical: Boolean)
 
