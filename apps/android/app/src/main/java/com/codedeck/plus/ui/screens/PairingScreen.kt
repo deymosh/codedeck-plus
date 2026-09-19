@@ -9,15 +9,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,7 +35,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.theme.Tokens
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiPairingView
 
@@ -56,10 +63,11 @@ private const val PHONE_LABEL = "Android"
  * `phase == "failed"` / `error` — unlike the TSX screen, which parses
  * client-side before dispatch (see that file's own `parsePairingUrl`).
  *
- * Deliberately omitted: "this phone's npub" (TSX shows it read from a local
- * identity store; Android's identity secret has no npub-encoding path
- * exposed over the FFI yet, and adding one is out of this milestone's
- * scope) and the CDX-028 mesh-join banner (Mesh is F6, off by default).
+ * "This phone's npub" asks the live core for its own identity
+ * ([CoreBridge.identityNpub] — the core derived it at construction from the
+ * same secret it holds) so the secret never leaves the FFI layer for a mere
+ * display string. Still omitted: the CDX-028 mesh-join banner (Mesh is F6,
+ * off by default).
  */
 @Composable
 fun PairingScreen(bridge: CoreBridge, onClose: () -> Unit) {
@@ -70,19 +78,30 @@ fun PairingScreen(bridge: CoreBridge, onClose: () -> Unit) {
         scope.launch { bridge.dispatch(intent) }
     }
 
+    // One-shot fetch — the identity is fixed for the process's life, so it is
+    // never re-fetched on recomposition. Only the npub is kept; the secret it
+    // came from stays inside the core.
+    var selfNpub by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        selfNpub = withContext(Dispatchers.IO) {
+            runCatching { bridge.identityNpub() }.getOrNull()
+        }
+    }
+
     val view = pairing
     if (view == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
     } else {
-        PairingBody(view = view, dispatch = ::dispatch, onClose = onClose)
+        PairingBody(view = view, selfNpub = selfNpub, dispatch = ::dispatch, onClose = onClose)
     }
 }
 
 @Composable
 private fun PairingBody(
     view: UniffiPairingView,
+    selfNpub: String?,
     dispatch: (UniffiIntent) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -93,14 +112,15 @@ private fun PairingBody(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Pair a machine", color = Tokens.Text, fontSize = Tokens.TextLg, modifier = Modifier.weight(1f))
-                Text(
-                    "×",
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextXl,
+                Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = "Close",
+                    tint = Tokens.TextMuted,
                     modifier = Modifier
                         .clip(RoundedCornerShape(Tokens.RadiusSm))
                         .clickable(onClick = onClose)
-                        .padding(Tokens.Space2),
+                        .padding(Tokens.Space2)
+                        .size(20.dp),
                 )
             }
 
@@ -119,7 +139,7 @@ private fun PairingBody(
                     staged != null && view.phase == "idle" -> StagedConfirm(staged.machine, staged.npub, staged.relays, dispatch)
                     view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine, dispatch)
                     view.phase == "paired" -> Paired(view.candidate?.machine, dispatch, onClose)
-                    else -> PairingForm(view, dispatch)
+                    else -> PairingForm(view, selfNpub, dispatch)
                 }
             }
         }
@@ -206,7 +226,11 @@ private fun Paired(machine: String?, dispatch: (UniffiIntent) -> Unit, onClose: 
 }
 
 @Composable
-private fun PairingForm(view: UniffiPairingView, dispatch: (UniffiIntent) -> Unit) {
+private fun PairingForm(
+    view: UniffiPairingView,
+    selfNpub: String?,
+    dispatch: (UniffiIntent) -> Unit,
+) {
     var url by remember { mutableStateOf("") }
     var manualNpub by remember { mutableStateOf("") }
     var manualToken by remember { mutableStateOf("") }
@@ -256,6 +280,13 @@ private fun PairingForm(view: UniffiPairingView, dispatch: (UniffiIntent) -> Uni
                 enabled = manualNpub.isNotBlank() && manualToken.isNotBlank(),
             ) {
                 Text("Pair manually")
+            }
+        }
+
+        selfNpub?.let { npub ->
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+                Text("This phone's npub", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+                Text(npub, color = Tokens.Text, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
             }
         }
     }

@@ -111,6 +111,15 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
     suspend fun dispatch(intent: UniffiIntent) = core.dispatch(intent)
 
     /**
+     * The phone's own Nostr id in bech32 `npub1…` form — derived by the core
+     * at construction from the identity secret it holds, so callers get the
+     * answer without ever touching that secret themselves. A pure field read
+     * on the Rust side; screens still fetch it once off the main thread (see
+     * `PairingScreen`).
+     */
+    fun identityNpub(): String = core.identityNpub()
+
+    /**
      * One session's grouped, ready-to-render transcript — emits once
      * immediately, then again on every `CoreEvent` that could have changed
      * it: `TranscriptAppended` naming this exact session, or a `StateChanged`

@@ -81,6 +81,7 @@ pub enum CoreInitError {
 #[derive(uniffi::Object)]
 pub struct Core {
     handle: RealCore,
+    identity_npub: String,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     join: Mutex<Option<JoinHandle<()>>>,
 }
@@ -99,6 +100,7 @@ impl Core {
     ) -> Result<Arc<Self>, CoreInitError> {
         let identity = keypair_from_secret_hex(&identity_secret_hex)
             .map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
+        let identity_npub = identity.npub.clone();
         let config = CoreConfig::new(relays, identity, None, false);
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<RealCore>();
@@ -137,9 +139,16 @@ impl Core {
 
         Ok(Arc::new(Self {
             handle,
+            identity_npub,
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             join: Mutex::new(Some(join)),
         }))
+    }
+
+    /// The phone's own Nostr id in bech32 `npub1…` form — the manual-pairing
+    /// fallback UI's "this is me" readout.
+    pub fn identity_npub(&self) -> String {
+        self.identity_npub.clone()
     }
 
     pub fn start(&self) {
@@ -228,5 +237,48 @@ impl Core {
         if let Some(h) = self.join.lock().unwrap().take() {
             let _ = h.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use client_runtime::{ActionFailedKind, CoreEvent};
+
+    /// Same fixed-secret convention as `client-core`'s bridge_api tests: the
+    /// derivation is fully deterministic, so the expected npub is computed
+    /// from the same constant rather than hard-coded a second time.
+    const SEC_PHONE: &str =
+        "0000000000000000000000000000000000000000000000000000000000000001";
+
+    struct NoopListener;
+    impl CoreListener for NoopListener {
+        fn connection_changed(&self, _view: ConnectionView) {}
+        fn on_event(&self, _event: CoreEvent) {}
+        fn action_failed(&self, _kind: ActionFailedKind) {}
+    }
+
+    struct NoopTestNotifier;
+    impl UniffiNotifier for NoopTestNotifier {
+        fn notify(&self, _title: String, _body: String, _tag: Option<String>) {}
+        fn cancel(&self, _tag: String) {}
+    }
+
+    #[test]
+    fn identity_npub_is_the_bech32_form_of_the_constructor_identity() {
+        let core = Core::new(
+            vec![],
+            SEC_PHONE.to_string(),
+            Arc::new(NoopListener),
+            Arc::new(NoopTestNotifier),
+        )
+        .expect("core spawns");
+        let expected = keypair_from_secret_hex(SEC_PHONE).unwrap();
+
+        let npub = core.identity_npub();
+        assert!(npub.starts_with("npub1"), "not a bech32 npub: {npub}");
+        assert_eq!(npub, expected.npub);
+
+        core.shutdown();
     }
 }

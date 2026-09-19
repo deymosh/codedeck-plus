@@ -838,6 +838,8 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -869,6 +871,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_dispatch(`ptr`: Pointer,`intent`: RustBuffer.ByValue,
     ): Long
+    fun uniffi_uniffi_bridge_fn_method_core_identity_npub(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_uniffi_bridge_fn_method_core_machines_view(`ptr`: Pointer,
     ): Long
     fun uniffi_uniffi_bridge_fn_method_core_outbox_view(`ptr`: Pointer,
@@ -1041,6 +1045,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_dispatch(
     ): Short
+    fun uniffi_uniffi_bridge_checksum_method_core_identity_npub(
+    ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_machines_view(
     ): Short
     fun uniffi_uniffi_bridge_checksum_method_core_outbox_view(
@@ -1106,6 +1112,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_dispatch() != 24441.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_bridge_checksum_method_core_identity_npub() != 46556.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_core_machines_view() != 61742.toShort()) {
@@ -1597,6 +1606,12 @@ public interface CoreInterface {
      */
     suspend fun `dispatch`(`intent`: UniffiIntent)
     
+    /**
+     * The phone's own Nostr id in bech32 `npub1…` form — the manual-pairing
+     * fallback UI's "this is me" readout.
+     */
+    fun `identityNpub`(): kotlin.String
+    
     suspend fun `machinesView`(): UniffiMachinesView
     
     suspend fun `outboxView`(): UniffiOutboxView
@@ -1790,6 +1805,22 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         UniffiIntentException.ErrorHandler,
     )
     }
+
+    
+    /**
+     * The phone's own Nostr id in bech32 `npub1…` form — the manual-pairing
+     * fallback UI's "this is me" readout.
+     */override fun `identityNpub`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_identity_npub(
+        it, _status)
+}
+    }
+    )
+    }
+    
 
     
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
