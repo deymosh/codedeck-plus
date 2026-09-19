@@ -43,7 +43,14 @@ import uniffi.uniffi_bridge.UniffiUiView
  * shape `MainActivity.kt`'s `MainViewModel` already uses `viewModelScope`
  * for.
  */
-class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: UniffiNotifier) : CoreListener {
+class CoreBridge(
+    relays: List<String>,
+    identitySecretHex: String,
+    notifier: UniffiNotifier,
+    dbPath: String,
+    proxy: String?,
+    tor: Boolean,
+) : CoreListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _connection = MutableStateFlow<ConnectionView?>(null)
@@ -80,7 +87,7 @@ class CoreBridge(relays: List<String>, identitySecretHex: String, notifier: Unif
     private val _pairing = MutableStateFlow<UniffiPairingView?>(null)
     val pairing: StateFlow<UniffiPairingView?> = _pairing.asStateFlow()
 
-    private val core: Core = Core(relays, identitySecretHex, this, notifier, CoreHttpFetch())
+    private val core: Core = Core(relays, identitySecretHex, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
 
     fun start() {
         core.start()

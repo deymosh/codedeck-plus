@@ -26,6 +26,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import uniffi.uniffi_bridge.persistedRelays
+import uniffi.uniffi_bridge.persistedTorProxyEnabled
 
 private const val CHANNEL_ID = "codedeck_stay_connected"
 private const val NOTIFICATION_ID = 1
@@ -88,7 +90,29 @@ class StayConnectedService : Service() {
         super.onCreate()
         val identitySecretHex = readOrCreateIdentitySecretHex(applicationContext)
         val notifier = Notifier(applicationContext)
-        bridge = CoreBridge(relays = emptyList(), identitySecretHex = identitySecretHex, notifier = notifier)
+        // `Core::spawn` dials its WebSocket transport from the constructor's
+        // `relays` argument alone -- it never falls back to whatever it
+        // separately hydrates from the db once already running -- so an
+        // empty list here would leave every boot connected to nothing,
+        // regardless of what the user actually has persisted. `persistedRelays`/
+        // `persistedTorProxyEnabled` are the same pre-init read
+        // `apps/mobile`'s `createPhoneCoreNative.ts` does from its own KV
+        // before calling `core.init`, against the SAME db file `Core` is
+        // about to open below.
+        val dbPath = applicationContext.getDatabasePath("codedeck.db").absolutePath
+        val relays = persistedRelays(dbPath)
+        val torProxyEnabled = persistedTorProxyEnabled(dbPath)
+        bridge = CoreBridge(
+            relays = relays,
+            identitySecretHex = identitySecretHex,
+            notifier = notifier,
+            dbPath = dbPath,
+            // Orbot's SOCKS5 default -- sent unconditionally, same as
+            // apps/mobile/src/main.tsx's own `nativeCoreProxy`, so a later
+            // live Tor toggle has an address to switch back to.
+            proxy = "127.0.0.1:9050",
+            tor = torProxyEnabled,
+        )
         bridge.start()
         connectivity = Connectivity(applicationContext)
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
