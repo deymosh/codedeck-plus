@@ -1,6 +1,7 @@
 package com.codedeck.plus.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -35,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.uniffi_bridge.UniffiCredentialsAck
@@ -48,6 +52,16 @@ import java.util.UUID
 
 /** The complete default-mode set — `PermissionMode`'s own wire spellings. */
 private val MODE_OPTIONS = listOf("default", "acceptEdits", "plan")
+
+/** The effort ladder's wire spellings — `protocolConstants.ts`'s
+ *  `EFFORT_LEVELS`, duplicated per-file for the same reason `MODE_OPTIONS`
+ *  above is (no UniFFI export for protocol defaults on this FFI surface). */
+private val EFFORT_OPTIONS = listOf("low", "medium", "high", "xhigh", "max", "auto")
+
+/** One choice in a [SelectField] dropdown — value is what gets dispatched,
+ *  label is what the user reads (they differ for the model union, where the
+ *  label is the entry's human name and the value its wire id). */
+private data class PickerOption(val value: String, val label: String)
 
 /** Same capability string `NewSessionScreen.kt` gates its own provider picker
  *  on — duplicated per-file rather than shared, matching that file's own
@@ -185,17 +199,42 @@ private fun SettingsBody(
                             }
                         }
                     }
-                    OutlinedTextField(
-                        value = view.defaultEffort,
-                        onValueChange = { dispatch(UniffiIntent.SetDefaultEffort(it)) },
-                        label = { Text("Default effort") },
-                        modifier = Modifier.fillMaxWidth(),
+                    Text("Default effort", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+                    SelectField(
+                        options =
+                            listOf(PickerOption("", "Default (auto)")) +
+                                EFFORT_OPTIONS.map { PickerOption(it, it) },
+                        selected = view.defaultEffort,
+                        onSelect = { dispatch(UniffiIntent.SetDefaultEffort(it)) },
                     )
-                    OutlinedTextField(
-                        value = view.defaultModel,
-                        onValueChange = { dispatch(UniffiIntent.SetDefaultModel(it)) },
-                        label = { Text("Default model") },
-                        modifier = Modifier.fillMaxWidth(),
+
+                    Text("Default model", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+                    val modelUnion = machines.flatMap { it.models }.distinctBy { it.id }
+                    val storedModel = view.defaultModel
+                    SelectField(
+                        options = buildList {
+                            add(PickerOption("", "Bridge default"))
+                            modelUnion.forEach { entry ->
+                                add(PickerOption(entry.id, entry.label ?: entry.id))
+                            }
+                            // The stored default may name a machine that has
+                            // since unpaired — keep it visible and selectable
+                            // so the user can see, keep, or clear it (the TSX's
+                            // trailing stale-model `<option>`).
+                            if (storedModel != "" && modelUnion.none { it.id == storedModel }) {
+                                add(PickerOption(storedModel, storedModel))
+                            }
+                        },
+                        selected = storedModel,
+                        onSelect = { dispatch(UniffiIntent.SetDefaultModel(it)) },
+                    )
+                    // The TSX's muted paragraph under the three pickers.
+                    Text(
+                        "Applied to new sessions: the mode is switched right after the " +
+                            "session starts; effort and model pre-fill the new-session " +
+                            "sheet. Models come from every paired machine's reported list.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
                     )
                 }
 
@@ -222,16 +261,49 @@ private fun SettingsBody(
                 // --- Stay connected ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Stay connected")
-                    // Stores the preference only. Starting/stopping the actual
-                    // StayConnectedService foreground service from this toggle
-                    // is separate follow-up wiring — today the service runs
-                    // whenever the app does (see MainActivity), regardless of
-                    // this switch.
-                    SwitchRow(
-                        label = "Keep the connection alive in the background",
-                        checked = view.stayConnected,
-                        onChange = { dispatch(UniffiIntent.SetStayConnected(it)) },
-                    )
+                    // The switch only stores the preference. StayConnectedService
+                    // (which hosts the CoreBridge, so it can never be
+                    // started/stopped from here the way mobile's controller
+                    // starts/stops its plugin service) collects the setting and
+                    // promotes/demotes its own foreground state — the badge
+                    // below is the service's live answer, mobile's
+                    // `service running` / `service off` pair.
+                    val serviceForeground by StayConnectedService.foreground.collectAsState()
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                    ) {
+                        Text(
+                            "Keep the connection alive in the background",
+                            color = Tokens.Text,
+                            fontSize = Tokens.TextSm,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (serviceForeground != null) {
+                            // Same pill/border treatment as the TSX's
+                            // `badgeLive`/`badgeOffline`: green text and border
+                            // while running, dim text on the plain border off.
+                            val live = serviceForeground == true
+                            Text(
+                                if (live) "service running" else "service off",
+                                color = if (live) Tokens.Success else Tokens.TextDim,
+                                fontSize = Tokens.TextXs,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(Tokens.RadiusPill))
+                                    .border(
+                                        1.dp,
+                                        if (live) Tokens.Success else Tokens.BorderStrong,
+                                        RoundedCornerShape(Tokens.RadiusPill),
+                                    )
+                                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                            )
+                        }
+                        Switch(
+                            checked = view.stayConnected,
+                            onCheckedChange = { dispatch(UniffiIntent.SetStayConnected(it)) },
+                        )
+                    }
                 }
 
                 // --- Route through Orbot ---
@@ -445,6 +517,50 @@ private fun MachineSection(
 @Composable
 private fun SectionHeading(title: String) {
     Text(title, color = Tokens.TextMuted, fontSize = Tokens.TextMd)
+}
+
+/** A `<select>`-style dropdown — the same trigger-plus-[DropdownMenu] idiom
+ *  `SessionScreen.kt`'s `EffortSelector` established (bordered trigger text
+ *  that opens the option list on tap). `selected` not matching any option
+ *  (a stored value from before a ladder/union changed) falls back to showing
+ *  the raw value in the trigger rather than silently showing nothing. */
+@Composable
+private fun SelectField(
+    options: List<PickerOption>,
+    selected: String,
+    enabled: Boolean = true,
+    onSelect: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val currentLabel = options.firstOrNull { it.value == selected }?.label ?: selected
+    Box {
+        Text(
+            currentLabel,
+            color = when {
+                !enabled -> Tokens.TextDim
+                selected == "" -> Tokens.TextMuted
+                else -> Tokens.Text
+            },
+            fontSize = Tokens.TextSm,
+            modifier = Modifier
+                .clip(RoundedCornerShape(Tokens.RadiusSm))
+                .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
+                .background(Tokens.SurfaceInput)
+                .clickable(enabled = enabled) { open = true }
+                .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label, color = Tokens.Text, fontSize = Tokens.TextSm) },
+                    onClick = {
+                        open = false
+                        onSelect(option.value)
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable

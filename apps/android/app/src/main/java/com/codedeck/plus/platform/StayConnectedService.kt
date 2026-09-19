@@ -20,6 +20,12 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.codedeck.plus.MainActivity
 import com.codedeck.plus.core.CoreBridge
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 private const val CHANNEL_ID = "codedeck_stay_connected"
 private const val NOTIFICATION_ID = 1
@@ -37,10 +43,24 @@ private const val NOTIFICATION_ID = 1
  * foreground" signal `apps/mobile`'s `document.visibilitychange` drove on the
  * WebView side — a debounced hint the connection FSM uses to decide whether a
  * healthy socket should be torn down (it never is) or just left alone.
+ *
+ * The service cannot be started/stopped from the "stay connected" toggle the
+ * way mobile's controller starts/stops its plugin service: this service OWNS
+ * the process's one [CoreBridge], so stopping it would kill the core while
+ * the app is open. Instead — mobile's `attachStayConnectedService`
+ * reconciliation, ported — the service collects the setting itself and
+ * promotes (foreground notification + locks) or demotes (locks released +
+ * foreground notification removed) on every emission, the first of which
+ * reconciles the persisted value at startup. The service still must exist
+ * whenever the app does, foreground or not.
  */
 class StayConnectedService : Service() {
 
     private val binder = LocalBinder()
+
+    /** Reconciles [CoreBridge.settings]'s `stayConnected` with the foreground
+     *  state; cancelled in [onDestroy] with the rest of the teardown. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     lateinit var bridge: CoreBridge
         private set
@@ -71,30 +91,39 @@ class StayConnectedService : Service() {
         bridge = CoreBridge(relays = emptyList(), identitySecretHex = identitySecretHex, notifier = notifier)
         bridge.start()
         connectivity = Connectivity(applicationContext)
-        acquireLocks()
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+        // The stay-connected setting drives THIS service's foreground state —
+        // the settings screen only flips the stored value. Collecting here is
+        // mobile's attach-reconcile too: the StateFlow replays the persisted
+        // view at startup, so the first real emission applies it. (The null
+        // pre-hydration replay is skipped; onStartCommand reconciles against
+        // the current value right after the platform-mandated startForeground,
+        // covering the window before hydration lands.)
+        scope.launch {
+            bridge.settings.collect { view ->
+                val stayConnected = view?.stayConnected ?: return@collect
+                if (stayConnected) promote() else demote()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        createNotificationChannel()
-        val notification = buildNotification()
+        // MainActivity launches this service via startForegroundService, which
+        // gives the process ~5s to reach foreground or kills it outright
+        // (ForegroundServiceDidNotStartInTimeException) — so this call stays
+        // UNCONDITIONAL even when the setting is off, and the demotion below
+        // (or the collector's, once hydration lands) removes the notification
+        // straight after. A brief foreground flash on launch with the setting
+        // off is the accepted cost of that platform rule.
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
+            startForegroundNotification()
         } catch (e: Exception) {
             // Android 15's ~6h/24h dataSync FGS budget (or any other platform
             // refusal) — degrade instead of crashing the whole process; the
             // bridge still runs unforegrounded until the OS allows a retry.
             stopSelf()
         }
+        if (bridge.settings.value?.stayConnected == false) demote()
         return START_STICKY
     }
 
@@ -107,14 +136,65 @@ class StayConnectedService : Service() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         connectivity?.close()
         releaseLocks()
         if (::bridge.isInitialized) bridge.stop()
+        foreground.value = null
         super.onDestroy()
     }
 
+    /** Foreground notification + wakelock/wifilock — the "stay connected on"
+     *  state. Re-runnable: StateFlow's distinct emissions mean promote and
+     *  demote strictly alternate, but the startForeground reconcile in
+     *  [onStartCommand] can interleave, so neither helper assumes ordering. */
+    private fun promote() {
+        // The locks are the actual keep-alive — take them first, so even a
+        // platform refusal of the notification leaves the connection as
+        // protected as the OS allows (stopping the service instead would kill
+        // the open app's core).
+        acquireLocks()
+        try {
+            startForegroundNotification()
+            foreground.value = true
+        } catch (e: Exception) {
+            // Same dataSync-budget refusal onStartCommand degrades on —
+            // keep the locks, report the service honestly as not foreground.
+            foreground.value = false
+        }
+    }
+
+    /** Releases the locks and removes the foreground notification — the
+     *  "stay connected off" state. The core keeps running either way; this
+     *  only stops promising the OS that the process must stay awake. */
+    private fun demote() {
+        releaseLocks()
+        // A no-op when not in foreground (safe against demote-before-foreground
+        // interleavings).
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foreground.value = false
+    }
+
+    private fun startForegroundNotification() {
+        createNotificationChannel()
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
     private fun acquireLocks() {
+        // Held already (promote without an intervening demote) — re-acquiring
+        // would orphan the still-held locks.
+        if (wakeLock != null || wifiLock != null) return
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
@@ -167,5 +247,17 @@ class StayConnectedService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
             .build()
+    }
+
+    companion object {
+        /**
+         * Live foreground state for the settings screen's badge — `true`
+         * promoted, `false` demoted, `null` unknown (service not yet up, or
+         * gone). A companion field is process-global by nature, and this
+         * service is a process singleton that owns the app's one CoreBridge,
+         * so there is exactly ever one writer (this service) and the state
+         * has exactly one honest home.
+         */
+        val foreground = MutableStateFlow<Boolean?>(null)
     }
 }

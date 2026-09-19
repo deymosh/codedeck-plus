@@ -32,7 +32,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.theme.Tokens
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import uniffi.client_runtime.ActionFailedKind
+import uniffi.client_runtime.CoreEvent
+import uniffi.client_runtime.SliceId
 import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiMachineSummary
 import uniffi.uniffi_bridge.UniffiModelEntry
@@ -49,6 +55,21 @@ private val EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max", "aut
 private const val CAP_OPENCODE = "opencode"
 private const val CAP_CUSTOM_PROVIDERS = "custom-providers"
 private const val BACKEND_OPENCODE = "opencode"
+
+/** How long a create waits for the core to confirm before the UI gives up
+ *  waiting and says so. The FFI dispatch is genuinely fire-and-forget (no
+ *  awaited response exists to await, unlike mobile's `await core.api.create`),
+ *  so this bounded wait over [CoreBridge.events] is the confirmation. */
+private const val CREATE_CONFIRM_TIMEOUT_MS = 10_000L
+
+/** Human copy for a failed create — the UI writes the words, the event only
+ *  carries the semantic kind. */
+private fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
+    ActionFailedKind.PUBLISH_UNREACHABLE -> "Could not reach a relay — check the connection and try again."
+    ActionFailedKind.PUBLISH_REJECTED -> "The relay rejected the request — try again."
+    ActionFailedKind.DECRYPT_FAILED -> "Could not decrypt the bridge's reply — try again."
+    ActionFailedKind.DECODE_FAILED -> "Could not read the bridge's reply — try again."
+}
 
 /** Last path segment of an absolute workspace root — port of
  *  `NewSessionModal.tsx`'s `rootLabel`. */
@@ -78,6 +99,11 @@ private fun rootLabel(root: String): String {
  * asks once per screen-open and once per backend change — covering the
  * common case (the picker asks, the bridge answers) without inventing a
  * timer this FFI surface doesn't need for anything else.
+ *
+ * Create differs from the TSX's `await core.api.createSession` the same way:
+ * the FFI dispatch has no awaited reply, so the in-flight button state and
+ * the error banner come from a bounded wait on [CoreBridge.events] instead
+ * (see [NewSessionBody.create]).
  */
 @Composable
 fun NewSessionScreen(bridge: CoreBridge, machinePubkey: String, onClose: () -> Unit) {
@@ -107,6 +133,7 @@ fun NewSessionScreen(bridge: CoreBridge, machinePubkey: String, onClose: () -> U
         machine = machine,
         defaultModel = settings?.defaultModel.orEmpty(),
         defaultEffort = settings?.defaultEffort.orEmpty(),
+        events = bridge.events,
         dispatch = ::dispatch,
         onClose = onClose,
     )
@@ -117,6 +144,7 @@ private fun NewSessionBody(
     machine: UniffiMachineSummary,
     defaultModel: String,
     defaultEffort: String,
+    events: StateFlow<CoreEvent?>,
     dispatch: (UniffiIntent) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -133,6 +161,12 @@ private fun NewSessionBody(
     // the ''-means-default convention every other field here already uses.
     var backend by remember(machine.pubkeyHex) { mutableStateOf("") }
     var providerId by remember(machine.pubkeyHex) { mutableStateOf("") }
+    // Create-flow feedback — mobile's `creating`/`error` pair: the button
+    // disables with a "Creating…" label, and failures surface as a banner
+    // above the button row instead of closing the screen silently.
+    var creating by remember { mutableStateOf(false) }
+    var createError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(machine.pubkeyHex, backend) {
         dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, backend.ifEmpty { null }))
@@ -181,6 +215,14 @@ private fun NewSessionBody(
     }
 
     fun create() {
+        if (creating) return
+        creating = true
+        createError = null
+        // Identity of the pre-dispatch event: a StateFlow replays its CURRENT
+        // value to a new collector, so the wait below must compare against
+        // this exact instance or it would instantly match the stale event
+        // that was already sitting in the flow before we dispatched.
+        val before = events.value
         val cwd = if (folderChoice == NEW_FOLDER) newFolderPath else folderChoice
         dispatch(
             UniffiIntent.CreateSession(
@@ -193,7 +235,28 @@ private fun NewSessionBody(
                 backend = if (backend == BACKEND_OPENCODE) BACKEND_OPENCODE else null,
             ),
         )
-        onClose()
+        scope.launch {
+            // No explicit refresh is needed on success — CoreBridge refreshes
+            // its views from the very StateChanged events watched here.
+            val settled = withTimeoutOrNull(CREATE_CONFIRM_TIMEOUT_MS) {
+                events.first { event ->
+                    event !== before && when (event) {
+                        is CoreEvent.StateChanged -> event.slice == SliceId.MACHINES
+                        is CoreEvent.ActionFailed -> true
+                        else -> false
+                    }
+                }
+            }
+            creating = false
+            when (settled) {
+                is CoreEvent.StateChanged ->
+                    // Accepted; the sidebar's pending-session card takes over
+                    // from here (mobile's optimistic flow).
+                    onClose()
+                is CoreEvent.ActionFailed -> createError = actionFailedCopy(settled.kind)
+                else -> createError = "The bridge did not confirm — check the session list."
+            }
+        }
     }
 
     Surface(Modifier.fillMaxSize()) {
@@ -310,12 +373,32 @@ private fun NewSessionBody(
                     }
                 }
 
+                // Same banner placement (and tone) as the TSX's
+                // `{error && <div className={s.bannerError}>{error}</div>}`
+                // sitting right above the button row.
+                createError?.let { error ->
+                    Text(
+                        error,
+                        color = Tokens.Danger,
+                        fontSize = Tokens.TextSm,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(Tokens.RadiusSm))
+                            .background(Tokens.Danger.copy(alpha = 0.12f))
+                            .padding(Tokens.Space2),
+                    )
+                }
+
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
                 ) {
-                    Button(onClick = ::create, enabled = canCreate, modifier = Modifier.weight(1f)) {
-                        Text("Create")
+                    Button(
+                        onClick = ::create,
+                        enabled = canCreate && !creating,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(if (creating) "Creating…" else "Create")
                     }
                     Text(
                         "Cancel",
