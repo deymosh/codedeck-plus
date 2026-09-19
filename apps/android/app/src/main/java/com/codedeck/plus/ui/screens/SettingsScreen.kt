@@ -37,8 +37,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.PickerOption
@@ -640,9 +642,23 @@ private fun MachineSection(
     }
 }
 
+/**
+ * Section label — the reference (`SettingsScreen.tsx`'s section titles) is
+ * uppercase, semibold, letter-spaced, muted text: a label, not body text.
+ * Same treatment `Sidebar.kt`'s MachineHeader gives machine names and
+ * `NewSessionScreen.kt`'s SectionHeading gives its pickers —
+ * `String.uppercase()`, `FontWeight.Bold`, 0.05 em tracking on the muted
+ * color.
+ */
 @Composable
 private fun SectionHeading(title: String) {
-    Text(title, color = Tokens.TextMuted, fontSize = Tokens.TextMd)
+    Text(
+        title.uppercase(),
+        color = Tokens.TextMuted,
+        fontSize = Tokens.TextMd,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.05.em,
+    )
 }
 
 @Composable

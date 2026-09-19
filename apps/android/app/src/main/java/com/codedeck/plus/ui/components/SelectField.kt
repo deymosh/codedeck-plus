@@ -5,11 +5,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,7 +24,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.codedeck.plus.ui.theme.Tokens
 
 /** One choice in a [SelectField] dropdown — value is what gets dispatched,
@@ -28,11 +36,24 @@ import com.codedeck.plus.ui.theme.Tokens
 data class PickerOption(val value: String, val label: String)
 
 /**
- * The shared `<select>`-style dropdown — bordered trigger text that opens a
- * Material3 [DropdownMenu] over the option list on tap. Started life as
- * `SettingsScreen.kt`'s private picker (the same trigger-plus-menu idiom
- * `SessionScreen.kt`'s original `EffortSelector` had established) and is now
- * THE widget for the job: SessionScreen's effort selector and
+ * The shared `<select>`-style dropdown — bordered trigger text that opens the
+ * option list CENTERED on screen as a modal ([Dialog]) sheet. That centered
+ * surface is deliberate: the TSX reference's pickers are bare native
+ * `<select>` elements with no custom popup styling (`.select` only sets
+ * border/padding/typography), so on a phone the option list renders as the
+ * browser's own centered system sheet — this Dialog reproduces that behavior,
+ * replacing an earlier anchored Material3 `DropdownMenu` whose width also
+ * swung with the longest option label. Here the sheet is a fixed fraction of
+ * the screen ([DialogProperties] with `usePlatformDefaultWidth = false` lets
+ * the 0.85 width fraction size against the SCREEN, not the platform's default
+ * dialog box) regardless of option content, capped at a fraction of the
+ * screen's height with the option column scrolling past it — the Model picker
+ * can carry dozens of entries. The current selection is highlighted, the way
+ * a native select sheet marks the chosen value.
+ *
+ * Started life as `SettingsScreen.kt`'s private picker (the trigger-plus-list
+ * idiom `SessionScreen.kt`'s original `EffortSelector` had established) and
+ * is now THE widget for the job: SessionScreen's effort selector and
  * NewSessionScreen's backend/provider/model/effort pickers and
  * MachineProviders' default-model picker all render through it, matching the
  * reference app's native `<select>` elements for the same fields.
@@ -83,29 +104,54 @@ fun SelectField(
             // pulling in a Material icon for one character.
             Text("▾", color = if (enabled) Tokens.TextMuted else Tokens.TextDim, fontSize = Tokens.TextXs)
         }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            // Material3's own menu Surface renders here, but on this app's
-            // near-black theme its default container barely reads as a
-            // separate surface from the screen behind it — the popup looked
-            // like a flat, borderless smear (device-observed 2026-09-19).
-            // Layering this app's own SurfaceRaised + border on top gives it
-            // the same visual weight as every other elevated surface in the
-            // app (cards, the machine-add button, PermissionCard, …).
-            modifier = Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusMd))
-                .background(Tokens.SurfaceRaised)
-                .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusMd)),
-        ) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label, color = Tokens.Text, fontSize = Tokens.TextSm) },
-                    onClick = {
-                        open = false
-                        onSelect(option.value)
-                    },
-                )
+        if (open) {
+            Dialog(
+                onDismissRequest = { open = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                BoxWithConstraints {
+                    val sheetWidth = maxWidth * 0.85f
+                    val sheetMaxHeight = maxHeight * 0.6f
+                    Column(
+                        Modifier
+                            .width(sheetWidth)
+                            .heightIn(max = sheetMaxHeight)
+                            .clip(RoundedCornerShape(Tokens.RadiusMd))
+                            .background(Tokens.SurfaceRaised)
+                            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusMd))
+                            .padding(vertical = Tokens.Space1),
+                    ) {
+                        Column(Modifier.verticalScroll(rememberScrollState())) {
+                            options.forEach { option ->
+                                val isSelected = option.value == selected
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            open = false
+                                            onSelect(option.value)
+                                        }
+                                        .padding(
+                                            horizontal = Tokens.Space3,
+                                            vertical = Tokens.Space2,
+                                        ),
+                                ) {
+                                    Text(
+                                        option.label,
+                                        // The chosen value reads at a glance in a
+                                        // long list (a native select sheet marks it
+                                        // the same way); everything else stays the
+                                        // plain body color.
+                                        color = if (isSelected) Tokens.Accent else Tokens.Text,
+                                        fontWeight = if (isSelected) FontWeight.Bold else null,
+                                        fontSize = Tokens.TextSm,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

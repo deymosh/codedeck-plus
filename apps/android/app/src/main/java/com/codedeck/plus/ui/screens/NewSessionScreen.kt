@@ -33,8 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.actionFailedCopy
 import com.codedeck.plus.ui.components.PickerOption
@@ -87,6 +89,9 @@ private fun rootLabel(root: String): String {
  * dropdown (`ui/components/SelectField.kt`), the native app's equivalent of
  * the TSX reference's `<select>` elements; only Folder is a radio-row list
  * ([SelectableRow]) — the one section the reference also renders as a list.
+ * Each dropdown section is ONE row ([SelectRow]): the section label on the
+ * start edge, the dropdown at the end (`SettingsScreen.kt`'s prefRow
+ * idiom), not a stacked heading-above-control pair.
  *
  * One deliberate narrowing from the TSX reference: that screen retries its
  * `modelsRequest` on every heartbeat while no list has landed yet
@@ -318,8 +323,7 @@ private fun NewSessionBody(
                 // anyway, so hiding the picker keeps this screen honest about
                 // what this bridge can do.
                 if (machine.capabilities.contains(CAP_OPENCODE)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                        SectionHeading("Backend")
+                    SelectRow("Backend") {
                         SelectField(
                             options = listOf(
                                 PickerOption("", "Claude Code"),
@@ -335,8 +339,7 @@ private fun NewSessionBody(
                 // AND stores at least one profile — an OpenCode session never
                 // sees this (providerProfiles is forced empty above).
                 if (providerProfiles.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                        SectionHeading("Provider")
+                    SelectRow("Provider") {
                         SelectField(
                             options = listOf(PickerOption("", "Anthropic")) +
                                 providerProfiles.map { PickerOption(it.id, it.label) },
@@ -348,27 +351,28 @@ private fun NewSessionBody(
 
                 // --- Model ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                    SectionHeading("Model")
-                    val modelOptions = activeProfile?.models ?: modelsList
-                    SelectField(
-                        options = buildList {
-                            add(PickerOption("", "Default model"))
-                            modelOptions.forEach { m ->
-                                add(PickerOption(m.id, m.label ?: m.id))
-                            }
-                            // The preferred default model (CDX-047) may not be in
-                            // THIS machine's list — keep the pre-selection honest
-                            // instead of a controlled picker silently showing
-                            // nothing (the same trailing synthetic option
-                            // `SettingsScreen.kt`'s model picker appends for a
-                            // stale stored value).
-                            if (model != "" && modelOptions.none { it.id == model }) {
-                                add(PickerOption(model, model))
-                            }
-                        },
-                        selected = model,
-                        onSelect = { model = it },
-                    )
+                    SelectRow("Model") {
+                        val modelOptions = activeProfile?.models ?: modelsList
+                        SelectField(
+                            options = buildList {
+                                add(PickerOption("", "Default model"))
+                                modelOptions.forEach { m ->
+                                    add(PickerOption(m.id, m.label ?: m.id))
+                                }
+                                // The preferred default model (CDX-047) may not be in
+                                // THIS machine's list — keep the pre-selection honest
+                                // instead of a controlled picker silently showing
+                                // nothing (the same trailing synthetic option
+                                // `SettingsScreen.kt`'s model picker appends for a
+                                // stale stored value).
+                                if (model != "" && modelOptions.none { it.id == model }) {
+                                    add(PickerOption(model, model))
+                                }
+                            },
+                            selected = model,
+                            onSelect = { model = it },
+                        )
+                    }
                     // CDX-035: the bridge's own reason for an empty answer, so
                     // an unavailable list is explained instead of silently
                     // blank — only on the plain (non-profile) path, a
@@ -379,8 +383,7 @@ private fun NewSessionBody(
                 }
 
                 // --- Effort ---
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                    SectionHeading("Effort")
+                SelectRow("Effort") {
                     SelectField(
                         options = listOf(PickerOption("", "Default effort")) +
                             EFFORT_LEVELS.map { PickerOption(it, it) },
@@ -432,9 +435,45 @@ private fun NewSessionBody(
     }
 }
 
+/**
+ * Section label — the reference renders these (`NewSessionModal.module.css`'s
+ * `.sectionTitle`, and the settings screen's own equivalent) as uppercase,
+ * semibold, letter-spaced, muted text: a label, not body text. Same treatment
+ * `Sidebar.kt`'s MachineHeader gives machine names — `String.uppercase()`,
+ * `FontWeight.Bold`, 0.05 em tracking on the muted color.
+ */
 @Composable
-private fun SectionHeading(title: String) {
-    Text(title, color = Tokens.TextMuted, fontSize = Tokens.TextMd)
+private fun SectionHeading(title: String, modifier: Modifier = Modifier) {
+    Text(
+        title.uppercase(),
+        color = Tokens.TextMuted,
+        fontSize = Tokens.TextMd,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.05.em,
+        modifier = modifier,
+    )
+}
+
+/**
+ * One picker as a single settings row: the section label on the start edge
+ * taking the free width, the `SelectField` hugging the row's end — the same
+ * label-left-control-right idiom `SettingsScreen.kt`'s preference rows use
+ * (weight(1f) on the label right-aligns the control), replacing the stacked
+ * heading-above-control layout. The label goes through [SectionHeading]
+ * rather than a bare `Text` because in the TSX reference Backend/Provider/
+ * Model/Effort ARE `.sectionTitle` divs — the same uppercase treatment the
+ * Folder heading gets.
+ */
+@Composable
+private fun SelectRow(label: String, content: @Composable () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+    ) {
+        SectionHeading(label, Modifier.weight(1f))
+        content()
+    }
 }
 
 @Composable
