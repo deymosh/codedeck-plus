@@ -689,7 +689,7 @@ internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod2 : com.sun.jna.C
     fun callback(`uniffiHandle`: Long,`proxy`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceUniffiNotifierMethod0 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+    fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceUniffiNotifierMethod1 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
@@ -974,7 +974,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_uniffi_bridge_fn_init_callback_vtable_uniffinotifier(`vtable`: UniffiVTableCallbackInterfaceUniffiNotifier,
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(`ptr`: Pointer,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(`ptr`: Pointer,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_uniffi_bridge_fn_method_uniffinotifier_cancel(`ptr`: Pointer,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1251,7 +1251,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_set_proxy() != 38239.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify() != 58966.toShort()) {
+    if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify() != 57158.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel() != 41559.toShort()) {
@@ -3088,11 +3088,12 @@ public object FfiConverterTypeUniffiHttpFetch: FfiConverter<UniffiHttpFetch, Poi
  * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
  * `tag` is the same per-session/per-peer key `client-core`'s own notification
  * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
- * for `cancel`-by-tag, not for anything UniFFI needs to interpret.
+ * for `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
+ * (`NotifyEvent::kind_str`) routes Android notification channels.
  */
 public interface UniffiNotifier {
     
-    fun `notify`(`title`: kotlin.String, `body`: kotlin.String, `tag`: kotlin.String?)
+    fun `notify`(`title`: kotlin.String, `body`: kotlin.String, `tag`: kotlin.String?, `kind`: kotlin.String)
     
     fun `cancel`(`tag`: kotlin.String)
     
@@ -3103,7 +3104,8 @@ public interface UniffiNotifier {
  * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
  * `tag` is the same per-session/per-peer key `client-core`'s own notification
  * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
- * for `cancel`-by-tag, not for anything UniFFI needs to interpret.
+ * for `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
+ * (`NotifyEvent::kind_str`) routes Android notification channels.
  */
 open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
 
@@ -3186,12 +3188,12 @@ open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
         }
     }
 
-    override fun `notify`(`title`: kotlin.String, `body`: kotlin.String, `tag`: kotlin.String?)
+    override fun `notify`(`title`: kotlin.String, `body`: kotlin.String, `tag`: kotlin.String?, `kind`: kotlin.String)
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(
-        it, FfiConverterString.lower(`title`),FfiConverterString.lower(`body`),FfiConverterOptionalString.lower(`tag`),_status)
+        it, FfiConverterString.lower(`title`),FfiConverterString.lower(`body`),FfiConverterOptionalString.lower(`tag`),FfiConverterString.lower(`kind`),_status)
 }
     }
     
@@ -3220,13 +3222,14 @@ open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfaceUniffiNotifier {
     internal object `notify`: UniffiCallbackInterfaceUniffiNotifierMethod0 {
-        override fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+        override fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeUniffiNotifier.handleMap.get(uniffiHandle)
             val makeCall = { ->
                 uniffiObj.`notify`(
                     FfiConverterString.lift(`title`),
                     FfiConverterString.lift(`body`),
                     FfiConverterOptionalString.lift(`tag`),
+                    FfiConverterString.lift(`kind`),
                 )
             }
             val writeReturn = { _: Unit -> Unit }

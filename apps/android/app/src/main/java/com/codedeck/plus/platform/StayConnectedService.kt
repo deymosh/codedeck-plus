@@ -19,6 +19,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.codedeck.plus.MainActivity
+import com.codedeck.plus.R
 import com.codedeck.plus.core.CoreBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -275,11 +276,8 @@ class StayConnectedService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             // A missing small icon isn't degraded gracefully — the platform
             // hard-crashes the process with `CannotPostForegroundServiceNotificationException`
-            // rather than posting an icon-less notification. A stock system
-            // glyph stands in until a real launcher/notification icon exists
-            // (branding pass, same "not part of F3/F4.1's scope" note the
-            // manifest's own `android:icon` comment already makes).
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            // rather than posting an icon-less notification.
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("CodeDeck+")
             .setContentText("Staying connected")
             .setOngoing(true)

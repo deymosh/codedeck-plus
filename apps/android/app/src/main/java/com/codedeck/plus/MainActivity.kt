@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.Shell
@@ -35,6 +36,7 @@ import com.codedeck.plus.ui.theme.CodeDeckTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Holds the [CoreBridge] reference handed back once [MainActivity] binds to
@@ -47,8 +49,30 @@ class MainViewModel : ViewModel() {
     private val _bridge = MutableStateFlow<CoreBridge?>(null)
     val bridge: StateFlow<CoreBridge?> = _bridge.asStateFlow()
 
+    /** Deep link arriving before the bridge attached; replayed in [attach].
+     *  Main-thread-only access, so a plain var holds. */
+    private var pendingSession: Pair<String, String>? = null
+
     fun attach(bridge: CoreBridge) {
         _bridge.value = bridge
+        pendingSession?.let { (machine, sessionId) ->
+            pendingSession = null
+            dispatchSelectSession(machine, sessionId)
+        }
+    }
+
+    fun selectSession(machine: String, sessionId: String) {
+        if (_bridge.value != null) {
+            dispatchSelectSession(machine, sessionId)
+        } else {
+            pendingSession = machine to sessionId
+        }
+    }
+
+    private fun dispatchSelectSession(machine: String, sessionId: String) {
+        viewModelScope.launch {
+            _bridge.value?.dispatch(uniffi.uniffi_bridge.UniffiIntent.SelectSession(machine, sessionId))
+        }
     }
 }
 
@@ -68,6 +92,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleDeepLink(intent)
         // Draws behind the status/navigation bars on every supported API
         // level — targetSdk 35+ enforces this regardless. The app consumes
         // the bar + keyboard insets itself (the root Surface below); without
@@ -119,5 +144,21 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         unbindService(connection)
         super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "codedeck" || uri.host != "session") return
+        // Notifier.kt builds codedeck://session/<machine>/<sessionId> — one
+        // path segment per key part, already decoded by Uri here.
+        val segments = uri.pathSegments
+        if (segments.size == 2 && segments.none { it.isBlank() }) {
+            viewModel.selectSession(segments[0], segments[1])
+        }
     }
 }
