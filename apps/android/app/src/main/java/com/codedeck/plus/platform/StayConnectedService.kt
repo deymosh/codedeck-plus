@@ -226,10 +226,25 @@ class StayConnectedService : Service() {
         ).apply { setReferenceCounted(false); acquire() }
 
         val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = wifiManager.createWifiLock(
-            WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-            "CodeDeck:StayConnected",
-        ).apply { setReferenceCounted(false); acquire() }
+        wifiLock = (
+            // LOW_LATENCY is the only non-deprecated radio mode (API 29+;
+            // from 34 the platform maps a legacy HIGH_PERF onto it anyway).
+            // Its screen-off pause costs nothing here — the PARTIAL_WAKE_LOCK
+            // above is the actual keep-alive.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY,
+                    "CodeDeck:StayConnected",
+                )
+            } else {
+                // Pre-Q has no LOW_LATENCY; HIGH_PERF is the only valid mode.
+                @Suppress("DEPRECATION")
+                wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "CodeDeck:StayConnected",
+                )
+            }
+            ).apply { setReferenceCounted(false); acquire() }
     }
 
     private fun releaseLocks() {
