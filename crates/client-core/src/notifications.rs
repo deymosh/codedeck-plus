@@ -308,6 +308,22 @@ impl Default for NotificationCoordinator {
     }
 }
 
+/// Everything [`NotificationCoordinator::emit`] needs besides the event
+/// itself — grouped so call sites name their booleans instead of listing
+/// eight positional arguments.
+pub struct EmitInputs<'a> {
+    pub visible: bool,
+    /// `enabled` false (CDX-048 master toggle) kills BOTH channels at the
+    /// single seam — no notify, no ping, no cooldown slot burned.
+    pub enabled: bool,
+    /// Mirrors the TS `deps.ping !== undefined` (a build with no chime seam
+    /// never wants a ping).
+    pub ping_available: bool,
+    pub active_session_key: Option<&'a str>,
+    pub context: NotificationContext<'a>,
+    pub now: u64,
+}
+
 impl NotificationCoordinator {
     pub fn with_cooldown(cooldown_ms: u64) -> Self {
         Self {
@@ -316,20 +332,15 @@ impl NotificationCoordinator {
         }
     }
 
-    /// `enabled` false (CDX-048 master toggle) kills BOTH channels at the single
-    /// seam — no notify, no ping, no cooldown slot burned. `ping_available`
-    /// mirrors the TS `deps.ping !== undefined` (a build with no chime seam
-    /// never wants a ping).
-    pub fn emit(
-        &mut self,
-        event: &NotifyEvent,
-        visible: bool,
-        enabled: bool,
-        ping_available: bool,
-        active_session_key: Option<&str>,
-        context: &NotificationContext,
-        now: u64,
-    ) -> Vec<NotifyEffect> {
+    pub fn emit(&mut self, event: &NotifyEvent, inputs: EmitInputs<'_>) -> Vec<NotifyEffect> {
+        let EmitInputs {
+            visible,
+            enabled,
+            ping_available,
+            active_session_key,
+            context,
+            now,
+        } = inputs;
         if !enabled {
             return vec![];
         }
@@ -358,7 +369,7 @@ impl NotificationCoordinator {
         }
         if want_notify {
             effects.push(NotifyEffect::Notify {
-                content: format_notify_event(event, context),
+                content: format_notify_event(event, &context),
                 tag: notify_tag(event),
                 kind: event.kind_str().to_string(),
             });
@@ -371,6 +382,19 @@ impl NotificationCoordinator {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Common EmitInputs for the coordinator tests — `EmitInputs { field: x,
+    /// ..inputs(...) }` overrides single fields at the call site.
+    fn inputs(visible: bool, enabled: bool, ping_available: bool) -> EmitInputs<'static> {
+        EmitInputs {
+            visible,
+            enabled,
+            ping_available,
+            active_session_key: None,
+            context: NotificationContext::none(),
+            now: 0,
+        }
+    }
 
     fn perm(m: &str, s: &str) -> NotifyEvent {
         NotifyEvent::PermissionRequest {
@@ -523,43 +547,43 @@ mod tests {
     #[test]
     fn master_toggle_off_kills_both_channels_and_burns_no_cooldown() {
         let mut co = NotificationCoordinator::default();
-        assert!(co.emit(&perm("m", "s"), false, false, true, None, &NotificationContext::none(), 0).is_empty());
+        assert!(co.emit(&perm("m", "s"), inputs(false, false, true)).is_empty());
         // enabled again immediately: not blocked by a cooldown slot
-        assert!(!co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), 1).is_empty());
+        assert!(!co.emit(&perm("m", "s"), EmitInputs { now: 1, ..inputs(false, true, true) }).is_empty());
     }
 
     #[test]
     fn a_visible_user_watching_the_session_gets_nothing() {
         let mut co = NotificationCoordinator::default();
-        assert!(co.emit(&perm("m", "s"), true, true, true, Some("m s"), &NotificationContext::none(), 0).is_empty());
+        assert!(co.emit(&perm("m", "s"), EmitInputs { visible: true, active_session_key: Some("m s"), ..inputs(true, true, true) }).is_empty());
     }
 
     #[test]
     fn ping_comes_before_notify_and_shares_one_cooldown() {
         let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), 0);
+        let eff = co.emit(&perm("m", "s"), inputs(false, true, true));
         assert_eq!(eff.len(), 2);
         assert_eq!(eff[0], NotifyEffect::Ping);
         assert!(matches!(eff[1], NotifyEffect::Notify { .. }));
 
         // same key inside the window: nothing (the live path AND the heartbeat
         // path can both emit for one card — this is the double-fire guard).
-        assert!(co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), NOTIFY_COOLDOWN_MS - 1).is_empty());
+        assert!(co.emit(&perm("m", "s"), EmitInputs { now: NOTIFY_COOLDOWN_MS - 1, ..inputs(false, true, true) }).is_empty());
         // window elapsed: fires again
-        assert_eq!(co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), NOTIFY_COOLDOWN_MS).len(), 2);
+        assert_eq!(co.emit(&perm("m", "s"), EmitInputs { now: NOTIFY_COOLDOWN_MS, ..inputs(false, true, true) }).len(), 2);
     }
 
     #[test]
     fn ping_only_when_the_os_notification_is_suppressed_but_the_user_is_elsewhere() {
         let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&perm("m", "s"), true, true, true, Some("m other"), &NotificationContext::none(), 0);
+        let eff = co.emit(&perm("m", "s"), EmitInputs { active_session_key: Some("m other"), ..inputs(true, true, true) });
         assert_eq!(eff, vec![NotifyEffect::Ping]);
     }
 
     #[test]
     fn no_ping_seam_means_no_ping_effect() {
         let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&perm("m", "s"), false, true, false, None, &NotificationContext::none(), 0);
+        let eff = co.emit(&perm("m", "s"), inputs(false, true, false));
         assert_eq!(eff.len(), 1);
         assert!(matches!(eff[0], NotifyEffect::Notify { .. }));
     }

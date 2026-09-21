@@ -32,7 +32,7 @@ use protocol::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
-use client_core::notifications::{dm_notify_tag, session_notify_tag, NotifyEvent};
+use client_core::notifications::{dm_notify_tag, session_notify_tag, EmitInputs, NotifyEvent};
 use client_core::stores::dm::{
     AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
 };
@@ -1839,25 +1839,24 @@ impl Loop {
 
     /// Run the notification coordinator for one event and deliver its effects.
     fn run_notify(&mut self, event: NotifyEvent) {
-        let visible = self.conn.visible;
-        let enabled = self.stores.settings.data.notifications_enabled;
         // DMs carry no session keys — bare context, their own labels suffice.
         let (session_label, machine_label) = match event.session() {
             Some((m, s)) => self.stores.notification_labels(m, s),
             None => (None, None),
         };
-        let context = client_core::notifications::NotificationContext {
-            session_label: session_label.as_deref(),
-            machine_label: machine_label.as_deref(),
-        };
         let effects = self.stores.notifications.emit(
             &event,
-            visible,
-            enabled,
-            false,
-            None,
-            &context,
-            self.clock.now_ms(),
+            EmitInputs {
+                visible: self.conn.visible,
+                enabled: self.stores.settings.data.notifications_enabled,
+                ping_available: false,
+                active_session_key: None,
+                context: client_core::notifications::NotificationContext {
+                    session_label: session_label.as_deref(),
+                    machine_label: machine_label.as_deref(),
+                },
+                now: self.clock.now_ms(),
+            },
         );
         if !effects.is_empty() {
             self.state_changed(SliceId::Cards);

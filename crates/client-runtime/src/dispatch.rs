@@ -14,7 +14,8 @@ use std::collections::{HashMap, HashSet};
 
 use protocol::crypto::Keypair;
 use client_core::notifications::{
-    classify_output_entry, is_agent_activity_entry, NotificationContext, NotifyEffect, NotifyEvent,
+    classify_output_entry, is_agent_activity_entry, EmitInputs, NotificationContext, NotifyEffect,
+    NotifyEvent,
 };
 use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
@@ -192,12 +193,14 @@ impl<'a> Router<'a> {
         };
         self.stores.notifications.emit(
             event,
-            self.visible,
-            self.notify_enabled,
-            self.ping_available,
-            key.as_deref(),
-            &context,
-            self.now,
+            EmitInputs {
+                visible: self.visible,
+                enabled: self.notify_enabled,
+                ping_available: self.ping_available,
+                active_session_key: key.as_deref(),
+                context,
+                now: self.now,
+            },
         )
     }
 
