@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # scripts/install-toolchain.sh — installs EVERY toolchain this repo needs
 # into ./toolchain/ (gitignored): a JDK, a Rust toolchain with the Android
-# targets, Node.js + the exact pinned pnpm, and the Android SDK/NDK.
+# targets, Node.js + the exact pinned pnpm, and the Android SDK/NDK — plus a
+# Zig that stands in for a missing system C compiler (see below).
 # Everything lives under the repo, version-pinned independently of whatever
 # else is on this machine — nothing is written to a system path (no
 # ~/.rustup, no ~/.cache/node, no ~/.android, no apt package), so a
@@ -146,6 +147,84 @@ export PATH="$CARGO_HOME/bin:$PATH"
 echo "==> Adding Android Rust targets"
 rustup target add aarch64-linux-android x86_64-linux-android
 
+# --- Zig — host C linker stand-in for cargo ---
+# Cargo links host binaries (build scripts, proc macros, test executables)
+# through a system `cc`, which a bare machine lacks. zig cc bundles clang
+# plus glibc headers/startup files, so it works with nothing from the OS;
+# pkg-config-driven libs (Tauri desktop) are still the distro's job.
+# env.sh only puts toolchain/bin (the shims below) on PATH when the machine
+# has no cc/gcc/clang at all.
+ZIG_DIR="$TOOLCHAIN_DIR/zig"
+if [ ! -x "$ZIG_DIR/zig" ]; then
+  echo "==> Installing Zig (host linker stand-in for cargo)"
+  arch="$(uname -m)"
+  case "$arch" in x86_64 | aarch64) ;; *)
+    echo "error: no prebuilt Zig for linux-$arch" >&2
+    exit 1
+  ;; esac
+  # Same resolve-at-install-time pattern as the JDK/Node steps: latest
+  # stable from ziglang.org's index (the index's only non-release key is
+  # "master"; every other key is a plain x.y.z version).
+  zig_version="$(curl -fsSL https://ziglang.org/download/index.json \
+    | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | sort -V | tail -1)"
+  if [ -z "$zig_version" ]; then
+    echo "error: could not resolve the latest Zig version from ziglang.org" >&2
+    exit 1
+  fi
+  echo "==> Zig $zig_version"
+  tmp="$(mktemp -d)"
+  curl -fsSL -o "$tmp/zig.tar.xz" \
+    "https://ziglang.org/download/${zig_version}/zig-${arch}-linux-${zig_version}.tar.xz"
+  mkdir -p "$ZIG_DIR"
+  extract_tar_xz "$tmp/zig.tar.xz" "$ZIG_DIR"
+  rm -rf "$tmp"
+else
+  echo "==> Zig already installed, skipping"
+fi
+
+if [ -x "$ZIG_DIR/zig" ]; then
+  mkdir -p "$TOOLCHAIN_DIR/bin"
+  # The cc shim rewrites --target/-target triples from the LLVM dialect
+  # (cc-rs emits the `-unknown-` vendor segment; zig rejects it).
+  sed "s|@ZIG@|$ZIG_DIR/zig|" > "$TOOLCHAIN_DIR/bin/cc" <<'EOF'
+#!/bin/sh
+# Installed by scripts/install-toolchain.sh — zig cc, the host C
+# compiler/linker this machine lacks (see that script for why).
+translate() {
+  printf '%s' "$1" | sed -E 's/^([A-Za-z0-9_]+)-unknown-/\1-/'
+}
+n=$#
+target_next=0
+for arg do
+  case "$arg" in
+    --target=*|-target=*)
+      set -- "$@" "${arg%%=*}=$(translate "${arg#*=}")"
+      ;;
+    -target|--target)
+      target_next=1
+      set -- "$@" "$arg"
+      ;;
+    *)
+      if [ "$target_next" -eq 1 ]; then
+        set -- "$@" "$(translate "$arg")"
+        target_next=0
+      else
+        set -- "$@" "$arg"
+      fi
+      ;;
+  esac
+done
+shift "$n"
+exec "@ZIG@" cc "$@"
+EOF
+  sed "s|@ZIG@|$ZIG_DIR/zig|" > "$TOOLCHAIN_DIR/bin/ar" <<'EOF'
+#!/bin/sh
+# Installed by scripts/install-toolchain.sh — pairs with bin/cc (zig ar).
+exec "@ZIG@" ar "$@"
+EOF
+  chmod +x "$TOOLCHAIN_DIR/bin/cc" "$TOOLCHAIN_DIR/bin/ar"
+fi
+
 # --- Node.js + the exact pnpm this repo pins (package.json's "engines"/
 # "packageManager" — kept in sync by hand, same as any other version bump
 # here) ---
@@ -218,6 +297,11 @@ export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
 export ANDROID_HOME="$ANDROID_HOME"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
 export PATH="\$JAVA_HOME/bin:\$CARGO_HOME/bin:$NODE_DIR/bin:\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/platform-tools:\$PATH"
+# zig-backed cc/ar shims (see install-toolchain.sh), only when this machine
+# has no C compiler of its own.
+if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then
+  export PATH="$TOOLCHAIN_DIR/bin:\$PATH"
+fi
 EOF
 
 echo

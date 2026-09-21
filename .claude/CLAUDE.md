@@ -54,7 +54,9 @@ applies:**
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
   or any bare Linux machine):** `scripts/install-toolchain.sh` installs a
   COMPLETE toolchain — JDK, Rust (+ the Android targets), Node.js, the exact
-  pinned pnpm, and the Android SDK/NDK — into `./toolchain/` (gitignored),
+  pinned pnpm, the Android SDK/NDK, and a Zig host-`cc` shim (active only
+  when the machine has no C compiler; cargo needs one to link build
+  scripts/proc macros/test binaries) — into `./toolchain/` (gitignored),
   independent of anything already on that machine (a different project's
   Java/Rust/Node/Android-SDK version is never at risk, and a bare machine
   with none of them works the same as one with all of them already
