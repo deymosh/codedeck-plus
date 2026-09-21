@@ -33,12 +33,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -367,26 +369,29 @@ private fun SwipeToDeleteSessionCard(
     onDelete: (machine: String, sessionId: String, label: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // The dismiss state's confirm lambda is captured on first composition —
-    // re-read the callback through `rememberUpdatedState` so a swipe always
-    // deletes THIS composition's session, never a stale one.
+    // The LaunchedEffect below captures these on first composition —
+    // `rememberUpdatedState` keeps a swipe deleting THIS session, not a
+    // stale one.
     val currentOnDelete by rememberUpdatedState(onDelete)
     val currentSession by rememberUpdatedState(session)
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            when (value) {
-                SwipeToDismissBoxValue.EndToStart -> {
+    val dismissState = rememberSwipeToDismissBoxState()
+
+    // Delete fires once a left swipe settles at EndToStart (observing the
+    // value rather than a confirmValueChange veto — deprecated without
+    // replacement in material3). enableDismissFromStartToEnd=false below
+    // leaves Settled and EndToStart as the only reachable values.
+    LaunchedEffect(dismissState) {
+        snapshotFlow { dismissState.currentValue }
+            .collect { value ->
+                if (value == SwipeToDismissBoxValue.EndToStart) {
                     val s = currentSession
                     val label = s.title?.takeIf { it.isNotBlank() }
                         ?: s.slug.takeIf { it.isNotBlank() }
                         ?: "Session"
                     currentOnDelete(machine, s.id, label)
-                    true
                 }
-                else -> false
             }
-        },
-    )
+    }
     SwipeToDismissBox(
         state = dismissState,
         modifier = modifier.fillMaxWidth(),
