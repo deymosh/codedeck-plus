@@ -177,7 +177,7 @@ impl TauriNotifier {
 }
 
 impl Notifier for TauriNotifier {
-    fn notify(&self, title: &str, body: &str, tag: Option<&str>) {
+    fn notify(&self, title: &str, body: &str, tag: Option<&str>, _kind: &str) {
         let id = self.next_id.get().wrapping_add(1);
         self.next_id.set(id);
         let shown = self

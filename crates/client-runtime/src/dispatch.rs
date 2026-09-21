@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use protocol::crypto::Keypair;
 use client_core::notifications::{
-    classify_output_entry, is_agent_activity_entry, NotifyEffect, NotifyEvent,
+    classify_output_entry, is_agent_activity_entry, NotificationContext, NotifyEffect, NotifyEvent,
 };
 use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
@@ -181,12 +181,22 @@ impl<'a> Router<'a> {
 
     fn emit_notify(&mut self, event: &NotifyEvent) -> Vec<NotifyEffect> {
         let key = self.active_session_key();
+        // DMs carry no session keys — bare context, their own labels suffice.
+        let (session_label, machine_label) = match event.session() {
+            Some((m, s)) => self.stores.notification_labels(m, s),
+            None => (None, None),
+        };
+        let context = NotificationContext {
+            session_label: session_label.as_deref(),
+            machine_label: machine_label.as_deref(),
+        };
         self.stores.notifications.emit(
             event,
             self.visible,
             self.notify_enabled,
             self.ping_available,
             key.as_deref(),
+            &context,
             self.now,
         )
     }

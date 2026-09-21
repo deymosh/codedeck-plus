@@ -43,7 +43,7 @@ pub enum NotifyEvent {
 }
 
 impl NotifyEvent {
-    fn session(&self) -> Option<(&str, &str)> {
+    pub fn session(&self) -> Option<(&str, &str)> {
         match self {
             Self::PermissionRequest { machine, session_id, .. }
             | Self::Question { machine, session_id }
@@ -54,7 +54,9 @@ impl NotifyEvent {
         }
     }
 
-    fn kind_str(&self) -> &'static str {
+    /// Stable kind string — the platform Notifier routes delivery on it
+    /// (Android: which notification channel).
+    pub fn kind_str(&self) -> &'static str {
         match self {
             Self::PermissionRequest { .. } => "permission-request",
             Self::Question { .. } => "question",
@@ -62,6 +64,23 @@ impl NotifyEvent {
             Self::SessionFinished { .. } => "session-finished",
             Self::SessionFailed { .. } => "session-failed",
             Self::DmReceived { .. } => "dm-received",
+        }
+    }
+}
+
+/// Human labels resolved by the runtime from its stores at emit time — the
+/// event itself only carries machine/session keys. Both optional; formatting
+/// falls back to the bare kind text when either is missing.
+pub struct NotificationContext<'a> {
+    pub session_label: Option<&'a str>,
+    pub machine_label: Option<&'a str>,
+}
+
+impl NotificationContext<'_> {
+    pub fn none() -> Self {
+        Self {
+            session_label: None,
+            machine_label: None,
         }
     }
 }
@@ -81,11 +100,14 @@ pub fn notify_key(event: &NotifyEvent) -> String {
     }
 }
 
+/// Parsed back by platform ports (Android turns it into a notification-tap
+/// deep link): `:` cannot occur in a machine key (npub/hex) or session id,
+/// so ports strip the prefix and split on the LAST colon unambiguously.
 pub fn session_notify_tag(machine: &str, session_id: &str) -> String {
-    format!("session {}", session_key_of(machine, session_id))
+    format!("session:{machine}:{session_id}")
 }
 pub fn dm_notify_tag(peer: &str) -> String {
-    format!("dm {peer}")
+    format!("dm:{peer}")
 }
 
 /// Cancellation scope (CDX-026c) — coarser than [`notify_key`]: opening a
@@ -129,29 +151,41 @@ pub struct NotificationContent {
     pub body: String,
 }
 
-pub fn format_notify_event(event: &NotifyEvent) -> NotificationContent {
+pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> NotificationContent {
+    // Session-scoped kinds title "{kind} — {session}" so a multi-session
+    // phone can tell cards apart at a glance, and name the machine in the
+    // body where it reads naturally. DMs already carry their own labels.
+    let titled = |kind: &str| match ctx.session_label {
+        Some(s) => format!("{kind} — {s}"),
+        None => kind.to_string(),
+    };
+    let on_machine = |base: &str| match ctx.machine_label {
+        Some(m) => format!("{base} on {m}"),
+        None => base.to_string(),
+    };
     let (title, body) = match event {
         NotifyEvent::PermissionRequest { tool_name, .. } => (
-            "Permission needed".to_string(),
+            titled("Permission needed"),
             match tool_name {
-                Some(t) => format!("Claude wants to use {t}"),
-                None => "Claude needs permission to proceed".to_string(),
+                Some(t) => on_machine(&format!("Claude wants to use {t}")),
+                None => on_machine("Claude needs permission to proceed"),
             },
         ),
         NotifyEvent::Question { .. } => (
-            "Question from Claude".to_string(),
-            "Claude is asking you a question".to_string(),
+            titled("Question from Claude"),
+            on_machine("Claude is asking you a question"),
         ),
         NotifyEvent::PlanApproval { .. } => (
-            "Plan ready for review".to_string(),
-            "A plan is waiting for your approval".to_string(),
+            titled("Plan ready for review"),
+            on_machine("A plan is waiting for your approval"),
         ),
         NotifyEvent::SessionFinished { .. } => (
-            "Session finished".to_string(),
-            "Claude finished the task".to_string(),
+            titled("Session finished"),
+            on_machine("Claude finished the task"),
         ),
         NotifyEvent::SessionFailed { reason, .. } => (
-            "Session failed".to_string(),
+            titled("Session failed"),
+            // Variable text — the machine name would read oddly after it.
             reason
                 .clone()
                 .unwrap_or_else(|| "The session ended with an error".to_string()),
@@ -247,9 +281,12 @@ pub enum NotifyEffect {
     /// Fire the in-app chime.
     Ping,
     /// Post an OS notification, filed under `tag` (CDX-026c cancellation scope).
+    /// `kind` is `NotifyEvent::kind_str` — platform Notifiers route delivery
+    /// (Android notification channels) on it.
     Notify {
         content: NotificationContent,
         tag: String,
+        kind: String,
     },
 }
 
@@ -290,6 +327,7 @@ impl NotificationCoordinator {
         enabled: bool,
         ping_available: bool,
         active_session_key: Option<&str>,
+        context: &NotificationContext,
         now: u64,
     ) -> Vec<NotifyEffect> {
         if !enabled {
@@ -320,8 +358,9 @@ impl NotificationCoordinator {
         }
         if want_notify {
             effects.push(NotifyEffect::Notify {
-                content: format_notify_event(event),
+                content: format_notify_event(event, context),
                 tag: notify_tag(event),
+                kind: event.kind_str().to_string(),
             });
         }
         effects
@@ -382,19 +421,19 @@ mod tests {
     fn keys_and_tags() {
         assert_eq!(notify_key(&perm("m", "s")), "permission-request m s");
         assert_eq!(notify_key(&dm("p")), "dm p");
-        assert_eq!(notify_tag(&perm("m", "s")), "session m s");
-        assert_eq!(notify_tag(&dm("p")), "dm p");
+        assert_eq!(notify_tag(&perm("m", "s")), "session:m:s");
+        assert_eq!(notify_tag(&dm("p")), "dm:p");
     }
 
     #[test]
     fn formatting_covers_every_variant() {
-        assert_eq!(format_notify_event(&perm("m", "s")).title, "Permission needed");
+        assert_eq!(format_notify_event(&perm("m", "s"), &NotificationContext::none()).title, "Permission needed");
         assert_eq!(
             format_notify_event(&NotifyEvent::PermissionRequest {
                 machine: "m".into(),
                 session_id: "s".into(),
                 tool_name: Some("Bash".into())
-            })
+            }, &NotificationContext::none())
             .body,
             "Claude wants to use Bash"
         );
@@ -403,7 +442,7 @@ mod tests {
                 machine: "m".into(),
                 session_id: "s".into(),
                 reason: Some("boom".into())
-            })
+            }, &NotificationContext::none())
             .body,
             "boom"
         );
@@ -412,9 +451,24 @@ mod tests {
                 peer: "p".into(),
                 peer_label: Some("Alice".into()),
                 preview: Some("hi".into())
-            }),
+            }, &NotificationContext::none()),
             NotificationContent { title: "Alice".into(), body: "hi".into() }
         );
+    }
+
+    #[test]
+    fn formatting_uses_the_runtime_resolved_labels() {
+        let ctx = NotificationContext {
+            session_label: Some("refactor-api"),
+            machine_label: Some("laptop-01"),
+        };
+        let content = format_notify_event(&perm("m", "s"), &ctx);
+        assert_eq!(content.title, "Permission needed — refactor-api");
+        assert_eq!(content.body, "Claude needs permission to proceed on laptop-01");
+        // No labels yet (unknown keys) — bare kind text, unchanged.
+        let bare = format_notify_event(&perm("m", "s"), &NotificationContext::none());
+        assert_eq!(bare.title, "Permission needed");
+        assert_eq!(bare.body, "Claude needs permission to proceed");
     }
 
     #[test]
@@ -469,43 +523,43 @@ mod tests {
     #[test]
     fn master_toggle_off_kills_both_channels_and_burns_no_cooldown() {
         let mut co = NotificationCoordinator::default();
-        assert!(co.emit(&perm("m", "s"), false, false, true, None, 0).is_empty());
+        assert!(co.emit(&perm("m", "s"), false, false, true, None, &NotificationContext::none(), 0).is_empty());
         // enabled again immediately: not blocked by a cooldown slot
-        assert!(!co.emit(&perm("m", "s"), false, true, true, None, 1).is_empty());
+        assert!(!co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), 1).is_empty());
     }
 
     #[test]
     fn a_visible_user_watching_the_session_gets_nothing() {
         let mut co = NotificationCoordinator::default();
-        assert!(co.emit(&perm("m", "s"), true, true, true, Some("m s"), 0).is_empty());
+        assert!(co.emit(&perm("m", "s"), true, true, true, Some("m s"), &NotificationContext::none(), 0).is_empty());
     }
 
     #[test]
     fn ping_comes_before_notify_and_shares_one_cooldown() {
         let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&perm("m", "s"), false, true, true, None, 0);
+        let eff = co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), 0);
         assert_eq!(eff.len(), 2);
         assert_eq!(eff[0], NotifyEffect::Ping);
         assert!(matches!(eff[1], NotifyEffect::Notify { .. }));
 
         // same key inside the window: nothing (the live path AND the heartbeat
         // path can both emit for one card — this is the double-fire guard).
-        assert!(co.emit(&perm("m", "s"), false, true, true, None, NOTIFY_COOLDOWN_MS - 1).is_empty());
+        assert!(co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), NOTIFY_COOLDOWN_MS - 1).is_empty());
         // window elapsed: fires again
-        assert_eq!(co.emit(&perm("m", "s"), false, true, true, None, NOTIFY_COOLDOWN_MS).len(), 2);
+        assert_eq!(co.emit(&perm("m", "s"), false, true, true, None, &NotificationContext::none(), NOTIFY_COOLDOWN_MS).len(), 2);
     }
 
     #[test]
     fn ping_only_when_the_os_notification_is_suppressed_but_the_user_is_elsewhere() {
         let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&perm("m", "s"), true, true, true, Some("m other"), 0);
+        let eff = co.emit(&perm("m", "s"), true, true, true, Some("m other"), &NotificationContext::none(), 0);
         assert_eq!(eff, vec![NotifyEffect::Ping]);
     }
 
     #[test]
     fn no_ping_seam_means_no_ping_effect() {
         let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&perm("m", "s"), false, true, false, None, 0);
+        let eff = co.emit(&perm("m", "s"), false, true, false, None, &NotificationContext::none(), 0);
         assert_eq!(eff.len(), 1);
         assert!(matches!(eff[0], NotifyEffect::Notify { .. }));
     }

@@ -45,7 +45,7 @@ impl CoreListener for RecordingListener {
 /// doesn't.
 struct NoopNotifier;
 impl UniffiNotifier for NoopNotifier {
-    fn notify(&self, _title: String, _body: String, _tag: Option<String>) {}
+    fn notify(&self, _title: String, _body: String, _tag: Option<String>, _kind: String) {}
     fn cancel(&self, _tag: String) {}
 }
 

@@ -984,8 +984,8 @@ impl Loop {
         }
         for effect in r.notifies {
             match effect {
-                NotifyEffect::Notify { content, tag } => {
-                    self.notifier.notify(&content.title, &content.body, Some(&tag));
+                NotifyEffect::Notify { content, tag, kind } => {
+                    self.notifier.notify(&content.title, &content.body, Some(&tag), &kind);
                 }
                 NotifyEffect::Ping => self.emit(CoreEvent::Ping),
             }
@@ -1841,16 +1841,31 @@ impl Loop {
     fn run_notify(&mut self, event: NotifyEvent) {
         let visible = self.conn.visible;
         let enabled = self.stores.settings.data.notifications_enabled;
-        let effects = self
-            .stores
-            .notifications
-            .emit(&event, visible, enabled, false, None, self.clock.now_ms());
+        // DMs carry no session keys — bare context, their own labels suffice.
+        let (session_label, machine_label) = match event.session() {
+            Some((m, s)) => self.stores.notification_labels(m, s),
+            None => (None, None),
+        };
+        let context = client_core::notifications::NotificationContext {
+            session_label: session_label.as_deref(),
+            machine_label: machine_label.as_deref(),
+        };
+        let effects = self.stores.notifications.emit(
+            &event,
+            visible,
+            enabled,
+            false,
+            None,
+            &context,
+            self.clock.now_ms(),
+        );
         if !effects.is_empty() {
             self.state_changed(SliceId::Cards);
         }
         for effect in effects {
-            if let client_core::notifications::NotifyEffect::Notify { content, tag } = effect {
-                self.notifier.notify(&content.title, &content.body, Some(&tag));
+            if let client_core::notifications::NotifyEffect::Notify { content, tag, kind } = effect
+            {
+                self.notifier.notify(&content.title, &content.body, Some(&tag), &kind);
             }
         }
     }

@@ -25,10 +25,11 @@ use client_runtime::Notifier;
 /// Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
 /// `tag` is the same per-session/per-peer key `client-core`'s own notification
 /// coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
-/// for `cancel`-by-tag, not for anything UniFFI needs to interpret.
+/// for `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
+/// (`NotifyEvent::kind_str`) routes Android notification channels.
 #[uniffi::export(with_foreign)]
 pub trait UniffiNotifier: Send + Sync {
-    fn notify(&self, title: String, body: String, tag: Option<String>);
+    fn notify(&self, title: String, body: String, tag: Option<String>, kind: String);
     fn cancel(&self, tag: String);
 }
 
@@ -37,8 +38,13 @@ pub struct NotifierAdapter {
 }
 
 impl Notifier for NotifierAdapter {
-    fn notify(&self, title: &str, body: &str, tag: Option<&str>) {
-        self.notifier.notify(title.to_string(), body.to_string(), tag.map(str::to_string));
+    fn notify(&self, title: &str, body: &str, tag: Option<&str>, kind: &str) {
+        self.notifier.notify(
+            title.to_string(),
+            body.to_string(),
+            tag.map(str::to_string),
+            kind.to_string(),
+        );
     }
 
     fn cancel(&self, tag: &str) {

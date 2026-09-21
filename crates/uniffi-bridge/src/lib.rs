@@ -472,7 +472,7 @@ mod tests {
 
     struct NoopTestNotifier;
     impl UniffiNotifier for NoopTestNotifier {
-        fn notify(&self, _title: String, _body: String, _tag: Option<String>) {}
+        fn notify(&self, _title: String, _body: String, _tag: Option<String>, _kind: String) {}
         fn cancel(&self, _tag: String) {}
     }
 

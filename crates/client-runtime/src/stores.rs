@@ -65,6 +65,33 @@ pub struct CoreStores {
     pub default_mode: DefaultModeApplier,
 }
 
+impl CoreStores {
+    /// Human labels for notification text, resolved from the machine view —
+    /// notify events themselves only carry machine/session keys. Owned, so
+    /// the borrow of `machines` ends before the coordinator's `&mut` emit.
+    /// `(session_label, machine_label)`.
+    pub fn notification_labels(
+        &self,
+        machine: &str,
+        session_id: &str,
+    ) -> (Option<String>, Option<String>) {
+        let Some(mv) = self.machines.machine(machine) else {
+            return (None, None);
+        };
+        let session_label = mv.sessions.get(session_id).and_then(|sv| {
+            non_blank(sv.info.title.as_deref().unwrap_or(""))
+                .or_else(|| non_blank(&sv.info.slug))
+                .map(str::to_string)
+        });
+        (session_label, non_blank(&mv.name).map(str::to_string))
+    }
+}
+
+fn non_blank(s: &str) -> Option<&str> {
+    let t = s.trim();
+    (!t.is_empty()).then_some(t)
+}
+
 /// What [`hydrate`] resolved from the KV.
 pub struct HydratedCore {
     pub stores: CoreStores,

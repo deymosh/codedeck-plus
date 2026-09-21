@@ -204,7 +204,9 @@ impl TranscriptStore for MemoryTranscriptStore {
 /// groups deliveries so they can be cancelled when the user handles the
 /// underlying thing in-app; platforms that cannot cancel ignore it.
 pub trait Notifier {
-    fn notify(&self, title: &str, body: &str, tag: Option<&str>);
+    /// `kind` is `NotifyEvent::kind_str` — platforms route delivery on it
+    /// (Android: which notification channel); headless seams ignore it.
+    fn notify(&self, title: &str, body: &str, tag: Option<&str>, kind: &str);
     fn cancel(&self, _tag: &str) {}
 }
 
@@ -212,7 +214,7 @@ pub trait Notifier {
 /// notifications.
 pub struct NullNotifier;
 impl Notifier for NullNotifier {
-    fn notify(&self, _title: &str, _body: &str, _tag: Option<&str>) {}
+    fn notify(&self, _title: &str, _body: &str, _tag: Option<&str>, _kind: &str) {}
 }
 
 /// A `Notifier` that records deliveries and cancels for assertions.
@@ -242,7 +244,7 @@ impl RecordingNotifier {
 }
 
 impl Notifier for RecordingNotifier {
-    fn notify(&self, title: &str, body: &str, tag: Option<&str>) {
+    fn notify(&self, title: &str, body: &str, tag: Option<&str>, _kind: &str) {
         self.inner.borrow_mut().delivered.push((
             title.to_string(),
             body.to_string(),
@@ -299,7 +301,7 @@ mod tests {
     #[test]
     fn recording_notifier_captures_deliveries_and_cancels() {
         let n = RecordingNotifier::new();
-        n.notify("Permission needed", "Bash", Some("session m s1"));
+        n.notify("Permission needed", "Bash", Some("session m s1"), "permission-request");
         n.cancel("session m s1");
         assert_eq!(
             n.delivered(),
