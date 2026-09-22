@@ -1,5 +1,6 @@
 package com.codedeck.plus.ui.transcript
 
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -58,37 +59,39 @@ import com.mikepenz.markdown.model.rememberMarkdownState
 @Composable
 fun TranscriptMarkdown(content: String, modifier: Modifier = Modifier) {
     val state = rememberMarkdownState(content, immediate = true)
-    Markdown(
-        markdownState = state,
-        // Per-element text color rides on `typography` below (each `TextStyle`
-        // carries its own `color`) — `markdownColor()` only covers the
-        // non-text surfaces (code/table backgrounds, the divider, alerts).
-        colors = markdownColor(
-            text = Tokens.Text,
-            codeBackground = Tokens.SurfaceInput,
-            inlineCodeBackground = Tokens.SurfaceInput,
-            dividerColor = Tokens.BorderStrong,
-            tableBackground = Tokens.Surface,
-        ),
-        typography = markdownTypography(
-            h1 = headingStyle(22),
-            h2 = headingStyle(18),
-            h3 = headingStyle(16),
-            h4 = headingStyle(15),
-            h5 = headingStyle(14),
-            h6 = headingStyle(13),
-            text = bodyStyle(),
-            paragraph = bodyStyle(),
-            ordered = bodyStyle(),
-            bullet = bodyStyle(),
-            list = bodyStyle(),
-            quote = bodyStyle(color = Tokens.TextMuted),
-            code = monoStyle(),
-            inlineCode = monoStyle(),
-            table = bodyStyle(),
-        ),
-        modifier = modifier.fillMaxWidth(),
-    )
+    SelectionContainer(modifier = modifier) {
+        Markdown(
+            markdownState = state,
+            // Per-element text color rides on `typography` below (each `TextStyle`
+            // carries its own `color`) — `markdownColor()` only covers the
+            // non-text surfaces (code/table backgrounds, the divider, alerts).
+            colors = markdownColor(
+                text = Tokens.Text,
+                codeBackground = Tokens.SurfaceInput,
+                inlineCodeBackground = Tokens.SurfaceInput,
+                dividerColor = Tokens.BorderStrong,
+                tableBackground = Tokens.Surface,
+            ),
+            typography = markdownTypography(
+                h1 = headingStyle(22),
+                h2 = headingStyle(18),
+                h3 = headingStyle(16),
+                h4 = headingStyle(15),
+                h5 = headingStyle(14),
+                h6 = headingStyle(13),
+                text = bodyStyle(),
+                paragraph = bodyStyle(),
+                ordered = bodyStyle(),
+                bullet = bodyStyle(),
+                list = bodyStyle(),
+                quote = bodyStyle(color = Tokens.TextMuted),
+                code = monoStyle(),
+                inlineCode = monoStyle(),
+                table = bodyStyle(),
+            ),
+            modifier = modifier.fillMaxWidth(),
+        )
+    }
 }
 
 private fun headingStyle(sizeSp: Int) = TextStyle(

@@ -1,7 +1,9 @@
 package com.codedeck.plus.ui.screens
 
 import android.Manifest
+import android.content.ClipData
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -19,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -36,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -349,9 +353,37 @@ private fun PairingForm(
         }
 
         selfNpub?.let { npub ->
+            val clipboard = LocalClipboard.current
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                 Text("This phone's npub", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                Text(npub, color = Tokens.Text, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                ) {
+                    Text(
+                        npub,
+                        color = Tokens.Text,
+                        fontSize = Tokens.TextSm,
+                        fontFamily = Tokens.FontMono,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "Copy npub",
+                        tint = Tokens.TextMuted,
+                        modifier = Modifier
+                            .clickable {
+                                val clipData = ClipData.newPlainText("npub", npub)
+                                scope.launch {
+                                    clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(clipData))
+                                }
+                                Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(Tokens.Space2),
+                    )
+                }
             }
         }
     }

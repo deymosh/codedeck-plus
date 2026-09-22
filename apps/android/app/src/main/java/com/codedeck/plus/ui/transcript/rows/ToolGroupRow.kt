@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,18 +58,20 @@ fun ToolGroupRow(entries: List<SeqEntry>, summary: String, expanded: Boolean, on
             Text(summary, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
         }
         if (expanded) {
-            Column(
-                Modifier.fillMaxWidth().padding(start = Tokens.Space5, end = Tokens.Space3, bottom = Tokens.Space3),
-            ) {
-                entries.forEach { e ->
-                    val prefix = if (e.entry.entryType == "tool_result") "↳ " else ""
-                    Text(
-                        prefix + if (isRedactedThinking(e)) "Thinking (redacted)" else preview(e.entry.content),
-                        color = Tokens.TextDim,
-                        fontFamily = Tokens.FontMono,
-                        fontSize = Tokens.TextXs,
-                        modifier = Modifier.padding(vertical = Tokens.Space1 / 2),
-                    )
+            SelectionContainer {
+                Column(
+                    Modifier.fillMaxWidth().padding(start = Tokens.Space5, end = Tokens.Space3, bottom = Tokens.Space3),
+                ) {
+                    entries.forEach { e ->
+                        val prefix = if (e.entry.entryType == "tool_result") "↳ " else ""
+                        Text(
+                            prefix + if (isRedactedThinking(e)) "Thinking (redacted)" else preview(e.entry.content),
+                            color = Tokens.TextDim,
+                            fontFamily = Tokens.FontMono,
+                            fontSize = Tokens.TextXs,
+                            modifier = Modifier.padding(vertical = Tokens.Space1 / 2),
+                        )
+                    }
                 }
             }
         }
