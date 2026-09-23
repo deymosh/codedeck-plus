@@ -79,6 +79,11 @@ struct Conn {
     /// connects later gets every stored sub's REQ replayed by `on_relay_up`, so
     /// nothing is sent twice.
     up: bool,
+    /// Which dial this entry belongs to. `set_relays` / `set_proxy` replace a
+    /// relay's entry while its old task may still be dialing or closing, and
+    /// that task's up/dead callbacks carry its own generation so they can
+    /// never mark, replay onto, or remove the replacement connection.
+    generation: u64,
 }
 
 struct State {
@@ -92,6 +97,21 @@ struct State {
     subs: HashMap<String, SubEntry>,
     publishes: HashMap<String, oneshot::Sender<PublishResult>>,
     sub_seq: u64,
+    next_generation: u64,
+}
+
+impl State {
+    /// Take `relay`'s connection out deliberately (teardown / redial). The
+    /// router must stop counting it as connected right away: the closing task
+    /// no longer reports its own death (see `run_relay`), and a replacement
+    /// dial for the same URL must not be confused with it.
+    fn detach(&mut self, relay: &str) -> Option<Conn> {
+        let conn = self.conns.remove(relay)?;
+        if conn.up {
+            self.router.forget_connected(relay);
+        }
+        Some(conn)
+    }
 }
 
 /// Config for [`WsTransport::new`].
@@ -144,6 +164,7 @@ impl WsTransport {
                 subs: HashMap::new(),
                 publishes: HashMap::new(),
                 sub_seq: 0,
+                next_generation: 0,
             })),
         }
     }
@@ -187,7 +208,11 @@ impl WsTransport {
 
     /// Tear down every socket deliberately (no `on_close` fires).
     pub fn shutdown(&self) {
-        let conns: Vec<Conn> = self.state.borrow_mut().conns.drain().map(|(_, c)| c).collect();
+        let conns: Vec<Conn> = {
+            let mut st = self.state.borrow_mut();
+            let relays: Vec<String> = st.conns.keys().cloned().collect();
+            relays.iter().filter_map(|r| st.detach(r)).collect()
+        };
         for c in conns {
             let _ = c.tx.send(Out::Close);
         }
@@ -275,29 +300,37 @@ impl WsTransport {
 
     fn spawn_relay(&self, relay: String) {
         let (tx, rx) = mpsc::unbounded_channel::<Out>();
-        self.state
-            .borrow_mut()
-            .conns
-            .insert(relay.clone(), Conn { tx, up: false });
+        let generation = {
+            let mut st = self.state.borrow_mut();
+            st.next_generation += 1;
+            let generation = st.next_generation;
+            st.conns.insert(relay.clone(), Conn { tx, up: false, generation });
+            generation
+        };
         let this = self.clone();
         tokio::task::spawn_local(async move {
-            this.run_relay(relay, rx).await;
+            this.run_relay(relay, generation, rx).await;
         });
     }
 
-    async fn run_relay(self, relay: String, mut rx: mpsc::UnboundedReceiver<Out>) {
+    async fn run_relay(self, relay: String, generation: u64, mut rx: mpsc::UnboundedReceiver<Out>) {
         let proxy = self.state.borrow().proxy.clone();
         log::debug!("ws: dialing {relay} (proxy={proxy:?})");
         let mut ws = match dial(&relay, proxy).await {
             Ok(ws) => ws,
             Err(err) => {
                 log::warn!("ws: dial failed for {relay}: {err}");
-                self.on_relay_dead(&relay, format!("dial failed: {err}"));
+                self.on_relay_dead(&relay, generation, format!("dial failed: {err}"));
                 return;
             }
         };
+        if !self.on_relay_up(&relay, generation) {
+            // Detached while dialing (teardown or redial): this socket is no
+            // longer wanted.
+            let _ = ws.close(None).await;
+            return;
+        }
         log::info!("ws: {relay} connected");
-        self.on_relay_up(&relay);
 
         let mut ping = tokio::time::interval(PING_EVERY);
         ping.tick().await; // consume the immediate first tick
@@ -334,16 +367,19 @@ impl WsTransport {
                 }
             }
         }
-        self.on_relay_dead(&relay, "socket closed".to_string());
+        self.on_relay_dead(&relay, generation, "socket closed".to_string());
     }
 
-    fn on_relay_up(&self, relay: &str) {
+    /// `false` when this dial's entry has been detached or replaced — the
+    /// caller then drops the socket without touching any shared state.
+    fn on_relay_up(&self, relay: &str, generation: u64) -> bool {
         let replays: Vec<String> = {
             let mut st = self.state.borrow_mut();
-            st.router.relay_connected(relay);
-            if let Some(c) = st.conns.get_mut(relay) {
-                c.up = true;
+            match st.conns.get_mut(relay) {
+                Some(c) if c.generation == generation => c.up = true,
+                _ => return false,
             }
+            st.router.relay_connected(relay);
             st.subs
                 .iter()
                 .map(|(id, e)| frames::req_frame(id, std::slice::from_ref(&e.filter)))
@@ -355,12 +391,17 @@ impl WsTransport {
                 let _ = c.tx.send(Out::Text(frame));
             }
         }
+        true
     }
 
-    fn on_relay_dead(&self, relay: &str, reason: String) {
-        log::info!("ws: {relay} disconnected ({reason})");
+    fn on_relay_dead(&self, relay: &str, generation: u64, reason: String) {
         let actions = {
             let mut st = self.state.borrow_mut();
+            // A superseded dial dying must not remove its replacement.
+            if st.conns.get(relay).map(|c| c.generation) != Some(generation) {
+                return;
+            }
+            log::info!("ws: {relay} disconnected ({reason})");
             st.conns.remove(relay);
             st.router.relay_disconnected(relay)
         };
@@ -493,7 +534,7 @@ impl Transport for WsTransport {
                 .filter(|r| !urls.contains(r))
                 .cloned()
                 .collect();
-            dead.into_iter().filter_map(|r| st.conns.remove(&r)).collect()
+            dead.into_iter().filter_map(|r| st.detach(&r)).collect()
         };
         for c in to_kill {
             let _ = c.tx.send(Out::Close);
@@ -510,7 +551,8 @@ impl Transport for WsTransport {
         let to_kill: Vec<Conn> = {
             let mut st = self.state.borrow_mut();
             st.proxy = proxy;
-            st.conns.drain().map(|(_, c)| c).collect()
+            let relays: Vec<String> = st.conns.keys().cloned().collect();
+            relays.iter().filter_map(|r| st.detach(r)).collect()
         };
         for c in to_kill {
             let _ = c.tx.send(Out::Close);
@@ -702,6 +744,61 @@ mod tests {
                 assert_eq!(t.current_proxy(), None);
             })
             .await;
+    }
+
+    async fn wait_until(mut cond: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if cond() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("condition never became true");
+    }
+
+    #[tokio::test]
+    async fn a_deliberate_shutdown_stops_reporting_the_relay_as_connected_at_once() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.ensure_connected();
+                wait_until(|| !t.connected_relays().is_empty()).await;
+
+                t.shutdown();
+                // No polling: the closing task never reports its own death,
+                // so this must be true synchronously.
+                assert!(t.connected_relays().is_empty());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_superseded_dial_never_touches_its_replacement() {
+        let mock = mock_relay().await;
+        let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+        let t = transport(&mock, &phone);
+        let url = mock.url.clone();
+        // The live replacement (generation 7), already up.
+        let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
+        {
+            let mut st = t.state.borrow_mut();
+            st.conns.insert(url.clone(), Conn { tx, up: true, generation: 7 });
+            st.router.relay_connected(&url);
+        }
+
+        // The old dial (generation 3) finishing either way is ignored.
+        assert!(!t.on_relay_up(&url, 3));
+        t.on_relay_dead(&url, 3, "dial failed: stale".into());
+        assert!(t.state.borrow().conns.contains_key(&url));
+        assert_eq!(t.connected_relays(), BTreeSet::from([url.clone()]));
+        assert!(rx.try_recv().is_err(), "nothing was replayed onto the replacement");
+
+        // Its own death still counts.
+        t.on_relay_dead(&url, 7, "socket closed".into());
+        assert!(!t.state.borrow().conns.contains_key(&url));
+        assert!(t.connected_relays().is_empty());
     }
 
     fn a_filter(phone: &Keypair) -> Filter {

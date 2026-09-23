@@ -100,6 +100,15 @@ impl Router {
 
     /// A relay socket closed or failed. Subs may go fully dead; publishes still
     /// awaiting an OK from it resolve that relay as unreachable.
+    /// The socket to `relay` was closed on purpose (teardown, or a redial
+    /// through a new proxy / relay list): stop counting it as connected
+    /// without the subscription and publish bookkeeping a failure triggers —
+    /// a deliberate close raises no `on_close`, and a redial replays every
+    /// stored REQ once the new socket is up.
+    pub fn forget_connected(&mut self, relay: &str) {
+        self.connected.remove(relay);
+    }
+
     pub fn relay_disconnected(&mut self, relay: &str) -> Vec<RouterAction> {
         self.connected.remove(relay);
         let mut out = Vec::new();
