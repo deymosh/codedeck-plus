@@ -381,6 +381,33 @@ describe('SessionRunner', () => {
     expect(session.inputs[1]).toBe('and add tests');
   });
 
+  it('without state events from the backend, a turn runs from sendInput until its result', async () => {
+    const { runner, session } = await startReady(ctx, 's1');
+    expect(runner.state()).toBe('idle');
+
+    runner.sendInput('hello');
+    expect(runner.state()).toBe('running');
+
+    session.emit(resultMsg());
+    await waitFor(() => runner.state() === 'idle');
+  });
+
+  it('once the backend sends state events, they alone decide running/idle', async () => {
+    const { runner, session } = await startReady(ctx, 's1');
+    session.emit({ type: 'system', subtype: 'session_state_changed', state: 'running', session_id: 's1' } as unknown as SdkMessage);
+    await waitFor(() => runner.state() === 'running');
+
+    // A result while background work continues does not end the turn…
+    session.emit(resultMsg());
+    session.emit({ type: 'system', subtype: 'session_state_changed', state: 'running', session_id: 's1' } as unknown as SdkMessage);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(runner.state()).toBe('running');
+
+    // …the backend's own idle does.
+    session.emit({ type: 'system', subtype: 'session_state_changed', state: 'idle', session_id: 's1' } as unknown as SdkMessage);
+    await waitFor(() => runner.state() === 'idle');
+  });
+
   it('CDX-082: sendInput authors the user transcript entry, before the reply and without the meta request', async () => {
     const { runner, session } = await startReady(ctx, 's1');
 

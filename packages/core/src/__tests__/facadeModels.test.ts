@@ -108,11 +108,23 @@ describe('buildQueryOptions (CDX-062 fallbackModel tri-state)', () => {
     expect(options.fallbackModel).toBe('claude-haiku-4-5');
   });
 
+  it('without a caller env, keeps the inherited environment and adds the turn-state flag', () => {
+    process.env.CODEDECK_TEST_INHERITED = 'kept';
+    try {
+      const options = buildQueryOptions(baseOpts());
+      expect(options.env?.CODEDECK_TEST_INHERITED).toBe('kept');
+      expect(options.env?.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe('1');
+    } finally {
+      delete process.env.CODEDECK_TEST_INHERITED;
+    }
+  });
+
   it('carries env/model/resume through unchanged', () => {
     const env = { ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-x' };
     const options = buildQueryOptions(baseOpts({ model: 'kimi-k3', env, fallbackModel: null }));
     expect(options.model).toBe('kimi-k3');
-    expect(options.env).toEqual(env);
+    // The caller's env, plus the flag that makes the CLI report turn state.
+    expect(options.env).toEqual({ ...env, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' });
     // create path uses sessionId; resume path replaces it.
     expect((options as { sessionId?: string }).sessionId).toBe('s1');
     const resumed = buildQueryOptions(baseOpts({ resume: 'sdk-old' }));

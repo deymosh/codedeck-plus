@@ -220,6 +220,11 @@ export class SessionRunner {
    */
   private msgsOnCurrentSpawn = 0;
   private sessionState: 'idle' | 'running' = 'idle';
+  /** The backend has sent at least one `session_state_changed`. Until it
+   *  does, the turn state is derived from input sent / `result` received
+   *  instead; once it has, its events are the only source, since they also
+   *  cover background work that outlives the `result`. */
+  private sawStateEvents = false;
   private lastActivity: string;
   private readonly createdAt: string;
 
@@ -641,8 +646,14 @@ export class SessionRunner {
 
     // idle/running transitions (turn boundaries).
     if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'session_state_changed') {
+      this.sawStateEvents = true;
       const state = (msg as unknown as { state: string }).state;
       this.sessionState = state === 'idle' ? 'idle' : 'running';
+      await this.refreshRegistryState();
+      this.events.onStateChanged?.(this.sessionId);
+    } else if (msg.type === 'result' && !this.sawStateEvents && this.sessionState === 'running') {
+      // Turn-state fallback (see markTurnStarted): the result ends the turn.
+      this.sessionState = 'idle';
       await this.refreshRegistryState();
       this.events.onStateChanged?.(this.sessionId);
     }
@@ -1094,7 +1105,20 @@ export class SessionRunner {
     }]);
 
     this.handle.pushInput(text);
+    this.markTurnStarted();
     return true;
+  }
+
+  /**
+   * Turn-state fallback for a backend that has not sent any
+   * `session_state_changed` (see `sawStateEvents`): a turn is running from
+   * the moment input is handed to it until its `result`.
+   */
+  private markTurnStarted(): void {
+    if (this.sawStateEvents || this.sessionState === 'running') return;
+    this.sessionState = 'running';
+    this.bg('registry state refresh', this.refreshRegistryState());
+    this.events.onStateChanged?.(this.sessionId);
   }
 
   /** Answer the active AskUserQuestion; falls back to plain input when none is pending. */

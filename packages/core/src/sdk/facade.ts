@@ -640,9 +640,30 @@ export function buildQueryOptions(
     ...(opts.pathToClaudeCodeExecutable
       ? { pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable }
       : {}),
-    ...(opts.env ? { env: opts.env } : {}),
+    env: withSessionStateEvents(opts.env),
     ...(betas ? { betas: [...betas] } : {}),
   };
+}
+
+/**
+ * The CLI only emits `system/session_state_changed` (running / idle — the
+ * turn-boundary signal SessionRunner derives the session's state from) when
+ * CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS is set; without it a Claude Code
+ * session never reads as running and the phone never shows the turn in
+ * progress. Options.env REPLACES the child environment, so the flag goes on
+ * top of the caller's env, or of the inherited one when there is none.
+ */
+export function withSessionStateEvents(env: Record<string, string> | undefined): Record<string, string> {
+  const base: Record<string, string> = {};
+  if (env) {
+    Object.assign(base, env);
+  } else {
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) base[k] = v;
+    }
+  }
+  base.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
+  return base;
 }
 
 // --- Real implementation over query() ---
