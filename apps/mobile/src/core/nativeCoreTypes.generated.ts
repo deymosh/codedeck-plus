@@ -22,7 +22,7 @@ export const commands = {
 	 *  — a pure read needing no running `Core`, callable before `core_init`.
 	 */
 	coreDefaults: () => __TAURI_INVOKE<ProtocolDefaults>("core_defaults"),
-	/**  Spin the bridge thread + `Core`. Idempotent — a second call is a no-op. */
+	/**  Spin the core thread + `Core`. Idempotent — a second call is a no-op. */
 	coreInit: (config: InitConfig) => typedError<null, string>(__TAURI_INVOKE("core_init", { config })),
 	coreStart: () => typedError<null, string>(__TAURI_INVOKE("core_start")),
 	coreStop: () => typedError<null, string>(__TAURI_INVOKE("core_stop")),
