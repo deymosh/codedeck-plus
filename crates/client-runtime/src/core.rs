@@ -44,7 +44,7 @@ use client_core::stores::marmot::{
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::giftwrap::{relay_list_event, unwrap_gift_parts, wrap_dm};
-use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, UndoTimer};
+use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionImageSend, UndoTimer};
 use crate::nostr_client::{
     Filter, NostrClient, NostrClientHost, NostrEvent, SubCallbacks, Transport,
 };
@@ -568,6 +568,13 @@ enum Msg {
         intent: Box<Intent>,
         reply: oneshot::Sender<()>,
     },
+    /// A DM image finished uploading off the loop: send the DM carrying its
+    /// reference line, then answer the intent's `reply`.
+    DmImageReady {
+        peer: String,
+        body: String,
+        reply: Option<oneshot::Sender<()>>,
+    },
     View(ViewQuery),
     /// The off-loop publish of an outbox item settled.
     PublishSettled {
@@ -786,8 +793,17 @@ impl Loop {
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
                 Msg::PairDeadline => self.on_pair_deadline(),
                 Msg::Intent { intent, reply } => {
-                    self.on_intent(*intent).await;
-                    let _ = reply.send(());
+                    // An image send keeps the reply and answers it when the
+                    // send finishes off the loop; everything else is done now.
+                    if let Some(reply) = self.on_intent(*intent, reply).await {
+                        let _ = reply.send(());
+                    }
+                }
+                Msg::DmImageReady { peer, body, reply } => {
+                    self.send_dm(peer, body).await;
+                    if let Some(reply) = reply {
+                        let _ = reply.send(());
+                    }
                 }
                 Msg::View(query) => self.answer_view(query).await,
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
@@ -1110,8 +1126,14 @@ impl Loop {
         }
     }
 
-    /// Fold a user action into the stores and carry out its effects.
-    async fn on_intent(&mut self, intent: Intent) {
+    /// Fold a user action into the stores and carry out its effects. Returns
+    /// `reply` unless an image send took it over (see [`Self::spawn_session_image`]).
+    async fn on_intent(
+        &mut self,
+        intent: Intent,
+        reply: oneshot::Sender<()>,
+    ) -> Option<oneshot::Sender<()>> {
+        let mut reply = Some(reply);
         let ctx = IntentCtx {
             now: self.clock.now_ms(),
             visible: self.conn.visible,
@@ -1128,18 +1150,10 @@ impl Loop {
             self.send_dm(peer, text).await;
         }
         if let Some((peer, text, image)) = dm_image_send {
-            self.send_dm_image(peer, text, image).await;
+            self.spawn_dm_image(peer, text, image, reply.take());
         }
         if let Some(send) = session_image_send {
-            self.send_session_image(
-                send.machine,
-                send.session_id,
-                send.text,
-                send.image,
-                send.filename,
-                send.mime_type,
-            )
-            .await;
+            self.spawn_session_image(send, reply.take());
         }
         if let Some(welcome_id) = marmot_accept {
             self.accept_marmot_welcome(welcome_id).await;
@@ -1150,31 +1164,69 @@ impl Loop {
         if let Some(peer_pubkey) = marmot_start_chat {
             self.start_marmot_chat(peer_pubkey).await;
         }
+        reply
     }
 
-    /// Encrypt + upload an image, then send it as a DM (the ref line appended
-    /// to `text`).
-    async fn send_dm_image(&mut self, peer: String, text: String, image: Vec<u8>) {
-        let opts = crate::attachments::UploadOptions::at(self.clock.now_ms());
-        match crate::attachments::upload_encrypted_image(
-            &image,
-            &self.identity,
-            self.http.as_ref(),
-            opts,
-        )
-        .await
-        {
-            Ok(reference) => {
-                let line = client_core::dm_attachments::build_image_ref(&reference);
-                let body = if text.is_empty() {
-                    line
-                } else {
-                    format!("{text}\n{line}")
-                };
-                self.send_dm(peer, body).await;
-            }
-            Err(_) => self.observer.action_failed(ActionFailedKind::PublishRejected),
+    /// The ports an image send needs, cloned out of the loop so the send can
+    /// run as its own task.
+    fn image_send_ctx(&self) -> ImageSendCtx {
+        ImageSendCtx {
+            identity: self.identity.clone(),
+            http: Rc::clone(&self.http),
+            ws: self.ws.clone(),
+            clock: Rc::clone(&self.clock),
+            entropy: Rc::clone(&self.entropy),
+            observer: Rc::clone(&self.observer),
         }
+    }
+
+    /// Encrypt + upload an image off the loop, then send it as a DM (the ref
+    /// line appended to `text`) back on the loop, which owns the DM store.
+    fn spawn_dm_image(
+        &self,
+        peer: String,
+        text: String,
+        image: Vec<u8>,
+        reply: Option<oneshot::Sender<()>>,
+    ) {
+        let ctx = self.image_send_ctx();
+        let self_tx = self.self_tx.clone();
+        tokio::task::spawn_local(async move {
+            let opts = crate::attachments::UploadOptions::at(ctx.clock.now_ms());
+            match crate::attachments::upload_encrypted_image(&image, &ctx.identity, ctx.http.as_ref(), opts)
+                .await
+            {
+                Ok(reference) => {
+                    let line = client_core::dm_attachments::build_image_ref(&reference);
+                    let body = if text.is_empty() {
+                        line
+                    } else {
+                        format!("{text}\n{line}")
+                    };
+                    let _ = self_tx.send(Msg::DmImageReady { peer, body, reply });
+                }
+                Err(_) => {
+                    ctx.observer.action_failed(ActionFailedKind::PublishRejected);
+                    if let Some(reply) = reply {
+                        let _ = reply.send(());
+                    }
+                }
+            }
+        });
+    }
+
+    /// Runs [`ImageSendCtx::send_session_image`] as its own task and answers
+    /// `reply` when it finishes. An upload can take minutes (Blossom retries,
+    /// then a paced chunk fallback); on the loop it would hold up relay
+    /// events, reconnects and every view query for that long.
+    fn spawn_session_image(&self, send: SessionImageSend, reply: Option<oneshot::Sender<()>>) {
+        let ctx = self.image_send_ctx();
+        tokio::task::spawn_local(async move {
+            ctx.send_session_image(send).await;
+            if let Some(reply) = reply {
+                let _ = reply.send(());
+            }
+        });
     }
 
     async fn interpret_intent(&mut self, r: IntentResult) {
@@ -2011,7 +2063,40 @@ impl Loop {
         });
     }
 
-    /// Build + sign + publish one command inline (unlike [`Self::publish_command`],
+    /// The publish of an outbox item settled — record it and emit `OutboxSettled`.
+    async fn on_publish_settled(&mut self, id: String, result: PublishResult) {
+        let accepted = matches!(
+            result.verdict,
+            PublishVerdict::Accepted | PublishVerdict::Unconfirmed
+        );
+        self.stores
+            .outbox
+            .settle_publish(&id, accepted, result.detail, self.clock.now_ms());
+        self.persist_store(StoreId::Outbox).await;
+        self.state_changed(SliceId::Outbox);
+        // `delivered` here means "published" — the bridge `input-ack` is the
+        // real confirmation and fires a second `OutboxSettled` via the router.
+        self.emit(CoreEvent::OutboxSettled {
+            id,
+            delivered: accepted,
+        });
+    }
+}
+
+/// The ports an image send needs, cloned out of the loop so the send runs
+/// as its own task (see `Loop::spawn_session_image`). It never touches the
+/// stores: everything it reports goes through the observer.
+struct ImageSendCtx {
+    identity: Keypair,
+    http: Rc<dyn crate::attachments::HttpFetch>,
+    ws: WsTransport,
+    clock: Rc<dyn Clock>,
+    entropy: Rc<dyn Entropy>,
+    observer: Rc<dyn CoreObserver>,
+}
+
+impl ImageSendCtx {
+    /// Build + sign + publish one command inline (unlike [`Loop::publish_command`],
     /// which is fire-and-forget off the loop) so a caller can branch on the
     /// verdict — the session-image upload needs that to decide Blossom vs.
     /// chunk fallback.
@@ -2041,14 +2126,10 @@ impl Loop {
     /// megabytes over the relays. No optimistic local echo: the image lands in
     /// the transcript only once the bridge injects it, like any other output.
     async fn send_session_image(
-        &mut self,
-        machine: String,
-        session_id: String,
-        text: String,
-        image: Vec<u8>,
-        filename: String,
-        mime_type: String,
+        &self,
+        send: SessionImageSend,
     ) {
+        let SessionImageSend { machine, session_id, text, image, filename, mime_type } = send;
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
         use protocol::commands::{
             UploadImageBlossomMsg, UploadImageChunkMsg, UploadImageMsg, VersionFields,
@@ -2149,24 +2230,6 @@ impl Loop {
         }
     }
 
-    /// The publish of an outbox item settled — record it and emit `OutboxSettled`.
-    async fn on_publish_settled(&mut self, id: String, result: PublishResult) {
-        let accepted = matches!(
-            result.verdict,
-            PublishVerdict::Accepted | PublishVerdict::Unconfirmed
-        );
-        self.stores
-            .outbox
-            .settle_publish(&id, accepted, result.detail, self.clock.now_ms());
-        self.persist_store(StoreId::Outbox).await;
-        self.state_changed(SliceId::Outbox);
-        // `delivered` here means "published" — the bridge `input-ack` is the
-        // real confirmation and fires a second `OutboxSettled` via the router.
-        self.emit(CoreEvent::OutboxSettled {
-            id,
-            delivered: accepted,
-        });
-    }
 }
 
 fn abort(slot: &mut Option<AbortHandle>) {
@@ -2373,6 +2436,68 @@ mod tests {
         {
             Box::pin(async { Err("no server".to_string()) })
         }
+    }
+
+    /// A Blossom server that accepts the upload and never answers.
+    struct HangHttp;
+    impl crate::attachments::HttpFetch for HangHttp {
+        fn put(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: Vec<u8>,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(std::future::pending())
+        }
+        fn get(
+            &self,
+            _url: &str,
+        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
+        {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_image_upload_does_not_block_the_loop() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let ports = CorePorts {
+                    http: Rc::new(HangHttp),
+                    ..CorePorts::default()
+                };
+                let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                let core2 = core.clone();
+                let upload = tokio::task::spawn_local(async move {
+                    core2
+                        .dispatch(Intent::SendSessionImage(SessionImageSend {
+                            machine: "m".into(),
+                            session_id: "s1".into(),
+                            text: String::new(),
+                            image: b"bytes".to_vec(),
+                            filename: "a.jpg".into(),
+                            mime_type: "image/jpeg".into(),
+                        }))
+                        .await;
+                });
+                settle().await;
+
+                // The upload is still hanging, yet the loop answers at once.
+                tokio::time::timeout(Duration::from_secs(1), core.machines_view())
+                    .await
+                    .expect("the loop stayed blocked behind the upload");
+                assert!(!upload.is_finished(), "the intent answers only when the send ends");
+                upload.abort();
+            })
+            .await;
     }
 
     /// Records every `set_proxy` call — used to check the HTTP port's own
