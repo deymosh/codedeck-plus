@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 globalThis.WebSocket = WebSocket;
 
-// Import directly from the built CLI location inside the monorepo workspace
-await import('./apps/bridge/out/main.js');
+// The image deploys apps/bridge as the /app package root (pnpm deploy), so
+// the bundle sits at /app/out/main.js next to this shim.
+await import('./out/main.js');

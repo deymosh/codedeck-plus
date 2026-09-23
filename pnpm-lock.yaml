@@ -6,11 +6,7 @@ settings:
 
 importers:
 
-  .:
-    dependencies:
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.3
+  .: {}
 
   apps/bridge:
     dependencies:
@@ -20,6 +16,9 @@ importers:
       '@opencode-ai/sdk':
         specifier: ^1.18.31
         version: 1.18.31
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.3
     devDependencies:
       '@codedeck/core':
         specifier: workspace:*

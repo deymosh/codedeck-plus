@@ -1,18 +1,22 @@
-# Keep the build context to what docker/Dockerfile actually COPYs: root
-# workspace manifests, packages/*, apps/bridge. Everything below either needs
-# a toolchain this image has no reason to carry (Rust/Android for
-# apps/mobile), is a pristine subtree mirror never built directly (vendor/),
-# is runtime state (data/), or is dependency/VCS churn Docker should never
-# need to hash.
-.git
-vendor/
-apps/mobile/
-data/
-node_modules/
-**/node_modules/
-**/dist/
-**/out/
-**/target/
-.env
-.env.*
-!.env.example
+# Allow-list: the build context is only what docker/Dockerfile COPYs — the
+# root workspace manifests, packages/*, apps/bridge and docker/. Everything
+# else (apps/mobile, apps/android, crates/, vendor/, runtime data/, Rust
+# target/, toolchains) is never read by the image, so it is never sent to the
+# daemon or hashed.
+*
+!pnpm-workspace.yaml
+!package.json
+!pnpm-lock.yaml
+!tsconfig.base.json
+!packages/
+!apps/bridge/
+!docker/
+
+# Inside the allowed trees: build output, deps, and tests. Tests are excluded
+# so editing one never invalidates the image's build layers.
+**/node_modules
+**/out
+**/dist
+**/__tests__
+**/*.test.ts
+**/vitest.config.*

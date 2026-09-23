@@ -206,8 +206,10 @@ packages/protocol   wire contract: schemas, codec (total), kinds, chunking,
 - Do not downgrade Node / TypeScript / Rust / NDK versions to work around a build
   failure; fix the root cause.
 - The `docker/main.js` shim (copied to `/app/main.js` in the image) and
-  `docker/Dockerfile` both assume the bridge builds to `apps/bridge/out/main.js`
-  — keep them consistent if that changes.
+  `docker/Dockerfile` both assume the bridge builds to `apps/bridge/out/main.js`,
+  which `pnpm deploy` lands at `/app/out/main.js` — keep them consistent if that
+  changes. The image's `claude` is a symlink to the Agent SDK's own platform
+  binary (no global Claude Code install), so its version follows the lockfile.
 
 ## Vendored history note
 
