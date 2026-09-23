@@ -21,8 +21,8 @@ import uniffi.client_ffi.UniffiUsageWindow
 
 /**
  * The session screen's chrome on a narrow (360dp) phone, where it has to
- * fit: the top bar with a long title and model, the running-turn line, and
- * the controls bar above the composer.
+ * fit: the top bar with a long title, the running-turn line, the failed-send
+ * line, and the controls bar above the composer.
  */
 class SessionChromeSnapshotTest {
 
@@ -44,14 +44,15 @@ class SessionChromeSnapshotTest {
                             title = "Refactor the relay reconnect logic so a flapping socket never duplicates subscriptions",
                             workspace = "/home/dev/projects/codedeck-docker",
                             sessionState = "running",
-                            connectionStatus = "waiting-retry",
-                            attentionLeft = false,
-                            attentionRight = true,
-                            onJumpAttention = {},
                             onBack = {},
                         )
                         Spacer(Modifier.height(120.dp))
                         ThinkingIndicator(onStop = {})
+                        SendFailedBar(
+                            text = "Also make sure the reconnect backoff resets after a clean close",
+                            failedCount = 2,
+                            onRetry = {},
+                        )
                         SessionControlsBar(
                             effortLevel = "high",
                             permissionMode = "acceptEdits",
@@ -60,10 +61,8 @@ class SessionChromeSnapshotTest {
                             model = "claude-opus-5-5",
                             contextPercentage = 82.0,
                             contextWindow = 200_000,
-                            hasFailedOutbox = true,
                             onEffortSelect = {},
                             onModeTap = {},
-                            onRetryOutbox = {},
                             showUsageBadge = true,
                             usage = UniffiUsageData(
                                 available = true,

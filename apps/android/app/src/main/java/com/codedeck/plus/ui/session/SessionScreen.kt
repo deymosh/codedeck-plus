@@ -21,7 +21,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,13 +69,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
-import com.codedeck.plus.ui.SessionKey
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.ThinkingGlyph
-import com.codedeck.plus.ui.getOrderedSessionKeys
 import com.codedeck.plus.ui.gsd.GsdStrip
-import com.codedeck.plus.ui.sessionKeyOf
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.PendingPermissionSummary
@@ -151,19 +147,17 @@ private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
 private const val SESSION_IMAGE_SEND_BACKSTOP_MS = SESSION_IMAGE_SEND_BUDGET_MS + 5_000L
 
 /**
- * The session screen, top to bottom: [SessionTopBar] (title, model/context,
- * relay state only when not connected, attention chevrons), the GSD strip,
- * the transcript, the [ThinkingIndicator] with Stop while a turn runs, the
- * always-visible pending-permission bar, the staged image-attachment strip,
- * quick prompts, [SessionControlsBar] (mode, effort, usage, failed-send
- * retry) and the input bar (attach / text field / mic / Send). Port of
- * `SessionScreen.tsx`, including the image flow.
+ * The session screen, top to bottom: [SessionTopBar] (back, title,
+ * workspace), the GSD strip, the transcript, the [ThinkingIndicator] with
+ * Stop while a turn runs, the always-visible pending-permission bar, the
+ * staged image-attachment strip, quick prompts, the [SendFailedBar] with
+ * Retry, [SessionControlsBar] (model/context, mode, effort, usage) and the
+ * input bar (attach / text field / mic / Send). Port of `SessionScreen.tsx`,
+ * including the image flow.
  *
- * The header's ‹/› chevrons mark sessions needing attention (blocked on the
- * user, or unread) left/right in the shared sidebar display order; tapping
- * one jumps there — the reference renders them as pointer-events:none hints
- * beside a swipe carousel, but this app's only equivalent affordance is the
- * tap itself.
+ * While the session waits on a question, text sent from the input bar is
+ * that question's custom answer — exactly what the card's own "type your
+ * own answer" field sends.
  */
 @Composable
 fun SessionScreen(
@@ -173,7 +167,6 @@ fun SessionScreen(
     onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val connection by core.connection.collectAsState()
     val machinesView by core.machines.collectAsState()
     val uiView by core.ui.collectAsState()
     val outboxView by core.outbox.collectAsState()
@@ -379,6 +372,13 @@ fun SessionScreen(
                 uploadError =
                     "TimeoutError: image send timed out after $SESSION_IMAGE_SEND_BACKSTOP_MS ms"
             } else {
+                pendingImage = null
+                draft = ""
+            }
+            uploading = false
+        }
+    }
+
     // Question-group progress, shared with the transcript's cards — see
     // TranscriptList for why it is kept locally at all.
     var locallyAdvanced by remember(machine, sessionId) { mutableStateOf(setOf<String>()) }
@@ -392,14 +392,14 @@ fun SessionScreen(
         null
     }
 
-                pendingImage = null
-                draft = ""
-            }
-            uploading = false
-        }
-    }
-
     fun send() {
+        val text = draft.trim()
+        if (pendingImage != null) {
+            sendWithImage(text)
+            return
+        }
+        if (text.isEmpty()) return
+        draft = ""
         if (activeQuestion != null) {
             activeQuestion.advanceKey?.let { locallyAdvanced = locallyAdvanced + it }
             dispatch(
@@ -412,13 +412,6 @@ fun SessionScreen(
             )
             return
         }
-        val text = draft.trim()
-        if (pendingImage != null) {
-            sendWithImage(text)
-            return
-        }
-        if (text.isEmpty()) return
-        draft = ""
         dispatch(
             UniffiIntent.SendInput(
                 machine = machine,
@@ -471,43 +464,15 @@ fun SessionScreen(
         core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
     }
 
-    // --- ‹/› attention chevrons: same ordered list as the sidebar/carousel,
-    // same predicate as the sidebar's attention dot.
-    val orderedKeys = remember(machinesView) { getOrderedSessionKeys(machinesView?.machines.orEmpty()) }
-    val unreadSessions = uiView?.unreadSessions.orEmpty().toSet()
-    val currentIndex = orderedKeys.indexOfFirst { it.machine == machine && it.sessionId == sessionId }
-    fun needsAttention(key: SessionKey): Boolean {
-        val state = machinesView?.machines
-            ?.firstOrNull { it.pubkeyHex == key.machine }
-            ?.sessions?.firstOrNull { it.id == key.sessionId }?.state
-        return state == "waiting_permission" || state == "waiting_question" ||
-            sessionKeyOf(key.machine, key.sessionId) in unreadSessions
-    }
-    val attentionLeft = currentIndex > 0 &&
-        orderedKeys.subList(0, currentIndex).any { needsAttention(it) }
-    val attentionRight = currentIndex >= 0 && currentIndex + 1 < orderedKeys.size &&
-        orderedKeys.subList(currentIndex + 1, orderedKeys.size).any { needsAttention(it) }
-    fun jumpAttention(direction: Int) {
-        if (currentIndex < 0) return
-        val targetIndex = if (direction < 0) {
-            (currentIndex - 1 downTo 0).firstOrNull { needsAttention(orderedKeys[it]) }
-        } else {
-            ((currentIndex + 1) until orderedKeys.size).firstOrNull { needsAttention(orderedKeys[it]) }
-        } ?: return
-        val target = orderedKeys[targetIndex]
-        dispatch(UniffiIntent.SelectSession(machine = target.machine, sessionId = target.sessionId))
-    }
-
-    // --- Outbox: the "send failed" badge counts this session's failed items;
-    // Retry re-publishes the oldest one (the transcript's per-row Retry covers
-    // the rest).
+    // --- Outbox: the "send failed" bar shows this session's oldest failed
+    // item; Retry re-publishes it (the transcript's per-row Retry covers the
+    // rest).
     val failedOutbox = outboxView?.items.orEmpty().filter {
         it.machine == machine && it.sessionId == sessionId && it.state == "failed"
     }
+    val oldestFailed = failedOutbox.minByOrNull { it.createdAt }
     fun retryOldestFailed() {
-            locallyAdvanced = locallyAdvanced,
-            onAdvance = { id -> locallyAdvanced = locallyAdvanced + id },
-        failedOutbox.minByOrNull { it.createdAt }?.let { oldest ->
+        oldestFailed?.let { oldest ->
             dispatch(UniffiIntent.RetryOutboxItem(machine = machine, id = oldest.id))
         }
     }
@@ -520,10 +485,6 @@ fun SessionScreen(
                 ?: "Session",
             workspace = session?.cwd,
             sessionState = session?.state,
-            connectionStatus = connection?.status,
-            attentionLeft = attentionLeft,
-            attentionRight = attentionRight,
-            onJumpAttention = ::jumpAttention,
             onBack = onBack,
         )
 
@@ -544,6 +505,8 @@ fun SessionScreen(
             contiguous = transcriptView?.contiguous ?: true,
             respondedCards = respondedCards,
             planApprovalChoices = planChoices,
+            locallyAdvanced = locallyAdvanced,
+            onAdvance = { id -> locallyAdvanced = locallyAdvanced + id },
             dispatch = ::dispatch,
             modifier = Modifier.weight(1f),
         )
@@ -661,6 +624,12 @@ fun SessionScreen(
             }
         }
 
+        // A failed send sits right above the controls, the same way the
+        // running turn's line does, with the message it failed to deliver.
+        oldestFailed?.let { failed ->
+            SendFailedBar(text = failed.text, failedCount = failedOutbox.size, onRetry = ::retryOldestFailed)
+        }
+
         SessionControlsBar(
             effortLevel = session?.effortLevel,
             permissionMode = confirmedMode,
@@ -669,14 +638,12 @@ fun SessionScreen(
             model = session?.model,
             contextPercentage = session?.contextPercentage,
             contextWindow = session?.contextWindow?.toLong(),
-            hasFailedOutbox = failedOutbox.isNotEmpty(),
             onEffortSelect = { level ->
                 if (level != session?.effortLevel) {
                     dispatch(UniffiIntent.SetEffort(machine = machine, sessionId = sessionId, level = level))
                 }
             },
             onModeTap = ::tapMode,
-            onRetryOutbox = ::retryOldestFailed,
             showUsageBadge = settings?.showUsageBadge ?: false,
             usage = session?.usage,
         )
@@ -713,33 +680,6 @@ fun SessionScreen(
                 enabled = (draft.isNotBlank() || pendingImage != null) && !uploading,
             ) {
                 Text("Send")
-/** The unanswered question a composer send answers: its option count (what
- *  `AnswerQuestion` needs to reach the free-text reply) and, for a
- *  sub-question of a group, the key that advances the group's card. */
-internal data class ActiveQuestion(val optionCount: ULong, val advanceKey: String?)
-
-/** The newest question card still awaiting a reply, or null when the newest
- *  one is already answered — an older unanswered card is a stale one. */
-internal fun activeQuestionOf(entries: List<DisplayEntry>, responded: Set<String>): ActiveQuestion? {
-    val newest = entries.lastOrNull { it is DisplayEntry.Question || it is DisplayEntry.QuestionGroup }
-    return when (newest) {
-        is DisplayEntry.Question -> {
-            val done = newest.answered != null || (newest.toolUseId != null && newest.toolUseId in responded)
-            if (done) null else ActiveQuestion((newest.question.options?.size ?: 0).toULong(), advanceKey = null)
-        }
-        is DisplayEntry.QuestionGroup -> {
-            if (newest.answered != null) return null
-            val index = newest.questions.indices.firstOrNull { "${newest.toolUseId}:q$it" !in responded }
-                ?: return null
-            ActiveQuestion(
-                (newest.questions[index].options?.size ?: 0).toULong(),
-                advanceKey = "${newest.toolUseId}:q$index",
-            )
-        }
-        else -> null
-    }
-}
-
             }
         }
     }
@@ -773,6 +713,33 @@ private class AttachGeneration {
     }
 }
 
+/** The unanswered question a composer send answers: its option count (what
+ *  `AnswerQuestion` needs to reach the free-text reply) and, for a
+ *  sub-question of a group, the key that advances the group's card. */
+internal data class ActiveQuestion(val optionCount: ULong, val advanceKey: String?)
+
+/** The newest question card still awaiting a reply, or null when the newest
+ *  one is already answered — an older unanswered card is a stale one. */
+internal fun activeQuestionOf(entries: List<DisplayEntry>, responded: Set<String>): ActiveQuestion? {
+    val newest = entries.lastOrNull { it is DisplayEntry.Question || it is DisplayEntry.QuestionGroup }
+    return when (newest) {
+        is DisplayEntry.Question -> {
+            val done = newest.answered != null || (newest.toolUseId != null && newest.toolUseId in responded)
+            if (done) null else ActiveQuestion((newest.question.options?.size ?: 0).toULong(), advanceKey = null)
+        }
+        is DisplayEntry.QuestionGroup -> {
+            if (newest.answered != null) return null
+            val index = newest.questions.indices.firstOrNull { "${newest.toolUseId}:q$it" !in responded }
+                ?: return null
+            ActiveQuestion(
+                (newest.questions[index].options?.size ?: 0).toULong(),
+                advanceKey = "${newest.toolUseId}:q$index",
+            )
+        }
+        else -> null
+    }
+}
+
 /** Tapping a quick prompt joins the fragment onto the draft: an empty or
  *  whitespace-only draft takes it verbatim, otherwise trailing whitespace is
  *  stripped and exactly one space joins the two. */
@@ -780,22 +747,18 @@ internal fun appendToDraft(draft: String, fragment: String): String =
     if (draft.isBlank()) fragment else "${draft.trimEnd()} $fragment"
 
 /**
- * The session's single top bar: back, what this session is and where it
- * works (title over the workspace path), and — only when they carry news —
- * the relay link state and the ‹/› jumps to other sessions needing
- * attention. The session's own state is not repeated here: a running turn
- * has the [ThinkingIndicator] line, and waiting sessions have the
- * permission bar or a question card, each with the control that answers it.
+ * The session's single top bar: back, and what this session is and where it
+ * works (title over the workspace path). The session's own state is not
+ * repeated here: a running turn has the [ThinkingIndicator] line, waiting
+ * sessions have the permission bar or a question card, and a failed send
+ * has the [SendFailedBar], each with the control that answers it. The relay
+ * link state lives on the sessions list.
  */
 @Composable
 internal fun SessionTopBar(
     title: String,
     workspace: String?,
     sessionState: String?,
-    connectionStatus: String?,
-    attentionLeft: Boolean,
-    attentionRight: Boolean,
-    onJumpAttention: (Int) -> Unit,
     onBack: (() -> Unit)?,
 ) {
     Row(
@@ -837,33 +800,13 @@ internal fun SessionTopBar(
                 )
             }
         }
-        // "connected" is the normal case and says nothing; anything else
-        // means what is on screen may be stale.
-        if (connectionStatus != null && connectionStatus != "connected") {
-            Text(
-                connectionStatus,
-                color = Tokens.Warn,
-                fontSize = Tokens.TextXs,
-                maxLines = 1,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.Warn.copy(alpha = 0.12f))
-                    .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
-            )
-        }
-        if (attentionLeft) {
-            NavChevron("‹", "Previous session needing attention") { onJumpAttention(-1) }
-        }
-        if (attentionRight) {
-            NavChevron("›", "Next session needing attention") { onJumpAttention(1) }
-        }
     }
 }
 
 /**
- * What the next turn runs with — permission mode, model and context used,
- * effort — plus usage and a failed-send retry, in one slim scrollable bar
- * right above the input, where Claude Code shows its own mode.
+ * What the next turn runs with — model and context used, permission mode,
+ * effort — then subscription usage, in one slim scrollable bar right above
+ * the input, where Claude Code shows its own mode.
  */
 @Composable
 internal fun SessionControlsBar(
@@ -874,10 +817,8 @@ internal fun SessionControlsBar(
     model: String?,
     contextPercentage: Double?,
     contextWindow: Long?,
-    hasFailedOutbox: Boolean,
     onEffortSelect: (String) -> Unit,
     onModeTap: () -> Unit,
-    onRetryOutbox: () -> Unit,
     showUsageBadge: Boolean,
     usage: UniffiUsageData?,
 ) {
@@ -889,16 +830,13 @@ internal fun SessionControlsBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        if (permissionMode != null) {
-            ModeButton(modeLabel, modePending, onModeTap)
-        }
         if (model != null) {
             ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
         }
-        EffortSelector(effortLevel, onEffortSelect)
-        if (hasFailedOutbox) {
-            SendFailedBadge(onRetryOutbox)
+        if (permissionMode != null) {
+            ModeButton(modeLabel, modePending, onModeTap)
         }
+        EffortSelector(effortLevel, onEffortSelect)
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {
             UsageBox(usage, badges)
@@ -930,26 +868,36 @@ internal fun ThinkingIndicator(onStop: () -> Unit) {
     }
 }
 
-/** ‹/› attention chevron — the reference renders these as non-interactive
- *  pulsing hints beside a swipe carousel; here the tap itself navigates. */
+/** The oldest failed send's line, laid out like [ThinkingIndicator]: what
+ *  failed to go out (plus how many more are waiting behind it) and its
+ *  Retry. */
 @Composable
-private fun NavChevron(glyph: String, label: String, onClick: () -> Unit) {
-    val alpha = pulsingAlpha(min = 0.4f, max = 1f, halfPeriodMs = 1_000)
-    Box(
+internal fun SendFailedBar(text: String, failedCount: Int, onRetry: () -> Unit) {
+    Row(
         Modifier
-            .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = label },
-        contentAlignment = Alignment.Center,
+            .fillMaxWidth()
+            .background(Tokens.Warn.copy(alpha = 0.12f))
+            .padding(start = Tokens.Space2, end = Tokens.Space1),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            glyph,
-            color = Tokens.Text,
-            fontSize = Tokens.TextXl,
+            if (failedCount > 1) "Send failed ($failedCount)" else "Send failed",
+            color = Tokens.Warn,
+            fontSize = Tokens.TextSm,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.graphicsLayer { this.alpha = alpha },
+            maxLines = 1,
         )
+        Text(
+            text.replace('\n', ' '),
+            color = Tokens.TextMuted,
+            fontSize = Tokens.TextSm,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = Tokens.Space2),
+        )
+        TextButton(onClick = onRetry) {
+            Text("Retry", color = Tokens.Text, fontSize = Tokens.TextSm)
+        }
     }
 }
 
@@ -986,34 +934,6 @@ private fun ModeButton(label: String, pending: Boolean, onTap: () -> Unit) {
             .clickable(onClick = onTap)
             .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
     )
-}
-
-@Composable
-private fun SendFailedBadge(onRetry: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "send failed",
-            color = Tokens.Warn,
-            fontSize = Tokens.TextXs,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.Text.copy(alpha = 0.03f))
-                .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
-        )
-        Text(
-            "Retry",
-            color = Tokens.Text,
-            fontSize = Tokens.TextXs,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.SurfaceHover)
-                .clickable(onClick = onRetry)
-                .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
-        )
-    }
 }
 
 /** The 5h/7d subscription-usage box: the reported windows on one line, the
