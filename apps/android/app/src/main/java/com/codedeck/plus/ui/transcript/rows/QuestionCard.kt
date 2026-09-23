@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,6 +81,13 @@ private fun QuestionAnswerBody(
             )
             ActionChip("Send", Tokens.Text, onClick = ::submitText)
         }
+        // Choosing to type is not a commitment: the offered replies stay one
+        // tap away (the draft is kept if the user comes back to typing).
+        if (hasOptions) {
+            TextButton(onClick = { showTextInput = false }) {
+                Text("Back to options", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+            }
+        }
         return
     }
 
@@ -137,12 +145,9 @@ private fun QuestionAnswerBody(
             }
         }
         if (freeTextIndex == -1) {
-            Text(
-                "Type your own answer…",
-                color = Tokens.TextMuted,
-                fontSize = Tokens.TextXs,
-                modifier = Modifier.padding(top = Tokens.Space2).clickable { showTextInput = true },
-            )
+            TextButton(onClick = { showTextInput = true }) {
+                Text("Type your own answer…", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+            }
         }
     }
 }
