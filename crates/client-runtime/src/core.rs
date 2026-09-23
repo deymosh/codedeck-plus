@@ -58,6 +58,12 @@ use crate::view::{
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
+/// How long after a relay closes the DM or Marmot subscription it is
+/// re-opened. Nothing else would: those subscriptions are otherwise only
+/// opened on (re)connect, and a relay can close one (`rate-limited:` …)
+/// while the socket stays up. The delay keeps a relay that re-closes it
+/// straight away from turning this into a hot loop.
+const SUB_REARM_DELAY_MS: u64 = 30_000;
 
 // --- ports (F1 minimal) ------------------------------------------------------
 
@@ -354,8 +360,10 @@ impl Core {
             undo_timer: None,
             dm_sub: None,
             dm_epoch: 0,
+            dm_rearm_timer: None,
             marmot_sub: None,
             marmot_epoch: 0,
+            marmot_rearm_timer: None,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -580,6 +588,10 @@ enum Msg {
     MarmotEvent(serde_json::Value),
     /// The Marmot subscription of `epoch` died.
     MarmotClosed(u64),
+    /// Re-open the DM subscription that closed at `epoch`, if still current.
+    DmRearm(u64),
+    /// Re-open the Marmot subscription that closed at `epoch`, if still current.
+    MarmotRearm(u64),
     /// A (re)connect: run the Marmot start sequence (engine init, group
     /// reconcile, KeyPackage / 10051 publish, then the 445 sub). Deferred to a
     /// message so the sync connection `apply` stays non-blocking.
@@ -687,9 +699,13 @@ struct Loop {
     /// The kind-1059 DM subscription + its epoch guard.
     dm_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
     dm_epoch: u64,
+    /// Pending re-open after a relay closed the DM subscription.
+    dm_rearm_timer: Option<AbortHandle>,
     /// The kind-445 Marmot group-message subscription (over joined `h` tags).
     marmot_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
     marmot_epoch: u64,
+    /// Pending re-open after a relay closed the Marmot subscription.
+    marmot_rearm_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- F2b: the composed store layer ---
     stores: CoreStores,
@@ -781,12 +797,38 @@ impl Loop {
                 Msg::DmClosed(epoch) => {
                     if epoch == self.dm_epoch {
                         self.dm_sub = None;
+                        abort(&mut self.dm_rearm_timer);
+                        self.dm_rearm_timer = Some(self.arm(SUB_REARM_DELAY_MS, Msg::DmRearm(epoch)));
                     }
                 }
                 Msg::MarmotEvent(event) => self.on_marmot_event(event).await,
                 Msg::MarmotClosed(epoch) => {
                     if epoch == self.marmot_epoch {
                         self.marmot_sub = None;
+                        abort(&mut self.marmot_rearm_timer);
+                        self.marmot_rearm_timer =
+                            Some(self.arm(SUB_REARM_DELAY_MS, Msg::MarmotRearm(epoch)));
+                    }
+                }
+                // Only while connected: after a socket loss the reconnect's
+                // OpenSocket re-opens both subscriptions itself (and bumps
+                // the epoch, which turns a pending re-arm into a no-op).
+                Msg::DmRearm(epoch) => {
+                    self.dm_rearm_timer = None;
+                    if epoch == self.dm_epoch
+                        && self.dm_sub.is_none()
+                        && self.conn.status == ConnectionStatus::Connected
+                    {
+                        self.start_dm_sub();
+                    }
+                }
+                Msg::MarmotRearm(epoch) => {
+                    self.marmot_rearm_timer = None;
+                    if epoch == self.marmot_epoch
+                        && self.marmot_sub.is_none()
+                        && self.conn.status == ConnectionStatus::Connected
+                    {
+                        self.start_marmot_sub();
                     }
                 }
                 Msg::MarmotStart => self.on_marmot_start().await,
@@ -1360,6 +1402,7 @@ impl Loop {
     /// (Re)open the kind-1059 subscription with a fresh epoch + catch-up cursor,
     /// and publish the kind-10050 DM relay list.
     fn start_dm_sub(&mut self) {
+        abort(&mut self.dm_rearm_timer);
         self.dm_epoch += 1;
         let epoch = self.dm_epoch;
         if let Some(sub) = self.dm_sub.take() {
@@ -1396,6 +1439,7 @@ impl Loop {
     }
 
     fn stop_dm_sub(&mut self) {
+        abort(&mut self.dm_rearm_timer);
         self.dm_epoch += 1; // orphan any in-flight callback
         if let Some(sub) = self.dm_sub.take() {
             sub.close();
@@ -1481,6 +1525,7 @@ impl Loop {
     /// nothing to listen for, so the subscription is torn down until a welcome
     /// is accepted (which calls this again).
     fn start_marmot_sub(&mut self) {
+        abort(&mut self.marmot_rearm_timer);
         self.marmot_epoch += 1;
         let epoch = self.marmot_epoch;
         if let Some(sub) = self.marmot_sub.take() {
@@ -1512,6 +1557,7 @@ impl Loop {
     }
 
     fn stop_marmot_sub(&mut self) {
+        abort(&mut self.marmot_rearm_timer);
         self.marmot_epoch += 1; // orphan any in-flight callback
         if let Some(sub) = self.marmot_sub.take() {
             sub.close();
@@ -3262,6 +3308,50 @@ mod tests {
                 // the appended line is `<blossom-url> key=<64hex> iv=<24hex>`
                 let line = msg.lines().nth(1).unwrap();
                 assert!(line.contains(" key=") && line.contains(" iv="));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_closed_dm_subscription_is_reopened_after_the_rearm_delay() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), CorePorts::default()).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                let dm_sub = eose_all(&mut mock).await;
+                settle().await;
+
+                // The relay drops the 1059 subscription while the socket stays up.
+                mock.push(format!(r#"["CLOSED","{dm_sub}","rate-limited: slow down"]"#));
+                settle().await;
+
+                // Paused only now, after the real-time handshake has settled.
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_millis(SUB_REARM_DELAY_MS + 1_000)).await;
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+                tokio::time::resume();
+
+                let reopened = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let frame = mock.next_frame().await;
+                        let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                        if v[0] == "REQ"
+                            && v.get(2).and_then(|f| f["kinds"].as_array())
+                                == Some(&vec![serde_json::json!(1059)])
+                        {
+                            return v[1].as_str().unwrap().to_string();
+                        }
+                    }
+                })
+                .await
+                .expect("the DM subscription was never re-opened");
+                assert_ne!(reopened, dm_sub);
             })
             .await;
     }
