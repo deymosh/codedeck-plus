@@ -124,9 +124,12 @@ private fun TranscriptListContent(
             verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
         ) {
             if (showSyncGap) {
-                item(key = "sync-gap") { SyncGapRow(failed = syncState == "failed") }
+                item(key = "sync-gap", contentType = "sync-gap") { SyncGapRow(failed = syncState == "failed") }
             }
-            items(displayEntries, key = { "e${it.seq}" }) { entry ->
+            // contentType lets the lazy list reuse a scrolled-off row's
+            // composition only for a row of the same kind (a tool group never
+            // gets recycled into a Markdown message and vice versa).
+            items(displayEntries, key = { "e${it.seq}" }, contentType = { it::class }) { entry ->
                 TranscriptRow(
                     item = entry,
                     machine = machine,
@@ -145,7 +148,7 @@ private fun TranscriptListContent(
                     actions = dispatch,
                 )
             }
-            items(visibleOutbox, key = { "o${it.id}" }) { item ->
+            items(visibleOutbox, key = { "o${it.id}" }, contentType = { "outbox" }) { item ->
                 OutboxRow(item) { id -> dispatch(UniffiIntent.RetryOutboxItem(machine = machine, id = id)) }
             }
         }

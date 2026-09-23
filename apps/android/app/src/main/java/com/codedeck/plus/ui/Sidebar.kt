@@ -54,6 +54,8 @@ import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.theme.connectionColor
 import com.codedeck.plus.ui.theme.presenceColor
 import com.codedeck.plus.ui.theme.stateColor
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -185,17 +187,21 @@ fun Sidebar(
                 if (refreshing || machines.isEmpty()) return@PullToRefreshBox
                 refreshing = true
                 pullScope.launch {
-                    val before = bridge.events.value
+                    // Subscribed (UNDISPATCHED runs up to the first
+                    // suspension, i.e. into `first`) before anything is
+                    // dispatched: `events` has no replay, so a reply landing
+                    // before a late subscription would be lost.
+                    val landed = async(start = CoroutineStart.UNDISPATCHED) {
+                        withTimeoutOrNull(5_000) {
+                            bridge.events.first { event ->
+                                event is CoreEvent.StateChanged && event.slice == SliceId.MACHINES
+                            }
+                        }
+                    }
                     machines.forEach { machine ->
                         bridge.dispatch(UniffiIntent.RefreshSessions(machine.pubkeyHex))
                     }
-                    withTimeoutOrNull(5_000) {
-                        bridge.events.first { event ->
-                            event !== before &&
-                                event is CoreEvent.StateChanged &&
-                                event.slice == SliceId.MACHINES
-                        }
-                    }
+                    landed.await()
                     refreshing = false
                 }
             },

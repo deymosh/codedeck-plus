@@ -69,6 +69,7 @@ import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.sessionKeyOf
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.theme.stateColor
+import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.PendingPermissionSummary
 import com.codedeck.plus.ui.transcript.TranscriptList
 import com.codedeck.plus.ui.transcript.parseDisplayEntries
@@ -85,12 +86,46 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.uniffi_bridge.UniffiIntent
 import uniffi.uniffi_bridge.UniffiTranscriptRowsView
 import uniffi.uniffi_bridge.UniffiUsageData
+
+/**
+ * A transcript view with its JSON payloads already decoded. Built off the main
+ * thread: a long transcript's `displayEntriesJson` is large, and decoding it
+ * inside composition on every append would stall frames during a streaming
+ * turn. [of] reuses the previous decode for any payload whose JSON did not
+ * change (a sync-status-only update, or an append that leaves the pending
+ * permission alone), which also keeps the decoded list referentially stable
+ * so the transcript does not recompose for nothing.
+ */
+private class ParsedTranscript(
+    val view: UniffiTranscriptRowsView,
+    val displayEntries: List<DisplayEntry>,
+    val pendingPermission: PendingPermissionSummary?,
+) {
+    companion object {
+        fun of(view: UniffiTranscriptRowsView, previous: ParsedTranscript?): ParsedTranscript = ParsedTranscript(
+            view = view,
+            displayEntries = if (previous != null && previous.view.displayEntriesJson == view.displayEntriesJson) {
+                previous.displayEntries
+            } else {
+                parseDisplayEntries(view.displayEntriesJson)
+            },
+            pendingPermission = if (previous != null && previous.view.pendingPermissionJson == view.pendingPermissionJson) {
+                previous.pendingPermission
+            } else {
+                view.pendingPermissionJson?.let(::parsePendingPermission)
+            },
+        )
+    }
+}
 
 /** The effort ladder the wire accepts (`SetEffort.level`'s own spellings). */
 private val EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max", "auto")
@@ -143,16 +178,18 @@ fun SessionScreen(
     // is not RENDERED at all (a hard gate on the wire, not a hidden one).
     val canAttachImages = machineSummary?.capabilities?.contains("images") == true
 
-    var transcriptView by remember(machine, sessionId) { mutableStateOf<UniffiTranscriptRowsView?>(null) }
+    var transcript by remember(machine, sessionId) { mutableStateOf<ParsedTranscript?>(null) }
     LaunchedEffect(machine, sessionId) {
-        bridge.transcriptFlow(machine, sessionId).collect { transcriptView = it }
+        var previous: ParsedTranscript? = null
+        bridge.transcriptFlow(machine, sessionId)
+            .distinctUntilChanged()
+            .map { view -> ParsedTranscript.of(view, previous).also { previous = it } }
+            .flowOn(Dispatchers.Default)
+            .collect { transcript = it }
     }
-    val displayEntries = remember(transcriptView) {
-        transcriptView?.displayEntriesJson?.let(::parseDisplayEntries).orEmpty()
-    }
-    val pendingPermission: PendingPermissionSummary? = remember(transcriptView) {
-        transcriptView?.pendingPermissionJson?.let(::parsePendingPermission)
-    }
+    val transcriptView = transcript?.view
+    val displayEntries = transcript?.displayEntries.orEmpty()
+    val pendingPermission: PendingPermissionSummary? = transcript?.pendingPermission
 
     val sessionKey = "$machine $sessionId"
     val respondedCards = uiView?.respondedCards?.get(sessionKey)?.toSet().orEmpty()

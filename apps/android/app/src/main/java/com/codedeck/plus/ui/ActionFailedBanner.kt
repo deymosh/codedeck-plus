@@ -7,8 +7,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -17,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import com.codedeck.plus.core.CoreBridge
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterIsInstance
 import uniffi.client_runtime.ActionFailedKind
 import uniffi.client_runtime.CoreEvent
 
@@ -49,27 +50,23 @@ fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
  */
 @Composable
 fun ActionFailedBanner(bridge: CoreBridge, modifier: Modifier = Modifier) {
-    val events by bridge.events.collectAsState()
-    // The event already sitting in the flow when this composable first
-    // composed: a StateFlow replays its CURRENT value to a new collector, so
-    // comparing by identity against this instance is what keeps a stale
-    // failure from re-showing every time the shell re-attaches — the exact
-    // idiom `NewSessionScreen.kt`'s create() uses around its own dispatch.
-    val initial = remember { events }
-    var lastSeen by remember { mutableStateOf(initial) }
     var shown by remember { mutableStateOf<CoreEvent.ActionFailed?>(null) }
+    // Bumped on every failure. The dismiss timer keys on this rather than on
+    // `shown`: two identical failures in a row are `equals` data-class
+    // instances, and keying on the event itself would not restart the window
+    // for the second one.
+    var generation by remember { mutableIntStateOf(0) }
 
-    // Surface each NEW event of kind ActionFailed (identity-compared against
-    // everything this composable has already seen).
-    LaunchedEffect(events) {
-        val current = events
-        if (current !== lastSeen) {
-            lastSeen = current
-            if (current is CoreEvent.ActionFailed) shown = current
+    // `events` has no replay, so only failures that happen while this
+    // banner is mounted ever show — a stale one never re-appears when the
+    // shell re-attaches.
+    LaunchedEffect(bridge) {
+        bridge.events.filterIsInstance<CoreEvent.ActionFailed>().collect { failed ->
+            shown = failed
+            generation++
         }
     }
-    // Auto-dismiss — re-keyed on `shown`, so a newer failure restarts it.
-    LaunchedEffect(shown) {
+    LaunchedEffect(generation) {
         if (shown != null) {
             delay(BANNER_VISIBLE_MS)
             shown = null

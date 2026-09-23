@@ -4,11 +4,19 @@ import com.codedeck.plus.platform.CoreHttpFetch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import uniffi.client_runtime.ActionFailedKind
 import uniffi.client_runtime.ConnectionView
@@ -56,8 +64,22 @@ class CoreBridge(
     private val _connection = MutableStateFlow<ConnectionView?>(null)
     val connection: StateFlow<ConnectionView?> = _connection.asStateFlow()
 
-    private val _events = MutableStateFlow<CoreEvent?>(null)
-    val events: StateFlow<CoreEvent?> = _events.asStateFlow()
+    /**
+     * Every `CoreEvent`, in order. Deliberately a `SharedFlow` and not a
+     * `StateFlow`: a `StateFlow` drops a value `equals` to its current one
+     * (two back-to-back `TranscriptAppended` for the same session are equal
+     * data-class instances, so the second would vanish) and conflates
+     * whatever a slow collector has not read yet. No replay: a waiter must
+     * subscribe BEFORE dispatching the intent whose outcome it waits for
+     * (`CoroutineStart.UNDISPATCHED` does that — see `NewSessionScreen`).
+     * The buffer only protects slow collectors from each other; it is not a
+     * history.
+     */
+    private val _events = MutableSharedFlow<CoreEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<CoreEvent> = _events.asSharedFlow()
 
     private val _machines = MutableStateFlow<UniffiMachinesView?>(null)
     val machines: StateFlow<UniffiMachinesView?> = _machines.asStateFlow()
@@ -87,6 +109,36 @@ class CoreBridge(
     private val _pairing = MutableStateFlow<UniffiPairingView?>(null)
     val pairing: StateFlow<UniffiPairingView?> = _pairing.asStateFlow()
 
+    /**
+     * Re-reads one view slice on request. Reads for a slice never overlap and
+     * requests arriving mid-read collapse into ONE follow-up read, so an
+     * older snapshot can never land after — and overwrite — a newer one (two
+     * independent concurrent reads could complete in either order), and a
+     * burst of `StateChanged` events costs at most two FFI round trips.
+     */
+    private inner class SliceRefresher<T>(sink: MutableStateFlow<T?>, read: suspend () -> T) {
+        private val requests = Channel<Unit>(Channel.CONFLATED)
+
+        init {
+            scope.launch { for (request in requests) sink.value = read() }
+        }
+
+        fun request() {
+            requests.trySend(Unit)
+        }
+    }
+
+    private val machinesRefresher = SliceRefresher(_machines) { core.machinesView() }
+    private val uiRefresher = SliceRefresher(_ui) { core.uiView() }
+    private val outboxRefresher = SliceRefresher(_outbox) { core.outboxView() }
+    private val settingsRefresher = SliceRefresher(_settings) { core.settingsView() }
+    private val quickPromptsRefresher = SliceRefresher(_quickPrompts) { core.quickPromptsView() }
+    private val pendingSessionsRefresher = SliceRefresher(_pendingSessions) { core.pendingSessionsView() }
+    private val pairingRefresher = SliceRefresher(_pairing) { core.pairingView() }
+
+    // Constructed last: `Core` holds `this` as its listener and may call back
+    // from its own thread straight away, so every field a callback touches
+    // (the refreshers above) must already be initialized.
     private val core: Core = Core(relays, identitySecretHex, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
 
     fun start() {
@@ -136,25 +188,32 @@ class CoreBridge(
      * `respondedCards`, which `TranscriptRowsView`'s pending-permission
      * projection reads). A screen collects this for as long as it shows that
      * session; cancelling the collection (leaving the screen) stops it.
+     *
+     * The event subscription is in place BEFORE the initial read (the
+     * synthetic trigger is emitted from `onSubscription`), so an append that
+     * lands between the two is never missed. Triggers that arrive while a
+     * read is in flight are conflated into one follow-up read — a streaming
+     * turn appends far faster than a full view needs re-reading.
      */
-    fun transcriptFlow(machine: String, sessionId: String): Flow<UniffiTranscriptRowsView> = flow {
-        emit(core.transcriptView(machine, sessionId))
-        events.collect { event ->
-            val relevant = when (event) {
-                is CoreEvent.TranscriptAppended -> event.machine == machine && event.sessionId == sessionId
-                is CoreEvent.StateChanged -> event.slice == SliceId.TRANSCRIPT || event.slice == SliceId.UI
-                else -> false
+    fun transcriptFlow(machine: String, sessionId: String): Flow<UniffiTranscriptRowsView> =
+        events
+            .onSubscription { emit(CoreEvent.StateChanged(SliceId.TRANSCRIPT)) }
+            .filter { event ->
+                when (event) {
+                    is CoreEvent.TranscriptAppended -> event.machine == machine && event.sessionId == sessionId
+                    is CoreEvent.StateChanged -> event.slice == SliceId.TRANSCRIPT || event.slice == SliceId.UI
+                    else -> false
+                }
             }
-            if (relevant) emit(core.transcriptView(machine, sessionId))
-        }
-    }
+            .conflate()
+            .map { core.transcriptView(machine, sessionId) }
 
     override fun connectionChanged(view: ConnectionView) {
         _connection.value = view
     }
 
     override fun onEvent(event: CoreEvent) {
-        _events.value = event
+        _events.tryEmit(event)
         when (event) {
             is CoreEvent.StateChanged -> when (event.slice) {
                 SliceId.MACHINES -> refreshMachines()
@@ -177,31 +236,17 @@ class CoreBridge(
         // banner, so nothing extra is needed in this callback.
     }
 
-    private fun refreshMachines() {
-        scope.launch { _machines.value = core.machinesView() }
-    }
+    private fun refreshMachines() = machinesRefresher.request()
 
-    private fun refreshUi() {
-        scope.launch { _ui.value = core.uiView() }
-    }
+    private fun refreshUi() = uiRefresher.request()
 
-    private fun refreshOutbox() {
-        scope.launch { _outbox.value = core.outboxView() }
-    }
+    private fun refreshOutbox() = outboxRefresher.request()
 
-    private fun refreshSettings() {
-        scope.launch { _settings.value = core.settingsView() }
-    }
+    private fun refreshSettings() = settingsRefresher.request()
 
-    private fun refreshQuickPrompts() {
-        scope.launch { _quickPrompts.value = core.quickPromptsView() }
-    }
+    private fun refreshQuickPrompts() = quickPromptsRefresher.request()
 
-    private fun refreshPendingSessions() {
-        scope.launch { _pendingSessions.value = core.pendingSessionsView() }
-    }
+    private fun refreshPendingSessions() = pendingSessionsRefresher.request()
 
-    private fun refreshPairing() {
-        scope.launch { _pairing.value = core.pairingView() }
-    }
+    private fun refreshPairing() = pairingRefresher.request()
 }

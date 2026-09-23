@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -99,7 +100,13 @@ class MainActivity : ComponentActivity() {
         // that, headers render under the clock/battery area and the keyboard
         // covers the composer.
         enableEdgeToEdge()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // Only when not already granted: onCreate reruns on every
+        // configuration change, and each launch is an activity-result round
+        // trip even when the system answers without showing a dialog.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         // Launched unconditionally of the "stay connected" setting: this

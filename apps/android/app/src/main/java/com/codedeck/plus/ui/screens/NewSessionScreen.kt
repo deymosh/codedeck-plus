@@ -42,7 +42,9 @@ import com.codedeck.plus.ui.actionFailedCopy
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -145,7 +147,7 @@ private fun NewSessionBody(
     machine: UniffiMachineSummary,
     defaultModel: String,
     defaultEffort: String,
-    events: StateFlow<CoreEvent?>,
+    events: SharedFlow<CoreEvent>,
     dispatch: (UniffiIntent) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -219,35 +221,36 @@ private fun NewSessionBody(
         if (creating) return
         creating = true
         createError = null
-        // Identity of the pre-dispatch event: a StateFlow replays its CURRENT
-        // value to a new collector, so the wait below must compare against
-        // this exact instance or it would instantly match the stale event
-        // that was already sitting in the flow before we dispatched.
-        val before = events.value
         val cwd = if (folderChoice == NEW_FOLDER) newFolderPath else folderChoice
-        dispatch(
-            UniffiIntent.CreateSession(
-                machine = machine.pubkeyHex,
-                cwd = cwd.ifEmpty { null },
-                createCwd = if (folderChoice == NEW_FOLDER) true else null,
-                model = model.ifEmpty { null },
-                defaultEffort = effort.ifEmpty { null },
-                providerId = providerId.ifEmpty { null },
-                backend = if (backend == BACKEND_OPENCODE) BACKEND_OPENCODE else null,
-            ),
-        )
         scope.launch {
             // No explicit refresh is needed on success — CoreBridge refreshes
             // its views from the very StateChanged events watched here.
-            val settled = withTimeoutOrNull(CREATE_CONFIRM_TIMEOUT_MS) {
-                events.first { event ->
-                    event !== before && when (event) {
-                        is CoreEvent.StateChanged -> event.slice == SliceId.MACHINES
-                        is CoreEvent.ActionFailed -> true
-                        else -> false
+            // `events` has no replay, so the wait subscribes BEFORE the
+            // dispatch: UNDISPATCHED runs the async body up to its first
+            // suspension (the subscription inside `first`) synchronously.
+            val confirmation = async(start = CoroutineStart.UNDISPATCHED) {
+                withTimeoutOrNull(CREATE_CONFIRM_TIMEOUT_MS) {
+                    events.first { event ->
+                        when (event) {
+                            is CoreEvent.StateChanged -> event.slice == SliceId.MACHINES
+                            is CoreEvent.ActionFailed -> true
+                            else -> false
+                        }
                     }
                 }
             }
+            dispatch(
+                UniffiIntent.CreateSession(
+                    machine = machine.pubkeyHex,
+                    cwd = cwd.ifEmpty { null },
+                    createCwd = if (folderChoice == NEW_FOLDER) true else null,
+                    model = model.ifEmpty { null },
+                    defaultEffort = effort.ifEmpty { null },
+                    providerId = providerId.ifEmpty { null },
+                    backend = if (backend == BACKEND_OPENCODE) BACKEND_OPENCODE else null,
+                ),
+            )
+            val settled = confirmation.await()
             creating = false
             when (settled) {
                 is CoreEvent.StateChanged ->
