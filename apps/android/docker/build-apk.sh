@@ -11,7 +11,8 @@
 # once apps/android needs it.
 #
 # First run builds the toolchain image (Android SDK/NDK 28 + Rust) — several
-# GB, several minutes. Reruns reuse Docker's layer cache.
+# GB, several minutes. Reruns reuse Docker's layer cache plus the cargo and
+# Gradle cache volumes (see below), so they are incremental.
 set -euo pipefail
 
 # Git Bash (MSYS) on Windows rewrites leading-/ arguments as if they were
@@ -60,25 +61,29 @@ CONTAINER=codedeck-android-build-run
 echo "==> Building toolchain image (cached after the first run)"
 docker build -t "$IMAGE" -f apps/android/docker/Dockerfile apps/android/docker
 
+# The container itself is throwaway, but the expensive state is not: the
+# cargo registry, the cargo target dir and the Gradle user home (dependency
+# jars, the build cache org.gradle.caching feeds, the configuration cache)
+# live in named volumes, so a rerun recompiles only what changed instead of
+# every crate and every Gradle task from scratch. `docker volume rm
+# codedeck-android-{cargo-registry,target,gradle}` resets them.
 echo "==> Copying source into a fresh container"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-docker create --name "$CONTAINER" -m 6g "$IMAGE" sleep infinity
+MSYS_NO_PATHCONV=1 docker create --name "$CONTAINER" -m 6g \
+  -v codedeck-android-cargo-registry:/opt/cargo/registry \
+  -v codedeck-android-target:/workspace/target \
+  -v codedeck-android-gradle:/gradle-home \
+  -e GRADLE_USER_HOME=/gradle-home \
+  "$IMAGE" sleep infinity >/dev/null
 docker start "$CONTAINER" >/dev/null
+trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 
-TARBALL="../.build-apk-repo.tar.gz"
-trap 'rm -f "$TARBALL"; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
-tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-    --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
-    --exclude='.pnpm-store' -czf "$TARBALL" .
-# A relative path OUTSIDE the tree being archived (not `mktemp`'s /tmp/...,
-# and not inside `.` either — tar refuses to read a file it's writing into
-# the same tree) — Git Bash's `docker cp` mishandles an absolute /tmp path on
-# Windows even with MSYS_NO_PATHCONV=1 set (docker.exe resolves it as a
-# Windows-relative path off the wrong drive). No-op difference on real
-# Linux/macOS.
-dcp "$TARBALL" "$CONTAINER":/workspace/repo.tar.gz
-rm -f "$TARBALL"
-dexec -w /workspace "$CONTAINER" tar -xzf repo.tar.gz
+# Only what this build reads: the cargo workspace, the protocol corpus
+# crates/protocol's build.rs embeds, and apps/android itself.
+# shellcheck source=../../../scripts/lib/pack-repo.sh
+. scripts/lib/pack-repo.sh
+pack_repo_into "$CONTAINER" /workspace \
+  Cargo.toml Cargo.lock crates packages/protocol/fixtures apps/android
 
 echo "==> Regenerating the UniFFI Kotlin bindings (host target, no NDK needed for this step)"
 dexec -w /workspace "$CONTAINER" cargo build --locked -p uniffi-bridge --lib

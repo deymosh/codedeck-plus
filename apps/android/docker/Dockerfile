@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # levels did); build-tools keeps the older "37.0.0" scheme.
 ENV ANDROID_HOME=/opt/android-sdk
 ENV ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/28.2.13676358
-ENV PATH=${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}
+ENV PATH=${ANDROID_HOME}/cmdline-tools/latest/bin:${PATH}
 
 RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
     && curl -fsSL -o /tmp/cmdline-tools.zip \
@@ -26,9 +26,10 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
     && mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest \
     && rm /tmp/cmdline-tools.zip
 
+# No platform-tools: adb is for installing onto a device, which happens on
+# the host, not in this build-only image.
 RUN yes | sdkmanager --licenses > /dev/null \
     && sdkmanager --install \
-       "platform-tools" \
        "platforms;android-37.2" \
        "build-tools;37.0.0" \
        "ndk;28.2.13676358"
@@ -37,7 +38,9 @@ RUN yes | sdkmanager --licenses > /dev/null \
 ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
 ENV PATH=${CARGO_HOME}/bin:${PATH}
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
+# --profile minimal: rustc + cargo + rust-std only; the default profile's
+# offline docs alone are several hundred MB.
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
     && rustup target add aarch64-linux-android x86_64-linux-android
 
 WORKDIR /workspace

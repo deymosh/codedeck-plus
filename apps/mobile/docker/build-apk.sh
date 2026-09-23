@@ -98,12 +98,11 @@ docker start "$CONTAINER" >/dev/null
 # container (sleep infinity) was left running forever after every build.
 trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 
-TARBALL="$(mktemp).tar.gz"
-tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-    --exclude='node_modules' --exclude='*/node_modules' -czf "$TARBALL" .
-docker cp "$TARBALL" "$CONTAINER":/workspace/repo.tar.gz
-rm -f "$TARBALL"
-dexec -w /workspace "$CONTAINER" tar -xzf repo.tar.gz
+# Git's file list (tracked + untracked-not-ignored), minus the trees this
+# build never reads — see scripts/lib/pack-repo.sh.
+. scripts/lib/pack-repo.sh
+pack_repo_into "$CONTAINER" /workspace \
+  ':(exclude)vendor' ':(exclude)spike' ':(exclude)apps/android' ':(exclude)docs'
 
 echo "==> Installing workspace deps"
 dexec -w /workspace "$CONTAINER" pnpm install --frozen-lockfile

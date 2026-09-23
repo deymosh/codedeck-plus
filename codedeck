@@ -153,37 +153,59 @@ cmd_apk() {
   esac
 }
 
-# --- Workspace checks: run in a throwaway node:22-slim container, same
-# pattern used throughout development here — nothing needs to be installed
-# on the host. `git` is installed on the fly (packages/core's folders.test.ts
-# needs it); the container is removed on exit either way. ---
-run_in_workspace_container() {
-  local name="codedeck-check-$$"
+# shellcheck source=scripts/lib/pack-repo.sh
+. scripts/lib/pack-repo.sh
+
+# Start a throwaway container that is removed when the script exits, whether
+# it succeeds, fails or is interrupted. Extra args go to `docker create`
+# (volumes, limits); MSYS path conversion is off so `-v vol:/path` survives.
+start_throwaway() {
+  local name="$1" image="$2"
+  shift 2
   docker rm -f "$name" >/dev/null 2>&1 || true
-  docker create --name "$name" node:22-slim sleep infinity >/dev/null
+  MSYS_NO_PATHCONV=1 docker create --name "$name" "$@" "$image" sleep infinity >/dev/null
   docker start "$name" >/dev/null
   # Double-quoted so $name is baked in NOW, as a literal — the trap fires
-  # after this function has already returned (local vars gone by then), so a
-  # single-quoted trap referencing $name would fail under `set -u`.
+  # after the calling function has returned (its locals are gone by then), so
+  # a single-quoted trap referencing $name would fail under `set -u`.
   trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+}
 
-  local tarball
-  tarball="$(mktemp).tar.gz"
-  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-      --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
-      --exclude='.pnpm-store' -czf "$tarball" .
-  docker cp "$tarball" "$name":/repo.tar.gz
-  rm -f "$tarball"
+# Build a small tool image from an inline Dockerfile (no build context).
+# Docker's layer cache makes every run after the first a no-op, so per-run
+# `apt-get install` / `npm install -g` cost is paid once per machine.
+ensure_image() {
+  local tag="$1"
+  shift
+  echo "==> Preparing $tag image (cached after the first run)"
+  docker build -q -t "$tag" "$@" - >/dev/null
+}
 
-  dexec "$name" mkdir -p /app
-  dexec -w /app "$name" tar -xzf /repo.tar.gz
+# --- Workspace checks: run in a throwaway Node container — nothing needs to
+# be installed on the host. The image carries git (packages/core's
+# folders.test.ts shells out to it) and the pnpm pinned by package.json's
+# packageManager; downloaded packages persist in the codedeck-pnpm-store
+# volume, so `pnpm install` only fetches what the lockfile changed. Vendored
+# upstream, the Rust-only trees and apps/android are not part of the pnpm
+# workspace and are left out of the copy. ---
+run_in_workspace_container() {
+  local name="codedeck-check-$$" pnpm_version
+  pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
+  ensure_image codedeck-check --build-arg "PNPM_VERSION=$pnpm_version" <<'EOF'
+FROM node:22-slim
+ARG PNPM_VERSION
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "pnpm@${PNPM_VERSION}"
+ENV npm_config_store_dir=/pnpm-store
+EOF
+  start_throwaway "$name" codedeck-check -v codedeck-pnpm-store:/pnpm-store
+
+  pack_repo_into "$name" /app \
+    ':(exclude)vendor' ':(exclude)spike' ':(exclude)crates' ':(exclude)apps/android' ':(exclude)docs'
   echo "==> Installing dependencies"
-  dexec -w /app "$name" npm install -g pnpm@10.8.0 >/dev/null
   dexec -w /app "$name" pnpm install --frozen-lockfile
-  if [ "$1" != "typecheck" ]; then
-    echo "==> Installing git (packages/core's folders.test.ts shells out to it)"
-    dexec "$name" bash -c "apt-get update -qq && apt-get install -y -qq git" >/dev/null 2>&1
-  fi
 
   case "$1" in
     typecheck)
@@ -208,26 +230,28 @@ cmd_sync() {
 # Rust's View/Intent/CoreEvent types are the source of truth, this file is a
 # build artifact). Runs the SAME command CI's drift check does, just without
 # the `git diff --exit-code`: this command's whole point is to update the
-# working tree, not fail on an already-known difference. ---
+# working tree, not fail on an already-known difference.
+#
+# The Tauri Linux system deps are baked into a cached image, and the cargo
+# registry and apps/mobile/src-tauri's target dir live in named volumes, so a
+# rerun only recompiles what changed. Only the Rust trees the build reads are
+# copied: apps/mobile (src-tauri, its tauri-plugin-* path deps, and the
+# generated file's destination), crates/* (path deps) and packages/protocol's
+# fixtures (crates/protocol's build.rs embeds the conformance corpus). ---
 cmd_gen_protocol_types() {
   local name="codedeck-gen-protocol-types-$$"
-  docker rm -f "$name" >/dev/null 2>&1 || true
-  docker create --name "$name" rust:1-bookworm sleep infinity >/dev/null
-  docker start "$name" >/dev/null
-  trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+  ensure_image codedeck-tauri-rust <<'EOF'
+FROM rust:1-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
+       libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+EOF
+  start_throwaway "$name" codedeck-tauri-rust \
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-tauri-target:/repo/apps/mobile/src-tauri/target
 
-  local tarball
-  tarball="$(mktemp).tar.gz"
-  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-      --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
-      --exclude='.pnpm-store' -czf "$tarball" .
-  docker cp "$tarball" "$name":/repo.tar.gz
-  rm -f "$tarball"
-
-  dexec "$name" mkdir -p /repo
-  dexec -w /repo "$name" tar -xzf /repo.tar.gz
-  echo "==> Installing Tauri Linux system deps"
-  dexec "$name" bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config" >/dev/null 2>&1
+  pack_repo_into "$name" /repo apps/mobile crates packages/protocol/fixtures Cargo.toml Cargo.lock
   echo "==> Regenerating nativeCoreTypes.generated.ts"
   dexec -w /repo/apps/mobile/src-tauri "$name" \
     cargo test --locked --features native-core --test gen_ts_bindings -- --ignored
@@ -247,24 +271,16 @@ cmd_gen_protocol_types() {
 # target triple), runs the bindgen binary, copies the output back. Does NOT
 # cross-compile the actual .so for an Android ABI — that's a separate,
 # NDK-dependent build step (apps/android's own Gradle Rust task, once it
-# exists), out of scope for a pure Kotlin-source regeneration command. ---
+# exists), out of scope for a pure Kotlin-source regeneration command. Only
+# the cargo workspace (plus the protocol corpus crates/protocol's build.rs
+# embeds) is copied; the cargo registry and target dir are cached volumes. ---
 cmd_gen_android_bindings() {
   local name="codedeck-gen-android-bindings-$$"
-  docker rm -f "$name" >/dev/null 2>&1 || true
-  docker create --name "$name" rust:1-bookworm sleep infinity >/dev/null
-  docker start "$name" >/dev/null
-  trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+  start_throwaway "$name" rust:1-bookworm \
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-uniffi-target:/repo/target
 
-  local tarball
-  tarball="$(mktemp).tar.gz"
-  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-      --exclude='node_modules' --exclude='*/node_modules' --exclude='**/target' \
-      --exclude='.pnpm-store' -czf "$tarball" .
-  docker cp "$tarball" "$name":/repo.tar.gz
-  rm -f "$tarball"
-
-  dexec "$name" mkdir -p /repo
-  dexec -w /repo "$name" tar -xzf /repo.tar.gz
+  pack_repo_into "$name" /repo crates packages/protocol/fixtures Cargo.toml Cargo.lock
   echo "==> Building crates/uniffi-bridge (host target)"
   dexec -w /repo "$name" cargo build --locked -p uniffi-bridge --lib
   echo "==> Running uniffi-bindgen (Kotlin, library mode)"
