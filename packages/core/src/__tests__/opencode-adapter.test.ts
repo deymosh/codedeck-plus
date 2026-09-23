@@ -11,9 +11,11 @@ import type {
   OpenCodeErrorMessage,
   OpenCodeResumeLostMessage,
   OpenCodeDiffMessage,
+  OpenCodeQuestionMessage,
+  LegacyFileDiff,
 } from '../sdk/opencodeAdapter';
 import type { SdkMessage } from '../sdk/facade';
-import type { FileDiff, Part } from '@opencode-ai/sdk';
+import type { Part } from '@opencode-ai/sdk/v2/client';
 
 function asSdkMessage(msg: unknown): SdkMessage {
   return msg as SdkMessage;
@@ -252,7 +254,7 @@ describe('opencodeMessageToEntries', () => {
   });
 
   describe('diff messages', () => {
-    function fileDiff(over: Partial<FileDiff> = {}): FileDiff {
+    function fileDiff(over: Partial<LegacyFileDiff> = {}): LegacyFileDiff {
       return { file: 'src/a.ts', before: 'line1\nline2\nline3', after: 'line1\nCHANGED\nline3', additions: 1, deletions: 1, ...over };
     }
 
@@ -302,6 +304,61 @@ describe('opencodeMessageToEntries', () => {
       expect(lines.length).toBe(200);
       expect(lines.every((l) => l.type === 'del')).toBe(true);
       expect(entries[0]!.diff?.truncated).toBe(true);
+    });
+
+    it('reads a 1.x unified patch (headers skipped, a "---" line inside a hunk is a deletion)', () => {
+      const patch = [
+        'diff --git a/src/a.ts b/src/a.ts',
+        'index 1..2 100644',
+        '--- a/src/a.ts',
+        '+++ b/src/a.ts',
+        '@@ -1,3 +1,3 @@',
+        ' keep',
+        '-old',
+        '+new',
+        '---dashes',
+        '\\ No newline at end of file',
+      ].join('\n');
+      const msg: OpenCodeDiffMessage = {
+        type: 'opencode-diff',
+        files: [{ file: 'src/a.ts', patch, additions: 1, deletions: 2, status: 'modified' }],
+      };
+      const entries = opencodeMessageToEntries(asSdkMessage(msg), { emitDiffEntries: true });
+      expect(entries[0]!.diff?.path).toBe('src/a.ts');
+      expect(entries[0]!.diff?.lines).toEqual([
+        { type: 'context', text: 'keep' },
+        { type: 'del', text: 'old' },
+        { type: 'add', text: 'new' },
+        { type: 'del', text: '--dashes' },
+      ]);
+    });
+
+    it('a file with only counts (no patch, no before/after) produces no card instead of throwing', () => {
+      const msg: OpenCodeDiffMessage = {
+        type: 'opencode-diff',
+        files: [{ file: 'bin.png', additions: 0, deletions: 0 }],
+      };
+      expect(opencodeMessageToEntries(asSdkMessage(msg), { emitDiffEntries: true })).toEqual([]);
+    });
+  });
+
+  describe('question messages', () => {
+    it('renders the same ask_question entries as a Claude Code AskUserQuestion', () => {
+      const msg: OpenCodeQuestionMessage = {
+        type: 'opencode-question',
+        toolUseId: 'call_q',
+        questions: [
+          { question: 'Which color?', header: 'Color', options: [{ label: 'Red' }], multiSelect: false },
+          { question: 'Which sizes?', header: 'Size', options: [{ label: 'S' }], multiSelect: true },
+        ],
+      };
+      const entries = opencodeMessageToEntries(asSdkMessage(msg));
+      expect(entries.map((e) => [e.entryType, e.content, e.metadata?.special, e.metadata?.tool_use_id, e.metadata?.question_index])).toEqual([
+        ['system', 'Which color?', 'ask_question', 'call_q', 0],
+        ['system', 'Which sizes?', 'ask_question', 'call_q', 1],
+      ]);
+      expect(entries[1]!.metadata?.multiSelect).toBe(true);
+      expect(entries[1]!.metadata?.question_count).toBe(2);
     });
   });
 

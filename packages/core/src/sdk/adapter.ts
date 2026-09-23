@@ -120,29 +120,8 @@ function parseAssistant(msg: SdkAssistantMessage, opts?: AdapterOptions): Output
         });
       } else if (block.name === 'AskUserQuestion') {
         const input = block.input as Record<string, unknown>;
-        const questions = (input.questions as Array<{
-          question: string;
-          header?: string;
-          options?: Array<{ label: string; description?: string }>;
-          multiSelect?: boolean;
-        }>) || [];
-        for (let qi = 0; qi < questions.length; qi++) {
-          const q = questions[qi]!;
-          entries.push({
-            entryType: 'system',
-            content: q.question,
-            timestamp: ts,
-            metadata: {
-              special: 'ask_question',
-              tool_use_id: block.id,
-              header: q.header,
-              options: q.options,
-              multiSelect: q.multiSelect,
-              question_index: qi,
-              question_count: questions.length,
-            },
-          });
-        }
+        const questions = (input.questions as AskQuestionSpec[]) || [];
+        entries.push(...askQuestionEntries(block.id, questions, ts));
       } else {
         entries.push({
           entryType: 'tool_use',
@@ -385,6 +364,36 @@ export function extractDiff(
 export function renderDiffFallback(diff: DiffData): string {
   const prefix = { add: '+', del: '-', context: ' ' } as const;
   return diff.lines.map((l) => prefix[l.type] + l.text).join('\n');
+}
+
+/** One question in an AskUserQuestion-shaped ask — Claude Code's own
+ *  tool input, and what the OpenCode facade maps OpenCode's questions to. */
+export interface AskQuestionSpec {
+  question: string;
+  header?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multiSelect?: boolean;
+}
+
+/** The phone's question card: one `special: 'ask_question'` system entry per
+ *  question, grouped by `toolUseId`. A later `tool_result` carrying the same
+ *  id marks the card answered. Shared by both backends so a question renders
+ *  identically whoever asked it. */
+export function askQuestionEntries(toolUseId: string, questions: AskQuestionSpec[], ts: string): OutputEntry[] {
+  return questions.map((q, qi) => ({
+    entryType: 'system',
+    content: q.question,
+    timestamp: ts,
+    metadata: {
+      special: 'ask_question',
+      tool_use_id: toolUseId,
+      header: q.header,
+      options: q.options,
+      multiSelect: q.multiSelect,
+      question_index: qi,
+      question_count: questions.length,
+    },
+  }));
 }
 
 function formatToolInput(toolName: string, input: Record<string, unknown>): string {

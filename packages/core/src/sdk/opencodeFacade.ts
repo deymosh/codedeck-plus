@@ -8,34 +8,35 @@
  * file) knows OpenCode's own message/event shapes well enough to translate
  * them into OutputEntry objects.
  *
- * Like RealSdkFacade, this class is deliberately NOT unit-tested beyond the
- * pure translation function in opencodeAdapter.ts — its only meaningful test
- * would be talking to a real OpenCode server.
+ * Speaks the SDK's v2 client only (`@opencode-ai/sdk/v2/client`) — the API
+ * OpenCode 1.x servers serve, and the only one with question replies and the
+ * current permission-reply endpoint. The v1 client's types no longer
+ * describe what a 1.x server sends (`permission.asked` instead of
+ * `permission.updated`, patch-based `session.diff`).
  *
- * Design choices deliberately kept minimal for this first pass (see the plan
- * this was built from):
- *  - Permission bridging is allow/deny only — no "always"/pattern rules, no
- *    doom-loop detection. See handlePermission below.
+ * Design choices deliberately kept minimal:
+ *  - Permission bridging is allow/deny only — no "always"/pattern rules. See
+ *    handlePermission below.
  *  - getContextUsage()/getUsageSnapshot() always return null — OpenCode has
  *    no equivalent control request to feature-detect, and fabricating a
  *    number would be worse than admitting we don't know.
  *  - setPermissionMode()/setEffort() are documented no-ops (see their doc
  *    comments) — OpenCode has no session-scoped analog for either.
  */
-import { createOpencodeClient } from '@opencode-ai/sdk';
+import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import type {
   Event,
+  EventPermissionAsked,
+  EventQuestionAsked,
   OpencodeClient,
   Part,
-  Permission,
+  QuestionAnswer,
+  QuestionInfo,
   Session,
-} from '@opencode-ai/sdk';
-import { createOpencodeClient as createOpencodeClientV2 } from '@opencode-ai/sdk/v2/client';
-import type {
-  EventPermissionAsked,
-  OpencodeClient as OpencodeClientV2,
+  SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
 import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
+import type { AskQuestionSpec } from './adapter';
 import type {
   SdkCanUseTool,
   SdkContextUsage,
@@ -48,29 +49,43 @@ import type {
 } from './facade';
 
 type ToolPart = Extract<Part, { type: 'tool' }>;
-
-/** One event off the `/event` stream. The v1 `Event` union still types
- *  every event this facade reads EXCEPT the permission ask: OpenCode 1.x
- *  servers announce it as v2's `permission.asked` and never emit v1's
- *  `permission.updated` at all, so handling only the v1 name leaves every ask
- *  unanswered — the tool call blocks and the phone never sees a card. Both
- *  are handled; `permission.updated` only still arrives from older external
- *  servers. */
-type StreamEvent = Event | EventPermissionAsked;
-
 type PermissionAsk = EventPermissionAsked['properties'];
+type QuestionAsk = EventQuestionAsked['properties'];
 
-/** The pieces of an ask `canUseTool` needs, normalized from either the v1
- *  (`permission.updated`) or v2 (`permission.asked`) shape, plus how to send
- *  the answer back on the matching endpoint. */
+/** The permission ask older (pre-1.x) servers sent. 1.x sends
+ *  `permission.asked` instead and never this; kept so an external older
+ *  server still gets its asks answered. Not in the v2 `Event` union, hence
+ *  declared here. */
+interface LegacyPermissionUpdated {
+  type: 'permission.updated';
+  properties: {
+    id: string;
+    type: string;
+    sessionID: string;
+    callID?: string;
+    title: string;
+    metadata?: Record<string, unknown>;
+  };
+}
+
+type StreamEvent = Event | LegacyPermissionUpdated;
+
+/** The pieces of an ask `canUseTool` needs, normalized from either ask shape,
+ *  plus how to send the answer back on the matching endpoint. */
 interface NormalizedPermission {
   id: string;
   toolName: string;
   input: Record<string, unknown>;
   toolUseID: string;
   title: string;
+  description?: string;
   reply: (response: 'once' | 'reject') => Promise<void>;
 }
+
+/** The tool OpenCode uses to ask the user questions. Its own call is not
+ *  shown as a generic tool row: `question.asked` renders it as a question
+ *  card instead (see handleQuestion). */
+const QUESTION_TOOL = 'question';
 
 export interface OpenCodeFacadeOptions {
   /**
@@ -109,6 +124,62 @@ function formatOpenCodeError(error: unknown): string {
     if (typeof e.name === 'string') return e.name;
   }
   return 'OpenCode reported an error';
+}
+
+/**
+ * The phone-facing description of a permission ask. OpenCode names the
+ * RULE that needs approval (`external_directory`, `edit`, `bash`, …), not
+ * the tool; the tool itself is shown as the card's title (see fromAsk), so
+ * this says what the approval is actually for.
+ */
+export function describePermission(permission: string, patterns: string[]): string {
+  const what = patterns.filter((p) => p.length > 0).join(', ');
+  switch (permission) {
+    case 'external_directory':
+      return what ? `Access outside the project: ${what}` : 'Access outside the project';
+    case 'doom_loop':
+      return 'The same tool call keeps repeating — let it continue?';
+    case 'bash':
+      return what ? `Run: ${what}` : 'Run a shell command';
+    case 'edit':
+      return what ? `Edit: ${what}` : 'Edit files';
+    case 'read':
+      return what ? `Read: ${what}` : 'Read files';
+    case 'webfetch':
+      return what ? `Fetch: ${what}` : 'Fetch a URL';
+    default:
+      return what ? `${permission}: ${what}` : permission;
+  }
+}
+
+/** OpenCode's questions in the AskUserQuestion shape the broker and the
+ *  phone's question card already speak. */
+export function toAskQuestions(questions: QuestionInfo[]): AskQuestionSpec[] {
+  return questions.map((q) => ({
+    question: q.question,
+    header: q.header,
+    options: q.options.map((o) => ({ label: o.label, description: o.description })),
+    multiSelect: q.multiple ?? false,
+  }));
+}
+
+/**
+ * The broker's answers (question text → one string; a multi-select arrives
+ * as its labels joined by ", ") back into OpenCode's per-question label
+ * arrays. A multi-select string is split only when every piece is one of
+ * the offered labels — otherwise it is a typed answer kept whole.
+ */
+export function toQuestionAnswers(questions: QuestionInfo[], answers: Record<string, string>): QuestionAnswer[] {
+  return questions.map((q) => {
+    const raw = answers[q.question];
+    if (raw === undefined || raw === '') return [];
+    if (q.multiple) {
+      const labels = new Set(q.options.map((o) => o.label));
+      const pieces = raw.split(', ');
+      if (pieces.every((p) => labels.has(p))) return pieces;
+    }
+    return [raw];
+  });
 }
 
 /** Minimal SPSC async queue — the OpenCode counterpart of facade.ts's
@@ -179,11 +250,19 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  call would re-emit a second tool_result; a repeat of the same status
    *  (e.g. two 'running' updates) is suppressed the same way. */
   private readonly emittedToolStatus = new Map<string, ToolPart['state']['status']>();
-  /** Permission ids already replied to — permission.updated could in theory
-   *  refire; a second reply to an already-answered permission is rejected by
-   *  the server anyway, but this avoids the wasted round trip and a second
-   *  canUseTool call. */
-  private readonly answeredPermissions = new Set<string>();
+  /** Latest part per tool callID, including still-`pending` ones. OpenCode
+   *  asks for permission (and asks questions) BEFORE the call goes
+   *  `running`, so the call would otherwise only appear in the transcript
+   *  after its own approval card; showCall() emits it first from here. */
+  private readonly toolParts = new Map<string, ToolPart>();
+  /** Last diff fingerprint per file. `session.diff` repeats the whole
+   *  session's diff on every step; only files whose diff changed become a
+   *  new card. */
+  private readonly lastDiffs = new Map<string, string>();
+  /** Ask ids (permissions and questions) already handled — an ask could in
+   *  theory refire; a second reply is rejected by the server anyway, but this
+   *  avoids the wasted round trip and a second canUseTool call. */
+  private readonly answeredAsks = new Set<string>();
 
   /** Resolves once the OpenCode session exists server-side. probeReady()
    *  awaits this — the same "control-channel round trip" contract
@@ -192,14 +271,8 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  init-shaped message is guaranteed to have arrived. */
   private readonly ready: Promise<{ client: OpencodeClient; session: Session }>;
 
-  /** v2 client, used only for `permission.reply` — the v1 client has no
-   *  binding for `/permission/{requestID}/reply`, only the deprecated
-   *  per-session endpoint. */
-  private readonly clientV2: OpencodeClientV2;
-
-  constructor(opts: SdkSessionOptions, clientPromise: Promise<OpencodeClient>, clientV2: OpencodeClientV2) {
+  constructor(opts: SdkSessionOptions, clientPromise: Promise<OpencodeClient>) {
     this.cwd = opts.cwd;
-    this.clientV2 = clientV2;
     this.canUseTool = opts.canUseTool;
     this.model = splitModelId(opts.model);
     // Fire-and-forget: SdkFacade.createSession() must return synchronously,
@@ -229,10 +302,10 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       // between "session exists" and "we started listening" is missed. The
       // stream is directory-scoped (a server can host multiple projects); this
       // handle further filters by sessionID once it is known.
-      const { stream } = await client.event.subscribe({
-        query: { directory: this.cwd },
-        signal: this.abortController.signal,
-      });
+      const { stream } = await client.event.subscribe(
+        { directory: this.cwd },
+        { signal: this.abortController.signal },
+      );
 
       const { session, resumeLost } = await this.resolveSession(client, opts);
 
@@ -259,7 +332,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       // throws instead of ending "cleanly" — that distinction is what routes a
       // broken stream into handleStreamError()'s restart logic instead of
       // ending the session outright on the first network blip.
-      void this.consumeEvents(client, stream, session.id).then(
+      void this.consumeEvents(client, stream as AsyncIterable<StreamEvent>, session.id).then(
         () => this.queue.close(),
         (err) => this.queue.closeWithError(err),
       );
@@ -279,19 +352,16 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  longer knows about (deleted, server restarted with no persistence) falls
    *  through to creating a fresh one rather than failing the whole session.
    *  `resumeLost` tells the caller whether that fallback happened, so it can
-   *  push a user-visible notice (init() does) instead of the silent swap this
-   *  used to be — a lost resume target means the model no longer remembers
-   *  earlier turns, the same fact Claude Code's CDX-056/073 mechanism always
-   *  surfaces to the phone. */
+   *  push a user-visible notice (init() does) instead of a silent swap — a
+   *  lost resume target means the model no longer remembers earlier turns,
+   *  the same fact Claude Code's CDX-056/073 mechanism always surfaces to the
+   *  phone. */
   private async resolveSession(
     client: OpencodeClient,
     opts: SdkSessionOptions,
   ): Promise<{ session: Session; resumeLost: boolean }> {
     if (opts.resume) {
-      const { data, error } = await client.session.get({
-        path: { id: opts.resume },
-        query: { directory: this.cwd },
-      });
+      const { data, error } = await client.session.get({ sessionID: opts.resume, directory: this.cwd });
       if (!error && data) return { session: data, resumeLost: false };
       console.error(
         `[OpenCodeFacade] resume ${opts.resume} not found server-side ` +
@@ -303,10 +373,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
   }
 
   private async createSessionRemote(client: OpencodeClient, opts: SdkSessionOptions): Promise<Session> {
-    const { data, error } = await client.session.create({
-      query: { directory: this.cwd },
-      body: { title: opts.sessionId },
-    });
+    const { data, error } = await client.session.create({ directory: this.cwd, title: opts.sessionId });
     if (error || !data) {
       throw new Error(`OpenCode session.create failed: ${JSON.stringify(error ?? 'no session returned')}`);
     }
@@ -315,10 +382,6 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
 
   private async consumeEvents(
     client: OpencodeClient,
-    // AsyncIterable, not the generator's exact 3-type-parameter shape: the SDK's
-    // subscribe() return type resolves its generator's return-value type param
-    // to `unknown` rather than `void`, and only `for await` iteration is needed
-    // here, so the narrower, structurally-compatible type is correct too.
     stream: AsyncIterable<StreamEvent>,
     sessionId: string,
   ): Promise<void> {
@@ -340,9 +403,9 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         case 'message.part.updated': {
           const part = event.properties.part;
           if (part.sessionID !== sessionId) continue;
+          if (part.type === 'tool') this.toolParts.set(part.callID, part);
           if (!this.shouldEmitPart(part)) continue;
-          const role = this.roles.get(part.messageID) ?? 'assistant';
-          this.queue.push({ type: 'opencode-part', part, role } as unknown as SdkMessage);
+          this.pushPart(part);
           break;
         }
         case 'session.idle': {
@@ -356,9 +419,9 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         }
         // Turn-boundary signal, the OpenCode counterpart of Claude Code's own
         // SDK-emitted session_state_changed('running') — without it,
-        // SessionRunner.sessionState (session/runner.ts) got stuck at 'idle'
-        // after the FIRST turn (only 'session.idle' above ever fired), so the
-        // phone's "thinking…" indicator never showed again from the second
+        // SessionRunner.sessionState (session/runner.ts) stays at 'idle' after
+        // the FIRST turn (only 'session.idle' above ever fires), so the
+        // phone's "thinking…" indicator never shows again from the second
         // turn onward. `status.type === 'idle'` overlaps with 'session.idle'
         // above; both just assign the same state, so the overlap is harmless.
         case 'session.status': {
@@ -378,7 +441,10 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
           // opencodeAdapter.ts (opts.emitDiffEntries), same as Claude Code's
           // adapter.ts — pushed unconditionally here, exactly like every other
           // event this switch turns into a queue message.
-          this.queue.push({ type: 'opencode-diff', files: event.properties.diff } as unknown as SdkMessage);
+          const files = this.changedDiffs(event.properties.diff);
+          if (files.length > 0) {
+            this.queue.push({ type: 'opencode-diff', files } as unknown as SdkMessage);
+          }
           break;
         }
         case 'session.error': {
@@ -394,13 +460,21 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         case 'permission.asked': {
           const ask = event.properties;
           if (ask.sessionID !== sessionId) continue;
-          this.handlePermission(this.fromAsk(ask));
+          this.showCall(ask.tool?.callID);
+          this.handlePermission(this.fromAsk(client, ask));
           break;
         }
         case 'permission.updated': {
           const permission = event.properties;
           if (permission.sessionID !== sessionId) continue;
+          this.showCall(permission.callID);
           this.handlePermission(this.fromLegacyPermission(client, permission));
+          break;
+        }
+        case 'question.asked': {
+          const ask = event.properties;
+          if (ask.sessionID !== sessionId) continue;
+          this.handleQuestion(client, ask);
           break;
         }
         default:
@@ -409,12 +483,36 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     }
   }
 
+  private pushPart(part: Part): void {
+    const role = this.roles.get(part.messageID) ?? 'assistant';
+    this.queue.push({ type: 'opencode-part', part, role } as unknown as SdkMessage);
+  }
+
+  /**
+   * Emit the tool call an ask belongs to, if it has not been shown yet. The
+   * part is still `pending` at ask time (the adapter drops pending parts as
+   * unstable), so it is emitted as `running` with the input it already has;
+   * the later real `running` update is then suppressed as a repeat.
+   */
+  private showCall(callID: string | undefined): void {
+    if (!callID || this.emittedToolStatus.has(callID)) return;
+    const part = this.toolParts.get(callID);
+    if (!part || part.tool === QUESTION_TOOL) return;
+    this.emittedToolStatus.set(callID, 'running');
+    this.pushPart({
+      ...part,
+      state: { status: 'running', input: part.state.input, time: { start: Date.now() } },
+    });
+  }
+
   /** Deduplicates streaming updates into at-most-one OutputEntry-worthy
    *  translation per part, WITHOUT the pure opencodeAdapter.ts needing any
    *  state: text/reasoning parts only qualify once they stop changing (`time`
    *  absent — no timing info at all — or `time.end` set); a tool's 'running'
    *  transition is reported once per call, its terminal transition
-   *  (completed/error) always reported. */
+   *  (completed/error) always reported. The question tool's call itself is
+   *  never a row (its card comes from `question.asked`), but its result is:
+   *  that is what marks the card answered. */
   private shouldEmitPart(part: Part): boolean {
     switch (part.type) {
       case 'text':
@@ -428,6 +526,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       case 'tool': {
         const status = part.state.status;
         if (status === 'pending') return false;
+        if (status === 'running' && part.tool === QUESTION_TOOL) return false;
         const last = this.emittedToolStatus.get(part.callID);
         if (last === 'completed' || last === 'error') return false;
         if (last === status) return false;
@@ -442,6 +541,18 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     }
   }
 
+  /** Files of a `session.diff` whose content differs from the last time they
+   *  were shown. */
+  private changedDiffs(files: SnapshotFileDiff[]): SnapshotFileDiff[] {
+    return files.filter((f) => {
+      const key = f.file ?? '';
+      const fingerprint = `${f.status ?? ''}\u0000${f.additions}\u0000${f.deletions}\u0000${f.patch ?? ''}`;
+      if (this.lastDiffs.get(key) === fingerprint) return false;
+      this.lastDiffs.set(key, fingerprint);
+      return true;
+    });
+  }
+
   /**
    * Bridges one OpenCode permission ask into the SAME `canUseTool` callback
    * SessionRunner already builds for Claude Code (session/runner.ts's
@@ -449,18 +560,11 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    * — this facade never talks to PermissionBroker directly, only through the
    * SdkSessionOptions.canUseTool seam every facade is handed.
    *
-   * Mapping (best-effort; OpenCode's permission ask has no 1:1 analog to
-   * Claude's canUseTool args):
-   *   toolName  <- the permission kind (`edit`, `bash`, `webfetch`, …) —
-   *                the closest thing to a tool-category id
-   *   toolInput <- the ask's metadata
-   *   toolUseID <- the originating tool call id, else the ask's own id
-   * Reply is allow/deny only — 'once' or 'reject' — no 'always' persistence
-   * and no doom-loop detection in this pass.
+   * Reply is allow/deny only — 'once' or 'reject' — no 'always' persistence.
    */
   private handlePermission(permission: NormalizedPermission): void {
-    if (this.answeredPermissions.has(permission.id)) return;
-    this.answeredPermissions.add(permission.id);
+    if (this.answeredAsks.has(permission.id)) return;
+    this.answeredAsks.add(permission.id);
 
     const reply = (result: SdkPermissionResult | null): Promise<void> => {
       // null means "already answered out-of-band" per the CanUseTool contract
@@ -478,6 +582,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       toolUseID: permission.toolUseID,
       requestId: permission.id,
       title: permission.title,
+      ...(permission.description ? { description: permission.description } : {}),
     })
       .then(reply)
       .catch((err) => {
@@ -487,19 +592,24 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       });
   }
 
-  /** A v2 `permission.asked`, answered on `/permission/{requestID}/reply`.
-   *  The ask carries no human title, so one is composed from the permission
-   *  kind and the patterns it covers (a path, a command prefix, a URL). */
-  private fromAsk(ask: PermissionAsk): NormalizedPermission {
-    const patterns = ask.patterns.filter((p) => p.length > 0);
+  /**
+   * A v2 `permission.asked`, answered on `/permission/{requestID}/reply`.
+   * The card names the tool the ask came from with that call's own input
+   * (what the user recognizes from the tool row above it); the permission
+   * rule being asked about goes into the description.
+   */
+  private fromAsk(client: OpencodeClient, ask: PermissionAsk): NormalizedPermission {
+    const part = ask.tool ? this.toolParts.get(ask.tool.callID) : undefined;
+    const description = describePermission(ask.permission, ask.patterns);
     return {
       id: ask.id,
-      toolName: ask.permission,
-      input: ask.metadata ?? {},
+      toolName: part?.tool ?? ask.permission,
+      input: part?.state.input ?? ask.metadata ?? {},
       toolUseID: ask.tool?.callID ?? ask.id,
-      title: patterns.length > 0 ? `${ask.permission}: ${patterns.join(', ')}` : ask.permission,
+      title: description,
+      description,
       reply: async (response) => {
-        const { error } = await this.clientV2.permission.reply({
+        const { error } = await client.permission.reply({
           requestID: ask.id,
           directory: this.cwd,
           reply: response,
@@ -509,9 +619,12 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     };
   }
 
-  /** A v1 `permission.updated` from an older server, answered on the
-   *  per-session endpoint those servers expose. */
-  private fromLegacyPermission(client: OpencodeClient, permission: Permission): NormalizedPermission {
+  /** A `permission.updated` from an older server, answered on the per-session
+   *  endpoint those servers expose. */
+  private fromLegacyPermission(
+    client: OpencodeClient,
+    permission: LegacyPermissionUpdated['properties'],
+  ): NormalizedPermission {
     return {
       id: permission.id,
       toolName: permission.type,
@@ -520,13 +633,52 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       title: permission.title,
       reply: async (response) => {
         const { session } = await this.ready;
-        await client.postSessionIdPermissionsPermissionId({
-          path: { id: session.id, permissionID: permission.id },
-          query: { directory: this.cwd },
-          body: { response },
+        await client.permission.respond({
+          sessionID: session.id,
+          permissionID: permission.id,
+          directory: this.cwd,
+          response,
         });
       },
     };
+  }
+
+  /**
+   * One OpenCode `question.asked`: shown as the phone's question card and
+   * routed through `canUseTool('AskUserQuestion')`, the same path Claude
+   * Code's questions take, so the phone's answer reaches the broker the usual
+   * way. Keyed by the question tool's call id: the card groups under it and
+   * that call's own result marks the card answered. Always answered — a
+   * denial or timeout rejects the question, so OpenCode never waits on a
+   * reply that is not coming.
+   */
+  private handleQuestion(client: OpencodeClient, ask: QuestionAsk): void {
+    if (this.answeredAsks.has(ask.id)) return;
+    this.answeredAsks.add(ask.id);
+
+    const toolUseID = ask.tool?.callID ?? ask.id;
+    const questions = toAskQuestions(ask.questions);
+    this.queue.push({ type: 'opencode-question', toolUseId: toolUseID, questions } as unknown as SdkMessage);
+
+    const reject = (): void => {
+      void client.question.reject({ requestID: ask.id, directory: this.cwd }).catch(() => {});
+    };
+    this.canUseTool('AskUserQuestion', { questions }, {
+      signal: this.abortController.signal,
+      toolUseID,
+      requestId: ask.id,
+    })
+      .then((result) => {
+        if (!result) return;
+        if (result.behavior !== 'allow') return reject();
+        const answers = ((result.updatedInput as { answers?: Record<string, string> } | undefined)?.answers) ?? {};
+        return client.question
+          .reply({ requestID: ask.id, directory: this.cwd, answers: toQuestionAnswers(ask.questions, answers) })
+          .then(({ error }) => {
+            if (error) reject();
+          });
+      })
+      .catch(reject);
   }
 
   messages(): AsyncIterable<SdkMessage> {
@@ -537,12 +689,10 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     this.ready
       .then(({ client, session }) =>
         client.session.promptAsync({
-          path: { id: session.id },
-          query: { directory: this.cwd },
-          body: {
-            parts: [{ type: 'text', text }],
-            ...(this.model ? { model: this.model } : {}),
-          },
+          sessionID: session.id,
+          directory: this.cwd,
+          parts: [{ type: 'text', text }],
+          ...(this.model ? { model: this.model } : {}),
         }),
       )
       .then(({ error }) => {
@@ -562,10 +712,10 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
   }
 
   /** No OpenCode equivalent to Claude Code's session-scoped permission mode:
-   *  OpenCode always asks per tool call via permission.updated events, and
-   *  this facade always bridges every ask through canUseTool regardless of
-   *  mode (see handlePermission) — there is nothing to switch. Intentional
-   *  no-op; must not throw (SdkSessionHandle's contract). */
+   *  OpenCode always asks per tool call via its permission events, and this
+   *  facade always bridges every ask through canUseTool regardless of mode
+   *  (see handlePermission) — there is nothing to switch. Intentional no-op;
+   *  must not throw (SdkSessionHandle's contract). */
   async setPermissionMode(_mode: PermissionMode): Promise<void> {}
 
   /** No OpenCode equivalent to Claude Code's mid-session reasoning-effort
@@ -574,8 +724,8 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
   async setEffort(_level: EffortLevel): Promise<void> {}
 
   /** OpenCode has no session-level "current model" setter — model selection
-   *  is a per-prompt field (SessionPromptData.body.model). Store the split
-   *  id and apply it to every subsequent pushInput's prompt call. */
+   *  is a per-prompt field. Store the split id and apply it to every
+   *  subsequent pushInput's prompt call. */
   async setModel(model: string): Promise<void> {
     this.model = splitModelId(model);
   }
@@ -583,7 +733,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
   async interrupt(): Promise<void> {
     try {
       const { client, session } = await this.ready;
-      await client.session.abort({ path: { id: session.id }, query: { directory: this.cwd } });
+      await client.session.abort({ sessionID: session.id, directory: this.cwd });
     } catch {
       // Best-effort, mirrors RealSdkSessionHandle's fire-and-forget
       // q.interrupt() — an already-idle OpenCode session can legitimately
@@ -613,7 +763,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     this.queue.close();
     try {
       const { client, session } = await this.ready;
-      await client.session.abort({ path: { id: session.id }, query: { directory: this.cwd } });
+      await client.session.abort({ sessionID: session.id, directory: this.cwd });
     } catch {
       // Best-effort — `ready` may itself have rejected (session never
       // created), or the session may already be gone server-side.
@@ -624,7 +774,6 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
 export class OpenCodeFacade implements SdkFacade {
   private readonly baseUrl: string;
   private clientPromise: Promise<OpencodeClient> | null = null;
-  private clientV2: OpencodeClientV2 | null = null;
 
   constructor(opts: OpenCodeFacadeOptions) {
     this.baseUrl = opts.baseUrl;
@@ -637,13 +786,8 @@ export class OpenCodeFacade implements SdkFacade {
     return this.clientPromise;
   }
 
-  private getClientV2(): OpencodeClientV2 {
-    this.clientV2 ??= createOpencodeClientV2({ baseUrl: this.baseUrl });
-    return this.clientV2;
-  }
-
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
-    return new OpenCodeSessionHandle(opts, this.getClient(), this.getClientV2());
+    return new OpenCodeSessionHandle(opts, this.getClient());
   }
 
   /** Best-effort model list from OpenCode's configured providers — empty

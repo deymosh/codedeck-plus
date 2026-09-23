@@ -23,7 +23,8 @@ import uniffi.client_ffi.UniffiIntent
 /** Compact one-line summary of the tool input (the card's subtitle) — port
  *  of `PermissionCard.tsx`'s `summarizeToolInput`. */
 fun summarizeToolInput(toolInput: JsonObject?): String {
-    val keys = listOf("command", "file_path", "notebook_path", "pattern", "url", "query", "description")
+    // snake_case keys are Claude Code tool inputs, camelCase ones OpenCode's.
+    val keys = listOf("command", "file_path", "filePath", "notebook_path", "pattern", "url", "query", "description")
     val first = keys.firstNotNullOfOrNull { k -> (toolInput?.get(k) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() } }
     val summary = first ?: toolInput?.toString().orEmpty()
     return if (summary.length > 200) summary.take(200) + "…" else summary

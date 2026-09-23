@@ -15,9 +15,9 @@
  * `makeRunner` injected for the session's `backend`.
  */
 import type { DiffData, DiffLine, OutputEntry } from '@codedeck/protocol';
-import type { FileDiff, Part } from '@opencode-ai/sdk';
-import { MAX_DIFF_LINE_CHARS, MAX_DIFF_LINES, renderDiffFallback, toDiffLines } from './adapter';
-import type { AdapterOptions } from './adapter';
+import type { Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
+import { askQuestionEntries, MAX_DIFF_LINE_CHARS, MAX_DIFF_LINES, renderDiffFallback, toDiffLines } from './adapter';
+import type { AdapterOptions, AskQuestionSpec } from './adapter';
 import type { SdkMessage } from './facade';
 
 /**
@@ -75,12 +75,33 @@ export interface OpenCodeResumeLostMessage {
   type: 'opencode-resume-lost';
 }
 
-/** Synthesized from OpenCode's `session.diff` event — a ready-made per-file
- *  before/after the server pushes on its own, translated here into the same
- *  `entryType: 'diff'` cards Claude Code's CDX-050 diff entries use. */
+/** One file of an older (pre-1.x) server's `session.diff`: whole-file
+ *  before/after text instead of a unified patch. */
+export interface LegacyFileDiff {
+  file: string;
+  before: string;
+  after: string;
+  additions: number;
+  deletions: number;
+}
+
+/** Synthesized from OpenCode's `session.diff` event, translated here into the
+ *  same `entryType: 'diff'` cards Claude Code's CDX-050 diff entries use.
+ *  OpenCode 1.x sends each file as a unified `patch`; older servers sent
+ *  whole-file `before`/`after` — both are read. */
 export interface OpenCodeDiffMessage {
   type: 'opencode-diff';
-  files: FileDiff[];
+  files: Array<SnapshotFileDiff | LegacyFileDiff>;
+}
+
+/** OpenCode asked the user a question (its `question` tool). Rendered as the
+ *  same question card Claude Code's AskUserQuestion produces; `toolUseId` is
+ *  the question tool's call id, so that tool's own result later marks the
+ *  card answered. */
+export interface OpenCodeQuestionMessage {
+  type: 'opencode-question';
+  toolUseId: string;
+  questions: AskQuestionSpec[];
 }
 
 export type OpenCodeAdapterMessage =
@@ -89,7 +110,8 @@ export type OpenCodeAdapterMessage =
   | OpenCodePartMessage
   | OpenCodeErrorMessage
   | OpenCodeResumeLostMessage
-  | OpenCodeDiffMessage;
+  | OpenCodeDiffMessage
+  | OpenCodeQuestionMessage;
 
 /**
  * Convert one synthesized OpenCode message envelope into zero or more
@@ -122,8 +144,9 @@ export function opencodeMessageToEntries(msg: SdkMessage, opts?: AdapterOptions)
       // Claude Code's own CDX-050 entries (adapter.ts) — the field is threaded
       // through this function's signature but was never read before this.
       if (!opts?.emitDiffEntries) return [];
-      return envelope.files.map((file) => {
+      return envelope.files.flatMap((file) => {
         const diff = toDiffData(file);
+        if (!diff) return [];
         return {
           entryType: 'diff',
           content: renderDiffFallback(diff),
@@ -132,6 +155,8 @@ export function opencodeMessageToEntries(msg: SdkMessage, opts?: AdapterOptions)
           diff,
         } satisfies OutputEntry;
       });
+    case 'opencode-question':
+      return askQuestionEntries(envelope.toolUseId, envelope.questions, new Date().toISOString());
     default:
       // Any OpenCode Part kind this pass doesn't translate (file, subtask,
       // agent, step markers, snapshots, patches, retries, compaction) — skip,
@@ -247,8 +272,9 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
 const MAX_DIFF_SOURCE_LINES = 2000;
 
 /**
- * Real add/del/context line diff between two FULL file texts. OpenCode's
- * `session.diff` event carries whole-file `before`/`after` content, unlike
+ * Real add/del/context line diff between two FULL file texts, for older
+ * servers whose `session.diff` carried whole-file `before`/`after` content
+ * (1.x sends a unified patch, read by `patchLines`), unlike
  * Claude Code's Edit/Write tool inputs (old_string/new_string/content —
  * extractDiff() in adapter.ts), which only ever have the edited snippet to
  * flatten into del-then-add blocks. Flattening two full files that same way
@@ -306,11 +332,43 @@ function truncateDiffLine(line: string): string {
   return line.length > MAX_DIFF_LINE_CHARS ? line.slice(0, MAX_DIFF_LINE_CHARS) + '…' : line;
 }
 
-function toDiffData(file: FileDiff): DiffData {
-  const lines = diffFileLines(file.before, file.after);
+/**
+ * Lines of a unified diff. File headers (`diff`, `index`, `---`, `+++`) are
+ * only skipped before the first hunk: inside a hunk, `---x` is the deletion
+ * of the line `--x`, not a header. Hunk headers and "\ No newline" markers
+ * carry no line content.
+ */
+function patchLines(patch: string): DiffLine[] {
+  const out: DiffLine[] = [];
+  let inHunk = false;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || line.startsWith('\\')) continue;
+    if (line.startsWith('+')) out.push({ type: 'add', text: truncateDiffLine(line.slice(1)) });
+    else if (line.startsWith('-')) out.push({ type: 'del', text: truncateDiffLine(line.slice(1)) });
+    else if (line.startsWith(' ')) out.push({ type: 'context', text: truncateDiffLine(line.slice(1)) });
+  }
+  return out;
+}
+
+/** `null` when the event carries no line content at all (only counts) —
+ *  there is nothing to render as a card then. */
+function toDiffData(file: SnapshotFileDiff | LegacyFileDiff): DiffData | null {
+  let lines: DiffLine[];
+  if ('patch' in file && typeof file.patch === 'string') {
+    lines = patchLines(file.patch);
+  } else if ('before' in file && typeof file.before === 'string' && typeof file.after === 'string') {
+    lines = diffFileLines(file.before, file.after);
+  } else {
+    return null;
+  }
+  if (lines.length === 0) return null;
   const truncated = lines.length > MAX_DIFF_LINES;
   return {
-    path: file.file,
+    path: file.file ?? 'unknown file',
     lines: truncated ? lines.slice(0, MAX_DIFF_LINES) : lines,
     ...(truncated ? { truncated: true } : {}),
   };
