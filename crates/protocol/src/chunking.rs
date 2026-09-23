@@ -178,7 +178,8 @@ struct OpenBuffer {
 /// - Missing fragment: the group never completes and is swept after `ttl_ms`;
 ///   partial content is NEVER surfaced.
 /// - Bounded: at most `max_open` groups and `max_bytes` buffered; the oldest
-///   group is evicted past either cap.
+///   group is evicted past either cap, and a single group that alone
+///   outgrows `max_bytes` is dropped as `Invalid`.
 ///
 /// `now_ms` is passed in per call — the runtime supplies real time, tests a
 /// fake clock (the `Clock` port lives one layer up).
@@ -278,6 +279,16 @@ impl ChunkAssembler {
         }
         while self.total_bytes > self.max_bytes && self.open.len() > 1 {
             self.evict_oldest(Some(&env.cid));
+        }
+        // The loop above never evicts the group being filled, so a single
+        // group could otherwise buffer without bound (`n` is sender-chosen)
+        // until the TTL sweep. One group larger than the whole budget can
+        // never be a message worth assembling — drop it.
+        if self.open.get(&env.cid).is_some_and(|b| b.bytes > self.max_bytes) {
+            self.drop(&env.cid);
+            return AssemblerResult::Invalid {
+                error: format!("chunk group {} exceeds {} buffered bytes", env.cid, self.max_bytes),
+            };
         }
 
         let buf = self.open.get(&env.cid).expect("present");
@@ -519,6 +530,21 @@ mod tests {
             a.offer(&frag, t as u64);
         }
         assert_eq!(a.open_count(), 2);
+    }
+
+    #[test]
+    fn assembler_drops_a_single_group_that_outgrows_max_bytes() {
+        let mut a = ChunkAssembler::with_limits(CHUNK_ASSEMBLY_TTL_MS, DEFAULT_MAX_OPEN, 100);
+        let part = "x".repeat(60);
+        let frag = |i: u64| encode_envelope("big", i, 1_000_000, &part);
+        assert_eq!(a.offer(&frag(0), 0), AssemblerResult::Buffered);
+        assert!(matches!(a.offer(&frag(1), 0), AssemblerResult::Invalid { .. }));
+        assert_eq!(a.open_count(), 0);
+        // The budget is fully released: a normal message still assembles.
+        let ok0 = encode_envelope("ok", 0, 2, "{\"a\":");
+        let ok1 = encode_envelope("ok", 1, 2, "1}");
+        assert_eq!(a.offer(&ok0, 0), AssemblerResult::Buffered);
+        assert_eq!(a.offer(&ok1, 0), AssemblerResult::Assembled { json: "{\"a\":1}".into() });
     }
 
     #[test]

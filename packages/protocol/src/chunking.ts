@@ -217,7 +217,9 @@ const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
  * - Missing fragment: the group never completes and is swept after `ttlMs`;
  *   partial content is NEVER surfaced.
  * - Bounded: at most `maxOpen` groups and `maxBytes` buffered; the oldest group
- *   is evicted past either cap (a broken/hostile bridge cannot exhaust memory).
+ *   is evicted past either cap, and a single group that alone outgrows
+ *   `maxBytes` is dropped as invalid (a broken/hostile bridge cannot exhaust
+ *   memory).
  */
 export class ChunkAssembler {
   private readonly now: () => number;
@@ -276,6 +278,14 @@ export class ChunkAssembler {
       buf.bytes += size;
       this.totalBytes += size;
       while (this.totalBytes > this.maxBytes && this.open.size > 1) this.evictOldest(env.cid);
+      // The loop above never evicts the group being filled, so a single group
+      // could otherwise buffer without bound (`n` is sender-chosen) until the
+      // TTL sweep. One group larger than the whole budget can never be a
+      // message worth assembling — drop it.
+      if (buf.bytes > this.maxBytes) {
+        this.drop(env.cid);
+        return { kind: 'invalid', error: `chunk group ${env.cid} exceeds ${this.maxBytes} buffered bytes` };
+      }
     }
 
     if (buf.parts.size < buf.n) return { kind: 'buffered' };

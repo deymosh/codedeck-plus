@@ -242,4 +242,17 @@ describe('ChunkAssembler', () => {
     }
     expect(a.openCount).toBe(2);
   });
+
+  it('drops a single group that alone outgrows maxBytes', () => {
+    const a = new ChunkAssembler({ maxBytes: 100 });
+    const part = 'x'.repeat(60);
+    const frag = (i: number) => JSON.stringify({ type: CHUNK_MESSAGE_TYPE, cid: 'big', i, n: 1_000_000, part });
+    expect(a.offer(frag(0)).kind).toBe('buffered');
+    expect(a.offer(frag(1)).kind).toBe('invalid');
+    expect(a.openCount).toBe(0);
+    // The budget is fully released: a normal message still assembles.
+    const ok = (i: number, p: string) => JSON.stringify({ type: CHUNK_MESSAGE_TYPE, cid: 'ok', i, n: 2, part: p });
+    expect(a.offer(ok(0, '{"a":')).kind).toBe('buffered');
+    expect(a.offer(ok(1, '1}'))).toEqual({ kind: 'assembled', json: '{"a":1}' });
+  });
 });
