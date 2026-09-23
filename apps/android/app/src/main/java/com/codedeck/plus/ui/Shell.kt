@@ -63,10 +63,6 @@ fun Shell(core: CoreHost) {
     val showCommitBadge = settings?.showCommitBadge ?: false
     val needsPairingCheck = connection?.needsPairingCheck ?: false
     val pending = pendingSessions?.pending.orEmpty()
-    // Shared with the swipe carousel (`MainPanel.kt`) — the exact order the
-    // sidebar renders, so a swipe can never land where the eye didn't predict
-    // (mobile's `getOrderedSessionKeys` invariant).
-    val orderedSessionKeys = getOrderedSessionKeys(machines)
 
     var newSessionFor by remember { mutableStateOf<String?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -146,10 +142,8 @@ fun Shell(core: CoreHost) {
                             MainPanel(
                                 selectedMachine = selectedMachine,
                                 selectedSession = selectedSession,
-                                orderedSessionKeys = orderedSessionKeys,
                                 isWide = true,
                                 onOpenSidebar = {},
-                                onSwipeNavigate = ::selectSession,
                                 modifier = Modifier.weight(1f),
                                 sessionContent = sessionContent,
                             )
@@ -177,10 +171,8 @@ fun Shell(core: CoreHost) {
                             MainPanel(
                                 selectedMachine = selectedMachine,
                                 selectedSession = selectedSession,
-                                orderedSessionKeys = orderedSessionKeys,
                                 isWide = false,
                                 onOpenSidebar = { showingSession = false },
-                                onSwipeNavigate = ::selectSession,
                                 modifier = Modifier.fillMaxSize(),
                                 sessionContent = sessionContent,
                             )
