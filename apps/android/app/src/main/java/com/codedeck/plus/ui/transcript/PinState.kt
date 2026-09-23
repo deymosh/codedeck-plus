@@ -3,8 +3,9 @@ package com.codedeck.plus.ui.transcript
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -169,6 +170,21 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
         snapshotFlow { listState.isScrollInProgress }.collect { inProgress ->
             if (!inProgress && !listState.canScrollForward) dispatch(PinEvent.ReachedBottom)
         }
+    }
+
+    // Detect layout-driven viewport shifts: when bars appear/disappear below the
+    // LazyColumn (keyboard, ThinkingIndicator, PendingPermissionBar, attachment
+    // strip, quick prompts, SendFailedBar, SessionControlsBar, composer) the
+    // list's height shrinks and the viewport slides down. `itemCount` is
+    // unchanged so the NewEntries effect above never fires. We watch the last
+    // visible item index — if it falls behind itemCount - 1 while pinned, the
+    // viewport was pushed off the bottom by a layout change, so we scroll back.
+    val lastVisibleIndex by derivedStateOf {
+        if (itemCount == 0) -1 else listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+    }
+
+    LaunchedEffect(state.pinned, lastVisibleIndex, itemCount) {
+        if (state.pinned && lastVisibleIndex < itemCount - 1) scrollToBottom()
     }
 
     // ★ THE single pin-owner effect — the only scroll driver. ★
