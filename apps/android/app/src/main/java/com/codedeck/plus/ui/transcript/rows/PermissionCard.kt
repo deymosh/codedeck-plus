@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -50,7 +51,8 @@ fun PermissionCard(
     }
 
     if (item.answered != null) {
-        val denied = Regex("denied|deny", RegexOption.IGNORE_CASE).containsMatchIn(item.answered)
+        // Claude Code reports "denied"; OpenCode says the user "rejected" the permission.
+        val denied = Regex("denied|deny|rejected", RegexOption.IGNORE_CASE).containsMatchIn(item.answered)
         ResolvedCard(item.toolName, item.description, if (denied) "Denied" else "Allowed", denied)
         return
     }
@@ -117,6 +119,7 @@ internal fun ActionChip(
         color = color,
         fontSize = Tokens.TextSm,
         modifier = modifier
+            .minimumInteractiveComponentSize()
             .clip(RoundedCornerShape(Tokens.RadiusSm))
             .background(Tokens.SurfaceHover)
             .clickable(onClick = onClick)
