@@ -11,12 +11,26 @@
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub enum Tristate<T> {
     #[default]
     Keep,
     Clear,
     Set(T),
+}
+
+/// Hand-written so `Set` never prints its value: every field typed
+/// `Tristate` carries a secret (API key, GitHub PAT, provider token), and a
+/// derived `Debug` would put it verbatim into any `{:?}` of the enclosing
+/// message or intent.
+impl<T> std::fmt::Debug for Tristate<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tristate::Keep => f.write_str("Keep"),
+            Tristate::Clear => f.write_str("Clear"),
+            Tristate::Set(_) => f.write_str("Set(<redacted>)"),
+        }
+    }
 }
 
 impl<T> Tristate<T> {
@@ -77,6 +91,15 @@ mod tests {
         let m: Msg = serde_json::from_str("{}").unwrap();
         assert_eq!(m.token, Tristate::Keep);
         assert_eq!(serde_json::to_string(&m).unwrap(), "{}");
+    }
+
+    #[test]
+    fn debug_never_prints_a_set_value() {
+        let secret = Tristate::Set("sk-ant-secret".to_string());
+        let shown = format!("{secret:?}");
+        assert!(!shown.contains("sk-ant-secret"));
+        assert_eq!(shown, "Set(<redacted>)");
+        assert_eq!(format!("{:?}", Tristate::<String>::Clear), "Clear");
     }
 
     #[test]

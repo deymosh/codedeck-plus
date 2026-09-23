@@ -32,11 +32,22 @@ use protocol::tristate::Tristate;
 /// payload rather than reusing `Tristate<T>` directly; every current use
 /// (`SetCredentials`, `SetProviderProfile`'s `auth_token`) is string-valued on
 /// the wire.
-#[derive(Debug, Clone, uniffi::Enum)]
+#[derive(Clone, uniffi::Enum)]
 pub enum UniffiTristate {
     Keep,
     Clear,
     Set { value: String },
+}
+
+/// Redacted like `Tristate`'s own `Debug`: the value is always a secret.
+impl std::fmt::Debug for UniffiTristate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UniffiTristate::Keep => f.write_str("Keep"),
+            UniffiTristate::Clear => f.write_str("Clear"),
+            UniffiTristate::Set { .. } => f.write_str("Set { value: <redacted> }"),
+        }
+    }
 }
 
 impl From<UniffiTristate> for Tristate<String> {
