@@ -32,6 +32,7 @@ import uniffi.client_ffi.persistedTorProxyEnabled
 
 private const val CHANNEL_ID = "codedeck_stay_connected"
 private const val NOTIFICATION_ID = 1
+private const val ACTION_REPOST = "com.codedeck.plus.action.REPOST_STAY_CONNECTED"
 
 /**
  * Owns the one long-lived [CoreHost] for the app's process lifetime — the
@@ -133,6 +134,14 @@ class StayConnectedService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_REPOST) {
+            // The user swiped the notification away (possible for ongoing
+            // foreground notifications since Android 14). The service kept
+            // running; put the notification back while staying connected is
+            // on, so the always-on connection stays visible and controllable.
+            if (core.settings.value?.stayConnected != false) repostNotification()
+            return START_STICKY
+        }
         // MainActivity launches this service via startForegroundService, which
         // gives the process ~5s to reach foreground or kills it outright
         // (ForegroundServiceDidNotStartInTimeException) — so this call stays
@@ -143,9 +152,9 @@ class StayConnectedService : Service() {
         try {
             startForegroundNotification()
         } catch (e: Exception) {
-            // Android 15's ~6h/24h dataSync FGS budget (or any other platform
-            // refusal) — degrade instead of crashing the whole process; the
-            // core still runs unforegrounded until the OS allows a retry.
+            // A platform refusal (e.g. the pre-Android-14 dataSync type's
+            // time budget) — degrade instead of crashing the whole process;
+            // the core still runs unforegrounded until the OS allows a retry.
             stopSelf()
         }
         if (core.settings.value?.stayConnected == false) demote()
@@ -205,14 +214,32 @@ class StayConnectedService : Service() {
         createNotificationChannel()
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            )
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundType())
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    /**
+     * `remoteMessaging` from Android 14: relaying messages between this phone
+     * and its bridges is exactly that type, and unlike `dataSync` it has no
+     * daily time budget — Android 15 stops a `dataSync` service after 6 h per
+     * 24 h, which silently ended "stay connected". Older versions only know
+     * `dataSync` (no budget there).
+     */
+    private fun foregroundType(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        }
+
+    private fun repostNotification() {
+        try {
+            startForegroundNotification()
+        } catch (e: Exception) {
+            // Refused (no notification permission, platform limit) — nothing
+            // to re-show; the connection itself is unaffected.
         }
     }
 
@@ -273,6 +300,13 @@ class StayConnectedService : Service() {
             launchIntent,
             PendingIntent.FLAG_IMMUTABLE,
         )
+        // Fired when the user dismisses the notification; see ACTION_REPOST.
+        val repostIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, StayConnectedService::class.java).setAction(ACTION_REPOST),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             // A missing small icon isn't degraded gracefully — the platform
             // hard-crashes the process with `CannotPostForegroundServiceNotificationException`
@@ -283,6 +317,10 @@ class StayConnectedService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
+            .setDeleteIntent(repostIntent)
+            // Shown right away instead of after Android 12+'s up-to-10 s
+            // deferral for foreground-service notifications.
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
