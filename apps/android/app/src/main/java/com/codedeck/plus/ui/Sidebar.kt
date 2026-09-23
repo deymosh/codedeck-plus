@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.ui.components.ThinkingGlyph
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.theme.connectionColor
 import com.codedeck.plus.ui.theme.presenceColor
@@ -523,9 +524,13 @@ private fun SessionCard(
  */
 @Composable
 private fun StatusDot(state: String?, isUnread: Boolean, presence: String) {
+    // Blocked on the user outranks everything; a running turn outranks mere
+    // unread output (a turn streaming in the background is always "unread",
+    // so it would otherwise always show as a white attention dot).
     when {
+        state == "waiting_permission" || state == "waiting_question" -> AttentionDot()
+        state == "running" -> ThinkingGlyph()
         sessionNeedsAttention(state, isUnread) -> AttentionDot()
-        state == "running" -> PresenceDot(Tokens.TextMuted)
         else -> PresenceDot(presenceColor(presence))
     }
 }

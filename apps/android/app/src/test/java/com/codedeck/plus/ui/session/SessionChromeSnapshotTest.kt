@@ -42,9 +42,7 @@ class SessionChromeSnapshotTest {
                     Column(Modifier.background(Tokens.Bg).fillMaxWidth()) {
                         SessionTopBar(
                             title = "Refactor the relay reconnect logic so a flapping socket never duplicates subscriptions",
-                            model = "claude-opus-5-5",
-                            contextPercentage = 42.0,
-                            contextWindow = 200_000,
+                            workspace = "/home/dev/projects/codedeck-docker",
                             sessionState = "running",
                             connectionStatus = "waiting-retry",
                             attentionLeft = false,
@@ -59,6 +57,9 @@ class SessionChromeSnapshotTest {
                             permissionMode = "acceptEdits",
                             modeLabel = "EDITS",
                             modePending = false,
+                            model = "claude-opus-5-5",
+                            contextPercentage = 82.0,
+                            contextWindow = 200_000,
                             hasFailedOutbox = true,
                             onEffortSelect = {},
                             onModeTap = {},

@@ -67,11 +67,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.SessionKey
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
+import com.codedeck.plus.ui.components.ThinkingGlyph
 import com.codedeck.plus.ui.getOrderedSessionKeys
 import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.sessionKeyOf
@@ -489,9 +491,7 @@ fun SessionScreen(
                 ?: session?.project?.takeIf { it.isNotBlank() }
                 ?: session?.cwd?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
                 ?: "Session",
-            model = session?.model,
-            contextPercentage = session?.contextPercentage,
-            contextWindow = session?.contextWindow?.toLong(),
+            workspace = session?.cwd,
             sessionState = session?.state,
             connectionStatus = connection?.status,
             attentionLeft = attentionLeft,
@@ -639,6 +639,9 @@ fun SessionScreen(
             permissionMode = confirmedMode,
             modeLabel = MODE_LABELS[modeCycle.pending ?: confirmedMode] ?: "PLAN",
             modePending = modeCycle.pending != null,
+            model = session?.model,
+            contextPercentage = session?.contextPercentage,
+            contextWindow = session?.contextWindow?.toLong(),
             hasFailedOutbox = failedOutbox.isNotEmpty(),
             onEffortSelect = { level ->
                 if (level != session?.effortLevel) {
@@ -723,19 +726,17 @@ internal fun appendToDraft(draft: String, fragment: String): String =
     if (draft.isBlank()) fragment else "${draft.trimEnd()} $fragment"
 
 /**
- * The session's single top bar: back, what this session is (title over a
- * model/context line), and — only when they carry news — the relay
- * link state and the ‹/› jumps to other sessions needing attention. The
- * session's own state is not repeated here: a running turn has the
- * [ThinkingIndicator] line, and waiting sessions have the permission bar or
- * a question card, each with the control that answers it.
+ * The session's single top bar: back, what this session is and where it
+ * works (title over the workspace path), and — only when they carry news —
+ * the relay link state and the ‹/› jumps to other sessions needing
+ * attention. The session's own state is not repeated here: a running turn
+ * has the [ThinkingIndicator] line, and waiting sessions have the
+ * permission bar or a question card, each with the control that answers it.
  */
 @Composable
 internal fun SessionTopBar(
     title: String,
-    model: String?,
-    contextPercentage: Double?,
-    contextWindow: Long?,
+    workspace: String?,
     sessionState: String?,
     connectionStatus: String?,
     attentionLeft: Boolean,
@@ -764,29 +765,22 @@ internal fun SessionTopBar(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
-            ) {
-                if (model != null) {
-                    ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
-                }
-                // A state with no surface of its own (e.g. an ended session).
-                // The project stays out of this line: the sessions list shows
-                // it already, and next to the model chip it had no room.
-                val quietState = sessionState?.takeIf {
-                    it !in setOf("running", "idle", "waiting_permission", "waiting_question")
-                }
-                if (quietState != null) {
-                    Text(
-                        quietState,
-                        color = Tokens.TextMuted,
-                        fontSize = Tokens.TextXs,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                }
+            // The workspace, trimmed from the START: the end of a path (the
+            // project folder) is the part that tells sessions apart. A state
+            // with no surface of its own (e.g. an ended session) leads it.
+            val quietState = sessionState?.takeIf {
+                it !in setOf("running", "idle", "waiting_permission", "waiting_question")
+            }
+            val subtitle = listOfNotNull(quietState, workspace?.takeIf { it.isNotBlank() }).joinToString(" · ")
+            if (subtitle.isNotEmpty()) {
+                Text(
+                    subtitle,
+                    color = Tokens.TextMuted,
+                    fontSize = Tokens.TextXs,
+                    fontFamily = Tokens.FontMono,
+                    maxLines = 1,
+                    overflow = TextOverflow.StartEllipsis,
+                )
             }
         }
         // "connected" is the normal case and says nothing; anything else
@@ -813,9 +807,9 @@ internal fun SessionTopBar(
 }
 
 /**
- * The session's settings the composer acts under — permission mode, effort —
- * plus usage and a failed-send retry, in one slim scrollable bar right above
- * the input, where Claude Code shows its own mode.
+ * What the next turn runs with — permission mode, model and context used,
+ * effort — plus usage and a failed-send retry, in one slim scrollable bar
+ * right above the input, where Claude Code shows its own mode.
  */
 @Composable
 internal fun SessionControlsBar(
@@ -823,6 +817,9 @@ internal fun SessionControlsBar(
     permissionMode: String?,
     modeLabel: String,
     modePending: Boolean,
+    model: String?,
+    contextPercentage: Double?,
+    contextWindow: Long?,
     hasFailedOutbox: Boolean,
     onEffortSelect: (String) -> Unit,
     onModeTap: () -> Unit,
@@ -841,6 +838,9 @@ internal fun SessionControlsBar(
         if (permissionMode != null) {
             ModeButton(modeLabel, modePending, onModeTap)
         }
+        if (model != null) {
+            ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
+        }
         EffortSelector(effortLevel, onEffortSelect)
         if (hasFailedOutbox) {
             SendFailedBadge(onRetryOutbox)
@@ -852,36 +852,23 @@ internal fun SessionControlsBar(
     }
 }
 
-/** Claude Code's spinner glyphs, cycled while a turn runs. */
-private val THINKING_FRAMES = listOf("·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢")
-
-/** The running turn's last line: an animated "Thinking…" and its Stop. */
+/** The running turn's last line: the spinner, "Thinking…", and its Stop. */
 @Composable
 internal fun ThinkingIndicator(onStop: () -> Unit) {
-    var frame by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(120)
-            frame = (frame + 1) % THINKING_FRAMES.size
-        }
-    }
     val alpha = pulsingAlpha(min = 0.55f, max = 1f, halfPeriodMs = 900)
     Row(
-        Modifier.fillMaxWidth().padding(start = Tokens.Space3, end = Tokens.Space1),
+        Modifier.fillMaxWidth().padding(start = Tokens.Space2, end = Tokens.Space1),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            THINKING_FRAMES[frame],
-            color = Tokens.Accent,
-            fontSize = Tokens.TextMd,
-            fontFamily = Tokens.FontMono,
-            modifier = Modifier.width(18.dp),
-        )
+        ThinkingGlyph()
         Text(
             "Thinking…",
             color = Tokens.Accent,
             fontSize = Tokens.TextSm,
-            modifier = Modifier.weight(1f).graphicsLayer { this.alpha = alpha },
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = Tokens.Space1)
+                .graphicsLayer { this.alpha = alpha },
         )
         TextButton(onClick = onStop) {
             Text("Stop", color = Tokens.Danger, fontSize = Tokens.TextSm)
@@ -1107,8 +1094,11 @@ internal fun modelLabel(id: String?): String {
     return base.replace(Regex("^claude-"), "").replace(Regex("-\\d{8}$"), "")
 }
 
+/** Widest the model tag in [ModelContextChip] gets before it marquees. */
+private val MODEL_TAG_MAX_WIDTH = 160.dp
+
 /**
- * The header's model+context chip — port of the reference's `.ctxBox`
+ * The controls bar's model+context chip — port of the reference's `.ctxBox`
  * (model tag accent/bold, then the `pct% · used/window` figure, muted).
  *
  * The model tag renders [modelLabel], the reference's own header convention
@@ -1128,7 +1118,7 @@ internal fun modelLabel(id: String?): String {
  * context to a fragment even while it marqueed, device-observed
  * 2026-09-19), and `weight(1f)` on the tag would make this chip itself
  * expand to all leftover header width (a Row with a weighted child fills
- * its constraints), starving the project text next to it. The chip stays
+ * its constraints), starving the chips next to it. The chip stays
  * wrap-content: its measured width is exactly the two children plus
  * padding, whatever that comes to.
  */
@@ -1151,7 +1141,12 @@ private fun ModelContextChip(
             contextBadge(contextPercentage, contextWindow)?.let { ctx ->
                 Text(
                     " · $ctx",
-                    color = Tokens.TextMuted,
+                    // Same thresholds as the usage box: warn from 75 %, danger from 90 %.
+                    color = when {
+                        (contextPercentage ?: 0.0) >= 90.0 -> Tokens.Danger
+                        (contextPercentage ?: 0.0) >= 75.0 -> Tokens.Warn
+                        else -> Tokens.TextMuted
+                    },
                     fontSize = Tokens.TextXs,
                     maxLines = 1,
                 )
@@ -1162,19 +1157,25 @@ private fun ModelContextChip(
             .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
             .background(Tokens.Text.copy(alpha = 0.03f)),
     ) { measurables, constraints ->
-        val hpad = 6.dp.roundToPx()
-        val vpad = 2.dp.roundToPx()
-        val inner = (constraints.maxWidth - hpad * 2).coerceAtLeast(0)
+        val hpad = Tokens.ChipPadH.roundToPx()
+        val vpad = Tokens.ChipPadV.roundToPx()
+        // In a scrolling row the width is unbounded; subtracting padding from
+        // Constraints.Infinity yields an invalid constraint, so the children
+        // measure unbounded there too.
+        val bounded = constraints.hasBoundedWidth
+        val inner = if (bounded) (constraints.maxWidth - hpad * 2).coerceAtLeast(0) else Constraints.Infinity
         // Context (the second child, when the badge produced one) measures
         // first at its full intrinsic width — it never truncates.
         val contextPlaceable = measurables.getOrNull(1)
-            ?.measure(constraints.copy(minWidth = 0, maxWidth = inner))
+            ?.measure(Constraints(maxWidth = inner, maxHeight = constraints.maxHeight))
         val contextWidth = contextPlaceable?.width ?: 0
-        // The model tag gets whatever is left, where the marquee takes over
-        // instead of an ellipsis.
-        val modelMaxWidth = (inner - contextWidth).coerceAtLeast(0)
+        // The model tag gets whatever is left (capped, so one long provider
+        // label cannot take the whole bar), and the marquee takes over past
+        // that instead of an ellipsis.
+        val modelCap = MODEL_TAG_MAX_WIDTH.roundToPx()
+        val modelMaxWidth = if (bounded) (inner - contextWidth).coerceIn(0, modelCap) else modelCap
         val modelPlaceable = measurables[0].measure(
-            constraints.copy(minWidth = 0, maxWidth = modelMaxWidth),
+            Constraints(maxWidth = modelMaxWidth, maxHeight = constraints.maxHeight),
         )
         val width = modelPlaceable.width + contextWidth + hpad * 2
         val height = maxOf(modelPlaceable.height, contextPlaceable?.height ?: 0) + vpad * 2
