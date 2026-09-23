@@ -60,6 +60,16 @@ pub struct OutboxItem {
     pub failed_at: Option<u64>,
     pub error: Option<String>,
     pub attempts: u32,
+    /// When the current publish attempt of a user retry started — the
+    /// confirm-timeout sweep's clock for a retry until it publishes. Timed
+    /// against the previous attempt's `published_at` instead, a retry still
+    /// publishing would be failed on the next sweep, and its successful
+    /// publish then ignored because a `Failed` verdict never regresses.
+    /// `None` on first attempts, whose start is `created_at`; `default`
+    /// keeps items persisted without the field loading.
+    #[serde(default)]
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub attempt_started_at: Option<u64>,
 }
 
 /// A JSON array of the items. Hydrate is total on garbage.
@@ -151,6 +161,7 @@ impl OutboxState {
             failed_at: None,
             error: None,
             attempts: 0,
+            attempt_started_at: None,
         }
     }
 
@@ -229,11 +240,13 @@ impl OutboxState {
 
     /// A user retry. `Some(item)` = re-publish this (already re-marked
     /// `Pending`, `attempts` bumped); `None` = the item is not failed, no-op.
-    pub fn mark_retry(&mut self, id: &str) -> Option<OutboxItem> {
-        let item = self.items.get(id)?.clone();
+    pub fn mark_retry(&mut self, id: &str, now: u64) -> Option<OutboxItem> {
+        let mut item = self.items.get(id)?.clone();
         if item.state != OutboxItemState::Failed {
             return None;
         }
+        item.published_at = None;
+        item.attempt_started_at = Some(now);
         Some(self.begin_publish(item))
     }
 
@@ -245,7 +258,10 @@ impl OutboxState {
             .values()
             .filter(|i| i.state.is_unresolved())
             .filter(|i| {
-                let started = i.published_at.unwrap_or(i.created_at);
+                let started = i
+                    .published_at
+                    .or(i.attempt_started_at)
+                    .unwrap_or(i.created_at);
                 now.saturating_sub(started) >= self.confirm_timeout_ms
             })
             .cloned()
@@ -359,7 +375,7 @@ mod tests {
     fn retry_republishes_a_failed_item_under_the_same_id_bumping_attempts() {
         let (mut st, _) = seeded(1000);
         st.settle_publish("in-1", false, None, 1000);
-        let to_publish = st.mark_retry("in-1").unwrap();
+        let to_publish = st.mark_retry("in-1", 1100).unwrap();
         assert_eq!(to_publish.id, "in-1");
         assert_eq!(to_publish.state, OutboxItemState::Pending);
         assert_eq!(to_publish.attempts, 2);
@@ -369,11 +385,51 @@ mod tests {
     }
 
     #[test]
+    fn a_retry_is_timed_from_its_own_start_not_the_previous_publish() {
+        let (mut st, _) = seeded(1000);
+        st.settle_publish("in-1", true, None, 1000);
+        st.sweep(1000 + OUTBOX_CONFIRM_TIMEOUT_MS);
+        assert_eq!(st.item("in-1").unwrap().state, OutboxItemState::Failed);
+
+        // Retried well after the first publish; the next sweep lands while
+        // the retry is still publishing and must leave it alone.
+        let retry_at = 1000 + 2 * OUTBOX_CONFIRM_TIMEOUT_MS;
+        st.mark_retry("in-1", retry_at).unwrap();
+        st.sweep(retry_at + 5);
+        assert_eq!(st.item("in-1").unwrap().state, OutboxItemState::Pending);
+        let settled = st.settle_publish("in-1", true, None, retry_at + 10).unwrap();
+        assert_eq!(settled.state, OutboxItemState::Published);
+
+        // Still times out, measured from the retry's own publish.
+        st.sweep(retry_at + 10 + OUTBOX_CONFIRM_TIMEOUT_MS);
+        assert_eq!(st.item("in-1").unwrap().state, OutboxItemState::Failed);
+    }
+
+    #[test]
+    fn a_retry_that_never_publishes_still_times_out() {
+        let (mut st, _) = seeded(1000);
+        st.settle_publish("in-1", false, None, 1000);
+        st.mark_retry("in-1", 5000).unwrap();
+        st.sweep(5000 + OUTBOX_CONFIRM_TIMEOUT_MS - 1);
+        assert_eq!(st.item("in-1").unwrap().state, OutboxItemState::Pending);
+        st.sweep(5000 + OUTBOX_CONFIRM_TIMEOUT_MS);
+        assert_eq!(st.item("in-1").unwrap().state, OutboxItemState::Failed);
+    }
+
+    #[test]
+    fn items_persisted_without_attempt_started_at_still_hydrate() {
+        let raw = r#"[{"id":"a","machine":"m","sessionId":"s","text":"t","state":"failed",
+            "createdAt":1,"publishedAt":2,"confirmedAt":null,"failedAt":3,"error":"x","attempts":1}]"#;
+        let items = hydrate_outbox(Some(raw));
+        assert_eq!(items["a"].attempt_started_at, None);
+    }
+
+    #[test]
     fn retry_on_a_non_failed_item_is_a_no_op() {
         let (mut st, _) = seeded(1000);
         st.settle_publish("in-1", true, None, 1000);
-        assert!(st.mark_retry("in-1").is_none());
-        assert!(st.mark_retry("ghost").is_none());
+        assert!(st.mark_retry("in-1", 1100).is_none());
+        assert!(st.mark_retry("ghost", 1100).is_none());
     }
 
     #[test]

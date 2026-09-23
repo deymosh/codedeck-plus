@@ -1487,6 +1487,16 @@ export type OutboxItem = {
 	failedAt: number | null,
 	error: string | null,
 	attempts: number,
+	/**
+	 *  When the current publish attempt of a user retry started — the
+	 *  confirm-timeout sweep's clock for a retry until it publishes. Timed
+	 *  against the previous attempt's `published_at` instead, a retry still
+	 *  publishing would be failed on the next sweep, and its successful
+	 *  publish then ignored because a `Failed` verdict never regresses.
+	 *  `None` on first attempts, whose start is `created_at`; `default`
+	 *  keeps items persisted without the field loading.
+	 */
+	attemptStartedAt?: number | null,
 };
 
 export type OutboxItemState = "pending" | "published" | "confirmed" | "failed";

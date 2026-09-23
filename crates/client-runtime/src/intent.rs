@@ -444,7 +444,7 @@ pub fn apply(
         Intent::RetryOutboxItem { machine, id } => {
             // `mark_retry` re-queues the item itself (Pending, attempts+1) and
             // returns it — only for a `Failed` item, else `None`.
-            if let Some(item) = stores.outbox.mark_retry(&id) {
+            if let Some(item) = stores.outbox.mark_retry(&id, ctx.now) {
                 r.persist(StoreId::Outbox);
                 r.outbox_send = Some(OutboxSend {
                     id,
