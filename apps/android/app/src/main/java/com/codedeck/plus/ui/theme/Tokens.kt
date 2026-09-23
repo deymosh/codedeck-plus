@@ -44,7 +44,12 @@ object Tokens {
     val FontMono = FontFamily.Monospace
 
     // --- Layout constants ---
-    val TapMin = 44.dp
+    /** Android's minimum touch target (Material / accessibility guideline),
+     *  not tokens.css's 44px web value. */
+    val TapMin = 48.dp
+    /** Inner padding of the small rectangular header/badge chips. */
+    val ChipPadH = 6.dp
+    val ChipPadV = 2.dp
     /** Fixed-px, deliberately not scale-coupled — matches tokens.css exactly. */
     val SidebarWidth = 260.dp
 

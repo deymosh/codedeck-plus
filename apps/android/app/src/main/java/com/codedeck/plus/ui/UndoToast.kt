@@ -2,12 +2,12 @@ package com.codedeck.plus.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,7 +42,7 @@ fun UndoToast(core: CoreHost, modifier: Modifier = Modifier) {
 
     Row(
         modifier
-            .padding(bottom = Tokens.Space4)
+            .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2)
             .clip(RoundedCornerShape(Tokens.RadiusMd))
             .background(Tokens.SurfaceRaised)
             .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusMd))
@@ -58,16 +58,8 @@ fun UndoToast(core: CoreHost, modifier: Modifier = Modifier) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
-        Text(
-            "Undo",
-            color = Tokens.Accent,
-            fontSize = Tokens.TextSm,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier
-                .clickable {
-                    scope.launch { core.dispatch(UniffiIntent.UndoDelete) }
-                }
-                .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-        )
+        TextButton(onClick = { scope.launch { core.dispatch(UniffiIntent.UndoDelete) } }) {
+            Text("Undo", color = Tokens.Accent, fontSize = Tokens.TextSm, fontWeight = FontWeight.SemiBold)
+        }
     }
 }

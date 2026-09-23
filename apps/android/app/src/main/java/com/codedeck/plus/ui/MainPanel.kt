@@ -67,7 +67,7 @@ fun MainPanel(
     onOpenSidebar: () -> Unit,
     onSwipeNavigate: (machine: String, sessionId: String) -> Unit,
     modifier: Modifier = Modifier,
-    sessionContent: @Composable (machine: String, sessionId: String, onMenu: (() -> Unit)?) -> Unit,
+    sessionContent: @Composable (machine: String, sessionId: String, onBack: (() -> Unit)?) -> Unit,
 ) {
     Column(modifier.fillMaxSize().background(Tokens.Bg)) {
         if (selectedMachine != null && selectedSession != null) {
@@ -84,9 +84,9 @@ fun MainPanel(
                 },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                // Narrow shells reach the drawer from the session header's own
-                // menu button (the reference's `onMenu` prop), not a separate
-                // top bar — wide shells have the sidebar permanently visible.
+                // On a phone the session header's back arrow returns to the
+                // sessions list (`onOpenSidebar`); wide shells keep the list
+                // permanently visible beside the session, so there is no back.
                 sessionContent(
                     selectedMachine,
                     selectedSession,

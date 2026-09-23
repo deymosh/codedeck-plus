@@ -21,23 +21,30 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -58,6 +65,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
@@ -68,7 +76,6 @@ import com.codedeck.plus.ui.getOrderedSessionKeys
 import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.sessionKeyOf
 import com.codedeck.plus.ui.theme.Tokens
-import com.codedeck.plus.ui.theme.stateColor
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.PendingPermissionSummary
 import com.codedeck.plus.ui.transcript.TranscriptList
@@ -142,12 +149,13 @@ private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
 private const val SESSION_IMAGE_SEND_BACKSTOP_MS = SESSION_IMAGE_SEND_BUDGET_MS + 5_000L
 
 /**
- * The session screen: session header rows (state/cwd/connection/model,
- * effort selector, mode-cycle button, send-failed badge, full title, usage
- * box, Stop while running, attention chevrons), the GSD strip, the
- * transcript, the always-visible pending-permission bar, the staged
- * image-attachment strip, and the input bar (attach / text field / mic /
- * Send). Port of `SessionScreen.tsx`, including the image flow.
+ * The session screen, top to bottom: [SessionTopBar] (title, model/context,
+ * relay state only when not connected, attention chevrons), the GSD strip,
+ * the transcript, the [ThinkingIndicator] with Stop while a turn runs, the
+ * always-visible pending-permission bar, the staged image-attachment strip,
+ * quick prompts, [SessionControlsBar] (mode, effort, usage, failed-send
+ * retry) and the input bar (attach / text field / mic / Send). Port of
+ * `SessionScreen.tsx`, including the image flow.
  *
  * The header's ‹/› chevrons mark sessions needing attention (blocked on the
  * user, or unread) left/right in the shared sidebar display order; tapping
@@ -160,7 +168,7 @@ fun SessionScreen(
     core: CoreHost,
     machine: String,
     sessionId: String,
-    onMenu: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val connection by core.connection.collectAsState()
@@ -476,36 +484,20 @@ fun SessionScreen(
     }
 
     Column(modifier.fillMaxSize()) {
-        SessionHeaderRow1(
-            state = session?.state,
-            cwd = session?.cwd,
-            connectionStatus = connection?.status,
+        SessionTopBar(
+            title = session?.title?.takeIf { it.isNotBlank() }
+                ?: session?.project?.takeIf { it.isNotBlank() }
+                ?: session?.cwd?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                ?: "Session",
             model = session?.model,
             contextPercentage = session?.contextPercentage,
             contextWindow = session?.contextWindow?.toLong(),
-            showUsageBadge = settings?.showUsageBadge ?: false,
-            usage = session?.usage,
+            sessionState = session?.state,
+            connectionStatus = connection?.status,
             attentionLeft = attentionLeft,
             attentionRight = attentionRight,
             onJumpAttention = ::jumpAttention,
-            onMenu = onMenu,
-            running = session?.state == "running",
-            onStop = { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) },
-        )
-        SessionHeaderRow2(
-            effortLevel = session?.effortLevel,
-            permissionMode = confirmedMode,
-            modeLabel = MODE_LABELS[modeCycle.pending ?: confirmedMode] ?: "PLAN",
-            modePending = modeCycle.pending != null,
-            hasFailedOutbox = failedOutbox.isNotEmpty(),
-            onEffortSelect = { level ->
-                if (level != session?.effortLevel) {
-                    dispatch(UniffiIntent.SetEffort(machine = machine, sessionId = sessionId, level = level))
-                }
-            },
-            onModeTap = ::tapMode,
-            onRetryOutbox = ::retryOldestFailed,
-            title = session?.title,
+            onBack = onBack,
         )
 
         GsdStrip(
@@ -528,6 +520,14 @@ fun SessionScreen(
             dispatch = ::dispatch,
             modifier = Modifier.weight(1f),
         )
+
+        // The session's activity, where Claude Code shows it: the last line.
+        // The waiting states have their own surfaces (the permission bar
+        // below, question cards in the transcript), so only a running turn
+        // gets a line here, with the Stop that belongs to it.
+        if (session?.state == "running") {
+            ThinkingIndicator(onStop = { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) })
+        }
 
         pendingPermission?.let { pending ->
             PendingPermissionBar(pending) { allow ->
@@ -582,16 +582,9 @@ fun SessionScreen(
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextXs,
                 )
-                Icon(
-                    Icons.Outlined.Close,
-                    contentDescription = "Remove attachment",
-                    tint = Tokens.TextMuted,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
-                        .clickable(onClick = ::removePendingImage)
-                        .padding(Tokens.Space2)
-                        .size(20.dp),
-                )
+                IconButton(onClick = ::removePendingImage) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Remove attachment", tint = Tokens.TextMuted)
+                }
             }
         }
         uploadError?.let { error ->
@@ -628,50 +621,63 @@ fun SessionScreen(
                         fontSize = Tokens.TextXs,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
+                            .widthIn(max = 160.dp)
                             .clip(RoundedCornerShape(Tokens.RadiusSm))
                             .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
                             .background(Tokens.Text.copy(alpha = 0.03f))
                             .clickable { insertPrompt(prompt.text) }
-                            .padding(horizontal = Tokens.Space2, vertical = 2.dp),
+                            .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
                     )
                 }
             }
         }
 
+        SessionControlsBar(
+            effortLevel = session?.effortLevel,
+            permissionMode = confirmedMode,
+            modeLabel = MODE_LABELS[modeCycle.pending ?: confirmedMode] ?: "PLAN",
+            modePending = modeCycle.pending != null,
+            hasFailedOutbox = failedOutbox.isNotEmpty(),
+            onEffortSelect = { level ->
+                if (level != session?.effortLevel) {
+                    dispatch(UniffiIntent.SetEffort(machine = machine, sessionId = sessionId, level = level))
+                }
+            },
+            onModeTap = ::tapMode,
+            onRetryOutbox = ::retryOldestFailed,
+            showUsageBadge = settings?.showUsageBadge ?: false,
+            usage = session?.usage,
+        )
+
         // Composer order matches the reference: attach, text field, mic, Send.
         Row(
-            Modifier.fillMaxWidth().padding(Tokens.Space2),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+            Modifier.fillMaxWidth().padding(horizontal = Tokens.Space1, vertical = Tokens.Space2),
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             if (canAttachImages) {
-                Icon(
-                    Icons.Outlined.AttachFile,
-                    contentDescription = "Attach image",
-                    tint = Tokens.TextMuted,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
-                        .clickable(enabled = !uploading, onClick = ::pickImage)
-                        .padding(Tokens.Space2)
-                        .size(20.dp),
-                )
+                // Dimmed while an upload runs, so the disabled state is visible.
+                IconButton(onClick = ::pickImage, enabled = !uploading) {
+                    Icon(
+                        Icons.Outlined.AttachFile,
+                        contentDescription = "Attach image",
+                        tint = if (uploading) Tokens.TextDim else Tokens.TextMuted,
+                    )
+                }
             }
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 placeholder = { Text("Message the session…") },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                maxLines = 6,
                 modifier = Modifier.weight(1f).focusRequester(inputFocus),
             )
-            Icon(
-                Icons.Outlined.Mic,
-                contentDescription = "Dictate with voice",
-                tint = Tokens.TextMuted,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .clickable(onClick = ::dictate)
-                    .padding(Tokens.Space2)
-                    .size(20.dp),
-            )
+            IconButton(onClick = ::dictate) {
+                Icon(Icons.Outlined.Mic, contentDescription = "Dictate with voice", tint = Tokens.TextMuted)
+            }
             Button(
                 onClick = ::send,
                 enabled = (draft.isNotBlank() || pendingImage != null) && !uploading,
@@ -716,128 +722,103 @@ private class AttachGeneration {
 internal fun appendToDraft(draft: String, fragment: String): String =
     if (draft.isBlank()) fragment else "${draft.trimEnd()} $fragment"
 
+/**
+ * The session's single top bar: back, what this session is (title over a
+ * model/context line), and — only when they carry news — the relay
+ * link state and the ‹/› jumps to other sessions needing attention. The
+ * session's own state is not repeated here: a running turn has the
+ * [ThinkingIndicator] line, and waiting sessions have the permission bar or
+ * a question card, each with the control that answers it.
+ */
 @Composable
-private fun SessionHeaderRow1(
-    state: String?,
-    cwd: String?,
-    connectionStatus: String?,
+internal fun SessionTopBar(
+    title: String,
     model: String?,
     contextPercentage: Double?,
     contextWindow: Long?,
-    showUsageBadge: Boolean,
-    usage: UniffiUsageData?,
+    sessionState: String?,
+    connectionStatus: String?,
     attentionLeft: Boolean,
     attentionRight: Boolean,
     onJumpAttention: (Int) -> Unit,
-    onMenu: (() -> Unit)?,
-    running: Boolean,
-    onStop: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(Tokens.Space2),
+        Modifier
+            .fillMaxWidth()
+            .background(Tokens.Surface)
+            .padding(end = Tokens.Space2, start = if (onBack == null) Tokens.Space3 else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        if (attentionLeft) {
-            NavChevron("‹") { onJumpAttention(-1) }
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Sessions", tint = Tokens.Text)
+            }
         }
-        if (onMenu != null) {
-            Icon(
-                Icons.Outlined.Menu,
-                contentDescription = "Open sessions",
-                tint = Tokens.Text,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .clickable(onClick = onMenu)
-                    .padding(Tokens.Space2)
-                    .size(20.dp),
-            )
-        }
-        if (state != null) {
+        Column(Modifier.weight(1f).padding(vertical = Tokens.Space2)) {
             Text(
-                state,
-                color = Tokens.Bg,
+                title,
+                color = Tokens.Text,
+                fontSize = Tokens.TextMd,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
+            ) {
+                if (model != null) {
+                    ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
+                }
+                // A state with no surface of its own (e.g. an ended session).
+                // The project stays out of this line: the sessions list shows
+                // it already, and next to the model chip it had no room.
+                val quietState = sessionState?.takeIf {
+                    it !in setOf("running", "idle", "waiting_permission", "waiting_question")
+                }
+                if (quietState != null) {
+                    Text(
+                        quietState,
+                        color = Tokens.TextMuted,
+                        fontSize = Tokens.TextXs,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+            }
+        }
+        // "connected" is the normal case and says nothing; anything else
+        // means what is on screen may be stale.
+        if (connectionStatus != null && connectionStatus != "connected") {
+            Text(
+                connectionStatus,
+                color = Tokens.Warn,
                 fontSize = Tokens.TextXs,
+                maxLines = 1,
                 modifier = Modifier
                     .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .background(stateColor(state))
-                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1 / 2),
+                    .background(Tokens.Warn.copy(alpha = 0.12f))
+                    .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
             )
         }
-        Text(
-            cwd.orEmpty(),
-            color = Tokens.TextMuted,
-            fontSize = Tokens.TextXs,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        // Boxed like the reference's `.header .boxed` badges (CDX-045: the
-        // top bar speaks in rectangular chips, not plain inline text) —
-        // was bare muted text here with no visual weight of its own.
-        //
-        // Kept deliberately, despite crowding the model chip on long model
-        // names: this is the phone↔relay SOCKET state (`ConnectionStatus` in
-        // `apps/mobile/src/core/stores/connection.ts`: idle / connecting /
-        // connected / waiting-retry / offline / stopped), which carries
-        // information the session's own `state` pill above genuinely does
-        // not — `state` describes the bridge-side session process, so a
-        // session can read "running" while the relay link is down and every
-        // transcript row on screen is local cache (`crates/client-ffi`'s
-        // views serve the machines store; nothing about viewing this screen
-        // requires a live connection). The reference keeps this same chip in
-        // its own header (`SessionScreen.tsx` renders `{connectionStatus}`
-        // right after the cwd span), and on a phone it is the ONLY
-        // relay-health surface in view: the sidebar's `connection:` banner
-        // lives in the navigation drawer, which `Shell.kt` closes the moment
-        // a session is opened (narrow layout).
-        Text(
-            connectionStatus ?: "…",
-            color = Tokens.TextDim,
-            fontSize = Tokens.TextXs,
-            modifier = Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.Text.copy(alpha = 0.03f))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-        if (model != null) {
-            // Port of the reference's `.ctxBox`: model tag (accent, bold) and
-            // context (muted, dimmer) are two SEPARATE Texts in one bordered
-            // chip, not one interpolated string sharing a single Text's
-            // ellipsis budget — a long custom-provider label (`Z.ai (Global)
-            // - Coding Plan/glm-5.3-flash`) used to fill it entirely and
-            // silently eat the context suffix along with it
-            // (device-observed 2026-09-19).
-            ModelContextChip(
-                model = model,
-                contextPercentage = contextPercentage,
-                contextWindow = contextWindow,
-            )
-        }
-        val badges = usageBadges(usage, System.currentTimeMillis())
-        if (showUsageBadge && badges.isNotEmpty()) {
-            UsageBox(usage, badges)
-        }
-        if (running) {
-            Text(
-                "Stop",
-                color = Tokens.Danger,
-                fontSize = Tokens.TextSm,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.SurfaceHover)
-                    .clickable(onClick = onStop)
-                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-            )
+        if (attentionLeft) {
+            NavChevron("‹", "Previous session needing attention") { onJumpAttention(-1) }
         }
         if (attentionRight) {
-            NavChevron("›") { onJumpAttention(1) }
+            NavChevron("›", "Next session needing attention") { onJumpAttention(1) }
         }
     }
 }
 
+/**
+ * The session's settings the composer acts under — permission mode, effort —
+ * plus usage and a failed-send retry, in one slim scrollable bar right above
+ * the input, where Claude Code shows its own mode.
+ */
 @Composable
-private fun SessionHeaderRow2(
+internal fun SessionControlsBar(
     effortLevel: String?,
     permissionMode: String?,
     modeLabel: String,
@@ -846,32 +827,64 @@ private fun SessionHeaderRow2(
     onEffortSelect: (String) -> Unit,
     onModeTap: () -> Unit,
     onRetryOutbox: () -> Unit,
-    title: String?,
+    showUsageBadge: Boolean,
+    usage: UniffiUsageData?,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = Tokens.Space2),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        EffortSelector(effortLevel, onEffortSelect)
         if (permissionMode != null) {
             ModeButton(modeLabel, modePending, onModeTap)
         }
+        EffortSelector(effortLevel, onEffortSelect)
         if (hasFailedOutbox) {
             SendFailedBadge(onRetryOutbox)
         }
-        // The FULL stored title (≤80 chars, `…` exactly at the 77+`...`
-        // boundary) — wraps, never ellipsizes, so the stored ellipsis itself
-        // stays readable; clamped to 3 lines like the reference.
-        if (title != null) {
-            Text(
-                title,
-                color = Tokens.TextMuted,
-                fontSize = Tokens.TextXs,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+        val badges = usageBadges(usage, System.currentTimeMillis())
+        if (showUsageBadge && badges.isNotEmpty()) {
+            UsageBox(usage, badges)
+        }
+    }
+}
+
+/** Claude Code's spinner glyphs, cycled while a turn runs. */
+private val THINKING_FRAMES = listOf("·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢")
+
+/** The running turn's last line: an animated "Thinking…" and its Stop. */
+@Composable
+internal fun ThinkingIndicator(onStop: () -> Unit) {
+    var frame by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(120)
+            frame = (frame + 1) % THINKING_FRAMES.size
+        }
+    }
+    val alpha = pulsingAlpha(min = 0.55f, max = 1f, halfPeriodMs = 900)
+    Row(
+        Modifier.fillMaxWidth().padding(start = Tokens.Space3, end = Tokens.Space1),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            THINKING_FRAMES[frame],
+            color = Tokens.Accent,
+            fontSize = Tokens.TextMd,
+            fontFamily = Tokens.FontMono,
+            modifier = Modifier.width(18.dp),
+        )
+        Text(
+            "Thinking…",
+            color = Tokens.Accent,
+            fontSize = Tokens.TextSm,
+            modifier = Modifier.weight(1f).graphicsLayer { this.alpha = alpha },
+        )
+        TextButton(onClick = onStop) {
+            Text("Stop", color = Tokens.Danger, fontSize = Tokens.TextSm)
         }
     }
 }
@@ -879,19 +892,24 @@ private fun SessionHeaderRow2(
 /** ‹/› attention chevron — the reference renders these as non-interactive
  *  pulsing hints beside a swipe carousel; here the tap itself navigates. */
 @Composable
-private fun NavChevron(glyph: String, onClick: () -> Unit) {
+private fun NavChevron(glyph: String, label: String, onClick: () -> Unit) {
     val alpha = pulsingAlpha(min = 0.4f, max = 1f, halfPeriodMs = 1_000)
-    Text(
-        glyph,
-        color = Tokens.Text,
-        fontSize = Tokens.TextXl,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier
-            .graphicsLayer { this.alpha = alpha }
+    Box(
+        Modifier
+            .minimumInteractiveComponentSize()
             .clip(RoundedCornerShape(Tokens.RadiusSm))
             .clickable(onClick = onClick)
-            .padding(horizontal = Tokens.Space1),
-    )
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            glyph,
+            color = Tokens.Text,
+            fontSize = Tokens.TextXl,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.graphicsLayer { this.alpha = alpha },
+        )
+    }
 }
 
 /** Effort dropdown — the reference's `<select>`: shows the current level
@@ -920,11 +938,12 @@ private fun ModeButton(label: String, pending: Boolean, onTap: () -> Unit) {
         fontSize = Tokens.TextXs,
         fontWeight = FontWeight.Bold,
         modifier = Modifier
+            .minimumInteractiveComponentSize()
             .graphicsLayer { this.alpha = alpha }
             .clip(RoundedCornerShape(Tokens.RadiusSm))
             .background(Tokens.Text.copy(alpha = 0.03f))
             .clickable(onClick = onTap)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
     )
 }
 
@@ -939,7 +958,7 @@ private fun SendFailedBadge(onRetry: () -> Unit) {
             modifier = Modifier
                 .clip(RoundedCornerShape(Tokens.RadiusSm))
                 .background(Tokens.Text.copy(alpha = 0.03f))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
         )
         Text(
             "Retry",
@@ -947,15 +966,16 @@ private fun SendFailedBadge(onRetry: () -> Unit) {
             fontSize = Tokens.TextXs,
             fontWeight = FontWeight.Bold,
             modifier = Modifier
+                .minimumInteractiveComponentSize()
                 .clip(RoundedCornerShape(Tokens.RadiusSm))
                 .background(Tokens.SurfaceHover)
                 .clickable(onClick = onRetry)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
         )
     }
 }
 
-/** The 5h/7d subscription-usage box: reported windows stacked as rows, the
+/** The 5h/7d subscription-usage box: the reported windows on one line, the
  *  worst utilization coloring the whole rectangle (warn ≥75, critical ≥90,
  *  critical also straight off a badge's ≥90 flag). */
 @Composable
@@ -970,21 +990,24 @@ private fun UsageBox(usage: UniffiUsageData?, badges: List<UsageBadgeData>) {
         "warn" -> Tokens.Warn.copy(alpha = 0.10f)
         else -> Tokens.Text.copy(alpha = 0.03f)
     }
-    Column(
+    // One line ("5h 61% · 7d 23%") so it stays as short as the other chips
+    // in the controls bar.
+    Row(
         Modifier
             .clip(RoundedCornerShape(Tokens.RadiusSm))
             .border(1.dp, accent, RoundedCornerShape(Tokens.RadiusSm))
             .background(fill)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        horizontalAlignment = Alignment.End,
+            .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        badges.forEach { badge ->
+        badges.forEachIndexed { i, badge ->
             val description = badge.resetCountdown?.let { "${badge.text}, $it" } ?: badge.text
             Text(
-                badge.text,
+                (if (i > 0) " · " else "") + badge.text,
                 color = accent,
-                fontSize = Tokens.TextXs * 0.9f,
+                fontSize = Tokens.TextXs,
                 fontWeight = FontWeight.Bold,
+                maxLines = 1,
                 modifier = Modifier.semantics { contentDescription = description },
             )
         }
@@ -1012,28 +1035,36 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
         Modifier
             .fillMaxWidth()
             .background(Tokens.Warn.copy(alpha = 0.12f))
-            .padding(Tokens.Space2),
+            .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
     ) {
         val label = if (pending.isSubAgent) {
             "${pending.agentLabel ?: "Sub-agent"}: ${pending.toolName} needs permission"
         } else {
             "${pending.toolName} needs permission"
         }
-        Text(label, color = Tokens.Text, fontSize = Tokens.TextSm, modifier = Modifier.weight(1f))
-        Text(
-            "Allow",
-            color = Tokens.Success,
-            fontSize = Tokens.TextSm,
-            modifier = Modifier.clickable { onRespond(true) }.padding(Tokens.Space2),
-        )
-        Text(
-            "Deny",
-            color = Tokens.Danger,
-            fontSize = Tokens.TextSm,
-            modifier = Modifier.clickable { onRespond(false) }.padding(Tokens.Space2),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Tokens.Text, fontSize = Tokens.TextSm, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // What the approval is actually for (the command, the path, or
+            // for OpenCode the rule, e.g. "Access outside the project: …").
+            if (pending.description.isNotBlank() && pending.description != label) {
+                Text(
+                    pending.description,
+                    color = Tokens.TextMuted,
+                    fontSize = Tokens.TextXs,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        // The highest-stakes taps in the app: full-size buttons.
+        TextButton(onClick = { onRespond(true) }) {
+            Text("Allow", color = Tokens.Success, fontSize = Tokens.TextSm)
+        }
+        TextButton(onClick = { onRespond(false) }) {
+            Text("Deny", color = Tokens.Danger, fontSize = Tokens.TextSm)
+        }
     }
 }
 
@@ -1097,7 +1128,7 @@ internal fun modelLabel(id: String?): String {
  * context to a fragment even while it marqueed, device-observed
  * 2026-09-19), and `weight(1f)` on the tag would make this chip itself
  * expand to all leftover header width (a Row with a weighted child fills
- * its constraints), starving the weighted `cwd` next to it. The chip stays
+ * its constraints), starving the project text next to it. The chip stays
  * wrap-content: its measured width is exactly the two children plus
  * padding, whatever that comes to.
  */

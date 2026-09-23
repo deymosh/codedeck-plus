@@ -1,20 +1,20 @@
 package com.codedeck.plus.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,14 +31,14 @@ import uniffi.client_ffi.UniffiIntent
 
 /** Narrow ↔ wide breakpoint, matching `apps/mobile`'s `(min-width: 700px)`
  *  media query (`App.tsx`'s `isWide`) — same threshold, same meaning: wide
- *  shows the sidebar beside the panel, narrow puts it in a drawer. */
+ *  shows the sessions list beside the session, narrow shows one at a time. */
 private val WIDE_BREAKPOINT = 700.dp
 
 /**
  * App shell (F3.3.3) — port of `apps/mobile/src/ui/App.tsx`'s core
- * composition: a machine-grouped `Sidebar` beside (wide) or over (narrow:
- * `ModalNavigationDrawer`, Compose's own native drawer gestures replacing
- * the hand-rolled scrim+drawer div) `MainPanel`. Settings, Pairing, and
+ * composition: a machine-grouped sessions list (`Sidebar`) beside the
+ * session (`MainPanel`) on wide screens; on phones the list is the home
+ * screen and a session opens over it. Settings, Pairing, and
  * New Session are all full-screen replacements of this whole shell while
  * open (F4.1.5, F4.4), not overlays. The undo toast (`UndoToast.kt`) is
  * mounted here at the root so the post-delete undo window is reachable from
@@ -96,115 +96,124 @@ fun Shell(core: CoreHost) {
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
-    Box(Modifier.fillMaxSize()) {
-        if (settingsOpen) {
-            // Full-screen replacement, not an overlay: while Settings is open it
-            // owns the window — the wide/narrow split (and the narrow branch's
-            // drawer state) simply isn't composed underneath it, so returning
-            // re-derives the drawer from the current selection as usual.
-            SettingsScreen(core, onClose = { settingsOpen = false })
-        } else if (pairingOpen) {
-            PairingScreen(core, onClose = { pairingOpen = false })
-        } else if (newSessionFor != null) {
-            NewSessionScreen(core, machinePubkey = newSessionFor!!, onClose = { newSessionFor = null })
-        } else {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val isWide = maxWidth >= WIDE_BREAKPOINT
-
-                val sessionContent: @Composable (String, String, (() -> Unit)?) -> Unit = { machine, sessionId, onMenu ->
-                    SessionScreen(core, machine, sessionId, onMenu = onMenu, modifier = Modifier.fillMaxSize())
-                }
-
-                if (isWide) {
-                    Row(Modifier.fillMaxSize()) {
-                        Sidebar(
-                            core = core,
-                            machines = machines,
-                            pendingSessions = pending,
-                            connectionStatus = connection?.status,
-                            needsPairingCheck = needsPairingCheck,
-                            showCommitBadge = showCommitBadge,
-                            unreadSessions = unreadSessions,
-                            selectedMachine = selectedMachine,
-                            selectedSession = selectedSession,
-                            onSelectSession = ::selectSession,
-                            onNewSession = { newSessionFor = it },
-                            onOpenSettings = { settingsOpen = true },
-                            onOpenPairing = { pairingOpen = true },
-                            modifier = Modifier.width(Tokens.SidebarWidth),
-                        )
-                        MainPanel(
-                            selectedMachine = selectedMachine,
-                            selectedSession = selectedSession,
-                            orderedSessionKeys = orderedSessionKeys,
-                            isWide = true,
-                            onOpenSidebar = {},
-                            onSwipeNavigate = ::selectSession,
-                            modifier = Modifier.weight(1f),
-                            sessionContent = sessionContent,
-                        )
+    // The failure banner and the undo toast are stacked above and below the
+    // content rather than drawn over it: overlaid, the banner covered the
+    // session header's menu and Stop, and the toast the composer's Send.
+    // Each takes space only while it is showing.
+    Column(Modifier.fillMaxSize()) {
+        ActionFailedBanner(core)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            // System Back returns from a full-screen replacement to the shell,
+            // like its own close button — without these it finished the activity.
+            if (settingsOpen) {
+                // Full-screen replacement, not an overlay: while Settings is open it
+                // owns the window — the wide/narrow split simply isn't composed
+                // underneath it, so returning shows the shell exactly as it was.
+                BackHandler { settingsOpen = false }
+                SettingsScreen(core, onClose = { settingsOpen = false })
+            } else if (pairingOpen) {
+                BackHandler { pairingOpen = false }
+                PairingScreen(core, onClose = { pairingOpen = false })
+            } else if (newSessionFor != null) {
+                BackHandler { newSessionFor = null }
+                NewSessionScreen(core, machinePubkey = newSessionFor!!, onClose = { newSessionFor = null })
+            } else {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val isWide = maxWidth >= WIDE_BREAKPOINT
+    
+                    val sessionContent: @Composable (String, String, (() -> Unit)?) -> Unit = { machine, sessionId, onBack ->
+                        SessionScreen(core, machine, sessionId, onBack = onBack, modifier = Modifier.fillMaxSize())
                     }
-                } else {
-                    // Narrow: open by default while nothing is selected — the
-                    // sidebar IS the home surface (old-app behaviour, App.tsx's own
-                    // `sidebarOpen` default) — and a session tap closes it.
-                    val drawerState = rememberDrawerState(
-                        initialValue = if (selectedSession == null) DrawerValue.Open else DrawerValue.Closed,
-                    )
-                    // A deep-link-driven or bottom-sheet selection can land while the
-                    // drawer is already closed; nothing here forces it shut again —
-                    // only an explicit tap (below) does, matching the wide pane's
-                    // own "selection doesn't change layout" behavior.
-                    LaunchedEffect(selectedSession) {
-                        if (selectedSession == null) drawerState.open()
-                    }
-                    ModalNavigationDrawer(
-                        drawerState = drawerState,
-                        drawerContent = {
-                            ModalDrawerSheet {
-                                Sidebar(
-                                    core = core,
-                                    machines = machines,
-                                    pendingSessions = pending,
-                                    connectionStatus = connection?.status,
-                                    needsPairingCheck = needsPairingCheck,
-                                    showCommitBadge = showCommitBadge,
-                                    unreadSessions = unreadSessions,
-                                    selectedMachine = selectedMachine,
-                                    selectedSession = selectedSession,
-                                    onSelectSession = { machine, sessionId ->
-                                        selectSession(machine, sessionId)
-                                        scope.launch { drawerState.close() }
-                                    },
-                                    onNewSession = { newSessionFor = it },
-                                    onOpenSettings = { settingsOpen = true },
-                                    onOpenPairing = { pairingOpen = true },
-                                )
+    
+                    if (isWide) {
+                        Row(Modifier.fillMaxSize()) {
+                            Sidebar(
+                                core = core,
+                                machines = machines,
+                                pendingSessions = pending,
+                                connectionStatus = connection?.status,
+                                needsPairingCheck = needsPairingCheck,
+                                showCommitBadge = showCommitBadge,
+                                unreadSessions = unreadSessions,
+                                selectedMachine = selectedMachine,
+                                selectedSession = selectedSession,
+                                onSelectSession = ::selectSession,
+                                onNewSession = { newSessionFor = it },
+                                onOpenSettings = { settingsOpen = true },
+                                onOpenPairing = { pairingOpen = true },
+                                modifier = Modifier.width(Tokens.SidebarWidth),
+                            )
+                            MainPanel(
+                                selectedMachine = selectedMachine,
+                                selectedSession = selectedSession,
+                                orderedSessionKeys = orderedSessionKeys,
+                                isWide = true,
+                                onOpenSidebar = {},
+                                onSwipeNavigate = ::selectSession,
+                                modifier = Modifier.weight(1f),
+                                sessionContent = sessionContent,
+                            )
+                        }
+                    } else {
+                        // Phone: the Sessions list IS the home screen, full
+                        // width, and a session opens over it; Back (or the
+                        // session's back arrow) returns to the list, and Back on
+                        // the list leaves the app. `showingSession` is separate
+                        // from the core's selection so going back to the list
+                        // keeps the selection intact. The app starts on the list.
+                        var showingSession by rememberSaveable { mutableStateOf(false) }
+                        // A selection that changes after this point (a tap in the
+                        // list, a notification tap, a deep link) opens it.
+                        var seenSelection by remember { mutableStateOf(selectedMachine to selectedSession) }
+                        LaunchedEffect(selectedMachine, selectedSession) {
+                            val current = selectedMachine to selectedSession
+                            if (current != seenSelection) {
+                                seenSelection = current
+                                if (selectedSession != null) showingSession = true
                             }
-                        },
-                    ) {
-                        MainPanel(
-                            selectedMachine = selectedMachine,
-                            selectedSession = selectedSession,
-                            orderedSessionKeys = orderedSessionKeys,
-                            isWide = false,
-                            onOpenSidebar = { scope.launch { drawerState.open() } },
-                            onSwipeNavigate = ::selectSession,
-                            modifier = Modifier.fillMaxSize(),
-                            sessionContent = sessionContent,
-                        )
+                        }
+                        if (showingSession && selectedSession != null) {
+                            BackHandler { showingSession = false }
+                            MainPanel(
+                                selectedMachine = selectedMachine,
+                                selectedSession = selectedSession,
+                                orderedSessionKeys = orderedSessionKeys,
+                                isWide = false,
+                                onOpenSidebar = { showingSession = false },
+                                onSwipeNavigate = ::selectSession,
+                                modifier = Modifier.fillMaxSize(),
+                                sessionContent = sessionContent,
+                            )
+                        } else {
+                            Sidebar(
+                                core = core,
+                                machines = machines,
+                                pendingSessions = pending,
+                                connectionStatus = connection?.status,
+                                needsPairingCheck = needsPairingCheck,
+                                showCommitBadge = showCommitBadge,
+                                unreadSessions = unreadSessions,
+                                selectedMachine = selectedMachine,
+                                selectedSession = selectedSession,
+                                onSelectSession = { machine, sessionId ->
+                                    selectSession(machine, sessionId)
+                                    // Re-opening the already-selected session
+                                    // changes no selection, so open it here too.
+                                    showingSession = true
+                                },
+                                onNewSession = { newSessionFor = it },
+                                onOpenSettings = { settingsOpen = true },
+                                onOpenPairing = { pairingOpen = true },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
             }
         }
-        // Bottom undo toast for an optimistic session delete — mounted once at
-        // the shell's root so it is visible on whichever screen is showing.
-        // Emits nothing (and intercepts nothing) while no window is open.
-        UndoToast(core, Modifier.align(Alignment.BottomCenter))
-        // Global action-failed banner — same "visible from any screen"
-        // placement, but pinned top-center: the bottom edge is the undo
-        // toast's slot, so the two can never collide and neither needs
-        // mutual-exclusion state. Emits nothing while no failure is showing.
-        ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
+        // Undo toast for an optimistic session delete — at the shell's root so it
+        // is visible on whichever screen is showing. Emits nothing while no undo
+        // window is open.
+        UndoToast(core, Modifier.align(Alignment.CenterHorizontally))
     }
 }

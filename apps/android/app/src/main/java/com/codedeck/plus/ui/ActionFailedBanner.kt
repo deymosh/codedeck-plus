@@ -41,7 +41,7 @@ fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
  * empty: client-runtime also emits the failure as a `CoreEvent.ActionFailed`
  * on the `events` flow, and that flow is what this banner watches).
  *
- * Mounted once at the shell's root (`Shell.kt`, `Alignment.TopCenter`) so it
+ * Mounted once at the shell's root (`Shell.kt`, stacked above the content) so it
  * is visible on whichever screen is showing — top, because the bottom edge is
  * `UndoToast`'s slot, so the two can never collide without any
  * mutual-exclusion state. Renders nothing while no failure is showing, and
