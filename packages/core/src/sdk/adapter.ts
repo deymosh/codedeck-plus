@@ -258,6 +258,11 @@ function parseResult(msg: SdkResultMessage): OutputEntry[] {
       metadata: { error_type: msg.subtype },
     }];
   }
+  // When several queued background-task completions are answered by one
+  // model call, the SDK still emits a result per completion, but every one
+  // except the last is empty (num_turns: 0). Those carry no turn and no cost,
+  // so they get no "Session complete" row.
+  if (msg.num_turns === 0) return [];
   // Success result — emit cost summary
   return [{
     entryType: 'system',

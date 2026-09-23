@@ -399,6 +399,27 @@ describe('sdkMessageToEntries', () => {
       expect(entries[0]!.content).toContain('$0.0123');
     });
 
+    it('drops the empty success results of a batched background-task completion', () => {
+      const msg = {
+        type: 'result' as const,
+        subtype: 'success' as const,
+        duration_ms: 0,
+        duration_api_ms: 0,
+        is_error: false,
+        num_turns: 0,
+        result: '',
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        modelUsage: {},
+        permission_denials: [],
+        uuid: MSG_UUID,
+        session_id: SESSION_ID,
+      } as unknown as SdkResultMessage;
+
+      expect(sdkMessageToEntries(msg)).toEqual([]);
+    });
+
     it('converts error result', () => {
       const msg = {
         type: 'result' as const,
