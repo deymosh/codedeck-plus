@@ -1,6 +1,7 @@
 package com.codedeck.plus.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.delay
@@ -41,8 +44,9 @@ fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
  * empty: client-runtime also emits the failure as a `CoreEvent.ActionFailed`
  * on the `events` flow, and that flow is what this banner watches).
  *
- * Mounted once at the shell's root (`Shell.kt`, stacked above the content) so it
- * is visible on whichever screen is showing — top, because the bottom edge is
+ * Mounted once at the shell's root (`Shell.kt`, floating over the content's
+ * top edge) so it is visible on whichever screen is showing — top, because
+ * the bottom edge is
  * `UndoToast`'s slot, so the two can never collide without any
  * mutual-exclusion state. Renders nothing while no failure is showing, and
  * auto-dismisses [BANNER_VISIBLE_MS] after the newest one arrived (a newer
@@ -80,6 +84,9 @@ fun ActionFailedBanner(core: CoreHost, modifier: Modifier = Modifier) {
         // shell's root is a bare `Box` with no Scaffold to host a
         // SnackbarHostState, and the transient-overlay pattern `UndoToast.kt`
         // already established needs no new plumbing.
+        // It floats over the screen's top edge, so the translucent wash sits
+        // on an opaque surface (the header's text must not show through), and
+        // a tap dismisses it early.
         Text(
             actionFailedCopy(failed.kind),
             color = Tokens.Danger,
@@ -87,8 +94,11 @@ fun ActionFailedBanner(core: CoreHost, modifier: Modifier = Modifier) {
             modifier = modifier
                 .padding(horizontal = Tokens.Space4, vertical = Tokens.Space3)
                 .fillMaxWidth()
+                .shadow(4.dp, RoundedCornerShape(Tokens.RadiusSm))
                 .clip(RoundedCornerShape(Tokens.RadiusSm))
+                .background(Tokens.SurfaceRaised)
                 .background(Tokens.Danger.copy(alpha = 0.12f))
+                .clickable { shown = null }
                 .padding(Tokens.Space2),
         )
     }

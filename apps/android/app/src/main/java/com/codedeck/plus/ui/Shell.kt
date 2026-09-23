@@ -96,12 +96,12 @@ fun Shell(core: CoreHost) {
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
-    // The failure banner and the undo toast are stacked above and below the
-    // content rather than drawn over it: overlaid, the banner covered the
-    // session header's menu and Stop, and the toast the composer's Send.
-    // Each takes space only while it is showing.
+    // The failure banner floats over the top of the content, so its arrival
+    // never shifts the screen under the user's finger; a tap dismisses it
+    // early to uncover the header controls it sits on. The undo toast is
+    // stacked below the content instead — overlaid, it covered the
+    // composer's Send — and takes space only while it is showing.
     Column(Modifier.fillMaxSize()) {
-        ActionFailedBanner(core)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // System Back returns from a full-screen replacement to the shell,
             // like its own close button — without these it finished the activity.
@@ -210,6 +210,7 @@ fun Shell(core: CoreHost) {
                     }
                 }
             }
+            ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
         }
         // Undo toast for an optimistic session delete — at the shell's root so it
         // is visible on whichever screen is showing. Emits nothing while no undo
