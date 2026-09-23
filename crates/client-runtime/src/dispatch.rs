@@ -24,7 +24,7 @@ use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
 use protocol::commands::{
-    ModeChangeMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
+    BareMsg, ModeChangeMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
 use protocol::common::SessionState;
 use protocol::events::BridgeToPhone;
@@ -650,7 +650,19 @@ impl<'a> Router<'a> {
             PAIR_ACK_TIMEOUT_MS,
         );
         let out = apply_pairing_effects(self.stores, self.identity, result);
+        let paired = out.pairing_settled == Some(true);
         out.merge_into(r);
+        // The bridge's greeting heartbeat (capabilities, folders, roots,
+        // sessions) goes out before its pair-ack, i.e. while this phone did
+        // not yet know the machine and dropped it. Ask for a fresh one right
+        // away instead of leaving the new machine without folders or the
+        // OpenCode backend until the next periodic heartbeat.
+        if paired {
+            r.sends.push(Send {
+                machine: machine.to_string(),
+                msg: PhoneToBridge::RefreshSessions(BareMsg { version: VersionFields::default() }),
+            });
+        }
     }
 }
 
@@ -1302,6 +1314,14 @@ mod tests {
             .relays_changed
             .as_ref()
             .is_some_and(|relays| relays.iter().any(|r| r == "wss://learned.example")));
+        // The new machine is asked for a fresh heartbeat straight away.
+        assert_eq!(
+            out.sends,
+            vec![Send {
+                machine: MACHINE.into(),
+                msg: PhoneToBridge::RefreshSessions(BareMsg { version: VersionFields::default() }),
+            }]
+        );
     }
 
     #[tokio::test]

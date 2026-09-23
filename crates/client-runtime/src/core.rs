@@ -1034,6 +1034,13 @@ impl Loop {
         if let Some(relays) = r.relays_changed {
             self.nostr.set_relays(&relays);
         }
+        // Also ahead of the sends: a send can provoke an immediate reply from
+        // a machine this route just added (the refresh after a pair-ack), and
+        // the subscription must already cover that machine when it arrives.
+        if r.resubscribe {
+            self.refresh_authors();
+            self.state_changed(SliceId::Machines);
+        }
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
         }
@@ -1060,10 +1067,6 @@ impl Loop {
         if let Some(paired) = r.pairing_settled {
             self.emit(CoreEvent::PairingSettled { paired });
             self.state_changed(SliceId::Pairing);
-        }
-        if r.resubscribe {
-            self.refresh_authors();
-            self.state_changed(SliceId::Machines);
         }
         if r.pending_sessions_changed {
             self.state_changed(SliceId::PendingSessions);
