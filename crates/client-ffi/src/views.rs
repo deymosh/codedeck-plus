@@ -43,6 +43,7 @@ use client_runtime::{
     TranscriptRowsView, UiView,
 };
 use protocol::common::{GsdAction, GsdExecution, GsdPhase, GsdState, UsageData, UsageWindow};
+use serde::Deserialize;
 
 /// Renders any `Copy` wire enum (all `#[serde(rename_all = ...)]`, no data)
 /// to its exact wire spelling by reusing the real `Serialize` impl, the same
@@ -714,8 +715,11 @@ pub fn build_uniffi_transcript_view(
     let seq_entries: Vec<SeqEntry> = view
         .rows
         .iter()
+        // Deserialized straight from the borrowed `Value` — this runs over
+        // every row on every transcript append, and `from_value` would need
+        // a deep clone of each row's JSON tree first.
         .filter_map(|r| {
-            serde_json::from_value::<protocol::common::OutputEntry>(r.entry.clone())
+            protocol::common::OutputEntry::deserialize(&r.entry)
                 .ok()
                 .map(|entry| SeqEntry { seq: r.seq, entry })
         })

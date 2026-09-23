@@ -126,27 +126,42 @@ impl TranscriptStore for TranscriptStoreSqlite {
         session: &str,
         rows: &[TranscriptRow],
     ) -> LocalBoxFuture<'_, Vec<u64>> {
+        // One transaction per sync batch: per-row autocommit made every row
+        // its own commit (and disk sync) on the core's event-loop thread. A
+        // batch that fails to commit is rolled back and reports nothing
+        // inserted, so the caller never counts rows that did not land.
         let conn = self.conn.borrow();
+        let Ok(tx) = conn.unchecked_transaction() else {
+            return Box::pin(async { Vec::new() });
+        };
         let mut inserted = Vec::new();
-        for row in rows {
-            let changed = conn
-                .execute(
-                    "INSERT OR IGNORE INTO transcript
-                        (machine_pubkey, session_id, seq, kind, json, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
+        {
+            let Ok(mut stmt) = tx.prepare_cached(
+                "INSERT OR IGNORE INTO transcript
+                    (machine_pubkey, session_id, seq, kind, json, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            ) else {
+                return Box::pin(async { Vec::new() });
+            };
+            let created_at = now_ms();
+            for row in rows {
+                let changed = stmt
+                    .execute(rusqlite::params![
                         machine,
                         session,
                         row.seq,
                         kind_of(&row.entry),
                         row.entry.to_string(),
-                        now_ms(),
-                    ],
-                )
-                .unwrap_or(0);
-            if changed > 0 {
-                inserted.push(row.seq);
+                        created_at,
+                    ])
+                    .unwrap_or(0);
+                if changed > 0 {
+                    inserted.push(row.seq);
+                }
             }
+        }
+        if tx.commit().is_err() {
+            inserted.clear();
         }
         Box::pin(async move { inserted })
     }
@@ -186,7 +201,7 @@ fn now_ms() -> i64 {
 impl TranscriptStoreSqlite {
     fn query_seqs(&self, machine: &str, session: &str) -> Vec<u64> {
         let conn = self.conn.borrow();
-        let mut stmt = match conn.prepare(
+        let mut stmt = match conn.prepare_cached(
             "SELECT seq FROM transcript WHERE machine_pubkey = ? AND session_id = ? ORDER BY seq ASC",
         ) {
             Ok(s) => s,
@@ -207,7 +222,7 @@ impl TranscriptStoreSqlite {
         let mut out = Vec::new();
         let mut corrupt = Vec::new();
         {
-            let mut stmt = match conn.prepare(
+            let mut stmt = match conn.prepare_cached(
                 "SELECT seq, json FROM transcript
                  WHERE machine_pubkey = ? AND session_id = ? AND seq >= ? AND seq <= ?
                  ORDER BY seq ASC",

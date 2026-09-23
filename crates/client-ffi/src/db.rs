@@ -50,6 +50,15 @@ pub fn open_native_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("set busy_timeout: {e}"))?;
+    // WAL + synchronous=NORMAL, the pairing Android's own SQLiteDatabase
+    // uses: a commit appends to the log instead of rewriting and fsyncing
+    // the main file, and readers never block the writer. Only a power loss
+    // (never an app crash) can drop the newest commits, and everything this
+    // file holds is either re-synced from the bridge (transcript rows) or
+    // re-written on the next change (kv). Best-effort: a filesystem without
+    // shared-memory support keeps the default journal and still works.
+    let _ = conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0));
+    let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     for stmt in MIGRATIONS {
         conn.execute(stmt, []).map_err(|e| format!("migration failed: {e}"))?;
     }
@@ -116,17 +125,24 @@ impl Kv for KvSqlite {
         Box::pin(async move { result })
     }
 
+    // The port has no error channel, but a failed write (full disk, locked
+    // file) must not vanish without a trace: settings, pairing and identity
+    // all persist through here. The key is logged, never the value.
     fn set(&self, key: &str, value: &str) -> LocalBoxFuture<'_, ()> {
-        let _ = self.conn.borrow().execute(
+        if let Err(e) = self.conn.borrow().execute(
             "INSERT INTO kv (key, value) VALUES (?, ?)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [key, value],
-        );
+        ) {
+            log::error!("kv set {key} failed: {e}");
+        }
         Box::pin(async {})
     }
 
     fn delete(&self, key: &str) -> LocalBoxFuture<'_, ()> {
-        let _ = self.conn.borrow().execute("DELETE FROM kv WHERE key = ?", [key]);
+        if let Err(e) = self.conn.borrow().execute("DELETE FROM kv WHERE key = ?", [key]) {
+            log::error!("kv delete {key} failed: {e}");
+        }
         Box::pin(async {})
     }
 }
@@ -148,28 +164,7 @@ impl TranscriptStore for TranscriptStoreSqlite {
         session: &str,
         rows: &[TranscriptRow],
     ) -> LocalBoxFuture<'_, Vec<u64>> {
-        let conn = self.conn.borrow();
-        let mut inserted = Vec::new();
-        for row in rows {
-            let changed = conn
-                .execute(
-                    "INSERT OR IGNORE INTO transcript
-                        (machine_pubkey, session_id, seq, kind, json, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        machine,
-                        session,
-                        row.seq,
-                        kind_of(&row.entry),
-                        row.entry.to_string(),
-                        now_ms(),
-                    ],
-                )
-                .unwrap_or(0);
-            if changed > 0 {
-                inserted.push(row.seq);
-            }
-        }
+        let inserted = insert_rows(&self.conn.borrow(), machine, session, rows);
         Box::pin(async move { inserted })
     }
 
@@ -198,6 +193,48 @@ impl TranscriptStore for TranscriptStoreSqlite {
     }
 }
 
+/// Inserts one sync batch in a single transaction and returns the seqs that
+/// were new. Per-row autocommit would make every row its own commit (and
+/// its own disk sync) on the core's event-loop thread — a gap refill of a
+/// few hundred rows stalled the loop for as many syncs. A batch that fails
+/// to commit is rolled back and reported as inserting nothing, so the
+/// caller never counts rows that did not land.
+fn insert_rows(conn: &Connection, machine: &str, session: &str, rows: &[TranscriptRow]) -> Vec<u64> {
+    let Ok(tx) = conn.unchecked_transaction() else {
+        return Vec::new();
+    };
+    let mut inserted = Vec::new();
+    {
+        let Ok(mut stmt) = tx.prepare_cached(
+            "INSERT OR IGNORE INTO transcript
+                (machine_pubkey, session_id, seq, kind, json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        ) else {
+            return Vec::new();
+        };
+        let created_at = now_ms();
+        for row in rows {
+            let changed = stmt
+                .execute(rusqlite::params![
+                    machine,
+                    session,
+                    row.seq,
+                    kind_of(&row.entry),
+                    row.entry.to_string(),
+                    created_at,
+                ])
+                .unwrap_or(0);
+            if changed > 0 {
+                inserted.push(row.seq);
+            }
+        }
+    }
+    if tx.commit().is_err() {
+        return Vec::new();
+    }
+    inserted
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -208,7 +245,7 @@ fn now_ms() -> i64 {
 impl TranscriptStoreSqlite {
     fn query_seqs(&self, machine: &str, session: &str) -> Vec<u64> {
         let conn = self.conn.borrow();
-        let mut stmt = match conn.prepare(
+        let mut stmt = match conn.prepare_cached(
             "SELECT seq FROM transcript WHERE machine_pubkey = ? AND session_id = ? ORDER BY seq ASC",
         ) {
             Ok(s) => s,
@@ -229,7 +266,7 @@ impl TranscriptStoreSqlite {
         let mut out = Vec::new();
         let mut corrupt = Vec::new();
         {
-            let mut stmt = match conn.prepare(
+            let mut stmt = match conn.prepare_cached(
                 "SELECT seq, json FROM transcript
                  WHERE machine_pubkey = ? AND session_id = ? AND seq >= ? AND seq <= ?
                  ORDER BY seq ASC",
@@ -270,6 +307,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_native_db(&dir.path().join("codedeck.db")).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn opens_in_wal_mode() {
+        let (_dir, conn) = open_temp();
+        let mode: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        assert_eq!(mode.to_ascii_lowercase(), "wal");
     }
 
     #[tokio::test]
