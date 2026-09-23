@@ -15,7 +15,7 @@ use client_core::dm_attachments::{EncryptedImageRef, BLOSSOM_AUTH_KIND, DEFAULT_
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
 use sha2::{Digest, Sha256};
 
-use crate::deadline::{remaining_budget, StageError};
+use crate::deadline::{remaining_budget, with_deadline, StageError};
 use crate::ports::LocalBoxFuture;
 
 // --- crypto -------------------------------------------------------------------
@@ -170,11 +170,18 @@ pub async fn upload_encrypted_image(
         base64_std(<nostr::Event as JsonUtil>::as_json(&auth_event).as_bytes())
     );
 
-    let started_at = opts.now_ms;
+    // Elapsed time comes from a live monotonic clock. `opts.now_ms` is one
+    // snapshot (it dates the auth event); measured against it, elapsed would
+    // always read 0 and the total budget would never bound the attempts.
+    let started = tokio::time::Instant::now();
     let mut last_error = StageError::Failed("Blossom upload failed after retries".into());
 
     for attempt in 0..=MAX_RETRIES {
-        let left = remaining_budget(started_at, opts.budget_ms, opts.now_ms);
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1000 << (attempt - 1))).await;
+        }
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let left = remaining_budget(0, opts.budget_ms, elapsed);
         if attempt > 0 && left < BLOSSOM_RETRY_FLOOR_MS {
             break;
         }
@@ -185,10 +192,16 @@ pub async fn upload_encrypted_image(
                 "application/octet-stream".to_string(),
             ),
         ];
-        match fetch
-            .put(&format!("{server}/upload"), headers, enc.encrypted.clone())
-            .await
-        {
+        let put = fetch.put(&format!("{server}/upload"), headers, enc.encrypted.clone());
+        let attempt_ms = BLOSSOM_ATTEMPT_TIMEOUT_MS.min(left).max(1);
+        let outcome = match with_deadline(put, attempt_ms, "Blossom upload").await {
+            Ok(outcome) => outcome,
+            Err(timeout) => {
+                last_error = timeout;
+                continue;
+            }
+        };
+        match outcome {
             Ok(resp) if (200..300).contains(&resp.status) => {
                 return Ok(EncryptedImageRef {
                     url: format!("{server}/{}", enc.sha256_hex),
@@ -340,7 +353,44 @@ mod tests {
         assert_eq!(got, raw);
     }
 
-    #[tokio::test]
+    /// A server that accepts the connection and never answers.
+    struct HangingFetch {
+        calls: Rc<RefCell<u32>>,
+    }
+
+    impl HttpFetch for HangingFetch {
+        fn put(
+            &self,
+            _url: &str,
+            _headers: Vec<(String, String)>,
+            _body: Vec<u8>,
+        ) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
+            *self.calls.borrow_mut() += 1;
+            Box::pin(std::future::pending())
+        }
+        fn get(&self, _url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hanging_server_is_bounded_by_the_total_budget() {
+        let phone = generate_keypair();
+        let calls = Rc::new(RefCell::new(0));
+        let fetch = HangingFetch { calls: Rc::clone(&calls) };
+        let started = tokio::time::Instant::now();
+
+        let r = upload_encrypted_image(b"x", &phone, &fetch, UploadOptions::at(0)).await;
+
+        assert!(matches!(r, Err(StageError::Timeout { .. })));
+        // Attempt 1 hits the 45 s per-attempt cap; attempt 2 gets only what is
+        // left of the 60 s budget; attempt 3 would start below the retry floor.
+        assert_eq!(*calls.borrow(), 2);
+        let elapsed = started.elapsed().as_millis() as u64;
+        assert!(elapsed <= BLOSSOM_TOTAL_BUDGET_MS + 3_000, "took {elapsed} ms");
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn upload_retries_a_502_then_gives_up_on_a_403() {
         let phone = generate_keypair();
         let calls = Rc::new(RefCell::new(Vec::new()));

@@ -3383,6 +3383,18 @@ mod tests {
                         .await;
                 });
 
+                // Step through the upload's retry backoff (1 s, then 2 s)
+                // on paused time; each sleep is only armed once the attempt
+                // before it has failed, hence one advance per step.
+                tokio::time::pause();
+                for _ in 0..3 {
+                    for _ in 0..20 {
+                        tokio::task::yield_now().await;
+                    }
+                    tokio::time::advance(Duration::from_millis(2_100)).await;
+                }
+                tokio::time::resume();
+
                 let msg = find_command_frame(
                     &mut mock,
                     &phone.pubkey_hex,
