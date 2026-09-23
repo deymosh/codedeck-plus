@@ -13,6 +13,11 @@ vi.mock('@opencode-ai/sdk', () => ({
   createOpencodeClient: vi.fn(),
 }));
 
+const permissionReply = vi.fn();
+vi.mock('@opencode-ai/sdk/v2/client', () => ({
+  createOpencodeClient: vi.fn(() => ({ permission: { reply: permissionReply } })),
+}));
+
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { OpenCodeFacade } from '../sdk/opencodeFacade';
 import type { SdkMessage, SdkSessionOptions } from '../sdk/facade';
@@ -187,6 +192,103 @@ describe('OpenCodeFacade session.diff', () => {
       | { files?: unknown[] }
       | undefined;
     expect(diffMsg?.files).toEqual([fileDiff]);
+  });
+});
+
+describe('OpenCodeFacade permission asks', () => {
+  function clientWith(events: Event[]) {
+    async function* stream(): AsyncGenerator<Event> {
+      for (const e of events) yield e;
+      // Keep the stream open long enough for the canUseTool -> reply chain
+      // (microtasks) to settle before the queue closes.
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return {
+      event: { subscribe: vi.fn().mockResolvedValue({ stream: stream() }) },
+      session: {
+        create: vi.fn().mockResolvedValue({ data: { id: 'ses_1' } as Session, error: undefined }),
+        get: vi.fn(),
+      },
+      postSessionIdPermissionsPermissionId: vi.fn().mockResolvedValue({ data: true }),
+    } as unknown as OpencodeClient & { postSessionIdPermissionsPermissionId: ReturnType<typeof vi.fn> };
+  }
+
+  it('forwards a v2 permission.asked to canUseTool and replies on the v2 endpoint', async () => {
+    permissionReply.mockReset().mockResolvedValue({ data: true, error: undefined });
+    const client = clientWith([
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'per_1',
+          sessionID: 'ses_1',
+          permission: 'bash',
+          patterns: ['rm -rf build'],
+          metadata: { command: 'rm -rf build' },
+          always: [],
+          tool: { messageID: 'msg_1', callID: 'call_1' },
+        },
+      } as unknown as Event,
+    ]);
+    vi.mocked(createOpencodeClient).mockReturnValue(client);
+    const canUseTool = vi.fn().mockResolvedValue({ behavior: 'deny', message: 'no' });
+
+    const handle = new OpenCodeFacade({ baseUrl: 'http://fake' }).createSession({ ...baseOpts(), canUseTool });
+    await collectWithTimeout(handle.messages());
+
+    expect(canUseTool).toHaveBeenCalledWith(
+      'bash',
+      { command: 'rm -rf build' },
+      expect.objectContaining({ toolUseID: 'call_1', requestId: 'per_1', title: 'bash: rm -rf build' }),
+    );
+    expect(permissionReply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'reject' });
+    expect(client.postSessionIdPermissionsPermissionId).not.toHaveBeenCalled();
+  });
+
+  it('asks for a different session are ignored', async () => {
+    permissionReply.mockReset();
+    const client = clientWith([
+      {
+        type: 'permission.asked',
+        properties: { id: 'per_x', sessionID: 'ses_other', permission: 'edit', patterns: [], metadata: {}, always: [] },
+      } as unknown as Event,
+    ]);
+    vi.mocked(createOpencodeClient).mockReturnValue(client);
+    const canUseTool = vi.fn();
+
+    const handle = new OpenCodeFacade({ baseUrl: 'http://fake' }).createSession({ ...baseOpts(), canUseTool });
+    await collectWithTimeout(handle.messages());
+
+    expect(canUseTool).not.toHaveBeenCalled();
+    expect(permissionReply).not.toHaveBeenCalled();
+  });
+
+  it('a legacy permission.updated still replies on the per-session endpoint', async () => {
+    permissionReply.mockReset();
+    const client = clientWith([
+      {
+        type: 'permission.updated',
+        properties: {
+          id: 'per_2',
+          type: 'edit',
+          sessionID: 'ses_1',
+          messageID: 'msg_1',
+          title: 'Edit a.ts',
+          metadata: {},
+          time: { created: 0 },
+        },
+      } as unknown as Event,
+    ]);
+    vi.mocked(createOpencodeClient).mockReturnValue(client);
+
+    const handle = new OpenCodeFacade({ baseUrl: 'http://fake' }).createSession(baseOpts());
+    await collectWithTimeout(handle.messages());
+
+    expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith({
+      path: { id: 'ses_1', permissionID: 'per_2' },
+      query: { directory: '/tmp' },
+      body: { response: 'once' },
+    });
+    expect(permissionReply).not.toHaveBeenCalled();
   });
 });
 

@@ -30,6 +30,11 @@ import type {
   Permission,
   Session,
 } from '@opencode-ai/sdk';
+import { createOpencodeClient as createOpencodeClientV2 } from '@opencode-ai/sdk/v2/client';
+import type {
+  EventPermissionAsked,
+  OpencodeClient as OpencodeClientV2,
+} from '@opencode-ai/sdk/v2/client';
 import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
 import type {
   SdkCanUseTool,
@@ -43,6 +48,29 @@ import type {
 } from './facade';
 
 type ToolPart = Extract<Part, { type: 'tool' }>;
+
+/** One event off the `/event` stream. The v1 `Event` union still types
+ *  every event this facade reads EXCEPT the permission ask: OpenCode 1.x
+ *  servers announce it as v2's `permission.asked` and never emit v1's
+ *  `permission.updated` at all, so handling only the v1 name leaves every ask
+ *  unanswered — the tool call blocks and the phone never sees a card. Both
+ *  are handled; `permission.updated` only still arrives from older external
+ *  servers. */
+type StreamEvent = Event | EventPermissionAsked;
+
+type PermissionAsk = EventPermissionAsked['properties'];
+
+/** The pieces of an ask `canUseTool` needs, normalized from either the v1
+ *  (`permission.updated`) or v2 (`permission.asked`) shape, plus how to send
+ *  the answer back on the matching endpoint. */
+interface NormalizedPermission {
+  id: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  toolUseID: string;
+  title: string;
+  reply: (response: 'once' | 'reject') => Promise<void>;
+}
 
 export interface OpenCodeFacadeOptions {
   /**
@@ -164,8 +192,14 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  init-shaped message is guaranteed to have arrived. */
   private readonly ready: Promise<{ client: OpencodeClient; session: Session }>;
 
-  constructor(opts: SdkSessionOptions, clientPromise: Promise<OpencodeClient>) {
+  /** v2 client, used only for `permission.reply` — the v1 client has no
+   *  binding for `/permission/{requestID}/reply`, only the deprecated
+   *  per-session endpoint. */
+  private readonly clientV2: OpencodeClientV2;
+
+  constructor(opts: SdkSessionOptions, clientPromise: Promise<OpencodeClient>, clientV2: OpencodeClientV2) {
     this.cwd = opts.cwd;
+    this.clientV2 = clientV2;
     this.canUseTool = opts.canUseTool;
     this.model = splitModelId(opts.model);
     // Fire-and-forget: SdkFacade.createSession() must return synchronously,
@@ -285,7 +319,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
     // subscribe() return type resolves its generator's return-value type param
     // to `unknown` rather than `void`, and only `for await` iteration is needed
     // here, so the narrower, structurally-compatible type is correct too.
-    stream: AsyncIterable<Event>,
+    stream: AsyncIterable<StreamEvent>,
     sessionId: string,
   ): Promise<void> {
     for await (const event of stream) {
@@ -357,10 +391,16 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
           }
           break;
         }
+        case 'permission.asked': {
+          const ask = event.properties;
+          if (ask.sessionID !== sessionId) continue;
+          this.handlePermission(this.fromAsk(ask));
+          break;
+        }
         case 'permission.updated': {
           const permission = event.properties;
           if (permission.sessionID !== sessionId) continue;
-          this.handlePermission(client, permission);
+          this.handlePermission(this.fromLegacyPermission(client, permission));
           break;
         }
         default:
@@ -409,57 +449,84 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    * — this facade never talks to PermissionBroker directly, only through the
    * SdkSessionOptions.canUseTool seam every facade is handed.
    *
-   * Mapping (best-effort; OpenCode's Permission has no 1:1 analog to Claude's
-   * canUseTool args):
-   *   toolName  <- permission.type   (closest thing to a tool-category id)
-   *   toolInput <- permission.metadata
-   *   toolUseID <- permission.callID ?? permission.id
+   * Mapping (best-effort; OpenCode's permission ask has no 1:1 analog to
+   * Claude's canUseTool args):
+   *   toolName  <- the permission kind (`edit`, `bash`, `webfetch`, …) —
+   *                the closest thing to a tool-category id
+   *   toolInput <- the ask's metadata
+   *   toolUseID <- the originating tool call id, else the ask's own id
    * Reply is allow/deny only — 'once' or 'reject' — no 'always' persistence
    * and no doom-loop detection in this pass.
    */
-  private handlePermission(client: OpencodeClient, permission: Permission): void {
+  private handlePermission(permission: NormalizedPermission): void {
     if (this.answeredPermissions.has(permission.id)) return;
     this.answeredPermissions.add(permission.id);
 
-    const toolUseID = permission.callID ?? permission.id;
-    this.canUseTool(permission.type, permission.metadata ?? {}, {
+    const reply = (result: SdkPermissionResult | null): Promise<void> => {
+      // null means "already answered out-of-band" per the CanUseTool contract
+      // (see facade.ts's re-exported type doc) — nothing in this facade ever
+      // does that, but honoring the contract means not guessing at a response.
+      if (!result) return Promise.resolve();
+      return permission.reply(result.behavior === 'allow' ? 'once' : 'reject').catch(() => {
+        // Best-effort — the ask then stays pending server-side; there is no
+        // live connection left to retry over.
+      });
+    };
+
+    this.canUseTool(permission.toolName, permission.input, {
       signal: this.abortController.signal,
-      toolUseID,
+      toolUseID: permission.toolUseID,
       requestId: permission.id,
       title: permission.title,
     })
-      .then((result) => this.replyPermission(client, permission.id, result))
+      .then(reply)
       .catch((err) => {
         // Fail closed: an unexpected canUseTool rejection must not leave
         // OpenCode's tool call waiting on a reply that never comes.
-        void this.replyPermission(client, permission.id, {
-          behavior: 'deny',
-          message: err instanceof Error ? err.message : String(err),
-        });
+        void reply({ behavior: 'deny', message: err instanceof Error ? err.message : String(err) });
       });
   }
 
-  private async replyPermission(
-    client: OpencodeClient,
-    permissionId: string,
-    result: SdkPermissionResult | null,
-  ): Promise<void> {
-    // null means "already answered out-of-band" per the CanUseTool contract
-    // (see facade.ts's re-exported type doc) — nothing in this facade ever
-    // does that, but honoring the contract means not guessing at a response.
-    if (!result) return;
-    const response = result.behavior === 'allow' ? 'once' : 'reject';
-    try {
-      const { session } = await this.ready;
-      await client.postSessionIdPermissionsPermissionId({
-        path: { id: session.id, permissionID: permissionId },
-        query: { directory: this.cwd },
-        body: { response },
-      });
-    } catch {
-      // Best-effort — the permission then times out server-side; there is no
-      // live connection left to retry over.
-    }
+  /** A v2 `permission.asked`, answered on `/permission/{requestID}/reply`.
+   *  The ask carries no human title, so one is composed from the permission
+   *  kind and the patterns it covers (a path, a command prefix, a URL). */
+  private fromAsk(ask: PermissionAsk): NormalizedPermission {
+    const patterns = ask.patterns.filter((p) => p.length > 0);
+    return {
+      id: ask.id,
+      toolName: ask.permission,
+      input: ask.metadata ?? {},
+      toolUseID: ask.tool?.callID ?? ask.id,
+      title: patterns.length > 0 ? `${ask.permission}: ${patterns.join(', ')}` : ask.permission,
+      reply: async (response) => {
+        const { error } = await this.clientV2.permission.reply({
+          requestID: ask.id,
+          directory: this.cwd,
+          reply: response,
+        });
+        if (error) throw new Error(JSON.stringify(error));
+      },
+    };
+  }
+
+  /** A v1 `permission.updated` from an older server, answered on the
+   *  per-session endpoint those servers expose. */
+  private fromLegacyPermission(client: OpencodeClient, permission: Permission): NormalizedPermission {
+    return {
+      id: permission.id,
+      toolName: permission.type,
+      input: permission.metadata ?? {},
+      toolUseID: permission.callID ?? permission.id,
+      title: permission.title,
+      reply: async (response) => {
+        const { session } = await this.ready;
+        await client.postSessionIdPermissionsPermissionId({
+          path: { id: session.id, permissionID: permission.id },
+          query: { directory: this.cwd },
+          body: { response },
+        });
+      },
+    };
   }
 
   messages(): AsyncIterable<SdkMessage> {
@@ -557,6 +624,7 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
 export class OpenCodeFacade implements SdkFacade {
   private readonly baseUrl: string;
   private clientPromise: Promise<OpencodeClient> | null = null;
+  private clientV2: OpencodeClientV2 | null = null;
 
   constructor(opts: OpenCodeFacadeOptions) {
     this.baseUrl = opts.baseUrl;
@@ -569,8 +637,13 @@ export class OpenCodeFacade implements SdkFacade {
     return this.clientPromise;
   }
 
+  private getClientV2(): OpencodeClientV2 {
+    this.clientV2 ??= createOpencodeClientV2({ baseUrl: this.baseUrl });
+    return this.clientV2;
+  }
+
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
-    return new OpenCodeSessionHandle(opts, this.getClient());
+    return new OpenCodeSessionHandle(opts, this.getClient(), this.getClientV2());
   }
 
   /** Best-effort model list from OpenCode's configured providers — empty
