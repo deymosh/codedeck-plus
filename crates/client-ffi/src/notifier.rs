@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 use client_runtime::Notifier;
 
+use crate::observer::foreign_call;
+
 /// Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
 /// `tag` is the same per-session/per-peer key `client-core`'s own notification
 /// coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
@@ -39,15 +41,17 @@ pub struct NotifierAdapter {
 
 impl Notifier for NotifierAdapter {
     fn notify(&self, title: &str, body: &str, tag: Option<&str>, kind: &str) {
-        self.notifier.notify(
-            title.to_string(),
-            body.to_string(),
-            tag.map(str::to_string),
-            kind.to_string(),
-        );
+        foreign_call("notify", || {
+            self.notifier.notify(
+                title.to_string(),
+                body.to_string(),
+                tag.map(str::to_string),
+                kind.to_string(),
+            )
+        });
     }
 
     fn cancel(&self, tag: &str) {
-        self.notifier.cancel(tag.to_string());
+        foreign_call("cancel", || self.notifier.cancel(tag.to_string()));
     }
 }

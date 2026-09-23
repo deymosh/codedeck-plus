@@ -25,6 +25,20 @@ pub trait CoreListener: Send + Sync {
     fn action_failed(&self, kind: ActionFailedKind);
 }
 
+/// Runs one call into Kotlin from the core thread, containing a failure.
+///
+/// A foreign method that returns `()` has no error channel: when the Kotlin
+/// side throws, uniffi panics in the calling Rust thread. On the core thread
+/// that panic would unwind out of the event loop and end it for the rest of
+/// the process — silently, since `dispatch` keeps succeeding and every view
+/// falls back to its empty default. A callback that fails is logged and
+/// skipped instead; the loop keeps running.
+pub(crate) fn foreign_call(what: &str, f: impl FnOnce()) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
+        log::error!("foreign callback {what} failed; the core keeps running");
+    }
+}
+
 pub struct UniffiObserver {
     pub listener: Arc<dyn CoreListener>,
 }
@@ -34,8 +48,8 @@ impl CoreObserver for UniffiObserver {
         log::info!(
             "connection_changed: status={status:?} needs_pairing_check={needs_pairing_check} connected_relays={connected_relays:?}"
         );
-        self.listener
-            .connection_changed(ConnectionView::new(status, needs_pairing_check, connected_relays.to_vec()));
+        let view = ConnectionView::new(status, needs_pairing_check, connected_relays.to_vec());
+        foreign_call("connection_changed", || self.listener.connection_changed(view));
     }
 
     /// Deferred (not dropped): F3's first slice drives the app through
@@ -47,10 +61,10 @@ impl CoreObserver for UniffiObserver {
 
     fn action_failed(&self, kind: ActionFailedKind) {
         log::warn!("action_failed: {kind:?}");
-        self.listener.action_failed(kind);
+        foreign_call("action_failed", || self.listener.action_failed(kind));
     }
 
     fn on_event(&self, event: CoreEvent) {
-        self.listener.on_event(event);
+        foreign_call("on_event", || self.listener.on_event(event));
     }
 }

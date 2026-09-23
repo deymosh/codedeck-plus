@@ -220,8 +220,9 @@ impl HttpFetch for HttpFetchAdapter {
 
     fn set_proxy(&self, proxy: Option<&str>) {
         // Reconfiguration only, no network I/O — safe to run inline on the
-        // core thread.
-        self.0.set_proxy(proxy.map(str::to_string));
+        // core thread, but guarded like every other inline foreign call.
+        let proxy = proxy.map(str::to_string);
+        crate::observer::foreign_call("set_proxy", || self.0.set_proxy(proxy));
     }
 }
 
