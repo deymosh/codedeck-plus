@@ -379,6 +379,19 @@ fun SessionScreen(
                 uploadError =
                     "TimeoutError: image send timed out after $SESSION_IMAGE_SEND_BACKSTOP_MS ms"
             } else {
+    // Question-group progress, shared with the transcript's cards — see
+    // TranscriptList for why it is kept locally at all.
+    var locallyAdvanced by remember(machine, sessionId) { mutableStateOf(setOf<String>()) }
+    // The question the session is blocked on, if any. Plain input sent while
+    // the session waits on a question does not answer it — the message is
+    // delivered and then sits there — so the composer sends the question's
+    // custom reply instead, the same intent the card's own text field sends.
+    val activeQuestion = if (session?.state == "waiting_question") {
+        activeQuestionOf(displayEntries, respondedCards + locallyAdvanced)
+    } else {
+        null
+    }
+
                 pendingImage = null
                 draft = ""
             }
@@ -387,6 +400,18 @@ fun SessionScreen(
     }
 
     fun send() {
+        if (activeQuestion != null) {
+            activeQuestion.advanceKey?.let { locallyAdvanced = locallyAdvanced + it }
+            dispatch(
+                UniffiIntent.AnswerQuestion(
+                    machine = machine,
+                    sessionId = sessionId,
+                    text = text,
+                    optionCount = activeQuestion.optionCount,
+                ),
+            )
+            return
+        }
         val text = draft.trim()
         if (pendingImage != null) {
             sendWithImage(text)
@@ -480,6 +505,8 @@ fun SessionScreen(
         it.machine == machine && it.sessionId == sessionId && it.state == "failed"
     }
     fun retryOldestFailed() {
+            locallyAdvanced = locallyAdvanced,
+            onAdvance = { id -> locallyAdvanced = locallyAdvanced + id },
         failedOutbox.minByOrNull { it.createdAt }?.let { oldest ->
             dispatch(UniffiIntent.RetryOutboxItem(machine = machine, id = oldest.id))
         }
@@ -673,7 +700,7 @@ fun SessionScreen(
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                placeholder = { Text("Message the session…") },
+                placeholder = { Text(if (activeQuestion != null) "Type your answer…" else "Message the session…") },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 maxLines = 6,
                 modifier = Modifier.weight(1f).focusRequester(inputFocus),
@@ -686,6 +713,33 @@ fun SessionScreen(
                 enabled = (draft.isNotBlank() || pendingImage != null) && !uploading,
             ) {
                 Text("Send")
+/** The unanswered question a composer send answers: its option count (what
+ *  `AnswerQuestion` needs to reach the free-text reply) and, for a
+ *  sub-question of a group, the key that advances the group's card. */
+internal data class ActiveQuestion(val optionCount: ULong, val advanceKey: String?)
+
+/** The newest question card still awaiting a reply, or null when the newest
+ *  one is already answered — an older unanswered card is a stale one. */
+internal fun activeQuestionOf(entries: List<DisplayEntry>, responded: Set<String>): ActiveQuestion? {
+    val newest = entries.lastOrNull { it is DisplayEntry.Question || it is DisplayEntry.QuestionGroup }
+    return when (newest) {
+        is DisplayEntry.Question -> {
+            val done = newest.answered != null || (newest.toolUseId != null && newest.toolUseId in responded)
+            if (done) null else ActiveQuestion((newest.question.options?.size ?: 0).toULong(), advanceKey = null)
+        }
+        is DisplayEntry.QuestionGroup -> {
+            if (newest.answered != null) return null
+            val index = newest.questions.indices.firstOrNull { "${newest.toolUseId}:q$it" !in responded }
+                ?: return null
+            ActiveQuestion(
+                (newest.questions[index].options?.size ?: 0).toULong(),
+                advanceKey = "${newest.toolUseId}:q$index",
+            )
+        }
+        else -> null
+    }
+}
+
             }
         }
     }

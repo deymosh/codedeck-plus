@@ -54,7 +54,7 @@ import uniffi.client_ffi.UniffiOutboxItem
  * Wraps the actual content in `key(sessionId)` — a session switch is a
  * REMOUNT (CDX-086's own fix, mirrored here exactly as
  * `rememberTranscriptPin`'s doc comment describes), so every `remember`
- * below (pin state, expanded groups, question-group progress) resets fresh
+ * below (pin state, expanded groups) resets fresh
  * per session without needing every future caller to remember to wrap this
  * itself.
  */
@@ -68,12 +68,14 @@ fun TranscriptList(
     contiguous: Boolean,
     respondedCards: Set<String>,
     planApprovalChoices: Map<String, String>,
+    locallyAdvanced: Set<String>,
+    onAdvance: (String) -> Unit,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) = key(sessionId) {
     TranscriptListContent(
         displayEntries, outboxItems, machine, sessionId, syncState, contiguous,
-        respondedCards, planApprovalChoices, dispatch, modifier,
+        respondedCards, planApprovalChoices, locallyAdvanced, onAdvance, dispatch, modifier,
     )
 }
 
@@ -87,6 +89,8 @@ private fun TranscriptListContent(
     contiguous: Boolean,
     respondedCards: Set<String>,
     planApprovalChoices: Map<String, String>,
+    locallyAdvanced: Set<String>,
+    onAdvance: (String) -> Unit,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,7 +100,8 @@ private fun TranscriptListContent(
     // Question-group progression bookkeeping — see QuestionGroupCard's
     // `onAdvance` doc comment for why this exists: the wire only signals a
     // group's resolution once, for the whole group, never per sub-question.
-    var locallyAdvanced by remember(sessionId) { mutableStateOf(setOf<String>()) }
+    // The caller owns the set because the session's input bar can answer
+    // the active sub-question too, and has to advance the same card.
     val mergedResponded = respondedCards + locallyAdvanced
 
     val visibleOutbox = remember(outboxItems, displayEntries, machine, sessionId) {
@@ -145,7 +150,7 @@ private fun TranscriptListContent(
                     },
                     respondedCards = mergedResponded,
                     planChoices = planApprovalChoices,
-                    onAdvance = { id -> locallyAdvanced = locallyAdvanced + id },
+                    onAdvance = onAdvance,
                     actions = dispatch,
                 )
             }
