@@ -188,10 +188,15 @@ pub fn truncate_peer_label(pubkey_hex: &str) -> String {
             return format!("{}…{}", &npub[..10], &npub[npub.len() - 4..]);
         }
     }
-    if pubkey_hex.len() < 16 {
+    // Char-based, not byte slicing: the input is not guaranteed hex/ASCII
+    // here, and a byte index inside a multi-byte char would panic.
+    let chars: Vec<char> = pubkey_hex.chars().collect();
+    if chars.len() < 16 {
         return pubkey_hex.to_string();
     }
-    format!("{}…{}", &pubkey_hex[..8], &pubkey_hex[pubkey_hex.len() - 4..])
+    let head: String = chars[..8].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// Conversation-list ordering: newest activity first.
@@ -585,6 +590,8 @@ mod tests {
         assert!(label.contains('…'));
         // non-hex short input passes through
         assert_eq!(truncate_peer_label("short"), "short");
+        // A multi-byte char straddling byte 8 must not panic.
+        assert_eq!(truncate_peer_label("abcdefgéhijklmnopq"), "abcdefgé…nopq");
     }
 
     #[test]

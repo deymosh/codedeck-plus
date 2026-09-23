@@ -109,6 +109,9 @@ pub enum SyncEffect {
     },
 }
 
+/// Newest [`SeqConflict`] records kept in [`TranscriptState::seq_conflicts`].
+pub const SEQ_CONFLICTS_CAP: usize = 100;
+
 /// The transcript sync client as a pure state machine. The runtime owns the
 /// `TranscriptStore` port: it calls `storage.insert_ignore` / `seqs` /
 /// `read_range` / `remove` and feeds the results in here.
@@ -199,6 +202,13 @@ impl TranscriptState {
                 session_id: session_id.to_string(),
                 seq,
             });
+        }
+        // Diagnostics only, fed by network data and never drained: keep the
+        // newest few so a peer that keeps re-sending altered rows cannot grow
+        // this for the life of the process.
+        if self.seq_conflicts.len() > SEQ_CONFLICTS_CAP {
+            let excess = self.seq_conflicts.len() - SEQ_CONFLICTS_CAP;
+            self.seq_conflicts.drain(..excess);
         }
     }
 
