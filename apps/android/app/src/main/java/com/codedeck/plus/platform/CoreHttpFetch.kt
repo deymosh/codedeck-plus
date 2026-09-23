@@ -7,14 +7,14 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
-import uniffi.uniffi_bridge.UniffiHttpHeader
-import uniffi.uniffi_bridge.UniffiHttpException
-import uniffi.uniffi_bridge.UniffiHttpResponse
-import uniffi.uniffi_bridge.UniffiHttpFetch
+import uniffi.client_ffi.UniffiHttpHeader
+import uniffi.client_ffi.UniffiHttpException
+import uniffi.client_ffi.UniffiHttpResponse
+import uniffi.client_ffi.UniffiHttpFetch
 
 /**
  * The Kotlin side of the `HttpFetch` port (see `UniffiHttpFetch` in
- * `crates/uniffi-bridge/src/lib.rs`): the real transport the core uses for
+ * `crates/client-ffi/src/lib.rs`): the real transport the core uses for
  * Blossom image upload/download. Plain `HttpURLConnection` — deliberately
  * no extra HTTP dependency.
  *

@@ -20,21 +20,21 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.codedeck.plus.MainActivity
 import com.codedeck.plus.R
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import uniffi.uniffi_bridge.persistedRelays
-import uniffi.uniffi_bridge.persistedTorProxyEnabled
+import uniffi.client_ffi.persistedRelays
+import uniffi.client_ffi.persistedTorProxyEnabled
 
 private const val CHANNEL_ID = "codedeck_stay_connected"
 private const val NOTIFICATION_ID = 1
 
 /**
- * Owns the one long-lived [CoreBridge] for the app's process lifetime — the
+ * Owns the one long-lived [CoreHost] for the app's process lifetime — the
  * literal fix for the gap `MainActivity.kt`'s own previous doc comment
  * flagged: a plain `AndroidViewModel` survives configuration changes but not
  * process death, and process death is exactly what backgrounding without a
@@ -42,14 +42,14 @@ private const val NOTIFICATION_ID = 1
  * priority; the `WakeLock`/`WifiLock` pair keeps the CPU and Wi-Fi radio from
  * sleeping out from under an open WebSocket. `ProcessLifecycleOwner` (app-level
  * — "is ANY activity visible", not per-Activity `onStart`/`onStop`) drives
- * [CoreBridge.pause]/[CoreBridge.resume], the same "app went to background/
+ * [CoreHost.pause]/[CoreHost.resume], the same "app went to background/
  * foreground" signal `apps/mobile`'s `document.visibilitychange` drove on the
  * WebView side — a debounced hint the connection FSM uses to decide whether a
  * healthy socket should be torn down (it never is) or just left alone.
  *
  * The service cannot be started/stopped from the "stay connected" toggle the
  * way mobile's controller starts/stops its plugin service: this service OWNS
- * the process's one [CoreBridge], so stopping it would kill the core while
+ * the process's one [CoreHost], so stopping it would kill the core while
  * the app is open. Instead — mobile's `attachStayConnectedService`
  * reconciliation, ported — the service collects the setting itself and
  * promotes (foreground notification + locks) or demotes (locks released +
@@ -61,11 +61,11 @@ class StayConnectedService : Service() {
 
     private val binder = LocalBinder()
 
-    /** Reconciles [CoreBridge.settings]'s `stayConnected` with the foreground
+    /** Reconciles [CoreHost.settings]'s `stayConnected` with the foreground
      *  state; cancelled in [onDestroy] with the rest of the teardown. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    lateinit var bridge: CoreBridge
+    lateinit var core: CoreHost
         private set
 
     private var connectivity: Connectivity? = null
@@ -74,10 +74,10 @@ class StayConnectedService : Service() {
 
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
-            if (::bridge.isInitialized) bridge.resume()
+            if (::core.isInitialized) core.resume()
         }
         override fun onStop(owner: LifecycleOwner) {
-            if (::bridge.isInitialized) bridge.pause()
+            if (::core.isInitialized) core.pause()
         }
     }
 
@@ -103,7 +103,7 @@ class StayConnectedService : Service() {
         val dbPath = applicationContext.getDatabasePath("codedeck.db").absolutePath
         val relays = persistedRelays(dbPath)
         val torProxyEnabled = persistedTorProxyEnabled(dbPath)
-        bridge = CoreBridge(
+        core = CoreHost(
             relays = relays,
             identitySecretHex = identitySecretHex,
             notifier = notifier,
@@ -114,7 +114,7 @@ class StayConnectedService : Service() {
             proxy = "127.0.0.1:9050",
             tor = torProxyEnabled,
         )
-        bridge.start()
+        core.start()
         connectivity = Connectivity(applicationContext)
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         // The stay-connected setting drives THIS service's foreground state —
@@ -125,7 +125,7 @@ class StayConnectedService : Service() {
         // the current value right after the platform-mandated startForeground,
         // covering the window before hydration lands.)
         scope.launch {
-            bridge.settings.collect { view ->
+            core.settings.collect { view ->
                 val stayConnected = view?.stayConnected ?: return@collect
                 if (stayConnected) promote() else demote()
             }
@@ -145,10 +145,10 @@ class StayConnectedService : Service() {
         } catch (e: Exception) {
             // Android 15's ~6h/24h dataSync FGS budget (or any other platform
             // refusal) — degrade instead of crashing the whole process; the
-            // bridge still runs unforegrounded until the OS allows a retry.
+            // core still runs unforegrounded until the OS allows a retry.
             stopSelf()
         }
-        if (bridge.settings.value?.stayConnected == false) demote()
+        if (core.settings.value?.stayConnected == false) demote()
         return START_STICKY
     }
 
@@ -165,7 +165,7 @@ class StayConnectedService : Service() {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         connectivity?.close()
         releaseLocks()
-        if (::bridge.isInitialized) bridge.stop()
+        if (::core.isInitialized) core.stop()
         foreground.value = null
         super.onDestroy()
     }
@@ -291,7 +291,7 @@ class StayConnectedService : Service() {
          * Live foreground state for the settings screen's badge — `true`
          * promoted, `false` demoted, `null` unknown (service not yet up, or
          * gone). A companion field is process-global by nature, and this
-         * service is a process singleton that owns the app's one CoreBridge,
+         * service is a process singleton that owns the app's one CoreHost,
          * so there is exactly ever one writer (this service) and the state
          * has exactly one honest home.
          */

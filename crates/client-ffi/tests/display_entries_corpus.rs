@@ -1,5 +1,5 @@
 //! Generates/verifies `fixtures/display_entries_corpus.json` — the exact
-//! grouped-transcript JSON shape `crates/uniffi-bridge/src/views.rs`'s
+//! grouped-transcript JSON shape `crates/client-ffi/src/views.rs`'s
 //! `build_uniffi_transcript_view` produces for `display_entries_json`/
 //! `pending_permission_json`, and `apps/android`'s Kotlin `DisplayEntries.kt`
 //! decodes on the other side of the FFI boundary. One committed fixture, two
@@ -9,7 +9,7 @@
 //! for the phone-bridge wire.
 //!
 //! Regenerate after a deliberate shape change:
-//! `cargo test -p uniffi-bridge --test display_entries_corpus -- --ignored regenerate_the_fixture`
+//! `cargo test -p client-ffi --test display_entries_corpus -- --ignored regenerate_the_fixture`
 //! then copy the file to the Android test resources path above and re-run
 //! both sides' tests.
 
@@ -171,7 +171,7 @@ fn matches_the_committed_fixture() {
     assert_eq!(actual.trim(), expected.trim());
 }
 
-/// `cargo test -p uniffi-bridge --test display_entries_corpus -- --ignored
+/// `cargo test -p client-ffi --test display_entries_corpus -- --ignored
 /// regenerate_the_fixture` after a deliberate shape change.
 #[test]
 #[ignore]

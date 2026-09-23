@@ -26,7 +26,7 @@ import org.junit.Test
 /**
  * F3.3.5 — Paparazzi goldens for a representative sample of transcript rows
  * and cards, sourced from the same shared fixture
- * `crates/uniffi-bridge/fixtures/display_entries_corpus.json` /
+ * `crates/client-ffi/fixtures/display_entries_corpus.json` /
  * `DisplayEntriesFixtureTest.kt` already decode — one corpus, exercised as
  * both a decode-correctness test and a render-fidelity golden.
  *

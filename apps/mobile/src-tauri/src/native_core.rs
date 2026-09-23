@@ -44,9 +44,9 @@ use crate::native_http::ReqwestHttpFetch;
 use crate::native_ports::{open_native_db, KvSqlite, TranscriptStoreSqlite};
 use crate::sqlstore::DB_FILE;
 
-/// Managed Tauri state: `Some` once `core_init` has spun the bridge thread.
+/// Managed Tauri state: `Some` once `core_init` has spun the core thread.
 #[derive(Default)]
-pub struct CoreBridge(Mutex<Option<Core>>);
+pub struct CoreHost(Mutex<Option<Core>>);
 
 const EV_CONNECTION: &str = "core://connection";
 const EV_MESSAGE: &str = "core://message";
@@ -250,15 +250,15 @@ pub fn core_defaults() -> protocol::defaults::ProtocolDefaults {
     protocol::defaults::protocol_defaults()
 }
 
-/// Spin the bridge thread + `Core`. Idempotent — a second call is a no-op.
+/// Spin the core thread + `Core`. Idempotent — a second call is a no-op.
 #[tauri::command]
 #[specta::specta]
-pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConfig) -> Result<(), String> {
-    let mut slot = bridge.0.lock().map_err(|_| "core bridge lock poisoned")?;
+pub fn core_init(app: AppHandle, host: State<'_, CoreHost>, config: InitConfig) -> Result<(), String> {
+    let mut slot = host.0.lock().map_err(|_| "core host lock poisoned")?;
     if slot.is_some() {
         // Diagnostic for the "stale connection dot after close/reopen"
         // family of reports: this line firing on a real-device close/reopen
-        // confirms the singleton `CoreBridge` (and its live socket) really
+        // confirms the singleton `CoreHost` (and its live socket) really
         // did survive the WebView reload, as this idempotent no-op assumes —
         // if the dot is STILL stale after confirming this fires, the bug is
         // downstream of here (the native adapters' own hydration), not a
@@ -359,54 +359,54 @@ pub fn core_init(app: AppHandle, bridge: State<'_, CoreBridge>, config: InitConf
 }
 
 fn with_core<R>(
-    bridge: &State<'_, CoreBridge>,
+    host: &State<'_, CoreHost>,
     f: impl FnOnce(&Core) -> R,
 ) -> Result<R, String> {
-    let slot = bridge.0.lock().map_err(|_| "core bridge lock poisoned")?;
+    let slot = host.0.lock().map_err(|_| "core host lock poisoned")?;
     let core = slot.as_ref().ok_or("core not initialised (call core_init)")?;
     Ok(f(core))
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_start(bridge: State<'_, CoreBridge>) -> Result<(), String> {
-    with_core(&bridge, Core::start)
+pub fn core_start(host: State<'_, CoreHost>) -> Result<(), String> {
+    with_core(&host, Core::start)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_stop(bridge: State<'_, CoreBridge>) -> Result<(), String> {
-    with_core(&bridge, Core::stop)
+pub fn core_stop(host: State<'_, CoreHost>) -> Result<(), String> {
+    with_core(&host, Core::stop)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_pause(bridge: State<'_, CoreBridge>) -> Result<(), String> {
-    with_core(&bridge, Core::pause)
+pub fn core_pause(host: State<'_, CoreHost>) -> Result<(), String> {
+    with_core(&host, Core::pause)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_resume(bridge: State<'_, CoreBridge>) -> Result<(), String> {
-    with_core(&bridge, Core::resume)
+pub fn core_resume(host: State<'_, CoreHost>) -> Result<(), String> {
+    with_core(&host, Core::resume)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_set_online(bridge: State<'_, CoreBridge>, online: bool) -> Result<(), String> {
-    with_core(&bridge, |c| c.set_online(online))
+pub fn core_set_online(host: State<'_, CoreHost>, online: bool) -> Result<(), String> {
+    with_core(&host, |c| c.set_online(online))
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_set_machines(bridge: State<'_, CoreBridge>, machines: Vec<String>) -> Result<(), String> {
-    with_core(&bridge, |c| c.set_machines(machines))
+pub fn core_set_machines(host: State<'_, CoreHost>, machines: Vec<String>) -> Result<(), String> {
+    with_core(&host, |c| c.set_machines(machines))
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn core_set_relays(bridge: State<'_, CoreBridge>, relays: Vec<String>) -> Result<(), String> {
-    with_core(&bridge, |c| c.set_relays(relays))
+pub fn core_set_relays(host: State<'_, CoreHost>, relays: Vec<String>) -> Result<(), String> {
+    with_core(&host, |c| c.set_relays(relays))
 }
 
 /// Fire-and-forget send. `message` is a phone→bridge command — the same
@@ -416,8 +416,8 @@ pub fn core_set_relays(bridge: State<'_, CoreBridge>, relays: Vec<String>) -> Re
 /// validation, just performed by the IPC layer instead of by hand).
 #[tauri::command]
 #[specta::specta]
-pub fn core_send(bridge: State<'_, CoreBridge>, machine: String, message: PhoneToBridge) -> Result<(), String> {
-    with_core(&bridge, |c| c.send(machine, message))
+pub fn core_send(host: State<'_, CoreHost>, machine: String, message: PhoneToBridge) -> Result<(), String> {
+    with_core(&host, |c| c.send(machine, message))
 }
 
 fn verdict_str(verdict: PublishVerdict) -> &'static str {
@@ -434,11 +434,11 @@ fn verdict_str(verdict: PublishVerdict) -> &'static str {
 #[tauri::command]
 #[specta::specta]
 pub async fn core_publish(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
     machine: String,
     message: PhoneToBridge,
 ) -> Result<String, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     let result = core.publish_confirmed(machine, message).await;
     Ok(verdict_str(result.verdict).to_string())
 }
@@ -446,9 +446,9 @@ pub async fn core_publish(
 #[tauri::command]
 #[specta::specta]
 pub async fn core_connection_status(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
 ) -> Result<ConnectionPayload, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     let (status, needs_pairing_check, connected_relays) = core.connection_status().await;
     Ok(ConnectionPayload {
         status: status_str(status),
@@ -464,91 +464,91 @@ pub async fn core_connection_status(
 /// deserializes it directly, no hand-rolled decoding on either side.
 #[tauri::command]
 #[specta::specta]
-pub async fn core_dispatch(bridge: State<'_, CoreBridge>, intent: Intent) -> Result<(), String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+pub async fn core_dispatch(host: State<'_, CoreHost>, intent: Intent) -> Result<(), String> {
+    let core = with_core(&host, |c| c.clone())?;
     core.dispatch(intent).await;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn core_machines_view(bridge: State<'_, CoreBridge>) -> Result<MachinesView, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+pub async fn core_machines_view(host: State<'_, CoreHost>) -> Result<MachinesView, String> {
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.machines_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn core_settings_view(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
 ) -> Result<Option<SettingsView>, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.settings_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn core_outbox_view(bridge: State<'_, CoreBridge>) -> Result<OutboxView, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+pub async fn core_outbox_view(host: State<'_, CoreHost>) -> Result<OutboxView, String> {
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.outbox_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn core_pairing_view(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
 ) -> Result<Option<PairingView>, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.pairing_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn core_dm_view(bridge: State<'_, CoreBridge>) -> Result<Option<DmView>, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+pub async fn core_dm_view(host: State<'_, CoreHost>) -> Result<Option<DmView>, String> {
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.dm_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn core_marmot_view(bridge: State<'_, CoreBridge>) -> Result<Option<MarmotView>, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+pub async fn core_marmot_view(host: State<'_, CoreHost>) -> Result<Option<MarmotView>, String> {
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.marmot_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn core_quick_prompts_view(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
 ) -> Result<QuickPromptsView, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.quick_prompts_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn core_pending_sessions_view(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
 ) -> Result<PendingSessionsView, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.pending_sessions_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn core_ui_view(bridge: State<'_, CoreBridge>) -> Result<UiView, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+pub async fn core_ui_view(host: State<'_, CoreHost>) -> Result<UiView, String> {
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.ui_view().await)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn core_transcript_view(
-    bridge: State<'_, CoreBridge>,
+    host: State<'_, CoreHost>,
     machine: String,
     session_id: String,
 ) -> Result<TranscriptRowsView, String> {
-    let core = with_core(&bridge, |c| c.clone())?;
+    let core = with_core(&host, |c| c.clone())?;
     Ok(core.transcript_view(machine, session_id).await)
 }
 

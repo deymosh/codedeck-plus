@@ -18,7 +18,7 @@
 # client-runtime = the async host (tokio reactor, Transport driver, lifecycle,
 #                 ports wiring). Depends on client-core AND protocol. Bindings
 #                 (UniFFI / tauri::command) attach here.
-# uniffi-bridge  = the F3 Android binding surface: UniFFI `#[uniffi::export]`
+# client-ffi  = the F3 Android binding surface: UniFFI `#[uniffi::export]`
 #                 objects/callbacks wrapping the real client-runtime `Core`,
 #                 compiled to the `.so` `apps/android` loads. Depends on
 #                 client-runtime (feature `uniffi`) only — it is the one crate
@@ -31,7 +31,7 @@
 # apps/android is built).
 [workspace]
 resolver = "2"
-members = ["crates/protocol", "crates/client-core", "crates/client-runtime", "crates/uniffi-bridge"]
+members = ["crates/protocol", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
 exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
 
 [workspace.package]

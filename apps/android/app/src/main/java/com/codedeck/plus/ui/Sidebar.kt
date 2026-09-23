@@ -49,7 +49,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.theme.connectionColor
 import com.codedeck.plus.ui.theme.presenceColor
@@ -61,10 +61,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiMachineSummary
-import uniffi.uniffi_bridge.UniffiPendingSession
-import uniffi.uniffi_bridge.UniffiSessionSummary
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiPendingSession
+import uniffi.client_ffi.UniffiSessionSummary
 
 /** Port of `apps/mobile/src/core/sessionNeedsAttention.ts` — true when the
  *  session is blocked on the user (permission approval or an
@@ -88,7 +88,7 @@ private fun sessionNeedsAttention(state: String?, isUnread: Boolean): Boolean =
  */
 @Composable
 fun Sidebar(
-    bridge: CoreBridge,
+    core: CoreHost,
     machines: List<UniffiMachineSummary>,
     pendingSessions: List<UniffiPendingSession>,
     connectionStatus: String?,
@@ -193,13 +193,13 @@ fun Sidebar(
                     // before a late subscription would be lost.
                     val landed = async(start = CoroutineStart.UNDISPATCHED) {
                         withTimeoutOrNull(5_000) {
-                            bridge.events.first { event ->
+                            core.events.first { event ->
                                 event is CoreEvent.StateChanged && event.slice == SliceId.MACHINES
                             }
                         }
                     }
                     machines.forEach { machine ->
-                        bridge.dispatch(UniffiIntent.RefreshSessions(machine.pubkeyHex))
+                        core.dispatch(UniffiIntent.RefreshSessions(machine.pubkeyHex))
                     }
                     landed.await()
                     refreshing = false
@@ -230,7 +230,7 @@ fun Sidebar(
                         pending = pending,
                         onDismiss = { dismissId ->
                             pullScope.launch {
-                                bridge.dispatch(UniffiIntent.DismissPendingSession(dismissId))
+                                core.dispatch(UniffiIntent.DismissPendingSession(dismissId))
                             }
                         },
                         modifier = Modifier.padding(vertical = Tokens.Space1),
@@ -253,7 +253,7 @@ fun Sidebar(
                             pending = pending,
                             onDismiss = { dismissId ->
                                 pullScope.launch {
-                                    bridge.dispatch(UniffiIntent.DismissPendingSession(dismissId))
+                                    core.dispatch(UniffiIntent.DismissPendingSession(dismissId))
                                 }
                             },
                             modifier = Modifier.padding(vertical = Tokens.Space1),
@@ -284,7 +284,7 @@ fun Sidebar(
                                 onClick = { onSelectSession(machine.pubkeyHex, session.id) },
                                 onDelete = { m, id, label ->
                                     pullScope.launch {
-                                        bridge.dispatch(UniffiIntent.DeleteSession(m, id, label))
+                                        core.dispatch(UniffiIntent.DeleteSession(m, id, label))
                                     }
                                 },
                                 // Same vertical rhythm PendingSessionCard already
@@ -315,7 +315,7 @@ private fun MachineHeader(machine: UniffiMachineSummary, connectionStatus: Strin
     ) {
         // True per-machine presence (mobile's `connection.presence(pubkey)`,
         // driven by that machine's own last heartbeat) isn't part of
-        // `UniffiMachinesView` yet — only the overall bridge connection
+        // `UniffiMachinesView` yet — only the overall relay connection
         // status is. A phone with one bridge paired reads the same either
         // way; this dot is that honest proxy, not a claim of per-machine
         // heartbeat freshness.

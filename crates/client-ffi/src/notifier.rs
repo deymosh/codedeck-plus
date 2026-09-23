@@ -7,7 +7,7 @@
 //! `apps/mobile/src/core/{notifications,notificationsCoordinator}.ts`) —
 //! this crate only carries the *delivery* call across the FFI boundary, the
 //! same "core decides, platform delivers" split `apps/mobile/src-tauri/src/
-//! corebridge.rs`'s `TauriNotifier` already has for Tauri.
+//! native_core.rs`'s `TauriNotifier` already has for Tauri.
 //!
 //! `client_runtime::ports::Notifier` is `Rc`-bound (the real `Core` runs
 //! entirely on one `LocalSet` thread, so its ports don't need `Send`/`Sync`)

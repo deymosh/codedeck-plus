@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Decodes `crates/uniffi-bridge/fixtures/display_entries_corpus.json` — the
+ * Decodes `crates/client-ffi/fixtures/display_entries_corpus.json` — the
  * same fixture `display_entries_corpus.rs`'s `matches_the_committed_fixture`
  * test asserts the real Rust serializer still produces. A shape change on
  * either side that isn't mirrored on the other shows up here as a decode
@@ -17,7 +17,7 @@ import org.junit.Test
  * one object purely for convenience of a single committed file; this test
  * splits them back apart before calling the real `parseDisplayEntries`/
  * `parsePendingPermission` entry points, so it exercises exactly what
- * `CoreBridge`'s `transcriptFlow` actually hands a screen.
+ * `CoreHost`'s `transcriptFlow` actually hands a screen.
  */
 class DisplayEntriesFixtureTest {
 

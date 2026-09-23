@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.Shell
 import com.codedeck.plus.ui.theme.CodeDeckTheme
@@ -40,22 +40,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Holds the [CoreBridge] reference handed back once [MainActivity] binds to
+ * Holds the [CoreHost] reference handed back once [MainActivity] binds to
  * [StayConnectedService] — the service, not this `ViewModel`, owns the
- * `CoreBridge`'s actual lifecycle (see that class's own doc comment for why
+ * `CoreHost`'s actual lifecycle (see that class's own doc comment for why
  * a plain `ViewModel` isn't enough: it survives configuration changes but
  * not process death).
  */
 class MainViewModel : ViewModel() {
-    private val _bridge = MutableStateFlow<CoreBridge?>(null)
-    val bridge: StateFlow<CoreBridge?> = _bridge.asStateFlow()
+    private val _core = MutableStateFlow<CoreHost?>(null)
+    val core: StateFlow<CoreHost?> = _core.asStateFlow()
 
-    /** Deep link arriving before the bridge attached; replayed in [attach].
+    /** Deep link arriving before the core attached; replayed in [attach].
      *  Main-thread-only access, so a plain var holds. */
     private var pendingSession: Pair<String, String>? = null
 
-    fun attach(bridge: CoreBridge) {
-        _bridge.value = bridge
+    fun attach(core: CoreHost) {
+        _core.value = core
         pendingSession?.let { (machine, sessionId) ->
             pendingSession = null
             dispatchSelectSession(machine, sessionId)
@@ -63,7 +63,7 @@ class MainViewModel : ViewModel() {
     }
 
     fun selectSession(machine: String, sessionId: String) {
-        if (_bridge.value != null) {
+        if (_core.value != null) {
             dispatchSelectSession(machine, sessionId)
         } else {
             pendingSession = machine to sessionId
@@ -72,7 +72,7 @@ class MainViewModel : ViewModel() {
 
     private fun dispatchSelectSession(machine: String, sessionId: String) {
         viewModelScope.launch {
-            _bridge.value?.dispatch(uniffi.uniffi_bridge.UniffiIntent.SelectSession(machine, sessionId))
+            _core.value?.dispatch(uniffi.client_ffi.UniffiIntent.SelectSession(machine, sessionId))
         }
     }
 }
@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val service = (binder as? StayConnectedService.LocalBinder)?.getService() ?: return
-            viewModel.attach(service.bridge)
+            viewModel.attach(service.core)
         }
         override fun onServiceDisconnected(name: ComponentName?) {}
     }
@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         // Launched unconditionally of the "stay connected" setting: this
-        // service hosts the CoreBridge the whole app runs on, so it must
+        // service hosts the CoreHost the whole app runs on, so it must
         // exist whenever the app does. It reconciles its own foreground
         // state against the setting (see StayConnectedService).
         ContextCompat.startForegroundService(this, Intent(this, StayConnectedService::class.java))
@@ -122,8 +122,8 @@ class MainActivity : ComponentActivity() {
                         .systemBarsPadding()
                         .imePadding(),
                 ) {
-                    val bridge by viewModel.bridge.collectAsState()
-                    val current = bridge
+                    val core by viewModel.core.collectAsState()
+                    val current = core
                     if (current != null) {
                         // Density and fontScale multiply together so dp spacing
                         // and sp text scale as one, like the TSX multiplier.

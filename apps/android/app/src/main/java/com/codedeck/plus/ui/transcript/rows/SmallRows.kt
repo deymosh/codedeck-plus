@@ -118,7 +118,7 @@ fun SyncGapRow(failed: Boolean) {
 /** A user send the transcript does not yet CONTAIN (CDX-063) — its outbox
  *  lifecycle state, Retry on failure. Port of `OutboxRow.tsx`. */
 @Composable
-fun OutboxRow(item: uniffi.uniffi_bridge.UniffiOutboxItem, onRetry: (String) -> Unit) {
+fun OutboxRow(item: uniffi.client_ffi.UniffiOutboxItem, onRetry: (String) -> Unit) {
     val failed = item.state == "failed"
     Column(
         Modifier

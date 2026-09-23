@@ -37,7 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.actionFailedCopy
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
@@ -50,10 +50,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiMachineSummary
-import uniffi.uniffi_bridge.UniffiModelEntry
-import uniffi.uniffi_bridge.UniffiProviderProfileInfo
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiModelEntry
+import uniffi.client_ffi.UniffiProviderProfileInfo
 
 /** Radio value for the free-text "new folder" branch — same sentinel `NewSessionModal.tsx` uses. */
 private const val NEW_FOLDER = "__new__"
@@ -70,7 +70,7 @@ private const val BACKEND_OPENCODE = "opencode"
 /** How long a create waits for the core to confirm before the UI gives up
  *  waiting and says so. The FFI dispatch is genuinely fire-and-forget (no
  *  awaited response exists to await, unlike mobile's `await core.api.create`),
- *  so this bounded wait over [CoreBridge.events] is the confirmation. */
+ *  so this bounded wait over [CoreHost.events] is the confirmation. */
 private const val CREATE_CONFIRM_TIMEOUT_MS = 10_000L
 
 /** Last path segment of an absolute workspace root — port of
@@ -105,17 +105,17 @@ private fun rootLabel(root: String): String {
  *
  * Create differs from the TSX's `await core.api.createSession` the same way:
  * the FFI dispatch has no awaited reply, so the in-flight button state and
- * the error banner come from a bounded wait on [CoreBridge.events] instead
+ * the error banner come from a bounded wait on [CoreHost.events] instead
  * (see [NewSessionBody.create]).
  */
 @Composable
-fun NewSessionScreen(bridge: CoreBridge, machinePubkey: String, onClose: () -> Unit) {
-    val machinesView by bridge.machines.collectAsState()
-    val settings by bridge.settings.collectAsState()
+fun NewSessionScreen(core: CoreHost, machinePubkey: String, onClose: () -> Unit) {
+    val machinesView by core.machines.collectAsState()
+    val settings by core.settings.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun dispatch(intent: UniffiIntent) {
-        scope.launch { bridge.dispatch(intent) }
+        scope.launch { core.dispatch(intent) }
     }
 
     val machine = machinesView?.machines?.find { it.pubkeyHex == machinePubkey }
@@ -136,7 +136,7 @@ fun NewSessionScreen(bridge: CoreBridge, machinePubkey: String, onClose: () -> U
         machine = machine,
         defaultModel = settings?.defaultModel.orEmpty(),
         defaultEffort = settings?.defaultEffort.orEmpty(),
-        events = bridge.events,
+        events = core.events,
         dispatch = ::dispatch,
         onClose = onClose,
     )
@@ -223,7 +223,7 @@ private fun NewSessionBody(
         createError = null
         val cwd = if (folderChoice == NEW_FOLDER) newFolderPath else folderChoice
         scope.launch {
-            // No explicit refresh is needed on success — CoreBridge refreshes
+            // No explicit refresh is needed on success — CoreHost refreshes
             // its views from the very StateChanged events watched here.
             // `events` has no replay, so the wait subscribes BEFORE the
             // dispatch: UNDISPATCHED runs the async body up to its first

@@ -86,14 +86,14 @@ pack_repo_into "$CONTAINER" /workspace \
   Cargo.toml Cargo.lock crates packages/protocol/fixtures apps/android
 
 echo "==> Regenerating the UniFFI Kotlin bindings (host target, no NDK needed for this step)"
-dexec -w /workspace "$CONTAINER" cargo build --locked -p uniffi-bridge --lib
-dexec -w /workspace "$CONTAINER" cargo run --locked -p uniffi-bridge --bin uniffi-bindgen -- \
-  generate --library target/debug/libuniffi_bridge.so --language kotlin \
+dexec -w /workspace "$CONTAINER" cargo build --locked -p client-ffi --lib
+dexec -w /workspace "$CONTAINER" cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
+  generate --library target/debug/libclient_ffi.so --language kotlin \
   --out-dir /tmp/uniffi-kotlin-out
 dexec "$CONTAINER" rm -rf /workspace/apps/android/app/src/main/java/uniffi
 dexec "$CONTAINER" cp -r /tmp/uniffi-kotlin-out/uniffi /workspace/apps/android/app/src/main/java/uniffi
 
-echo "==> Cross-compiling crates/uniffi-bridge for: ${TARGETS[*]}"
+echo "==> Cross-compiling crates/client-ffi for: ${TARGETS[*]}"
 NDK_TOOLCHAIN=/opt/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64
 for target in "${TARGETS[@]}"; do
   abi="$(abi_of "$target")"
@@ -103,10 +103,10 @@ for target in "${TARGETS[@]}"; do
     "CC_${target//-/_}=${NDK_TOOLCHAIN}/bin/${clang_target}26-clang" \
     "AR_${target//-/_}=${NDK_TOOLCHAIN}/bin/llvm-ar" \
     "CARGO_TARGET_${env_upper}_LINKER=${NDK_TOOLCHAIN}/bin/${clang_target}26-clang" \
-    cargo build --locked -p uniffi-bridge --lib --target "$target" --release
+    cargo build --locked -p client-ffi --lib --target "$target" --release
   dexec "$CONTAINER" mkdir -p "/workspace/apps/android/app/src/main/jniLibs/$abi"
-  dexec "$CONTAINER" cp "/workspace/target/$target/release/libuniffi_bridge.so" \
-    "/workspace/apps/android/app/src/main/jniLibs/$abi/libuniffi_bridge.so"
+  dexec "$CONTAINER" cp "/workspace/target/$target/release/libclient_ffi.so" \
+    "/workspace/apps/android/app/src/main/jniLibs/$abi/libclient_ffi.so"
 done
 
 echo "==> Building the debug APK (Gradle)"

@@ -14,7 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
@@ -37,7 +37,7 @@ fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
 
 /**
  * Global transient banner for a failed core action — the screen-level
- * counterpart of `CoreBridge.actionFailed` (whose callback itself stays
+ * counterpart of `CoreHost.actionFailed` (whose callback itself stays
  * empty: client-runtime also emits the failure as a `CoreEvent.ActionFailed`
  * on the `events` flow, and that flow is what this banner watches).
  *
@@ -49,7 +49,7 @@ fun actionFailedCopy(kind: ActionFailedKind): String = when (kind) {
  * failure replaces the visible copy and restarts the window).
  */
 @Composable
-fun ActionFailedBanner(bridge: CoreBridge, modifier: Modifier = Modifier) {
+fun ActionFailedBanner(core: CoreHost, modifier: Modifier = Modifier) {
     var shown by remember { mutableStateOf<CoreEvent.ActionFailed?>(null) }
     // Bumped on every failure. The dismiss timer keys on this rather than on
     // `shown`: two identical failures in a row are `equals` data-class
@@ -60,8 +60,8 @@ fun ActionFailedBanner(bridge: CoreBridge, modifier: Modifier = Modifier) {
     // `events` has no replay, so only failures that happen while this
     // banner is mounted ever show — a stale one never re-appears when the
     // shell re-attaches.
-    LaunchedEffect(bridge) {
-        bridge.events.filterIsInstance<CoreEvent.ActionFailed>().collect { failed ->
+    LaunchedEffect(core) {
+        core.events.filterIsInstance<CoreEvent.ActionFailed>().collect { failed ->
             shown = failed
             generation++
         }

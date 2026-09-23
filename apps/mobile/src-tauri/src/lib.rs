@@ -9,7 +9,7 @@
 //! commands). Desktop gets Marmot for free — same code.
 
 #[cfg(feature = "native-core")]
-pub mod corebridge;
+pub mod native_core;
 #[cfg(feature = "native-core")]
 pub mod native_http;
 #[cfg(feature = "native-core")]
@@ -39,53 +39,53 @@ pub fn run() {
             sqlstore::sql_execute,
             sqlstore::sql_select,
             #[cfg(feature = "native-core")]
-            corebridge::core_available,
+            native_core::core_available,
             #[cfg(feature = "native-core")]
-            corebridge::core_defaults,
+            native_core::core_defaults,
             #[cfg(feature = "native-core")]
-            corebridge::core_init,
+            native_core::core_init,
             #[cfg(feature = "native-core")]
-            corebridge::core_start,
+            native_core::core_start,
             #[cfg(feature = "native-core")]
-            corebridge::core_stop,
+            native_core::core_stop,
             #[cfg(feature = "native-core")]
-            corebridge::core_pause,
+            native_core::core_pause,
             #[cfg(feature = "native-core")]
-            corebridge::core_resume,
+            native_core::core_resume,
             #[cfg(feature = "native-core")]
-            corebridge::core_set_online,
+            native_core::core_set_online,
             #[cfg(feature = "native-core")]
-            corebridge::core_set_machines,
+            native_core::core_set_machines,
             #[cfg(feature = "native-core")]
-            corebridge::core_set_relays,
+            native_core::core_set_relays,
             #[cfg(feature = "native-core")]
-            corebridge::core_send,
+            native_core::core_send,
             #[cfg(feature = "native-core")]
-            corebridge::core_publish,
+            native_core::core_publish,
             #[cfg(feature = "native-core")]
-            corebridge::core_connection_status,
+            native_core::core_connection_status,
             #[cfg(feature = "native-core")]
-            corebridge::core_dispatch,
+            native_core::core_dispatch,
             #[cfg(feature = "native-core")]
-            corebridge::core_machines_view,
+            native_core::core_machines_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_settings_view,
+            native_core::core_settings_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_outbox_view,
+            native_core::core_outbox_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_pairing_view,
+            native_core::core_pairing_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_dm_view,
+            native_core::core_dm_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_marmot_view,
+            native_core::core_marmot_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_quick_prompts_view,
+            native_core::core_quick_prompts_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_pending_sessions_view,
+            native_core::core_pending_sessions_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_ui_view,
+            native_core::core_ui_view,
             #[cfg(feature = "native-core")]
-            corebridge::core_transcript_view,
+            native_core::core_transcript_view,
         ])
         .plugin(tauri_plugin_deep_link::init())
         // CDX-029: Rust-side fetch escape hatch — Blossom's upload preflight
@@ -98,7 +98,7 @@ pub fn run() {
     // F1: the in-process Rust client-runtime handle (behind the `native-core`
     // feature). Inert until the WebView calls `core_init`.
     #[cfg(feature = "native-core")]
-    let builder = builder.manage(corebridge::CoreBridge::default());
+    let builder = builder.manage(native_core::CoreHost::default());
     // CDX-011: QR camera scan for pairing — the plugin exists on mobile only
     // (desktop pairing pastes the URL / uses the codedeck:// deep link).
     #[cfg(mobile)]

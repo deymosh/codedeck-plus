@@ -18,7 +18,7 @@ import com.codedeck.plus.ui.transcript.metaObj
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.client_ffi.UniffiIntent
 
 /** Compact one-line summary of the tool input (the card's subtitle) — port
  *  of `PermissionCard.tsx`'s `summarizeToolInput`. */

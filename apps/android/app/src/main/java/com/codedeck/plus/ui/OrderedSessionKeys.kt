@@ -1,7 +1,7 @@
 package com.codedeck.plus.ui
 
-import uniffi.uniffi_bridge.UniffiMachineSummary
-import uniffi.uniffi_bridge.UniffiSessionSummary
+import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiSessionSummary
 
 /**
  * Shared sidebar ⇄ swipe-carousel session ordering — port of

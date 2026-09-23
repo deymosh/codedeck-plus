@@ -41,19 +41,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
-import uniffi.uniffi_bridge.UniffiCredentialsAck
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiMachineSummary
-import uniffi.uniffi_bridge.UniffiProviderProfileAck
-import uniffi.uniffi_bridge.UniffiQuickPrompt
-import uniffi.uniffi_bridge.UniffiSettingsView
-import uniffi.uniffi_bridge.UniffiUiView
+import uniffi.client_ffi.UniffiCredentialsAck
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiProviderProfileAck
+import uniffi.client_ffi.UniffiQuickPrompt
+import uniffi.client_ffi.UniffiSettingsView
+import uniffi.client_ffi.UniffiUiView
 import java.util.UUID
 
 /** The default-mode picker's options — wire values whose display text is
@@ -93,22 +93,22 @@ private const val CAP_CUSTOM_PROVIDERS = "custom-providers"
  * Deliberately absent: mesh (deferred to F6, off by default upstream).
  */
 @Composable
-fun SettingsScreen(bridge: CoreBridge, onClose: () -> Unit) {
-    val settings by bridge.settings.collectAsState()
-    val quickPrompts by bridge.quickPrompts.collectAsState()
-    val connection by bridge.connection.collectAsState()
-    val machinesView by bridge.machines.collectAsState()
-    val ui by bridge.ui.collectAsState()
+fun SettingsScreen(core: CoreHost, onClose: () -> Unit) {
+    val settings by core.settings.collectAsState()
+    val quickPrompts by core.quickPrompts.collectAsState()
+    val connection by core.connection.collectAsState()
+    val machinesView by core.machines.collectAsState()
+    val ui by core.ui.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun dispatch(intent: UniffiIntent) {
-        scope.launch { bridge.dispatch(intent) }
+        scope.launch { core.dispatch(intent) }
     }
 
     val view = settings
     if (view == null) {
         // Pre-hydration — same shape `MainActivity` shows while its own
-        // bridge reference is still null. Nothing to render until the
+        // core reference is still null. Nothing to render until the
         // SETTINGS slice's first fetch lands.
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
@@ -322,7 +322,7 @@ private fun SettingsBody(
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Stay connected")
                     // The switch only stores the preference. StayConnectedService
-                    // (which hosts the CoreBridge, so it can never be
+                    // (which hosts the CoreHost, so it can never be
                     // started/stopped from here the way mobile's controller
                     // starts/stops its plugin service) collects the setting and
                     // promotes/demotes its own foreground state — the badge

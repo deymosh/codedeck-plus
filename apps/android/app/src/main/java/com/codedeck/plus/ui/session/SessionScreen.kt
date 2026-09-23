@@ -60,7 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.SessionKey
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
@@ -92,9 +92,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiTranscriptRowsView
-import uniffi.uniffi_bridge.UniffiUsageData
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiTranscriptRowsView
+import uniffi.client_ffi.UniffiUsageData
 
 /**
  * A transcript view with its JSON payloads already decoded. Built off the main
@@ -157,18 +157,18 @@ private const val SESSION_IMAGE_SEND_BACKSTOP_MS = SESSION_IMAGE_SEND_BUDGET_MS 
  */
 @Composable
 fun SessionScreen(
-    bridge: CoreBridge,
+    core: CoreHost,
     machine: String,
     sessionId: String,
     onMenu: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val connection by bridge.connection.collectAsState()
-    val machinesView by bridge.machines.collectAsState()
-    val uiView by bridge.ui.collectAsState()
-    val outboxView by bridge.outbox.collectAsState()
-    val settings by bridge.settings.collectAsState()
-    val quickPromptsView by bridge.quickPrompts.collectAsState()
+    val connection by core.connection.collectAsState()
+    val machinesView by core.machines.collectAsState()
+    val uiView by core.ui.collectAsState()
+    val outboxView by core.outbox.collectAsState()
+    val settings by core.settings.collectAsState()
+    val quickPromptsView by core.quickPrompts.collectAsState()
     val scope = rememberCoroutineScope()
 
     val machineSummary = machinesView?.machines?.firstOrNull { it.pubkeyHex == machine }
@@ -181,7 +181,7 @@ fun SessionScreen(
     var transcript by remember(machine, sessionId) { mutableStateOf<ParsedTranscript?>(null) }
     LaunchedEffect(machine, sessionId) {
         var previous: ParsedTranscript? = null
-        bridge.transcriptFlow(machine, sessionId)
+        core.transcriptFlow(machine, sessionId)
             .distinctUntilChanged()
             .map { view -> ParsedTranscript.of(view, previous).also { previous = it } }
             .flowOn(Dispatchers.Default)
@@ -290,7 +290,7 @@ fun SessionScreen(
     }
 
     fun dispatch(intent: UniffiIntent) {
-        scope.launch { bridge.dispatch(intent) }
+        scope.launch { core.dispatch(intent) }
     }
 
     /**
@@ -342,7 +342,7 @@ fun SessionScreen(
             // branch below — it is not an error thrown, it is the backstop.
             val completed = try {
                 withTimeoutOrNull(SESSION_IMAGE_SEND_BACKSTOP_MS) {
-                    bridge.dispatch(
+                    core.dispatch(
                         UniffiIntent.SendSessionImage(
                             machine = machine,
                             sessionId = sessionId,
@@ -433,7 +433,7 @@ fun SessionScreen(
     // publishes usage when asked; unsupported SDKs publish nothing and the
     // header just shows no usage badge.
     LaunchedEffect(machine, sessionId) {
-        bridge.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
+        core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
     }
 
     // --- ‹/› attention chevrons: same ordered list as the sidebar/carousel,
@@ -509,7 +509,7 @@ fun SessionScreen(
         )
 
         GsdStrip(
-            bridge = bridge,
+            core = core,
             machine = machine,
             sessionId = sessionId,
             gsd = session?.gsd,
@@ -783,7 +783,7 @@ private fun SessionHeaderRow1(
         // information the session's own `state` pill above genuinely does
         // not — `state` describes the bridge-side session process, so a
         // session can read "running" while the relay link is down and every
-        // transcript row on screen is local cache (`crates/uniffi-bridge`'s
+        // transcript row on screen is local cache (`crates/client-ffi`'s
         // views serve the machines store; nothing about viewing this screen
         // requires a live connection). The reference keeps this same chip in
         // its own header (`SessionScreen.tsx` renders `{connectionStatus}`

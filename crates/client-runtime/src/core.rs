@@ -309,7 +309,7 @@ impl Core {
             }
             authors
         };
-        let host = Rc::new(HostBridge {
+        let host = Rc::new(LoopHost {
             tx: tx.clone(),
             machines: RefCell::new(initial_authors.clone()),
             cursor: RefCell::new(hydrated.last_stored_seen),
@@ -584,7 +584,7 @@ enum Msg {
     /// reconcile, KeyPackage / 10051 publish, then the 445 sub). Deferred to a
     /// message so the sync connection `apply` stays non-blocking.
     MarmotStart,
-    /// `HostBridge::note_stored_seen` advanced the cursor — persist it so a
+    /// `LoopHost::note_stored_seen` advanced the cursor — persist it so a
     /// restart resumes the stored-response filter instead of replaying the
     /// relay's entire history for this identity. Deferred the same way every
     /// other host callback is: `note_stored_seen` itself is a synchronous
@@ -614,7 +614,7 @@ enum ViewQuery {
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
 /// (decoupling reentrancy — a callback fires inside the transport's task).
-struct HostBridge {
+struct LoopHost {
     tx: mpsc::UnboundedSender<Msg>,
     machines: RefCell<Vec<String>>,
     /// `last_stored_seen` cursor (seconds) — the in-memory copy `authors()`'s
@@ -624,7 +624,7 @@ struct HostBridge {
     cursor: RefCell<i64>,
 }
 
-impl NostrClientHost for HostBridge {
+impl NostrClientHost for LoopHost {
     fn authors(&self) -> Vec<String> {
         self.machines.borrow().clone()
     }
@@ -661,11 +661,11 @@ struct Loop {
     entropy: Rc<dyn Entropy>,
     observer: Rc<dyn CoreObserver>,
     conn: ConnectionState,
-    nostr: NostrClient<WsTransport, HostBridge>,
+    nostr: NostrClient<WsTransport, LoopHost>,
     ws: WsTransport,
     api: BridgeApi,
     machines: Vec<String>,
-    host: Rc<HostBridge>,
+    host: Rc<LoopHost>,
     retry_timer: Option<AbortHandle>,
     vis_timer: Option<AbortHandle>,
     stale_timer: Option<AbortHandle>,
@@ -1049,7 +1049,7 @@ impl Loop {
     }
 
     /// Subscription authors = registered machines + the pairing candidate (its
-    /// pair-ack must pass the filter). Push them to the `HostBridge` and, if
+    /// pair-ack must pass the filter). Push them to the `LoopHost` and, if
     /// connected, re-REQ.
     fn refresh_authors(&mut self) {
         let mut authors = self.stores.machines.machine_pubkeys();
@@ -2744,7 +2744,7 @@ mod tests {
     }
 
     /// A stored-kind event (4516/30515) advancing `last_stored_seen` used to
-    /// update only the in-memory `HostBridge` cursor — a restart re-hydrated
+    /// update only the in-memory `LoopHost` cursor — a restart re-hydrated
     /// from the `Kv` at 0 and re-fetched the peer's ENTIRE stored history
     /// instead of resuming from where it left off, on every single restart.
     #[tokio::test]

@@ -1,7 +1,7 @@
 //! F2b: real persistence for the in-process `client_runtime::Core` (F1's
 //! transitional `CorePorts::default()` used in-memory ports, losing every
 //! store — machines, pairing, outbox, settings, identity — on every app
-//! restart). Behind `native-core`, same as `corebridge.rs`.
+//! restart). Behind `native-core`, same as `native_core.rs`.
 //!
 //! Schema compatibility is deliberate: this opens the SAME `codedeck.db` file
 //! and issues the SAME `CREATE TABLE`/`CREATE INDEX` statements as

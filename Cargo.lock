@@ -543,6 +543,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-ffi"
+version = "0.0.0"
+dependencies = [
+ "android_logger",
+ "client-runtime",
+ "env_logger",
+ "log",
+ "log-panics",
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "uniffi",
+]
+
+[[package]]
 name = "client-runtime"
 version = "0.0.0"
 dependencies = [
@@ -3450,25 +3469,6 @@ dependencies = [
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",
-]
-
-[[package]]
-name = "uniffi-bridge"
-version = "0.0.0"
-dependencies = [
- "android_logger",
- "client-runtime",
- "env_logger",
- "log",
- "log-panics",
- "protocol",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "uniffi",
 ]
 
 [[package]]

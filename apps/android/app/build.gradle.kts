@@ -97,7 +97,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     // ProcessLifecycleOwner — app-level foreground/background ("is ANY activity
     // visible"), not a per-Activity signal; StayConnectedService drives
-    // CoreBridge.pause()/resume() from it.
+    // CoreHost.pause()/resume() from it.
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -110,10 +110,10 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.kotlinx.coroutines.android)
     // JNA: the FFI bridge uniffi-bindgen's generated Kotlin uses to call into
-    // crates/uniffi-bridge's cdylib. Version pinned loosely on purpose — this
+    // crates/client-ffi's cdylib. Version pinned loosely on purpose — this
     // is exactly the dependency the generated bindings file itself declares
     // as a prerequisite; keep it in step with whatever `uniffi` crate version
-    // crates/uniffi-bridge/Cargo.toml pins (currently 0.28).
+    // crates/client-ffi/Cargo.toml pins (currently 0.28).
     implementation("net.java.dev.jna:jna:5.19.0@aar")
 
     // Tink directly, not its deprecated androidx.security:security-crypto

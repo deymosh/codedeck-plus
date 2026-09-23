@@ -20,14 +20,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.screens.NewSessionScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
-import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.client_ffi.UniffiIntent
 
 /** Narrow ↔ wide breakpoint, matching `apps/mobile`'s `(min-width: 700px)`
  *  media query (`App.tsx`'s `isWide`) — same threshold, same meaning: wide
@@ -45,13 +45,13 @@ private val WIDE_BREAKPOINT = 700.dp
  * any screen; the keyboard-inset controller is still later work.
  */
 @Composable
-fun Shell(bridge: CoreBridge) {
-    val machinesView by bridge.machines.collectAsState()
-    val connection by bridge.connection.collectAsState()
-    val ui by bridge.ui.collectAsState()
-    val pairing by bridge.pairing.collectAsState()
-    val settings by bridge.settings.collectAsState()
-    val pendingSessions by bridge.pendingSessions.collectAsState()
+fun Shell(core: CoreHost) {
+    val machinesView by core.machines.collectAsState()
+    val connection by core.connection.collectAsState()
+    val ui by core.ui.collectAsState()
+    val pairing by core.pairing.collectAsState()
+    val settings by core.settings.collectAsState()
+    val pendingSessions by core.pendingSessions.collectAsState()
     val scope = rememberCoroutineScope()
 
     val machines = machinesView?.machines ?: emptyList()
@@ -75,7 +75,7 @@ fun Shell(bridge: CoreBridge) {
     // `apps/mobile`'s `App.tsx`. Waits for the first real `MachinesView`
     // fetch (`machinesView != null`) rather than deciding off the empty
     // pre-hydration list, so a phone that DOES have paired machines never
-    // flashes the pairing screen while `CoreBridge.start()`'s initial fetch
+    // flashes the pairing screen while `CoreHost.start()`'s initial fetch
     // is still in flight.
     var pairingAutoOpenDecided by remember { mutableStateOf(false) }
     LaunchedEffect(machinesView) {
@@ -93,7 +93,7 @@ fun Shell(bridge: CoreBridge) {
     }
 
     fun selectSession(machine: String, sessionId: String) {
-        scope.launch { bridge.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
+        scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -102,23 +102,23 @@ fun Shell(bridge: CoreBridge) {
             // owns the window — the wide/narrow split (and the narrow branch's
             // drawer state) simply isn't composed underneath it, so returning
             // re-derives the drawer from the current selection as usual.
-            SettingsScreen(bridge, onClose = { settingsOpen = false })
+            SettingsScreen(core, onClose = { settingsOpen = false })
         } else if (pairingOpen) {
-            PairingScreen(bridge, onClose = { pairingOpen = false })
+            PairingScreen(core, onClose = { pairingOpen = false })
         } else if (newSessionFor != null) {
-            NewSessionScreen(bridge, machinePubkey = newSessionFor!!, onClose = { newSessionFor = null })
+            NewSessionScreen(core, machinePubkey = newSessionFor!!, onClose = { newSessionFor = null })
         } else {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val isWide = maxWidth >= WIDE_BREAKPOINT
 
                 val sessionContent: @Composable (String, String, (() -> Unit)?) -> Unit = { machine, sessionId, onMenu ->
-                    SessionScreen(bridge, machine, sessionId, onMenu = onMenu, modifier = Modifier.fillMaxSize())
+                    SessionScreen(core, machine, sessionId, onMenu = onMenu, modifier = Modifier.fillMaxSize())
                 }
 
                 if (isWide) {
                     Row(Modifier.fillMaxSize()) {
                         Sidebar(
-                            bridge = bridge,
+                            core = core,
                             machines = machines,
                             pendingSessions = pending,
                             connectionStatus = connection?.status,
@@ -163,7 +163,7 @@ fun Shell(bridge: CoreBridge) {
                         drawerContent = {
                             ModalDrawerSheet {
                                 Sidebar(
-                                    bridge = bridge,
+                                    core = core,
                                     machines = machines,
                                     pendingSessions = pending,
                                     connectionStatus = connection?.status,
@@ -200,11 +200,11 @@ fun Shell(bridge: CoreBridge) {
         // Bottom undo toast for an optimistic session delete — mounted once at
         // the shell's root so it is visible on whichever screen is showing.
         // Emits nothing (and intercepts nothing) while no window is open.
-        UndoToast(bridge, Modifier.align(Alignment.BottomCenter))
+        UndoToast(core, Modifier.align(Alignment.BottomCenter))
         // Global action-failed banner — same "visible from any screen"
         // placement, but pinned top-center: the bottom edge is the undo
         // toast's slot, so the two can never collide and neither needs
         // mutual-exclusion state. Emits nothing while no failure is showing.
-        ActionFailedBanner(bridge, Modifier.align(Alignment.TopCenter))
+        ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
     }
 }

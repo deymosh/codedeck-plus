@@ -14,11 +14,11 @@
 //!
 //! `#[ignore]`d rather than a normal test: it writes to the working tree,
 //! which a plain `cargo test` run should never do as a side effect. The
-//! actual `Builder` lives in `corebridge::ts_bindings_builder` — see its own
+//! actual `Builder` lives in `native_core::ts_bindings_builder` — see its own
 //! doc comment for why it can't live here.
 #![cfg(feature = "native-core")]
 
-use codedeck_mobile_lib::corebridge::ts_bindings_builder;
+use codedeck_mobile_lib::native_core::ts_bindings_builder;
 
 #[test]
 #[ignore = "writes ../../src/core/nativeCoreTypes.generated.ts — run explicitly to regenerate"]

@@ -23,7 +23,7 @@ import androidx.compose.ui.text.input.ImeAction
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.QuestionSpecView
-import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.client_ffi.UniffiIntent
 
 /** Heuristic: detect "type your own answer" style options — port of
  *  `isFreeTextOption` in `QuestionCard.tsx`. */

@@ -3,7 +3,7 @@
 
 @file:Suppress("NAME_SHADOWING")
 
-package uniffi.uniffi_bridge
+package uniffi.client_ffi
 
 // Common helper code.
 //
@@ -75,7 +75,7 @@ open class RustBuffer : Structure() {
     companion object {
         internal fun alloc(size: ULong = 0UL) = uniffiRustCall() { status ->
             // Note: need to convert the size to a `Long` value to make this work with JVM.
-            UniffiLib.INSTANCE.ffi_uniffi_bridge_rustbuffer_alloc(size.toLong(), status)
+            UniffiLib.INSTANCE.ffi_client_ffi_rustbuffer_alloc(size.toLong(), status)
         }.also {
             if(it.data == null) {
                throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=${size})")
@@ -91,7 +91,7 @@ open class RustBuffer : Structure() {
         }
 
         internal fun free(buf: RustBuffer.ByValue) = uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.ffi_uniffi_bridge_rustbuffer_free(buf, status)
+            UniffiLib.INSTANCE.ffi_client_ffi_rustbuffer_free(buf, status)
         }
     }
 
@@ -391,7 +391,7 @@ private fun findLibraryName(componentName: String): String {
     if (libOverride != null) {
         return libOverride
     }
-    return "uniffi_bridge"
+    return "client_ffi"
 }
 
 private inline fun <reified Lib : Library> loadIndirect(
@@ -890,7 +890,7 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 internal interface UniffiLib : Library {
     companion object {
         internal val INSTANCE: UniffiLib by lazy {
-            loadIndirect<UniffiLib>(componentName = "uniffi_bridge")
+            loadIndirect<UniffiLib>(componentName = "client_ffi")
             .also { lib: UniffiLib ->
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
@@ -906,257 +906,257 @@ internal interface UniffiLib : Library {
         }
     }
 
-    fun uniffi_uniffi_bridge_fn_clone_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_clone_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_uniffi_bridge_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_uniffi_bridge_fn_method_core_connection_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_connection_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_dispatch(`ptr`: Pointer,`intent`: RustBuffer.ByValue,
+    fun uniffi_client_ffi_fn_method_core_dispatch(`ptr`: Pointer,`intent`: RustBuffer.ByValue,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_identity_npub(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_core_identity_npub(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_uniffi_bridge_fn_method_core_machines_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_machines_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_outbox_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_outbox_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_pairing_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_pairing_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_pause(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_core_pause(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_core_pending_sessions_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_pending_sessions_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_quick_prompts_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_quick_prompts_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_resume(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_core_resume(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_core_settings_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_settings_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_core_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_core_start(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_core_start(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_core_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_core_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_core_transcript_view(`ptr`: Pointer,`machine`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,
+    fun uniffi_client_ffi_fn_method_core_transcript_view(`ptr`: Pointer,`machine`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,
     ): Long
-    fun uniffi_uniffi_bridge_fn_method_core_ui_view(`ptr`: Pointer,
+    fun uniffi_client_ffi_fn_method_core_ui_view(`ptr`: Pointer,
     ): Long
-    fun uniffi_uniffi_bridge_fn_clone_corelistener(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_clone_corelistener(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_uniffi_bridge_fn_free_corelistener(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_free_corelistener(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_init_callback_vtable_corelistener(`vtable`: UniffiVTableCallbackInterfaceCoreListener,
+    fun uniffi_client_ffi_fn_init_callback_vtable_corelistener(`vtable`: UniffiVTableCallbackInterfaceCoreListener,
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_corelistener_connection_changed(`ptr`: Pointer,`view`: RustBufferConnectionView.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_corelistener_connection_changed(`ptr`: Pointer,`view`: RustBufferConnectionView.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_corelistener_on_event(`ptr`: Pointer,`event`: RustBufferCoreEvent.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_corelistener_on_event(`ptr`: Pointer,`event`: RustBufferCoreEvent.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_corelistener_action_failed(`ptr`: Pointer,`kind`: RustBufferActionFailedKind.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_corelistener_action_failed(`ptr`: Pointer,`kind`: RustBufferActionFailedKind.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_clone_uniffihttpfetch(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_clone_uniffihttpfetch(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_uniffi_bridge_fn_free_uniffihttpfetch(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_free_uniffihttpfetch(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_init_callback_vtable_uniffihttpfetch(`vtable`: UniffiVTableCallbackInterfaceUniffiHttpFetch,
+    fun uniffi_client_ffi_fn_init_callback_vtable_uniffihttpfetch(`vtable`: UniffiVTableCallbackInterfaceUniffiHttpFetch,
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_uniffihttpfetch_put(`ptr`: Pointer,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_uniffihttpfetch_put(`ptr`: Pointer,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_uniffi_bridge_fn_method_uniffihttpfetch_get(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_uniffihttpfetch_get(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_uniffi_bridge_fn_method_uniffihttpfetch_set_proxy(`ptr`: Pointer,`proxy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_uniffihttpfetch_set_proxy(`ptr`: Pointer,`proxy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_clone_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_clone_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_uniffi_bridge_fn_free_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_free_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_init_callback_vtable_uniffinotifier(`vtable`: UniffiVTableCallbackInterfaceUniffiNotifier,
+    fun uniffi_client_ffi_fn_init_callback_vtable_uniffinotifier(`vtable`: UniffiVTableCallbackInterfaceUniffiNotifier,
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(`ptr`: Pointer,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_uniffinotifier_notify(`ptr`: Pointer,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_method_uniffinotifier_cancel(`ptr`: Pointer,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_method_uniffinotifier_cancel(`ptr`: Pointer,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_uniffi_bridge_fn_func_persisted_relays(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_func_persisted_relays(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_uniffi_bridge_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_uniffi_bridge_fn_func_provider_base_url_error(uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_func_provider_base_url_error(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun ffi_uniffi_bridge_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun ffi_uniffi_bridge_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun ffi_uniffi_bridge_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun ffi_uniffi_bridge_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun ffi_uniffi_bridge_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_u8(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_u8(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_u8(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_u8(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun ffi_uniffi_bridge_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_i8(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_i8(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_i8(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_i8(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun ffi_uniffi_bridge_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_u16(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_u16(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_u16(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_u16(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Short
-    fun ffi_uniffi_bridge_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_i16(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_i16(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_i16(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_i16(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Short
-    fun ffi_uniffi_bridge_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_u32(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_u32(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_u32(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_u32(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
-    fun ffi_uniffi_bridge_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_i32(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_i32(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_i32(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_i32(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
-    fun ffi_uniffi_bridge_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_u64(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_u64(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_u64(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_u64(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    fun ffi_uniffi_bridge_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_i64(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_i64(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_i64(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_i64(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    fun ffi_uniffi_bridge_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_f32(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_f32(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_f32(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_f32(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Float
-    fun ffi_uniffi_bridge_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_f64(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_f64(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_f64(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_f64(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Double
-    fun ffi_uniffi_bridge_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_pointer(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_pointer(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_pointer(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_pointer(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun ffi_uniffi_bridge_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_rust_buffer(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_rust_buffer(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_rust_buffer(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_rust_buffer(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun ffi_uniffi_bridge_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    fun ffi_client_ffi_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_cancel_void(`handle`: Long,
+    fun ffi_client_ffi_rust_future_cancel_void(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_free_void(`handle`: Long,
+    fun ffi_client_ffi_rust_future_free_void(`handle`: Long,
     ): Unit
-    fun ffi_uniffi_bridge_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_client_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_uniffi_bridge_checksum_func_is_valid_provider_base_url(
+    fun uniffi_client_ffi_checksum_func_is_valid_provider_base_url(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_func_persisted_relays(
+    fun uniffi_client_ffi_checksum_func_persisted_relays(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_func_persisted_tor_proxy_enabled(
+    fun uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_func_provider_base_url_error(
+    fun uniffi_client_ffi_checksum_func_provider_base_url_error(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_connection_view(
+    fun uniffi_client_ffi_checksum_method_core_connection_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_dispatch(
+    fun uniffi_client_ffi_checksum_method_core_dispatch(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_identity_npub(
+    fun uniffi_client_ffi_checksum_method_core_identity_npub(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_machines_view(
+    fun uniffi_client_ffi_checksum_method_core_machines_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_outbox_view(
+    fun uniffi_client_ffi_checksum_method_core_outbox_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_pairing_view(
+    fun uniffi_client_ffi_checksum_method_core_pairing_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_pause(
+    fun uniffi_client_ffi_checksum_method_core_pause(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_pending_sessions_view(
+    fun uniffi_client_ffi_checksum_method_core_pending_sessions_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view(
+    fun uniffi_client_ffi_checksum_method_core_quick_prompts_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_resume(
+    fun uniffi_client_ffi_checksum_method_core_resume(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_settings_view(
+    fun uniffi_client_ffi_checksum_method_core_settings_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_shutdown(
+    fun uniffi_client_ffi_checksum_method_core_shutdown(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_start(
+    fun uniffi_client_ffi_checksum_method_core_start(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_stop(
+    fun uniffi_client_ffi_checksum_method_core_stop(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_transcript_view(
+    fun uniffi_client_ffi_checksum_method_core_transcript_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_core_ui_view(
+    fun uniffi_client_ffi_checksum_method_core_ui_view(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_corelistener_connection_changed(
+    fun uniffi_client_ffi_checksum_method_corelistener_connection_changed(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_corelistener_on_event(
+    fun uniffi_client_ffi_checksum_method_corelistener_on_event(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_corelistener_action_failed(
+    fun uniffi_client_ffi_checksum_method_corelistener_action_failed(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_put(
+    fun uniffi_client_ffi_checksum_method_uniffihttpfetch_put(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_get(
+    fun uniffi_client_ffi_checksum_method_uniffihttpfetch_get(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_set_proxy(
+    fun uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify(
+    fun uniffi_client_ffi_checksum_method_uniffinotifier_notify(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel(
+    fun uniffi_client_ffi_checksum_method_uniffinotifier_cancel(
     ): Short
-    fun uniffi_uniffi_bridge_checksum_constructor_core_new(
+    fun uniffi_client_ffi_checksum_constructor_core_new(
     ): Short
-    fun ffi_uniffi_bridge_uniffi_contract_version(
+    fun ffi_client_ffi_uniffi_contract_version(
     ): Int
     
 }
@@ -1165,7 +1165,7 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
     // Get the bindings contract version from our ComponentInterface
     val bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
-    val scaffolding_contract_version = lib.ffi_uniffi_bridge_uniffi_contract_version()
+    val scaffolding_contract_version = lib.ffi_client_ffi_uniffi_contract_version()
     if (bindings_contract_version != scaffolding_contract_version) {
         throw RuntimeException("UniFFI contract version mismatch: try cleaning and rebuilding your project")
     }
@@ -1173,91 +1173,91 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_uniffi_bridge_checksum_func_is_valid_provider_base_url() != 63450.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_func_is_valid_provider_base_url() != 58480.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_func_persisted_relays() != 26756.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_func_persisted_relays() != 10018.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_func_persisted_tor_proxy_enabled() != 6597.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled() != 64892.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_func_provider_base_url_error() != 21815.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_func_provider_base_url_error() != 4866.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_connection_view() != 18816.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_connection_view() != 2560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_dispatch() != 24441.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_dispatch() != 23179.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_identity_npub() != 46556.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_identity_npub() != 690.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_machines_view() != 61742.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_machines_view() != 7292.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_outbox_view() != 39167.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_outbox_view() != 16.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_pairing_view() != 59865.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_pairing_view() != 32112.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_pause() != 6384.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_pause() != 63086.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_pending_sessions_view() != 5965.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_pending_sessions_view() != 37142.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_quick_prompts_view() != 24028.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_quick_prompts_view() != 36327.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_resume() != 36642.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_resume() != 44586.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_settings_view() != 30582.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_settings_view() != 2639.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_shutdown() != 57467.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_shutdown() != 15871.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_start() != 2836.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_start() != 11542.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_stop() != 55423.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_stop() != 63056.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_transcript_view() != 23234.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_transcript_view() != 31861.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_core_ui_view() != 59054.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_ui_view() != 57983.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_corelistener_connection_changed() != 48857.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_corelistener_connection_changed() != 62894.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_corelistener_on_event() != 13039.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_corelistener_on_event() != 45035.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_corelistener_action_failed() != 63877.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_corelistener_action_failed() != 34984.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_put() != 61026.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_put() != 23571.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_get() != 38743.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_get() != 61940.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_uniffihttpfetch_set_proxy() != 38239.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy() != 42549.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_notify() != 57158.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_uniffinotifier_notify() != 16604.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_method_uniffinotifier_cancel() != 41559.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_uniffinotifier_cancel() != 23418.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_bridge_checksum_constructor_core_new() != 43449.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 58260.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1819,7 +1819,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
         this(
     uniffiRustCallWithError(CoreInitException) { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_constructor_core_new(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_constructor_core_new(
         FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),FfiConverterString.lower(`dbPath`),FfiConverterOptionalString.lower(`proxy`),FfiConverterBoolean.lower(`tor`),_status)
 }
     )
@@ -1875,7 +1875,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         override fun run() {
             pointer?.let { ptr ->
                 uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_free_core(ptr, status)
+                    UniffiLib.INSTANCE.uniffi_client_ffi_fn_free_core(ptr, status)
                 }
             }
         }
@@ -1883,7 +1883,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
 
     fun uniffiClonePointer(): Pointer {
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_clone_core(pointer!!, status)
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_clone_core(pointer!!, status)
         }
     }
 
@@ -1892,14 +1892,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `connectionView`() : ConnectionView? {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_connection_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_connection_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterOptionalTypeConnectionView.lift(it) },
         // Error FFI converter
@@ -1918,14 +1918,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `dispatch`(`intent`: UniffiIntent) {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_dispatch(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_dispatch(
                 thisPtr,
                 FfiConverterTypeUniffiIntent.lower(`intent`),
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_void(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_void(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_void(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_void(future) },
         // lift function
         { Unit },
         
@@ -1942,7 +1942,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_identity_npub(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_identity_npub(
         it, _status)
 }
     }
@@ -1955,14 +1955,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `machinesView`() : UniffiMachinesView {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_machines_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_machines_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiMachinesView.lift(it) },
         // Error FFI converter
@@ -1975,14 +1975,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `outboxView`() : UniffiOutboxView {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_outbox_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_outbox_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiOutboxView.lift(it) },
         // Error FFI converter
@@ -1995,14 +1995,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `pairingView`() : UniffiPairingView? {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_pairing_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_pairing_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterOptionalTypeUniffiPairingView.lift(it) },
         // Error FFI converter
@@ -2021,7 +2021,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_pause(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_pause(
         it, _status)
 }
     }
@@ -2038,14 +2038,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `pendingSessionsView`() : UniffiPendingSessionsView {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_pending_sessions_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_pending_sessions_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiPendingSessionsView.lift(it) },
         // Error FFI converter
@@ -2058,14 +2058,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `quickPromptsView`() : UniffiQuickPromptsView {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_quick_prompts_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_quick_prompts_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiQuickPromptsView.lift(it) },
         // Error FFI converter
@@ -2080,7 +2080,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_resume(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_resume(
         it, _status)
 }
     }
@@ -2092,14 +2092,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `settingsView`() : UniffiSettingsView? {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_settings_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_settings_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterOptionalTypeUniffiSettingsView.lift(it) },
         // Error FFI converter
@@ -2116,7 +2116,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_shutdown(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_shutdown(
         it, _status)
 }
     }
@@ -2127,7 +2127,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_start(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_start(
         it, _status)
 }
     }
@@ -2138,7 +2138,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_stop(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_stop(
         it, _status)
 }
     }
@@ -2155,14 +2155,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `transcriptView`(`machine`: kotlin.String, `sessionId`: kotlin.String) : UniffiTranscriptRowsView {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_transcript_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_transcript_view(
                 thisPtr,
                 FfiConverterString.lower(`machine`),FfiConverterString.lower(`sessionId`),
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiTranscriptRowsView.lift(it) },
         // Error FFI converter
@@ -2175,14 +2175,14 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     override suspend fun `uiView`() : UniffiUiView {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_core_ui_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_ui_view(
                 thisPtr,
                 
             )
         },
-        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_poll_rust_buffer(future, callback, continuation) },
-        { future, continuation -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_complete_rust_buffer(future, continuation) },
-        { future -> UniffiLib.INSTANCE.ffi_uniffi_bridge_rust_future_free_rust_buffer(future) },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeUniffiUiView.lift(it) },
         // Error FFI converter
@@ -2425,7 +2425,7 @@ open class CoreListenerImpl: Disposable, AutoCloseable, CoreListener {
         override fun run() {
             pointer?.let { ptr ->
                 uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_free_corelistener(ptr, status)
+                    UniffiLib.INSTANCE.uniffi_client_ffi_fn_free_corelistener(ptr, status)
                 }
             }
         }
@@ -2433,7 +2433,7 @@ open class CoreListenerImpl: Disposable, AutoCloseable, CoreListener {
 
     fun uniffiClonePointer(): Pointer {
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_clone_corelistener(pointer!!, status)
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_clone_corelistener(pointer!!, status)
         }
     }
 
@@ -2441,7 +2441,7 @@ open class CoreListenerImpl: Disposable, AutoCloseable, CoreListener {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_corelistener_connection_changed(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_corelistener_connection_changed(
         it, FfiConverterTypeConnectionView.lower(`view`),_status)
 }
     }
@@ -2452,7 +2452,7 @@ open class CoreListenerImpl: Disposable, AutoCloseable, CoreListener {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_corelistener_on_event(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_corelistener_on_event(
         it, FfiConverterTypeCoreEvent.lower(`event`),_status)
 }
     }
@@ -2463,7 +2463,7 @@ open class CoreListenerImpl: Disposable, AutoCloseable, CoreListener {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_corelistener_action_failed(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_corelistener_action_failed(
         it, FfiConverterTypeActionFailedKind.lower(`kind`),_status)
 }
     }
@@ -2565,7 +2565,7 @@ internal object uniffiCallbackInterfaceCoreListener {
     // Registers the foreign callback with the Rust side.
     // This method is generated for each callback interface.
     internal fun register(lib: UniffiLib) {
-        lib.uniffi_uniffi_bridge_fn_init_callback_vtable_corelistener(vtable)
+        lib.uniffi_client_ffi_fn_init_callback_vtable_corelistener(vtable)
     }
 }
 
@@ -2816,7 +2816,7 @@ open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
         override fun run() {
             pointer?.let { ptr ->
                 uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_free_uniffihttpfetch(ptr, status)
+                    UniffiLib.INSTANCE.uniffi_client_ffi_fn_free_uniffihttpfetch(ptr, status)
                 }
             }
         }
@@ -2824,7 +2824,7 @@ open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
 
     fun uniffiClonePointer(): Pointer {
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_clone_uniffihttpfetch(pointer!!, status)
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_clone_uniffihttpfetch(pointer!!, status)
         }
     }
 
@@ -2833,7 +2833,7 @@ open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
             return FfiConverterTypeUniffiHttpResponse.lift(
     callWithPointer {
     uniffiRustCallWithError(UniffiHttpException) { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffihttpfetch_put(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffihttpfetch_put(
         it, FfiConverterString.lower(`url`),FfiConverterSequenceTypeUniffiHttpHeader.lower(`headers`),FfiConverterByteArray.lower(`body`),_status)
 }
     }
@@ -2846,7 +2846,7 @@ open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
             return FfiConverterTypeUniffiHttpResponse.lift(
     callWithPointer {
     uniffiRustCallWithError(UniffiHttpException) { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffihttpfetch_get(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffihttpfetch_get(
         it, FfiConverterString.lower(`url`),_status)
 }
     }
@@ -2869,7 +2869,7 @@ open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffihttpfetch_set_proxy(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffihttpfetch_set_proxy(
         it, FfiConverterOptionalString.lower(`proxy`),_status)
 }
     }
@@ -2952,7 +2952,7 @@ internal object uniffiCallbackInterfaceUniffiHttpFetch {
     // Registers the foreign callback with the Rust side.
     // This method is generated for each callback interface.
     internal fun register(lib: UniffiLib) {
-        lib.uniffi_uniffi_bridge_fn_init_callback_vtable_uniffihttpfetch(vtable)
+        lib.uniffi_client_ffi_fn_init_callback_vtable_uniffihttpfetch(vtable)
     }
 }
 
@@ -3176,7 +3176,7 @@ open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
         override fun run() {
             pointer?.let { ptr ->
                 uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_free_uniffinotifier(ptr, status)
+                    UniffiLib.INSTANCE.uniffi_client_ffi_fn_free_uniffinotifier(ptr, status)
                 }
             }
         }
@@ -3184,7 +3184,7 @@ open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
 
     fun uniffiClonePointer(): Pointer {
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_clone_uniffinotifier(pointer!!, status)
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_clone_uniffinotifier(pointer!!, status)
         }
     }
 
@@ -3192,7 +3192,7 @@ open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffinotifier_notify(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffinotifier_notify(
         it, FfiConverterString.lower(`title`),FfiConverterString.lower(`body`),FfiConverterOptionalString.lower(`tag`),FfiConverterString.lower(`kind`),_status)
 }
     }
@@ -3203,7 +3203,7 @@ open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_method_uniffinotifier_cancel(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffinotifier_cancel(
         it, FfiConverterString.lower(`tag`),_status)
 }
     }
@@ -3264,7 +3264,7 @@ internal object uniffiCallbackInterfaceUniffiNotifier {
     // Registers the foreign callback with the Rust side.
     // This method is generated for each callback interface.
     internal fun register(lib: UniffiLib) {
-        lib.uniffi_uniffi_bridge_fn_init_callback_vtable_uniffinotifier(vtable)
+        lib.uniffi_client_ffi_fn_init_callback_vtable_uniffinotifier(vtable)
     }
 }
 
@@ -7395,7 +7395,7 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
          */ fun `isValidProviderBaseUrl`(`raw`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_is_valid_provider_base_url(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_is_valid_provider_base_url(
         FfiConverterString.lower(`raw`),_status)
 }
     )
@@ -7414,7 +7414,7 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
          */ fun `persistedRelays`(`dbPath`: kotlin.String): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_persisted_relays(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_persisted_relays(
         FfiConverterString.lower(`dbPath`),_status)
 }
     )
@@ -7430,7 +7430,7 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
          */ fun `persistedTorProxyEnabled`(`dbPath`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_persisted_tor_proxy_enabled(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_persisted_tor_proxy_enabled(
         FfiConverterString.lower(`dbPath`),_status)
 }
     )
@@ -7442,7 +7442,7 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
          */ fun `providerBaseUrlError`(): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_uniffi_bridge_fn_func_provider_base_url_error(
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_provider_base_url_error(
         _status)
 }
     )

@@ -43,13 +43,13 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiPairingView
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiPairingView
 
 /** This build's fixed device label — mirrors `apps/mobile/src/ui/label.ts`'s
  *  `PHONE_LABEL`, sent with every `BeginPairing`/`BeginManualPairing`/
@@ -79,18 +79,18 @@ private const val PHONE_LABEL = "Android"
  * phase swap and would drop it.
  *
  * "This phone's npub" asks the live core for its own identity
- * ([CoreBridge.identityNpub] — the core derived it at construction from the
+ * ([CoreHost.identityNpub] — the core derived it at construction from the
  * same secret it holds) so the secret never leaves the FFI layer for a mere
  * display string. Still omitted: the CDX-028 mesh-join banner (Mesh is F6,
  * off by default).
  */
 @Composable
-fun PairingScreen(bridge: CoreBridge, onClose: () -> Unit) {
-    val pairing by bridge.pairing.collectAsState()
+fun PairingScreen(core: CoreHost, onClose: () -> Unit) {
+    val pairing by core.pairing.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun dispatch(intent: UniffiIntent) {
-        scope.launch { bridge.dispatch(intent) }
+        scope.launch { core.dispatch(intent) }
     }
 
     // One-shot fetch — the identity is fixed for the process's life, so it is
@@ -99,7 +99,7 @@ fun PairingScreen(bridge: CoreBridge, onClose: () -> Unit) {
     var selfNpub by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         selfNpub = withContext(Dispatchers.IO) {
-            runCatching { bridge.identityNpub() }.getOrNull()
+            runCatching { core.identityNpub() }.getOrNull()
         }
     }
 

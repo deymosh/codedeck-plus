@@ -9,7 +9,7 @@
  * something to render before boot finishes, and so plain-browser dev / tests
  * without a `NativeCore` still work) and are OVERWRITTEN once at boot by
  * `applyProtocolDefaults`, called from `main.tsx` with `core.defaults()` —
- * the real `ProtocolDefaults` view `corebridge.rs`'s `core_defaults` computes
+ * the real `ProtocolDefaults` view `native_core.rs`'s `core_defaults` computes
  * straight from `protocol::defaults::protocol_defaults()`. Every export here
  * is a `let`, not a `const`: ES module imports are live bindings, so
  * reassigning them inside this module is visible to every already-imported

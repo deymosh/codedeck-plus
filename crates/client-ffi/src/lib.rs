@@ -8,7 +8,7 @@
 //! `Core::spawn` must run inside a `tokio::task::LocalSet` (its internals use
 //! `Rc`/`!Send` closures) — this crate's `Core::new` spins up a dedicated OS
 //! thread with a current-thread runtime + `LocalSet` to host it, exactly the
-//! pattern `apps/mobile/src-tauri/src/corebridge.rs`'s `core_init` already
+//! pattern `apps/mobile/src-tauri/src/native_core.rs`'s `core_init` already
 //! uses for Tauri. The `client_runtime::Core` *handle* it produces is cheap
 //! to clone and `Send` (just an `mpsc::UnboundedSender`), so every exported
 //! method below can be called from any thread without hopping onto that one.
@@ -268,7 +268,7 @@ impl Core {
         notifier: Arc<dyn UniffiNotifier>,
         http: Option<Arc<dyn UniffiHttpFetch>>,
         // Absolute path to the app's SQLite file — Kotlin resolves this via
-        // `Context.getDatabasePath`, same role as `corebridge.rs`'s
+        // `Context.getDatabasePath`, same role as `native_core.rs`'s
         // `AppHandle::path().app_config_dir()`. Opened on the dedicated core
         // thread below (`rusqlite::Connection` isn't `Send`), not here.
         db_path: String,

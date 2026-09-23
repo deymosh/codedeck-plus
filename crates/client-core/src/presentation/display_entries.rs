@@ -33,7 +33,7 @@ use protocol::common::{OutputEntry, OutputEntryType};
 use serde::Serialize;
 
 // `Serialize` (F3.3): these cross the UniFFI boundary as one JSON blob per
-// session (`crates/uniffi-bridge`'s `UniffiTranscriptRowsView.display_entries_json`)
+// session (`crates/client-ffi`'s `UniffiTranscriptRowsView.display_entries_json`)
 // rather than as a UniFFI `Record` — `OutputEntry.metadata` is arbitrary
 // `serde_json::Value`, which `#[derive(uniffi::Record)]` cannot express, so
 // the whole grouped list rides as JSON the same way an individual row's

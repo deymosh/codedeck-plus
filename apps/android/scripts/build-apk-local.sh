@@ -58,15 +58,15 @@ ndk_clang_target_of() {
 }
 
 echo "==> Regenerating the UniFFI Kotlin bindings (host target)"
-cargo build --locked -p uniffi-bridge --lib
-cargo run --locked -p uniffi-bridge --bin uniffi-bindgen -- \
-  generate --library target/debug/libuniffi_bridge.so --language kotlin \
+cargo build --locked -p client-ffi --lib
+cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
+  generate --library target/debug/libclient_ffi.so --language kotlin \
   --out-dir /tmp/uniffi-kotlin-out-$$
 rm -rf apps/android/app/src/main/java/uniffi
 cp -r "/tmp/uniffi-kotlin-out-$$/uniffi" apps/android/app/src/main/java/uniffi
 rm -rf "/tmp/uniffi-kotlin-out-$$"
 
-echo "==> Cross-compiling crates/uniffi-bridge for: ${TARGETS[*]}"
+echo "==> Cross-compiling crates/client-ffi for: ${TARGETS[*]}"
 for target in "${TARGETS[@]}"; do
   abi="$(abi_of "$target")"
   clang_target="$(ndk_clang_target_of "$target")"
@@ -75,9 +75,9 @@ for target in "${TARGETS[@]}"; do
     "CC_${target//-/_}=${NDK_TOOLCHAIN}/bin/${clang_target}26-clang" \
     "AR_${target//-/_}=${NDK_TOOLCHAIN}/bin/llvm-ar" \
     "CARGO_TARGET_${env_upper}_LINKER=${NDK_TOOLCHAIN}/bin/${clang_target}26-clang" \
-    cargo build --locked -p uniffi-bridge --lib --target "$target" --release
+    cargo build --locked -p client-ffi --lib --target "$target" --release
   mkdir -p "apps/android/app/src/main/jniLibs/$abi"
-  cp "target/$target/release/libuniffi_bridge.so" "apps/android/app/src/main/jniLibs/$abi/libuniffi_bridge.so"
+  cp "target/$target/release/libclient_ffi.so" "apps/android/app/src/main/jniLibs/$abi/libclient_ffi.so"
 done
 
 echo "==> Building the debug APK (Gradle)"

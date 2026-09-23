@@ -22,27 +22,27 @@ import uniffi.client_runtime.ActionFailedKind
 import uniffi.client_runtime.ConnectionView
 import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
-import uniffi.uniffi_bridge.Core
-import uniffi.uniffi_bridge.CoreListener
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiMachinesView
-import uniffi.uniffi_bridge.UniffiNotifier
-import uniffi.uniffi_bridge.UniffiOutboxView
-import uniffi.uniffi_bridge.UniffiPairingView
-import uniffi.uniffi_bridge.UniffiPendingSessionsView
-import uniffi.uniffi_bridge.UniffiQuickPromptsView
-import uniffi.uniffi_bridge.UniffiSettingsView
-import uniffi.uniffi_bridge.UniffiTranscriptRowsView
-import uniffi.uniffi_bridge.UniffiUiView
+import uniffi.client_ffi.Core
+import uniffi.client_ffi.CoreListener
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiMachinesView
+import uniffi.client_ffi.UniffiNotifier
+import uniffi.client_ffi.UniffiOutboxView
+import uniffi.client_ffi.UniffiPairingView
+import uniffi.client_ffi.UniffiPendingSessionsView
+import uniffi.client_ffi.UniffiQuickPromptsView
+import uniffi.client_ffi.UniffiSettingsView
+import uniffi.client_ffi.UniffiTranscriptRowsView
+import uniffi.client_ffi.UniffiUiView
 
 /**
  * The Kotlin-side counterpart to `apps/mobile/src/core/nativeCore.ts` and
- * `apps/mobile/src-tauri/src/corebridge.rs`'s `TauriObserver`: owns the
+ * `apps/mobile/src-tauri/src/native_core.rs`'s `TauriObserver`: owns the
  * generated `Core` object, implements the generated `CoreListener` callback
  * interface, and republishes each callback as a `StateFlow`/`Flow` a
  * Composable can collect. Nothing here understands the wire protocol, a
  * session, or a transcript — that is entirely `crates/client-runtime` and
- * `crates/uniffi-bridge`'s job on the other side of the FFI boundary.
+ * `crates/client-ffi`'s job on the other side of the FFI boundary.
  *
  * `CoreListener`'s callbacks are plain (non-`suspend`) Kotlin functions
  * invoked from the core's own background thread — refreshing a `*View` needs
@@ -51,7 +51,7 @@ import uniffi.uniffi_bridge.UniffiUiView
  * shape `MainActivity.kt`'s `MainViewModel` already uses `viewModelScope`
  * for.
  */
-class CoreBridge(
+class CoreHost(
     relays: List<String>,
     identitySecretHex: String,
     notifier: UniffiNotifier,
@@ -85,7 +85,7 @@ class CoreBridge(
     val machines: StateFlow<UniffiMachinesView?> = _machines.asStateFlow()
 
     /** Selection + optimistic card-response bookkeeping — see
-     *  `crates/uniffi-bridge/src/views.rs`'s doc comment for why this is a
+     *  `crates/client-ffi/src/views.rs`'s doc comment for why this is a
      *  narrowed projection rather than the real (much larger) `UiView`. */
     private val _ui = MutableStateFlow<UniffiUiView?>(null)
     val ui: StateFlow<UniffiUiView?> = _ui.asStateFlow()

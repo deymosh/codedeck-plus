@@ -24,7 +24,7 @@ marmot = ["client-core/marmot"]
 # derive is all-or-nothing for the whole enum, and several variants carry
 # `protocol` wire payloads (e.g. `SendSessionImage`) that would need their own
 # derive rollout disproportionate to what F3's first slice actually needs;
-# `crates/uniffi-bridge` instead hand-maps a small, growing `UniffiIntent`
+# `crates/client-ffi` instead hand-maps a small, growing `UniffiIntent`
 # subset onto the real `Intent` — a disclosed, deliberate narrowing from "no
 # DTO duplication", not an oversight. Off by default: derive-only, but still
 # a real optional dependency, unlike the always-on `specta` above.
@@ -39,14 +39,14 @@ serde = "1"
 serde_json = "1"
 # Facade only, zero-cost with no backend installed — every binding (Tauri,
 # UniFFI/Android) wires its own backend onto these same call sites; see
-# `crates/uniffi-bridge/src/android_log.rs` for the Android one.
+# `crates/client-ffi/src/android_log.rs` for the Android one.
 log = "0.4"
 # TS bindings are generated from these types, not hand-mirrored — see protocol's Cargo.toml.
 specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
 specta-typescript = "0.0.12"
 # Derive macros only here (`uniffi::Enum`/`uniffi::Record`) — the
 # `#[uniffi::export(async_runtime = "tokio")]` surface itself lives in
-# `crates/uniffi-bridge`, which pulls in uniffi's "tokio" feature on its own.
+# `crates/client-ffi`, which pulls in uniffi's "tokio" feature on its own.
 # Version matches spike/uniffi-binding-probe's validated 0.28.
 uniffi = { version = "0.28", optional = true }
 

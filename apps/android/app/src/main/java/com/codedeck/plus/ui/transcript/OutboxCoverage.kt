@@ -1,6 +1,6 @@
 package com.codedeck.plus.ui.transcript
 
-import uniffi.uniffi_bridge.UniffiOutboxItem
+import uniffi.client_ffi.UniffiOutboxItem
 
 /**
  * Port of `apps/mobile/src/ui/transcript/outboxCoverage.ts` (CDX-063): an

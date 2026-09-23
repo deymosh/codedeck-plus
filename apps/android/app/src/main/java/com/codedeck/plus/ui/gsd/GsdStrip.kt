@@ -31,14 +31,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.theme.Tokens
 import java.util.UUID
 import kotlinx.coroutines.launch
-import uniffi.uniffi_bridge.UniffiGsdAction
-import uniffi.uniffi_bridge.UniffiGsdPhase
-import uniffi.uniffi_bridge.UniffiGsdState
-import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.client_ffi.UniffiGsdAction
+import uniffi.client_ffi.UniffiGsdPhase
+import uniffi.client_ffi.UniffiGsdState
+import uniffi.client_ffi.UniffiIntent
 import kotlin.math.roundToLong
 
 /**
@@ -62,7 +62,7 @@ import kotlin.math.roundToLong
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GsdStrip(
-    bridge: CoreBridge,
+    core: CoreHost,
     machine: String,
     sessionId: String,
     gsd: UniffiGsdState?,
@@ -71,14 +71,14 @@ fun GsdStrip(
 ) {
     val scope = rememberCoroutineScope()
     fun dispatch(intent: UniffiIntent) {
-        scope.launch { bridge.dispatch(intent) }
+        scope.launch { core.dispatch(intent) }
     }
 
     // One request on mount, per session — gating this on already-having state
     // meant neither side ever initiated and the strip could never render.
     // Also refreshes stored state from a prior run.
     LaunchedEffect(machine, sessionId) {
-        bridge.dispatch(UniffiIntent.RequestGsd(machine = machine, sessionId = sessionId))
+        core.dispatch(UniffiIntent.RequestGsd(machine = machine, sessionId = sessionId))
     }
 
     if (gsd == null || !gsd.available) return

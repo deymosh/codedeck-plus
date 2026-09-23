@@ -25,15 +25,15 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiMachineSummary
-import uniffi.uniffi_bridge.UniffiProviderModelWrite
-import uniffi.uniffi_bridge.UniffiProviderProfileAck
-import uniffi.uniffi_bridge.UniffiProviderProfileInfo
-import uniffi.uniffi_bridge.UniffiProviderProfileWrite
-import uniffi.uniffi_bridge.UniffiTristate
-import uniffi.uniffi_bridge.isValidProviderBaseUrl
-import uniffi.uniffi_bridge.providerBaseUrlError
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiProviderModelWrite
+import uniffi.client_ffi.UniffiProviderProfileAck
+import uniffi.client_ffi.UniffiProviderProfileInfo
+import uniffi.client_ffi.UniffiProviderProfileWrite
+import uniffi.client_ffi.UniffiTristate
+import uniffi.client_ffi.isValidProviderBaseUrl
+import uniffi.client_ffi.providerBaseUrlError
 
 /** Draft row of the models editor ('' label = omit on the wire). */
 private data class ModelRow(val id: String, val label: String)

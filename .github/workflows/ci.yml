@@ -172,7 +172,7 @@ jobs:
   # + the UniFFI Kotlin bindings drift check. Path-filtered like the cargo job
   # above, and for the same reason `core` (crates/**) is included there: a
   # client-runtime/client-core change behind the `uniffi` feature can change
-  # what uniffi-bindgen generates without touching crates/uniffi-bridge or
+  # what uniffi-bindgen generates without touching crates/client-ffi or
   # apps/android directly.
   android:
     name: Android (Gradle + Paparazzi + UniFFI bindings)
@@ -181,14 +181,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Detect Android/uniffi-bridge changes
+      - name: Detect Android/client-ffi changes
         id: filter
         uses: dorny/paths-filter@v4
         with:
           filters: |
             android:
               - 'apps/android/**'
-              - 'crates/uniffi-bridge/**'
+              - 'crates/client-ffi/**'
             core:
               - 'crates/**'
               - 'Cargo.toml'
@@ -223,16 +223,16 @@ jobs:
           echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             --install "platforms;android-37.2" "build-tools;37.0.0" >/dev/null
 
-      # crates/uniffi-bridge/src/lib.rs's own doc comment: the Kotlin binding
+      # crates/client-ffi/src/lib.rs's own doc comment: the Kotlin binding
       # surface is a build artifact of uniffi-bindgen's library-mode
       # generation, never hand-edited. Same shape as the TS bindings drift
       # check above — mirrors `./codedeck gen-android-bindings` exactly.
       - name: UniFFI Kotlin bindings drift check
         if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
         run: |
-          cargo build --locked -p uniffi-bridge --lib
-          cargo run --locked -p uniffi-bridge --bin uniffi-bindgen -- \
-            generate --library target/debug/libuniffi_bridge.so --language kotlin \
+          cargo build --locked -p client-ffi --lib
+          cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
+            generate --library target/debug/libclient_ffi.so --language kotlin \
             --out-dir /tmp/uniffi-kotlin-out
           rm -rf apps/android/app/src/main/java/uniffi
           cp -r /tmp/uniffi-kotlin-out/uniffi apps/android/app/src/main/java/uniffi
@@ -246,6 +246,6 @@ jobs:
         working-directory: apps/android
         run: ./gradlew testDebugUnitTest verifyPaparazziDebug --console=plain
 
-      - name: No Android/uniffi-bridge changes — skipped
+      - name: No Android/client-ffi changes — skipped
         if: steps.filter.outputs.android != 'true' && steps.filter.outputs.core != 'true'
-        run: echo "no Android/uniffi-bridge changes; android job skipped."
+        run: echo "no Android/client-ffi changes; android job skipped."

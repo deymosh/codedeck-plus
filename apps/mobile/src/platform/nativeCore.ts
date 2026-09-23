@@ -81,7 +81,7 @@ export interface NativeCore {
    * Fires on Android resume / desktop focus — "the OS may have frozen us".
    * `hydrateFromCore` uses this to re-pull a fresh snapshot on top of the
    * live-update listener: Tauri's `emit` has no buffering or retry
-   * (`corebridge.rs`'s `TauriObserver` discards every emit result), and
+   * (`native_core.rs`'s `TauriObserver` discards every emit result), and
    * Android can suspend a backgrounded WebView's JS execution for long
    * enough that a push racing that window is silently lost — not just at
    * boot (the listener-registration race `hydrateFromCore` already closes),

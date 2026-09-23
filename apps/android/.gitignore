@@ -16,7 +16,7 @@ local.properties
 key.properties
 keystore.properties
 
-# crates/uniffi-bridge's compiled .so, cross-compiled per ABI by
+# crates/client-ffi's compiled .so, cross-compiled per ABI by
 # docker/build-apk.sh / scripts/build-apk-local.sh — a build artifact, never
 # committed (unlike app/src/main/java/uniffi/**, which IS committed: that's
 # generated SOURCE, checked in the same way nativeCoreTypes.generated.ts is).

@@ -18,10 +18,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.codedeck.plus.core.CoreBridge
+import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
-import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.client_ffi.UniffiIntent
 
 /**
  * The bottom "Deleted X — Undo" toast after an optimistic session delete —
@@ -35,8 +35,8 @@ import uniffi.uniffi_bridge.UniffiIntent
  * nothing — no empty overlay is laid out to intercept touches.
  */
 @Composable
-fun UndoToast(bridge: CoreBridge, modifier: Modifier = Modifier) {
-    val ui by bridge.ui.collectAsState()
+fun UndoToast(core: CoreHost, modifier: Modifier = Modifier) {
+    val ui by core.ui.collectAsState()
     val toast = ui?.undoToast ?: return
     val scope = rememberCoroutineScope()
 
@@ -65,7 +65,7 @@ fun UndoToast(bridge: CoreBridge, modifier: Modifier = Modifier) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
                 .clickable {
-                    scope.launch { bridge.dispatch(UniffiIntent.UndoDelete) }
+                    scope.launch { core.dispatch(UniffiIntent.UndoDelete) }
                 }
                 .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
         )

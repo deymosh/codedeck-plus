@@ -13,7 +13,7 @@
 
 // UniFFI's `#[derive(uniffi::Record)]`/`uniffi::Enum` need a `UniFfiTag` in
 // THIS crate regardless of the fact that the actual `#[uniffi::export]`
-// surface lives in `crates/uniffi-bridge`, not here — a "types" crate with no
+// surface lives in `crates/client-ffi`, not here — a "types" crate with no
 // exported functions of its own still needs its own scaffolding call so its
 // derived types are referenceable from the crate that does the exporting.
 #[cfg(feature = "uniffi")]

@@ -9,14 +9,14 @@ import kotlinx.serialization.json.JsonObject
  * Kotlin mirror of `crates/client-core/src/presentation/display_entries.rs`'s
  * `DisplayEntry` and the `OutputEntry`/`SeqEntry`/`QuestionSpecView`/
  * `PendingPermissionSummary` types it carries — the exact JSON shape
- * `crates/uniffi-bridge/src/views.rs`'s `build_uniffi_transcript_view`
+ * `crates/client-ffi/src/views.rs`'s `build_uniffi_transcript_view`
  * crosses as `UniffiTranscriptRowsView.displayEntriesJson`/
  * `pendingPermissionJson`. The grouping ALGORITHM lives only in Rust (see
  * that file's own doc comment for why it was already ported there but
  * unwired until F3.3) — this file is a decode target, not a second
  * implementation: it defines the shape and parses it, nothing more.
  *
- * `crates/uniffi-bridge/fixtures/display_entries_corpus.json` is the same
+ * `crates/client-ffi/fixtures/display_entries_corpus.json` is the same
  * fixture both sides verify against — `DisplayEntriesFixtureTest` decodes it
  * here, `display_entries_corpus.rs`'s `matches_the_committed_fixture` test
  * asserts the real Rust serializer still produces it. A shape change on

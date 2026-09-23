@@ -24,9 +24,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # support, and it's `native-core`-gated too. `client-runtime/marmot` unlocks
 # `MarmotEngineImpl` (the same MDK/MLS engine `client-core`'s own `marmot`
 # feature below already compiles in for the WebView path's Tauri commands) so
-# `corebridge.rs` can wire a real Marmot port instead of `NoMarmot`.
+# `native_core.rs` can wire a real Marmot port instead of `NoMarmot`.
 # `dep:specta`/`dep:tauri-specta` gate this crate's OWN use of them
-# (tests/gen_ts_bindings.rs, corebridge.rs's ConnectionPayload/InitConfig
+# (tests/gen_ts_bindings.rs, native_core.rs's ConnectionPayload/InitConfig
 # derives) — `protocol`/`client-core` depend on plain `specta` unconditionally
 # (see their own Cargo.toml comments) since it's their derive macro deriving
 # a dead `fn definition()` nothing calls without `native-core`'s
@@ -105,7 +105,7 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"], 
 # `#[tauri::command]` wrapper. `nostr` stays a direct dep — the command layer
 # uses its types in its signatures.
 client-core = { path = "../../../crates/client-core", features = ["marmot"] }
-# `core_defaults` (corebridge.rs) reads straight from the wire-contract crate
+# `core_defaults` (native_core.rs) reads straight from the wire-contract crate
 # — already an unconditional transitive dep via client-core above, so this
 # adds nothing to any build's actual compile graph.
 protocol = { path = "../../../crates/protocol" }

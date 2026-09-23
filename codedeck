@@ -56,7 +56,7 @@ Protocol bindings (run in a throwaway Rust container):
                            View/Intent/CoreEvent types (source of truth —
                            see gen_ts_bindings.rs). CI fails if this drifts.
   gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
-                           from crates/uniffi-bridge via uniffi-bindgen
+                           from crates/client-ffi via uniffi-bindgen
                            (source of truth — see that crate's own doc
                            comment). CI fails if this drifts.
 
@@ -263,7 +263,7 @@ EOF
 
 
 # --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
-# crates/uniffi-bridge/src/lib.rs's own doc comment — the Kotlin binding
+# crates/client-ffi/src/lib.rs's own doc comment — the Kotlin binding
 # surface is a build artifact of `uniffi-bindgen`'s library-mode generation,
 # never hand-edited). Same shape as cmd_gen_protocol_types: builds the cdylib
 # for the HOST target (the generated Kotlin source is architecture-
@@ -281,11 +281,11 @@ cmd_gen_android_bindings() {
     -v codedeck-uniffi-target:/repo/target
 
   pack_repo_into "$name" /repo crates packages/protocol/fixtures Cargo.toml Cargo.lock
-  echo "==> Building crates/uniffi-bridge (host target)"
-  dexec -w /repo "$name" cargo build --locked -p uniffi-bridge --lib
+  echo "==> Building crates/client-ffi (host target)"
+  dexec -w /repo "$name" cargo build --locked -p client-ffi --lib
   echo "==> Running uniffi-bindgen (Kotlin, library mode)"
-  dexec -w /repo "$name" cargo run --locked -p uniffi-bridge --bin uniffi-bindgen -- \
-    generate --library target/debug/libuniffi_bridge.so --language kotlin \
+  dexec -w /repo "$name" cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
+    generate --library target/debug/libclient_ffi.so --language kotlin \
     --out-dir /tmp/uniffi-kotlin-out
 
   local dest="apps/android/app/src/main/java/uniffi"

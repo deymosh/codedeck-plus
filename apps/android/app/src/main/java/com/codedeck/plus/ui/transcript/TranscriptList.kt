@@ -37,8 +37,8 @@ import com.codedeck.plus.ui.transcript.rows.SyncGapRow
 import com.codedeck.plus.ui.transcript.rows.SystemRow
 import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
 import com.codedeck.plus.ui.transcript.rows.UserMessageRow
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiOutboxItem
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiOutboxItem
 
 /**
  * The virtualized transcript — port of `TranscriptView.tsx`. `LazyColumn` +

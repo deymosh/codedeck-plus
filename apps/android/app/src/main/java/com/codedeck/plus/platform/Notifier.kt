@@ -13,7 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.codedeck.plus.R
-import uniffi.uniffi_bridge.UniffiNotifier
+import uniffi.client_ffi.UniffiNotifier
 
 private const val CODEDECK_SCHEME = "codedeck"
 private const val SESSION_HOST = "session"
@@ -53,7 +53,7 @@ internal fun channelFor(kind: String): ChannelSpec = when (kind) {
 }
 
 /**
- * The Kotlin side of the `Notifier` port (`crates/uniffi-bridge/src/notifier.rs`)
+ * The Kotlin side of the `Notifier` port (`crates/client-ffi/src/notifier.rs`)
  * — the real core decides WHEN to notify (`notifications`/
  * `notificationsCoordinator`, already ported); this class only posts/cancels
  * the actual Android notification when told to. `tag` is the same

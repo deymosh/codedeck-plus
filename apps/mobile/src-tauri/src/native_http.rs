@@ -1,7 +1,7 @@
 //! F2b: real HTTP for the in-process `client_runtime::Core`'s `HttpFetch`
 //! port (Blossom image upload/download — `crates/client-runtime/src/
 //! attachments.rs`), replacing the `NoHttpFetch` default that failed every
-//! request. Behind `native-core`, same as `corebridge.rs`.
+//! request. Behind `native-core`, same as `native_core.rs`.
 //!
 //! Reuses `tauri-plugin-http`'s OWN `reqwest` (re-exported as
 //! `tauri_plugin_http::reqwest`) rather than adding a second HTTP stack to

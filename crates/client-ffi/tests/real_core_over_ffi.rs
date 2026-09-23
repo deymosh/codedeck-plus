@@ -5,7 +5,7 @@
 //! the eventual Kotlin `suspend fun`), observe (the foreign `CoreListener`
 //! callback), and a clean shutdown (thread actually joins, no leak).
 //!
-//! These tests call `uniffi_bridge::Core` directly (Rust to Rust, no JNI) —
+//! These tests call `client_ffi::Core` directly (Rust to Rust, no JNI) —
 //! that already exercises 100% of the logic Kotlin will drive, since UniFFI's
 //! generated Kotlin is a thin, mechanical trampoline onto exactly these
 //! `#[uniffi::export]` functions. What it does NOT exercise is UniFFI's own
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use client_runtime::{ActionFailedKind, ConnectionView, CoreEvent};
-use uniffi_bridge::{Core, CoreListener, UniffiIntent, UniffiNotifier};
+use client_ffi::{Core, CoreListener, UniffiIntent, UniffiNotifier};
 
 #[derive(Default)]
 struct RecordingListener {

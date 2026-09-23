@@ -12,7 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
-import uniffi.uniffi_bridge.UniffiIntent
+import uniffi.client_ffi.UniffiIntent
 
 /**
  * v10 handles plan approval via the keypress command (`context:

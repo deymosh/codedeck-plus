@@ -17,9 +17,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.codedeck.plus.ui.theme.Tokens
-import uniffi.uniffi_bridge.UniffiCredentialsAck
-import uniffi.uniffi_bridge.UniffiIntent
-import uniffi.uniffi_bridge.UniffiTristate
+import uniffi.client_ffi.UniffiCredentialsAck
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiTristate
 
 /**
  * Machine credentials (CDX-011) — port of `apps/mobile/src/ui/screens/
@@ -31,10 +31,10 @@ import uniffi.uniffi_bridge.UniffiTristate
  * never echoed back over the wire.
  *
  * `saving` is a local optimistic stamp, not a round trip through
- * `CoreBridge`: it mirrors `apps/mobile/src/core/stores/nativeUi.ts`'s
+ * `CoreHost`: it mirrors `apps/mobile/src/core/stores/nativeUi.ts`'s
  * `noteCredentialsSent` (a plain client-side "saving" marker), cleared once
  * [status] next changes — the real ack arrives through the existing
- * `CoreBridge.ui` `StateFlow` on the following `UiView` refresh.
+ * `CoreHost.ui` `StateFlow` on the following `UiView` refresh.
  */
 @Composable
 fun MachineCredentials(machinePubkey: String, status: UniffiCredentialsAck?, dispatch: (UniffiIntent) -> Unit) {

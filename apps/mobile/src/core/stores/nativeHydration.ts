@@ -11,7 +11,7 @@
  * listener finishes attaching is lost for good.
  *
  * On an ordinary app reopen against an already-connected, already-populated
- * core (the singleton `CoreBridge` — built once in `lib.rs`'s `run()` — is
+ * core (the singleton `CoreHost` — built once in `lib.rs`'s `run()` — is
  * designed to outlive a WebView reload, and `core_init` is explicitly
  * idempotent), nothing is about to transition again soon. That makes the
  * one-shot snapshot fetch the ONLY chance to observe the real state — firing
@@ -26,7 +26,7 @@
  * and the fetch that follows reads whatever is true at that instant — no
  * version/generation counter needed.
  *
- * It does not close a second, ongoing one: `corebridge.rs`'s `TauriObserver`
+ * It does not close a second, ongoing one: `native_core.rs`'s `TauriObserver`
  * discards every `app.emit(...)` result (`let _ = ...`), and Android can
  * suspend a backgrounded WebView's JS execution for long enough that a push
  * racing that window is silently dropped — mid-session, not just at boot,
