@@ -4,12 +4,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -86,6 +89,7 @@ private fun QuestionAnswerBody(
             val on = selected.contains(i)
             Row(
                 Modifier
+                    .minimumInteractiveComponentSize()
                     .fillMaxWidth()
                     .padding(top = Tokens.Space1)
                     .clip(RoundedCornerShape(Tokens.RadiusSm))
@@ -103,7 +107,8 @@ private fun QuestionAnswerBody(
         }
         ActionChip(
             if (selected.isNotEmpty()) "Send (${selected.size})" else "Send",
-            Tokens.Text,
+            // Dimmed until something is selected — the tap does nothing then.
+            if (selected.isNotEmpty()) Tokens.Text else Tokens.TextDim,
             modifier = Modifier.padding(top = Tokens.Space2),
         ) {
             if (selected.isNotEmpty()) onTextAnswer(selected.sorted().joinToString(", ") { options[it].label })
@@ -115,6 +120,7 @@ private fun QuestionAnswerBody(
         options.forEachIndexed { i, opt ->
             Row(
                 Modifier
+                    .minimumInteractiveComponentSize()
                     .fillMaxWidth()
                     .padding(top = Tokens.Space1)
                     .clip(RoundedCornerShape(Tokens.RadiusSm))
@@ -195,6 +201,7 @@ fun QuestionCard(
  * `respondedCards` the same way `apps/mobile`'s old client-only
  * `uiStore.markCardResponded` did before that store moved into Rust.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuestionGroupCard(
     item: DisplayEntry.QuestionGroup,
@@ -226,7 +233,8 @@ fun QuestionGroupCard(
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusMd)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+        // Wraps: one plain Row clipped the trailing headers of a larger group.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
             item.questions.forEachIndexed { i, q ->
                 val done = i in answeredSet
                 val isActive = i == firstUnanswered

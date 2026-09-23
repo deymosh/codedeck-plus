@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -232,6 +233,7 @@ private fun GsdChip(label: String, recovery: Boolean, enabled: Boolean, onClick:
         fontSize = Tokens.TextXs,
         maxLines = 1,
         modifier = Modifier
+            .minimumInteractiveComponentSize()
             .clip(RoundedCornerShape(Tokens.RadiusPill))
             .border(1.dp, borderColor, RoundedCornerShape(Tokens.RadiusPill))
             .background(Tokens.Surface)

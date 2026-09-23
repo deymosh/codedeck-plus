@@ -94,8 +94,9 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
     LaunchedEffect(machine.pubkeyHex) {
         dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
     }
-    LaunchedEffect(status) { if (status != null) saving = false }
 
+    /** A save of the open form is waiting for the bridge's ack. */
+    var awaitingSave by remember(machine.pubkeyHex) { mutableStateOf(false) }
     val editingProfile = editingId?.let { id -> profiles.find { it.id == id } }
     val validModels = models.filter { it.id.trim().isNotEmpty() }
     val trimmedBaseUrl = baseUrl.trim()
@@ -111,6 +112,18 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
         clearToken = false
         models = listOf(EMPTY_ROW)
         defaultModel = ""
+    }
+
+    LaunchedEffect(status) {
+        if (status == null) return@LaunchedEffect
+        saving = false
+        if (awaitingSave && status.state != "saving") {
+            awaitingSave = false
+            if (status.state == "saved") {
+                formOpen = false
+                resetForm()
+            }
+        }
     }
 
     fun openAdd() {
@@ -161,10 +174,12 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                 ),
             ),
         )
+        // The secret leaves component state at once; the rest of the form
+        // stays open until the bridge confirms, so a failed save can be
+        // corrected and retried instead of retyped (see LaunchedEffect(status)).
         token = ""
         clearToken = false
-        formOpen = false
-        resetForm()
+        awaitingSave = true
     }
 
     fun deleteProfile(profileId: String) {

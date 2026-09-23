@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -154,6 +155,7 @@ private fun PairingBody(
                         contentDescription = "Close",
                         tint = Tokens.TextMuted,
                         modifier = Modifier
+                            .minimumInteractiveComponentSize()
                             .clip(RoundedCornerShape(Tokens.RadiusSm))
                             .clickable(onClick = onClose)
                             .padding(Tokens.Space2)
@@ -248,6 +250,7 @@ private fun StagedConfirm(
             color = Tokens.TextMuted,
             fontSize = Tokens.TextSm,
             modifier = Modifier
+                .minimumInteractiveComponentSize()
                 .clickable { dispatch(UniffiIntent.DismissStagedPairing) }
                 .padding(Tokens.Space2),
         )
@@ -267,6 +270,7 @@ private fun AwaitingAck(machine: String?, dispatch: (UniffiIntent) -> Unit) {
             color = Tokens.TextMuted,
             fontSize = Tokens.TextSm,
             modifier = Modifier
+                .minimumInteractiveComponentSize()
                 .clickable { dispatch(UniffiIntent.ResetPairing) }
                 .padding(Tokens.Space2),
         )
@@ -374,6 +378,7 @@ private fun PairingForm(
                         contentDescription = "Copy npub",
                         tint = Tokens.TextMuted,
                         modifier = Modifier
+                            .minimumInteractiveComponentSize()
                             .clickable {
                                 val clipData = ClipData.newPlainText("npub", npub)
                                 scope.launch {

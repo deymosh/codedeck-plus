@@ -2,16 +2,20 @@ package com.codedeck.plus.ui.transcript.rows
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DiffLine
 import com.codedeck.plus.ui.transcript.OutputEntry
@@ -58,26 +62,41 @@ fun DiffRow(entry: OutputEntry, expanded: Boolean, onToggle: () -> Unit) {
     ) {
         if (diff.path.isNotEmpty()) {
             Row {
-                Text(diff.path, color = Tokens.TextMuted, fontFamily = Tokens.FontMono, fontSize = Tokens.TextXs)
+                Text(
+                    diff.path,
+                    color = Tokens.TextMuted,
+                    fontFamily = Tokens.FontMono,
+                    fontSize = Tokens.TextXs,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
                 if (diff.truncated == true) {
                     Text(" (truncated)", color = Tokens.TextDim, fontFamily = Tokens.FontMono, fontSize = Tokens.TextXs)
                 }
             }
         }
-        visible.forEach { line: DiffLine ->
-            Text(
-                linePrefix(line.type) + line.text,
-                color = lineColor(line.type),
-                fontFamily = Tokens.FontMono,
-                fontSize = Tokens.TextXs,
-            )
+        // Lines never wrap — a wrapped code line breaks the +/- column and the
+        // indentation — so the block scrolls sideways instead, as one unit.
+        Column(Modifier.horizontalScroll(rememberScrollState())) {
+            visible.forEach { line: DiffLine ->
+                Text(
+                    linePrefix(line.type) + line.text,
+                    color = lineColor(line.type),
+                    fontFamily = Tokens.FontMono,
+                    fontSize = Tokens.TextXs,
+                    softWrap = false,
+                )
+            }
         }
         if (overflow > 0) {
             Text(
                 if (expanded) "Show less" else "$overflow more line${if (overflow != 1) "s" else ""}",
                 color = Tokens.TextMuted,
                 fontSize = Tokens.TextXs,
-                modifier = Modifier.clickable(onClick = onToggle).padding(top = Tokens.Space1),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .clickable(onClick = onToggle),
             )
         }
     }

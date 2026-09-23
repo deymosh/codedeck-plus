@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -47,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import com.codedeck.plus.core.CoreHost
@@ -118,6 +120,7 @@ fun Sidebar(
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                 Box(
                     Modifier
+                        .minimumInteractiveComponentSize()
                         .clip(RoundedCornerShape(Tokens.RadiusSm))
                         .background(Tokens.SurfaceRaised)
                         .clickable(onClick = onOpenPairing)
@@ -132,6 +135,7 @@ fun Sidebar(
                 }
                 Box(
                     Modifier
+                        .minimumInteractiveComponentSize()
                         .clip(RoundedCornerShape(Tokens.RadiusSm))
                         .background(Tokens.SurfaceRaised)
                         .clickable(onClick = onOpenSettings)
@@ -346,6 +350,7 @@ private fun MachineHeader(machine: UniffiMachineSummary, connectionStatus: Strin
         }
         Box(
             Modifier
+                .minimumInteractiveComponentSize()
                 .clip(RoundedCornerShape(Tokens.RadiusSm))
                 .background(Tokens.SurfaceRaised)
                 .clickable(onClick = onNewSession)
@@ -476,9 +481,19 @@ private fun SessionCard(
                 session.title ?: session.slug.ifBlank { session.id.take(8) },
                 color = Tokens.Text,
                 fontSize = Tokens.TextMd,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                Text(session.project.ifBlank { session.cwd }, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+                // One line, so a long cwd fallback cannot balloon the card.
+                Text(
+                    session.project.ifBlank { session.cwd },
+                    color = Tokens.TextMuted,
+                    fontSize = Tokens.TextXs,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
                 if (session.presence != "live") {
                     Text("· ${session.presence}", color = Tokens.TextDim, fontSize = Tokens.TextXs)
                 }
@@ -605,6 +620,7 @@ private fun PendingSessionCard(
                 color = Tokens.Text,
                 fontSize = Tokens.TextSm,
                 modifier = Modifier
+                    .minimumInteractiveComponentSize()
                     .clip(RoundedCornerShape(Tokens.RadiusSm))
                     .background(Tokens.SurfaceRaised)
                     .clickable { onDismiss(pending.pendingId) }

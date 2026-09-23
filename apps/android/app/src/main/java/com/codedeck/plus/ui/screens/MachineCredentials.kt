@@ -42,6 +42,8 @@ fun MachineCredentials(machinePubkey: String, status: UniffiCredentialsAck?, dis
     var apiKey by remember(machinePubkey) { mutableStateOf("") }
     var pat by remember(machinePubkey) { mutableStateOf("") }
     var saving by remember(machinePubkey) { mutableStateOf(false) }
+    /** "key" / "pat" while a clear awaits confirmation. */
+    var confirmClear by remember(machinePubkey) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(status) { if (status != null) saving = false }
 
@@ -91,6 +93,7 @@ fun MachineCredentials(machinePubkey: String, status: UniffiCredentialsAck?, dis
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
+        // Two rows: all four buttons on one row did not fit a phone.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
             Button(
                 onClick = ::save,
@@ -99,14 +102,39 @@ fun MachineCredentials(machinePubkey: String, status: UniffiCredentialsAck?, dis
             ) {
                 Text("Save on bridge")
             }
-            TextButton(onClick = { send(UniffiTristate.Clear, UniffiTristate.Keep) }) {
-                Text("Clear key")
-            }
-            TextButton(onClick = { send(UniffiTristate.Keep, UniffiTristate.Clear) }) {
-                Text("Clear PAT")
-            }
             TextButton(onClick = { open = false }) {
                 Text("Close")
+            }
+        }
+        // Clearing deletes the stored secret on the bridge, so it asks first,
+        // like removing a machine or a provider does.
+        val pending = confirmClear
+        if (pending == null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                TextButton(onClick = { confirmClear = "key" }) {
+                    Text("Clear API key", color = Tokens.Danger)
+                }
+                TextButton(onClick = { confirmClear = "pat" }) {
+                    Text("Clear GitHub PAT", color = Tokens.Danger)
+                }
+            }
+        } else {
+            Text(
+                if (pending == "key") "Delete the API key stored on the bridge?" else "Delete the GitHub PAT stored on the bridge?",
+                color = Tokens.Text,
+                fontSize = Tokens.TextSm,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                TextButton(onClick = {
+                    if (pending == "key") send(UniffiTristate.Clear, UniffiTristate.Keep)
+                    else send(UniffiTristate.Keep, UniffiTristate.Clear)
+                    confirmClear = null
+                }) {
+                    Text("Delete", color = Tokens.Danger)
+                }
+                TextButton(onClick = { confirmClear = null }) {
+                    Text("Cancel")
+                }
             }
         }
         if (status != null) {
