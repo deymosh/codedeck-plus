@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -73,6 +75,12 @@ private const val BACKEND_OPENCODE = "opencode"
  *  so this bounded wait over [CoreHost.events] is the confirmation. */
 private const val CREATE_CONFIRM_TIMEOUT_MS = 10_000L
 
+/** Below this body height the pickers + folder list scroll as one column
+ *  instead of the folder list scrolling on its own between them and the
+ *  pinned buttons — a phone in landscape would otherwise leave the folder
+ *  list no room at all. */
+private val COMPACT_BODY_HEIGHT = 360.dp
+
 /** Last path segment of an absolute workspace root — port of
  *  `NewSessionModal.tsx`'s `rootLabel`. */
 private fun rootLabel(root: String): String {
@@ -109,7 +117,11 @@ private fun rootLabel(root: String): String {
  * (see [NewSessionBody.create]).
  */
 @Composable
-fun NewSessionScreen(core: CoreHost, machinePubkey: String, onClose: () -> Unit) {
+fun NewSessionScreen(
+    core: CoreHost,
+    machinePubkey: String,
+    onClose: () -> Unit,
+) {
     val machinesView by core.machines.collectAsState()
     val settings by core.settings.collectAsState()
     val scope = rememberCoroutineScope()
@@ -254,7 +266,7 @@ private fun NewSessionBody(
             creating = false
             when (settled) {
                 is CoreEvent.StateChanged ->
-                    // Accepted; the sidebar's pending-session card takes over
+                    // Accepted; the sessions list's pending card takes over
                     // from here (mobile's optimistic flow).
                     onClose()
                 is CoreEvent.ActionFailed -> createError = actionFailedCopy(settled.kind)
@@ -263,6 +275,114 @@ private fun NewSessionBody(
         }
     }
 
+    // The pickers, in the order they appear at the top of the screen.
+    @Composable
+    fun Options() {
+        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+            // Rendered only when the bridge advertises the 'opencode'
+            // capability — an old bridge's zod would reject the field
+            // anyway, so hiding the picker keeps this screen honest about
+            // what this bridge can do.
+            if (machine.capabilities.contains(CAP_OPENCODE)) {
+                SelectRow("Backend") {
+                    SelectField(
+                        options = listOf(
+                            PickerOption("", "Claude Code"),
+                            PickerOption(BACKEND_OPENCODE, "OpenCode"),
+                        ),
+                        selected = backend,
+                        onSelect = ::changeBackend,
+                    )
+                }
+            }
+
+            // Rendered only when the bridge advertises 'custom-providers'
+            // AND stores at least one profile — an OpenCode session never
+            // sees this (providerProfiles is forced empty above).
+            if (providerProfiles.isNotEmpty()) {
+                SelectRow("Provider") {
+                    SelectField(
+                        options = listOf(PickerOption("", "Anthropic")) +
+                            providerProfiles.map { PickerOption(it.id, it.label) },
+                        selected = providerId,
+                        onSelect = ::changeProvider,
+                    )
+                }
+            }
+
+            // --- Model ---
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+                SelectRow("Model") {
+                    val modelOptions = activeProfile?.models ?: modelsList
+                    SelectField(
+                        options = buildList {
+                            add(PickerOption("", "Default model"))
+                            modelOptions.forEach { m ->
+                                add(PickerOption(m.id, m.label ?: m.id))
+                            }
+                            // The preferred default model (CDX-047) may not be in
+                            // THIS machine's list — keep the pre-selection honest
+                            // instead of a controlled picker silently showing
+                            // nothing (the same trailing synthetic option
+                            // `SettingsScreen.kt`'s model picker appends for a
+                            // stale stored value).
+                            if (model != "" && modelOptions.none { it.id == model }) {
+                                add(PickerOption(model, model))
+                            }
+                        },
+                        selected = model,
+                        onSelect = { model = it },
+                    )
+                }
+                // CDX-035: the bridge's own reason for an empty answer, so
+                // an unavailable list is explained instead of silently
+                // blank — only on the plain (non-profile) path, a
+                // provider profile brings its own list.
+                if (activeProfile == null && modelsList.isEmpty() && modelsErr != null) {
+                    Text(modelsErr, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+                }
+            }
+
+            // --- Effort ---
+            SelectRow("Effort") {
+                SelectField(
+                    options = listOf(PickerOption("", "Default effort")) +
+                        EFFORT_LEVELS.map { PickerOption(it, it) },
+                    selected = effort,
+                    onSelect = { effort = it },
+                )
+            }
+        }
+    }
+
+    // The radio rows of the folder list, plus the new-folder name field.
+    @Composable
+    fun FolderRows() {
+        SelectableRow("Default (workspace root)", folderChoice == "") { folderChoice = "" }
+        roots.forEach { root ->
+            SelectableRow(rootLabel(root), folderChoice == root, mono = true) { folderChoice = root }
+        }
+        machine.folders.forEach { folder ->
+            SelectableRow(folder, folderChoice == folder, mono = true) { folderChoice = folder }
+        }
+        SelectableRow("New folder…", folderChoice == NEW_FOLDER) { folderChoice = NEW_FOLDER }
+        if (folderChoice == NEW_FOLDER) {
+            OutlinedTextField(
+                value = newFolder,
+                onValueChange = { newFolder = it },
+                placeholder = { Text("my-new-project") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
+    // Three bands that never scroll together: the pickers on top, the folder
+    // list filling the middle (the only part that scrolls, however many
+    // folders the machine has), and Create/Cancel pinned to the bottom.
+    // A window too short for that split (a phone in landscape) scrolls the
+    // pickers and folders as one column instead, so the folder list never
+    // collapses to nothing; the buttons stay pinned either way.
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(
@@ -287,114 +407,47 @@ private fun NewSessionBody(
                 )
             }
 
-            Column(
-                Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
-                verticalArrangement = Arrangement.spacedBy(Tokens.Space4),
-            ) {
-                // --- Folder ---
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                    SectionHeading("Folder")
-                    SelectableRow("Default (workspace root)", folderChoice == "") { folderChoice = "" }
-                    roots.forEach { root ->
-                        SelectableRow(rootLabel(root), folderChoice == root, mono = true) { folderChoice = root }
-                    }
-                    machine.folders.forEach { folder ->
-                        SelectableRow(folder, folderChoice == folder, mono = true) { folderChoice = folder }
-                    }
-                    SelectableRow("New folder…", folderChoice == NEW_FOLDER) { folderChoice = NEW_FOLDER }
-                    if (folderChoice == NEW_FOLDER) {
-                        OutlinedTextField(
-                            value = newFolder,
-                            onValueChange = { newFolder = it },
-                            placeholder = { Text("my-new-project") },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val compact = maxHeight < COMPACT_BODY_HEIGHT
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .then(if (compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                        .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
+                    verticalArrangement = Arrangement.spacedBy(Tokens.Space3),
+                ) {
+                    Options()
+                    SectionHeading("Folder", Modifier.padding(top = Tokens.Space2))
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (compact) {
+                                    Modifier
+                                } else {
+                                    Modifier.weight(1f).verticalScroll(rememberScrollState())
+                                },
+                            ),
+                        verticalArrangement = Arrangement.spacedBy(Tokens.Space1),
+                    ) {
+                        FolderRows()
                     }
                     Text(
                         "Folders come from the machine's workspace; a new folder is created " +
                             "(and git-initialized) on the machine.",
                         color = Tokens.TextDim,
-                        fontSize = Tokens.TextSm,
+                        fontSize = Tokens.TextXs,
                     )
                 }
+            }
 
-                // Rendered only when the bridge advertises the 'opencode'
-                // capability — an old bridge's zod would reject the field
-                // anyway, so hiding the picker keeps this screen honest about
-                // what this bridge can do.
-                if (machine.capabilities.contains(CAP_OPENCODE)) {
-                    SelectRow("Backend") {
-                        SelectField(
-                            options = listOf(
-                                PickerOption("", "Claude Code"),
-                                PickerOption(BACKEND_OPENCODE, "OpenCode"),
-                            ),
-                            selected = backend,
-                            onSelect = ::changeBackend,
-                        )
-                    }
-                }
-
-                // Rendered only when the bridge advertises 'custom-providers'
-                // AND stores at least one profile — an OpenCode session never
-                // sees this (providerProfiles is forced empty above).
-                if (providerProfiles.isNotEmpty()) {
-                    SelectRow("Provider") {
-                        SelectField(
-                            options = listOf(PickerOption("", "Anthropic")) +
-                                providerProfiles.map { PickerOption(it.id, it.label) },
-                            selected = providerId,
-                            onSelect = ::changeProvider,
-                        )
-                    }
-                }
-
-                // --- Model ---
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                    SelectRow("Model") {
-                        val modelOptions = activeProfile?.models ?: modelsList
-                        SelectField(
-                            options = buildList {
-                                add(PickerOption("", "Default model"))
-                                modelOptions.forEach { m ->
-                                    add(PickerOption(m.id, m.label ?: m.id))
-                                }
-                                // The preferred default model (CDX-047) may not be in
-                                // THIS machine's list — keep the pre-selection honest
-                                // instead of a controlled picker silently showing
-                                // nothing (the same trailing synthetic option
-                                // `SettingsScreen.kt`'s model picker appends for a
-                                // stale stored value).
-                                if (model != "" && modelOptions.none { it.id == model }) {
-                                    add(PickerOption(model, model))
-                                }
-                            },
-                            selected = model,
-                            onSelect = { model = it },
-                        )
-                    }
-                    // CDX-035: the bridge's own reason for an empty answer, so
-                    // an unavailable list is explained instead of silently
-                    // blank — only on the plain (non-profile) path, a
-                    // provider profile brings its own list.
-                    if (activeProfile == null && modelsList.isEmpty() && modelsErr != null) {
-                        Text(modelsErr, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                    }
-                }
-
-                // --- Effort ---
-                SelectRow("Effort") {
-                    SelectField(
-                        options = listOf(PickerOption("", "Default effort")) +
-                            EFFORT_LEVELS.map { PickerOption(it, it) },
-                        selected = effort,
-                        onSelect = { effort = it },
-                    )
-                }
-
+            HorizontalDivider(color = Tokens.Border)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(Tokens.Space3),
+                verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
+            ) {
                 // Same banner placement (and tone) as the TSX's
                 // `{error && <div className={s.bannerError}>{error}</div>}`
                 // sitting right above the button row.
@@ -410,10 +463,10 @@ private fun NewSessionBody(
                             .padding(Tokens.Space2),
                     )
                 }
-
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Button(
                         onClick = ::create,
