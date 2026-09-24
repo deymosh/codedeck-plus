@@ -22,7 +22,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use client_core::bridge_api::{classify_publish, combine_publish, PublishResult, PublishVerdict};
+use crate::publish::{classify_publish, combine_publish, PublishResult, PublishVerdict};
 use serde_json::Value;
 
 use super::frames::RelayMessage;

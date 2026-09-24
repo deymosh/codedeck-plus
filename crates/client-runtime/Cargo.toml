@@ -50,22 +50,10 @@ specta-typescript = "0.0.12"
 # Version matches spike/uniffi-binding-probe's validated 0.28.
 uniffi = { version = "0.28", optional = true }
 
-# Real relay transport (F1). Hand-rolled on these rather than a relay-pool crate
-# — see docs/CLIENT-CORE.md. rustls (not native-tls) so wss:// cross-compiles
-# for Android without OpenSSL.
+# The relay transport (WebSocket + SOCKS5 driver), shared with other runtimes.
+nostr-transport = { path = "../nostr-transport" }
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
-# Direct (not just transitive through tokio-tungstenite): `rustls-tls-webpki-roots`
-# alone leaves NEITHER of rustls 0.23's crypto backends selected, which panics
-# on the first TLS handshake instead of picking one — see `ws.rs`'s
-# `install_crypto_provider`. `ring`, matching what this workspace already
-# builds for `nostr`'s own crypto, cross-compiles to Android with no C++
-# toolchain (unlike `aws-lc-rs`, which needs one).
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-tokio-socks = "0.5"
 tokio-util = "0.7"
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-url = "2"
 # DM image attachments: AES-256-GCM blob + SHA-256 blob id + BUD-02 auth b64.
 aes-gcm = "0.10"
 sha2 = "0.10"
@@ -76,3 +64,4 @@ nostr = { version = "0.44", default-features = false, features = ["std", "nip44"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util", "process"] }
+nostr-transport = { path = "../nostr-transport", features = ["mock"] }

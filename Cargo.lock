@@ -568,22 +568,18 @@ dependencies = [
  "aes-gcm",
  "base64",
  "client-core",
- "futures-util",
  "log",
  "nostr",
+ "nostr-transport",
  "protocol",
- "rustls",
  "serde",
  "serde_json",
  "sha2",
  "specta",
  "specta-typescript",
  "tokio",
- "tokio-socks",
- "tokio-tungstenite",
  "tokio-util",
  "uniffi",
- "url",
 ]
 
 [[package]]
@@ -2051,6 +2047,23 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-normalization",
+ "url",
+]
+
+[[package]]
+name = "nostr-transport"
+version = "0.0.0"
+dependencies = [
+ "futures-util",
+ "log",
+ "nostr",
+ "protocol",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tokio-socks",
+ "tokio-tungstenite",
+ "tokio-util",
  "url",
 ]
 

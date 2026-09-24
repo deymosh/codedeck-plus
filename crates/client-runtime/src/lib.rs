@@ -29,8 +29,11 @@ pub mod marmot;
 pub mod nostr_client;
 pub mod ports;
 pub mod stores;
-pub mod transport;
 pub mod view;
+
+/// The relay transport (WebSocket + SOCKS5 driver, frame codec, publish
+/// verdicts), shared with other runtimes as the `nostr-transport` crate.
+pub use nostr_transport as transport;
 
 pub use core::{
     ActionFailedKind, Clock, Core, CoreConfig, CoreEvent, CoreObserver, CorePorts, Entropy, SliceId,

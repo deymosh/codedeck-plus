@@ -27,62 +27,10 @@ use protocol::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
 pub const STORED_SINCE_GRACE_SECONDS: i64 = 60;
 const SEEN_IDS_CAP: usize = 2000;
 
-/// A relay subscription filter (the subset the client uses).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Filter {
-    pub kinds: Vec<u16>,
-    pub authors: Vec<String>,
-    /// the `#p` tag filter.
-    pub p_tags: Vec<String>,
-    /// the `#h` tag filter (Marmot kind-445 group routing).
-    pub h_tags: Vec<String>,
-    pub since: Option<i64>,
-}
-
-/// A Nostr event. The client itself only routes / dedups / advances the cursor
-/// on `id` / `kind` / `created_at` / `pubkey`; `content` is carried through
-/// untouched for the layer above (`bridge_api::ingest` — decrypt + decode).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NostrEvent {
-    pub id: String,
-    pub kind: u16,
-    pub created_at: i64,
-    pub pubkey: String,
-    /// `event.content`: `base64(NIP-44(json))`, or a `chunk` fragment.
-    pub content: String,
-    /// The full relay event object — the DM / Marmot gift-wrap paths re-parse
-    /// it (they need `tags` + `sig`, not just what the client routes on).
-    pub raw: serde_json::Value,
-}
-
-/// Callbacks a `Transport` invokes for one subscription. Mirrors the TS
-/// `TransportSubscriptionParams`. `Rc` (not `Box`) so a transport can clone one
-/// callback out from under a `RefCell` borrow and invoke it after dropping the
-/// borrow — a user callback may re-enter `subscribe` / `TransportSub::close`.
-pub struct SubCallbacks {
-    pub on_event: Rc<dyn Fn(&NostrEvent)>,
-    /// end of stored events for this subscription.
-    pub on_eose: Rc<dyn Fn()>,
-    /// the underlying subscription died (NOT a deliberate `close()`).
-    pub on_close: Rc<dyn Fn(Option<String>)>,
-}
-
-pub trait TransportSub {
-    /// Tear down. After this the transport must not invoke the callbacks.
-    fn close(&self);
-}
-
-/// The socket seam. Production: a WS pool over the settings relay list. Tests: a
-/// scriptable fake.
-pub trait Transport {
-    fn subscribe(&self, filter: Filter, callbacks: SubCallbacks) -> Box<dyn TransportSub>;
-    /// Replace the relay list. Default: no-op (in-memory test transports).
-    fn set_relays(&self, _urls: &[String]) {}
-    /// Replace the SOCKS5 proxy (Tor on/off, or a different host:port) and
-    /// redial every relay through it. Default: no-op (in-memory test
-    /// transports have no real socket to redial).
-    fn set_proxy(&self, _proxy: Option<String>) {}
-}
+// The socket seam this client is written against lives in the shared
+// `nostr-transport` crate; re-exported so `nostr_client::Filter` etc. keep
+// naming the same types.
+pub use nostr_transport::port::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
 
 /// The client's outward surface — what a heard event / lifecycle change does.
 pub trait NostrClientHost {

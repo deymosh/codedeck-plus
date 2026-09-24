@@ -24,7 +24,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread;
 
-use client_runtime::client_core::bridge_api::PublishVerdict;
+use client_runtime::transport::PublishVerdict;
 use client_runtime::client_core::connection::ConnectionStatus;
 use client_runtime::protocol::commands::PhoneToBridge;
 use client_runtime::protocol::crypto::keypair_from_secret_hex;

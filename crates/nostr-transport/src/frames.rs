@@ -13,7 +13,7 @@
 use protocol::nostr_event::SignedEvent;
 use serde_json::{json, Value};
 
-use crate::nostr_client::Filter;
+use crate::port::Filter;
 
 /// One parsed relay → client frame.
 #[derive(Debug, Clone, PartialEq)]

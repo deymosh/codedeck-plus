@@ -2,8 +2,8 @@
 //! task per relay, wired through the pure [`frames`](super::frames) codec and
 //! [`router`](super::router).
 //!
-//! Single-threaded by construction. The [`SubCallbacks`] closures
-//! `nostr_client` hands us are `!Send`, so the whole transport runs on a
+//! Single-threaded by construction. The [`SubCallbacks`] closures a
+//! runtime's subscription logic hands us are `!Send`, so the whole transport runs on a
 //! current-thread runtime inside a `LocalSet` (the FG service's client thread);
 //! every task is `spawn_local`. This mirrors the TS `this`-bound model exactly.
 //!
@@ -21,7 +21,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
 
-use client_core::bridge_api::{PublishResult, PublishVerdict};
+use crate::publish::{PublishResult, PublishVerdict};
 use protocol::crypto::Keypair;
 use protocol::nip42::build_auth_event;
 use protocol::nostr_event::SignedEvent;
@@ -38,7 +38,7 @@ use url::Url;
 
 use super::frames::{self, RelayMessage};
 use super::router::{Router, RouterAction};
-use crate::nostr_client::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
+use crate::port::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
 
 /// Send a WS Ping this often.
 const PING_EVERY: Duration = Duration::from_secs(30);
@@ -654,9 +654,8 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::mock::{mock_relay, MockRelay};
+    use crate::mock::{mock_relay, MockRelay};
     use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
-    use protocol::codec::decode_phone_to_bridge;
     use nostr::JsonUtil;
     use std::cell::RefCell;
     use tokio::task::LocalSet;
@@ -895,7 +894,6 @@ mod tests {
             .run_until(async {
                 let mut mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let machine = generate_keypair();
                 let t = transport(&mock, &phone);
                 t.ensure_connected();
                 // force the dial to complete
@@ -909,10 +907,12 @@ mod tests {
                 );
                 let _req = mock.next_frame().await;
 
-                let msg = decode_phone_to_bridge(r#"{"type":"refresh-sessions"}"#).unwrap();
-                let event =
-                    client_core::bridge_api::build_command(&phone, &machine.pubkey_hex, &msg, 1_000)
-                        .unwrap();
+                // Any signed event: the transport never looks inside it.
+                let keys = nostr::Keys::new(phone.secret_key.clone());
+                let signed = nostr::EventBuilder::new(nostr::Kind::Custom(4515), "payload")
+                    .sign_with_keys(&keys)
+                    .unwrap();
+                let event = SignedEvent::from_nostr(&signed);
 
                 let pt = t.clone();
                 let handle = tokio::task::spawn_local(async move {

@@ -16,9 +16,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use client_core::bridge_api::{
-    build_command, BridgeApi, EgressError, IncomingEvent, Ingested, PublishResult, PublishVerdict,
-};
+use client_core::bridge_api::{build_command, BridgeApi, EgressError, IncomingEvent, Ingested};
+use nostr_transport::{PublishResult, PublishVerdict};
 use client_core::connection::{
     connection_reducer, heartbeats_all_stale, initial_connection_state, ConnectionEffect,
     ConnectionEvent, ConnectionState, ConnectionStatus, ReconnectConfig, DEFAULT_RECONNECT_CONFIG,
