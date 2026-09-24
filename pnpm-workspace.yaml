@@ -1,8 +1,10 @@
 packages:
   - packages/*
   - apps/bridge
-  - apps/mobile
   - tools/*
+# apps/mobile (the Tauri app) is frozen on protocol v10 and deliberately not a
+# member: its sources are kept for a future desktop client, but it is not
+# installed, type-checked, tested or built. apps/android is the phone client.
 
 onlyBuiltDependencies:
   - better-sqlite3

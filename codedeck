@@ -186,8 +186,8 @@ ensure_image() {
 # folders.test.ts shells out to it) and the pnpm pinned by package.json's
 # packageManager; downloaded packages persist in the codedeck-pnpm-store
 # volume, so `pnpm install` only fetches what the lockfile changed. Vendored
-# upstream, the Rust-only trees and apps/android are not part of the pnpm
-# workspace and are left out of the copy. ---
+# upstream, the Rust-only trees, apps/android and the frozen apps/mobile are
+# not part of the pnpm workspace and are left out of the copy. ---
 run_in_workspace_container() {
   local name="codedeck-check-$$" pnpm_version
   pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
@@ -203,7 +203,7 @@ EOF
   start_throwaway "$name" codedeck-check -v codedeck-pnpm-store:/pnpm-store
 
   pack_repo_into "$name" /app \
-    ':(exclude)vendor' ':(exclude)spike' ':(exclude)crates' ':(exclude)apps/android' ':(exclude)docs'
+    ':(exclude)vendor' ':(exclude)spike' ':(exclude)crates' ':(exclude)apps/android' ':(exclude)apps/mobile' ':(exclude)docs'
   echo "==> Installing dependencies"
   dexec -w /app "$name" pnpm install --frozen-lockfile
 

@@ -1,5 +1,10 @@
 # CodeDeck+ — mobile app
 
+> **Frozen.** This Tauri app stays on protocol v10 and is no longer part of the
+> pnpm workspace, CI or releases; it does not talk to a v11 bridge. The phone
+> client is the native app in [`apps/android`](../android). These sources are
+> kept as the starting point for a future desktop client.
+
 Control Claude Code sessions running on your laptop or VPS from your Android
 phone, over end-to-end encrypted Nostr. No accounts and no central server: the
 phone and the bridge pair directly by scanning a QR code.
