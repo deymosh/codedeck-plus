@@ -7,7 +7,7 @@
 //! notification (the UI is the notification). Sync catch-up never notifies:
 //! only the LIVE output path calls [`classify_output_entry`].
 
-use protocol::common::{OutputEntry, OutputEntryType};
+use protocol::common::{OutputEntry, OutputEntryType, SessionBackend};
 
 // --- event vocabulary ---
 
@@ -69,11 +69,15 @@ impl NotifyEvent {
 }
 
 /// Human labels resolved by the runtime from its stores at emit time — the
-/// event itself only carries machine/session keys. Both optional; formatting
-/// falls back to the bare kind text when either is missing.
+/// event itself only carries machine/session keys. All optional; formatting
+/// falls back to the bare kind text when a label is missing.
 pub struct NotificationContext<'a> {
     pub session_label: Option<&'a str>,
     pub machine_label: Option<&'a str>,
+    /// The agent the session runs on ([`agent_label`]), so the text names
+    /// the agent that actually finished or asked. Absent (session not in
+    /// the store yet) falls back to plain "Claude" / "Session …" wording.
+    pub agent_label: Option<&'a str>,
 }
 
 impl NotificationContext<'_> {
@@ -81,7 +85,17 @@ impl NotificationContext<'_> {
         Self {
             session_label: None,
             machine_label: None,
+            agent_label: None,
         }
+    }
+}
+
+/// Display name of a session's agent backend. An absent backend is Claude
+/// Code — the protocol's own default for `backend`.
+pub fn agent_label(backend: Option<SessionBackend>) -> &'static str {
+    match backend {
+        Some(SessionBackend::Opencode) => "OpenCode",
+        Some(SessionBackend::ClaudeCode) | None => "Claude Code",
     }
 }
 
@@ -163,28 +177,34 @@ pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> No
         Some(m) => format!("{base} on {m}"),
         None => base.to_string(),
     };
+    // Who is acting, in body text, and which kind of session, in titles.
+    let agent = ctx.agent_label.unwrap_or("Claude");
+    let session_kind = |what: &str| match ctx.agent_label {
+        Some(a) => format!("{a} session {what}"),
+        None => format!("Session {what}"),
+    };
     let (title, body) = match event {
         NotifyEvent::PermissionRequest { tool_name, .. } => (
             titled("Permission needed"),
             match tool_name {
-                Some(t) => on_machine(&format!("Claude wants to use {t}")),
-                None => on_machine("Claude needs permission to proceed"),
+                Some(t) => on_machine(&format!("{agent} wants to use {t}")),
+                None => on_machine(&format!("{agent} needs permission to proceed")),
             },
         ),
         NotifyEvent::Question { .. } => (
-            titled("Question from Claude"),
-            on_machine("Claude is asking you a question"),
+            titled(&format!("Question from {agent}")),
+            on_machine(&format!("{agent} is asking you a question")),
         ),
         NotifyEvent::PlanApproval { .. } => (
             titled("Plan ready for review"),
             on_machine("A plan is waiting for your approval"),
         ),
         NotifyEvent::SessionFinished { .. } => (
-            titled("Session finished"),
-            on_machine("Claude finished the task"),
+            titled(&session_kind("finished")),
+            on_machine(&format!("{agent} finished the task")),
         ),
         NotifyEvent::SessionFailed { reason, .. } => (
-            titled("Session failed"),
+            titled(&session_kind("failed")),
             // Variable text — the machine name would read oddly after it.
             reason
                 .clone()
@@ -485,14 +505,53 @@ mod tests {
         let ctx = NotificationContext {
             session_label: Some("refactor-api"),
             machine_label: Some("laptop-01"),
+            agent_label: Some("Claude Code"),
         };
         let content = format_notify_event(&perm("m", "s"), &ctx);
         assert_eq!(content.title, "Permission needed — refactor-api");
-        assert_eq!(content.body, "Claude needs permission to proceed on laptop-01");
+        assert_eq!(content.body, "Claude Code needs permission to proceed on laptop-01");
         // No labels yet (unknown keys) — bare kind text, unchanged.
         let bare = format_notify_event(&perm("m", "s"), &NotificationContext::none());
         assert_eq!(bare.title, "Permission needed");
         assert_eq!(bare.body, "Claude needs permission to proceed");
+    }
+
+    #[test]
+    fn formatting_names_the_sessions_agent() {
+        let finished = NotifyEvent::SessionFinished { machine: "m".into(), session_id: "s".into() };
+        let question = NotifyEvent::Question { machine: "m".into(), session_id: "s".into() };
+        let failed = NotifyEvent::SessionFailed { machine: "m".into(), session_id: "s".into(), reason: None };
+        let ctx = |agent| NotificationContext {
+            session_label: Some("fix-ci"),
+            machine_label: Some("laptop-01"),
+            agent_label: Some(agent),
+        };
+
+        let open_code = ctx(agent_label(Some(SessionBackend::Opencode)));
+        assert_eq!(
+            format_notify_event(&finished, &open_code),
+            NotificationContent {
+                title: "OpenCode session finished — fix-ci".into(),
+                body: "OpenCode finished the task on laptop-01".into(),
+            }
+        );
+        assert_eq!(format_notify_event(&question, &open_code).title, "Question from OpenCode — fix-ci");
+        assert_eq!(format_notify_event(&failed, &open_code).title, "OpenCode session failed — fix-ci");
+
+        // An absent backend is Claude Code, per the protocol's default.
+        let claude_code = ctx(agent_label(None));
+        assert_eq!(
+            format_notify_event(&finished, &claude_code),
+            NotificationContent {
+                title: "Claude Code session finished — fix-ci".into(),
+                body: "Claude Code finished the task on laptop-01".into(),
+            }
+        );
+
+        // Session not in the store yet — the generic wording.
+        let bare = format_notify_event(&finished, &NotificationContext::none());
+        assert_eq!(bare.title, "Session finished");
+        assert_eq!(bare.body, "Claude finished the task");
     }
 
     #[test]

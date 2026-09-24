@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use protocol::crypto::Keypair;
 use client_core::notifications::{
-    classify_output_entry, is_agent_activity_entry, EmitInputs, NotificationContext, NotifyEffect,
+    classify_output_entry, is_agent_activity_entry, EmitInputs, NotifyEffect,
     NotifyEvent,
 };
 use client_core::stores::pairing::{
@@ -30,7 +30,7 @@ use protocol::common::SessionState;
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
-use crate::stores::CoreStores;
+use crate::stores::{CoreStores, NotificationLabels};
 
 /// A `client_core` store the runtime must re-serialize to the `Kv` after a
 /// route mutated it.
@@ -183,14 +183,11 @@ impl<'a> Router<'a> {
     fn emit_notify(&mut self, event: &NotifyEvent) -> Vec<NotifyEffect> {
         let key = self.active_session_key();
         // DMs carry no session keys — bare context, their own labels suffice.
-        let (session_label, machine_label) = match event.session() {
+        let labels = match event.session() {
             Some((m, s)) => self.stores.notification_labels(m, s),
-            None => (None, None),
+            None => NotificationLabels::default(),
         };
-        let context = NotificationContext {
-            session_label: session_label.as_deref(),
-            machine_label: machine_label.as_deref(),
-        };
+        let context = labels.context();
         self.stores.notifications.emit(
             event,
             EmitInputs {

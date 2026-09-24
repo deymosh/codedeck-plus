@@ -1941,9 +1941,9 @@ impl Loop {
     /// Run the notification coordinator for one event and deliver its effects.
     fn run_notify(&mut self, event: NotifyEvent) {
         // DMs carry no session keys — bare context, their own labels suffice.
-        let (session_label, machine_label) = match event.session() {
+        let labels = match event.session() {
             Some((m, s)) => self.stores.notification_labels(m, s),
-            None => (None, None),
+            None => crate::stores::NotificationLabels::default(),
         };
         let effects = self.stores.notifications.emit(
             &event,
@@ -1952,10 +1952,7 @@ impl Loop {
                 enabled: self.stores.settings.data.notifications_enabled,
                 ping_available: false,
                 active_session_key: None,
-                context: client_core::notifications::NotificationContext {
-                    session_label: session_label.as_deref(),
-                    machine_label: machine_label.as_deref(),
-                },
+                context: labels.context(),
                 now: self.clock.now_ms(),
             },
         );

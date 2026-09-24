@@ -9,7 +9,7 @@
 use protocol::crypto::Keypair;
 use client_core::default_session_mode::DefaultModeApplier;
 use client_core::delete_controller::DeleteController;
-use client_core::notifications::NotificationCoordinator;
+use client_core::notifications::{agent_label, NotificationContext, NotificationCoordinator};
 use client_core::stores::dm::{hydrate_dm, serialize_dm, DmState, DM_STORAGE_KEY};
 use client_core::stores::identity::{load_or_create_identity, IDENTITY_STORAGE_KEY};
 use client_core::stores::machines::{
@@ -69,21 +69,39 @@ impl CoreStores {
     /// Human labels for notification text, resolved from the machine view —
     /// notify events themselves only carry machine/session keys. Owned, so
     /// the borrow of `machines` ends before the coordinator's `&mut` emit.
-    /// `(session_label, machine_label)`.
-    pub fn notification_labels(
-        &self,
-        machine: &str,
-        session_id: &str,
-    ) -> (Option<String>, Option<String>) {
+    pub fn notification_labels(&self, machine: &str, session_id: &str) -> NotificationLabels {
         let Some(mv) = self.machines.machine(machine) else {
-            return (None, None);
+            return NotificationLabels::default();
         };
-        let session_label = mv.sessions.get(session_id).and_then(|sv| {
-            non_blank(sv.info.title.as_deref().unwrap_or(""))
-                .or_else(|| non_blank(&sv.info.slug))
-                .map(str::to_string)
-        });
-        (session_label, non_blank(&mv.name).map(str::to_string))
+        let session = mv.sessions.get(session_id);
+        NotificationLabels {
+            session: session.and_then(|sv| {
+                non_blank(sv.info.title.as_deref().unwrap_or(""))
+                    .or_else(|| non_blank(&sv.info.slug))
+                    .map(str::to_string)
+            }),
+            machine: non_blank(&mv.name).map(str::to_string),
+            agent: session.map(|sv| agent_label(sv.info.backend)),
+        }
+    }
+}
+
+/// What [`CoreStores::notification_labels`] resolved; each is absent when
+/// the store does not know it (yet).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct NotificationLabels {
+    pub session: Option<String>,
+    pub machine: Option<String>,
+    pub agent: Option<&'static str>,
+}
+
+impl NotificationLabels {
+    pub fn context(&self) -> NotificationContext<'_> {
+        NotificationContext {
+            session_label: self.session.as_deref(),
+            machine_label: self.machine.as_deref(),
+            agent_label: self.agent,
+        }
     }
 }
 
