@@ -16,18 +16,9 @@ android {
     }
 
     defaultConfig {
-        // Deliberately DIFFERENT from apps/mobile/src-tauri's applicationId
-        // (com.codedeck.plus) while this app is still catching up to feature
-        // parity: installing this one must not replace or lose the Tauri
-        // app's local state on a test device. The plan's F3 "Convivencia"
-        // note originally called for the SAME applicationId so an eventual
-        // F5 cutover would be a plain swap — revert to "com.codedeck.plus"
-        // (and drop this note) only once this app is actually finished and
-        // ready to replace the Tauri one. `namespace` above stays
-        // com.codedeck.plus on purpose — it only affects the generated R
-        // class / Kotlin package, not app identity, so it doesn't need to
-        // track this.
-        applicationId = "com.codedeck.native"
+        // The same identity the frozen Tauri app (apps/mobile) shipped under,
+        // so a signed release installs over it as an upgrade.
+        applicationId = "com.codedeck.plus"
         // 26, not apps/mobile's 24: the JNA runtime uniffi-bindgen's
         // generated Kotlin depends on uses MethodHandle.invoke/invokeExact,
         // unsupported by D8 below API 26 (confirmed by a failed dex build at
@@ -38,8 +29,18 @@ android {
         targetSdk {
             version = release(37)
         }
-        versionCode = 1
-        versionName = "0.1.0"
+        // A release stamps its version from the tag (`-PcodedeckVersion=1.2.3`,
+        // or `1.2.3-rc1` for a prerelease). The code keeps the Tauri app's
+        // scheme, major*1_000_000 + minor*1_000 + patch, so it keeps rising
+        // across the switch from that app.
+        val stamped = (findProperty("codedeckVersion") as String?)?.removePrefix("v")
+        versionName = stamped ?: "0.0.0-dev"
+        versionCode = stamped
+            ?.substringBefore('-')
+            ?.split('.')
+            ?.map { it.toInt() }
+            ?.let { (major, minor, patch) -> major * 1_000_000 + minor * 1_000 + patch }
+            ?: 1
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

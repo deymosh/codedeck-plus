@@ -2,7 +2,7 @@ name: Release
 
 # A single `vMAJOR.MINOR.PATCH` tag publishes ONE GitHub Release carrying every
 # artifact of that version:
-#   - the signed Android APK               (codedeck-vX.Y.Z.apk)
+#   - the signed Android APK               (codedeck-vX.Y.Z.apk, the native app in apps/android)
 #   - the bridge npm tarball               (codedeck-bridge-X.Y.Z.tgz, for `npx`)
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
@@ -16,10 +16,6 @@ name: Release
 #   KEY_ALIAS            key alias inside that keystore
 #   KEY_STORE_PASSWORD   keystore password
 #   KEY_PASSWORD         key password
-# Optional, to bundle the nostr-vpn mesh engine into the APK (otherwise the app
-# ships without mesh support, exactly as a local build without the checkout):
-#   vars.NVPN_REPO       owner/repo of the nostr-vpn source
-#   secrets.NVPN_REPO_TOKEN   PAT that can read it
 
 on:
   push:
@@ -176,21 +172,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Checkout nostr-vpn (mesh engine, optional)
-        if: vars.NVPN_REPO != ''
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ vars.NVPN_REPO }}
-          token: ${{ secrets.NVPN_REPO_TOKEN }}
-          path: ../nostr-vpn
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: pnpm
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -203,49 +184,39 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/mobile/src-tauri
+          workspaces: .
 
-      - name: Install cargo-tauri
-        # gen/android's `:app:rustBuild*` Gradle task shells out to
-        # `cargo tauri android android-studio-script` — a CARGO SUBCOMMAND from
-        # the tauri-cli crate, separate from the `@tauri-apps/cli` npm package
-        # used to kick off the build below. Without it the Gradle task dies with
-        # "error: no such command: `tauri`". Mirrors apps/mobile/docker/Dockerfile.
-        run: cargo install tauri-cli --version "^2" --locked
-
-      - name: Install NDK
+      - name: Install NDK + SDK platform
         run: |
-          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" >/dev/null
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --install "ndk;28.2.13676358" "platforms;android-37.2" "build-tools;37.0.0" >/dev/null
           echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Stamp the release version into tauri.conf.json
-        run: |
-          cd apps/mobile
-          node -e "const fs=require('fs'),f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f));c.version='${{ needs.meta.outputs.number }}';fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
-          # Tauri v2 derives the Android versionCode from this string
-          # (major*1000000 + minor*1000 + patch), so no separate bump is needed.
-
-      - name: Build release APK (aarch64)
+      - name: Cross-compile the client core (aarch64)
         env:
-          ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
+          # Symbol tables only bloat the .so; the dynamic symbols JNA binds
+          # to are kept.
+          CARGO_PROFILE_RELEASE_STRIP: symbols
         run: |
-          # openssl-src's Makefile calls `<triple>-ranlib`/`-ar` — GNU names
-          # gone from NDK r23+. Point the cc-crate env at the llvm tools.
+          # Same recipe as apps/android/scripts/build-apk-local.sh.
           TOOLBIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export RANLIB_aarch64_linux_android="$TOOLBIN/llvm-ranlib"
+          export CC_aarch64_linux_android="$TOOLBIN/aarch64-linux-android26-clang"
           export AR_aarch64_linux_android="$TOOLBIN/llvm-ar"
-          cd apps/mobile
-          pnpm dlx @tauri-apps/cli@^2 android build --target aarch64
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLBIN/aarch64-linux-android26-clang"
+          cargo build --locked -p client-ffi --lib --target aarch64-linux-android --release
+          mkdir -p apps/android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/libclient_ffi.so apps/android/app/src/main/jniLibs/arm64-v8a/
+
+      - name: Build the release APK (unsigned)
+        working-directory: apps/android
+        run: ./gradlew assembleRelease -PcodedeckVersion=${{ needs.meta.outputs.number }} --console=plain
 
       - name: Locate the unsigned APK
         run: |
-          DIR=apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          DIR=apps/android/app/build/outputs/apk/release
           if [ ! -d "$DIR" ] || [ -z "$(ls -A "$DIR"/*.apk 2>/dev/null)" ]; then
-            echo "::error::no APK under $DIR — Tauri output layout may have changed" >&2
-            find apps/mobile/src-tauri/gen/android/app/build/outputs -name '*.apk' -print || true
+            echo "::error::no APK under $DIR — Gradle output layout may have changed" >&2
+            find apps/android/app/build/outputs -name '*.apk' -print || true
             exit 1
           fi
           ls -la "$DIR"
@@ -257,7 +228,7 @@ jobs:
         # re-cut. SHA-pinned so the ref cannot move under us.
         uses: r0adkll/sign-android-release@d5f8436b702872ad5cdb1e6e4d5c8b983d25a997
         with:
-          releaseDirectory: apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          releaseDirectory: apps/android/app/build/outputs/apk/release
           signingKeyBase64: ${{ secrets.SIGNING_KEY }}
           alias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
@@ -272,7 +243,7 @@ jobs:
           test -n "$APK" && test -f "$APK" || { echo "no signed APK from the sign step" >&2; exit 1; }
           APK_BYTES=$(stat -c%s "$APK")
           echo "APK: $APK ($((APK_BYTES / 1024 / 1024))MB)"
-          SO_BYTES=$(unzip -l "$APK" | awk '/libcodedeck_mobile_lib\.so/ {print $1}' | head -1)
+          SO_BYTES=$(unzip -l "$APK" | awk '/libclient_ffi\.so/ {print $1}' | head -1)
           echo ".so (uncompressed): $((SO_BYTES / 1024 / 1024))MB"
           if [ "${SO_BYTES:-0}" -gt $((50 * 1024 * 1024)) ]; then
             echo "FAIL: .so exceeds 50MB — symbols are probably not stripped" >&2
