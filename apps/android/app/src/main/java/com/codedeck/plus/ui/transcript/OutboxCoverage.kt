@@ -42,7 +42,7 @@ fun entryCovers(entryContent: String, itemText: String): Boolean =
 private data class SeqText(val seq: Long, val content: String)
 
 private fun userEntriesOf(displayEntries: List<DisplayEntry>): List<SeqText> =
-    displayEntries.filterIsInstance<DisplayEntry.UserMessage>().map { SeqText(it.seq, it.entry.content) }
+    displayEntries.filterIsInstance<DisplayEntry.UserMessage>().map { SeqText(it.seq, it.text) }
 
 /** Pairs outbox items (createdAt order) against user entries (seq order);
  *  each entry consumes at most one item. A covering entry is proof of

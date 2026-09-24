@@ -17,26 +17,21 @@ import com.codedeck.plus.ui.transcript.rows.DiffRow
 import com.codedeck.plus.ui.transcript.rows.PermissionCard
 import com.codedeck.plus.ui.transcript.rows.PlanApprovalCard
 import com.codedeck.plus.ui.transcript.rows.QuestionCard
-import com.codedeck.plus.ui.transcript.rows.QuestionGroupCard
 import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
 import kotlinx.serialization.json.jsonObject
 import org.junit.Rule
 import org.junit.Test
 
 /**
- * F3.3.5 — Paparazzi goldens for a representative sample of transcript rows
- * and cards, sourced from the same shared fixture
- * `crates/client-ffi/fixtures/display_entries_corpus.json` /
- * `DisplayEntriesFixtureTest.kt` already decode — one corpus, exercised as
- * both a decode-correctness test and a render-fidelity golden.
+ * Paparazzi goldens for a representative sample of transcript rows and
+ * cards, sourced from the same shared fixture
+ * `crates/client-ffi/fixtures/display_entries_corpus.json` that
+ * `DisplayEntriesFixtureTest.kt` decodes — one corpus, exercised as both a
+ * decode-correctness test and a render-fidelity golden.
  *
- * Scoped down from the F3.3 execution plan's "every card kind, both pending
- * and resolved states": this covers each kind once, in its PENDING
- * (unanswered) state — the resolved-state branches are simple, already
- * unit-testable string logic (`PLAN_APPROVAL_LABELS`, the `answered`/
- * `responded` early-return in each card) rather than a rendering risk on
- * the order of tables/checkboxes/diff coloring. Widen this suite before
- * shipping a real device build, not before this milestone lands.
+ * Each card kind is covered once in its PENDING (unanswered) state; the
+ * resolved-state branches are the simple `answered`/`responded` early return
+ * in each card rather than a rendering risk.
  */
 class TranscriptRowsParityTest {
 
@@ -69,8 +64,8 @@ class TranscriptRowsParityTest {
         paparazzi.snapshot {
             dark {
                 Column {
-                    ToolGroupRow(group.entries, group.summary, expanded = false, onToggle = {})
-                    ToolGroupRow(group.entries, group.summary, expanded = true, onToggle = {})
+                    ToolGroupRow(group.steps, group.summary, expanded = false, onToggle = {})
+                    ToolGroupRow(group.steps, group.summary, expanded = true, onToggle = {})
                 }
             }
         }
@@ -79,12 +74,12 @@ class TranscriptRowsParityTest {
     @Test
     fun diff_card() {
         val diff = corpus().filterIsInstance<DisplayEntry.Diff>().first()
-        paparazzi.snapshot { dark { DiffRow(diff.entry, expanded = false, onToggle = {}) } }
+        paparazzi.snapshot { dark { DiffRow(diff.path, diff.lines, diff.truncated, expanded = false, onToggle = {}) } }
     }
 
     @Test
     fun permission_card_pending() {
-        val permission = corpus().filterIsInstance<DisplayEntry.PermissionRequest>().first()
+        val permission = corpus().filterIsInstance<DisplayEntry.PermissionRequest>().last()
         paparazzi.snapshot {
             dark { PermissionCard(permission, "machine", "session", responded = false, actions = {}) }
         }
@@ -102,17 +97,15 @@ class TranscriptRowsParityTest {
     fun question_card_pending() {
         val question = corpus().filterIsInstance<DisplayEntry.Question>().first()
         paparazzi.snapshot {
-            dark { QuestionCard(question, "machine", "session", responded = false, actions = {}) }
+            dark { QuestionCard(question, "machine", "session", respondedCards = emptySet(), actions = {}) }
         }
     }
 
     @Test
     fun question_group_card_pending() {
-        val group = corpus().filterIsInstance<DisplayEntry.QuestionGroup>().first()
+        val group = corpus().filterIsInstance<DisplayEntry.Question>().first { it.questions.size > 1 }
         paparazzi.snapshot {
-            dark {
-                QuestionGroupCard(group, "machine", "session", respondedCards = emptySet(), onAdvance = {}, actions = {})
-            }
+            dark { QuestionCard(group, "machine", "session", respondedCards = emptySet(), actions = {}) }
         }
     }
 }

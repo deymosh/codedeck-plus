@@ -50,22 +50,12 @@ import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiCredentialsAck
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiProviderProfileAck
 import uniffi.client_ffi.UniffiQuickPrompt
 import uniffi.client_ffi.UniffiSettingsView
 import uniffi.client_ffi.UniffiUiView
 import java.util.UUID
-
-/** The default-mode picker's options — wire values whose display text is
- *  `modeCycle.ts`'s MODE_LABELS (PLAN / YOLO / EDITS), the same mapping
- *  `SessionScreen.kt`'s own `MODE_LABELS` copy carries; duplicated per-file
- *  like the constants below (no UniFFI export for protocol defaults). */
-private val MODE_OPTIONS =
-    listOf(
-        PickerOption("plan", "PLAN"),
-        PickerOption("default", "YOLO"),
-        PickerOption("acceptEdits", "EDITS"),
-    )
 
 /** UI-scale slider bounds and default — `core/stores/settings.ts`'s
  *  UI_SCALE_MIN / UI_SCALE_MAX / UI_SCALE_DEFAULT. */
@@ -73,15 +63,14 @@ private const val UI_SCALE_MIN = 0.85f
 private const val UI_SCALE_MAX = 1.4f
 private const val UI_SCALE_DEFAULT = 1f
 
-/** The effort ladder's wire spellings — `protocolConstants.ts`'s
- *  `EFFORT_LEVELS`, duplicated per-file for the same reason `MODE_OPTIONS`
- *  above is (no UniFFI export for protocol defaults on this FFI surface). */
-private val EFFORT_OPTIONS = listOf("low", "medium", "high", "xhigh", "max", "auto")
-
-/** Same capability string `NewSessionScreen.kt` gates its own provider picker
- *  on — duplicated per-file rather than shared, matching that file's own
- *  precedent (this codebase has no shared capability-constants file yet). */
-private const val CAP_CUSTOM_PROVIDERS = "custom-providers"
+/** A default-for-new-sessions picker over every paired agent's choices (by
+ *  id, first label wins), plus "agent default" and — so a stored preference
+ *  no current agent offers stays visible and clearable — that stored value. */
+private fun preferenceOptions(choices: List<UniffiOptionChoice>, stored: String): List<PickerOption> = buildList {
+    add(PickerOption("", "Agent default"))
+    choices.distinctBy { it.id }.forEach { add(PickerOption(it.id, it.label)) }
+    if (stored != "" && choices.none { it.id == stored }) add(PickerOption(stored, stored))
+}
 
 /**
  * F4.1.5 — the settings screen, rendered as a full-screen replacement the
@@ -233,7 +222,7 @@ private fun SettingsBody(
                             modifier = Modifier.weight(1f),
                         )
                         SelectField(
-                            options = MODE_OPTIONS,
+                            options = preferenceOptions(machines.flatMap { m -> m.agents.flatMap { it.modes } }, view.defaultMode),
                             selected = view.defaultMode,
                             onSelect = { dispatch(UniffiIntent.SetDefaultMode(it)) },
                         )
@@ -250,9 +239,7 @@ private fun SettingsBody(
                             modifier = Modifier.weight(1f),
                         )
                         SelectField(
-                            options =
-                                listOf(PickerOption("", "Default (auto)")) +
-                                    EFFORT_OPTIONS.map { PickerOption(it, it) },
+                            options = preferenceOptions(machines.flatMap { m -> m.agents.flatMap { it.efforts } }, view.defaultEffort),
                             selected = view.defaultEffort,
                             onSelect = { dispatch(UniffiIntent.SetDefaultEffort(it)) },
                         )
@@ -268,7 +255,7 @@ private fun SettingsBody(
                             fontSize = Tokens.TextSm,
                             modifier = Modifier.weight(1f),
                         )
-                        val modelUnion = machines.flatMap { it.models }.distinctBy { it.id }
+                        val modelUnion = machines.flatMap { m -> m.models.flatMap { it.models } }.distinctBy { it.id }
                         val storedModel = view.defaultModel
                         SelectField(
                             options = buildList {
@@ -290,9 +277,8 @@ private fun SettingsBody(
                     }
                     // The TSX's muted paragraph under the three pickers.
                     Text(
-                        "Applied to new sessions: the mode is switched right after the " +
-                            "session starts; effort and model pre-fill the new-session " +
-                            "sheet. Models come from every paired machine's reported list.",
+                        "Pre-filled on the new-session screen whenever the chosen agent " +
+                            "offers them. Choices come from every paired machine's agents.",
                         color = Tokens.TextDim,
                         fontSize = Tokens.TextSm,
                     )
@@ -602,9 +588,9 @@ private fun MachineSection(
             fontFamily = Tokens.FontMono,
         )
 
-        MachineCredentials(machine.pubkeyHex, credentialsStatus, dispatch)
+        MachineCredentials(machine, credentialsStatus, dispatch)
 
-        if (machine.capabilities.contains(CAP_CUSTOM_PROVIDERS)) {
+        if (machine.agents.any { it.supportsProviders }) {
             MachineProviders(machine, providerProfileStatus, dispatch)
         }
 

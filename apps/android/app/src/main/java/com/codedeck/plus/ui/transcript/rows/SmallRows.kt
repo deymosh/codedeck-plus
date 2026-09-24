@@ -16,13 +16,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import com.codedeck.plus.ui.theme.Tokens
-import com.codedeck.plus.ui.transcript.OutputEntry
 import com.codedeck.plus.ui.transcript.TranscriptMarkdown
-import com.codedeck.plus.ui.transcript.metaStr
 
-/** User input echoed by the SDK — port of `UserMessageRow.tsx`. */
+/** A message the user sent. */
 @Composable
-fun UserMessageRow(entry: OutputEntry) {
+fun UserMessageRow(text: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Column(
             Modifier
@@ -30,16 +28,15 @@ fun UserMessageRow(entry: OutputEntry) {
                 .background(Tokens.SurfaceRaised)
                 .padding(Tokens.Space3),
         ) {
-            TranscriptMarkdown(entry.content)
+            TranscriptMarkdown(text)
         }
     }
 }
 
-/** Assistant text (markdown). `isPlan` marks a `special=plan` entry — the
- *  plan body stays readable after approval, framed as a plan document. Port
- *  of `AssistantTextRow.tsx`. */
+/** Agent text (markdown). `isPlan` frames it as a plan document, which stays
+ *  readable after the plan is approved. */
 @Composable
-fun AssistantTextRow(entry: OutputEntry, isPlan: Boolean = false) {
+fun AgentTextRow(text: String, isPlan: Boolean = false) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -49,34 +46,25 @@ fun AssistantTextRow(entry: OutputEntry, isPlan: Boolean = false) {
         if (isPlan) {
             Text("Plan", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
         }
-        TranscriptMarkdown(entry.content)
+        TranscriptMarkdown(text)
     }
 }
 
-/** Plain status/system line — init banners etc. are filtered upstream by
- *  the Rust grouping. Port of `SystemRow.tsx`. */
+/** A one-line status message from the bridge or agent. */
 @Composable
-fun SystemRow(entry: OutputEntry) {
-    if (entry.content.isBlank()) return
+fun StatusRow(text: String) {
+    if (text.isBlank()) return
     Text(
-        entry.content,
+        text,
         color = Tokens.TextDim,
         fontSize = Tokens.TextXs,
         modifier = Modifier.fillMaxWidth().padding(vertical = Tokens.Space1),
     )
 }
 
-/** Generic result errors plus the runner's lifecycle specials
- *  (`session_died`/`session_failed`/`auth_error`), labelled so a dead
- *  session is unmistakable. Port of `ErrorRow.tsx`. */
+/** An agent or bridge error. */
 @Composable
-fun ErrorRow(entry: OutputEntry) {
-    val label = when (entry.metadata.metaStr("special")) {
-        "session_died" -> "Session died"
-        "session_failed" -> "Session failed"
-        "auth_error" -> "Authentication error"
-        else -> null
-    }
+fun ErrorRow(text: String, label: String? = null) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -86,16 +74,29 @@ fun ErrorRow(entry: OutputEntry) {
         if (label != null) {
             Text(label, color = Tokens.Danger, fontSize = Tokens.TextXs)
         }
-        Text(entry.content, color = Tokens.Danger, fontSize = Tokens.TextSm)
+        Text(text, color = Tokens.Danger, fontSize = Tokens.TextSm)
     }
 }
 
-/** Session lifecycle marker (`special=session_restart`) — a centered
- *  divider line. Port of `LifecycleRow.tsx`. */
+/**
+ * A lifecycle notice. A session that died, failed or hit an auth error is
+ * shown as a labelled error, so it is unmistakable; a restart (or any other
+ * notice) is a centered divider line.
+ */
 @Composable
-fun LifecycleRow(entry: OutputEntry) {
+fun NoticeRow(notice: String, text: String) {
+    val errorLabel = when (notice) {
+        "session_died" -> "Session died"
+        "session_failed" -> "Session failed"
+        "auth_error" -> "Authentication error"
+        else -> null
+    }
+    if (errorLabel != null) {
+        ErrorRow(text, errorLabel)
+        return
+    }
     Text(
-        entry.content,
+        text,
         color = Tokens.TextDim,
         fontSize = Tokens.TextXs,
         textAlign = TextAlign.Center,

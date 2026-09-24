@@ -79,6 +79,7 @@ import com.codedeck.plus.ui.transcript.PendingPermissionSummary
 import com.codedeck.plus.ui.transcript.TranscriptList
 import com.codedeck.plus.ui.transcript.parseDisplayEntries
 import com.codedeck.plus.ui.transcript.parsePendingPermission
+import com.codedeck.plus.ui.transcript.questionCardKey
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -98,6 +99,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiTranscriptRowsView
 import uniffi.client_ffi.UniffiUsageData
 
@@ -132,12 +134,6 @@ private class ParsedTranscript(
     }
 }
 
-/** The effort ladder the wire accepts (`SetEffort.level`'s own spellings). */
-private val EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max", "auto")
-
-/** Legacy mode cycle order + compact display labels (`core/modeCycle.ts`). */
-private val MODE_CYCLE = listOf("plan", "default", "acceptEdits")
-private val MODE_LABELS = mapOf("plan" to "PLAN", "default" to "YOLO", "acceptEdits" to "EDITS")
 private const val MODE_TAP_COOLDOWN_MS = 600L
 private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
 
@@ -180,6 +176,9 @@ fun SessionScreen(
     // capability in its heartbeat; without the string the attach affordance
     // is not RENDERED at all (a hard gate on the wire, not a hidden one).
     val canAttachImages = machineSummary?.capabilities?.contains("images") == true
+    // The session's agent as the bridge advertises it: its modes and effort
+    // levels are what the controls bar offers.
+    val agent = machineSummary?.agents?.firstOrNull { it.id == session?.agent }
 
     var transcript by remember(machine, sessionId) { mutableStateOf<ParsedTranscript?>(null) }
     LaunchedEffect(machine, sessionId) {
@@ -379,15 +378,13 @@ fun SessionScreen(
         }
     }
 
-    // Question-group progress, shared with the transcript's cards — see
-    // TranscriptList for why it is kept locally at all.
-    var locallyAdvanced by remember(machine, sessionId) { mutableStateOf(setOf<String>()) }
     // The question the session is blocked on, if any. Plain input sent while
     // the session waits on a question does not answer it — the message is
     // delivered and then sits there — so the composer sends the question's
-    // custom reply instead, the same intent the card's own text field sends.
+    // free-text answer instead, the same intent the card's own text field
+    // sends.
     val activeQuestion = if (session?.state == "waiting_question") {
-        activeQuestionOf(displayEntries, respondedCards + locallyAdvanced)
+        activeQuestionOf(displayEntries, respondedCards)
     } else {
         null
     }
@@ -401,13 +398,14 @@ fun SessionScreen(
         if (text.isEmpty()) return
         draft = ""
         if (activeQuestion != null) {
-            activeQuestion.advanceKey?.let { locallyAdvanced = locallyAdvanced + it }
             dispatch(
                 UniffiIntent.AnswerQuestion(
                     machine = machine,
                     sessionId = sessionId,
+                    requestId = activeQuestion.requestId,
+                    index = activeQuestion.index.toUInt(),
+                    selected = emptyList(),
                     text = text,
-                    optionCount = activeQuestion.optionCount,
                 ),
             )
             return
@@ -422,12 +420,14 @@ fun SessionScreen(
         )
     }
 
-    // --- Mode cycle (CDX-046): the confirmed mode comes from the machines
-    // view; a tap shows the REQUESTED mode pulsing until either the
-    // mode-confirmed lands (settling the request) or the revert window closes
-    // (the request may have been lost — the button must not lie).
+    // --- Mode cycle (CDX-046): steps through the agent's advertised modes.
+    // The confirmed mode comes from the machines view; a tap shows the
+    // REQUESTED mode pulsing until either option-confirmed lands (settling
+    // the request) or the revert window closes (the request may have been
+    // lost — the button must not lie).
+    val modes = agent?.modes.orEmpty()
     val modeCycle = remember(machine, sessionId) { ModeCycleUi() }
-    val confirmedMode = session?.permissionMode
+    val confirmedMode = session?.mode
     LaunchedEffect(confirmedMode) {
         val pending = modeCycle.pending
         if (pending != null && confirmedMode == pending) {
@@ -436,11 +436,12 @@ fun SessionScreen(
         }
     }
     fun tapMode() {
+        if (modes.size < 2) return
         val now = SystemClock.elapsedRealtime()
         if (now - modeCycle.lastTapAtMs < MODE_TAP_COOLDOWN_MS) return
         modeCycle.lastTapAtMs = now
-        val displayed = modeCycle.pending ?: confirmedMode ?: "plan"
-        val next = MODE_CYCLE[(MODE_CYCLE.indexOf(displayed) + 1).mod(MODE_CYCLE.size)]
+        val displayed = modeCycle.pending ?: confirmedMode
+        val next = modes[(modes.indexOfFirst { it.id == displayed } + 1).mod(modes.size)].id
         modeCycle.pending = next
         // Restart the revert window: only the LATEST request's confirmation
         // (or its absence) decides what the button ends up showing.
@@ -449,8 +450,10 @@ fun SessionScreen(
             delay(MODE_CONFIRM_TIMEOUT_MS)
             modeCycle.pending = null
         }
-        dispatch(UniffiIntent.SetMode(machine = machine, sessionId = sessionId, mode = next))
+        dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "mode", value = next))
     }
+    val displayedMode = modeCycle.pending ?: confirmedMode
+    val modeLabel = modes.firstOrNull { it.id == displayedMode }?.label ?: displayedMode
 
     fun insertPrompt(text: String) {
         draft = appendToDraft(draft, text)
@@ -505,8 +508,6 @@ fun SessionScreen(
             contiguous = transcriptView?.contiguous ?: true,
             respondedCards = respondedCards,
             planApprovalChoices = planChoices,
-            locallyAdvanced = locallyAdvanced,
-            onAdvance = { id -> locallyAdvanced = locallyAdvanced + id },
             dispatch = ::dispatch,
             modifier = Modifier.weight(1f),
         )
@@ -520,14 +521,13 @@ fun SessionScreen(
         }
 
         pendingPermission?.let { pending ->
-            PendingPermissionBar(pending) { allow ->
+            PendingPermissionBar(pending) { optionId ->
                 dispatch(
                     UniffiIntent.RespondPermission(
                         machine = machine,
                         sessionId = sessionId,
                         requestId = pending.requestId,
-                        allow = allow,
-                        modifier = null,
+                        optionId = optionId,
                     ),
                 )
             }
@@ -631,16 +631,17 @@ fun SessionScreen(
         }
 
         SessionControlsBar(
-            effortLevel = session?.effortLevel,
-            permissionMode = confirmedMode,
-            modeLabel = MODE_LABELS[modeCycle.pending ?: confirmedMode] ?: "PLAN",
+            effort = session?.effort,
+            efforts = agent?.efforts.orEmpty(),
+            // The button shows only when the agent has modes to switch between.
+            modeLabel = modeLabel?.takeIf { modes.size >= 2 },
             modePending = modeCycle.pending != null,
             model = session?.model,
             contextPercentage = session?.contextPercentage,
             contextWindow = session?.contextWindow?.toLong(),
             onEffortSelect = { level ->
-                if (level != session?.effortLevel) {
-                    dispatch(UniffiIntent.SetEffort(machine = machine, sessionId = sessionId, level = level))
+                if (level != session?.effort) {
+                    dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "effort", value = level))
                 }
             },
             onModeTap = ::tapMode,
@@ -713,31 +714,17 @@ private class AttachGeneration {
     }
 }
 
-/** The unanswered question a composer send answers: its option count (what
- *  `AnswerQuestion` needs to reach the free-text reply) and, for a
- *  sub-question of a group, the key that advances the group's card. */
-internal data class ActiveQuestion(val optionCount: ULong, val advanceKey: String?)
+/** The unanswered question a composer send answers: its ask and index. */
+internal data class ActiveQuestion(val requestId: String, val index: Int)
 
-/** The newest question card still awaiting a reply, or null when the newest
- *  one is already answered — an older unanswered card is a stale one. */
+/** The first unanswered question of the newest ask, or null when that ask is
+ *  already answered — an older unanswered card is a stale one. */
 internal fun activeQuestionOf(entries: List<DisplayEntry>, responded: Set<String>): ActiveQuestion? {
-    val newest = entries.lastOrNull { it is DisplayEntry.Question || it is DisplayEntry.QuestionGroup }
-    return when (newest) {
-        is DisplayEntry.Question -> {
-            val done = newest.answered != null || (newest.toolUseId != null && newest.toolUseId in responded)
-            if (done) null else ActiveQuestion((newest.question.options?.size ?: 0).toULong(), advanceKey = null)
-        }
-        is DisplayEntry.QuestionGroup -> {
-            if (newest.answered != null) return null
-            val index = newest.questions.indices.firstOrNull { "${newest.toolUseId}:q$it" !in responded }
-                ?: return null
-            ActiveQuestion(
-                (newest.questions[index].options?.size ?: 0).toULong(),
-                advanceKey = "${newest.toolUseId}:q$index",
-            )
-        }
-        else -> null
-    }
+    val newest = entries.lastOrNull { it is DisplayEntry.Question } as? DisplayEntry.Question ?: return null
+    if (newest.answered != null) return null
+    val next = newest.questions.firstOrNull { questionCardKey(newest.requestId, it.index) !in responded }
+        ?: return null
+    return ActiveQuestion(newest.requestId, next.index)
 }
 
 /** Tapping a quick prompt joins the fragment onto the draft: an empty or
@@ -804,15 +791,16 @@ internal fun SessionTopBar(
 }
 
 /**
- * What the next turn runs with — model and context used, permission mode,
- * effort — then subscription usage, in one slim scrollable bar right above
- * the input, where Claude Code shows its own mode.
+ * What the next turn runs with — model and context used, mode, effort — then
+ * subscription usage, in one slim scrollable bar right above the input. The
+ * mode button and effort picker show only what the session's agent offers.
  */
 @Composable
 internal fun SessionControlsBar(
-    effortLevel: String?,
-    permissionMode: String?,
-    modeLabel: String,
+    effort: String?,
+    efforts: List<UniffiOptionChoice>,
+    /** `null` hides the mode button (the agent has no modes to switch). */
+    modeLabel: String?,
     modePending: Boolean,
     model: String?,
     contextPercentage: Double?,
@@ -833,10 +821,12 @@ internal fun SessionControlsBar(
         if (model != null) {
             ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
         }
-        if (permissionMode != null) {
-            ModeButton(modeLabel, modePending, onModeTap)
+        if (modeLabel != null) {
+            ModeButton(modeLabel.uppercase(), modePending, onModeTap)
         }
-        EffortSelector(effortLevel, onEffortSelect)
+        if (efforts.isNotEmpty()) {
+            EffortSelector(effort, efforts, onEffortSelect)
+        }
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {
             UsageBox(usage, badges)
@@ -901,23 +891,22 @@ internal fun SendFailedBar(text: String, failedCount: Int, onRetry: () -> Unit) 
     }
 }
 
-/** Effort dropdown — the reference's `<select>`: shows the current level
- *  ("effort…" until the bridge reports one), opens the ladder on tap. A thin
- *  wrapper over the shared [SelectField]: the placeholder carries the muted
- *  "effort…" trigger for the not-yet-reported state without putting a
- *  phantom "effort…" entry into the ladder itself. */
+/** Effort dropdown over the agent's advertised levels: shows the current
+ *  level ("effort…" until the bridge reports one), opens the list on tap. The
+ *  placeholder carries the muted "effort…" trigger for the not-yet-reported
+ *  state without putting a phantom entry into the list itself. */
 @Composable
-private fun EffortSelector(current: String?, onSelect: (String) -> Unit) {
+private fun EffortSelector(current: String?, efforts: List<UniffiOptionChoice>, onSelect: (String) -> Unit) {
     SelectField(
-        options = EFFORT_LEVELS.map { PickerOption(it, it) },
+        options = efforts.map { PickerOption(it.id, it.label) },
         selected = current ?: "",
         placeholder = "effort…",
         onSelect = onSelect,
     )
 }
 
-/** The PLAN → YOLO → EDITS cycle button. While a request is in flight the
- *  label is the REQUESTED mode, pulsing like the legacy `setting-pending`. */
+/** The mode cycle button — taps step through the agent's modes. While a
+ *  request is in flight the label is the REQUESTED mode, pulsing. */
 @Composable
 private fun ModeButton(label: String, pending: Boolean, onTap: () -> Unit) {
     val alpha = if (pending) pulsingAlpha(min = 0.35f, max = 1f, halfPeriodMs = 500) else 1f
@@ -991,7 +980,7 @@ private fun pulsingAlpha(min: Float, max: Float, halfPeriodMs: Int): Float {
 }
 
 @Composable
-private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (Boolean) -> Unit) {
+private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (optionId: String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1005,13 +994,14 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
         } else {
             "${pending.toolName} needs permission"
         }
+        // What the approval is actually for: the call's own title (the
+        // command, the path), else the agent's description of the rule.
+        val detail = pending.title.takeIf { it.isNotBlank() } ?: pending.description.orEmpty()
         Column(Modifier.weight(1f)) {
             Text(label, color = Tokens.Text, fontSize = Tokens.TextSm, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            // What the approval is actually for (the command, the path, or
-            // for OpenCode the rule, e.g. "Access outside the project: …").
-            if (pending.description.isNotBlank() && pending.description != label) {
+            if (detail.isNotBlank() && detail != label) {
                 Text(
-                    pending.description,
+                    detail,
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextXs,
                     maxLines = 2,
@@ -1019,12 +1009,16 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
                 )
             }
         }
-        // The highest-stakes taps in the app: full-size buttons.
-        TextButton(onClick = { onRespond(true) }) {
-            Text("Allow", color = Tokens.Success, fontSize = Tokens.TextSm)
-        }
-        TextButton(onClick = { onRespond(false) }) {
-            Text("Deny", color = Tokens.Danger, fontSize = Tokens.TextSm)
+        // The highest-stakes taps in the app: full-size buttons. The bar has
+        // room for the one-time choices; "always" options stay on the card.
+        pending.options.filter { it.kind == "allow_once" || it.kind == "reject_once" }.forEach { option ->
+            TextButton(onClick = { onRespond(option.id) }) {
+                Text(
+                    option.label,
+                    color = if (option.isReject) Tokens.Danger else Tokens.Success,
+                    fontSize = Tokens.TextSm,
+                )
+            }
         }
     }
 }
@@ -1198,19 +1192,16 @@ private data class UsageBadgeData(val text: String, val resetCountdown: String?,
 
 private fun usageBadges(usage: UniffiUsageData?, nowMs: Long): List<UsageBadgeData> {
     if (usage?.available != true) return emptyList()
-    val badges = mutableListOf<UsageBadgeData>()
-    for ((label, window) in listOf("5h" to usage.fiveHour, "7d" to usage.sevenDay)) {
-        val utilization = window?.utilization?.takeIf { it.isFinite() } ?: continue
+    // Every window the agent reports, in its order ("5h 61% · 7d 23%").
+    return usage.windows.mapNotNull { window ->
+        val utilization = window.utilization?.takeIf { it.isFinite() } ?: return@mapNotNull null
         val pct = utilization.coerceIn(0.0, 100.0).roundToInt()
-        badges.add(
-            UsageBadgeData(
-                text = "$label $pct%",
-                resetCountdown = formatReset(window.resetsAt, nowMs),
-                critical = pct >= 90,
-            ),
+        UsageBadgeData(
+            text = "${window.label} $pct%",
+            resetCountdown = formatReset(window.resetsAt, nowMs),
+            critical = pct >= 90,
         )
     }
-    return badges
 }
 
 /** Severity for the usage BOX: the worst utilization across the reported
@@ -1219,12 +1210,7 @@ private fun usageBadges(usage: UniffiUsageData?, nowMs: Long): List<UsageBadgeDa
 private fun usageSeverity(usage: UniffiUsageData?, badges: List<UsageBadgeData>): String =
     when {
         badges.any { it.critical } -> "critical"
-        listOfNotNull(
-            usage?.fiveHour,
-            usage?.sevenDay,
-            usage?.sevenDayOpus,
-            usage?.sevenDaySonnet,
-        ).any { window -> (window.utilization?.takeIf { it.isFinite() } ?: 0.0) >= 75.0 } -> "warn"
+        usage?.windows.orEmpty().any { window -> (window.utilization?.takeIf { it.isFinite() } ?: 0.0) >= 75.0 } -> "warn"
         else -> "ok"
     }
 

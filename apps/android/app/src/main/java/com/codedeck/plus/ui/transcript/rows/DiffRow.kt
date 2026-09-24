@@ -23,7 +23,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DiffLine
-import com.codedeck.plus.ui.transcript.OutputEntry
 
 const val DIFF_COLLAPSE_AT = 40
 
@@ -40,23 +39,14 @@ private fun linePrefix(type: String): String = when (type) {
 }
 
 /**
- * Diff card (CDX-050) — filename header + monospace colored lines. Port of
- * `DiffRow.tsx`. Long diffs collapse beyond [DIFF_COLLAPSE_AT] lines behind
- * an "N more lines" expander. Unlike the TS original, there's no
- * reconstruct-from-`+`/`-`-prefixed-`content` fallback for a missing
- * structured payload — `entry.diff` is expected to always be present for a
- * `diff`-kind entry (the bridge always sends it structured); an absent one
- * here just shows the raw content, a disclosed simplification.
+ * Diff card (CDX-050) — file path header + monospace colored lines. Long
+ * diffs collapse beyond [DIFF_COLLAPSE_AT] lines behind an "N more lines"
+ * expander.
  */
 @Composable
-fun DiffRow(entry: OutputEntry, expanded: Boolean, onToggle: () -> Unit) {
-    val diff = entry.diff
-    if (diff == null) {
-        Text(entry.content, color = Tokens.TextMuted, fontFamily = Tokens.FontMono, fontSize = Tokens.TextSm)
-        return
-    }
-    val overflow = diff.lines.size - DIFF_COLLAPSE_AT
-    val visible = if (expanded || overflow <= 0) diff.lines else diff.lines.take(DIFF_COLLAPSE_AT)
+fun DiffRow(path: String, lines: List<DiffLine>, truncated: Boolean, expanded: Boolean, onToggle: () -> Unit) {
+    val overflow = lines.size - DIFF_COLLAPSE_AT
+    val visible = if (expanded || overflow <= 0) lines else lines.take(DIFF_COLLAPSE_AT)
 
     Column(
         Modifier
@@ -65,15 +55,15 @@ fun DiffRow(entry: OutputEntry, expanded: Boolean, onToggle: () -> Unit) {
             .background(Tokens.SurfaceInput)
             .padding(Tokens.Space2),
     ) {
-        if (diff.path.isNotEmpty()) {
+        if (path.isNotEmpty()) {
             // The whole path, wrapped onto as many lines as it needs: which
             // file changed is the card's headline, and an ellipsis cut the
             // one part that tells files apart. The truncation note flows
             // right after it in the same text.
             Text(
                 buildAnnotatedString {
-                    append(diff.path)
-                    if (diff.truncated == true) {
+                    append(path)
+                    if (truncated) {
                         withStyle(SpanStyle(color = Tokens.TextDim)) { append(" (truncated)") }
                     }
                 },

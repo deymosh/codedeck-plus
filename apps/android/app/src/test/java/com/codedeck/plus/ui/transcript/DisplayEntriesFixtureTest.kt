@@ -32,54 +32,60 @@ class DisplayEntriesFixtureTest {
         val entries = parseDisplayEntries(root.getValue("displayEntries").toString())
         val pending = parsePendingPermission(root.getValue("pendingPermission").toString())
 
-        assertEquals(11, entries.size)
+        assertEquals(13, entries.size)
         assertTrue(entries[0] is DisplayEntry.UserMessage)
-        assertTrue(entries[1] is DisplayEntry.AssistantMessage)
+        assertEquals(false, (entries[1] as DisplayEntry.AgentMessage).isPlan)
 
         val toolGroup = entries[2] as DisplayEntry.ToolGroup
-        assertEquals(2, toolGroup.entries.size)
-        assertEquals("2 actions", toolGroup.summary)
+        assertEquals(4, toolGroup.steps.size)
+        assertEquals("3 actions", toolGroup.summary)
+        assertTrue(toolGroup.steps[0] is ToolStep.Thinking)
+        assertTrue(toolGroup.steps[1] is ToolStep.Text)
+        val grep = toolGroup.steps[3] as ToolStep.Call
+        assertEquals("search", grep.toolKind)
+        assertEquals("explorer", grep.subagent)
+        assertEquals("3 matches", grep.result?.text)
 
-        val diff = entries[3] as DisplayEntry.Diff
-        assertEquals("packages/core/src/nostr/pool.ts", diff.entry.diff?.path)
-        assertEquals(3, diff.entry.diff?.lines?.size)
-        assertEquals("del", diff.entry.diff?.lines?.get(1)?.type)
+        val resolved = entries[3] as DisplayEntry.PermissionRequest
+        assertEquals("Allowed", resolved.answered)
+        assertEquals(listOf(false, false, true), resolved.options.map { it.isReject })
 
-        assertTrue(entries[4] is DisplayEntry.Error)
-        assertTrue(entries[5] is DisplayEntry.System)
-        assertTrue(entries[6] is DisplayEntry.Lifecycle)
+        val diff = entries[4] as DisplayEntry.Diff
+        assertEquals("packages/core/src/nostr/pool.ts", diff.path)
+        assertEquals(3, diff.lines.size)
+        assertEquals("del", diff.lines[1].type)
 
-        val planApproval = entries[7] as DisplayEntry.PlanApproval
-        assertEquals(true, planApproval.hasPlan)
-        assertEquals("tu-plan", planApproval.toolUseId)
+        assertTrue(entries[5] is DisplayEntry.Error)
+        assertTrue(entries[6] is DisplayEntry.Status)
+        assertEquals("session_restart", (entries[7] as DisplayEntry.Notice).notice)
+        assertEquals(true, (entries[8] as DisplayEntry.AgentMessage).isPlan)
 
-        val question = entries[8] as DisplayEntry.Question
-        assertEquals(2, question.question.options?.size)
-        assertEquals("Direction", question.question.header)
+        val planApproval = entries[9] as DisplayEntry.PlanApproval
+        assertEquals("tu-plan", planApproval.requestId)
+        assertEquals(3, planApproval.options.size)
+        assertEquals("Stay in plan mode and send feedback", planApproval.options[2].description)
 
-        val questionGroup = entries[9] as DisplayEntry.QuestionGroup
-        assertEquals(2, questionGroup.questions.size)
-        assertEquals("Scope", questionGroup.questions[0].header)
-        assertEquals("Timeline", questionGroup.questions[1].header)
+        val question = entries[10] as DisplayEntry.Question
+        assertEquals(1, question.questions.size)
+        assertEquals("Direction", question.questions[0].header)
+        assertEquals(2, question.questions[0].options.size)
 
-        val permission = entries[10] as DisplayEntry.PermissionRequest
-        assertEquals("Read", permission.toolName)
+        val questionGroup = entries[11] as DisplayEntry.Question
+        assertEquals(listOf("Scope", "Timeline"), questionGroup.questions.map { it.header })
+        assertEquals(true, questionGroup.questions[1].multiSelect)
+
+        val permission = entries[12] as DisplayEntry.PermissionRequest
+        assertEquals("Bash", permission.toolName)
+        assertEquals("execute", permission.toolKind)
         assertEquals("tu-permission", permission.requestId)
 
         assertEquals("tu-permission", pending.requestId)
-        assertEquals("Read", pending.toolName)
+        assertEquals("Bash", pending.toolName)
         assertEquals(false, pending.isSubAgent)
     }
 
     @Test
-    fun metadata_keys_stay_in_their_original_snake_case_wire_spelling() {
-        val root = displayEntriesJson.parseToJsonElement(loadFixture()).jsonObject
-        val entries = parseDisplayEntries(root.getValue("displayEntries").toString())
-        val permission = entries[10] as DisplayEntry.PermissionRequest
-        // Unlike every typed field around it, `metadata` is untyped bridge
-        // passthrough — it must NOT be re-cased to camelCase the way
-        // `toolName`/`requestId` etc. are.
-        assertTrue(permission.entry.metadata?.containsKey("tool_use_id") == true)
-        assertTrue(permission.entry.metadata?.containsKey("toolUseId") != true)
+    fun question_card_keys_match_the_core() {
+        assertEquals("tu-question-group:q1", questionCardKey("tu-question-group", 1))
     }
 }

@@ -53,21 +53,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
 import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiProviderProfileInfo
 
 /** Radio value for the free-text "new folder" branch — same sentinel `NewSessionModal.tsx` uses. */
 private const val NEW_FOLDER = "__new__"
-
-/** `protocolConstants.ts`'s own `EFFORT_LEVELS` fallback list, hardcoded here
- *  for the same reason `SettingsScreen.kt`'s `MODE_OPTIONS` is: no UniFFI
- *  export for protocol defaults exists on this FFI surface yet. */
-private val EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max", "auto")
-
-private const val CAP_OPENCODE = "opencode"
-private const val CAP_CUSTOM_PROVIDERS = "custom-providers"
-private const val BACKEND_OPENCODE = "opencode"
 
 /** How long a create waits for the core to confirm before the UI gives up
  *  waiting and says so. The FFI dispatch is genuinely fire-and-forget (no
@@ -92,10 +84,11 @@ private fun rootLabel(root: String): String {
  * F4.1 — the new-session screen, rendered as a full-screen replacement the
  * shell swaps in (same pattern `SettingsScreen.kt`/`PairingScreen.kt`
  * established), replacing `NewSessionSheet.kt`'s single-button placeholder:
- * port of `apps/mobile/src/ui/NewSessionModal.tsx`'s folder/backend/provider/
- * model/effort picker.
+ * port of `apps/mobile/src/ui/NewSessionModal.tsx`'s folder/agent/provider/
+ * model/mode/effort picker. Which agents, modes and effort levels exist is the
+ * bridge's agent catalog, not a list hardcoded here.
  *
- * Backend, provider, model, and effort render as the shared `SelectField`
+ * Agent, provider, model, mode and effort render as the shared `SelectField`
  * dropdown (`ui/components/SelectField.kt`), the native app's equivalent of
  * the TSX reference's `<select>` elements; only Folder is a radio-row list
  * ([SelectableRow]) — the one section the reference also renders as a list.
@@ -107,7 +100,7 @@ private fun rootLabel(root: String): String {
  * `modelsRequest` on every heartbeat while no list has landed yet
  * (`freshAskedFor` in its own doc comment). `UniffiMachineSummary` carries no
  * heartbeat timestamp to key that retry loop off of, so this screen instead
- * asks once per screen-open and once per backend change — covering the
+ * asks once per screen-open and once per agent change — covering the
  * common case (the picker asks, the bridge answers) without inventing a
  * timer this FFI surface doesn't need for anything else.
  *
@@ -147,6 +140,7 @@ fun NewSessionScreen(
 
     NewSessionBody(
         machine = machine,
+        defaultMode = settings?.defaultMode.orEmpty(),
         defaultModel = settings?.defaultModel.orEmpty(),
         defaultEffort = settings?.defaultEffort.orEmpty(),
         events = core.events,
@@ -159,6 +153,7 @@ fun NewSessionScreen(
 @Composable
 private fun NewSessionBody(
     machine: UniffiMachineSummary,
+    defaultMode: String,
     defaultModel: String,
     defaultEffort: String,
     events: SharedFlow<CoreEvent>,
@@ -166,18 +161,24 @@ private fun NewSessionBody(
     onClose: () -> Unit,
     onCreated: (knownSessionIds: Set<String>) -> Unit,
 ) {
-    // Preferences (CDX-047 parity) pre-select model/effort; '' stays "bridge
-    // default" the same way every other field here uses '' for that. Re-keyed
-    // on the machine so switching which machine's "+" opened this screen
-    // (unlikely — the shell always dismisses first — but cheap to be honest
-    // about) starts from a clean slate rather than a stale prior selection.
+    // The agent the session runs on — the bridge's first advertised agent
+    // until the user picks another. Re-keyed on the machine so switching which
+    // machine's "+" opened this screen starts from a clean slate rather than a
+    // stale prior selection.
+    var agentId by remember(machine.pubkeyHex) { mutableStateOf(machine.agents.firstOrNull()?.id.orEmpty()) }
+    val agent: UniffiAgent? = machine.agents.firstOrNull { it.id == agentId }
+
+    // Preferences (CDX-047 parity) pre-select mode/effort/model — but only
+    // ids this agent actually offers; '' stays "the agent's default", the
+    // same way every other field here uses '' for that.
+    fun preferredMode(a: UniffiAgent?) = defaultMode.takeIf { pref -> a?.modes?.any { it.id == pref } == true }.orEmpty()
+    fun preferredEffort(a: UniffiAgent?) = defaultEffort.takeIf { pref -> a?.efforts?.any { it.id == pref } == true }.orEmpty()
+
     var folderChoice by remember(machine.pubkeyHex) { mutableStateOf("") }
     var newFolder by remember(machine.pubkeyHex) { mutableStateOf("") }
+    var mode by remember(machine.pubkeyHex) { mutableStateOf(preferredMode(agent)) }
+    var effort by remember(machine.pubkeyHex) { mutableStateOf(preferredEffort(agent)) }
     var model by remember(machine.pubkeyHex) { mutableStateOf(defaultModel) }
-    var effort by remember(machine.pubkeyHex) { mutableStateOf(defaultEffort) }
-    // "" = Claude Code (the only backend before OpenCode existed), matching
-    // the ''-means-default convention every other field here already uses.
-    var backend by remember(machine.pubkeyHex) { mutableStateOf("") }
     var providerId by remember(machine.pubkeyHex) { mutableStateOf("") }
     // Create-flow feedback — mobile's `creating`/`error` pair: the button
     // disables with a "Creating…" label, and failures surface as a banner
@@ -186,11 +187,11 @@ private fun NewSessionBody(
     var createError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(machine.pubkeyHex, backend) {
-        dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, backend.ifEmpty { null }))
+    LaunchedEffect(machine.pubkeyHex, agentId) {
+        if (agent?.supportsModels == true) dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, agentId))
     }
     LaunchedEffect(machine.pubkeyHex) {
-        if (machine.capabilities.contains(CAP_CUSTOM_PROVIDERS)) {
+        if (machine.agents.any { it.supportsProviders }) {
             dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
         }
     }
@@ -200,23 +201,16 @@ private fun NewSessionBody(
     // identical-looking row would be noise.
     val roots = if (machine.roots.size > 1) machine.roots else emptyList()
     val newFolderPath = newFolder.trim()
-    val canCreate = folderChoice != NEW_FOLDER || newFolderPath.isNotEmpty()
+    val canCreate = agent != null && (folderChoice != NEW_FOLDER || newFolderPath.isNotEmpty())
 
-    // The Provider select exists only when the bridge can honor it — cap
-    // advertised AND OpenCode isn't the active backend (custom provider
-    // profiles are an Anthropic-compatible-credential concept OpenCode never
-    // reads).
+    // Custom provider profiles only for an agent that can use them.
     val providerProfiles: List<UniffiProviderProfileInfo> =
-        if (backend != BACKEND_OPENCODE && machine.capabilities.contains(CAP_CUSTOM_PROVIDERS)) {
-            machine.providerProfiles
-        } else {
-            emptyList()
-        }
+        if (agent?.supportsProviders == true) machine.providerProfiles else emptyList()
     val activeProfile = if (providerId != "") providerProfiles.find { it.id == providerId } else null
-    // OpenCode has its own model list, unrelated to Claude Code's — the Model
-    // picker must never mix the two.
-    val modelsList: List<UniffiModelEntry> = if (backend == BACKEND_OPENCODE) machine.openCodeModels else machine.models
-    val modelsErr = if (backend == BACKEND_OPENCODE) machine.openCodeModelsError else machine.modelsError
+    // Each agent has its own model list — the Model picker never mixes them.
+    val agentModels = machine.models.firstOrNull { it.agent == agentId }
+    val modelsList: List<UniffiModelEntry> = agentModels?.models.orEmpty()
+    val modelsErr = agentModels?.error
 
     fun changeProvider(id: String) {
         providerId = id
@@ -224,16 +218,19 @@ private fun NewSessionBody(
         model = profile?.defaultModel ?: defaultModel
     }
 
-    fun changeBackend(value: String) {
-        backend = value
+    fun changeAgent(id: String) {
+        agentId = id
+        val next = machine.agents.firstOrNull { it.id == id }
         providerId = ""
-        // OpenCode model ids don't share Claude Code's shape — reset to the
-        // bridge/OpenCode default instead of carrying over a stale preference.
-        model = if (value == BACKEND_OPENCODE) "" else defaultModel
+        mode = preferredMode(next)
+        effort = preferredEffort(next)
+        // Model ids are per agent — start from its default rather than carry
+        // over one it may not know.
+        model = ""
     }
 
     fun create() {
-        if (creating) return
+        if (creating || agent == null) return
         creating = true
         createError = null
         val cwd = if (folderChoice == NEW_FOLDER) newFolderPath else folderChoice
@@ -260,12 +257,13 @@ private fun NewSessionBody(
             dispatch(
                 UniffiIntent.CreateSession(
                     machine = machine.pubkeyHex,
+                    agent = agent.id,
                     cwd = cwd.ifEmpty { null },
                     createCwd = if (folderChoice == NEW_FOLDER) true else null,
+                    mode = mode.ifEmpty { null },
+                    effort = effort.ifEmpty { null },
                     model = model.ifEmpty { null },
-                    defaultEffort = effort.ifEmpty { null },
                     providerId = providerId.ifEmpty { null },
-                    backend = if (backend == BACKEND_OPENCODE) BACKEND_OPENCODE else null,
                 ),
             )
             val settled = confirmation.await()
@@ -281,34 +279,25 @@ private fun NewSessionBody(
         }
     }
 
-    // The pickers, in the order they appear at the top of the screen.
+    // The pickers, in the order they appear at the top of the screen. Each
+    // one shows only what the chosen agent offers.
     @Composable
     fun Options() {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-            // Rendered only when the bridge advertises the 'opencode'
-            // capability — an old bridge's zod would reject the field
-            // anyway, so hiding the picker keeps this screen honest about
-            // what this bridge can do.
-            if (machine.capabilities.contains(CAP_OPENCODE)) {
-                SelectRow("Backend") {
+            if (machine.agents.size > 1) {
+                SelectRow("Agent") {
                     SelectField(
-                        options = listOf(
-                            PickerOption("", "Claude Code"),
-                            PickerOption(BACKEND_OPENCODE, "OpenCode"),
-                        ),
-                        selected = backend,
-                        onSelect = ::changeBackend,
+                        options = machine.agents.map { PickerOption(it.id, it.displayName) },
+                        selected = agentId,
+                        onSelect = ::changeAgent,
                     )
                 }
             }
 
-            // Rendered only when the bridge advertises 'custom-providers'
-            // AND stores at least one profile — an OpenCode session never
-            // sees this (providerProfiles is forced empty above).
             if (providerProfiles.isNotEmpty()) {
                 SelectRow("Provider") {
                     SelectField(
-                        options = listOf(PickerOption("", "Anthropic")) +
+                        options = listOf(PickerOption("", "Default provider")) +
                             providerProfiles.map { PickerOption(it.id, it.label) },
                         selected = providerId,
                         onSelect = ::changeProvider,
@@ -349,14 +338,28 @@ private fun NewSessionBody(
                 }
             }
 
+            // --- Mode ---
+            val modes = agent?.modes.orEmpty()
+            if (modes.isNotEmpty()) {
+                SelectRow("Mode") {
+                    SelectField(
+                        options = listOf(PickerOption("", "Default mode")) + modes.map { PickerOption(it.id, it.label) },
+                        selected = mode,
+                        onSelect = { mode = it },
+                    )
+                }
+            }
+
             // --- Effort ---
-            SelectRow("Effort") {
-                SelectField(
-                    options = listOf(PickerOption("", "Default effort")) +
-                        EFFORT_LEVELS.map { PickerOption(it, it) },
-                    selected = effort,
-                    onSelect = { effort = it },
-                )
+            val efforts = agent?.efforts.orEmpty()
+            if (efforts.isNotEmpty()) {
+                SelectRow("Effort") {
+                    SelectField(
+                        options = listOf(PickerOption("", "Default effort")) + efforts.map { PickerOption(it.id, it.label) },
+                        selected = effort,
+                        onSelect = { effort = it },
+                    )
+                }
             }
         }
     }

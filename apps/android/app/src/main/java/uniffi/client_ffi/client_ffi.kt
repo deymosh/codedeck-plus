@@ -3300,6 +3300,206 @@ public object FfiConverterTypeUniffiNotifier: FfiConverter<UniffiNotifier, Point
 
 
 /**
+ * An agent backend a bridge advertises (`protocol::common::AgentDescriptor`).
+ */
+data class UniffiAgent (
+    var `id`: kotlin.String, 
+    var `displayName`: kotlin.String, 
+    var `modes`: List<UniffiOptionChoice>, 
+    var `efforts`: List<UniffiOptionChoice>, 
+    var `defaultMode`: kotlin.String?, 
+    var `supportsModels`: kotlin.Boolean, 
+    var `supportsUsage`: kotlin.Boolean, 
+    var `supportsProviders`: kotlin.Boolean, 
+    var `supportsGsd`: kotlin.Boolean, 
+    var `supportsInterrupt`: kotlin.Boolean, 
+    var `credentials`: List<UniffiCredentialStatus>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
+    override fun read(buf: ByteBuffer): UniffiAgent {
+        return UniffiAgent(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeUniffiOptionChoice.read(buf),
+            FfiConverterSequenceTypeUniffiOptionChoice.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceTypeUniffiCredentialStatus.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiAgent) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`displayName`) +
+            FfiConverterSequenceTypeUniffiOptionChoice.allocationSize(value.`modes`) +
+            FfiConverterSequenceTypeUniffiOptionChoice.allocationSize(value.`efforts`) +
+            FfiConverterOptionalString.allocationSize(value.`defaultMode`) +
+            FfiConverterBoolean.allocationSize(value.`supportsModels`) +
+            FfiConverterBoolean.allocationSize(value.`supportsUsage`) +
+            FfiConverterBoolean.allocationSize(value.`supportsProviders`) +
+            FfiConverterBoolean.allocationSize(value.`supportsGsd`) +
+            FfiConverterBoolean.allocationSize(value.`supportsInterrupt`) +
+            FfiConverterSequenceTypeUniffiCredentialStatus.allocationSize(value.`credentials`)
+    )
+
+    override fun write(value: UniffiAgent, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`displayName`, buf)
+            FfiConverterSequenceTypeUniffiOptionChoice.write(value.`modes`, buf)
+            FfiConverterSequenceTypeUniffiOptionChoice.write(value.`efforts`, buf)
+            FfiConverterOptionalString.write(value.`defaultMode`, buf)
+            FfiConverterBoolean.write(value.`supportsModels`, buf)
+            FfiConverterBoolean.write(value.`supportsUsage`, buf)
+            FfiConverterBoolean.write(value.`supportsProviders`, buf)
+            FfiConverterBoolean.write(value.`supportsGsd`, buf)
+            FfiConverterBoolean.write(value.`supportsInterrupt`, buf)
+            FfiConverterSequenceTypeUniffiCredentialStatus.write(value.`credentials`, buf)
+    }
+}
+
+
+
+/**
+ * One agent's live model list on a machine.
+ */
+data class UniffiAgentModels (
+    var `agent`: kotlin.String, 
+    var `models`: List<UniffiModelEntry>, 
+    var `defaultModel`: kotlin.String?, 
+    /**
+     * The bridge's reason for its latest empty answer.
+     */
+    var `error`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiAgentModels: FfiConverterRustBuffer<UniffiAgentModels> {
+    override fun read(buf: ByteBuffer): UniffiAgentModels {
+        return UniffiAgentModels(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeUniffiModelEntry.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiAgentModels) = (
+            FfiConverterString.allocationSize(value.`agent`) +
+            FfiConverterSequenceTypeUniffiModelEntry.allocationSize(value.`models`) +
+            FfiConverterOptionalString.allocationSize(value.`defaultModel`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: UniffiAgentModels, buf: ByteBuffer) {
+            FfiConverterString.write(value.`agent`, buf)
+            FfiConverterSequenceTypeUniffiModelEntry.write(value.`models`, buf)
+            FfiConverterOptionalString.write(value.`defaultModel`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+    }
+}
+
+
+
+/**
+ * A credential's status — the secret itself never crosses.
+ */
+data class UniffiCredentialStatus (
+    var `id`: kotlin.String, 
+    var `label`: kotlin.String, 
+    var `present`: kotlin.Boolean, 
+    var `fromEnv`: kotlin.Boolean, 
+    var `valid`: kotlin.Boolean?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiCredentialStatus: FfiConverterRustBuffer<UniffiCredentialStatus> {
+    override fun read(buf: ByteBuffer): UniffiCredentialStatus {
+        return UniffiCredentialStatus(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiCredentialStatus) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`label`) +
+            FfiConverterBoolean.allocationSize(value.`present`) +
+            FfiConverterBoolean.allocationSize(value.`fromEnv`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`valid`)
+    )
+
+    override fun write(value: UniffiCredentialStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`label`, buf)
+            FfiConverterBoolean.write(value.`present`, buf)
+            FfiConverterBoolean.write(value.`fromEnv`, buf)
+            FfiConverterOptionalBoolean.write(value.`valid`, buf)
+    }
+}
+
+
+
+/**
+ * One credential write for `SetCredentials`: set (`Set`) or clear (`Clear`)
+ * the credential `id`; `Keep` entries are dropped (an id not sent is kept).
+ */
+data class UniffiCredentialWrite (
+    var `id`: kotlin.String, 
+    var `value`: UniffiTristate
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiCredentialWrite: FfiConverterRustBuffer<UniffiCredentialWrite> {
+    override fun read(buf: ByteBuffer): UniffiCredentialWrite {
+        return UniffiCredentialWrite(
+            FfiConverterString.read(buf),
+            FfiConverterTypeUniffiTristate.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiCredentialWrite) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterTypeUniffiTristate.allocationSize(value.`value`)
+    )
+
+    override fun write(value: UniffiCredentialWrite, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterTypeUniffiTristate.write(value.`value`, buf)
+    }
+}
+
+
+
+/**
  * Fire-and-answer round-trip ack for `SetCredentials` (CDX-011) — mirrors
  * `client_core::stores::ui::CredentialsAck` field for field. `state` is
  * `"saving"` / `"saved"` / `"failed"`, the same wire spelling `wire_str`
@@ -3308,9 +3508,11 @@ public object FfiConverterTypeUniffiNotifier: FfiConverter<UniffiNotifier, Point
 data class UniffiCredentialsAck (
     var `state`: kotlin.String, 
     var `at`: kotlin.ULong, 
-    var `hasAnthropicKey`: kotlin.Boolean?, 
-    var `hasGithubPat`: kotlin.Boolean?, 
-    var `keyValid`: kotlin.Boolean?, 
+    /**
+     * The agent the write was for; `None` = the bridge's own credentials.
+     * The resulting statuses are on the machine (`UniffiMachineSummary`).
+     */
+    var `agent`: kotlin.String?, 
     var `error`: kotlin.String?
 ) {
     
@@ -3325,9 +3527,7 @@ public object FfiConverterTypeUniffiCredentialsAck: FfiConverterRustBuffer<Uniff
         return UniffiCredentialsAck(
             FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
-            FfiConverterOptionalBoolean.read(buf),
-            FfiConverterOptionalBoolean.read(buf),
-            FfiConverterOptionalBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
@@ -3335,18 +3535,14 @@ public object FfiConverterTypeUniffiCredentialsAck: FfiConverterRustBuffer<Uniff
     override fun allocationSize(value: UniffiCredentialsAck) = (
             FfiConverterString.allocationSize(value.`state`) +
             FfiConverterULong.allocationSize(value.`at`) +
-            FfiConverterOptionalBoolean.allocationSize(value.`hasAnthropicKey`) +
-            FfiConverterOptionalBoolean.allocationSize(value.`hasGithubPat`) +
-            FfiConverterOptionalBoolean.allocationSize(value.`keyValid`) +
+            FfiConverterOptionalString.allocationSize(value.`agent`) +
             FfiConverterOptionalString.allocationSize(value.`error`)
     )
 
     override fun write(value: UniffiCredentialsAck, buf: ByteBuffer) {
             FfiConverterString.write(value.`state`, buf)
             FfiConverterULong.write(value.`at`, buf)
-            FfiConverterOptionalBoolean.write(value.`hasAnthropicKey`, buf)
-            FfiConverterOptionalBoolean.write(value.`hasGithubPat`, buf)
-            FfiConverterOptionalBoolean.write(value.`keyValid`, buf)
+            FfiConverterOptionalString.write(value.`agent`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
     }
 }
@@ -3697,26 +3893,23 @@ data class UniffiMachineSummary (
     var `host`: kotlin.String?, 
     var `sessions`: List<UniffiSessionSummary>, 
     /**
-     * Bridge heartbeat capability strings, e.g. `"opencode"` /
-     * `"custom-providers"` — the new-session screen gates its backend and
-     * provider pickers on these, the same wire strings the reference
-     * `NewSessionModal.tsx` gates on.
+     * Bridge heartbeat capability strings (e.g. `"images"`).
      */
     var `capabilities`: List<kotlin.String>, 
     var `folders`: List<kotlin.String>, 
     var `roots`: List<kotlin.String>, 
     /**
-     * Claude Code's live model list, requested via `RequestModels`.
+     * The agents this bridge can run sessions on, in its own order.
      */
-    var `models`: List<UniffiModelEntry>, 
-    var `defaultModel`: kotlin.String?, 
-    var `modelsError`: kotlin.String?, 
+    var `agents`: List<UniffiAgent>, 
     /**
-     * OpenCode's live model list — tracked separately (see `MachineView`'s
-     * own doc comment) since the two backends can support different models.
+     * The bridge's own credentials (not tied to an agent).
      */
-    var `openCodeModels`: List<UniffiModelEntry>, 
-    var `openCodeModelsError`: kotlin.String?, 
+    var `credentials`: List<UniffiCredentialStatus>, 
+    /**
+     * Live model lists, one entry per agent that has answered `RequestModels`.
+     */
+    var `models`: List<UniffiAgentModels>, 
     var `providerProfiles`: List<UniffiProviderProfileInfo>
 ) {
     
@@ -3736,11 +3929,9 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterSequenceString.read(buf),
-            FfiConverterSequenceTypeUniffiModelEntry.read(buf),
-            FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalString.read(buf),
-            FfiConverterSequenceTypeUniffiModelEntry.read(buf),
-            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeUniffiAgent.read(buf),
+            FfiConverterSequenceTypeUniffiCredentialStatus.read(buf),
+            FfiConverterSequenceTypeUniffiAgentModels.read(buf),
             FfiConverterSequenceTypeUniffiProviderProfileInfo.read(buf),
         )
     }
@@ -3753,11 +3944,9 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceString.allocationSize(value.`capabilities`) +
             FfiConverterSequenceString.allocationSize(value.`folders`) +
             FfiConverterSequenceString.allocationSize(value.`roots`) +
-            FfiConverterSequenceTypeUniffiModelEntry.allocationSize(value.`models`) +
-            FfiConverterOptionalString.allocationSize(value.`defaultModel`) +
-            FfiConverterOptionalString.allocationSize(value.`modelsError`) +
-            FfiConverterSequenceTypeUniffiModelEntry.allocationSize(value.`openCodeModels`) +
-            FfiConverterOptionalString.allocationSize(value.`openCodeModelsError`) +
+            FfiConverterSequenceTypeUniffiAgent.allocationSize(value.`agents`) +
+            FfiConverterSequenceTypeUniffiCredentialStatus.allocationSize(value.`credentials`) +
+            FfiConverterSequenceTypeUniffiAgentModels.allocationSize(value.`models`) +
             FfiConverterSequenceTypeUniffiProviderProfileInfo.allocationSize(value.`providerProfiles`)
     )
 
@@ -3769,11 +3958,9 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceString.write(value.`capabilities`, buf)
             FfiConverterSequenceString.write(value.`folders`, buf)
             FfiConverterSequenceString.write(value.`roots`, buf)
-            FfiConverterSequenceTypeUniffiModelEntry.write(value.`models`, buf)
-            FfiConverterOptionalString.write(value.`defaultModel`, buf)
-            FfiConverterOptionalString.write(value.`modelsError`, buf)
-            FfiConverterSequenceTypeUniffiModelEntry.write(value.`openCodeModels`, buf)
-            FfiConverterOptionalString.write(value.`openCodeModelsError`, buf)
+            FfiConverterSequenceTypeUniffiAgent.write(value.`agents`, buf)
+            FfiConverterSequenceTypeUniffiCredentialStatus.write(value.`credentials`, buf)
+            FfiConverterSequenceTypeUniffiAgentModels.write(value.`models`, buf)
             FfiConverterSequenceTypeUniffiProviderProfileInfo.write(value.`providerProfiles`, buf)
     }
 }
@@ -3841,6 +4028,46 @@ public object FfiConverterTypeUniffiModelEntry: FfiConverterRustBuffer<UniffiMod
     override fun write(value: UniffiModelEntry, buf: ByteBuffer) {
             FfiConverterString.write(value.`id`, buf)
             FfiConverterOptionalString.write(value.`label`, buf)
+    }
+}
+
+
+
+/**
+ * One selectable value of an agent option (a mode, an effort level, a plan
+ * approval choice).
+ */
+data class UniffiOptionChoice (
+    var `id`: kotlin.String, 
+    var `label`: kotlin.String, 
+    var `description`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiOptionChoice: FfiConverterRustBuffer<UniffiOptionChoice> {
+    override fun read(buf: ByteBuffer): UniffiOptionChoice {
+        return UniffiOptionChoice(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiOptionChoice) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`label`) +
+            FfiConverterOptionalString.allocationSize(value.`description`)
+    )
+
+    override fun write(value: UniffiOptionChoice, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`label`, buf)
+            FfiConverterOptionalString.write(value.`description`, buf)
     }
 }
 
@@ -4404,9 +4631,16 @@ data class UniffiSessionSummary (
      */
     var `presence`: kotlin.String, 
     var `lastActivity`: kotlin.String, 
+    /**
+     * The agent the session runs on (`UniffiAgent.id`).
+     */
+    var `agent`: kotlin.String, 
     var `model`: kotlin.String?, 
-    var `permissionMode`: kotlin.String?, 
-    var `effortLevel`: kotlin.String?, 
+    /**
+     * Agent-defined mode / effort ids (see the agent's `modes` / `efforts`).
+     */
+    var `mode`: kotlin.String?, 
+    var `effort`: kotlin.String?, 
     var `contextPercentage`: kotlin.Double?, 
     var `contextWindow`: kotlin.ULong?, 
     var `committed`: kotlin.Boolean?, 
@@ -4440,6 +4674,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
@@ -4461,9 +4696,10 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalString.allocationSize(value.`state`) +
             FfiConverterString.allocationSize(value.`presence`) +
             FfiConverterString.allocationSize(value.`lastActivity`) +
+            FfiConverterString.allocationSize(value.`agent`) +
             FfiConverterOptionalString.allocationSize(value.`model`) +
-            FfiConverterOptionalString.allocationSize(value.`permissionMode`) +
-            FfiConverterOptionalString.allocationSize(value.`effortLevel`) +
+            FfiConverterOptionalString.allocationSize(value.`mode`) +
+            FfiConverterOptionalString.allocationSize(value.`effort`) +
             FfiConverterOptionalDouble.allocationSize(value.`contextPercentage`) +
             FfiConverterOptionalULong.allocationSize(value.`contextWindow`) +
             FfiConverterOptionalBoolean.allocationSize(value.`committed`) +
@@ -4481,9 +4717,10 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalString.write(value.`state`, buf)
             FfiConverterString.write(value.`presence`, buf)
             FfiConverterString.write(value.`lastActivity`, buf)
+            FfiConverterString.write(value.`agent`, buf)
             FfiConverterOptionalString.write(value.`model`, buf)
-            FfiConverterOptionalString.write(value.`permissionMode`, buf)
-            FfiConverterOptionalString.write(value.`effortLevel`, buf)
+            FfiConverterOptionalString.write(value.`mode`, buf)
+            FfiConverterOptionalString.write(value.`effort`, buf)
             FfiConverterOptionalDouble.write(value.`contextPercentage`, buf)
             FfiConverterOptionalULong.write(value.`contextWindow`, buf)
             FfiConverterOptionalBoolean.write(value.`committed`, buf)
@@ -4502,7 +4739,8 @@ data class UniffiSettingsView (
     var `torProxyEnabled`: kotlin.Boolean, 
     var `blossomServer`: kotlin.String, 
     /**
-     * `default` / `acceptEdits` / `plan` — `PermissionMode`'s own wire spelling.
+     * Preferred mode / effort / model for new sessions: agent ids, `""` =
+     * the agent's default.
      */
     var `defaultMode`: kotlin.String, 
     var `defaultEffort`: kotlin.String, 
@@ -4739,11 +4977,8 @@ public object FfiConverterTypeUniffiUndoToast: FfiConverterRustBuffer<UniffiUndo
  */
 data class UniffiUsageData (
     var `available`: kotlin.Boolean, 
-    var `subscriptionType`: kotlin.String?, 
-    var `fiveHour`: UniffiUsageWindow?, 
-    var `sevenDay`: UniffiUsageWindow?, 
-    var `sevenDayOpus`: UniffiUsageWindow?, 
-    var `sevenDaySonnet`: UniffiUsageWindow?, 
+    var `plan`: kotlin.String?, 
+    var `windows`: List<UniffiUsageWindow>, 
     var `sessionCostUsd`: kotlin.Double?, 
     var `fetchedAt`: kotlin.String
 ) {
@@ -4759,10 +4994,7 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
         return UniffiUsageData(
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalTypeUniffiUsageWindow.read(buf),
-            FfiConverterOptionalTypeUniffiUsageWindow.read(buf),
-            FfiConverterOptionalTypeUniffiUsageWindow.read(buf),
-            FfiConverterOptionalTypeUniffiUsageWindow.read(buf),
+            FfiConverterSequenceTypeUniffiUsageWindow.read(buf),
             FfiConverterOptionalDouble.read(buf),
             FfiConverterString.read(buf),
         )
@@ -4770,22 +5002,16 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
 
     override fun allocationSize(value: UniffiUsageData) = (
             FfiConverterBoolean.allocationSize(value.`available`) +
-            FfiConverterOptionalString.allocationSize(value.`subscriptionType`) +
-            FfiConverterOptionalTypeUniffiUsageWindow.allocationSize(value.`fiveHour`) +
-            FfiConverterOptionalTypeUniffiUsageWindow.allocationSize(value.`sevenDay`) +
-            FfiConverterOptionalTypeUniffiUsageWindow.allocationSize(value.`sevenDayOpus`) +
-            FfiConverterOptionalTypeUniffiUsageWindow.allocationSize(value.`sevenDaySonnet`) +
+            FfiConverterOptionalString.allocationSize(value.`plan`) +
+            FfiConverterSequenceTypeUniffiUsageWindow.allocationSize(value.`windows`) +
             FfiConverterOptionalDouble.allocationSize(value.`sessionCostUsd`) +
             FfiConverterString.allocationSize(value.`fetchedAt`)
     )
 
     override fun write(value: UniffiUsageData, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`available`, buf)
-            FfiConverterOptionalString.write(value.`subscriptionType`, buf)
-            FfiConverterOptionalTypeUniffiUsageWindow.write(value.`fiveHour`, buf)
-            FfiConverterOptionalTypeUniffiUsageWindow.write(value.`sevenDay`, buf)
-            FfiConverterOptionalTypeUniffiUsageWindow.write(value.`sevenDayOpus`, buf)
-            FfiConverterOptionalTypeUniffiUsageWindow.write(value.`sevenDaySonnet`, buf)
+            FfiConverterOptionalString.write(value.`plan`, buf)
+            FfiConverterSequenceTypeUniffiUsageWindow.write(value.`windows`, buf)
             FfiConverterOptionalDouble.write(value.`sessionCostUsd`, buf)
             FfiConverterString.write(value.`fetchedAt`, buf)
     }
@@ -4794,10 +5020,14 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
 
 
 /**
- * One usage-limit window (5h / 7d / …) — mirrors
- * `protocol::common::UsageWindow` field for field.
+ * One usage-limit window — mirrors `protocol::common::UsageWindow` field for
+ * field.
  */
 data class UniffiUsageWindow (
+    /**
+     * e.g. "5h", "7d".
+     */
+    var `label`: kotlin.String, 
     /**
      * Percentage 0..=100, not a fraction — the wire carries it pre-scaled
      * (the reference's usage badges round it directly and warn at 75/90).
@@ -4819,17 +5049,20 @@ data class UniffiUsageWindow (
 public object FfiConverterTypeUniffiUsageWindow: FfiConverterRustBuffer<UniffiUsageWindow> {
     override fun read(buf: ByteBuffer): UniffiUsageWindow {
         return UniffiUsageWindow(
+            FfiConverterString.read(buf),
             FfiConverterOptionalDouble.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: UniffiUsageWindow) = (
+            FfiConverterString.allocationSize(value.`label`) +
             FfiConverterOptionalDouble.allocationSize(value.`utilization`) +
             FfiConverterOptionalString.allocationSize(value.`resetsAt`)
     )
 
     override fun write(value: UniffiUsageWindow, buf: ByteBuffer) {
+            FfiConverterString.write(value.`label`, buf)
             FfiConverterOptionalDouble.write(value.`utilization`, buf)
             FfiConverterOptionalString.write(value.`resetsAt`, buf)
     }
@@ -5064,39 +5297,33 @@ sealed class UniffiIntent {
     }
     
     /**
-     * `backend`: `"claude-code"` / `"opencode"` / absent (defaults to Claude
-     * Code) — see this module's doc comment for why wire enums cross as
-     * plain strings. Send `"opencode"` only when the machine's
-     * `capabilities` includes `"opencode"`.
+     * Start a session on `agent` (a `UniffiAgent.id` the machine advertises).
+     * `mode` / `effort` are agent-defined ids; absent = the agent's default.
      */
     data class CreateSession(
         val `machine`: kotlin.String, 
+        val `agent`: kotlin.String, 
         val `cwd`: kotlin.String?, 
         val `createCwd`: kotlin.Boolean?, 
+        val `mode`: kotlin.String?, 
+        val `effort`: kotlin.String?, 
         val `model`: kotlin.String?, 
-        /**
-         * `"low"` / `"medium"` / `"high"` / `"xhigh"` / `"max"` — the wire's
-         * own spelling, same convention as `mode`.
-         */
-        val `defaultEffort`: kotlin.String?, 
-        val `providerId`: kotlin.String?, 
-        val `backend`: kotlin.String?) : UniffiIntent() {
+        val `providerId`: kotlin.String?) : UniffiIntent() {
         companion object
     }
     
     /**
-     * Ask the bridge for a backend's live supported-model list; the answer
-     * lands in the matching `UniffiMachineSummary` field (`models` /
-     * `open_code_models`).
+     * Ask the bridge for `agent`'s live model list; the answer lands in the
+     * machine's `models` entry for that agent.
      */
     data class RequestModels(
         val `machine`: kotlin.String, 
-        val `backend`: kotlin.String?) : UniffiIntent() {
+        val `agent`: kotlin.String) : UniffiIntent() {
         companion object
     }
     
     /**
-     * Ask the bridge for this session's usage snapshot (5h/7d limits, cost);
+     * Ask the bridge for this session's usage snapshot (limit windows, cost);
      * the answer lands in `UniffiSessionSummary.usage`.
      */
     data class RequestUsage(
@@ -5121,12 +5348,14 @@ sealed class UniffiIntent {
     }
     
     /**
-     * Store credentials on the bridge host (CDX-011). Secrets: never logged.
+     * Store credentials on the bridge host (CDX-011) for `agent`, or for the
+     * bridge itself when `None`. Ids not listed are kept. Secrets: never
+     * logged.
      */
     data class SetCredentials(
         val `machine`: kotlin.String, 
-        val `anthropicApiKey`: UniffiTristate, 
-        val `githubPat`: UniffiTristate) : UniffiIntent() {
+        val `agent`: kotlin.String?, 
+        val `values`: List<UniffiCredentialWrite>) : UniffiIntent() {
         companion object
     }
     
@@ -5141,57 +5370,51 @@ sealed class UniffiIntent {
         companion object
     }
     
+    /**
+     * Answer a permission request with one of its options' ids.
+     */
     data class RespondPermission(
         val `machine`: kotlin.String, 
         val `sessionId`: kotlin.String, 
         val `requestId`: kotlin.String, 
-        val `allow`: kotlin.Boolean, 
-        /**
-         * `"always"` / `"never"` / absent — see this module's doc comment.
-         */
-        val `modifier`: kotlin.String?) : UniffiIntent() {
-        companion object
-    }
-    
-    data class AnswerQuestion(
-        val `machine`: kotlin.String, 
-        val `sessionId`: kotlin.String, 
-        val `text`: kotlin.String, 
-        val `optionCount`: kotlin.ULong) : UniffiIntent() {
-        companion object
-    }
-    
-    data class Keypress(
-        val `machine`: kotlin.String, 
-        val `sessionId`: kotlin.String, 
-        val `key`: kotlin.String, 
-        /**
-         * `"plan-approval"` / `"question"` / absent.
-         */
-        val `context`: kotlin.String?) : UniffiIntent() {
-        companion object
-    }
-    
-    data class SetMode(
-        val `machine`: kotlin.String, 
-        val `sessionId`: kotlin.String, 
-        /**
-         * `"default"` / `"acceptEdits"` / `"plan"` — the wire's own spelling.
-         */
-        val `mode`: kotlin.String) : UniffiIntent() {
+        val `optionId`: kotlin.String) : UniffiIntent() {
         companion object
     }
     
     /**
-     * Session-level effort change — distinct from the global-settings
-     * `SetDefaultEffort` below. `level`: `"low"` / `"medium"` / `"high"` /
-     * `"xhigh"` / `"max"` / `"auto"` — the wire's own spelling, same
-     * convention as `mode`.
+     * Answer question `index` of the ask `request_id`: free `text` when
+     * present, otherwise the `selected` option indices.
      */
-    data class SetEffort(
+    data class AnswerQuestion(
         val `machine`: kotlin.String, 
         val `sessionId`: kotlin.String, 
-        val `level`: kotlin.String) : UniffiIntent() {
+        val `requestId`: kotlin.String, 
+        val `index`: kotlin.UInt, 
+        val `selected`: List<kotlin.UInt>, 
+        val `text`: kotlin.String?) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * Answer a plan approval with one of its options' ids.
+     */
+    data class RespondPlan(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String, 
+        val `requestId`: kotlin.String, 
+        val `optionId`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * Change a session option: `option` is `"mode"` / `"effort"` /
+     * `"model"`, `value` an id the session's agent advertises (or a model id).
+     */
+    data class SetOption(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String, 
+        val `option`: kotlin.String, 
+        val `value`: kotlin.String) : UniffiIntent() {
         companion object
     }
     
@@ -5209,7 +5432,7 @@ sealed class UniffiIntent {
     /**
      * F3.3: records which plan-approval option the user tapped so the
      * resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
-     * actual answer (`Keypress` with `context: "plan-approval"`), not
+     * actual answer (`RespondPlan`), not
      * instead of it — same contract the TS `PlanApprovalCard.tsx` had.
      */
     data class SetPlanApprovalChoice(
@@ -5280,7 +5503,7 @@ sealed class UniffiIntent {
     }
     
     /**
-     * `"default"` / `"acceptEdits"` / `"plan"` — same wire spelling as `SetMode`.
+     * Preferred mode for new sessions — an agent mode id; `""` = the agent's default.
      */
     data class SetDefaultMode(
         val `mode`: kotlin.String) : UniffiIntent() {
@@ -5422,6 +5645,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 )
             6 -> UniffiIntent.CreateSession(
                 FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterOptionalBoolean.read(buf),
                 FfiConverterOptionalString.read(buf),
@@ -5431,7 +5655,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 )
             7 -> UniffiIntent.RequestModels(
                 FfiConverterString.read(buf),
-                FfiConverterOptionalString.read(buf),
+                FfiConverterString.read(buf),
                 )
             8 -> UniffiIntent.RequestUsage(
                 FfiConverterString.read(buf),
@@ -5446,8 +5670,8 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 )
             11 -> UniffiIntent.SetCredentials(
                 FfiConverterString.read(buf),
-                FfiConverterTypeUniffiTristate.read(buf),
-                FfiConverterTypeUniffiTristate.read(buf),
+                FfiConverterOptionalString.read(buf),
+                FfiConverterSequenceTypeUniffiCredentialWrite.read(buf),
                 )
             12 -> UniffiIntent.SetProviderProfile(
                 FfiConverterString.read(buf),
@@ -5458,121 +5682,118 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
-                FfiConverterBoolean.read(buf),
-                FfiConverterOptionalString.read(buf),
+                FfiConverterString.read(buf),
                 )
             14 -> UniffiIntent.AnswerQuestion(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
-                FfiConverterULong.read(buf),
+                FfiConverterUInt.read(buf),
+                FfiConverterSequenceUInt.read(buf),
+                FfiConverterOptionalString.read(buf),
                 )
-            15 -> UniffiIntent.Keypress(
+            15 -> UniffiIntent.RespondPlan(
                 FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            16 -> UniffiIntent.SetOption(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            17 -> UniffiIntent.SelectSession(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            18 -> UniffiIntent.SetPlanApprovalChoice(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            19 -> UniffiIntent.RetryOutboxItem(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            20 -> UniffiIntent.DeleteSession(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            16 -> UniffiIntent.SetMode(
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
-                )
-            17 -> UniffiIntent.SetEffort(
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
+            21 -> UniffiIntent.UndoDelete
+            22 -> UniffiIntent.AddRelay(
                 FfiConverterString.read(buf),
                 )
-            18 -> UniffiIntent.SelectSession(
-                FfiConverterString.read(buf),
-                FfiConverterOptionalString.read(buf),
-                )
-            19 -> UniffiIntent.SetPlanApprovalChoice(
-                FfiConverterString.read(buf),
+            23 -> UniffiIntent.RemoveRelay(
                 FfiConverterString.read(buf),
                 )
-            20 -> UniffiIntent.RetryOutboxItem(
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
-                )
-            21 -> UniffiIntent.DeleteSession(
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
-                FfiConverterOptionalString.read(buf),
-                )
-            22 -> UniffiIntent.UndoDelete
-            23 -> UniffiIntent.AddRelay(
-                FfiConverterString.read(buf),
-                )
-            24 -> UniffiIntent.RemoveRelay(
-                FfiConverterString.read(buf),
-                )
-            25 -> UniffiIntent.SetTorEnabled(
+            24 -> UniffiIntent.SetTorEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            26 -> UniffiIntent.SetStayConnected(
+            25 -> UniffiIntent.SetStayConnected(
                 FfiConverterBoolean.read(buf),
                 )
-            27 -> UniffiIntent.SetBlossomServer(
+            26 -> UniffiIntent.SetBlossomServer(
                 FfiConverterString.read(buf),
                 )
-            28 -> UniffiIntent.SetNotificationsEnabled(
+            27 -> UniffiIntent.SetNotificationsEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            29 -> UniffiIntent.SetDefaultMode(
+            28 -> UniffiIntent.SetDefaultMode(
                 FfiConverterString.read(buf),
                 )
-            30 -> UniffiIntent.SetDefaultEffort(
+            29 -> UniffiIntent.SetDefaultEffort(
                 FfiConverterString.read(buf),
                 )
-            31 -> UniffiIntent.SetDefaultModel(
+            30 -> UniffiIntent.SetDefaultModel(
                 FfiConverterString.read(buf),
                 )
-            32 -> UniffiIntent.SetUiScale(
+            31 -> UniffiIntent.SetUiScale(
                 FfiConverterDouble.read(buf),
                 )
-            33 -> UniffiIntent.SetShowUsageBadge(
+            32 -> UniffiIntent.SetShowUsageBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            34 -> UniffiIntent.SetShowCommitBadge(
+            33 -> UniffiIntent.SetShowCommitBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            35 -> UniffiIntent.AddQuickPrompt(
+            34 -> UniffiIntent.AddQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            36 -> UniffiIntent.UpdateQuickPrompt(
+            35 -> UniffiIntent.UpdateQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            37 -> UniffiIntent.RemoveQuickPrompt(
+            36 -> UniffiIntent.RemoveQuickPrompt(
                 FfiConverterString.read(buf),
                 )
-            38 -> UniffiIntent.DismissPendingSession(
+            37 -> UniffiIntent.DismissPendingSession(
                 FfiConverterString.read(buf),
                 )
-            39 -> UniffiIntent.RemoveMachine(
+            38 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
-            40 -> UniffiIntent.BeginPairing(
-                FfiConverterString.read(buf),
-                FfiConverterString.read(buf),
-                )
-            41 -> UniffiIntent.BeginManualPairing(
-                FfiConverterString.read(buf),
+            39 -> UniffiIntent.BeginPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            42 -> UniffiIntent.StagePairing(
+            40 -> UniffiIntent.BeginManualPairing(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            43 -> UniffiIntent.ConfirmStagedPairing(
+            41 -> UniffiIntent.StagePairing(
                 FfiConverterString.read(buf),
                 )
-            44 -> UniffiIntent.DismissStagedPairing
-            45 -> UniffiIntent.ResetPairing
+            42 -> UniffiIntent.ConfirmStagedPairing(
+                FfiConverterString.read(buf),
+                )
+            43 -> UniffiIntent.DismissStagedPairing
+            44 -> UniffiIntent.ResetPairing
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -5628,12 +5849,13 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             (
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`agent`)
                 + FfiConverterOptionalString.allocationSize(value.`cwd`)
                 + FfiConverterOptionalBoolean.allocationSize(value.`createCwd`)
+                + FfiConverterOptionalString.allocationSize(value.`mode`)
+                + FfiConverterOptionalString.allocationSize(value.`effort`)
                 + FfiConverterOptionalString.allocationSize(value.`model`)
-                + FfiConverterOptionalString.allocationSize(value.`defaultEffort`)
                 + FfiConverterOptionalString.allocationSize(value.`providerId`)
-                + FfiConverterOptionalString.allocationSize(value.`backend`)
             )
         }
         is UniffiIntent.RequestModels -> {
@@ -5641,7 +5863,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             (
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
-                + FfiConverterOptionalString.allocationSize(value.`backend`)
+                + FfiConverterString.allocationSize(value.`agent`)
             )
         }
         is UniffiIntent.RequestUsage -> {
@@ -5672,8 +5894,8 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             (
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
-                + FfiConverterTypeUniffiTristate.allocationSize(value.`anthropicApiKey`)
-                + FfiConverterTypeUniffiTristate.allocationSize(value.`githubPat`)
+                + FfiConverterOptionalString.allocationSize(value.`agent`)
+                + FfiConverterSequenceTypeUniffiCredentialWrite.allocationSize(value.`values`)
             )
         }
         is UniffiIntent.SetProviderProfile -> {
@@ -5692,8 +5914,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`machine`)
                 + FfiConverterString.allocationSize(value.`sessionId`)
                 + FfiConverterString.allocationSize(value.`requestId`)
-                + FfiConverterBoolean.allocationSize(value.`allow`)
-                + FfiConverterOptionalString.allocationSize(value.`modifier`)
+                + FfiConverterString.allocationSize(value.`optionId`)
             )
         }
         is UniffiIntent.AnswerQuestion -> {
@@ -5702,36 +5923,30 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
                 + FfiConverterString.allocationSize(value.`sessionId`)
-                + FfiConverterString.allocationSize(value.`text`)
-                + FfiConverterULong.allocationSize(value.`optionCount`)
+                + FfiConverterString.allocationSize(value.`requestId`)
+                + FfiConverterUInt.allocationSize(value.`index`)
+                + FfiConverterSequenceUInt.allocationSize(value.`selected`)
+                + FfiConverterOptionalString.allocationSize(value.`text`)
             )
         }
-        is UniffiIntent.Keypress -> {
+        is UniffiIntent.RespondPlan -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
                 + FfiConverterString.allocationSize(value.`sessionId`)
-                + FfiConverterString.allocationSize(value.`key`)
-                + FfiConverterOptionalString.allocationSize(value.`context`)
+                + FfiConverterString.allocationSize(value.`requestId`)
+                + FfiConverterString.allocationSize(value.`optionId`)
             )
         }
-        is UniffiIntent.SetMode -> {
+        is UniffiIntent.SetOption -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
                 + FfiConverterString.allocationSize(value.`sessionId`)
-                + FfiConverterString.allocationSize(value.`mode`)
-            )
-        }
-        is UniffiIntent.SetEffort -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`machine`)
-                + FfiConverterString.allocationSize(value.`sessionId`)
-                + FfiConverterString.allocationSize(value.`level`)
+                + FfiConverterString.allocationSize(value.`option`)
+                + FfiConverterString.allocationSize(value.`value`)
             )
         }
         is UniffiIntent.SelectSession -> {
@@ -5981,18 +6196,19 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             is UniffiIntent.CreateSession -> {
                 buf.putInt(6)
                 FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`agent`, buf)
                 FfiConverterOptionalString.write(value.`cwd`, buf)
                 FfiConverterOptionalBoolean.write(value.`createCwd`, buf)
+                FfiConverterOptionalString.write(value.`mode`, buf)
+                FfiConverterOptionalString.write(value.`effort`, buf)
                 FfiConverterOptionalString.write(value.`model`, buf)
-                FfiConverterOptionalString.write(value.`defaultEffort`, buf)
                 FfiConverterOptionalString.write(value.`providerId`, buf)
-                FfiConverterOptionalString.write(value.`backend`, buf)
                 Unit
             }
             is UniffiIntent.RequestModels -> {
                 buf.putInt(7)
                 FfiConverterString.write(value.`machine`, buf)
-                FfiConverterOptionalString.write(value.`backend`, buf)
+                FfiConverterString.write(value.`agent`, buf)
                 Unit
             }
             is UniffiIntent.RequestUsage -> {
@@ -6015,8 +6231,8 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             is UniffiIntent.SetCredentials -> {
                 buf.putInt(11)
                 FfiConverterString.write(value.`machine`, buf)
-                FfiConverterTypeUniffiTristate.write(value.`anthropicApiKey`, buf)
-                FfiConverterTypeUniffiTristate.write(value.`githubPat`, buf)
+                FfiConverterOptionalString.write(value.`agent`, buf)
+                FfiConverterSequenceTypeUniffiCredentialWrite.write(value.`values`, buf)
                 Unit
             }
             is UniffiIntent.SetProviderProfile -> {
@@ -6031,187 +6247,182 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
-                FfiConverterBoolean.write(value.`allow`, buf)
-                FfiConverterOptionalString.write(value.`modifier`, buf)
+                FfiConverterString.write(value.`optionId`, buf)
                 Unit
             }
             is UniffiIntent.AnswerQuestion -> {
                 buf.putInt(14)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
-                FfiConverterString.write(value.`text`, buf)
-                FfiConverterULong.write(value.`optionCount`, buf)
+                FfiConverterString.write(value.`requestId`, buf)
+                FfiConverterUInt.write(value.`index`, buf)
+                FfiConverterSequenceUInt.write(value.`selected`, buf)
+                FfiConverterOptionalString.write(value.`text`, buf)
                 Unit
             }
-            is UniffiIntent.Keypress -> {
+            is UniffiIntent.RespondPlan -> {
                 buf.putInt(15)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
-                FfiConverterString.write(value.`key`, buf)
-                FfiConverterOptionalString.write(value.`context`, buf)
+                FfiConverterString.write(value.`requestId`, buf)
+                FfiConverterString.write(value.`optionId`, buf)
                 Unit
             }
-            is UniffiIntent.SetMode -> {
+            is UniffiIntent.SetOption -> {
                 buf.putInt(16)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
-                FfiConverterString.write(value.`mode`, buf)
-                Unit
-            }
-            is UniffiIntent.SetEffort -> {
-                buf.putInt(17)
-                FfiConverterString.write(value.`machine`, buf)
-                FfiConverterString.write(value.`sessionId`, buf)
-                FfiConverterString.write(value.`level`, buf)
+                FfiConverterString.write(value.`option`, buf)
+                FfiConverterString.write(value.`value`, buf)
                 Unit
             }
             is UniffiIntent.SelectSession -> {
-                buf.putInt(18)
+                buf.putInt(17)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.SetPlanApprovalChoice -> {
-                buf.putInt(19)
+                buf.putInt(18)
                 FfiConverterString.write(value.`cardId`, buf)
                 FfiConverterString.write(value.`key`, buf)
                 Unit
             }
             is UniffiIntent.RetryOutboxItem -> {
-                buf.putInt(20)
+                buf.putInt(19)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DeleteSession -> {
-                buf.putInt(21)
+                buf.putInt(20)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterOptionalString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.UndoDelete -> {
-                buf.putInt(22)
+                buf.putInt(21)
                 Unit
             }
             is UniffiIntent.AddRelay -> {
-                buf.putInt(23)
+                buf.putInt(22)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.RemoveRelay -> {
-                buf.putInt(24)
+                buf.putInt(23)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.SetTorEnabled -> {
-                buf.putInt(25)
+                buf.putInt(24)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetStayConnected -> {
-                buf.putInt(26)
+                buf.putInt(25)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetBlossomServer -> {
-                buf.putInt(27)
+                buf.putInt(26)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.SetNotificationsEnabled -> {
-                buf.putInt(28)
+                buf.putInt(27)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultMode -> {
-                buf.putInt(29)
+                buf.putInt(28)
                 FfiConverterString.write(value.`mode`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultEffort -> {
-                buf.putInt(30)
+                buf.putInt(29)
                 FfiConverterString.write(value.`level`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultModel -> {
-                buf.putInt(31)
+                buf.putInt(30)
                 FfiConverterString.write(value.`model`, buf)
                 Unit
             }
             is UniffiIntent.SetUiScale -> {
-                buf.putInt(32)
+                buf.putInt(31)
                 FfiConverterDouble.write(value.`scale`, buf)
                 Unit
             }
             is UniffiIntent.SetShowUsageBadge -> {
-                buf.putInt(33)
+                buf.putInt(32)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetShowCommitBadge -> {
-                buf.putInt(34)
+                buf.putInt(33)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.AddQuickPrompt -> {
-                buf.putInt(35)
+                buf.putInt(34)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is UniffiIntent.UpdateQuickPrompt -> {
-                buf.putInt(36)
+                buf.putInt(35)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is UniffiIntent.RemoveQuickPrompt -> {
-                buf.putInt(37)
+                buf.putInt(36)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DismissPendingSession -> {
-                buf.putInt(38)
+                buf.putInt(37)
                 FfiConverterString.write(value.`pendingId`, buf)
                 Unit
             }
             is UniffiIntent.RemoveMachine -> {
-                buf.putInt(39)
+                buf.putInt(38)
                 FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
             is UniffiIntent.BeginPairing -> {
-                buf.putInt(40)
+                buf.putInt(39)
                 FfiConverterString.write(value.`url`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.BeginManualPairing -> {
-                buf.putInt(41)
+                buf.putInt(40)
                 FfiConverterString.write(value.`npub`, buf)
                 FfiConverterString.write(value.`token`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.StagePairing -> {
-                buf.putInt(42)
+                buf.putInt(41)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ConfirmStagedPairing -> {
-                buf.putInt(43)
+                buf.putInt(42)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.DismissStagedPairing -> {
-                buf.putInt(44)
+                buf.putInt(43)
                 Unit
             }
             is UniffiIntent.ResetPairing -> {
-                buf.putInt(45)
+                buf.putInt(44)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -6819,38 +7030,6 @@ public object FfiConverterOptionalTypeUniffiUsageData: FfiConverterRustBuffer<Un
 /**
  * @suppress
  */
-public object FfiConverterOptionalTypeUniffiUsageWindow: FfiConverterRustBuffer<UniffiUsageWindow?> {
-    override fun read(buf: ByteBuffer): UniffiUsageWindow? {
-        if (buf.get().toInt() == 0) {
-            return null
-        }
-        return FfiConverterTypeUniffiUsageWindow.read(buf)
-    }
-
-    override fun allocationSize(value: UniffiUsageWindow?): ULong {
-        if (value == null) {
-            return 1UL
-        } else {
-            return 1UL + FfiConverterTypeUniffiUsageWindow.allocationSize(value)
-        }
-    }
-
-    override fun write(value: UniffiUsageWindow?, buf: ByteBuffer) {
-        if (value == null) {
-            buf.put(0)
-        } else {
-            buf.put(1)
-            FfiConverterTypeUniffiUsageWindow.write(value, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
 public object FfiConverterOptionalTypeConnectionView: FfiConverterRustBuffer<ConnectionView?> {
     override fun read(buf: ByteBuffer): ConnectionView? {
         if (buf.get().toInt() == 0) {
@@ -6883,6 +7062,34 @@ public object FfiConverterOptionalTypeConnectionView: FfiConverterRustBuffer<Con
 /**
  * @suppress
  */
+public object FfiConverterSequenceUInt: FfiConverterRustBuffer<List<kotlin.UInt>> {
+    override fun read(buf: ByteBuffer): List<kotlin.UInt> {
+        val len = buf.getInt()
+        return List<kotlin.UInt>(len) {
+            FfiConverterUInt.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.UInt>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterUInt.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.UInt>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterUInt.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -6901,6 +7108,118 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiAgent: FfiConverterRustBuffer<List<UniffiAgent>> {
+    override fun read(buf: ByteBuffer): List<UniffiAgent> {
+        val len = buf.getInt()
+        return List<UniffiAgent>(len) {
+            FfiConverterTypeUniffiAgent.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiAgent>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiAgent.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiAgent>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiAgent.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiAgentModels: FfiConverterRustBuffer<List<UniffiAgentModels>> {
+    override fun read(buf: ByteBuffer): List<UniffiAgentModels> {
+        val len = buf.getInt()
+        return List<UniffiAgentModels>(len) {
+            FfiConverterTypeUniffiAgentModels.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiAgentModels>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiAgentModels.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiAgentModels>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiAgentModels.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiCredentialStatus: FfiConverterRustBuffer<List<UniffiCredentialStatus>> {
+    override fun read(buf: ByteBuffer): List<UniffiCredentialStatus> {
+        val len = buf.getInt()
+        return List<UniffiCredentialStatus>(len) {
+            FfiConverterTypeUniffiCredentialStatus.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiCredentialStatus>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiCredentialStatus.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiCredentialStatus>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiCredentialStatus.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiCredentialWrite: FfiConverterRustBuffer<List<UniffiCredentialWrite>> {
+    override fun read(buf: ByteBuffer): List<UniffiCredentialWrite> {
+        val len = buf.getInt()
+        return List<UniffiCredentialWrite>(len) {
+            FfiConverterTypeUniffiCredentialWrite.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiCredentialWrite>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiCredentialWrite.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiCredentialWrite>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiCredentialWrite.write(it, buf)
         }
     }
 }
@@ -7041,6 +7360,34 @@ public object FfiConverterSequenceTypeUniffiModelEntry: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiModelEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiOptionChoice: FfiConverterRustBuffer<List<UniffiOptionChoice>> {
+    override fun read(buf: ByteBuffer): List<UniffiOptionChoice> {
+        val len = buf.getInt()
+        return List<UniffiOptionChoice>(len) {
+            FfiConverterTypeUniffiOptionChoice.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiOptionChoice>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiOptionChoice.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiOptionChoice>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiOptionChoice.write(it, buf)
         }
     }
 }
@@ -7209,6 +7556,34 @@ public object FfiConverterSequenceTypeUniffiSessionSummary: FfiConverterRustBuff
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiSessionSummary.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiUsageWindow: FfiConverterRustBuffer<List<UniffiUsageWindow>> {
+    override fun read(buf: ByteBuffer): List<UniffiUsageWindow> {
+        val len = buf.getInt()
+        return List<UniffiUsageWindow>(len) {
+            FfiConverterTypeUniffiUsageWindow.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiUsageWindow>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiUsageWindow.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiUsageWindow>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiUsageWindow.write(it, buf)
         }
     }
 }

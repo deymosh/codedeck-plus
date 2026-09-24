@@ -16,6 +16,7 @@ import com.codedeck.plus.ui.theme.CodeDeckTheme
 import com.codedeck.plus.ui.theme.Tokens
 import org.junit.Rule
 import org.junit.Test
+import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiUsageData
 import uniffi.client_ffi.UniffiUsageWindow
 
@@ -54,8 +55,11 @@ class SessionChromeSnapshotTest {
                             onRetry = {},
                         )
                         SessionControlsBar(
-                            effortLevel = "high",
-                            permissionMode = "acceptEdits",
+                            effort = "high",
+                            efforts = listOf(
+                                UniffiOptionChoice("low", "Low", null),
+                                UniffiOptionChoice("high", "High", null),
+                            ),
                             modeLabel = "EDITS",
                             modePending = false,
                             model = "claude-opus-5-5",
@@ -66,11 +70,11 @@ class SessionChromeSnapshotTest {
                             showUsageBadge = true,
                             usage = UniffiUsageData(
                                 available = true,
-                                subscriptionType = "max",
-                                fiveHour = UniffiUsageWindow(utilization = 61.0, resetsAt = null),
-                                sevenDay = UniffiUsageWindow(utilization = 23.0, resetsAt = null),
-                                sevenDayOpus = null,
-                                sevenDaySonnet = null,
+                                plan = "max",
+                                windows = listOf(
+                                    UniffiUsageWindow(label = "5h", utilization = 61.0, resetsAt = null),
+                                    UniffiUsageWindow(label = "7d", utilization = 23.0, resetsAt = null),
+                                ),
                                 sessionCostUsd = null,
                                 fetchedAt = "2026-09-23T10:00:00Z",
                             ),

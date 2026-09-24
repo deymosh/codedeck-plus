@@ -15,28 +15,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import com.codedeck.plus.ui.theme.Tokens
-import com.codedeck.plus.ui.transcript.SeqEntry
-import com.codedeck.plus.ui.transcript.metaBool
+import com.codedeck.plus.ui.transcript.ToolStep
 
 private const val PREVIEW_LIMIT = 600
 
 private fun preview(text: String): String =
     if (text.length > PREVIEW_LIMIT) text.take(PREVIEW_LIMIT) + "…" else text
 
-/** A `redacted_thinking` block carries no readable text — without this it
- *  renders as a blank row inside the body. */
-private fun isRedactedThinking(e: SeqEntry): Boolean =
-    e.entry.entryType == "thinking" && e.entry.metadata.metaBool("redacted") == true
+/** One step's lines: a call's `toolName title` (a sub-agent's call names the
+ *  sub-agent) followed by its result, or a lone result / thinking / folded
+ *  text line. */
+private fun stepLines(step: ToolStep): List<Pair<String, Boolean>> = when (step) {
+    is ToolStep.Call -> buildList {
+        val who = if (step.isSubAgent) "${step.subagent ?: "sub-agent"} · " else ""
+        add("$who${step.toolName} ${step.title}".trim() to false)
+        step.result?.let { add("↳ ${preview(it.text)}" to it.isError) }
+    }
+    is ToolStep.Result -> listOf("↳ ${preview(step.text)}" to step.isError)
+    // A redacted block carries no readable text.
+    is ToolStep.Thinking -> listOf((if (step.redacted) "Thinking (redacted)" else preview(step.text)) to false)
+    is ToolStep.Text -> listOf(preview(step.text) to false)
+}
 
 /**
- * Collapsed turn activity — "N actions" summary, expandable to the raw
- * `tool_use` commands, `tool_result` previews, the model's thinking, and any
- * collapsed assistant text. Port of `ToolGroupRow.tsx`; CDX-085: thinking
- * renders here (not a row of its own) in transcript order, so reasoning
- * appears where it actually happened.
+ * Collapsed turn activity — an "N actions" summary, expandable to each tool
+ * call with its result, the model's thinking, and any folded agent text, in
+ * transcript order so reasoning appears where it actually happened.
  */
 @Composable
-fun ToolGroupRow(entries: List<SeqEntry>, summary: String, expanded: Boolean, onToggle: () -> Unit) {
+fun ToolGroupRow(steps: List<ToolStep>, summary: String, expanded: Boolean, onToggle: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -62,15 +69,16 @@ fun ToolGroupRow(entries: List<SeqEntry>, summary: String, expanded: Boolean, on
                 Column(
                     Modifier.fillMaxWidth().padding(start = Tokens.Space5, end = Tokens.Space3, bottom = Tokens.Space3),
                 ) {
-                    entries.forEach { e ->
-                        val prefix = if (e.entry.entryType == "tool_result") "↳ " else ""
-                        Text(
-                            prefix + if (isRedactedThinking(e)) "Thinking (redacted)" else preview(e.entry.content),
-                            color = Tokens.TextDim,
-                            fontFamily = Tokens.FontMono,
-                            fontSize = Tokens.TextXs,
-                            modifier = Modifier.padding(vertical = Tokens.Space1 / 2),
-                        )
+                    steps.forEach { step ->
+                        stepLines(step).forEach { (line, isError) ->
+                            Text(
+                                line,
+                                color = if (isError) Tokens.Danger else Tokens.TextDim,
+                                fontFamily = Tokens.FontMono,
+                                fontSize = Tokens.TextXs,
+                                modifier = Modifier.padding(vertical = Tokens.Space1 / 2),
+                            )
+                        }
                     }
                 }
             }

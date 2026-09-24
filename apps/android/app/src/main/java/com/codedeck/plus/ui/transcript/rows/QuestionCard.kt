@@ -26,7 +26,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
-import com.codedeck.plus.ui.transcript.QuestionSpecView
+import com.codedeck.plus.ui.transcript.QuestionView
+import com.codedeck.plus.ui.transcript.questionCardKey
 import uniffi.client_ffi.UniffiIntent
 
 /** Heuristic: detect "type your own answer" style options — port of
@@ -41,20 +42,20 @@ fun isFreeTextOption(label: String, index: Int, total: Int): Boolean {
 }
 
 /** The answering surface for ONE question: options / multi-select toggles /
- *  free-text input. Port of `QuestionAnswerBody` in `QuestionCard.tsx`. */
+ *  free-text input. `onSelect` gets 0-based option indices. */
 @Composable
 private fun QuestionAnswerBody(
-    question: QuestionSpecView,
-    onKeypressAnswer: (String) -> Unit,
+    question: QuestionView,
+    onSelect: (List<Int>) -> Unit,
     onTextAnswer: (String) -> Unit,
 ) {
     var showTextInput by remember(question) { mutableStateOf(false) }
     var textValue by remember(question) { mutableStateOf("") }
     var selected by remember(question) { mutableStateOf(setOf<Int>()) }
 
-    val options = question.options.orEmpty()
+    val options = question.options
     val hasOptions = options.isNotEmpty()
-    val isMulti = question.multiSelect == true && hasOptions
+    val isMulti = question.multiSelect && hasOptions
     val freeTextIndex = if (hasOptions) {
         options.withIndex().firstOrNull { (i, opt) -> isFreeTextOption(opt.label, i, options.size) }?.index ?: -1
     } else {
@@ -119,7 +120,7 @@ private fun QuestionAnswerBody(
             if (selected.isNotEmpty()) Tokens.Text else Tokens.TextDim,
             modifier = Modifier.padding(top = Tokens.Space2),
         ) {
-            if (selected.isNotEmpty()) onTextAnswer(selected.sorted().joinToString(", ") { options[it].label })
+            if (selected.isNotEmpty()) onSelect(selected.sorted())
         }
         return
     }
@@ -133,9 +134,7 @@ private fun QuestionAnswerBody(
                     .padding(top = Tokens.Space1)
                     .clip(RoundedCornerShape(Tokens.RadiusSm))
                     .background(Tokens.SurfaceInput)
-                    .clickable {
-                        if (i == freeTextIndex) showTextInput = true else onKeypressAnswer((i + 1).toString())
-                    }
+                    .clickable { if (i == freeTextIndex) showTextInput = true else onSelect(listOf(i)) }
                     .padding(Tokens.Space2),
             ) {
                 Column {
@@ -152,114 +151,85 @@ private fun QuestionAnswerBody(
     }
 }
 
+/**
+ * One ask — a single question, or several answered in order. Each answer
+ * names its question's `index`; the core marks that question responded
+ * ([questionCardKey]), so the card moves on to the next unanswered question
+ * right away, and the whole card resolves when the bridge reports the ask
+ * answered.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuestionCard(
     item: DisplayEntry.Question,
     machine: String,
     sessionId: String,
-    responded: Boolean,
-    actions: CardActions,
-) {
-    val q = item.question
-    val optionCount = (q.options?.size ?: 0).toULong()
-
-    if (item.answered != null || responded) {
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusMd)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
-        ) {
-            q.header?.let { Text(it, color = Tokens.Text, fontSize = Tokens.TextMd) }
-            Text(q.entry.content, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-            Text(item.answered ?: "Response sent…", color = Tokens.Success, fontSize = Tokens.TextXs)
-        }
-        return
-    }
-
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusMd)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
-    ) {
-        q.header?.let { Text(it, color = Tokens.Text, fontSize = Tokens.TextMd) }
-        Text(q.entry.content, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-        QuestionAnswerBody(
-            question = q,
-            onKeypressAnswer = { key ->
-                actions(UniffiIntent.Keypress(machine = machine, sessionId = sessionId, key = key, context = "question"))
-            },
-            onTextAnswer = { text ->
-                actions(UniffiIntent.AnswerQuestion(machine = machine, sessionId = sessionId, text = text, optionCount = optionCount))
-            },
-        )
-    }
-}
-
-/**
- * `onAdvance`: unlike `RespondPermission`, `AnswerQuestion`/`Keypress` do
- * NOT mark `ui.responded_cards` server-side (checked against
- * `Intent::apply` directly — only the permission path calls
- * `mark_card_responded`), and the wire only signals a multi-question
- * group's resolution once, for the WHOLE group, when its shared
- * `toolUseId` gets an answering `tool_result` — never per sub-question. The
- * broker resolves questions strictly in order, so without some local
- * "already tapped" bookkeeping this card would keep re-showing the same
- * first sub-question after each tap instead of advancing. `onAdvance` is
- * that bookkeeping's write side — TranscriptList owns a small in-memory
- * set (session-scoped, not synced anywhere) and folds it into
- * `respondedCards` the same way `apps/mobile`'s old client-only
- * `uiStore.markCardResponded` did before that store moved into Rust.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun QuestionGroupCard(
-    item: DisplayEntry.QuestionGroup,
-    machine: String,
-    sessionId: String,
     respondedCards: Set<String>,
-    onAdvance: (String) -> Unit,
     actions: CardActions,
 ) {
-    val answeredSet = item.questions.indices.filter { respondedCards.contains("${item.toolUseId}:q$it") }.toSet()
-    val firstUnanswered = item.questions.indices.firstOrNull { it !in answeredSet } ?: -1
-    val allAnswered = firstUnanswered == -1
-
-    if (item.answered != null || allAnswered) {
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusMd)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
-        ) {
-            item.questions.forEachIndexed { i, q ->
-                Text("✓ ${q.header ?: "Question ${i + 1}"}", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
-            }
-            Text(item.answered ?: "All responses sent", color = Tokens.Success, fontSize = Tokens.TextXs)
-        }
-        return
-    }
-
-    val active = item.questions[firstUnanswered]
-    val optionCount = (active.options?.size ?: 0).toULong()
+    val answeredSet = item.questions
+        .filter { respondedCards.contains(questionCardKey(item.requestId, it.index)) }
+        .map { it.index }
+        .toSet()
+    val active = item.questions.firstOrNull { it.index !in answeredSet }
+    val multi = item.questions.size > 1
 
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusMd)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
     ) {
-        // Wraps: one plain Row clipped the trailing headers of a larger group.
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-            item.questions.forEachIndexed { i, q ->
-                val done = i in answeredSet
-                val isActive = i == firstUnanswered
+        if (item.answered != null || active == null) {
+            item.questions.forEach { q ->
                 Text(
-                    (if (done) "✓ " else "") + (q.header ?: "Question ${i + 1}"),
-                    color = if (isActive) Tokens.Text else if (done) Tokens.Success else Tokens.TextDim,
-                    fontSize = Tokens.TextXs,
+                    (if (multi) "✓ " else "") + (q.header ?: q.question),
+                    color = if (multi) Tokens.TextMuted else Tokens.Text,
+                    fontSize = if (multi) Tokens.TextXs else Tokens.TextMd,
                 )
             }
+            Text(item.answered ?: "Response sent…", color = Tokens.Success, fontSize = Tokens.TextXs)
+            return@Column
         }
-        Text(active.entry.content, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+
+        if (multi) {
+            // Wraps: one plain Row clipped the trailing headers of a larger ask.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                item.questions.forEach { q ->
+                    val done = q.index in answeredSet
+                    Text(
+                        (if (done) "✓ " else "") + (q.header ?: "Question ${q.index + 1}"),
+                        color = if (q == active) Tokens.Text else if (done) Tokens.Success else Tokens.TextDim,
+                        fontSize = Tokens.TextXs,
+                    )
+                }
+            }
+        } else {
+            active.header?.let { Text(it, color = Tokens.Text, fontSize = Tokens.TextMd) }
+        }
+        Text(active.question, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
         QuestionAnswerBody(
             question = active,
-            onKeypressAnswer = { key ->
-                onAdvance("${item.toolUseId}:q$firstUnanswered")
-                actions(UniffiIntent.Keypress(machine = machine, sessionId = sessionId, key = key, context = "question"))
+            onSelect = { indices ->
+                actions(
+                    UniffiIntent.AnswerQuestion(
+                        machine = machine,
+                        sessionId = sessionId,
+                        requestId = item.requestId,
+                        index = active.index.toUInt(),
+                        selected = indices.map { it.toUInt() },
+                        text = null,
+                    ),
+                )
             },
             onTextAnswer = { text ->
-                onAdvance("${item.toolUseId}:q$firstUnanswered")
-                actions(UniffiIntent.AnswerQuestion(machine = machine, sessionId = sessionId, text = text, optionCount = optionCount))
+                actions(
+                    UniffiIntent.AnswerQuestion(
+                        machine = machine,
+                        sessionId = sessionId,
+                        requestId = item.requestId,
+                        index = active.index.toUInt(),
+                        selected = emptyList(),
+                        text = text,
+                    ),
+                )
             },
         )
     }

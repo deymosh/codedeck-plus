@@ -25,17 +25,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import com.codedeck.plus.ui.theme.Tokens
-import com.codedeck.plus.ui.transcript.rows.AssistantTextRow
+import com.codedeck.plus.ui.transcript.rows.AgentTextRow
 import com.codedeck.plus.ui.transcript.rows.DiffRow
 import com.codedeck.plus.ui.transcript.rows.ErrorRow
-import com.codedeck.plus.ui.transcript.rows.LifecycleRow
+import com.codedeck.plus.ui.transcript.rows.NoticeRow
 import com.codedeck.plus.ui.transcript.rows.OutboxRow
 import com.codedeck.plus.ui.transcript.rows.PermissionCard
 import com.codedeck.plus.ui.transcript.rows.PlanApprovalCard
 import com.codedeck.plus.ui.transcript.rows.QuestionCard
-import com.codedeck.plus.ui.transcript.rows.QuestionGroupCard
 import com.codedeck.plus.ui.transcript.rows.SyncGapRow
-import com.codedeck.plus.ui.transcript.rows.SystemRow
+import com.codedeck.plus.ui.transcript.rows.StatusRow
 import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
 import com.codedeck.plus.ui.transcript.rows.UserMessageRow
 import uniffi.client_ffi.UniffiIntent
@@ -68,14 +67,12 @@ fun TranscriptList(
     contiguous: Boolean,
     respondedCards: Set<String>,
     planApprovalChoices: Map<String, String>,
-    locallyAdvanced: Set<String>,
-    onAdvance: (String) -> Unit,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) = key(sessionId) {
     TranscriptListContent(
         displayEntries, outboxItems, machine, sessionId, syncState, contiguous,
-        respondedCards, planApprovalChoices, locallyAdvanced, onAdvance, dispatch, modifier,
+        respondedCards, planApprovalChoices, dispatch, modifier,
     )
 }
 
@@ -89,20 +86,11 @@ private fun TranscriptListContent(
     contiguous: Boolean,
     respondedCards: Set<String>,
     planApprovalChoices: Map<String, String>,
-    locallyAdvanced: Set<String>,
-    onAdvance: (String) -> Unit,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
     var expandedGroups by remember(sessionId) { mutableStateOf(setOf<Long>()) }
-
-    // Question-group progression bookkeeping — see QuestionGroupCard's
-    // `onAdvance` doc comment for why this exists: the wire only signals a
-    // group's resolution once, for the whole group, never per sub-question.
-    // The caller owns the set because the session's input bar can answer
-    // the active sub-question too, and has to advance the same card.
-    val mergedResponded = respondedCards + locallyAdvanced
 
     val visibleOutbox = remember(outboxItems, displayEntries, machine, sessionId) {
         visibleOutboxItems(outboxItems, machine, sessionId, displayEntries)
@@ -148,9 +136,8 @@ private fun TranscriptListContent(
                             expandedGroups + entry.seq
                         }
                     },
-                    respondedCards = mergedResponded,
+                    respondedCards = respondedCards,
                     planChoices = planApprovalChoices,
-                    onAdvance = onAdvance,
                     actions = dispatch,
                 )
             }
@@ -188,38 +175,29 @@ private fun TranscriptRow(
     onToggle: () -> Unit,
     respondedCards: Set<String>,
     planChoices: Map<String, String>,
-    onAdvance: (String) -> Unit,
     actions: (UniffiIntent) -> Unit,
 ) {
     when (item) {
-        is DisplayEntry.UserMessage -> UserMessageRow(item.entry)
-        is DisplayEntry.AssistantMessage -> AssistantTextRow(item.entry, item.isPlan)
-        is DisplayEntry.ToolGroup -> ToolGroupRow(item.entries, item.summary, expanded, onToggle)
-        is DisplayEntry.Diff -> DiffRow(item.entry, expanded, onToggle)
-        is DisplayEntry.Error -> ErrorRow(item.entry)
-        is DisplayEntry.System -> SystemRow(item.entry)
-        is DisplayEntry.Lifecycle -> LifecycleRow(item.entry)
+        is DisplayEntry.UserMessage -> UserMessageRow(item.text)
+        is DisplayEntry.AgentMessage -> AgentTextRow(item.text, item.isPlan)
+        is DisplayEntry.ToolGroup -> ToolGroupRow(item.steps, item.summary, expanded, onToggle)
+        is DisplayEntry.Diff -> DiffRow(item.path, item.lines, item.truncated, expanded, onToggle)
+        is DisplayEntry.Error -> ErrorRow(item.text)
+        is DisplayEntry.Status -> StatusRow(item.text)
+        is DisplayEntry.Notice -> NoticeRow(item.notice, item.text)
         is DisplayEntry.PlanApproval -> PlanApprovalCard(
             item = item,
             machine = machine,
             sessionId = sessionId,
-            responded = item.toolUseId != null && respondedCards.contains(item.toolUseId),
-            choice = item.toolUseId?.let { planChoices[it] },
+            responded = respondedCards.contains(item.requestId),
+            choice = planChoices[item.requestId],
             actions = actions,
         )
         is DisplayEntry.Question -> QuestionCard(
             item = item,
             machine = machine,
             sessionId = sessionId,
-            responded = item.toolUseId != null && respondedCards.contains(item.toolUseId),
-            actions = actions,
-        )
-        is DisplayEntry.QuestionGroup -> QuestionGroupCard(
-            item = item,
-            machine = machine,
-            sessionId = sessionId,
             respondedCards = respondedCards,
-            onAdvance = onAdvance,
             actions = actions,
         )
         is DisplayEntry.PermissionRequest -> PermissionCard(

@@ -16,17 +16,11 @@ import com.codedeck.plus.ui.transcript.DisplayEntry
 import uniffi.client_ffi.UniffiIntent
 
 /**
- * v10 handles plan approval via the keypress command (`context:
- * "plan-approval"`) — options ported from the old app: 1 = approve/
- * acceptEdits, 2 = approve/default(YOLO), 3 = revise (deny, stay in plan
- * mode). Port of `PlanApprovalCard.tsx`.
+ * Plan approval — one choice per option the agent offered (e.g. approve and
+ * auto-accept edits, approve, keep planning). A tapped choice is recorded
+ * alongside the answer so the card can name it before the bridge resolves
+ * the request.
  */
-val PLAN_APPROVAL_LABELS = mapOf(
-    "1" to "Plan approved — Accept Edits",
-    "2" to "Plan approved — YOLO",
-    "3" to "Revising — type your feedback below",
-)
-
 @Composable
 fun PlanApprovalCard(
     item: DisplayEntry.PlanApproval,
@@ -37,7 +31,7 @@ fun PlanApprovalCard(
     actions: CardActions,
 ) {
     if (item.answered != null || responded) {
-        val label = choice?.let { PLAN_APPROVAL_LABELS[it] } ?: item.answered ?: "Response sent…"
+        val chosen = choice?.let { id -> item.options.firstOrNull { it.id == id }?.label }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -45,15 +39,9 @@ fun PlanApprovalCard(
                 .background(Tokens.SurfaceRaised)
                 .padding(Tokens.Space3),
         ) {
-            Text(label, color = Tokens.Success, fontSize = Tokens.TextSm)
+            Text(item.answered ?: chosen ?: "Response sent…", color = Tokens.Success, fontSize = Tokens.TextSm)
         }
         return
-    }
-
-    fun respond(key: String) {
-        val cardId = item.toolUseId
-        if (cardId != null) actions(UniffiIntent.SetPlanApprovalChoice(cardId = cardId, key = key))
-        actions(UniffiIntent.Keypress(machine = machine, sessionId = sessionId, key = key, context = "plan-approval"))
     }
 
     Column(
@@ -63,19 +51,25 @@ fun PlanApprovalCard(
             .background(Tokens.SurfaceRaised)
             .padding(Tokens.Space3),
     ) {
-        Text(
-            if (item.hasPlan) "Approve this plan?" else "Exit plan mode?",
-            color = Tokens.Text,
-            fontSize = Tokens.TextMd,
-        )
-        PlanOption("Approve — mode EDITS", "Auto-accepts file edits, prompts for Bash/Web") { respond("1") }
-        PlanOption("Approve — mode YOLO", "Auto-approves all tool actions") { respond("2") }
-        PlanOption("Revise plan", "Stay in plan mode and type feedback") { respond("3") }
+        Text("Approve this plan?", color = Tokens.Text, fontSize = Tokens.TextMd)
+        item.options.forEach { option ->
+            PlanOption(option.label, option.description) {
+                actions(UniffiIntent.SetPlanApprovalChoice(cardId = item.requestId, key = option.id))
+                actions(
+                    UniffiIntent.RespondPlan(
+                        machine = machine,
+                        sessionId = sessionId,
+                        requestId = item.requestId,
+                        optionId = option.id,
+                    ),
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun PlanOption(label: String, description: String, onClick: () -> Unit) {
+private fun PlanOption(label: String, description: String?, onClick: () -> Unit) {
     Column(
         Modifier
             .minimumInteractiveComponentSize()
@@ -87,6 +81,6 @@ private fun PlanOption(label: String, description: String, onClick: () -> Unit) 
             .padding(Tokens.Space2),
     ) {
         Text(label, color = Tokens.Text, fontSize = Tokens.TextSm)
-        Text(description, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+        description?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextXs) }
     }
 }
