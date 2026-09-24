@@ -342,6 +342,76 @@ describe('opencodeMessageToEntries', () => {
     });
   });
 
+  describe('diffs from completed file-changing tool calls', () => {
+    function completed(tool: string, input: Record<string, unknown>, metadata: Record<string, unknown> = {}): SdkMessage {
+      const part = {
+        id: 'prt_1', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_1', tool,
+        state: { status: 'completed', input, output: 'ok', title: '', metadata, time: { start: 1, end: 2 } },
+      } as unknown as Part;
+      return asSdkMessage({ type: 'opencode-part', part, role: 'assistant' } satisfies OpenCodePartMessage);
+    }
+    const diffsOf = (msg: SdkMessage) =>
+      opencodeMessageToEntries(msg, { emitDiffEntries: true }).filter((e) => e.entryType === 'diff');
+
+    it('is gated on opts.emitDiffEntries — the tool_result alone without it', () => {
+      const msg = completed('write', { filePath: '/w/a.ts', content: 'x' });
+      expect(opencodeMessageToEntries(msg).map((e) => e.entryType)).toEqual(['tool_result']);
+    });
+
+    it('edit: reads the unified patch from metadata.filediff, after the tool_result', () => {
+      const patch = 'Index: /w/a.ts\n===\n--- /w/a.ts\n+++ /w/a.ts\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n';
+      const msg = completed('edit', { filePath: '/w/a.ts', oldString: 'old', newString: 'new' }, {
+        filediff: { file: '/w/a.ts', patch, additions: 1, deletions: 1 },
+      });
+      const entries = opencodeMessageToEntries(msg, { emitDiffEntries: true });
+      expect(entries.map((e) => e.entryType)).toEqual(['tool_result', 'diff']);
+      expect(entries[1]!.diff).toEqual({
+        path: '/w/a.ts',
+        lines: [
+          { type: 'context', text: 'keep' },
+          { type: 'del', text: 'old' },
+          { type: 'add', text: 'new' },
+        ],
+      });
+      expect(entries[1]!.metadata).toMatchObject({ tool_name: 'edit', tool_use_id: 'call_1' });
+    });
+
+    it('edit: falls back to oldString/newString when the metadata has no patch', () => {
+      const [diff] = diffsOf(completed('edit', { filePath: '/w/a.ts', oldString: 'a\nb', newString: 'c' }));
+      expect(diff!.diff?.lines).toEqual([
+        { type: 'del', text: 'a' },
+        { type: 'del', text: 'b' },
+        { type: 'add', text: 'c' },
+      ]);
+    });
+
+    it('write: the written content is all additions', () => {
+      const [diff] = diffsOf(completed('write', { filePath: '/w/new.ts', content: 'one\ntwo' }, { filepath: '/w/new.ts', exists: false }));
+      expect(diff!.diff).toEqual({ path: '/w/new.ts', lines: [{ type: 'add', text: 'one' }, { type: 'add', text: 'two' }] });
+    });
+
+    it('apply_patch: one card per touched file — patched, moved, deleted', () => {
+      const diffs = diffsOf(completed('apply_patch', { patchText: '…' }, {
+        files: [
+          { filePath: '/w/a.ts', relativePath: 'a.ts', type: 'update', patch: '@@ -1 +1 @@\n-x\n+y' },
+          { filePath: '/w/old.ts', movePath: '/w/moved.ts', type: 'move', diff: '@@ -1 +1 @@\n-p\n+q' },
+          { filePath: '/w/gone.ts', type: 'delete' },
+        ],
+      }));
+      expect(diffs.map((e) => e.diff)).toEqual([
+        { path: '/w/a.ts', lines: [{ type: 'del', text: 'x' }, { type: 'add', text: 'y' }] },
+        { path: '/w/moved.ts', lines: [{ type: 'del', text: 'p' }, { type: 'add', text: 'q' }] },
+        { path: '/w/gone.ts', lines: [{ type: 'context', text: '(file deleted)' }] },
+      ]);
+    });
+
+    it('other tools, and calls with nothing to show, produce no card', () => {
+      expect(diffsOf(completed('read', { filePath: '/w/a.ts' }))).toEqual([]);
+      expect(diffsOf(completed('write', { filePath: '/w/a.ts', content: '' }))).toEqual([]);
+      expect(diffsOf(completed('edit', { oldString: 'a', newString: 'b' }))).toEqual([]);
+    });
+  });
+
   describe('question messages', () => {
     it('renders the same ask_question entries as a Claude Code AskUserQuestion', () => {
       const msg: OpenCodeQuestionMessage = {

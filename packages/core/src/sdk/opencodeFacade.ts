@@ -37,6 +37,7 @@ import type {
 } from '@opencode-ai/sdk/v2/client';
 import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
 import type { AskQuestionSpec } from './adapter';
+import { toolCallDiffs } from './opencodeAdapter';
 import type {
   SdkCanUseTool,
   SdkContextUsage,
@@ -259,6 +260,12 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
    *  session's diff on every step; only files whose diff changed become a
    *  new card. */
   private readonly lastDiffs = new Map<string, string>();
+  /** Files a completed edit/write/apply_patch call already showed as a diff
+   *  card (opencodeAdapter.ts's toolCallDiffs). The next `session.diff`
+   *  change to such a file is that same edit — dropped instead of shown
+   *  twice — and consumes the entry, so a LATER change to the file (a shell
+   *  command, say) still gets its card. */
+  private readonly toolDiffedFiles = new Set<string>();
   /** Ask ids (permissions and questions) already handled — an ask could in
    *  theory refire; a second reply is rejected by the server anyway, but this
    *  avoids the wasted round trip and a second canUseTool call. */
@@ -405,6 +412,11 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
           if (part.sessionID !== sessionId) continue;
           if (part.type === 'tool') this.toolParts.set(part.callID, part);
           if (!this.shouldEmitPart(part)) continue;
+          if (part.type === 'tool' && part.state.status === 'completed') {
+            for (const diff of toolCallDiffs(part.tool, part.state.input, part.state.metadata)) {
+              this.toolDiffedFiles.add(diff.path);
+            }
+          }
           this.pushPart(part);
           break;
         }
@@ -549,8 +561,24 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
       const fingerprint = `${f.status ?? ''}\u0000${f.additions}\u0000${f.deletions}\u0000${f.patch ?? ''}`;
       if (this.lastDiffs.get(key) === fingerprint) return false;
       this.lastDiffs.set(key, fingerprint);
-      return true;
+      return !this.consumeToolDiff(key);
     });
+  }
+
+  /** Whether a tool call already showed `file`'s change (removing that
+   *  record). Tool calls name files by absolute path, `session.diff` by
+   *  worktree-relative path, so either may be a path-suffix of the other. */
+  private consumeToolDiff(file: string): boolean {
+    const norm = (p: string) => p.replace(/\\/g, '/');
+    const target = norm(file);
+    for (const shown of this.toolDiffedFiles) {
+      const s = norm(shown);
+      if (s === target || s.endsWith(`/${target}`) || target.endsWith(`/${s}`)) {
+        this.toolDiffedFiles.delete(shown);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

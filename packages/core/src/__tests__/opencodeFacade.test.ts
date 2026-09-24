@@ -144,6 +144,29 @@ describe('OpenCodeFacade session.diff', () => {
     }>;
     expect(diffs.map((d) => d.files)).toEqual([[first], [second]]);
   });
+
+  it('drops the session.diff change a completed edit already showed, but not a later change to that file', async () => {
+    const edit = {
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_1', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_1', tool: 'edit',
+          state: {
+            status: 'completed', input: { filePath: '/tmp/src/a.ts', oldString: 'x', newString: 'y' },
+            output: 'ok', title: 'src/a.ts', metadata: {}, time: { start: 1, end: 2 },
+          },
+        },
+      },
+    };
+    const ev = (d: unknown) => ({ type: 'session.diff', properties: { sessionID: 'ses_1', diff: [d] } });
+    const byEdit = { file: 'src/a.ts', additions: 1, deletions: 1, status: 'modified' };
+    const byShell = { file: 'src/a.ts', additions: 2, deletions: 1, status: 'modified' };
+    const handle = start(clientWith([edit, ev(byEdit), ev(byShell)]));
+    const diffs = (await collectWithTimeout(handle.messages())).filter((m) => typeOf(m) === 'opencode-diff') as unknown as Array<{
+      files: unknown[];
+    }>;
+    expect(diffs.map((d) => d.files)).toEqual([[byShell]]);
+  });
 });
 
 describe('OpenCodeFacade permission asks', () => {

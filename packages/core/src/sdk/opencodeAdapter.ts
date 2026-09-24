@@ -88,7 +88,11 @@ export interface LegacyFileDiff {
 /** Synthesized from OpenCode's `session.diff` event, translated here into the
  *  same `entryType: 'diff'` cards Claude Code's CDX-050 diff entries use.
  *  OpenCode 1.x sends each file as a unified `patch`; older servers sent
- *  whole-file `before`/`after` — both are read. */
+ *  whole-file `before`/`after` — both are read. A file changed through
+ *  edit/write/apply_patch already got its card from that tool call
+ *  ([toolCallDiffs]), and `session.diff` often carries only counts, so the
+ *  facade drops those files here; this path covers the rest (a file a
+ *  shell command changed). */
 export interface OpenCodeDiffMessage {
   type: 'opencode-diff';
   files: Array<SnapshotFileDiff | LegacyFileDiff>;
@@ -124,7 +128,7 @@ export function opencodeMessageToEntries(msg: SdkMessage, opts?: AdapterOptions)
     case 'system':
       return parseSystem(envelope);
     case 'opencode-part':
-      return parsePart(envelope);
+      return parsePart(envelope, opts);
     case 'opencode-error':
       return [{
         entryType: 'error',
@@ -192,7 +196,7 @@ function parseSystem(msg: OpenCodeInitMessage | OpenCodeStateMessage): OutputEnt
   return [];
 }
 
-function parsePart(msg: OpenCodePartMessage): OutputEntry[] {
+function parsePart(msg: OpenCodePartMessage, opts?: AdapterOptions): OutputEntry[] {
   const { part, role } = msg;
   const ts = new Date().toISOString();
 
@@ -214,13 +218,13 @@ function parsePart(msg: OpenCodePartMessage): OutputEntry[] {
         metadata: { role },
       }];
     case 'tool':
-      return parseTool(part, ts);
+      return parseTool(part, ts, opts);
     default:
       return [];
   }
 }
 
-function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string): OutputEntry[] {
+function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, opts?: AdapterOptions): OutputEntry[] {
   const state = part.state;
 
   // 'pending' input may still be streaming in — nothing stable to show yet.
@@ -243,12 +247,29 @@ function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string): OutputEnt
   if (state.status === 'completed') {
     const output = state.output ?? '';
     const text = output.length > 2000 ? output.slice(0, 2000) + '...[truncated]' : output;
-    return [{
+    const entries: OutputEntry[] = [{
       entryType: 'tool_result',
       content: text,
       timestamp: ts,
       metadata: { tool_use_id: part.callID },
     }];
+    // A file-changing call gets the same diff cards Claude Code's Edit/Write
+    // calls do (adapter.ts), gated on the phone-side 'diff' capability the
+    // same way. Taken from the COMPLETED call — the change has actually
+    // been applied by then, and the tool's own metadata carries the real
+    // patch it applied.
+    if (opts?.emitDiffEntries) {
+      for (const diff of toolCallDiffs(part.tool, state.input, state.metadata)) {
+        entries.push({
+          entryType: 'diff',
+          content: renderDiffFallback(diff),
+          timestamp: ts,
+          metadata: { role: 'assistant', tool_name: part.tool, tool_use_id: part.callID },
+          diff,
+        });
+      }
+    }
+    return entries;
   }
 
   // status === 'error'
@@ -365,11 +386,104 @@ function toDiffData(file: SnapshotFileDiff | LegacyFileDiff): DiffData | null {
   } else {
     return null;
   }
+  return boundedDiff(file.file ?? 'unknown file', lines);
+}
+
+/** A diff payload inside the shared wire caps; `null` when there are no
+ *  lines to show. */
+function boundedDiff(path: string, lines: DiffLine[]): DiffData | null {
   if (lines.length === 0) return null;
   const truncated = lines.length > MAX_DIFF_LINES;
   return {
-    path: file.file ?? 'unknown file',
+    path,
     lines: truncated ? lines.slice(0, MAX_DIFF_LINES) : lines,
     ...(truncated ? { truncated: true } : {}),
   };
+}
+
+// --- tool-call diffs ---
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * The files a COMPLETED OpenCode tool call changed, as diff payloads — the
+ * OpenCode counterpart of adapter.ts's `extractDiff` for Claude Code's
+ * Edit/Write/MultiEdit. What each tool reports (OpenCode 1.x):
+ *
+ * - `edit`: `metadata.filediff = {file, patch, …}` (and `metadata.diff`,
+ *   the same unified patch); the input's `oldString`/`newString` are the
+ *   fallback when neither is present.
+ * - `write`: metadata carries no diff, so the written `content` is the
+ *   card — all additions, exactly like Claude Code's Write.
+ * - `apply_patch` (listed as `patch` by some servers): one
+ *   `metadata.files[]` entry per touched file, `type` add/update/delete/
+ *   move, with its unified `patch` (or `diff`). A delete without one still
+ *   gets a card, so a removed file is never silent.
+ *
+ * Any other tool, or a call without usable content, yields nothing.
+ */
+export function toolCallDiffs(
+  tool: string,
+  input: Record<string, unknown>,
+  metadata: Record<string, unknown> | undefined,
+): DiffData[] {
+  const found: Array<DiffData | null> = [];
+  switch (tool) {
+    case 'edit': {
+      const filediff = record(metadata?.filediff);
+      const path = str(filediff?.file) ?? str(input.filePath);
+      if (!path) break;
+      const patch = str(filediff?.patch) ?? str(metadata?.diff);
+      if (patch) {
+        found.push(boundedDiff(path, patchLines(patch)));
+      } else {
+        const oldStr = str(input.oldString);
+        const newStr = str(input.newString);
+        found.push(boundedDiff(path, [
+          ...(oldStr ? toDiffLines(oldStr, 'del') : []),
+          ...(newStr ? toDiffLines(newStr, 'add') : []),
+        ]));
+      }
+      break;
+    }
+    case 'write': {
+      const path = str(input.filePath) ?? str(metadata?.filepath);
+      const content = str(input.content);
+      if (path && content) found.push(boundedDiff(path, toDiffLines(content, 'add')));
+      break;
+    }
+    case 'patch':
+    case 'apply_patch': {
+      const files: unknown = metadata?.files;
+      for (const entry of Array.isArray(files) ? files : []) {
+        const file = record(entry);
+        if (!file) continue;
+        // A move shows where the file ended up.
+        const path = str(file.movePath) ?? str(file.filePath) ?? str(file.relativePath);
+        if (!path) continue;
+        const patch = str(file.patch) ?? str(file.diff);
+        let lines = patch ? patchLines(patch) : [];
+        if (lines.length === 0 && file.type === 'delete') {
+          const oldContent = str(file.oldContent);
+          lines = oldContent ? toDiffLines(oldContent, 'del') : [{ type: 'context', text: '(file deleted)' }];
+        } else if (lines.length === 0 && file.type === 'add') {
+          const newContent = str(file.newContent);
+          if (newContent) lines = toDiffLines(newContent, 'add');
+        }
+        found.push(boundedDiff(path, lines));
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return found.filter((d): d is DiffData => d !== null);
 }
