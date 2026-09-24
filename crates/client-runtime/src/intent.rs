@@ -16,17 +16,22 @@ use client_core::stores::pairing::{
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    BareMsg, CreateFolderMsg, CreateSessionMsg, EffortChangeMsg, InputMsg, KeypressContext,
-    KeypressMsg, ModeChangeMsg, ModelChangeMsg, ModelsRequestMsg, PermissionModifier,
-    PermissionResMsg, PhoneToBridge, ProviderProfileWrite, QuestionInputMsg, SessionIdMsg,
-    SetCredentialsMsg, SetDeviceConfigMsg, SetProviderProfileMsg, VersionFields,
+    BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, ModelsRequestMsg, PermissionResponseMsg,
+    PhoneToBridge, PlanResponseMsg, ProviderProfileWrite, QuestionAnswer, QuestionResponseMsg,
+    SessionIdMsg, SetCredentialsMsg, SetDeviceConfigMsg, SetOptionMsg, SetProviderProfileMsg,
+    VersionFields,
 };
-use protocol::common::{DeviceConfig, EffortLevel, PermissionMode, SessionBackend};
-use protocol::tristate::Tristate;
+use protocol::common::{CredentialValues, DeviceConfig, SessionOption};
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
 use crate::stores::CoreStores;
+
+/// The `ui.responded_cards` key for question `index` of the ask `request_id`
+/// — per question, so a multi-question card can advance question by question.
+pub fn question_card_key(request_id: &str, index: u32) -> String {
+    format!("{request_id}:q{index}")
+}
 
 /// Arm / clear the delete-controller's 4 s undo timer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,40 +202,35 @@ pub enum Intent {
     },
 
     // --- session commands ---
+    /// Answer a permission request with one of its advertised options.
     RespondPermission {
         machine: String,
         session_id: String,
         request_id: String,
-        allow: bool,
-        modifier: Option<PermissionModifier>,
+        option_id: String,
     },
+    /// Answer question `index` of the ask `request_id`.
     AnswerQuestion {
         machine: String,
         session_id: String,
-        text: String,
+        request_id: String,
         #[specta(type = specta_typescript::Number)]
-        option_count: u64,
+        index: u32,
+        answer: QuestionAnswer,
     },
-    Keypress {
+    /// Answer a plan approval with one of its advertised options.
+    RespondPlan {
         machine: String,
         session_id: String,
-        key: String,
-        context: Option<KeypressContext>,
+        request_id: String,
+        option_id: String,
     },
-    SetMode {
+    /// Change a session's mode / effort / model.
+    SetOption {
         machine: String,
         session_id: String,
-        mode: PermissionMode,
-    },
-    SetEffort {
-        machine: String,
-        session_id: String,
-        level: EffortLevel,
-    },
-    SetModel {
-        machine: String,
-        session_id: String,
-        model: String,
+        option: SessionOption,
+        value: String,
     },
     Interrupt {
         machine: String,
@@ -242,20 +242,21 @@ pub enum Intent {
     },
     CreateSession {
         machine: String,
+        agent: String,
         cwd: Option<String>,
         create_cwd: Option<bool>,
+        mode: Option<String>,
+        effort: Option<String>,
         model: Option<String>,
-        default_effort: Option<EffortLevel>,
         provider_id: Option<String>,
         test_session: Option<bool>,
-        backend: Option<SessionBackend>,
     },
     RefreshSessions {
         machine: String,
     },
     RequestModels {
         machine: String,
-        backend: Option<SessionBackend>,
+        agent: String,
     },
     RequestUsage {
         machine: String,
@@ -265,16 +266,13 @@ pub enum Intent {
         machine: String,
         session_id: String,
     },
-    /// Store credentials on the bridge host (CDX-011): an absent field keeps
-    /// the stored value, `null` deletes it, a string sets it — the wire's
-    /// own keep/clear/set convention (`Tristate`), carried straight through
-    /// rather than re-derived here. Secrets: never logged.
+    /// Store credentials on the bridge host (CDX-011) for `agent`, or for the
+    /// bridge itself when `None`: a string sets an id, `null` clears it, an
+    /// id not listed is kept. Secrets: never logged.
     SetCredentials {
         machine: String,
-        #[serde(default, skip_serializing_if = "Tristate::is_keep")]
-        anthropic_api_key: Tristate<String>,
-        #[serde(default, skip_serializing_if = "Tristate::is_keep")]
-        github_pat: Tristate<String>,
+        agent: Option<String>,
+        values: CredentialValues,
     },
     /// Upsert (`profile: Some`) or delete (`profile: None`) one custom
     /// provider profile stored bridge-side (CDX-062).
@@ -367,9 +365,9 @@ pub enum Intent {
     SetMeshTestTarget(bool),
     SetBlossomServer(String),
     SetNotificationsEnabled(bool),
-    SetDefaultMode(PermissionMode),
-    /// Empty string = unset (the bridge/SDK default) — `EffortLevel` has no
-    /// such variant, so this carries the raw wire string, same as the store.
+    /// Preferred mode / effort / model for new sessions (agent ids; empty =
+    /// the agent's default).
+    SetDefaultMode(String),
     SetDefaultEffort(String),
     SetDefaultModel(String),
     SetUiScale(f64),
@@ -392,10 +390,9 @@ pub enum Intent {
     DismissPendingSession {
         pending_id: String,
     },
-    /// Records which plan-approval option the user tapped (`"1"`/`"2"`/`"3"`)
-    /// so the resolved card can label itself before the bridge echoes
-    /// anything — sent ALONGSIDE the actual answer (`AnswerQuestion`), not
-    /// instead of it.
+    /// Records which plan-approval option the user tapped (its option id) so
+    /// the card can label itself before the bridge resolves it — sent
+    /// ALONGSIDE the actual answer (`RespondPlan`), not instead of it.
     SetPlanApprovalChoice {
         card_id: String,
         key: String,
@@ -530,88 +527,80 @@ pub fn apply(
             machine,
             session_id,
             request_id,
-            allow,
-            modifier,
+            option_id,
         } => {
             // Optimistic: mark the card responded now (the durable proof is the
-            // tool_result that eventually lands).
+            // `resolved` entry that eventually lands).
             stores
                 .ui
                 .mark_card_responded(&machine, &session_id, &request_id);
             r.ui_changed = true;
             r.send(
                 &machine,
-                PhoneToBridge::PermissionRes(PermissionResMsg {
+                PhoneToBridge::PermissionResponse(PermissionResponseMsg {
                     version: v(),
                     session_id,
                     request_id,
-                    allow,
-                    modifier,
+                    option_id,
                 }),
             );
         }
         Intent::AnswerQuestion {
             machine,
             session_id,
-            text,
-            option_count,
-        } => r.send(
-            &machine,
-            PhoneToBridge::QuestionInput(QuestionInputMsg {
-                version: v(),
-                session_id,
-                text,
-                option_count,
-            }),
-        ),
-        Intent::Keypress {
+            request_id,
+            index,
+            answer,
+        } => {
+            // One responded key per question, so a multi-question card moves
+            // to its next question before the bridge resolves the whole ask.
+            stores
+                .ui
+                .mark_card_responded(&machine, &session_id, &question_card_key(&request_id, index));
+            r.ui_changed = true;
+            r.send(
+                &machine,
+                PhoneToBridge::QuestionResponse(QuestionResponseMsg {
+                    version: v(),
+                    session_id,
+                    request_id,
+                    index,
+                    answer,
+                }),
+            );
+        }
+        Intent::RespondPlan {
             machine,
             session_id,
-            key,
-            context,
-        } => r.send(
-            &machine,
-            PhoneToBridge::Keypress(KeypressMsg {
-                version: v(),
-                session_id,
-                key,
-                context,
-            }),
-        ),
-        Intent::SetMode {
+            request_id,
+            option_id,
+        } => {
+            stores
+                .ui
+                .mark_card_responded(&machine, &session_id, &request_id);
+            r.ui_changed = true;
+            r.send(
+                &machine,
+                PhoneToBridge::PlanResponse(PlanResponseMsg {
+                    version: v(),
+                    session_id,
+                    request_id,
+                    option_id,
+                }),
+            );
+        }
+        Intent::SetOption {
             machine,
             session_id,
-            mode,
+            option,
+            value,
         } => r.send(
             &machine,
-            PhoneToBridge::Mode(ModeChangeMsg {
+            PhoneToBridge::SetOption(SetOptionMsg {
                 version: v(),
                 session_id,
-                mode,
-            }),
-        ),
-        Intent::SetEffort {
-            machine,
-            session_id,
-            level,
-        } => r.send(
-            &machine,
-            PhoneToBridge::Effort(EffortChangeMsg {
-                version: v(),
-                session_id,
-                level,
-            }),
-        ),
-        Intent::SetModel {
-            machine,
-            session_id,
-            model,
-        } => r.send(
-            &machine,
-            PhoneToBridge::Model(ModelChangeMsg {
-                version: v(),
-                session_id,
-                model,
+                option,
+                value,
             }),
         ),
         Intent::Interrupt {
@@ -636,34 +625,36 @@ pub fn apply(
         ),
         Intent::CreateSession {
             machine,
+            agent,
             cwd,
             create_cwd,
+            mode,
+            effort,
             model,
-            default_effort,
             provider_id,
             test_session,
-            backend,
         } => r.send(
             &machine,
             PhoneToBridge::CreateSession(CreateSessionMsg {
                 version: v(),
-                default_effort,
+                agent,
+                mode,
+                effort,
                 model,
                 test_session,
                 cwd,
                 create_cwd,
                 provider_id,
-                backend,
             }),
         ),
         Intent::RefreshSessions { machine } => {
             r.send(&machine, PhoneToBridge::RefreshSessions(BareMsg { version: v() }))
         }
-        Intent::RequestModels { machine, backend } => r.send(
+        Intent::RequestModels { machine, agent } => r.send(
             &machine,
             PhoneToBridge::ModelsRequest(ModelsRequestMsg {
                 version: v(),
-                backend,
+                agent,
             }),
         ),
         Intent::RequestUsage {
@@ -688,16 +679,22 @@ pub fn apply(
         ),
         Intent::SetCredentials {
             machine,
-            anthropic_api_key,
-            github_pat,
-        } => r.send(
-            &machine,
-            PhoneToBridge::SetCredentials(SetCredentialsMsg {
-                version: v(),
-                anthropic_api_key,
-                github_pat,
-            }),
-        ),
+            agent,
+            values,
+        } => {
+            stores
+                .ui
+                .note_credentials_sent(&machine, agent.as_deref(), ctx.now);
+            r.ui_changed = true;
+            r.send(
+                &machine,
+                PhoneToBridge::SetCredentials(SetCredentialsMsg {
+                    version: v(),
+                    agent,
+                    values,
+                }),
+            );
+        }
         Intent::SetProviderProfile {
             machine,
             profile_id,
@@ -818,7 +815,7 @@ pub fn apply(
             r.persist(StoreId::Settings);
         }
         Intent::SetDefaultMode(mode) => {
-            stores.settings.set_default_mode(mode);
+            stores.settings.set_default_mode(&mode);
             r.persist(StoreId::Settings);
         }
         Intent::SetDefaultEffort(level) => {
@@ -1075,14 +1072,15 @@ mod tests {
             "m",
             &RemoteSessionInfo {
                 id: "s1".into(),
+                agent: "claude-code".into(),
                 slug: "the-slug".into(),
                 cwd: "/w".into(),
                 last_activity: "t".into(),
                 line_count: 0,
                 title: None,
                 project: "p".into(),
-                permission_mode: None,
-                effort_level: None,
+                mode: None,
+                effort: None,
                 model: None,
                 context_window: None,
                 context_percentage: None,
@@ -1091,7 +1089,6 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
-                backend: None,
             },
             0,
         );
@@ -1130,14 +1127,15 @@ mod tests {
             "m",
             &RemoteSessionInfo {
                 id: "s1".into(),
+                agent: "claude-code".into(),
                 slug: "the-slug".into(),
                 cwd: "/w".into(),
                 last_activity: "t".into(),
                 line_count: 0,
                 title: None,
                 project: "p".into(),
-                permission_mode: None,
-                effort_level: None,
+                mode: None,
+                effort: None,
                 model: None,
                 context_window: None,
                 context_percentage: None,
@@ -1146,7 +1144,6 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
-                backend: None,
             },
             0,
         );
@@ -1293,8 +1290,7 @@ mod tests {
                 machine: "m".into(),
                 session_id: "s1".into(),
                 request_id: "req-1".into(),
-                allow: true,
-                modifier: None,
+                option_id: "allow".into(),
             },
             &kp,
             ctx(),
@@ -1302,20 +1298,25 @@ mod tests {
         assert!(s.ui.is_card_responded("m", "s1", "req-1"));
         assert!(matches!(
             out.sends.as_slice(),
-            [Send { machine, msg: PhoneToBridge::PermissionRes(m) }]
-                if machine == "m" && m.allow && m.request_id == "req-1"
+            [Send { machine, msg: PhoneToBridge::PermissionResponse(m) }]
+                if machine == "m" && m.option_id == "allow" && m.request_id == "req-1"
         ));
     }
 
     #[tokio::test]
-    async fn set_credentials_carries_the_tristate_keep_clear_set_convention() {
+    async fn set_credentials_carries_set_and_clear_and_notes_the_pending_save() {
         let (mut s, kp) = stores().await;
+        let values: CredentialValues = [
+            ("anthropic_api_key".to_string(), Some("sk-ant-xyz".to_string())),
+            ("old".to_string(), None),
+        ]
+        .into();
         let out = apply(
             &mut s,
             Intent::SetCredentials {
                 machine: "m".into(),
-                anthropic_api_key: Tristate::Set("sk-ant-xyz".into()),
-                github_pat: Tristate::Clear,
+                agent: Some("claude-code".into()),
+                values: values.clone(),
             },
             &kp,
             ctx(),
@@ -1323,9 +1324,34 @@ mod tests {
         assert!(matches!(
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::SetCredentials(m) }]
-                if machine == "m"
-                    && m.anthropic_api_key == Tristate::Set("sk-ant-xyz".to_string())
-                    && m.github_pat == Tristate::Clear
+                if machine == "m" && m.agent.as_deref() == Some("claude-code") && m.values == values
+        ));
+        assert_eq!(
+            s.ui.credentials_status["m"].state,
+            client_core::stores::ui::AckState::Saving
+        );
+    }
+
+    #[tokio::test]
+    async fn answering_one_question_marks_only_that_question_responded() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::AnswerQuestion {
+                machine: "m".into(),
+                session_id: "s1".into(),
+                request_id: "q".into(),
+                index: 1,
+                answer: QuestionAnswer::Options { selected: vec![0] },
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(s.ui.is_card_responded("m", "s1", "q:q1"));
+        assert!(!s.ui.is_card_responded("m", "s1", "q:q0"));
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { msg: PhoneToBridge::QuestionResponse(m), .. }] if m.index == 1 && m.request_id == "q"
         ));
     }
 
@@ -1416,22 +1442,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_mode_maps_to_one_command() {
+    async fn set_option_maps_to_one_command() {
         let (mut s, kp) = stores().await;
         let out = apply(
             &mut s,
-            Intent::SetMode {
+            Intent::SetOption {
                 machine: "m".into(),
                 session_id: "s1".into(),
-                mode: PermissionMode::AcceptEdits,
+                option: SessionOption::Mode,
+                value: "acceptEdits".into(),
             },
             &kp,
             ctx(),
         );
         assert!(matches!(
             out.sends.as_slice(),
-            [Send { msg: PhoneToBridge::Mode(m), .. }]
-                if m.mode == PermissionMode::AcceptEdits
+            [Send { msg: PhoneToBridge::SetOption(m), .. }]
+                if m.option == SessionOption::Mode && m.value == "acceptEdits"
         ));
         assert!(out.persist.is_empty()); // the CONFIRM writes state, not the request
     }

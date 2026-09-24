@@ -1,4 +1,4 @@
-//! Rust half of the shared codec conformance corpus
+//! The shared codec conformance corpus
 //! (`packages/protocol/fixtures/corpus.json`). The TS half lives in
 //! `packages/protocol/src/__tests__/fixtures.test.ts` and runs the identical
 //! assertions on the identical bytes. A zod-schema change that isn't mirrored
@@ -76,8 +76,8 @@ fn corpus_covers_every_message_type() {
             .collect::<std::collections::BTreeSet<_>>()
             .len()
     };
-    assert_eq!(distinct(&c["phoneToBridge"]["valid"]), 23, "phone->bridge message types");
-    assert_eq!(distinct(&c["bridgeToPhone"]["valid"]), 24, "bridge->phone message types");
+    assert_eq!(distinct(&c["phoneToBridge"]["valid"]), 21, "phone->bridge message types");
+    assert_eq!(distinct(&c["bridgeToPhone"]["valid"]), 22, "bridge->phone message types");
 }
 
 #[test]

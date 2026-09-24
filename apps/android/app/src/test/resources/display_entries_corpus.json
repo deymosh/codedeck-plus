@@ -1,273 +1,257 @@
 {
   "displayEntries": [
     {
-      "entry": {
-        "content": "port the connection reducer to rust",
-        "entryType": "text",
-        "metadata": {
-          "role": "user"
-        },
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
       "kind": "userMessage",
-      "seq": 1
+      "seq": 1,
+      "text": "port the connection reducer to rust"
     },
     {
-      "entry": {
-        "content": "## Refactor plan\n\nHere's what I'll do, in order.",
-        "entryType": "text",
-        "metadata": {
-          "role": "assistant"
-        },
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
       "isPlan": false,
-      "kind": "assistantMessage",
-      "seq": 2
+      "kind": "agentMessage",
+      "seq": 2,
+      "text": "## Refactor plan\n\nHere's what I'll do, in order."
     },
     {
-      "entries": [
-        {
-          "entry": {
-            "content": "Read pool.ts",
-            "entryType": "tool_use",
-            "timestamp": "2026-09-16T00:00:00Z"
-          },
-          "seq": 3
-        },
-        {
-          "entry": {
-            "content": "42 lines",
-            "entryType": "tool_result",
-            "metadata": {
-              "tool_use_id": "tu-read"
-            },
-            "timestamp": "2026-09-16T00:00:00Z"
-          },
-          "seq": 4
-        }
-      ],
       "kind": "toolGroup",
       "seq": 3,
-      "summary": "2 actions"
+      "steps": [
+        {
+          "redacted": false,
+          "seq": 3,
+          "step": "thinking",
+          "text": "Start with the pool."
+        },
+        {
+          "seq": 4,
+          "step": "text",
+          "text": "Reading the pool first."
+        },
+        {
+          "callId": "tu-read",
+          "isSubAgent": false,
+          "result": {
+            "isError": false,
+            "text": "42 lines"
+          },
+          "seq": 5,
+          "step": "call",
+          "subagent": null,
+          "title": "pool.ts",
+          "toolKind": "read",
+          "toolName": "Read"
+        },
+        {
+          "callId": "tu-grep",
+          "isSubAgent": true,
+          "result": {
+            "isError": false,
+            "text": "3 matches"
+          },
+          "seq": 6,
+          "step": "call",
+          "subagent": "explorer",
+          "title": "SimplePool",
+          "toolKind": "search",
+          "toolName": "Grep"
+        }
+      ],
+      "summary": "3 actions"
     },
     {
-      "entry": {
-        "content": "",
-        "diff": {
-          "lines": [
-            {
-              "text": "  const pool = new SimplePool();",
-              "type": "context"
-            },
-            {
-              "text": "  pool.trackRelays = true;",
-              "type": "del"
-            },
-            {
-              "text": "  pool.idleTimeout = 0x7fffffff; // CDX-020",
-              "type": "add"
-            }
-          ],
-          "path": "packages/core/src/nostr/pool.ts"
+      "agentLabel": null,
+      "answered": "Allowed",
+      "description": "Read packages/core/src/nostr/pool.ts",
+      "isSubAgent": false,
+      "kind": "permissionRequest",
+      "locations": [],
+      "options": [
+        {
+          "id": "allow",
+          "kind": "allow_once",
+          "label": "Allow"
         },
-        "entryType": "diff",
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
+        {
+          "id": "allow_always",
+          "kind": "allow_always",
+          "label": "Always allow"
+        },
+        {
+          "id": "deny",
+          "kind": "reject_once",
+          "label": "Deny"
+        }
+      ],
+      "requestId": "tu-read",
+      "seq": 8,
+      "title": "pool.ts",
+      "toolKind": "read",
+      "toolName": "Read"
+    },
+    {
       "kind": "diff",
-      "seq": 5
+      "lines": [
+        {
+          "text": "  const pool = new SimplePool();",
+          "type": "context"
+        },
+        {
+          "text": "  pool.trackRelays = true;",
+          "type": "del"
+        },
+        {
+          "text": "  pool.idleTimeout = 0x7fffffff; // CDX-020",
+          "type": "add"
+        }
+      ],
+      "path": "packages/core/src/nostr/pool.ts",
+      "seq": 11,
+      "truncated": false
     },
     {
-      "entry": {
-        "content": "session_died: bridge disconnected",
-        "entryType": "error",
-        "metadata": {
-          "special": "session_died"
-        },
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
       "kind": "error",
-      "seq": 6
+      "seq": 12,
+      "text": "bridge disconnected"
     },
     {
-      "entry": {
-        "content": "status: idle",
-        "entryType": "system",
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
-      "kind": "system",
-      "seq": 7
+      "kind": "status",
+      "seq": 13,
+      "text": "status: idle"
     },
     {
-      "entry": {
-        "content": "restarted",
-        "entryType": "system",
-        "metadata": {
-          "special": "session_restart"
-        },
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
-      "kind": "lifecycle",
-      "seq": 8
+      "kind": "notice",
+      "notice": "session_restart",
+      "seq": 14,
+      "text": "restarted"
+    },
+    {
+      "isPlan": true,
+      "kind": "agentMessage",
+      "seq": 15,
+      "text": "1. Extract the reducer\n2. Wire the effects interpreter"
     },
     {
       "answered": null,
-      "entry": {
-        "content": "1. Extract the reducer\n2. Wire the effects interpreter",
-        "entryType": "text",
-        "metadata": {
-          "has_plan": true,
-          "special": "plan_approval",
-          "tool_use_id": "tu-plan"
-        },
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
-      "hasPlan": true,
       "kind": "planApproval",
-      "seq": 9,
-      "toolUseId": "tu-plan"
+      "options": [
+        {
+          "id": "acceptEdits",
+          "label": "Approve, auto-accept edits"
+        },
+        {
+          "id": "default",
+          "label": "Approve"
+        },
+        {
+          "description": "Stay in plan mode and send feedback",
+          "id": "revise",
+          "label": "Keep planning"
+        }
+      ],
+      "requestId": "tu-plan",
+      "seq": 16
     },
     {
       "answered": null,
       "kind": "question",
-      "question": {
-        "entry": {
-          "content": "Which approach?",
-          "entryType": "system",
-          "metadata": {
-            "header": "Direction",
-            "options": [
-              {
-                "label": "Extract first"
-              },
-              {
-                "label": "Rewrite in one pass"
-              }
-            ],
-            "special": "ask_question",
-            "tool_use_id": "tu-solo-question"
-          },
-          "timestamp": "2026-09-16T00:00:00Z"
-        },
-        "header": "Direction",
-        "multiSelect": null,
-        "options": [
-          {
-            "description": null,
-            "label": "Extract first"
-          },
-          {
-            "description": null,
-            "label": "Rewrite in one pass"
-          }
-        ]
-      },
-      "seq": 10,
-      "toolUseId": "tu-solo-question"
+      "questions": [
+        {
+          "header": "Direction",
+          "index": 0,
+          "multiSelect": false,
+          "options": [
+            {
+              "label": "Extract first"
+            },
+            {
+              "label": "Rewrite in one pass"
+            }
+          ],
+          "question": "Which approach?"
+        }
+      ],
+      "requestId": "tu-solo-question",
+      "seq": 17
     },
     {
       "answered": null,
-      "kind": "questionGroup",
+      "kind": "question",
       "questions": [
         {
-          "entry": {
-            "content": "How wide?",
-            "entryType": "system",
-            "metadata": {
-              "header": "Scope",
-              "options": [
-                {
-                  "label": "Narrow"
-                },
-                {
-                  "label": "Wide"
-                }
-              ],
-              "question_count": 2,
-              "question_index": 0,
-              "special": "ask_question",
-              "tool_use_id": "tu-question-group"
-            },
-            "timestamp": "2026-09-16T00:00:00Z"
-          },
           "header": "Scope",
-          "multiSelect": null,
+          "index": 0,
+          "multiSelect": false,
           "options": [
             {
-              "description": null,
               "label": "Narrow"
             },
             {
-              "description": null,
               "label": "Wide"
             }
-          ]
+          ],
+          "question": "How wide?"
         },
         {
-          "entry": {
-            "content": "When?",
-            "entryType": "system",
-            "metadata": {
-              "header": "Timeline",
-              "options": [
-                {
-                  "label": "This week"
-                },
-                {
-                  "label": "Next sprint"
-                }
-              ],
-              "question_count": 2,
-              "question_index": 1,
-              "special": "ask_question",
-              "tool_use_id": "tu-question-group"
-            },
-            "timestamp": "2026-09-16T00:00:00Z"
-          },
           "header": "Timeline",
-          "multiSelect": null,
+          "index": 1,
+          "multiSelect": true,
           "options": [
             {
-              "description": null,
               "label": "This week"
             },
             {
-              "description": null,
               "label": "Next sprint"
             }
-          ]
+          ],
+          "question": "When?"
         }
       ],
-      "seq": 11,
-      "toolUseId": "tu-question-group"
+      "requestId": "tu-question-group",
+      "seq": 18
     },
     {
       "agentLabel": null,
       "answered": null,
-      "description": "Read packages/core/src/nostr/pool.ts",
-      "entry": {
-        "content": "Read pool.ts",
-        "entryType": "system",
-        "metadata": {
-          "description": "Read packages/core/src/nostr/pool.ts",
-          "special": "permission_request",
-          "tool_name": "Read",
-          "tool_use_id": "tu-permission"
-        },
-        "timestamp": "2026-09-16T00:00:00Z"
-      },
+      "description": null,
       "isSubAgent": false,
       "kind": "permissionRequest",
+      "locations": [],
+      "options": [
+        {
+          "id": "allow",
+          "kind": "allow_once",
+          "label": "Allow"
+        },
+        {
+          "id": "deny",
+          "kind": "reject_once",
+          "label": "Deny"
+        }
+      ],
       "requestId": "tu-permission",
-      "seq": 13,
-      "toolName": "Read"
+      "seq": 20,
+      "title": "cargo test",
+      "toolKind": "execute",
+      "toolName": "Bash"
     }
   ],
   "pendingPermission": {
     "agentLabel": null,
-    "description": "Read packages/core/src/nostr/pool.ts",
+    "description": null,
     "isSubAgent": false,
+    "options": [
+      {
+        "id": "allow",
+        "kind": "allow_once",
+        "label": "Allow"
+      },
+      {
+        "id": "deny",
+        "kind": "reject_once",
+        "label": "Deny"
+      }
+    ],
     "requestId": "tu-permission",
-    "toolName": "Read"
+    "title": "cargo test",
+    "toolName": "Bash"
   }
 }

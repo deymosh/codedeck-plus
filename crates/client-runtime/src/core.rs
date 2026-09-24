@@ -3089,7 +3089,7 @@ mod tests {
                 // machines view — proving the subscription actually scopes to
                 // it, not just that some vacuous socket opened.
                 let sessions_json =
-                    r#"{"type":"sessions","machine":"bridge","sessions":[],"protocolVersion":10}"#;
+                    r#"{"type":"sessions","machine":"bridge","sessions":[],"agents":[],"protocolVersion":11}"#;
                 let msg = protocol::codec::decode_bridge_to_phone(sessions_json).unwrap();
                 let plaintext = encode_bridge_to_phone(&msg);
                 let ct = protocol::crypto::encrypt_to(
@@ -4253,7 +4253,7 @@ mod tests {
                 eose_all(&mut mock).await;
 
                 let msg = protocol::codec::decode_bridge_to_phone(
-                    r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","content":"hi","timestamp":"t"}}"#,
+                    r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}}"#,
                 )
                 .unwrap();
                 let plaintext = encode_bridge_to_phone(&msg);
@@ -4406,15 +4406,15 @@ mod tests {
                 // like the TS `removeMachine` it mirrors.
                 let sessions_msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"sessions","machine":"laptop","sessions":[
-                        {"id":"s1","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
-                    ],"protocolVersion":10}"#,
+                        {"id":"s1","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
+                    ],"agents":[],"protocolVersion":11}"#,
                 )
                 .unwrap();
                 push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
                 settle().await;
 
                 let msg = protocol::codec::decode_bridge_to_phone(
-                    r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","content":"hi","timestamp":"t"}}"#,
+                    r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}}"#,
                 )
                 .unwrap();
                 push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &msg);
@@ -4507,8 +4507,8 @@ mod tests {
                 let sub = drain_traffic_resubscribe(&mut mock).await;
                 let sessions_msg = protocol::codec::decode_bridge_to_phone(
                     r#"{"type":"sessions","machine":"laptop","sessions":[
-                        {"id":"s1","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
-                    ],"protocolVersion":10}"#,
+                        {"id":"s1","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
+                    ],"agents":[],"protocolVersion":11}"#,
                 )
                 .unwrap();
                 push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);

@@ -1,6 +1,6 @@
 [package]
 name = "protocol"
-description = "CodeDeck+ wire contract (pure). Mirrors packages/protocol's zod schemas; source of truth for client-core/client-runtime and (future) bridge-core/bridge-runtime."
+description = "CodeDeck+ wire contract (pure, authoritative): the agent control protocol shared by phone and bridge runtimes."
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true

@@ -15,15 +15,16 @@
 //! parallel DTOs, and it grows (never shrinks) as later F3/F4 milestones
 //! wire more of the app.
 //!
-//! `mode`/`modifier`/`context` cross as plain strings (Kotlin has no reason
-//! to see a Rust enum type here) and are parsed via the SAME `Deserialize`
-//! impl the wire protocol itself uses (`protocol::common::PermissionMode` et
-//! al.) rather than a hand-duplicated match — a typo lands as a clear
-//! `UniffiIntentError`, not a silent wrong mapping.
+//! Wire enums (e.g. `SetOption`'s `option`) cross as plain strings (Kotlin
+//! has no reason to see a Rust enum type here) and are parsed via the SAME
+//! `Deserialize` impl the wire protocol itself uses rather than a
+//! hand-duplicated match — a typo lands as a clear `UniffiIntentError`, not a
+//! silent wrong mapping. Agent-defined values (modes, efforts, models) are
+//! plain ids the bridge validates.
 
 use client_runtime::intent::{Intent, SessionImageSend};
-use protocol::commands::{KeypressContext, PermissionModifier, ProviderProfileWrite};
-use protocol::common::{EffortLevel, PermissionMode, ProviderModel, SessionBackend};
+use protocol::commands::{ProviderProfileWrite, QuestionAnswer};
+use protocol::common::{CredentialValues, ProviderModel, SessionOption};
 use protocol::tristate::Tristate;
 
 /// A UniFFI-crossable mirror of [`protocol::tristate::Tristate`] — see that
@@ -58,6 +59,27 @@ impl From<UniffiTristate> for Tristate<String> {
             UniffiTristate::Set { value } => Tristate::Set(value),
         }
     }
+}
+
+/// One credential write for `SetCredentials`: set (`Set`) or clear (`Clear`)
+/// the credential `id`; `Keep` entries are dropped (an id not sent is kept).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiCredentialWrite {
+    pub id: String,
+    pub value: UniffiTristate,
+}
+
+/// The wire's `values` map: `Set` → the secret, `Clear` → `null`, `Keep` →
+/// omitted.
+fn credential_values(writes: Vec<UniffiCredentialWrite>) -> CredentialValues {
+    writes
+        .into_iter()
+        .filter_map(|w| match w.value {
+            UniffiTristate::Keep => None,
+            UniffiTristate::Clear => Some((w.id, None)),
+            UniffiTristate::Set { value } => Some((w.id, Some(value))),
+        })
+        .collect()
 }
 
 /// UniFFI-crossable mirror of [`protocol::common::ProviderModel`] — a plain
@@ -115,29 +137,25 @@ pub enum UniffiIntent {
     RefreshSessions {
         machine: String,
     },
-    /// `backend`: `"claude-code"` / `"opencode"` / absent (defaults to Claude
-    /// Code) — see this module's doc comment for why wire enums cross as
-    /// plain strings. Send `"opencode"` only when the machine's
-    /// `capabilities` includes `"opencode"`.
+    /// Start a session on `agent` (a `UniffiAgent.id` the machine advertises).
+    /// `mode` / `effort` are agent-defined ids; absent = the agent's default.
     CreateSession {
         machine: String,
+        agent: String,
         cwd: Option<String>,
         create_cwd: Option<bool>,
+        mode: Option<String>,
+        effort: Option<String>,
         model: Option<String>,
-        /// `"low"` / `"medium"` / `"high"` / `"xhigh"` / `"max"` — the wire's
-        /// own spelling, same convention as `mode`.
-        default_effort: Option<String>,
         provider_id: Option<String>,
-        backend: Option<String>,
     },
-    /// Ask the bridge for a backend's live supported-model list; the answer
-    /// lands in the matching `UniffiMachineSummary` field (`models` /
-    /// `open_code_models`).
+    /// Ask the bridge for `agent`'s live model list; the answer lands in the
+    /// machine's `models` entry for that agent.
     RequestModels {
         machine: String,
-        backend: Option<String>,
+        agent: String,
     },
-    /// Ask the bridge for this session's usage snapshot (5h/7d limits, cost);
+    /// Ask the bridge for this session's usage snapshot (limit windows, cost);
     /// the answer lands in `UniffiSessionSummary.usage`.
     RequestUsage {
         machine: String,
@@ -152,11 +170,13 @@ pub enum UniffiIntent {
     RequestProviderProfiles {
         machine: String,
     },
-    /// Store credentials on the bridge host (CDX-011). Secrets: never logged.
+    /// Store credentials on the bridge host (CDX-011) for `agent`, or for the
+    /// bridge itself when `None`. Ids not listed are kept. Secrets: never
+    /// logged.
     SetCredentials {
         machine: String,
-        anthropic_api_key: UniffiTristate,
-        github_pat: UniffiTristate,
+        agent: Option<String>,
+        values: Vec<UniffiCredentialWrite>,
     },
     /// Upsert (`profile: Some`) or delete (`profile: None`) one custom
     /// provider profile stored bridge-side (CDX-062).
@@ -165,41 +185,37 @@ pub enum UniffiIntent {
         profile_id: String,
         profile: Option<UniffiProviderProfileWrite>,
     },
+    /// Answer a permission request with one of its options' ids.
     RespondPermission {
         machine: String,
         session_id: String,
         request_id: String,
-        allow: bool,
-        /// `"always"` / `"never"` / absent — see this module's doc comment.
-        modifier: Option<String>,
+        option_id: String,
     },
+    /// Answer question `index` of the ask `request_id`: free `text` when
+    /// present, otherwise the `selected` option indices.
     AnswerQuestion {
         machine: String,
         session_id: String,
-        text: String,
-        option_count: u64,
+        request_id: String,
+        index: u32,
+        selected: Vec<u32>,
+        text: Option<String>,
     },
-    Keypress {
+    /// Answer a plan approval with one of its options' ids.
+    RespondPlan {
         machine: String,
         session_id: String,
-        key: String,
-        /// `"plan-approval"` / `"question"` / absent.
-        context: Option<String>,
+        request_id: String,
+        option_id: String,
     },
-    SetMode {
+    /// Change a session option: `option` is `"mode"` / `"effort"` /
+    /// `"model"`, `value` an id the session's agent advertises (or a model id).
+    SetOption {
         machine: String,
         session_id: String,
-        /// `"default"` / `"acceptEdits"` / `"plan"` — the wire's own spelling.
-        mode: String,
-    },
-    /// Session-level effort change — distinct from the global-settings
-    /// `SetDefaultEffort` below. `level`: `"low"` / `"medium"` / `"high"` /
-    /// `"xhigh"` / `"max"` / `"auto"` — the wire's own spelling, same
-    /// convention as `mode`.
-    SetEffort {
-        machine: String,
-        session_id: String,
-        level: String,
+        option: String,
+        value: String,
     },
     /// F3.3: selects (or, with `session_id: None`, deselects) a session in
     /// the shared `UiView` — the sidebar's tap-to-open and the shell's
@@ -210,7 +226,7 @@ pub enum UniffiIntent {
     },
     /// F3.3: records which plan-approval option the user tapped so the
     /// resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
-    /// actual answer (`Keypress` with `context: "plan-approval"`), not
+    /// actual answer (`RespondPlan`), not
     /// instead of it — same contract the TS `PlanApprovalCard.tsx` had.
     SetPlanApprovalChoice {
         card_id: String,
@@ -253,7 +269,7 @@ pub enum UniffiIntent {
     SetNotificationsEnabled {
         enabled: bool,
     },
-    /// `"default"` / `"acceptEdits"` / `"plan"` — same wire spelling as `SetMode`.
+    /// Preferred mode for new sessions — an agent mode id; `""` = the agent's default.
     SetDefaultMode {
         mode: String,
     },
@@ -351,26 +367,25 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::RefreshSessions { machine } => Intent::RefreshSessions { machine },
             UniffiIntent::CreateSession {
                 machine,
+                agent,
                 cwd,
                 create_cwd,
+                mode,
+                effort,
                 model,
-                default_effort,
                 provider_id,
-                backend,
             } => Intent::CreateSession {
                 machine,
+                agent,
                 cwd,
                 create_cwd,
+                mode,
+                effort,
                 model,
-                default_effort: default_effort.map(|e| parse_enum::<EffortLevel>("default_effort", &e)).transpose()?,
                 provider_id,
                 test_session: None,
-                backend: backend.map(|b| parse_enum::<SessionBackend>("backend", &b)).transpose()?,
             },
-            UniffiIntent::RequestModels { machine, backend } => Intent::RequestModels {
-                machine,
-                backend: backend.map(|b| parse_enum::<SessionBackend>("backend", &b)).transpose()?,
-            },
+            UniffiIntent::RequestModels { machine, agent } => Intent::RequestModels { machine, agent },
             UniffiIntent::RequestUsage { machine, session_id } => {
                 Intent::RequestUsage { machine, session_id }
             }
@@ -378,10 +393,10 @@ impl TryFrom<UniffiIntent> for Intent {
                 Intent::RequestGsd { machine, session_id }
             }
             UniffiIntent::RequestProviderProfiles { machine } => Intent::RequestProviderProfiles { machine },
-            UniffiIntent::SetCredentials { machine, anthropic_api_key, github_pat } => Intent::SetCredentials {
+            UniffiIntent::SetCredentials { machine, agent, values } => Intent::SetCredentials {
                 machine,
-                anthropic_api_key: anthropic_api_key.into(),
-                github_pat: github_pat.into(),
+                agent,
+                values: credential_values(values),
             },
             UniffiIntent::SetProviderProfile { machine, profile_id, profile } => Intent::SetProviderProfile {
                 machine,
@@ -394,36 +409,29 @@ impl TryFrom<UniffiIntent> for Intent {
                     default_model: p.default_model,
                 }),
             },
-            UniffiIntent::RespondPermission { machine, session_id, request_id, allow, modifier } => {
-                Intent::RespondPermission {
+            UniffiIntent::RespondPermission { machine, session_id, request_id, option_id } => {
+                Intent::RespondPermission { machine, session_id, request_id, option_id }
+            }
+            UniffiIntent::AnswerQuestion { machine, session_id, request_id, index, selected, text } => {
+                Intent::AnswerQuestion {
                     machine,
                     session_id,
                     request_id,
-                    allow,
-                    modifier: modifier.map(|m| parse_enum::<PermissionModifier>("modifier", &m)).transpose()?,
+                    index,
+                    answer: match text {
+                        Some(text) => QuestionAnswer::Text { text },
+                        None => QuestionAnswer::Options { selected },
+                    },
                 }
             }
-            UniffiIntent::AnswerQuestion { machine, session_id, text, option_count } => Intent::AnswerQuestion {
+            UniffiIntent::RespondPlan { machine, session_id, request_id, option_id } => {
+                Intent::RespondPlan { machine, session_id, request_id, option_id }
+            }
+            UniffiIntent::SetOption { machine, session_id, option, value } => Intent::SetOption {
                 machine,
                 session_id,
-                text,
-                option_count,
-            },
-            UniffiIntent::Keypress { machine, session_id, key, context } => Intent::Keypress {
-                machine,
-                session_id,
-                key,
-                context: context.map(|c| parse_enum::<KeypressContext>("context", &c)).transpose()?,
-            },
-            UniffiIntent::SetMode { machine, session_id, mode } => Intent::SetMode {
-                machine,
-                session_id,
-                mode: parse_enum::<PermissionMode>("mode", &mode)?,
-            },
-            UniffiIntent::SetEffort { machine, session_id, level } => Intent::SetEffort {
-                machine,
-                session_id,
-                level: parse_enum::<EffortLevel>("level", &level)?,
+                option: parse_enum::<SessionOption>("option", &option)?,
+                value,
             },
             UniffiIntent::SelectSession { machine, session_id } => {
                 Intent::SelectSession { machine, session_id }
@@ -442,9 +450,7 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SetStayConnected { enabled } => Intent::SetStayConnected(enabled),
             UniffiIntent::SetBlossomServer { url } => Intent::SetBlossomServer(url),
             UniffiIntent::SetNotificationsEnabled { enabled } => Intent::SetNotificationsEnabled(enabled),
-            UniffiIntent::SetDefaultMode { mode } => {
-                Intent::SetDefaultMode(parse_enum::<PermissionMode>("mode", &mode)?)
-            }
+            UniffiIntent::SetDefaultMode { mode } => Intent::SetDefaultMode(mode),
             UniffiIntent::SetDefaultEffort { level } => Intent::SetDefaultEffort(level),
             UniffiIntent::SetDefaultModel { model } => Intent::SetDefaultModel(model),
             UniffiIntent::SetUiScale { scale } => Intent::SetUiScale(scale),
@@ -518,66 +524,93 @@ mod tests {
     }
 
     #[test]
-    fn set_mode_parses_the_same_wire_spelling_the_protocol_uses() {
-        let intent = UniffiIntent::SetMode {
+    fn set_option_parses_the_same_wire_spelling_the_protocol_uses() {
+        let intent = UniffiIntent::SetOption {
             machine: "m".into(),
             session_id: "s".into(),
-            mode: "acceptEdits".into(),
+            option: "mode".into(),
+            value: "acceptEdits".into(),
         };
         let mapped: Intent = intent.try_into().unwrap();
         assert_eq!(
             mapped,
-            Intent::SetMode {
+            Intent::SetOption {
                 machine: "m".into(),
                 session_id: "s".into(),
-                mode: PermissionMode::AcceptEdits,
+                option: SessionOption::Mode,
+                value: "acceptEdits".into(),
             }
         );
     }
 
     #[test]
-    fn an_unrecognized_mode_string_is_a_clear_error_not_a_panic_or_silent_default() {
-        let intent = UniffiIntent::SetMode {
+    fn an_unrecognized_option_is_a_clear_error_not_a_panic_or_silent_default() {
+        let intent = UniffiIntent::SetOption {
             machine: "m".into(),
             session_id: "s".into(),
-            mode: "not-a-real-mode".into(),
+            option: "temperature".into(),
+            value: "1".into(),
         };
         let err = Intent::try_from(intent).unwrap_err();
         assert!(matches!(err, UniffiIntentError::BadEnumValue { .. }));
     }
 
     #[test]
-    fn set_credentials_keep_clear_set_round_trip() {
+    fn set_credentials_sends_set_and_clear_and_drops_keep() {
         let intent = UniffiIntent::SetCredentials {
             machine: "m".into(),
-            anthropic_api_key: UniffiTristate::Set { value: "sk-ant-1".into() },
-            github_pat: UniffiTristate::Clear,
+            agent: Some("claude-code".into()),
+            values: vec![
+                UniffiCredentialWrite { id: "anthropic_api_key".into(), value: UniffiTristate::Set { value: "sk-ant-1".into() } },
+                UniffiCredentialWrite { id: "old".into(), value: UniffiTristate::Clear },
+                UniffiCredentialWrite { id: "untouched".into(), value: UniffiTristate::Keep },
+            ],
         };
         let mapped: Intent = intent.try_into().unwrap();
         assert_eq!(
             mapped,
             Intent::SetCredentials {
                 machine: "m".into(),
-                anthropic_api_key: Tristate::Set("sk-ant-1".into()),
-                github_pat: Tristate::Clear,
+                agent: Some("claude-code".into()),
+                values: [
+                    ("anthropic_api_key".to_string(), Some("sk-ant-1".to_string())),
+                    ("old".to_string(), None),
+                ]
+                .into(),
             }
         );
+    }
 
-        let kept: Intent = UniffiIntent::SetCredentials {
+    #[test]
+    fn answer_question_is_text_when_given_else_the_selected_options() {
+        let text: Intent = UniffiIntent::AnswerQuestion {
             machine: "m".into(),
-            anthropic_api_key: UniffiTristate::Keep,
-            github_pat: UniffiTristate::Keep,
+            session_id: "s".into(),
+            request_id: "q".into(),
+            index: 1,
+            selected: vec![],
+            text: Some("blue".into()),
         }
         .try_into()
         .unwrap();
-        assert_eq!(
-            kept,
-            Intent::SetCredentials {
-                machine: "m".into(),
-                anthropic_api_key: Tristate::Keep,
-                github_pat: Tristate::Keep,
-            }
-        );
+        assert!(matches!(
+            text,
+            Intent::AnswerQuestion { index: 1, answer: QuestionAnswer::Text { ref text }, .. } if text == "blue"
+        ));
+        let picked: Intent = UniffiIntent::AnswerQuestion {
+            machine: "m".into(),
+            session_id: "s".into(),
+            request_id: "q".into(),
+            index: 0,
+            selected: vec![0, 2],
+            text: None,
+        }
+        .try_into()
+        .unwrap();
+        assert!(matches!(
+            picked,
+            Intent::AnswerQuestion { answer: QuestionAnswer::Options { ref selected }, .. } if *selected == vec![0, 2]
+        ));
     }
 
     #[test]
@@ -650,54 +683,5 @@ mod tests {
         let intent = UniffiIntent::DismissPendingSession { pending_id: "p1".into() };
         let mapped: Intent = intent.try_into().unwrap();
         assert_eq!(mapped, Intent::DismissPendingSession { pending_id: "p1".into() });
-    }
-
-    #[test]
-    fn set_effort_parses_the_same_wire_spelling_the_protocol_uses() {
-        let intent = UniffiIntent::SetEffort {
-            machine: "m".into(),
-            session_id: "s".into(),
-            level: "xhigh".into(),
-        };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(
-            mapped,
-            Intent::SetEffort {
-                machine: "m".into(),
-                session_id: "s".into(),
-                level: EffortLevel::Xhigh,
-            }
-        );
-    }
-
-    #[test]
-    fn an_unrecognized_effort_level_is_a_clear_error_not_a_panic_or_silent_default() {
-        let intent = UniffiIntent::SetEffort {
-            machine: "m".into(),
-            session_id: "s".into(),
-            level: "not-a-real-level".into(),
-        };
-        let err = Intent::try_from(intent).unwrap_err();
-        assert!(matches!(err, UniffiIntentError::BadEnumValue { .. }));
-    }
-
-    #[test]
-    fn request_usage_maps_field_for_field() {
-        let intent = UniffiIntent::RequestUsage {
-            machine: "m".into(),
-            session_id: "s".into(),
-        };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(mapped, Intent::RequestUsage { machine: "m".into(), session_id: "s".into() });
-    }
-
-    #[test]
-    fn request_gsd_maps_field_for_field() {
-        let intent = UniffiIntent::RequestGsd {
-            machine: "m".into(),
-            session_id: "s".into(),
-        };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(mapped, Intent::RequestGsd { machine: "m".into(), session_id: "s".into() });
     }
 }

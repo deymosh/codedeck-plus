@@ -7,9 +7,8 @@
 //! `apps/mobile/src/core` layout so an in-place upgrade keeps its data.
 
 use protocol::crypto::Keypair;
-use client_core::default_session_mode::DefaultModeApplier;
 use client_core::delete_controller::DeleteController;
-use client_core::notifications::{agent_label, NotificationContext, NotificationCoordinator};
+use client_core::notifications::{NotificationContext, NotificationCoordinator};
 use client_core::stores::dm::{hydrate_dm, serialize_dm, DmState, DM_STORAGE_KEY};
 use client_core::stores::identity::{load_or_create_identity, IDENTITY_STORAGE_KEY};
 use client_core::stores::machines::{
@@ -62,7 +61,6 @@ pub struct CoreStores {
     pub marmot: MarmotState,
     pub notifications: NotificationCoordinator,
     pub delete_controller: DeleteController,
-    pub default_mode: DefaultModeApplier,
 }
 
 impl CoreStores {
@@ -81,7 +79,12 @@ impl CoreStores {
                     .map(str::to_string)
             }),
             machine: non_blank(&mv.name).map(str::to_string),
-            agent: session.map(|sv| agent_label(sv.info.backend)),
+            // The catalog's display name; the bare id when the bridge has not
+            // advertised the agent (yet).
+            agent: session.map(|sv| {
+                mv.agent(&sv.info.agent)
+                    .map_or_else(|| sv.info.agent.clone(), |a| a.display_name.clone())
+            }),
         }
     }
 }
@@ -92,7 +95,7 @@ impl CoreStores {
 pub struct NotificationLabels {
     pub session: Option<String>,
     pub machine: Option<String>,
-    pub agent: Option<&'static str>,
+    pub agent: Option<String>,
 }
 
 impl NotificationLabels {
@@ -100,7 +103,7 @@ impl NotificationLabels {
         NotificationContext {
             session_label: self.session.as_deref(),
             machine_label: self.machine.as_deref(),
-            agent_label: self.agent,
+            agent_label: self.agent.as_deref(),
         }
     }
 }
@@ -172,7 +175,6 @@ pub async fn hydrate(
             marmot,
             notifications: NotificationCoordinator::default(),
             delete_controller: DeleteController::default(),
-            default_mode: DefaultModeApplier::default(),
         },
         keypair: identity.keypair,
         identity_needs_persist: identity.needs_persist,
@@ -307,14 +309,15 @@ mod tests {
         machines.register_machine("m", "laptop", None, None);
         let info = RemoteSessionInfo {
             id: "s1".into(),
+            agent: "claude-code".into(),
             slug: "slug-s1".into(),
             cwd: "/w".into(),
             last_activity: "1970-01-01T00:00:00.000Z".into(),
             line_count: 0,
             title: None,
             project: "p".into(),
-            permission_mode: None,
-            effort_level: None,
+            mode: None,
+            effort: None,
             model: None,
             context_window: None,
             context_percentage: None,
@@ -323,7 +326,6 @@ mod tests {
             seq_high: None,
             provider_id: None,
             provider_label: None,
-            backend: None,
         };
         machines.apply_session_upsert("m", &info, 0);
         kv.set(MACHINES_KEY, &serialize_machines(&machines.machines)).await;

@@ -1,49 +1,36 @@
 //! `display_entries` — pure transform from the flat transcript (`seq` +
-//! `OutputEntry`) to grouped display items, one per rendered row. Port of
-//! `apps/mobile/src/ui/transcript/displayEntries.ts`, on the v10 wire entry
-//! vocabulary the bridge actually produces.
+//! typed [`OutputEntry`]) to grouped, render-ready rows. Clients render these
+//! rows; they never interpret wire entries themselves.
 //!
-//! - `text` role=user → user message bubble.
-//! - `text` role=assistant → assistant markdown, or absorbed into a tool group
-//!   when `display_hint` is `collapse`.
-//! - `text` special=plan → plan markdown (stays visible).
-//! - `tool_use` / `tool_result` / `progress` / `thinking` → collapsed
-//!   "N actions" group.
-//! - `system` special=plan_approval → plan approval card.
-//! - `system` special=ask_question → question card (grouped by `tool_use_id`
-//!   for a multi-question turn).
-//! - `system` special=permission_request → permission card.
-//! - `system` special=session_restart → lifecycle marker.
-//! - `error` → error row.
-//! - `system` init banner / token counts / result summaries / `stream_end`
-//!   markers → filtered out; the rest are status lines.
-//!
-//! CDX-085: `thinking` is folded into the action group and counted with the
-//! rest — a turn no longer renders as an alternating `Thinking` / `N actions`
-//! stack. A lone thinking step reads as "1 action". `diff` deliberately stays
-//! OUT: it flushes the group and renders standalone (the point of a diff card
-//! is to be seen).
-//!
-//! Answered-state detection: a `tool_result` whose `tool_use_id` matches a
-//! card's id means the card was resolved.
+//! - `text` role=user → user message bubble; role=agent → agent markdown, or
+//!   folded into the surrounding tool group when `collapsible`.
+//! - `plan` → plan markdown (stays visible).
+//! - `tool_call` / `tool_result` / `thinking` → one collapsed "N actions"
+//!   group per run. A call carries its result wherever the result landed in
+//!   the transcript (a permission card between the two does not split them);
+//!   a result whose call is unknown stays a step of its own.
+//! - `diff` → a standalone diff card (the point of a diff card is to be seen).
+//! - `permission_request` / `plan_approval` → a card each; consecutive
+//!   `question` entries sharing a `request_id` → one question card.
+//! - `resolved` marks the card with that `request_id` answered (its summary is
+//!   the outcome shown) and renders nothing itself.
+//! - `notice` → a lifecycle / notice line; `status` → a status line; `error` →
+//!   an error row; `turn_complete` and empty status lines → hidden.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use protocol::common::{OutputEntry, OutputEntryType};
+use protocol::common::{
+    DiffLine, EntryBody, NoticeKind, OptionChoice, OutputEntry, PermissionOption, QuestionOption,
+    Role, ToolKind,
+};
 use serde::Serialize;
 
-// `Serialize` (F3.3): these cross the UniFFI boundary as one JSON blob per
-// session (`crates/client-ffi`'s `UniffiTranscriptRowsView.display_entries_json`)
-// rather than as a UniFFI `Record` — `OutputEntry.metadata` is arbitrary
-// `serde_json::Value`, which `#[derive(uniffi::Record)]` cannot express, so
-// the whole grouped list rides as JSON the same way an individual row's
-// `OutputEntry` already does. `camelCase` matches every other wire/view type
-// in this codebase; `tag = "kind"` on `DisplayEntry` gives Kotlin's
-// `kotlinx.serialization` polymorphic decoder a discriminant to match its
-// sealed-class hierarchy against.
+// These rows cross to the UI as one JSON blob per session (`crates/client-ffi`'s
+// `UniffiTranscriptRowsView.display_entries_json`). `tag = "kind"` gives
+// Kotlin's polymorphic decoder a discriminant to match its sealed classes on,
+// which is why the tool / notice kinds are named `toolKind` / `notice` here.
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SeqEntry {
     pub seq: u64,
     pub entry: OutputEntry,
@@ -51,18 +38,48 @@ pub struct SeqEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct QuestionOption {
-    pub label: String,
-    pub description: Option<String>,
+pub struct ToolResultView {
+    pub text: String,
+    pub is_error: bool,
+}
+
+/// One step inside a collapsed tool group.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "step", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ToolStep {
+    Call {
+        seq: u64,
+        call_id: String,
+        tool_name: String,
+        tool_kind: ToolKind,
+        title: String,
+        /// Label of the sub-agent that made the call, if one did.
+        subagent: Option<String>,
+        is_sub_agent: bool,
+        result: Option<ToolResultView>,
+    },
+    /// A result whose call is not in the transcript.
+    Result { seq: u64, text: String, is_error: bool },
+    Thinking { seq: u64, text: String, redacted: bool },
+    /// Agent text written alongside tool calls (`collapsible`).
+    Text { seq: u64, text: String },
+}
+
+impl ToolStep {
+    /// Every step but folded-in text is one action of the "N actions" count.
+    fn is_action(&self) -> bool {
+        !matches!(self, ToolStep::Text { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct QuestionSpecView {
-    pub entry: OutputEntry,
+pub struct QuestionView {
+    pub index: u32,
     pub header: Option<String>,
-    pub options: Option<Vec<QuestionOption>>,
-    pub multi_select: Option<bool>,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
 }
 
 /// One rendered row. `seq` is the stable key — the seq of the first entry
@@ -72,398 +89,342 @@ pub struct QuestionSpecView {
 pub enum DisplayEntry {
     UserMessage {
         seq: u64,
-        entry: OutputEntry,
+        text: String,
     },
-    AssistantMessage {
+    AgentMessage {
         seq: u64,
-        entry: OutputEntry,
-        /// `true` for `special=plan` entries (plan markdown).
+        text: String,
+        /// A `plan` entry: rendered framed as a plan document.
         is_plan: bool,
     },
     ToolGroup {
         seq: u64,
-        entries: Vec<SeqEntry>,
+        steps: Vec<ToolStep>,
         summary: String,
     },
     Diff {
         seq: u64,
-        entry: OutputEntry,
+        path: String,
+        lines: Vec<DiffLine>,
+        truncated: bool,
     },
     Error {
         seq: u64,
-        entry: OutputEntry,
+        text: String,
     },
-    System {
+    Status {
         seq: u64,
-        entry: OutputEntry,
+        text: String,
     },
-    Lifecycle {
+    Notice {
         seq: u64,
-        entry: OutputEntry,
+        notice: NoticeKind,
+        text: String,
     },
     PlanApproval {
         seq: u64,
-        entry: OutputEntry,
-        tool_use_id: Option<String>,
-        has_plan: bool,
-        /// Set (`"Plan approved"`) when a matching `tool_result` resolved it.
+        request_id: String,
+        options: Vec<OptionChoice>,
+        /// The outcome, once a `resolved` entry answered it.
         answered: Option<String>,
     },
     Question {
         seq: u64,
-        tool_use_id: Option<String>,
-        question: QuestionSpecView,
-        answered: Option<String>,
-    },
-    QuestionGroup {
-        seq: u64,
-        tool_use_id: String,
-        questions: Vec<QuestionSpecView>,
+        request_id: String,
+        /// Sorted by `index`; one element for a single question.
+        questions: Vec<QuestionView>,
         answered: Option<String>,
     },
     PermissionRequest {
         seq: u64,
-        entry: OutputEntry,
-        tool_name: String,
-        description: String,
         request_id: String,
+        tool_name: String,
+        tool_kind: ToolKind,
+        title: String,
+        description: Option<String>,
+        locations: Vec<String>,
+        options: Vec<PermissionOption>,
         is_sub_agent: bool,
         agent_label: Option<String>,
-        /// Set when a matching `tool_result` resolved the request.
         answered: Option<String>,
     },
 }
 
-// --- metadata helpers (OutputEntry.metadata is Option<serde_json::Value>) ---
-
-fn meta<'a>(entry: &'a OutputEntry, key: &str) -> Option<&'a serde_json::Value> {
-    entry.metadata.as_ref()?.get(key)
-}
-
-fn meta_str<'a>(entry: &'a OutputEntry, key: &str) -> Option<&'a str> {
-    meta(entry, key)?.as_str()
-}
-
-fn meta_bool(entry: &OutputEntry, key: &str) -> Option<bool> {
-    meta(entry, key)?.as_bool()
-}
-
-fn meta_f64(entry: &OutputEntry, key: &str) -> Option<f64> {
-    meta(entry, key)?.as_f64()
-}
-
-/// JS `!!value` on a metadata field.
-fn meta_truthy(entry: &OutputEntry, key: &str) -> bool {
-    match meta(entry, key) {
-        Some(serde_json::Value::Bool(b)) => *b,
-        Some(serde_json::Value::String(s)) => !s.is_empty(),
-        Some(serde_json::Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
-        Some(serde_json::Value::Array(_)) | Some(serde_json::Value::Object(_)) => true,
-        Some(serde_json::Value::Null) | None => false,
+/// Entries the transcript never shows as a row of their own.
+pub fn is_hidden_entry(entry: &OutputEntry) -> bool {
+    match &entry.body {
+        EntryBody::TurnComplete {} | EntryBody::Resolved { .. } => true,
+        EntryBody::Status { text } => text.trim().is_empty(),
+        _ => false,
     }
 }
 
-/// `metadata.special`, treating `""` as absent (JS truthiness).
-fn special_of(entry: &OutputEntry) -> Option<&str> {
-    meta_str(entry, "special").filter(|s| !s.is_empty())
-}
-
-fn tool_use_id_of(entry: &OutputEntry) -> Option<&str> {
-    meta_str(entry, "tool_use_id").filter(|s| !s.is_empty())
-}
-
-fn parse_options(entry: &OutputEntry) -> Option<Vec<QuestionOption>> {
-    let arr = meta(entry, "options")?.as_array()?;
-    Some(
-        arr.iter()
-            .map(|v| QuestionOption {
-                label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                description: v
-                    .get("description")
-                    .and_then(|x| x.as_str())
-                    .map(str::to_string),
-            })
-            .collect(),
-    )
-}
-
-/// CDX-085: what folds into the action group. `diff` is NOT here — it renders
-/// standalone. Do not generalise this set.
-fn is_action_entry(entry: &OutputEntry) -> bool {
-    matches!(
-        entry.entry_type,
-        OutputEntryType::ToolUse
-            | OutputEntryType::ToolResult
-            | OutputEntryType::Progress
-            | OutputEntryType::Thinking
-    )
-}
-
-/// Assistant text accompanying tool calls collapses into the tool group.
-fn should_collapse_text(entry: &OutputEntry) -> bool {
-    if special_of(entry).is_some() {
-        return false;
-    }
-    if entry.entry_type != OutputEntryType::Text {
-        return false;
-    }
-    if meta_str(entry, "role") == Some("user") {
-        return false;
-    }
-    meta_str(entry, "display_hint") == Some("collapse")
-}
-
-/// Per-turn metadata noise the transcript hides.
-pub fn is_hidden_system_entry(entry: &OutputEntry) -> bool {
-    if entry.entry_type != OutputEntryType::System {
-        return false;
-    }
-    if special_of(entry).is_some() {
-        return false;
-    }
-    if meta_truthy(entry, "stream_end") {
-        return true;
-    }
-    let t = &entry.content;
-    t.is_empty()
-        || t.starts_with("Claude Code")
-        || t.starts_with("Session complete")
-        || t.starts_with("Tokens:")
-}
-
-/// Count of ACTIONS, not of absorbed entries — a collapsed assistant text rides
-/// in `entries` without being an action. CDX-085 added thinking steps to the
-/// tally; the rest is unchanged.
-fn build_tool_summary(entries: &[SeqEntry]) -> String {
-    let count = entries.iter().filter(|e| is_action_entry(&e.entry)).count();
-    format!("{count} action{}", if count == 1 { "" } else { "s" })
-}
-
-/// `tool_use_id` → answering `tool_result` content (resolved-card detection).
-pub fn collect_answered_tool_use_ids(entries: &[SeqEntry]) -> HashMap<String, String> {
-    let mut answered = HashMap::new();
+/// `request_id` → outcome summary, from `resolved` entries (the latest wins).
+pub fn collect_resolved(entries: &[SeqEntry]) -> HashMap<String, String> {
+    let mut resolved = HashMap::new();
     for item in entries {
-        if item.entry.entry_type != OutputEntryType::ToolResult {
-            continue;
-        }
-        if let Some(id) = tool_use_id_of(&item.entry) {
-            answered.insert(id.to_string(), item.entry.content.clone());
+        if let EntryBody::Resolved { request_id, summary } = &item.entry.body {
+            resolved.insert(request_id.clone(), summary.clone());
         }
     }
-    answered
+    resolved
+}
+
+fn subagent_label(entry: &OutputEntry) -> Option<String> {
+    entry.subagent.as_ref().and_then(|s| s.label.clone())
+}
+
+fn build_tool_summary(steps: &[ToolStep]) -> String {
+    let count = steps.iter().filter(|s| s.is_action()).count();
+    format!("{count} action{}", if count == 1 { "" } else { "s" })
 }
 
 struct Builder {
     display: Vec<DisplayEntry>,
-    answered: HashMap<String, String>,
-    tool_group: Vec<SeqEntry>,
-    tool_group_seq: u64,
-    questions: Vec<QuestionSpecView>,
-    question_tool_use_id: Option<String>,
+    resolved: HashMap<String, String>,
+    steps: Vec<ToolStep>,
+    group_seq: u64,
+    questions: Vec<QuestionView>,
+    question_request: Option<String>,
     question_seq: u64,
 }
 
 impl Builder {
-    fn flush_tool_group(&mut self) {
-        if self.tool_group.is_empty() {
+    fn push_step(&mut self, seq: u64, step: ToolStep) {
+        self.flush_questions();
+        if self.steps.is_empty() {
+            self.group_seq = seq;
+        }
+        self.steps.push(step);
+    }
+
+    fn flush_group(&mut self) {
+        if self.steps.is_empty() {
             return;
         }
-        let entries = std::mem::take(&mut self.tool_group);
-        let summary = build_tool_summary(&entries);
+        let steps = std::mem::take(&mut self.steps);
+        let summary = build_tool_summary(&steps);
         self.display.push(DisplayEntry::ToolGroup {
-            seq: self.tool_group_seq,
-            entries,
+            seq: self.group_seq,
+            steps,
             summary,
         });
     }
 
-    fn flush_question_group(&mut self) {
-        if self.questions.is_empty() {
+    fn flush_questions(&mut self) {
+        let Some(request_id) = self.question_request.take() else {
             return;
-        }
-        let questions = std::mem::take(&mut self.questions);
-        let tool_use_id = self.question_tool_use_id.take();
-        let answered = tool_use_id
-            .as_deref()
-            .and_then(|id| self.answered.get(id).cloned());
-
-        let expected = meta_f64(&questions[0].entry, "question_count");
-        let is_multi = match expected {
-            Some(n) => n > 1.0,
-            None => questions.len() > 1,
         };
+        let mut questions = std::mem::take(&mut self.questions);
+        questions.sort_by_key(|q| q.index);
+        self.display.push(DisplayEntry::Question {
+            seq: self.question_seq,
+            answered: self.resolved.get(&request_id).cloned(),
+            request_id,
+            questions,
+        });
+    }
 
-        if !is_multi {
-            self.display.push(DisplayEntry::Question {
-                seq: self.question_seq,
-                tool_use_id,
-                question: questions.into_iter().next().expect("non-empty"),
-                answered,
-            });
-        } else {
-            // Robust against out-of-order delivery: sort by question_index.
-            let mut sorted = questions;
-            sorted.sort_by(|a, b| {
-                let ai = meta_f64(&a.entry, "question_index").unwrap_or(0.0);
-                let bi = meta_f64(&b.entry, "question_index").unwrap_or(0.0);
-                ai.total_cmp(&bi)
-            });
-            self.display.push(DisplayEntry::QuestionGroup {
-                seq: self.question_seq,
-                tool_use_id: tool_use_id.unwrap_or_else(|| self.question_seq.to_string()),
-                questions: sorted,
-                answered,
-            });
-        }
+    /// Everything that is not a tool step or a question ends both open runs.
+    fn flush_all(&mut self) {
+        self.flush_group();
+        self.flush_questions();
     }
 }
 
 pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
-    let mut b = Builder {
-        display: Vec::new(),
-        answered: collect_answered_tool_use_ids(source),
-        tool_group: Vec::new(),
-        tool_group_seq: 0,
-        questions: Vec::new(),
-        question_tool_use_id: None,
-        question_seq: 0,
-    };
-
-    let filtered: Vec<SeqEntry> = source
-        .iter()
-        .filter(|e| !is_hidden_system_entry(&e.entry))
-        .cloned()
-        .collect();
-
-    for item in &filtered {
-        let entry = &item.entry;
-        let seq = item.seq;
-
-        if is_action_entry(entry) {
-            b.flush_question_group();
-            if b.tool_group.is_empty() {
-                b.tool_group_seq = seq;
+    // Results by call id, and the calls that exist, so a call carries its
+    // result wherever it landed and a paired result never renders twice.
+    let mut results: HashMap<&str, ToolResultView> = HashMap::new();
+    let mut calls: HashSet<&str> = HashSet::new();
+    for item in source {
+        match &item.entry.body {
+            EntryBody::ToolResult { call_id, text, is_error } => {
+                results.insert(
+                    call_id,
+                    ToolResultView {
+                        text: text.clone(),
+                        is_error: *is_error,
+                    },
+                );
             }
-            b.tool_group.push(item.clone());
-            continue;
-        }
-        if should_collapse_text(entry) {
-            if b.tool_group.is_empty() {
-                b.tool_group_seq = seq;
+            EntryBody::ToolCall { call_id, .. } => {
+                calls.insert(call_id);
             }
-            b.tool_group.push(item.clone());
-            continue;
-        }
-        b.flush_tool_group();
-
-        let special = special_of(entry);
-        let tool_use_id = tool_use_id_of(entry);
-
-        if special == Some("ask_question") {
-            let current = b.question_tool_use_id.clone();
-            if let Some(current) = current {
-                if tool_use_id != Some(current.as_str()) {
-                    b.flush_question_group();
-                }
-            }
-            if b.questions.is_empty() {
-                b.question_seq = seq;
-                b.question_tool_use_id = tool_use_id.map(str::to_string);
-            }
-            b.questions.push(QuestionSpecView {
-                entry: entry.clone(),
-                header: meta_str(entry, "header").map(str::to_string),
-                options: parse_options(entry),
-                multi_select: meta_bool(entry, "multiSelect"),
-            });
-            continue;
-        }
-        b.flush_question_group();
-
-        if special == Some("plan") {
-            b.display.push(DisplayEntry::AssistantMessage {
-                seq,
-                entry: entry.clone(),
-                is_plan: true,
-            });
-            continue;
-        }
-        if special == Some("plan_approval") {
-            let answered = tool_use_id
-                .and_then(|id| b.answered.get(id))
-                .map(|_| "Plan approved".to_string());
-            b.display.push(DisplayEntry::PlanApproval {
-                seq,
-                entry: entry.clone(),
-                tool_use_id: tool_use_id.map(str::to_string),
-                has_plan: meta_bool(entry, "has_plan") != Some(false),
-                answered,
-            });
-            continue;
-        }
-        if special == Some("permission_request") {
-            let answered = tool_use_id.and_then(|id| b.answered.get(id).cloned());
-            b.display.push(DisplayEntry::PermissionRequest {
-                seq,
-                entry: entry.clone(),
-                tool_name: meta_str(entry, "tool_name").unwrap_or("").to_string(),
-                description: meta_str(entry, "description")
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&entry.content)
-                    .to_string(),
-                request_id: tool_use_id.unwrap_or("").to_string(),
-                is_sub_agent: meta_truthy(entry, "subagent"),
-                agent_label: meta_str(entry, "agent_label").map(str::to_string),
-                answered,
-            });
-            continue;
-        }
-        if special == Some("session_restart") {
-            b.display.push(DisplayEntry::Lifecycle {
-                seq,
-                entry: entry.clone(),
-            });
-            continue;
-        }
-
-        match entry.entry_type {
-            OutputEntryType::Text => {
-                if meta_str(entry, "role") == Some("user") {
-                    b.display.push(DisplayEntry::UserMessage {
-                        seq,
-                        entry: entry.clone(),
-                    });
-                } else {
-                    b.display.push(DisplayEntry::AssistantMessage {
-                        seq,
-                        entry: entry.clone(),
-                        is_plan: false,
-                    });
-                }
-            }
-            // `thinking` never reaches here — is_action_entry absorbs it (CDX-085).
-            OutputEntryType::Diff => b.display.push(DisplayEntry::Diff {
-                seq,
-                entry: entry.clone(),
-            }),
-            OutputEntryType::Error => b.display.push(DisplayEntry::Error {
-                seq,
-                entry: entry.clone(),
-            }),
-            OutputEntryType::System => b.display.push(DisplayEntry::System {
-                seq,
-                entry: entry.clone(),
-            }),
-            _ => b.display.push(DisplayEntry::AssistantMessage {
-                seq,
-                entry: entry.clone(),
-                is_plan: false,
-            }),
+            _ => {}
         }
     }
 
-    b.flush_question_group();
-    b.flush_tool_group();
+    let mut b = Builder {
+        display: Vec::new(),
+        resolved: collect_resolved(source),
+        steps: Vec::new(),
+        group_seq: 0,
+        questions: Vec::new(),
+        question_request: None,
+        question_seq: 0,
+    };
+
+    for item in source.iter().filter(|e| !is_hidden_entry(&e.entry)) {
+        let seq = item.seq;
+        let entry = &item.entry;
+        match &entry.body {
+            EntryBody::ToolCall {
+                call_id,
+                tool_name,
+                kind,
+                title,
+                ..
+            } => {
+                let subagent = subagent_label(entry);
+                b.push_step(
+                    seq,
+                    ToolStep::Call {
+                        seq,
+                        call_id: call_id.clone(),
+                        tool_name: tool_name.clone(),
+                        tool_kind: *kind,
+                        title: title.clone(),
+                        is_sub_agent: entry.subagent.is_some(),
+                        subagent,
+                        result: results.get(call_id.as_str()).cloned(),
+                    },
+                );
+            }
+            EntryBody::ToolResult { call_id, text, is_error } => {
+                if !calls.contains(call_id.as_str()) {
+                    b.push_step(
+                        seq,
+                        ToolStep::Result {
+                            seq,
+                            text: text.clone(),
+                            is_error: *is_error,
+                        },
+                    );
+                }
+            }
+            EntryBody::Thinking { text, redacted } => b.push_step(
+                seq,
+                ToolStep::Thinking {
+                    seq,
+                    text: text.clone(),
+                    redacted: *redacted,
+                },
+            ),
+            EntryBody::Text {
+                role: Role::Agent,
+                text,
+                collapsible: true,
+            } => b.push_step(seq, ToolStep::Text { seq, text: text.clone() }),
+            EntryBody::Question {
+                request_id,
+                index,
+                header,
+                question,
+                options,
+                multi_select,
+                ..
+            } => {
+                b.flush_group();
+                if b.question_request.as_deref() != Some(request_id.as_str()) {
+                    b.flush_questions();
+                    b.question_request = Some(request_id.clone());
+                    b.question_seq = seq;
+                }
+                b.questions.push(QuestionView {
+                    index: *index,
+                    header: header.clone(),
+                    question: question.clone(),
+                    options: options.clone(),
+                    multi_select: *multi_select,
+                });
+            }
+            EntryBody::Text { role, text, .. } => {
+                b.flush_all();
+                b.display.push(match role {
+                    Role::User => DisplayEntry::UserMessage { seq, text: text.clone() },
+                    Role::Agent => DisplayEntry::AgentMessage {
+                        seq,
+                        text: text.clone(),
+                        is_plan: false,
+                    },
+                });
+            }
+            EntryBody::Plan { text } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::AgentMessage {
+                    seq,
+                    text: text.clone(),
+                    is_plan: true,
+                });
+            }
+            EntryBody::Diff {
+                path, lines, truncated, ..
+            } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::Diff {
+                    seq,
+                    path: path.clone(),
+                    lines: lines.clone(),
+                    truncated: *truncated,
+                });
+            }
+            EntryBody::PermissionRequest {
+                request_id,
+                tool_name,
+                kind,
+                title,
+                description,
+                locations,
+                options,
+                ..
+            } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::PermissionRequest {
+                    seq,
+                    answered: b.resolved.get(request_id).cloned(),
+                    request_id: request_id.clone(),
+                    tool_name: tool_name.clone(),
+                    tool_kind: *kind,
+                    title: title.clone(),
+                    description: description.clone(),
+                    locations: locations.clone(),
+                    options: options.clone(),
+                    is_sub_agent: entry.subagent.is_some(),
+                    agent_label: subagent_label(entry),
+                });
+            }
+            EntryBody::PlanApproval { request_id, options } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::PlanApproval {
+                    seq,
+                    answered: b.resolved.get(request_id).cloned(),
+                    request_id: request_id.clone(),
+                    options: options.clone(),
+                });
+            }
+            EntryBody::Notice { kind, text } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::Notice {
+                    seq,
+                    notice: *kind,
+                    text: text.clone(),
+                });
+            }
+            EntryBody::Status { text } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::Status { seq, text: text.clone() });
+            }
+            EntryBody::Error { text } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::Error { seq, text: text.clone() });
+            }
+            // Filtered above; listed so a new entry kind is a compile error here.
+            EntryBody::Resolved { .. } | EntryBody::TurnComplete {} => {}
+        }
+    }
+
+    b.flush_all();
     b.display
 }
 
@@ -472,388 +433,228 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
 pub struct PendingPermissionSummary {
     pub request_id: String,
     pub tool_name: String,
-    pub description: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub options: Vec<PermissionOption>,
     pub is_sub_agent: bool,
     pub agent_label: Option<String>,
 }
 
-/// Latest still-pending permission request (no answering `tool_result`, not
-/// optimistically responded). Drives the always-visible bar above the input —
-/// an inline card buried under a collapsed sub-agent group is exactly how a
-/// permission prompt goes unseen and deadlocks the session.
+/// Latest still-pending permission request (not resolved, not optimistically
+/// responded). Drives the always-visible bar above the input — an inline card
+/// buried under a collapsed sub-agent group is exactly how a permission
+/// prompt goes unseen and deadlocks the session.
 pub fn find_pending_permission(
     source: &[SeqEntry],
     responded_cards: Option<&BTreeSet<String>>,
 ) -> Option<PendingPermissionSummary> {
-    if source.is_empty() {
-        return None;
-    }
-    let answered = collect_answered_tool_use_ids(source);
-    for item in source.iter().rev() {
-        let entry = &item.entry;
-        if special_of(entry) != Some("permission_request") {
-            continue;
-        }
-        let Some(tool_use_id) = tool_use_id_of(entry) else {
-            continue;
+    let resolved = collect_resolved(source);
+    source.iter().rev().find_map(|item| {
+        let EntryBody::PermissionRequest {
+            request_id,
+            tool_name,
+            title,
+            description,
+            options,
+            ..
+        } = &item.entry.body
+        else {
+            return None;
         };
-        if answered.contains_key(tool_use_id)
-            || responded_cards.is_some_and(|s| s.contains(tool_use_id))
-        {
-            continue;
+        if resolved.contains_key(request_id) || responded_cards.is_some_and(|s| s.contains(request_id)) {
+            return None;
         }
-        return Some(PendingPermissionSummary {
-            request_id: tool_use_id.to_string(),
-            tool_name: meta_str(entry, "tool_name").unwrap_or("").to_string(),
-            description: meta_str(entry, "description")
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&entry.content)
-                .to_string(),
-            is_sub_agent: meta_truthy(entry, "subagent"),
-            agent_label: meta_str(entry, "agent_label").map(str::to_string),
-        });
-    }
-    None
+        Some(PendingPermissionSummary {
+            request_id: request_id.clone(),
+            tool_name: tool_name.clone(),
+            title: title.clone(),
+            description: description.clone(),
+            options: options.clone(),
+            is_sub_agent: item.entry.subagent.is_some(),
+            agent_label: subagent_label(&item.entry),
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::common::Subagent;
     use serde_json::json;
 
-    fn e(entry_type: OutputEntryType, content: &str, metadata: serde_json::Value) -> OutputEntry {
-        OutputEntry {
-            entry_type,
-            content: content.to_string(),
-            timestamp: "2026-08-05T00:00:00.000Z".to_string(),
-            metadata: if metadata.is_null() { None } else { Some(metadata) },
-            diff: None,
-        }
-    }
-
-    /// Sequential-seq builder mirroring the TS test helper.
-    struct Seqr(u64);
-    impl Seqr {
-        fn n(&mut self, entry: OutputEntry) -> SeqEntry {
-            self.0 += 1;
-            SeqEntry { seq: self.0, entry }
-        }
+    /// Entries from their exact wire JSON — keeps the tests honest against
+    /// the protocol's own decoder.
+    fn seq(entries: &[serde_json::Value]) -> Vec<SeqEntry> {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let mut v = v.clone();
+                v["timestamp"] = json!("2026-08-05T00:00:00.000Z");
+                SeqEntry {
+                    seq: i as u64 + 1,
+                    entry: serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{v} -> {e}")),
+                }
+            })
+            .collect()
     }
 
     fn kinds(d: &[DisplayEntry]) -> Vec<&'static str> {
         d.iter()
             .map(|x| match x {
-                DisplayEntry::UserMessage { .. } => "user_message",
-                DisplayEntry::AssistantMessage { .. } => "assistant_message",
-                DisplayEntry::ToolGroup { .. } => "tool_group",
+                DisplayEntry::UserMessage { .. } => "user",
+                DisplayEntry::AgentMessage { is_plan: true, .. } => "plan",
+                DisplayEntry::AgentMessage { .. } => "agent",
+                DisplayEntry::ToolGroup { .. } => "tools",
                 DisplayEntry::Diff { .. } => "diff",
                 DisplayEntry::Error { .. } => "error",
-                DisplayEntry::System { .. } => "system",
-                DisplayEntry::Lifecycle { .. } => "lifecycle",
+                DisplayEntry::Status { .. } => "status",
+                DisplayEntry::Notice { .. } => "notice",
                 DisplayEntry::PlanApproval { .. } => "plan_approval",
                 DisplayEntry::Question { .. } => "question",
-                DisplayEntry::QuestionGroup { .. } => "question_group",
-                DisplayEntry::PermissionRequest { .. } => "permission_request",
+                DisplayEntry::PermissionRequest { .. } => "permission",
             })
             .collect()
     }
 
-    #[test]
-    fn maps_each_bridge_entry_kind_to_its_display_row() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::Text, "hello from user", json!({ "role": "user" }))),
-            s.n(e(
-                OutputEntryType::Text,
-                "assistant standalone answer",
-                json!({ "role": "assistant", "display_hint": "show" }),
-            )),
-            s.n(e(OutputEntryType::Error, "boom", json!({ "error_type": "error_during_execution" }))),
-            s.n(e(OutputEntryType::System, "some status line", json!(null))),
-            s.n(e(
-                OutputEntryType::System,
-                "Session interrupted — restarting (attempt 1)...",
-                json!({ "special": "session_restart" }),
-            )),
-        ]);
-        assert_eq!(
-            kinds(&d),
-            ["user_message", "assistant_message", "error", "system", "lifecycle"]
-        );
+    fn call(id: &str) -> serde_json::Value {
+        json!({"entryType":"tool_call","callId":id,"toolName":"Bash","kind":"execute","title":format!("run {id}")})
+    }
+    fn result(id: &str, text: &str) -> serde_json::Value {
+        json!({"entryType":"tool_result","callId":id,"text":text})
+    }
+    fn perm(id: &str) -> serde_json::Value {
+        json!({"entryType":"permission_request","requestId":id,"toolName":"Bash","kind":"execute","title":"rm x",
+            "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}]})
     }
 
     #[test]
-    fn groups_consecutive_tool_entries_plus_collapsed_text_into_one_tool_group() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::Text, "let me look", json!({ "role": "assistant", "display_hint": "collapse" }))),
-            s.n(e(OutputEntryType::ToolUse, "Bash: ls", json!({ "tool_name": "Bash", "tool_use_id": "t1" }))),
-            s.n(e(OutputEntryType::ToolResult, "file.txt", json!({ "tool_use_id": "t1" }))),
-            s.n(e(OutputEntryType::Progress, "working…", json!(null))),
-            s.n(e(OutputEntryType::Text, "done — here is the answer", json!({ "role": "assistant", "display_hint": "show" }))),
-        ]);
-        assert_eq!(kinds(&d), ["tool_group", "assistant_message"]);
-        match &d[0] {
-            DisplayEntry::ToolGroup { entries, summary, .. } => {
-                assert_eq!(entries.len(), 4);
-                assert_eq!(summary, "3 actions"); // collapsed text does not count
-            }
-            _ => panic!("expected tool_group"),
+    fn a_turn_groups_its_actions_and_keeps_the_conversation_visible() {
+        let d = build_display_entries(&seq(&[
+            json!({"entryType":"text","role":"user","text":"fix it"}),
+            json!({"entryType":"thinking","text":"hmm"}),
+            json!({"entryType":"text","role":"agent","text":"Checking.","collapsible":true}),
+            call("c1"),
+            result("c1", "ok"),
+            json!({"entryType":"text","role":"agent","text":"Done."}),
+            json!({"entryType":"turn_complete"}),
+        ]));
+        assert_eq!(kinds(&d), ["user", "tools", "agent"]);
+        let DisplayEntry::ToolGroup { steps, summary, seq } = &d[1] else { panic!() };
+        assert_eq!(*seq, 2);
+        // thinking + call count; folded text does not; the result rides its call
+        assert_eq!(summary, "2 actions");
+        assert_eq!(steps.len(), 3);
+        assert!(matches!(&steps[2], ToolStep::Call { result: Some(r), .. } if r.text == "ok"));
+    }
+
+    #[test]
+    fn a_result_after_a_permission_card_still_joins_its_call() {
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            perm("c1"),
+            json!({"entryType":"resolved","requestId":"c1","summary":"Allowed"}),
+            result("c1", "removed"),
+        ]));
+        // the result renders with its call, not as a second group
+        assert_eq!(kinds(&d), ["tools", "permission"]);
+        let DisplayEntry::ToolGroup { steps, .. } = &d[0] else { panic!() };
+        assert!(matches!(&steps[0], ToolStep::Call { result: Some(r), .. } if r.text == "removed"));
+        let DisplayEntry::PermissionRequest { answered, options, .. } = &d[1] else { panic!() };
+        assert_eq!(answered.as_deref(), Some("Allowed"));
+        assert_eq!(options.len(), 2);
+    }
+
+    #[test]
+    fn a_result_without_a_known_call_is_its_own_step() {
+        let d = build_display_entries(&seq(&[result("ghost", "orphan")]));
+        let DisplayEntry::ToolGroup { steps, summary, .. } = &d[0] else { panic!() };
+        assert!(matches!(&steps[0], ToolStep::Result { text, .. } if text == "orphan"));
+        assert_eq!(summary, "1 action");
+    }
+
+    #[test]
+    fn diffs_notices_status_and_errors_break_a_group_and_render_alone() {
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            json!({"entryType":"diff","path":"a.rs","lines":[{"type":"add","text":"x"}]}),
+            call("c2"),
+            json!({"entryType":"notice","kind":"session_restart","text":"restarted"}),
+            json!({"entryType":"status","text":"compacting"}),
+            json!({"entryType":"status","text":"   "}),
+            json!({"entryType":"error","text":"boom"}),
+            json!({"entryType":"plan","text":"1. x"}),
+        ]));
+        assert_eq!(kinds(&d), ["tools", "diff", "tools", "notice", "status", "error", "plan"]);
+    }
+
+    #[test]
+    fn questions_sharing_a_request_become_one_card_in_index_order() {
+        let q = |i: u32| json!({"entryType":"question","requestId":"q","index":i,"count":2,"header":format!("H{i}"),"question":"?","options":[{"label":"A"}]});
+        let d = build_display_entries(&seq(&[
+            q(1),
+            q(0),
+            json!({"entryType":"question","requestId":"other","index":0,"count":1,"question":"?"}),
+            json!({"entryType":"resolved","requestId":"q","summary":"Answered"}),
+        ]));
+        assert_eq!(kinds(&d), ["question", "question"]);
+        let DisplayEntry::Question { questions, answered, request_id, .. } = &d[0] else { panic!() };
+        assert_eq!(request_id, "q");
+        assert_eq!(questions.iter().map(|q| q.index).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(answered.as_deref(), Some("Answered"));
+        let DisplayEntry::Question { answered, .. } = &d[1] else { panic!() };
+        assert_eq!(*answered, None);
+    }
+
+    #[test]
+    fn plan_approval_carries_its_options_and_outcome() {
+        let d = build_display_entries(&seq(&[
+            json!({"entryType":"plan_approval","requestId":"p","options":[{"id":"approve","label":"Approve"}]}),
+            json!({"entryType":"resolved","requestId":"p","summary":"Plan approved"}),
+        ]));
+        let DisplayEntry::PlanApproval { options, answered, .. } = &d[0] else { panic!() };
+        assert_eq!(options[0].id, "approve");
+        assert_eq!(answered.as_deref(), Some("Plan approved"));
+    }
+
+    #[test]
+    fn sub_agent_calls_and_requests_are_labelled() {
+        let mut entries = seq(&[call("c1"), perm("r1")]);
+        for e in &mut entries {
+            e.entry.subagent = Some(Subagent { label: Some("explorer".into()) });
         }
+        let d = build_display_entries(&entries);
+        let DisplayEntry::ToolGroup { steps, .. } = &d[0] else { panic!() };
+        assert!(matches!(&steps[0], ToolStep::Call { is_sub_agent: true, subagent: Some(l), .. } if l == "explorer"));
+        let DisplayEntry::PermissionRequest { is_sub_agent, agent_label, .. } = &d[1] else { panic!() };
+        assert!(*is_sub_agent);
+        assert_eq!(agent_label.as_deref(), Some("explorer"));
     }
 
     #[test]
-    fn plan_text_and_plan_approval_are_separate_rows_sharing_the_tool_use_id() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::Text, "# The plan\n1. do things", json!({ "role": "assistant", "special": "plan", "tool_use_id": "p1" }))),
-            s.n(e(OutputEntryType::System, "Plan approval needed", json!({ "special": "plan_approval", "tool_use_id": "p1", "has_plan": true }))),
+    fn pending_permission_is_the_latest_unresolved_unresponded_request() {
+        let entries = seq(&[
+            perm("r1"),
+            perm("r2"),
+            json!({"entryType":"resolved","requestId":"r2","summary":"Denied"}),
+            perm("r3"),
         ]);
-        assert_eq!(kinds(&d), ["assistant_message", "plan_approval"]);
-        assert!(matches!(&d[0], DisplayEntry::AssistantMessage { is_plan: true, .. }));
-        match &d[1] {
-            DisplayEntry::PlanApproval { has_plan, answered, .. } => {
-                assert!(*has_plan);
-                assert_eq!(*answered, None);
-            }
-            _ => panic!("expected plan_approval"),
-        }
+        assert_eq!(find_pending_permission(&entries, None).unwrap().request_id, "r3");
+        let responded: BTreeSet<String> = ["r3".to_string()].into();
+        assert_eq!(find_pending_permission(&entries, Some(&responded)).unwrap().request_id, "r1");
+        let all: BTreeSet<String> = ["r1".to_string(), "r3".to_string()].into();
+        assert_eq!(find_pending_permission(&entries, Some(&all)), None);
+        assert_eq!(find_pending_permission(&[], None), None);
     }
 
     #[test]
-    fn plan_approval_without_a_plan_carries_has_plan_false() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[s.n(e(
-            OutputEntryType::System,
-            "Plan approval needed",
-            json!({ "special": "plan_approval", "tool_use_id": "p1", "has_plan": false }),
-        ))]);
-        assert!(matches!(&d[0], DisplayEntry::PlanApproval { has_plan: false, .. }));
-    }
-
-    #[test]
-    fn a_tool_result_answering_the_plan_tool_use_id_marks_the_approval_answered() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::System, "Plan approval needed", json!({ "special": "plan_approval", "tool_use_id": "p1", "has_plan": true }))),
-            s.n(e(OutputEntryType::ToolResult, "User approved the plan", json!({ "tool_use_id": "p1" }))),
-        ]);
-        let approval = d.iter().find(|x| matches!(x, DisplayEntry::PlanApproval { .. })).unwrap();
-        match approval {
-            DisplayEntry::PlanApproval { answered, .. } => {
-                assert_eq!(answered.as_deref(), Some("Plan approved"));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn single_ask_question_becomes_a_question_card_with_options() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[s.n(e(
-            OutputEntryType::System,
-            "Which color?",
-            json!({
-                "special": "ask_question", "tool_use_id": "q1", "header": "Color",
-                "options": [{ "label": "red" }, { "label": "blue", "description": "cool" }],
-                "multiSelect": false, "question_index": 0, "question_count": 1
-            }),
-        ))]);
-        assert_eq!(d.len(), 1);
-        match &d[0] {
-            DisplayEntry::Question { tool_use_id, question, .. } => {
-                assert_eq!(tool_use_id.as_deref(), Some("q1"));
-                assert_eq!(question.header.as_deref(), Some("Color"));
-                assert_eq!(question.options.as_ref().unwrap().len(), 2);
-                assert_eq!(question.options.as_ref().unwrap()[1].description.as_deref(), Some("cool"));
-            }
-            _ => panic!("expected question"),
-        }
-    }
-
-    #[test]
-    fn multi_question_group_buffers_and_sorts_by_index() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::System, "Second?", json!({ "special": "ask_question", "tool_use_id": "q1", "header": "B", "question_index": 1, "question_count": 2 }))),
-            s.n(e(OutputEntryType::System, "First?", json!({ "special": "ask_question", "tool_use_id": "q1", "header": "A", "question_index": 0, "question_count": 2 }))),
-        ]);
-        assert_eq!(d.len(), 1);
-        match &d[0] {
-            DisplayEntry::QuestionGroup { tool_use_id, questions, .. } => {
-                assert_eq!(tool_use_id, "q1");
-                assert_eq!(
-                    questions.iter().map(|q| q.header.as_deref().unwrap()).collect::<Vec<_>>(),
-                    ["A", "B"]
-                );
-            }
-            _ => panic!("expected question_group"),
-        }
-    }
-
-    #[test]
-    fn permission_request_card_fields_and_tool_result_resolution() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[s.n(e(
-            OutputEntryType::System,
-            "Permission needed: Bash",
-            json!({
-                "special": "permission_request", "tool_name": "Bash", "tool_use_id": "perm1",
-                "tool_input": { "command": "rm -rf build" }, "description": "Run rm -rf build",
-                "subagent": true, "agent_label": "Plan"
-            }),
-        ))]);
-        match &d[0] {
-            DisplayEntry::PermissionRequest {
-                tool_name, request_id, description, is_sub_agent, agent_label, answered, ..
-            } => {
-                assert_eq!(tool_name, "Bash");
-                assert_eq!(request_id, "perm1");
-                assert_eq!(description, "Run rm -rf build");
-                assert!(*is_sub_agent);
-                assert_eq!(agent_label.as_deref(), Some("Plan"));
-                assert_eq!(*answered, None);
-            }
-            _ => panic!("expected permission_request"),
-        }
-
-        let mut s = Seqr(0);
-        let resolved = build_display_entries(&[
-            s.n(e(OutputEntryType::System, "Permission needed: Bash", json!({ "special": "permission_request", "tool_name": "Bash", "tool_use_id": "perm1" }))),
-            s.n(e(OutputEntryType::ToolResult, "User denied", json!({ "tool_use_id": "perm1" }))),
-        ]);
-        let card = resolved.iter().find(|x| matches!(x, DisplayEntry::PermissionRequest { .. })).unwrap();
-        match card {
-            DisplayEntry::PermissionRequest { answered, .. } => {
-                assert_eq!(answered.as_deref(), Some("User denied"));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn filters_per_turn_noise() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::System, "", json!({ "stream_end": true }))),
-            s.n(e(OutputEntryType::System, "Tokens: 10 in / 20 out", json!({ "usage": {} }))),
-            s.n(e(OutputEntryType::System, "Claude Code 2.0.1 (claude-opus-4)", json!({ "subtype": "init" }))),
-            s.n(e(OutputEntryType::System, "Session complete — 3 turns, $0.0421", json!({ "subtype": "result" }))),
-            s.n(e(OutputEntryType::Text, "visible", json!({ "role": "assistant" }))),
-        ]);
-        assert_eq!(kinds(&d), ["assistant_message"]);
-    }
-
-    #[test]
-    fn is_hidden_system_entry_never_hides_special_cards() {
-        let entry = e(
-            OutputEntryType::System,
-            "",
-            json!({ "special": "permission_request", "tool_use_id": "x" }),
-        );
-        assert!(!is_hidden_system_entry(&entry));
-    }
-
-    #[test]
-    fn find_pending_permission_returns_latest_unanswered_unresponded() {
-        let mut s = Seqr(0);
-        let entries = [
-            s.n(e(OutputEntryType::System, "perm A", json!({ "special": "permission_request", "tool_name": "Bash", "tool_use_id": "a" }))),
-            s.n(e(OutputEntryType::ToolResult, "User denied", json!({ "tool_use_id": "a" }))),
-            s.n(e(OutputEntryType::System, "perm B", json!({ "special": "permission_request", "tool_name": "Edit", "tool_use_id": "b" }))),
-        ];
-        assert_eq!(
-            find_pending_permission(&entries, None).unwrap().request_id,
-            "b"
-        );
-        let responded: BTreeSet<String> = ["b".to_string()].into_iter().collect();
-        assert_eq!(find_pending_permission(&entries, Some(&responded)), None);
-    }
-
-    #[test]
-    fn thinking_is_absorbed_into_the_action_group_and_counts_cdx_085() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::ToolUse, "Bash: ls", json!({ "tool_name": "Bash", "tool_use_id": "t1" }))),
-            s.n(e(OutputEntryType::Thinking, "hmm", json!({ "role": "assistant" }))),
-            s.n(e(OutputEntryType::ToolUse, "Bash: pwd", json!({ "tool_name": "Bash", "tool_use_id": "t2" }))),
-        ]);
-        assert_eq!(kinds(&d), ["tool_group"]);
-        match &d[0] {
-            DisplayEntry::ToolGroup { entries, summary, .. } => {
-                assert_eq!(entries.len(), 3);
-                assert_eq!(summary, "3 actions");
-                assert_eq!(
-                    entries.iter().map(|x| x.entry.entry_type).collect::<Vec<_>>(),
-                    [OutputEntryType::ToolUse, OutputEntryType::Thinking, OutputEntryType::ToolUse]
-                );
-            }
-            _ => panic!("expected tool_group"),
-        }
-    }
-
-    #[test]
-    fn a_lone_thinking_step_is_one_action_and_owns_the_group_seq() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::Thinking, "let me reason…", json!({ "role": "assistant" }))),
-            s.n(e(OutputEntryType::Text, "the answer", json!({ "role": "assistant", "display_hint": "show" }))),
-        ]);
-        assert_eq!(kinds(&d), ["tool_group", "assistant_message"]);
-        match &d[0] {
-            DisplayEntry::ToolGroup { seq, entries, summary } => {
-                assert_eq!(summary, "1 action");
-                assert_eq!(entries[0].entry.content, "let me reason…");
-                assert_eq!(*seq, entries[0].seq);
-            }
-            _ => panic!("expected tool_group"),
-        }
-    }
-
-    #[test]
-    fn redacted_thinking_is_carried_into_the_group() {
-        let mut s = Seqr(0);
-        let d = build_display_entries(&[s.n(e(
-            OutputEntryType::Thinking,
-            "",
-            json!({ "role": "assistant", "redacted": true }),
-        ))]);
-        assert_eq!(d.len(), 1);
-        match &d[0] {
-            DisplayEntry::ToolGroup { entries, summary, .. } => {
-                assert_eq!(summary, "1 action");
-                assert_eq!(
-                    entries[0].entry.metadata.as_ref().unwrap().get("redacted"),
-                    Some(&json!(true))
-                );
-            }
-            _ => panic!("expected tool_group"),
-        }
-    }
-
-    #[test]
-    fn diff_routes_to_its_own_row_and_is_never_absorbed() {
-        let diff_entry = |seq: u64| SeqEntry {
-            seq,
-            entry: OutputEntry {
-                entry_type: OutputEntryType::Diff,
-                content: "-const a = 1;\n+const a = 2;".to_string(),
-                timestamp: "2026-08-08T00:00:00.000Z".to_string(),
-                metadata: Some(json!({ "role": "assistant", "tool_name": "Edit", "tool_use_id": "toolu_d1" })),
-                diff: None,
-            },
-        };
-
-        let d = build_display_entries(&[diff_entry(1)]);
-        assert_eq!(kinds(&d), ["diff"]);
-
-        let mut s = Seqr(1);
-        let d = build_display_entries(&[
-            s.n(e(OutputEntryType::ToolUse, "Edit: src/app.ts", json!({ "tool_name": "Edit", "tool_use_id": "toolu_d1" }))),
-            diff_entry(3),
-            s.n(e(OutputEntryType::ToolResult, "ok", json!({ "tool_use_id": "toolu_d1" }))),
-        ]);
-        // the diff splits the tool entries into two groups around a visible card
-        assert_eq!(kinds(&d), ["tool_group", "diff", "tool_group"]);
+    fn rows_serialize_with_the_kind_discriminant_the_ui_decodes() {
+        let d = build_display_entries(&seq(&[call("c1"), json!({"entryType":"notice","kind":"auth_error","text":"bad key"})]));
+        let v = serde_json::to_value(&d).unwrap();
+        assert_eq!(v[0]["kind"], "toolGroup");
+        assert_eq!(v[0]["steps"][0]["step"], "call");
+        assert_eq!(v[0]["steps"][0]["toolKind"], "execute");
+        assert_eq!(v[1]["kind"], "notice");
+        assert_eq!(v[1]["notice"], "auth_error");
     }
 }

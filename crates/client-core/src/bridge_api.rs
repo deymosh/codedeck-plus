@@ -49,10 +49,9 @@ pub fn kind_for_message(_msg: &PhoneToBridge) -> u16 {
 }
 
 /// Stamp `v` + `caps` onto an already-encoded command, mirroring the TS
-/// `{ v, caps, ...msg }` spread: the sender's [`PROTOCOL_VERSION`] and the
-/// caps it can RENDER ([`ALL_PHONE_CAPABILITIES`]) so the bridge can gate entry
-/// kinds an older phone would hard-fail on (CDX-050). A field the message
-/// already carries is left untouched.
+/// `{ v, caps, ...msg }` spread: the sender's [`PROTOCOL_VERSION`] and its
+/// capabilities ([`ALL_PHONE_CAPABILITIES`]), so negotiation is visible from
+/// both ends. A field the message already carries is left untouched.
 fn stamp_command(encoded: &str) -> String {
     let mut value: serde_json::Value =
         serde_json::from_str(encoded).expect("encode_phone_to_bridge emits a JSON object");
@@ -342,9 +341,9 @@ mod tests {
                 "seq": seq,
                 "entry": {
                     "entryType": "text",
-                    "content": "Z".repeat(bytes),
+                    "role": "agent",
+                    "text": "Z".repeat(bytes),
                     "timestamp": "2026-08-05T00:00:00.000Z",
-                    "metadata": { "role": "assistant" },
                 },
             })
             .to_string(),
@@ -386,7 +385,7 @@ mod tests {
         let plaintext = decrypt_from(&mac.secret_key, &id.pubkey_hex, &cmd.content).unwrap();
         let payload: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
         assert_eq!(payload["v"], json!(PROTOCOL_VERSION));
-        assert_eq!(payload["caps"], json!(["diff", "chunked"]));
+        assert_eq!(payload["caps"], json!(["chunked"]));
         assert_eq!(payload["type"], "input");
         assert_eq!(payload["text"], "hello");
     }
@@ -529,7 +528,7 @@ mod tests {
             "type": "output",
             "sessionId": "s1",
             "seq": 1,
-            "entry": { "entryType": "text", "content": "hi", "timestamp": "2026-08-05T00:00:00Z" },
+            "entry": { "entryType": "text", "role": "agent", "text": "hi", "timestamp": "2026-08-05T00:00:00Z" },
         });
         let want = decode_bridge_to_phone(&src.to_string()).unwrap();
         let content = event_content(&encode_bridge_to_phone(&want), &mac, &id);
@@ -648,7 +647,7 @@ mod tests {
                 "type": "output",
                 "sessionId": "s1",
                 "seq": 101,
-                "entry": { "entryType": "text", "content": "quick follow-up", "timestamp": "2026-08-05T00:00:00Z" },
+                "entry": { "entryType": "text", "role": "agent", "text": "quick follow-up", "timestamp": "2026-08-05T00:00:00Z" },
             })
             .to_string(),
         )
@@ -702,7 +701,7 @@ mod tests {
         // guards the test helpers above against a crypto regression
         let id = generate_keypair();
         let mac = generate_keypair();
-        let msg = decode_phone_to_bridge(r#"{"type":"models-request"}"#).unwrap();
+        let msg = decode_phone_to_bridge(r#"{"type":"models-request","agent":"claude-code"}"#).unwrap();
         let cmd = build_command(&id, &mac.pubkey_hex, &msg, 0).unwrap();
         assert_eq!(cmd.pubkey, id.pubkey_hex);
     }

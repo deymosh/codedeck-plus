@@ -1,10 +1,9 @@
 //! `settings` store — user settings. Port of the pure half of
-//! `apps/mobile/src/core/stores/settings.ts`. Persistence is the runtime's; the
+//! `apps/obile/src/core/stores/settings.ts`. Persistence is the runtime's; the
 //! only cross-store signal is `RelaysChanged` (reconfigure the transport).
 
 use serde::{Deserialize, Serialize};
 
-use protocol::common::{EffortLevel, PermissionMode};
 use protocol::relays::{DEFAULT_RELAYS, MARMOT_RELAYS};
 
 /// UI-scale slider range (plan §5).
@@ -69,11 +68,11 @@ pub struct SettingsData {
     pub mesh_test_target: bool,
     /// Blossom server for DM attachments (`""` = built-in default).
     pub blossom_server: String,
-    /// Permission mode applied to NEW sessions (CDX-047).
-    pub default_mode: PermissionMode,
-    /// `create-session` default effort — `""` = unset (bridge/SDK default).
+    /// Preferred mode / effort / model for NEW sessions, as agent-defined ids
+    /// (`""` = the agent's own default). Applied to a new session only when
+    /// its agent advertises the id, so one preference can serve several agents.
+    pub default_mode: String,
     pub default_effort: String,
-    /// `create-session` model — `""` = bridge default.
     pub default_model: String,
     /// Master toggle for OS notifications AND the in-app ping (CDX-048).
     pub notifications_enabled: bool,
@@ -95,17 +94,13 @@ pub fn default_settings() -> SettingsData {
         tor_proxy_enabled: false,
         mesh_test_target: false,
         blossom_server: String::new(),
-        default_mode: PermissionMode::Plan,
+        default_mode: String::new(),
         default_effort: String::new(),
         default_model: String::new(),
         notifications_enabled: true,
         show_usage_badge: true,
         show_commit_badge: true,
     }
-}
-
-fn is_valid_effort(s: &str) -> bool {
-    s.is_empty() || serde_json::from_value::<EffortLevel>(serde_json::Value::String(s.to_string())).is_ok()
 }
 
 /// Tolerant per-field hydrate + the CDX-021/042 legacy-relay migration.
@@ -152,20 +147,6 @@ pub fn hydrate_settings(raw: Option<&str>) -> SettingsData {
         .map(clamp_ui_scale)
         .unwrap_or(defaults.ui_scale);
 
-    let default_mode = obj
-        .get("defaultMode")
-        .and_then(|m| serde_json::from_value::<PermissionMode>(m.clone()).ok())
-        .unwrap_or(defaults.default_mode);
-
-    let default_effort = {
-        let raw = s("defaultEffort", "");
-        if is_valid_effort(&raw) {
-            raw
-        } else {
-            defaults.default_effort.clone()
-        }
-    };
-
     SettingsData {
         relays,
         ui_scale,
@@ -173,8 +154,8 @@ pub fn hydrate_settings(raw: Option<&str>) -> SettingsData {
         tor_proxy_enabled: b("torProxyEnabled", defaults.tor_proxy_enabled),
         mesh_test_target: b("meshTestTarget", defaults.mesh_test_target),
         blossom_server: s("blossomServer", &defaults.blossom_server),
-        default_mode,
-        default_effort,
+        default_mode: s("defaultMode", &defaults.default_mode),
+        default_effort: s("defaultEffort", &defaults.default_effort),
         default_model: s("defaultModel", &defaults.default_model),
         notifications_enabled: b("notificationsEnabled", defaults.notifications_enabled),
         show_usage_badge: b("showUsageBadge", defaults.show_usage_badge),
@@ -265,13 +246,13 @@ impl SettingsState {
     pub fn set_blossom_server(&mut self, url: &str) {
         self.data.blossom_server = url.trim().to_string();
     }
-    pub fn set_default_mode(&mut self, mode: PermissionMode) {
-        self.data.default_mode = mode;
+    /// `""` clears it (the agent's default).
+    pub fn set_default_mode(&mut self, mode: &str) {
+        self.data.default_mode = mode.trim().to_string();
     }
-    /// `""` clears it (the SDK default); any other value must be a valid
-    /// `EffortLevel` string (the caller validated it).
+    /// `""` clears it (the agent's default).
     pub fn set_default_effort(&mut self, level: &str) {
-        self.data.default_effort = level.to_string();
+        self.data.default_effort = level.trim().to_string();
     }
     pub fn set_default_model(&mut self, model: &str) {
         self.data.default_model = model.trim().to_string();
@@ -297,7 +278,7 @@ mod tests {
         assert!(d.relays.contains(&"wss://relay2.descendant.io".to_string()));
         assert!(d.relays.contains(&"wss://relay.us.whitenoise.chat".to_string()));
         assert_eq!(d.relays.len(), 5);
-        assert_eq!(d.default_mode, PermissionMode::Plan);
+        assert_eq!(d.default_mode, ""); // the agent's own default
     }
 
     #[test]
@@ -364,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn hydrate_is_total_on_garbage_and_validates_enums() {
+    fn hydrate_is_total_on_garbage_and_type_checks_fields() {
         assert_eq!(hydrate_settings(None), default_settings());
         assert_eq!(hydrate_settings(Some("not json")), default_settings());
         assert_eq!(hydrate_settings(Some("[1,2,3]")), default_settings());
@@ -372,21 +353,17 @@ mod tests {
         let raw = serde_json::json!({
             "relays": ["wss://x", "wss://y"],
             "uiScale": 99.0,
-            "defaultMode": "bogus",
-            "defaultEffort": "ultra",
+            "defaultMode": 7,
+            "defaultEffort": "high",
             "stayConnected": "yes",
         })
         .to_string();
         let h = hydrate_settings(Some(&raw));
         assert_eq!(h.ui_scale, UI_SCALE_MAX); // clamped
-        assert_eq!(h.default_mode, PermissionMode::Plan); // invalid -> default
-        assert_eq!(h.default_effort, ""); // invalid -> default ""
+        assert_eq!(h.default_mode, ""); // non-string -> default
+        assert_eq!(h.default_effort, "high"); // agent ids are kept as-is
         assert!(!h.stay_connected); // non-bool -> default
         assert_eq!(h.relays, vec!["wss://x", "wss://y"]); // custom list kept
-
-        // a valid effort survives
-        let raw2 = serde_json::json!({ "relays": ["wss://x"], "defaultEffort": "high" }).to_string();
-        assert_eq!(hydrate_settings(Some(&raw2)).default_effort, "high");
     }
 
     #[test]
@@ -396,7 +373,7 @@ mod tests {
         assert_eq!(st.data.blossom_server, "https://blossom.example");
         st.set_default_model("  opus  ");
         assert_eq!(st.data.default_model, "opus");
-        st.set_default_mode(PermissionMode::AcceptEdits);
-        assert_eq!(st.data.default_mode, PermissionMode::AcceptEdits);
+        st.set_default_mode(" acceptEdits ");
+        assert_eq!(st.data.default_mode, "acceptEdits");
     }
 }

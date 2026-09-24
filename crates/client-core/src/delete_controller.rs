@@ -197,14 +197,15 @@ mod tests {
     fn info(id: &str) -> RemoteSessionInfo {
         RemoteSessionInfo {
             id: id.into(),
+            agent: "claude-code".into(),
             slug: format!("slug-{id}"),
             cwd: "/work".into(),
             last_activity: "1970-01-01T00:00:00.000Z".into(),
             line_count: 0,
             title: None,
             project: "proj".into(),
-            permission_mode: None,
-            effort_level: None,
+            mode: None,
+            effort: None,
             model: None,
             context_window: None,
             context_percentage: None,
@@ -213,7 +214,6 @@ mod tests {
             seq_high: None,
             provider_id: None,
             provider_label: None,
-            backend: None,
         }
     }
 

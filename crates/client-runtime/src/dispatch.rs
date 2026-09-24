@@ -24,9 +24,9 @@ use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, ModeChangeMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
+    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
-use protocol::common::SessionState;
+use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
@@ -237,24 +237,6 @@ impl<'a> Router<'a> {
                     .machines
                     .apply_session_upsert(machine, &m.session, self.now);
                 r.persist(StoreId::Machines);
-                // CDX-047: apply the "default mode for new sessions" preference
-                // once, only when it differs from the mode it came up in.
-                let want = self.stores.settings.data.default_mode;
-                if let Some(mode) = self.stores.default_mode.apply(
-                    machine,
-                    &m.session.id,
-                    m.session.permission_mode,
-                    want,
-                ) {
-                    r.send(
-                        machine,
-                        PhoneToBridge::Mode(ModeChangeMsg {
-                            version: VersionFields::default(),
-                            session_id: m.session.id.clone(),
-                            mode,
-                        }),
-                    );
-                }
             }
             BridgeToPhone::CloseSessionAck(m) => {
                 self.stores.machines.user_remove_session(machine, &m.session_id);
@@ -378,30 +360,15 @@ impl<'a> Router<'a> {
                 );
                 r.persist(StoreId::Machines);
             }
-            BridgeToPhone::ModeConfirmed(m) => {
-                let mode = m.mode;
+            BridgeToPhone::OptionConfirmed(m) => {
+                let value = m.value.clone();
+                let option = m.option;
                 self.stores
                     .machines
-                    .update_session_info(machine, &m.session_id, |info| {
-                        info.permission_mode = Some(mode);
-                    });
-                r.persist(StoreId::Machines);
-            }
-            BridgeToPhone::EffortConfirmed(m) => {
-                let level = m.level;
-                self.stores
-                    .machines
-                    .update_session_info(machine, &m.session_id, |info| {
-                        info.effort_level = Some(level);
-                    });
-                r.persist(StoreId::Machines);
-            }
-            BridgeToPhone::ModelConfirmed(m) => {
-                let model = m.model.clone();
-                self.stores
-                    .machines
-                    .update_session_info(machine, &m.session_id, |info| {
-                        info.model = Some(model.clone());
+                    .update_session_info(machine, &m.session_id, |info| match option {
+                        SessionOption::Mode => info.mode = Some(value),
+                        SessionOption::Effort => info.effort = Some(value),
+                        SessionOption::Model => info.model = Some(value),
                     });
                 r.persist(StoreId::Machines);
             }
@@ -414,14 +381,20 @@ impl<'a> Router<'a> {
                     machine,
                     CredentialsAckInput {
                         success: m.success,
-                        has_anthropic_key: m.has_anthropic_key,
-                        has_github_pat: m.has_github_pat,
-                        key_valid: m.key_valid,
+                        agent: m.agent.clone(),
                         error: m.error.clone(),
                     },
                     self.now,
                 );
                 r.ui_changed = true;
+                if m.success {
+                    self.stores.machines.apply_credential_statuses(
+                        machine,
+                        m.agent.as_deref(),
+                        &m.credentials,
+                    );
+                    r.persist(StoreId::Machines);
+                }
             }
             BridgeToPhone::DeviceConfigAck(m) => {
                 self.stores
@@ -827,9 +800,7 @@ mod tests {
         InputAckMsg, InputFailedMsg, OutputMsg, SessionListMsg, SessionReadyMsg, SyncChunkMsg,
         SyncEndMsg,
     };
-    use protocol::common::{
-        OutputEntry, OutputEntryType, PermissionMode, RemoteSessionInfo, SessionState,
-    };
+    use protocol::common::{EntryBody, OutputEntry, RemoteSessionInfo, SessionState};
     use serde_json::json;
 
     const MACHINE: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -837,14 +808,15 @@ mod tests {
     fn info(id: &str, state: Option<SessionState>, seq_high: Option<u64>) -> RemoteSessionInfo {
         RemoteSessionInfo {
             id: id.into(),
+            agent: "claude-code".into(),
             slug: format!("slug-{id}"),
             cwd: "/w".into(),
             last_activity: "t".into(),
             line_count: 0,
             title: None,
             project: "p".into(),
-            permission_mode: None,
-            effort_level: None,
+            mode: None,
+            effort: None,
             model: None,
             context_window: None,
             context_percentage: None,
@@ -853,7 +825,6 @@ mod tests {
             seq_high,
             provider_id: None,
             provider_label: None,
-            backend: None,
         }
     }
 
@@ -862,8 +833,9 @@ mod tests {
             machine: "laptop".into(),
             host: None,
             sessions,
-            auth_status: None,
-            protocol_version: 10,
+            agents: Vec::new(),
+            credentials: Vec::new(),
+            protocol_version: protocol::capabilities::PROTOCOL_VERSION,
             capabilities: None,
             folders: None,
             roots: None,
@@ -880,13 +852,14 @@ mod tests {
     }
 
     fn text_entry(content: &str) -> OutputEntry {
-        OutputEntry {
-            entry_type: OutputEntryType::Text,
-            content: content.to_string(),
-            timestamp: "t".to_string(),
-            metadata: None,
-            diff: None,
-        }
+        OutputEntry::new(
+            "t",
+            EntryBody::Text {
+                role: protocol::common::Role::Agent,
+                text: content.to_string(),
+                collapsible: false,
+            },
+        )
     }
 
     #[tokio::test]
@@ -917,13 +890,11 @@ mod tests {
     #[tokio::test]
     async fn a_live_permission_card_marks_unread_and_notifies_then_agent_activity_clears_it() {
         let (mut s, ts, kp) = stores().await;
-        let card = OutputEntry {
-            entry_type: OutputEntryType::System,
-            content: String::new(),
-            timestamp: "t".into(),
-            metadata: Some(json!({ "special": "permission_request", "tool_name": "Bash" })),
-            diff: None,
-        };
+        let card: OutputEntry = serde_json::from_value(json!({
+            "timestamp": "t", "entryType": "permission_request", "requestId": "r1",
+            "toolName": "Bash", "kind": "execute", "title": "ls", "options": []
+        }))
+        .unwrap();
         {
             let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             r.visible = false; // backgrounded → OS notify
@@ -986,7 +957,7 @@ mod tests {
         assert_eq!(s.transcript.seq_conflicts[0].seq, 1);
         // the stored row is untouched — the first content wins
         let rows = ts.read_range(MACHINE, "s1", 1, 1).await;
-        assert_eq!(rows[0].entry, json!({ "entryType": "text", "content": "first", "timestamp": "t" }));
+        assert_eq!(rows[0].entry, json!({ "timestamp": "t", "entryType": "text", "role": "agent", "text": "first" }));
     }
 
     #[tokio::test]
@@ -1158,237 +1129,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_ready_upserts_the_session_and_applies_the_default_mode_once() {
+    async fn session_ready_upserts_the_session_and_sends_nothing() {
         let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
-        s.settings.data.default_mode = PermissionMode::AcceptEdits;
 
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
-        // session came up in plan (bridge default) → a differing preference sends a mode
-        let mut ready = info("s1", Some(SessionState::Idle), None);
-        ready.permission_mode = Some(PermissionMode::Plan);
         let out = r
             .route(
                 MACHINE,
                 &BridgeToPhone::SessionReady(SessionReadyMsg {
                     pending_id: "s1".into(),
-                    session: ready.clone(),
+                    session: info("s1", Some(SessionState::Idle), None),
                 }),
             )
             .await;
         assert!(s.machines.session(MACHINE, "s1").is_some());
-        assert!(matches!(
-            out.sends.as_slice(),
-            [Send { msg: PhoneToBridge::Mode(m), .. }]
-                if m.mode == PermissionMode::AcceptEdits && m.session_id == "s1"
-        ));
-
-        // a replayed session-ready never re-sends
-        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
-        let out = r
-            .route(
-                MACHINE,
-                &BridgeToPhone::SessionReady(SessionReadyMsg {
-                    pending_id: "s1".into(),
-                    session: ready,
-                }),
-            )
-            .await;
+        // The new session's mode rides create-session itself; nothing follows.
         assert!(out.sends.is_empty());
+        assert_eq!(out.persist, vec![StoreId::Machines]);
     }
 
     #[tokio::test]
-    async fn close_session_ack_removes_the_session_locally() {
+    async fn credentials_ack_updates_the_ui_ack_and_the_stored_statuses() {
         let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
-        s.machines.apply_session_upsert(MACHINE, &info("s1", None, None), 0);
-        ts.insert_ignore(
-            MACHINE,
-            "s1",
-            &[TranscriptRow { seq: 1, entry: json!({}) }],
-        )
-        .await;
-
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
                 MACHINE,
-                &BridgeToPhone::CloseSessionAck(protocol::events::CloseSessionAckMsg {
-                    session_id: "s1".into(),
+                &BridgeToPhone::CredentialsAck(protocol::events::CredentialsAckMsg {
+                    machine: "laptop".into(),
+                    agent: None,
                     success: true,
-                }),
-            )
-            .await;
-        assert!(s.machines.session(MACHINE, "s1").is_none());
-        assert_eq!(
-            out.transcript_removed,
-            vec![(MACHINE.to_string(), "s1".to_string())]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_folder_ack_is_surfaced_verbatim_with_no_store_side_effect() {
-        let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
-
-        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
-        let out = r
-            .route(
-                MACHINE,
-                &BridgeToPhone::FolderAck(protocol::events::FolderAckMsg {
-                    request_id: "req-1".into(),
-                    success: true,
-                    path: Some("sub/dir".into()),
+                    credentials: vec![protocol::common::CredentialStatus {
+                        id: "github_pat".into(),
+                        label: "GitHub token".into(),
+                        present: true,
+                        from_env: false,
+                        valid: Some(true),
+                    }],
                     error: None,
                 }),
             )
             .await;
-        assert_eq!(
-            out.folder_ack,
-            Some(protocol::events::FolderAckMsg {
-                request_id: "req-1".into(),
-                success: true,
-                path: Some("sub/dir".into()),
-                error: None,
-            }),
-        );
-        // Not store-backed — nothing to persist or re-fetch a view for.
-        assert!(out.persist.is_empty());
-        assert!(!out.ui_changed);
-    }
-
-    #[tokio::test]
-    async fn a_pair_ack_registers_the_machine_learns_its_relays_and_disarms_the_deadline() {
-        use client_core::stores::pairing::{PairingCandidate, PairingPhase, PairingState};
-        use protocol::capabilities::BridgeHostKind;
-        use protocol::events::PairAckMsg;
-
-        let (mut s, ts, kp) = stores().await;
-        s.pairing = PairingState {
-            phase: PairingPhase::AwaitingAck,
-            candidate: Some(PairingCandidate {
-                pubkey_hex: MACHINE.into(),
-                npub: "npub1candidate".into(),
-                machine: "(manual)".into(),
-                relays: vec!["wss://learned.example".into()],
-                token: "tok".into(),
-                netid: None,
-                mesh_admin: None,
-            }),
-            error: None,
-            timed_out: false,
-            staged: None,
-        };
-
-        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
-        let out = r
-            .route(
-                MACHINE,
-                &BridgeToPhone::PairAck(PairAckMsg {
-                    machine: "laptop".into(),
-                    ok: true,
-                    reason: None,
-                    relays: None,
-                    host: Some(BridgeHostKind::Cli),
-                }),
-            )
-            .await;
-
-        assert_eq!(s.pairing.phase, PairingPhase::Paired);
-        let mv = s.machines.machine(MACHINE).expect("registered");
-        assert_eq!(mv.name, "laptop");
-        assert!(s
-            .settings
-            .data
-            .relays
-            .iter()
-            .any(|r| r == "wss://learned.example"));
-        assert_eq!(out.pair_deadline, Some(PairDeadline::Clear));
-        assert!(out.resubscribe);
-        assert!(out.persist.contains(&StoreId::Machines));
-        assert!(out.persist.contains(&StoreId::Settings));
-        assert!(out
-            .relays_changed
-            .as_ref()
-            .is_some_and(|relays| relays.iter().any(|r| r == "wss://learned.example")));
-        // The new machine is asked for a fresh heartbeat straight away.
-        assert_eq!(
-            out.sends,
-            vec![Send {
-                machine: MACHINE.into(),
-                msg: PhoneToBridge::RefreshSessions(BareMsg { version: VersionFields::default() }),
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_pair_ack_with_no_new_relays_leaves_relays_changed_unset() {
-        use client_core::stores::pairing::{PairingCandidate, PairingPhase, PairingState};
-        use protocol::capabilities::BridgeHostKind;
-        use protocol::events::PairAckMsg;
-
-        let (mut s, ts, kp) = stores().await;
-        let already_known = s.settings.data.relays.first().cloned().unwrap();
-        s.pairing = PairingState {
-            phase: PairingPhase::AwaitingAck,
-            candidate: Some(PairingCandidate {
-                pubkey_hex: MACHINE.into(),
-                npub: "npub1candidate".into(),
-                machine: "(manual)".into(),
-                relays: vec![already_known],
-                token: "tok".into(),
-                netid: None,
-                mesh_admin: None,
-            }),
-            error: None,
-            timed_out: false,
-            staged: None,
-        };
-
-        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
-        let out = r
-            .route(
-                MACHINE,
-                &BridgeToPhone::PairAck(PairAckMsg {
-                    machine: "laptop".into(),
-                    ok: true,
-                    reason: None,
-                    relays: None,
-                    host: Some(BridgeHostKind::Cli),
-                }),
-            )
-            .await;
-
-        assert_eq!(out.relays_changed, None);
-    }
-
-    #[tokio::test]
-    async fn credentials_ack_lands_in_the_ui_slice_transiently() {
-        let (mut s, ts, kp) = stores().await;
-        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
-        let out = r
-            .route(
-                MACHINE,
-                &BridgeToPhone::CredentialsAck(
-                    protocol::events::CredentialsAckMsg {
-                        machine: "laptop".into(),
-                        success: true,
-                        has_anthropic_key: true,
-                        has_github_pat: false,
-                        key_valid: Some(true),
-                        error: None,
-                    },
-                ),
-            )
-            .await;
-        assert!(out.persist.is_empty()); // acks are transient
+        assert!(out.ui_changed);
+        assert_eq!(out.persist, vec![StoreId::Machines]);
         let ack = &s.ui.credentials_status[MACHINE];
         assert_eq!(ack.state, client_core::stores::ui::AckState::Saved);
-        assert_eq!(ack.key_valid, Some(true));
+        assert_eq!(s.machines.machine(MACHINE).unwrap().credentials[0].valid, Some(true));
     }
 
     #[tokio::test]
-    async fn models_updates_the_machine_and_asks_for_a_persist() {
+    async fn models_updates_the_agents_list_and_asks_for_a_persist() {
         let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
@@ -1396,65 +1188,48 @@ mod tests {
             .route(
                 MACHINE,
                 &BridgeToPhone::Models(protocol::events::ModelsMsg {
+                    agent: "claude-code".into(),
                     models: vec![protocol::events::ModelEntry {
                         id: "sonnet".into(),
                         label: Some("Sonnet".into()),
                     }],
                     default_model: Some("sonnet".into()),
                     error: None,
-                    backend: None,
                 }),
             )
             .await;
         assert_eq!(out.persist, vec![StoreId::Machines]);
         assert_eq!(
-            s.machines.machine(MACHINE).unwrap().models.as_ref().unwrap()[0].id,
+            s.machines.machine(MACHINE).unwrap().models["claude-code"].models.as_ref().unwrap()[0].id,
             "sonnet"
         );
     }
 
     #[tokio::test]
-    async fn mode_confirmed_writes_through_to_the_session_info() {
-        use protocol::common::{PermissionMode, RemoteSessionInfo};
+    async fn option_confirmed_writes_through_to_the_session_info() {
         let (mut s, ts, kp) = stores().await;
         s.machines.register_machine(MACHINE, "laptop", None, None);
-        s.machines.apply_session_upsert(
-            MACHINE,
-            &RemoteSessionInfo {
-                id: "s1".into(),
-                slug: "s".into(),
-                cwd: "/w".into(),
-                last_activity: "t".into(),
-                line_count: 0,
-                title: None,
-                project: "p".into(),
-                permission_mode: None,
-                effort_level: None,
-                model: None,
-                context_window: None,
-                context_percentage: None,
-                committed: None,
-                state: None,
-                seq_high: None,
-                provider_id: None,
-                provider_label: None,
-                backend: None,
-            },
-            0,
-        );
-        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
-        r.route(
-            MACHINE,
-            &BridgeToPhone::ModeConfirmed(protocol::events::ModeConfirmedMsg {
-                session_id: "s1".into(),
-                mode: PermissionMode::AcceptEdits,
-            }),
-        )
-        .await;
-        assert_eq!(
-            s.machines.session(MACHINE, "s1").unwrap().info.permission_mode,
-            Some(PermissionMode::AcceptEdits)
-        );
+        s.machines.apply_session_upsert(MACHINE, &info("s1", None, None), 0);
+        for (option, value) in [
+            (protocol::common::SessionOption::Mode, "acceptEdits"),
+            (protocol::common::SessionOption::Effort, "high"),
+            (protocol::common::SessionOption::Model, "opus"),
+        ] {
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+            r.route(
+                MACHINE,
+                &BridgeToPhone::OptionConfirmed(protocol::events::OptionConfirmedMsg {
+                    session_id: "s1".into(),
+                    option,
+                    value: value.into(),
+                }),
+            )
+            .await;
+        }
+        let info = &s.machines.session(MACHINE, "s1").unwrap().info;
+        assert_eq!(info.mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(info.effort.as_deref(), Some("high"));
+        assert_eq!(info.model.as_deref(), Some("opus"));
     }
 
     #[tokio::test]

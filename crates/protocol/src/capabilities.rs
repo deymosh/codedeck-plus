@@ -1,75 +1,47 @@
-//! Protocol version + capability negotiation. Port of
-//! `packages/protocol/src/capabilities.ts`.
+//! Protocol version + capability negotiation.
 //!
 //! The bridge advertises `protocol_version` + `capabilities` on the session-list
 //! heartbeat; the client stamps commands with `v` (and optionally `caps`).
-//! Feature gating is on capability **strings**, never version comparisons — a
-//! new feature is one new string, not a version-ladder entry.
+//! Feature gating is on capability **strings** and on the per-agent catalog
+//! (`AgentDescriptor::supports`), never on version comparisons — a new feature
+//! is one new string or one new `supports` flag, not a version-ladder entry.
 //!
-//! Three tiers (do not add a new string as a "gate" unless a peer that has not
-//! seen it would otherwise hard-fail):
+//! What an individual AGENT can do (models, usage, custom providers, GSD) is
+//! catalog data, not a capability: capabilities describe the BRIDGE. Tiers
+//! (do not add a string as a "gate" unless a peer that has not seen it would
+//! otherwise hard-fail):
 //!
-//! * **HARD GATE** — absence changes behaviour: [`IMAGES`], [`CUSTOM_PROVIDERS`]
-//!   (client gates on the bridge heartbeat), [`DIFF`] (bridge gates emission on
-//!   every heard-from client's command `caps`).
-//! * **PRESENCE MARKER** — feature is unconditional in v10; detection is on
-//!   payload data: [`SYNC_1`], [`FOLDERS`], [`GSD`], [`USAGE`], [`MODELS`],
-//!   [`DEVICE_ACTIONS`]. The string is kept only so a session list is
+//! * **HARD GATE** — absence changes behaviour: [`IMAGES`] (the client shows
+//!   image attach only when the bridge advertises it).
+//! * **PRESENCE MARKER** — detection is on payload data: [`SYNC_1`],
+//!   [`FOLDERS`], [`DEVICE_ACTIONS`]. Kept so a session list is
 //!   self-describing.
 //! * **TRANSPORT BEACON** — [`CHUNKED`]: advertised on both sides, gated by
 //!   neither. Fragmentation lives below the semantic layer.
 
-/// v10 = the monorepo rebuild (kind split, transcript sync, tombstones, host
-/// discrimination, input acks). Clean break from v9 — no pre-v10 compatibility.
-pub const PROTOCOL_VERSION: u32 = 10;
+/// v11 = the agent-neutral protocol: per-agent catalog, typed transcript
+/// entries, typed answers, `set-option`. Clean break from v10 — no v10
+/// compatibility.
+pub const PROTOCOL_VERSION: u32 = 11;
 
 // PRESENCE MARKER — transcript sync v1; always runs, nothing checks this.
 pub const SYNC_1: &str = "sync/1";
 // PRESENCE MARKER — folder listing; client gates on `folders[]`/`roots[]`.
 pub const FOLDERS: &str = "folders";
-// PRESENCE MARKER — GSD snapshots; UI gates on `gsd.available`.
-pub const GSD: &str = "gsd";
 // HARD GATE (client-side) — image upload; the attach control shows only when
 // this is in the machine's heartbeat capabilities.
 pub const IMAGES: &str = "images";
 // PRESENCE MARKER — on-device test sessions; no client UI sends them.
 pub const DEVICE_ACTIONS: &str = "device-actions";
-// PRESENCE MARKER — usage snapshots; client requests unconditionally.
-pub const USAGE: &str = "usage";
-// PRESENCE MARKER — live model list; client re-requests unconditionally.
-pub const MODELS: &str = "models";
-// HARD GATE (bridge-side, on the client's command `caps`) — coloured diff cards.
-// Bridge advertises "I can produce diff entries"; the client advertises "I can
-// render them". Emission defaults OFF until a capable client proves itself (a
-// pre-diff client hard-fails zod on the unknown entryType and drops the message).
-pub const DIFF: &str = "diff";
-// HARD GATE (client-side) — custom AI provider profiles. The client must gate
-// ALL provider UI and send on it; an old bridge silently strips the unknown
-// `providerId` and runs the session on the wrong provider/account.
-pub const CUSTOM_PROVIDERS: &str = "custom-providers";
-// PRESENCE MARKER, conditionally advertised. OpenCode backend support
-// (`create-session.backend: Opencode`). Unlike every other marker in this
-// file, the bridge does NOT always include this string — it is added to the
-// heartbeat only when the bridge has a working OpenCode facade configured,
-// because a bridge without one would otherwise advertise a backend it can't
-// actually run. The client shows the backend picker when present. Not part
-// of [`ALL_BRIDGE_CAPABILITIES`] for that reason.
-pub const OPENCODE: &str = "opencode";
 // TRANSPORT BEACON — oversize-event `chunk` fragmentation. Advertised on both
 // sides, gated by neither.
 pub const CHUNKED: &str = "chunked";
 
-/// Every capability the reference bridge ships with, EXCEPT [`OPENCODE`]
-/// (conditionally advertised — see its doc comment above). A running bridge
-/// computes its actual heartbeat list from this plus `OPENCODE` when configured.
-pub const ALL_BRIDGE_CAPABILITIES: [&str; 10] = [
-    SYNC_1, FOLDERS, GSD, IMAGES, DEVICE_ACTIONS, USAGE, MODELS, DIFF, CUSTOM_PROVIDERS, CHUNKED,
-];
+/// Every capability the reference bridge ships with.
+pub const ALL_BRIDGE_CAPABILITIES: [&str; 5] = [SYNC_1, FOLDERS, IMAGES, DEVICE_ACTIONS, CHUNKED];
 
-/// Capabilities the reference client stamps on outgoing command `caps` (strings
-/// it can RENDER). The bridge only ever reads [`DIFF`] from this; [`CHUNKED`] is
-/// a transport beacon so the negotiated pair is observable.
-pub const ALL_PHONE_CAPABILITIES: [&str; 2] = [DIFF, CHUNKED];
+/// Capabilities the reference client stamps on outgoing command `caps`.
+pub const ALL_PHONE_CAPABILITIES: [&str; 1] = [CHUNKED];
 
 /// Which host binary a bridge runs as — a UI badge only; identity is the keypair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -104,26 +76,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_version_is_10() {
-        assert_eq!(PROTOCOL_VERSION, 10);
+    fn protocol_version_is_11() {
+        assert_eq!(PROTOCOL_VERSION, 11);
     }
 
     #[test]
-    fn bridge_advertises_all_ten() {
-        assert_eq!(ALL_BRIDGE_CAPABILITIES.len(), 10);
-        assert!(ALL_BRIDGE_CAPABILITIES.contains(&"sync/1"));
-        assert!(ALL_BRIDGE_CAPABILITIES.contains(&"custom-providers"));
-    }
-
-    #[test]
-    fn opencode_is_conditionally_advertised_not_wholesale() {
-        assert_eq!(OPENCODE, "opencode");
-        assert!(!ALL_BRIDGE_CAPABILITIES.contains(&OPENCODE));
-    }
-
-    #[test]
-    fn phone_advertises_only_diff_and_chunked() {
-        assert_eq!(ALL_PHONE_CAPABILITIES, ["diff", "chunked"]);
+    fn capability_lists() {
+        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "images", "device-actions", "chunked"]);
+        assert_eq!(ALL_PHONE_CAPABILITIES, ["chunked"]);
     }
 
     #[test]

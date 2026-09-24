@@ -5,8 +5,8 @@
 //! decodes on the other side of the FFI boundary. One committed fixture, two
 //! consumers (this test's default run, and a Kotlin JVM test reading the
 //! same bytes copied to `apps/android/app/src/test/resources/`) — the same
-//! anti-drift shape `packages/protocol/fixtures/corpus.json` already uses
-//! for the phone-bridge wire.
+//! anti-drift shape `packages/protocol/fixtures/corpus.json` uses for the
+//! phone-bridge wire.
 //!
 //! Regenerate after a deliberate shape change:
 //! `cargo test -p client-ffi --test display_entries_corpus -- --ignored regenerate_the_fixture`
@@ -16,141 +16,63 @@
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, SeqEntry,
 };
-use protocol::common::{DiffData, DiffLine, DiffLineType, OutputEntry, OutputEntryType};
+use protocol::common::OutputEntry;
 use serde_json::json;
 
-fn entry(entry_type: OutputEntryType, content: &str, metadata: Option<serde_json::Value>) -> OutputEntry {
-    OutputEntry {
-        entry_type,
-        content: content.to_string(),
-        timestamp: "2026-09-16T00:00:00Z".to_string(),
-        metadata,
-        diff: None,
-    }
-}
-
-/// One flat transcript exercising every `DisplayEntry` kind: a user message,
-/// an assistant message, a tool group (tool_use + tool_result), a diff card,
-/// an error row, a plain system row, a lifecycle marker, a plan-approval
-/// card, a single question, a two-question group, and a permission request
-/// — the same corpus shape `apps/mobile/src/ui/transcript/__tests__/
-/// displayEntries.test.ts` exercises, rebuilt directly against the real
-/// `OutputEntry`/`build_display_entries` this crate's FFI surface actually
-/// crosses.
+/// One flat transcript, as v11 wire entries, exercising every `DisplayEntry`
+/// kind: a user message, agent text, a tool group (thinking, folded agent
+/// text, a call whose result lands after a permission card, a sub-agent
+/// call), a diff card, an error, a status line, a notice, a plan, a plan
+/// approval, a single question, a two-question ask, a resolved permission
+/// and a pending one.
 fn corpus() -> Vec<SeqEntry> {
-    let mut entries = Vec::new();
-    let mut seq = 1u64;
-    let mut push = |entries: &mut Vec<SeqEntry>, e: OutputEntry| {
-        entries.push(SeqEntry { seq, entry: e });
-        seq += 1;
-    };
-
-    push(
-        &mut entries,
-        entry(OutputEntryType::Text, "port the connection reducer to rust", Some(json!({"role": "user"}))),
-    );
-    push(
-        &mut entries,
-        entry(
-            OutputEntryType::Text,
-            "## Refactor plan\n\nHere's what I'll do, in order.",
-            Some(json!({"role": "assistant"})),
-        ),
-    );
-    push(&mut entries, entry(OutputEntryType::ToolUse, "Read pool.ts", None));
-    push(
-        &mut entries,
-        entry(OutputEntryType::ToolResult, "42 lines", Some(json!({"tool_use_id": "tu-read"}))),
-    );
-    let mut diff = entry(OutputEntryType::Diff, "", None);
-    diff.diff = Some(DiffData {
-        path: "packages/core/src/nostr/pool.ts".to_string(),
-        lines: vec![
-            DiffLine { kind: DiffLineType::Context, text: "  const pool = new SimplePool();".to_string() },
-            DiffLine { kind: DiffLineType::Del, text: "  pool.trackRelays = true;".to_string() },
-            DiffLine { kind: DiffLineType::Add, text: "  pool.idleTimeout = 0x7fffffff; // CDX-020".to_string() },
-        ],
-        truncated: None,
-    });
-    push(&mut entries, diff);
-    push(
-        &mut entries,
-        entry(OutputEntryType::Error, "session_died: bridge disconnected", Some(json!({"special": "session_died"}))),
-    );
-    push(&mut entries, entry(OutputEntryType::System, "status: idle", None));
-    push(
-        &mut entries,
-        entry(OutputEntryType::System, "restarted", Some(json!({"special": "session_restart"}))),
-    );
-    push(
-        &mut entries,
-        entry(
-            OutputEntryType::Text,
-            "1. Extract the reducer\n2. Wire the effects interpreter",
-            Some(json!({"special": "plan_approval", "tool_use_id": "tu-plan", "has_plan": true})),
-        ),
-    );
-    push(
-        &mut entries,
-        entry(
-            OutputEntryType::System,
-            "Which approach?",
-            Some(json!({
-                "special": "ask_question",
-                "tool_use_id": "tu-solo-question",
-                "header": "Direction",
-                "options": [
-                    {"label": "Extract first"},
-                    {"label": "Rewrite in one pass"},
-                ],
-            })),
-        ),
-    );
-    push(
-        &mut entries,
-        entry(
-            OutputEntryType::System,
-            "How wide?",
-            Some(json!({
-                "special": "ask_question",
-                "tool_use_id": "tu-question-group",
-                "question_count": 2,
-                "question_index": 0,
-                "header": "Scope",
-                "options": [{"label": "Narrow"}, {"label": "Wide"}],
-            })),
-        ),
-    );
-    push(
-        &mut entries,
-        entry(
-            OutputEntryType::System,
-            "When?",
-            Some(json!({
-                "special": "ask_question",
-                "tool_use_id": "tu-question-group",
-                "question_count": 2,
-                "question_index": 1,
-                "header": "Timeline",
-                "options": [{"label": "This week"}, {"label": "Next sprint"}],
-            })),
-        ),
-    );
-    push(
-        &mut entries,
-        entry(
-            OutputEntryType::System,
-            "Read pool.ts",
-            Some(json!({
-                "special": "permission_request",
-                "tool_use_id": "tu-permission",
-                "tool_name": "Read",
-                "description": "Read packages/core/src/nostr/pool.ts",
-            })),
-        ),
-    );
-
-    entries
+    let wire = [
+        json!({"entryType":"text","role":"user","text":"port the connection reducer to rust"}),
+        json!({"entryType":"text","role":"agent","text":"## Refactor plan\n\nHere's what I'll do, in order."}),
+        json!({"entryType":"thinking","text":"Start with the pool."}),
+        json!({"entryType":"text","role":"agent","text":"Reading the pool first.","collapsible":true}),
+        json!({"entryType":"tool_call","callId":"tu-read","toolName":"Read","kind":"read","title":"pool.ts","locations":["packages/core/src/nostr/pool.ts"]}),
+        json!({"entryType":"tool_call","callId":"tu-grep","toolName":"Grep","kind":"search","title":"SimplePool","subagent":{"label":"explorer"}}),
+        json!({"entryType":"tool_result","callId":"tu-grep","text":"3 matches"}),
+        json!({"entryType":"permission_request","requestId":"tu-read","toolName":"Read","kind":"read","title":"pool.ts",
+            "description":"Read packages/core/src/nostr/pool.ts",
+            "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"allow_always","label":"Always allow","kind":"allow_always"},{"id":"deny","label":"Deny","kind":"reject_once"}]}),
+        json!({"entryType":"resolved","requestId":"tu-read","summary":"Allowed"}),
+        json!({"entryType":"tool_result","callId":"tu-read","text":"42 lines"}),
+        json!({"entryType":"diff","path":"packages/core/src/nostr/pool.ts","lines":[
+            {"type":"context","text":"  const pool = new SimplePool();"},
+            {"type":"del","text":"  pool.trackRelays = true;"},
+            {"type":"add","text":"  pool.idleTimeout = 0x7fffffff; // CDX-020"}
+        ]}),
+        json!({"entryType":"error","text":"bridge disconnected"}),
+        json!({"entryType":"status","text":"status: idle"}),
+        json!({"entryType":"notice","kind":"session_restart","text":"restarted"}),
+        json!({"entryType":"plan","text":"1. Extract the reducer\n2. Wire the effects interpreter"}),
+        json!({"entryType":"plan_approval","requestId":"tu-plan","options":[
+            {"id":"acceptEdits","label":"Approve, auto-accept edits"},
+            {"id":"default","label":"Approve"},
+            {"id":"revise","label":"Keep planning","description":"Stay in plan mode and send feedback"}
+        ]}),
+        json!({"entryType":"question","requestId":"tu-solo-question","index":0,"count":1,"header":"Direction","question":"Which approach?",
+            "options":[{"label":"Extract first"},{"label":"Rewrite in one pass"}]}),
+        json!({"entryType":"question","requestId":"tu-question-group","index":0,"count":2,"header":"Scope","question":"How wide?",
+            "options":[{"label":"Narrow"},{"label":"Wide"}]}),
+        json!({"entryType":"question","requestId":"tu-question-group","index":1,"count":2,"header":"Timeline","question":"When?",
+            "options":[{"label":"This week"},{"label":"Next sprint"}],"multiSelect":true}),
+        json!({"entryType":"permission_request","requestId":"tu-permission","toolName":"Bash","kind":"execute","title":"cargo test",
+            "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}]}),
+        json!({"entryType":"turn_complete"}),
+    ];
+    wire.into_iter()
+        .enumerate()
+        .map(|(i, mut v)| {
+            v["timestamp"] = json!("2026-09-16T00:00:00Z");
+            SeqEntry {
+                seq: i as u64 + 1,
+                entry: serde_json::from_value::<OutputEntry>(v).expect("a valid v11 entry"),
+            }
+        })
+        .collect()
 }
 
 fn corpus_json() -> String {

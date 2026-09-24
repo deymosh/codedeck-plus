@@ -42,7 +42,10 @@ use client_runtime::{
     MachinesView, OutboxView, PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
     TranscriptRowsView, UiView,
 };
-use protocol::common::{GsdAction, GsdExecution, GsdPhase, GsdState, UsageData, UsageWindow};
+use protocol::common::{
+    AgentDescriptor, CredentialStatus, GsdAction, GsdExecution, GsdPhase, GsdState, OptionChoice,
+    UsageData, UsageWindow,
+};
 use serde::Deserialize;
 
 /// Renders any `Copy` wire enum (all `#[serde(rename_all = ...)]`, no data)
@@ -72,9 +75,12 @@ pub struct UniffiSessionSummary {
     /// `live` / `stale` / `offline` — the machines store's own listing presence.
     pub presence: String,
     pub last_activity: String,
+    /// The agent the session runs on (`UniffiAgent.id`).
+    pub agent: String,
     pub model: Option<String>,
-    pub permission_mode: Option<String>,
-    pub effort_level: Option<String>,
+    /// Agent-defined mode / effort ids (see the agent's `modes` / `efforts`).
+    pub mode: Option<String>,
+    pub effort: Option<String>,
     pub context_percentage: Option<f64>,
     pub context_window: Option<u64>,
     pub committed: Option<bool>,
@@ -87,10 +93,12 @@ pub struct UniffiSessionSummary {
     pub gsd: Option<UniffiGsdState>,
 }
 
-/// One usage-limit window (5h / 7d / …) — mirrors
-/// `protocol::common::UsageWindow` field for field.
+/// One usage-limit window — mirrors `protocol::common::UsageWindow` field for
+/// field.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiUsageWindow {
+    /// e.g. "5h", "7d".
+    pub label: String,
     /// Percentage 0..=100, not a fraction — the wire carries it pre-scaled
     /// (the reference's usage badges round it directly and warn at 75/90).
     /// `None` when the bridge has no number.
@@ -104,11 +112,8 @@ pub struct UniffiUsageWindow {
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiUsageData {
     pub available: bool,
-    pub subscription_type: Option<String>,
-    pub five_hour: Option<UniffiUsageWindow>,
-    pub seven_day: Option<UniffiUsageWindow>,
-    pub seven_day_opus: Option<UniffiUsageWindow>,
-    pub seven_day_sonnet: Option<UniffiUsageWindow>,
+    pub plan: Option<String>,
+    pub windows: Vec<UniffiUsageWindow>,
     pub session_cost_usd: Option<f64>,
     pub fetched_at: String,
 }
@@ -176,6 +181,7 @@ pub struct UniffiGsdState {
 
 fn to_uniffi_usage_window(w: &UsageWindow) -> UniffiUsageWindow {
     UniffiUsageWindow {
+        label: w.label.clone(),
         utilization: w.utilization,
         resets_at: w.resets_at.clone(),
     }
@@ -184,11 +190,8 @@ fn to_uniffi_usage_window(w: &UsageWindow) -> UniffiUsageWindow {
 fn to_uniffi_usage_data(u: &UsageData) -> UniffiUsageData {
     UniffiUsageData {
         available: u.available,
-        subscription_type: u.subscription_type.clone(),
-        five_hour: u.five_hour.as_ref().map(to_uniffi_usage_window),
-        seven_day: u.seven_day.as_ref().map(to_uniffi_usage_window),
-        seven_day_opus: u.seven_day_opus.as_ref().map(to_uniffi_usage_window),
-        seven_day_sonnet: u.seven_day_sonnet.as_ref().map(to_uniffi_usage_window),
+        plan: u.plan.clone(),
+        windows: u.windows.iter().map(to_uniffi_usage_window).collect(),
         session_cost_usd: u.session_cost_usd,
         fetched_at: u.fetched_at.clone(),
     }
@@ -277,27 +280,101 @@ pub struct UniffiProviderProfileInfo {
     pub has_token: bool,
 }
 
+/// One selectable value of an agent option (a mode, an effort level, a plan
+/// approval choice).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiOptionChoice {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// A credential's status — the secret itself never crosses.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiCredentialStatus {
+    pub id: String,
+    pub label: String,
+    pub present: bool,
+    pub from_env: bool,
+    pub valid: Option<bool>,
+}
+
+/// An agent backend a bridge advertises (`protocol::common::AgentDescriptor`).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgent {
+    pub id: String,
+    pub display_name: String,
+    pub modes: Vec<UniffiOptionChoice>,
+    pub efforts: Vec<UniffiOptionChoice>,
+    pub default_mode: Option<String>,
+    pub supports_models: bool,
+    pub supports_usage: bool,
+    pub supports_providers: bool,
+    pub supports_gsd: bool,
+    pub supports_interrupt: bool,
+    pub credentials: Vec<UniffiCredentialStatus>,
+}
+
+/// One agent's live model list on a machine.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentModels {
+    pub agent: String,
+    pub models: Vec<UniffiModelEntry>,
+    pub default_model: Option<String>,
+    /// The bridge's reason for its latest empty answer.
+    pub error: Option<String>,
+}
+
+pub fn to_uniffi_option_choice(c: &OptionChoice) -> UniffiOptionChoice {
+    UniffiOptionChoice {
+        id: c.id.clone(),
+        label: c.label.clone(),
+        description: c.description.clone(),
+    }
+}
+
+fn to_uniffi_credential_status(c: &CredentialStatus) -> UniffiCredentialStatus {
+    UniffiCredentialStatus {
+        id: c.id.clone(),
+        label: c.label.clone(),
+        present: c.present,
+        from_env: c.from_env,
+        valid: c.valid,
+    }
+}
+
+fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
+    UniffiAgent {
+        id: a.id.clone(),
+        display_name: a.display_name.clone(),
+        modes: a.modes.iter().map(to_uniffi_option_choice).collect(),
+        efforts: a.efforts.iter().map(to_uniffi_option_choice).collect(),
+        default_mode: a.default_mode.clone(),
+        supports_models: a.supports.models,
+        supports_usage: a.supports.usage,
+        supports_providers: a.supports.providers,
+        supports_gsd: a.supports.gsd,
+        supports_interrupt: a.supports.interrupt,
+        credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiMachineSummary {
     pub pubkey_hex: String,
     pub name: String,
     pub host: Option<String>,
     pub sessions: Vec<UniffiSessionSummary>,
-    /// Bridge heartbeat capability strings, e.g. `"opencode"` /
-    /// `"custom-providers"` — the new-session screen gates its backend and
-    /// provider pickers on these, the same wire strings the reference
-    /// `NewSessionModal.tsx` gates on.
+    /// Bridge heartbeat capability strings (e.g. `"images"`).
     pub capabilities: Vec<String>,
     pub folders: Vec<String>,
     pub roots: Vec<String>,
-    /// Claude Code's live model list, requested via `RequestModels`.
-    pub models: Vec<UniffiModelEntry>,
-    pub default_model: Option<String>,
-    pub models_error: Option<String>,
-    /// OpenCode's live model list — tracked separately (see `MachineView`'s
-    /// own doc comment) since the two backends can support different models.
-    pub open_code_models: Vec<UniffiModelEntry>,
-    pub open_code_models_error: Option<String>,
+    /// The agents this bridge can run sessions on, in its own order.
+    pub agents: Vec<UniffiAgent>,
+    /// The bridge's own credentials (not tied to an agent).
+    pub credentials: Vec<UniffiCredentialStatus>,
+    /// Live model lists, one entry per agent that has answered `RequestModels`.
+    pub models: Vec<UniffiAgentModels>,
     pub provider_profiles: Vec<UniffiProviderProfileInfo>,
 }
 
@@ -329,9 +406,10 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             state: info.state.map(|st| wire_str(&st)),
                             presence: wire_str(&s.presence),
                             last_activity: info.last_activity.clone(),
+                            agent: info.agent.clone(),
                             model: info.model.clone(),
-                            permission_mode: info.permission_mode.map(|pm| wire_str(&pm)),
-                            effort_level: info.effort_level.map(|e| wire_str(&e)),
+                            mode: info.mode.clone(),
+                            effort: info.effort.clone(),
                             context_percentage: info.context_percentage,
                             context_window: info.context_window,
                             committed: info.committed,
@@ -344,11 +422,18 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                 capabilities: m.capabilities.clone(),
                 folders: m.folders.clone(),
                 roots: m.roots.clone(),
-                models: m.models.as_deref().map(to_uniffi_model_entries).unwrap_or_default(),
-                default_model: m.default_model.clone(),
-                models_error: m.models_error.clone(),
-                open_code_models: m.open_code_models.as_deref().map(to_uniffi_model_entries).unwrap_or_default(),
-                open_code_models_error: m.open_code_models_error.clone(),
+                agents: m.agents.iter().map(to_uniffi_agent).collect(),
+                credentials: m.credentials.iter().map(to_uniffi_credential_status).collect(),
+                models: m
+                    .models
+                    .iter()
+                    .map(|(agent, am)| UniffiAgentModels {
+                        agent: agent.clone(),
+                        models: am.models.as_deref().map(to_uniffi_model_entries).unwrap_or_default(),
+                        default_model: am.default_model.clone(),
+                        error: am.error.clone(),
+                    })
+                    .collect(),
                 provider_profiles: m
                     .provider_profiles
                     .as_deref()
@@ -421,9 +506,9 @@ pub fn build_uniffi_outbox_view(v: &OutboxView) -> UniffiOutboxView {
 pub struct UniffiCredentialsAck {
     pub state: String,
     pub at: u64,
-    pub has_anthropic_key: Option<bool>,
-    pub has_github_pat: Option<bool>,
-    pub key_valid: Option<bool>,
+    /// The agent the write was for; `None` = the bridge's own credentials.
+    /// The resulting statuses are on the machine (`UniffiMachineSummary`).
+    pub agent: Option<String>,
     pub error: Option<String>,
 }
 
@@ -492,9 +577,7 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
                     UniffiCredentialsAck {
                         state: wire_str(&a.state),
                         at: a.at,
-                        has_anthropic_key: a.has_anthropic_key,
-                        has_github_pat: a.has_github_pat,
-                        key_valid: a.key_valid,
+                        agent: a.agent.clone(),
                         error: a.error.clone(),
                     },
                 )
@@ -533,7 +616,8 @@ pub struct UniffiSettingsView {
     pub stay_connected: bool,
     pub tor_proxy_enabled: bool,
     pub blossom_server: String,
-    /// `default` / `acceptEdits` / `plan` — `PermissionMode`'s own wire spelling.
+    /// Preferred mode / effort / model for new sessions: agent ids, `""` =
+    /// the agent's default.
     pub default_mode: String,
     pub default_effort: String,
     pub default_model: String,
@@ -550,7 +634,7 @@ pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
         stay_connected: d.stay_connected,
         tor_proxy_enabled: d.tor_proxy_enabled,
         blossom_server: d.blossom_server.clone(),
-        default_mode: wire_str(&d.default_mode),
+        default_mode: d.default_mode.clone(),
         default_effort: d.default_effort.clone(),
         default_model: d.default_model.clone(),
         notifications_enabled: d.notifications_enabled,

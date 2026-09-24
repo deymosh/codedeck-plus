@@ -7,7 +7,7 @@
 //! notification (the UI is the notification). Sync catch-up never notifies:
 //! only the LIVE output path calls [`classify_output_entry`].
 
-use protocol::common::{OutputEntry, OutputEntryType, SessionBackend};
+use protocol::common::{EntryBody, NoticeKind, OutputEntry};
 
 // --- event vocabulary ---
 
@@ -74,9 +74,9 @@ impl NotifyEvent {
 pub struct NotificationContext<'a> {
     pub session_label: Option<&'a str>,
     pub machine_label: Option<&'a str>,
-    /// The agent the session runs on ([`agent_label`]), so the text names
-    /// the agent that actually finished or asked. Absent (session not in
-    /// the store yet) falls back to plain "Claude" / "Session …" wording.
+    /// Display name of the agent the session runs on (from the bridge's agent
+    /// catalog), so the text names the agent that actually finished or asked.
+    /// Absent (session or catalog not known yet) falls back to "the agent".
     pub agent_label: Option<&'a str>,
 }
 
@@ -87,15 +87,6 @@ impl NotificationContext<'_> {
             machine_label: None,
             agent_label: None,
         }
-    }
-}
-
-/// Display name of a session's agent backend. An absent backend is Claude
-/// Code — the protocol's own default for `backend`.
-pub fn agent_label(backend: Option<SessionBackend>) -> &'static str {
-    match backend {
-        Some(SessionBackend::Opencode) => "OpenCode",
-        Some(SessionBackend::ClaudeCode) | None => "Claude Code",
     }
 }
 
@@ -178,7 +169,11 @@ pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> No
         None => base.to_string(),
     };
     // Who is acting, in body text, and which kind of session, in titles.
-    let agent = ctx.agent_label.unwrap_or("Claude");
+    // Sentence-initial and mid-sentence forms of the actor.
+    let (agent, agent_mid) = match ctx.agent_label {
+        Some(a) => (a, a),
+        None => ("The agent", "the agent"),
+    };
     let session_kind = |what: &str| match ctx.agent_label {
         Some(a) => format!("{a} session {what}"),
         None => format!("Session {what}"),
@@ -192,7 +187,7 @@ pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> No
             },
         ),
         NotifyEvent::Question { .. } => (
-            titled(&format!("Question from {agent}")),
+            titled(&format!("Question from {agent_mid}")),
             on_machine(&format!("{agent} is asking you a question")),
         ),
         NotifyEvent::PlanApproval { .. } => (
@@ -222,72 +217,51 @@ pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> No
 
 // --- live-output entry classification ---
 
-fn meta_str<'a>(entry: &'a OutputEntry, key: &str) -> Option<&'a str> {
-    entry.metadata.as_ref()?.get(key)?.as_str()
-}
-
-/// Map ONE live output entry to a notify event, or `None`. Mirrors the
-/// transcript renderer's special-card vocabulary — they must agree.
+/// Map ONE live output entry to a notify event, or `None`. The entry kinds
+/// that ask for the user, finish a turn, or end a session notify; everything
+/// else is ordinary transcript.
 pub fn classify_output_entry(
     machine: &str,
     session_id: &str,
     entry: &OutputEntry,
 ) -> Option<NotifyEvent> {
-    let special = meta_str(entry, "special");
-    match entry.entry_type {
-        OutputEntryType::System => match special {
-            Some("permission_request") => Some(NotifyEvent::PermissionRequest {
-                machine: machine.to_string(),
-                session_id: session_id.to_string(),
-                tool_name: meta_str(entry, "tool_name").map(str::to_string),
-            }),
-            Some("ask_question") => Some(NotifyEvent::Question {
-                machine: machine.to_string(),
-                session_id: session_id.to_string(),
-            }),
-            Some("plan_approval") => Some(NotifyEvent::PlanApproval {
-                machine: machine.to_string(),
-                session_id: session_id.to_string(),
-            }),
-            None => {
-                // Turn complete — `stream_end` is only ever set on live entries.
-                let stream_end = entry
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("stream_end"))
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                stream_end.then(|| NotifyEvent::SessionFinished {
-                    machine: machine.to_string(),
-                    session_id: session_id.to_string(),
-                })
-            }
-            _ => None,
-        },
-        OutputEntryType::Error => match special {
-            Some("session_died") | Some("session_failed") => Some(NotifyEvent::SessionFailed {
-                machine: machine.to_string(),
-                session_id: session_id.to_string(),
-                reason: (!entry.content.is_empty()).then(|| entry.content.clone()),
-            }),
-            _ => None,
-        },
+    let machine = machine.to_string();
+    let session_id = session_id.to_string();
+    match &entry.body {
+        EntryBody::PermissionRequest { tool_name, .. } => Some(NotifyEvent::PermissionRequest {
+            machine,
+            session_id,
+            tool_name: (!tool_name.is_empty()).then(|| tool_name.clone()),
+        }),
+        // One notification per ask, not per question of a multi-question ask.
+        EntryBody::Question { index: 0, .. } => Some(NotifyEvent::Question { machine, session_id }),
+        EntryBody::PlanApproval { .. } => Some(NotifyEvent::PlanApproval { machine, session_id }),
+        EntryBody::TurnComplete {} => Some(NotifyEvent::SessionFinished { machine, session_id }),
+        EntryBody::Notice {
+            kind: NoticeKind::SessionDied | NoticeKind::SessionFailed,
+            text,
+        } => Some(NotifyEvent::SessionFailed {
+            machine,
+            session_id,
+            reason: (!text.is_empty()).then(|| text.clone()),
+        }),
         _ => None,
     }
 }
 
 /// CDX-053: does this live entry prove the agent is ACTIVELY WORKING? Only such
-/// entries may auto-clear a session's unread dot. `System` / `Error` are turn
-/// ARTIFACTS, not activity.
+/// entries may auto-clear a session's unread dot. Status lines, errors,
+/// notices and the cards that wait on the user are turn ARTIFACTS, not
+/// activity.
 pub fn is_agent_activity_entry(entry: &OutputEntry) -> bool {
     matches!(
-        entry.entry_type,
-        OutputEntryType::Text
-            | OutputEntryType::Thinking
-            | OutputEntryType::ToolUse
-            | OutputEntryType::ToolResult
-            | OutputEntryType::Progress
-            | OutputEntryType::Diff
+        entry.body,
+        EntryBody::Text { .. }
+            | EntryBody::Plan { .. }
+            | EntryBody::Thinking { .. }
+            | EntryBody::ToolCall { .. }
+            | EntryBody::ToolResult { .. }
+            | EntryBody::Diff { .. }
     )
 }
 
@@ -430,14 +404,8 @@ mod tests {
             preview: None,
         }
     }
-    fn entry(t: OutputEntryType, content: &str, meta: serde_json::Value) -> OutputEntry {
-        OutputEntry {
-            entry_type: t,
-            content: content.into(),
-            timestamp: "1970-01-01T00:00:00.000Z".into(),
-            metadata: if meta.is_null() { None } else { Some(meta) },
-            diff: None,
-        }
+    fn entry(body: EntryBody) -> OutputEntry {
+        OutputEntry::new("1970-01-01T00:00:00.000Z", body)
     }
 
     #[test]
@@ -479,7 +447,7 @@ mod tests {
                 tool_name: Some("Bash".into())
             }, &NotificationContext::none())
             .body,
-            "Claude wants to use Bash"
+            "The agent wants to use Bash"
         );
         assert_eq!(
             format_notify_event(&NotifyEvent::SessionFailed {
@@ -513,7 +481,7 @@ mod tests {
         // No labels yet (unknown keys) — bare kind text, unchanged.
         let bare = format_notify_event(&perm("m", "s"), &NotificationContext::none());
         assert_eq!(bare.title, "Permission needed");
-        assert_eq!(bare.body, "Claude needs permission to proceed");
+        assert_eq!(bare.body, "The agent needs permission to proceed");
     }
 
     #[test]
@@ -527,7 +495,7 @@ mod tests {
             agent_label: Some(agent),
         };
 
-        let open_code = ctx(agent_label(Some(SessionBackend::Opencode)));
+        let open_code = ctx("OpenCode");
         assert_eq!(
             format_notify_event(&finished, &open_code),
             NotificationContent {
@@ -538,8 +506,7 @@ mod tests {
         assert_eq!(format_notify_event(&question, &open_code).title, "Question from OpenCode — fix-ci");
         assert_eq!(format_notify_event(&failed, &open_code).title, "OpenCode session failed — fix-ci");
 
-        // An absent backend is Claude Code, per the protocol's default.
-        let claude_code = ctx(agent_label(None));
+        let claude_code = ctx("Claude Code");
         assert_eq!(
             format_notify_event(&finished, &claude_code),
             NotificationContent {
@@ -551,53 +518,69 @@ mod tests {
         // Session not in the store yet — the generic wording.
         let bare = format_notify_event(&finished, &NotificationContext::none());
         assert_eq!(bare.title, "Session finished");
-        assert_eq!(bare.body, "Claude finished the task");
+        assert_eq!(bare.body, "The agent finished the task");
+        assert_eq!(
+            format_notify_event(&question, &NotificationContext::none()).title,
+            "Question from the agent"
+        );
+    }
+
+    fn body(v: serde_json::Value) -> EntryBody {
+        serde_json::from_value(v).unwrap()
     }
 
     #[test]
-    fn classify_output_entry_maps_the_special_cards() {
-        let c = |t, content, meta| classify_output_entry("m", "s", &entry(t, content, meta));
+    fn classify_output_entry_maps_the_cards_that_want_the_user() {
+        let c = |b| classify_output_entry("m", "s", &entry(body(b)));
         assert_eq!(
-            c(OutputEntryType::System, "", json!({ "special": "permission_request", "tool_name": "Edit" })),
+            c(json!({"entryType":"permission_request","requestId":"r","toolName":"Edit","kind":"edit","title":"a.rs","options":[]})),
             Some(NotifyEvent::PermissionRequest { machine: "m".into(), session_id: "s".into(), tool_name: Some("Edit".into()) })
         );
         assert_eq!(
-            c(OutputEntryType::System, "", json!({ "special": "ask_question" })),
+            c(json!({"entryType":"question","requestId":"q","index":0,"count":2,"question":"?"})),
             Some(NotifyEvent::Question { machine: "m".into(), session_id: "s".into() })
         );
+        // later questions of the same ask do not notify again
+        assert_eq!(c(json!({"entryType":"question","requestId":"q","index":1,"count":2,"question":"?"})), None);
         assert_eq!(
-            c(OutputEntryType::System, "", json!({ "special": "plan_approval" })),
+            c(json!({"entryType":"plan_approval","requestId":"p","options":[]})),
             Some(NotifyEvent::PlanApproval { machine: "m".into(), session_id: "s".into() })
         );
         assert_eq!(
-            c(OutputEntryType::System, "", json!({ "stream_end": true })),
+            c(json!({"entryType":"turn_complete"})),
             Some(NotifyEvent::SessionFinished { machine: "m".into(), session_id: "s".into() })
         );
         assert_eq!(
-            c(OutputEntryType::Error, "it died", json!({ "special": "session_died" })),
+            c(json!({"entryType":"notice","kind":"session_died","text":"it died"})),
             Some(NotifyEvent::SessionFailed { machine: "m".into(), session_id: "s".into(), reason: Some("it died".into()) })
         );
         // no-ops
-        assert_eq!(c(OutputEntryType::System, "", json!({ "special": "some_status" })), None);
-        assert_eq!(c(OutputEntryType::System, "", serde_json::Value::Null), None);
-        assert_eq!(c(OutputEntryType::Text, "hello", serde_json::Value::Null), None);
-        assert_eq!(c(OutputEntryType::Error, "", json!({ "special": "other" })), None);
+        assert_eq!(c(json!({"entryType":"notice","kind":"session_restart","text":"x"})), None);
+        assert_eq!(c(json!({"entryType":"status","text":"compacting"})), None);
+        assert_eq!(c(json!({"entryType":"text","role":"agent","text":"hello"})), None);
+        assert_eq!(c(json!({"entryType":"error","text":"boom"})), None);
     }
 
     #[test]
     fn agent_activity_excludes_artifacts() {
-        for t in [
-            OutputEntryType::Text,
-            OutputEntryType::Thinking,
-            OutputEntryType::ToolUse,
-            OutputEntryType::ToolResult,
-            OutputEntryType::Progress,
-            OutputEntryType::Diff,
+        for b in [
+            json!({"entryType":"text","role":"agent","text":"x"}),
+            json!({"entryType":"plan","text":"x"}),
+            json!({"entryType":"thinking","text":"x"}),
+            json!({"entryType":"tool_call","callId":"c","toolName":"Read","kind":"read","title":"a"}),
+            json!({"entryType":"tool_result","callId":"c","text":"x"}),
+            json!({"entryType":"diff","path":"a","lines":[]}),
         ] {
-            assert!(is_agent_activity_entry(&entry(t, "", serde_json::Value::Null)));
+            assert!(is_agent_activity_entry(&entry(body(b.clone()))), "{b}");
         }
-        for t in [OutputEntryType::System, OutputEntryType::Error] {
-            assert!(!is_agent_activity_entry(&entry(t, "", serde_json::Value::Null)));
+        for b in [
+            json!({"entryType":"status","text":"x"}),
+            json!({"entryType":"error","text":"x"}),
+            json!({"entryType":"turn_complete"}),
+            json!({"entryType":"resolved","requestId":"r","summary":"ok"}),
+            json!({"entryType":"permission_request","requestId":"r","toolName":"Edit","kind":"edit","title":"a","options":[]}),
+        ] {
+            assert!(!is_agent_activity_entry(&entry(body(b.clone()))), "{b}");
         }
     }
 

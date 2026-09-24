@@ -42,13 +42,11 @@ pub struct CredentialsAck {
     pub state: AckState,
     #[specta(type = specta_typescript::Number)]
     pub at: u64,
+    /// Which scope the write was for: an agent id, or `None` for the
+    /// bridge's own credentials. The resulting statuses themselves live in
+    /// the machines store (`MachineView::credentials` / the agent catalog).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_anthropic_key: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_github_pat: Option<bool>,
-    /// Bridge-side 1-token validation outcome; `None` = not validated (network).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_valid: Option<bool>,
+    pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -103,9 +101,7 @@ pub enum UiEffect {
 #[derive(Debug, Clone, Default)]
 pub struct CredentialsAckInput {
     pub success: bool,
-    pub has_anthropic_key: bool,
-    pub has_github_pat: bool,
-    pub key_valid: Option<bool>,
+    pub agent: Option<String>,
     pub error: Option<String>,
 }
 
@@ -230,15 +226,13 @@ impl UiState {
     }
 
     /// A `set-credentials` command left for this machine — show "saving…".
-    pub fn note_credentials_sent(&mut self, machine_pubkey: &str, now: u64) {
+    pub fn note_credentials_sent(&mut self, machine_pubkey: &str, agent: Option<&str>, now: u64) {
         self.credentials_status.insert(
             machine_pubkey.to_string(),
             CredentialsAck {
                 state: AckState::Saving,
                 at: now,
-                has_anthropic_key: None,
-                has_github_pat: None,
-                key_valid: None,
+                agent: agent.map(str::to_string),
                 error: None,
             },
         );
@@ -255,9 +249,7 @@ impl UiState {
             CredentialsAck {
                 state: ack_state(ack.success),
                 at: now,
-                has_anthropic_key: Some(ack.has_anthropic_key),
-                has_github_pat: Some(ack.has_github_pat),
-                key_valid: ack.key_valid,
+                agent: ack.agent,
                 error: ack.error,
             },
         );
@@ -420,16 +412,14 @@ mod tests {
     #[test]
     fn credentials_ack_moves_saving_to_saved_or_failed() {
         let mut ui = UiState::default();
-        ui.note_credentials_sent("m", 100);
+        ui.note_credentials_sent("m", Some("claude-code"), 100);
         assert_eq!(ui.credentials_status["m"].state, AckState::Saving);
 
         ui.apply_credentials_ack(
             "m",
             CredentialsAckInput {
                 success: true,
-                has_anthropic_key: true,
-                has_github_pat: false,
-                key_valid: Some(true),
+                agent: Some("claude-code".into()),
                 error: None,
             },
             200,
@@ -437,8 +427,7 @@ mod tests {
         let ack = &ui.credentials_status["m"];
         assert_eq!(ack.state, AckState::Saved);
         assert_eq!(ack.at, 200);
-        assert_eq!(ack.has_anthropic_key, Some(true));
-        assert_eq!(ack.key_valid, Some(true));
+        assert_eq!(ack.agent.as_deref(), Some("claude-code"));
 
         ui.apply_credentials_ack(
             "m",

@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::BridgeHostKind;
-use protocol::common::{GsdState, ProviderProfileInfo, RemoteSessionInfo, SessionBackend, UsageData};
+use protocol::common::{
+    AgentDescriptor, CredentialStatus, GsdState, ProviderProfileInfo, RemoteSessionInfo, UsageData,
+};
 use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
 /// A user-dismissed session id keeps suppressing incoming lists for this long
@@ -205,29 +207,43 @@ pub struct MachineView {
     pub last_heartbeat_at: Option<u64>,
     #[serde(default)]
     pub sessions: BTreeMap<String, SessionView>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub models: Option<Vec<ModelEntry>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub models_error: Option<String>,
-    /// OpenCode's model list, tracked separately from `models` because the two
-    /// backends can have entirely different supported models — a `models`
-    /// answer for one must never clobber the other's list. No `default_model`
-    /// counterpart: OpenCode answers never carry one (port of
-    /// `apps/mobile/src/core/stores/machines.ts`'s `openCodeModels`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_code_models: Option<Vec<ModelEntry>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_code_models_error: Option<String>,
-    /// Stripped by `serialize_machines` before persisting and forced back to
+    /// The agent backends this bridge runs, from its latest heartbeat.
+    #[serde(default)]
+    pub agents: Vec<AgentDescriptor>,
+    /// The bridge's own credentials (not tied to an agent), from its latest
+    /// heartbeat or `credentials-ack`.
+    #[serde(default)]
+    pub credentials: Vec<CredentialStatus>,
+    /// Live model lists, by agent id. Kept per agent because agents support
+    /// entirely different models — one agent's answer never touches another's.
+    #[serde(default)]
+    pub models: BTreeMap<String, AgentModels>,    /// Stripped by `serialize_machines` before persisting and forced back to
     /// `None` by `hydrate_machines` on load (CDX-062) — but present here so it
     /// serializes normally into the live `MachinesView` an IPC boundary reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profiles: Option<Vec<ProviderProfileInfo>>,
 }
 
+/// One agent's live model list on one machine. `models` stays `None` until
+/// the first non-empty answer; `error` is the bridge's reason for its latest
+/// empty answer (CDX-035).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModels {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<ModelEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl MachineView {
+    /// The catalog entry for `agent_id`, if this bridge advertises it.
+    pub fn agent(&self, agent_id: &str) -> Option<&AgentDescriptor> {
+        self.agents.iter().find(|a| a.id == agent_id)
+    }
+
     fn new(pubkey_hex: String, name: String) -> Self {
         Self {
             pubkey_hex,
@@ -241,11 +257,9 @@ impl MachineView {
             machine_offline: false,
             last_heartbeat_at: None,
             sessions: BTreeMap::new(),
-            models: None,
-            default_model: None,
-            models_error: None,
-            open_code_models: None,
-            open_code_models_error: None,
+            agents: Vec::new(),
+            credentials: Vec::new(),
+            models: BTreeMap::new(),
             provider_profiles: None,
         }
     }
@@ -397,6 +411,8 @@ impl MachinesState {
         if let Some(r) = &msg.roots {
             entry.roots = r.clone();
         }
+        entry.agents = msg.agents.clone();
+        entry.credentials = msg.credentials.clone();
         entry.protocol_version = Some(msg.protocol_version);
         entry.machine_offline = msg.machine_offline.unwrap_or(false);
         entry.last_heartbeat_at = Some(at);
@@ -527,35 +543,39 @@ impl MachinesState {
 
     /// CDX-035: an EMPTY `models` is a "could not answer" report (it carries a
     /// reason) — it must never overwrite a good list. A non-empty answer is
-    /// always authoritative and clears any stored reason. `msg.backend` picks
-    /// which pair of fields this applies to — Claude Code's and OpenCode's
-    /// model lists are tracked separately (see `open_code_models`'s doc
-    /// comment) so one backend's answer never clobbers the other's.
+    /// always authoritative and clears any stored reason. Applies only to the
+    /// answering agent's entry, and only for a known machine.
     pub fn apply_models(&mut self, machine_pubkey: &str, msg: &ModelsMsg) {
-        // Machines the phone hasn't paired can still receive a models answer
-        // (3c routing) — create the record if needed, matching the TS
-        // `withMachine` that would drop it. Actually the TS drops it; mirror
-        // that: only touch a known machine.
-        let is_open_code = msg.backend == Some(SessionBackend::Opencode);
         self.with_machine(machine_pubkey, |m| {
+            let entry = m.models.entry(msg.agent.clone()).or_default();
             if msg.models.is_empty() {
-                if is_open_code {
-                    m.open_code_models_error = msg.error.clone();
-                } else {
-                    m.models_error = msg.error.clone();
-                }
+                entry.error = msg.error.clone();
                 return;
             }
-            if is_open_code {
-                m.open_code_models = Some(msg.models.clone());
-                m.open_code_models_error = None;
-                return;
-            }
-            m.models = Some(msg.models.clone());
+            entry.models = Some(msg.models.clone());
             if let Some(dm) = &msg.default_model {
-                m.default_model = Some(dm.clone());
+                entry.default_model = Some(dm.clone());
             }
-            m.models_error = None;
+            entry.error = None;
+        });
+    }
+
+    /// A `credentials-ack` for the bridge's own credentials (no `agent`)
+    /// replaces the stored statuses; one for an agent patches that agent's
+    /// catalog entry. Either way the next heartbeat re-states them.
+    pub fn apply_credential_statuses(
+        &mut self,
+        machine_pubkey: &str,
+        agent: Option<&str>,
+        statuses: &[CredentialStatus],
+    ) {
+        self.with_machine(machine_pubkey, |m| match agent {
+            None => m.credentials = statuses.to_vec(),
+            Some(id) => {
+                if let Some(a) = m.agents.iter_mut().find(|a| a.id == id) {
+                    a.credentials = statuses.to_vec();
+                }
+            }
         });
     }
 
@@ -579,14 +599,15 @@ mod tests {
     fn info(id: &str) -> RemoteSessionInfo {
         RemoteSessionInfo {
             id: id.into(),
+            agent: "claude-code".into(),
             slug: format!("slug-{id}"),
             cwd: "/work".into(),
             last_activity: "1970-01-01T00:00:00.000Z".into(),
             line_count: 0,
             title: None,
             project: "proj".into(),
-            permission_mode: None,
-            effort_level: None,
+            mode: None,
+            effort: None,
             model: None,
             context_window: None,
             context_percentage: None,
@@ -595,7 +616,6 @@ mod tests {
             seq_high: None,
             provider_id: None,
             provider_label: None,
-            backend: None,
         }
     }
 
@@ -613,6 +633,7 @@ mod tests {
             "type": "sessions",
             "machine": "m1",
             "sessions": sessions,
+            "agents": [],
             "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
         });
         if let (Some(o), Some(e)) = (obj.as_object_mut(), extra.as_object()) {
@@ -841,6 +862,7 @@ mod tests {
 
     fn models_msg(ids: &[&str], default: Option<&str>) -> ModelsMsg {
         ModelsMsg {
+            agent: "claude-code".into(),
             models: ids
                 .iter()
                 .map(|id| ModelEntry {
@@ -850,8 +872,11 @@ mod tests {
                 .collect(),
             default_model: default.map(str::to_string),
             error: None,
-            backend: None,
         }
+    }
+
+    fn agent_models<'a>(st: &'a MachinesState, agent: &str) -> &'a AgentModels {
+        st.machine("pk").unwrap().models.get(agent).expect("agent entry")
     }
 
     #[test]
@@ -859,24 +884,44 @@ mod tests {
         let mut st = MachinesState::default();
         st.apply_session_list("pk", &list(&[info("s1")], NONE()), 10);
         st.apply_models("pk", &models_msg(&["opus", "sonnet"], Some("opus")));
-        assert_eq!(st.machine("pk").unwrap().models.as_ref().unwrap().len(), 2);
+        assert_eq!(agent_models(&st, "claude-code").models.as_ref().unwrap().len(), 2);
 
         // CDX-022: the refresh-sessions heartbeat that used to wipe the picker.
         for at in [20, 30, 40, 50, 60] {
             st.apply_session_list("pk", &list(&[info("s1")], NONE()), at);
         }
+        let kept = agent_models(&st, "claude-code");
         assert_eq!(
-            st.machine("pk")
-                .unwrap()
-                .models
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|m| m.id.as_str())
-                .collect::<Vec<_>>(),
+            kept.models.as_ref().unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
             vec!["opus", "sonnet"]
         );
-        assert_eq!(st.machine("pk").unwrap().default_model.as_deref(), Some("opus"));
+        assert_eq!(kept.default_model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn a_heartbeat_replaces_the_agent_catalog_and_bridge_credentials() {
+        let mut st = MachinesState::default();
+        st.apply_session_list(
+            "pk",
+            &list(
+                &[],
+                json!({
+                    "agents": [{ "id": "claude-code", "displayName": "Claude Code", "supports": { "models": true } }],
+                    "credentials": [{ "id": "github_pat", "label": "GitHub token", "present": true }],
+                }),
+            ),
+            10,
+        );
+        let m = st.machine("pk").unwrap();
+        assert!(m.agent("claude-code").unwrap().supports.models);
+        assert!(m.agent("opencode").is_none());
+        assert!(m.credentials[0].present);
+
+        st.apply_session_list("pk", &list(&[], json!({ "agents": [{ "id": "opencode", "displayName": "OpenCode" }] })), 20);
+        let m = st.machine("pk").unwrap();
+        assert!(m.agent("claude-code").is_none());
+        assert!(m.agent("opencode").is_some());
+        assert!(m.credentials.is_empty());
     }
 
     #[test]
@@ -887,72 +932,69 @@ mod tests {
         st.apply_models(
             "pk",
             &ModelsMsg {
+                agent: "claude-code".into(),
                 models: vec![],
                 default_model: None,
                 error: Some("no live SDK".into()),
-                backend: None,
             },
         );
-        assert_eq!(
-            st.machine("pk").unwrap().models.as_ref().unwrap()[0].id,
-            "opus"
-        );
-        assert_eq!(st.machine("pk").unwrap().models_error.as_deref(), Some("no live SDK"));
+        assert_eq!(agent_models(&st, "claude-code").models.as_ref().unwrap()[0].id, "opus");
+        assert_eq!(agent_models(&st, "claude-code").error.as_deref(), Some("no live SDK"));
         // a later good answer clears the error
         st.apply_models("pk", &models_msg(&["opus", "sonnet"], None));
-        assert_eq!(st.machine("pk").unwrap().models_error, None);
+        assert_eq!(agent_models(&st, "claude-code").error, None);
     }
 
     #[test]
-    fn opencode_models_are_tracked_separately_from_claude_code_models() {
+    fn each_agents_model_list_is_tracked_separately() {
         let mut st = MachinesState::default();
         st.apply_session_list("pk", &list(&[], NONE()), 10);
         st.apply_models("pk", &models_msg(&["opus"], Some("opus")));
         st.apply_models(
             "pk",
             &ModelsMsg {
+                agent: "opencode".into(),
                 models: vec![ModelEntry { id: "gpt".into(), label: None }],
                 default_model: None,
                 error: None,
-                backend: Some(SessionBackend::Opencode),
-            },
-        );
-        // OpenCode's answer landed in its own field, untouched Claude Code fields.
-        assert_eq!(st.machine("pk").unwrap().models.as_ref().unwrap()[0].id, "opus");
-        assert_eq!(st.machine("pk").unwrap().default_model.as_deref(), Some("opus"));
-        assert_eq!(st.machine("pk").unwrap().open_code_models.as_ref().unwrap()[0].id, "gpt");
-    }
-
-    #[test]
-    fn an_empty_opencode_models_response_never_wipes_its_own_good_list() {
-        let mut st = MachinesState::default();
-        st.apply_session_list("pk", &list(&[], NONE()), 10);
-        st.apply_models(
-            "pk",
-            &ModelsMsg {
-                models: vec![ModelEntry { id: "gpt".into(), label: None }],
-                default_model: None,
-                error: None,
-                backend: Some(SessionBackend::Opencode),
             },
         );
         st.apply_models(
             "pk",
             &ModelsMsg {
+                agent: "opencode".into(),
                 models: vec![],
                 default_model: None,
                 error: Some("opencode offline".into()),
-                backend: Some(SessionBackend::Opencode),
             },
         );
-        assert_eq!(st.machine("pk").unwrap().open_code_models.as_ref().unwrap()[0].id, "gpt");
-        assert_eq!(
-            st.machine("pk").unwrap().open_code_models_error.as_deref(),
-            Some("opencode offline")
+        assert_eq!(agent_models(&st, "claude-code").models.as_ref().unwrap()[0].id, "opus");
+        assert_eq!(agent_models(&st, "claude-code").default_model.as_deref(), Some("opus"));
+        assert_eq!(agent_models(&st, "claude-code").error, None);
+        assert_eq!(agent_models(&st, "opencode").models.as_ref().unwrap()[0].id, "gpt");
+        assert_eq!(agent_models(&st, "opencode").error.as_deref(), Some("opencode offline"));
+    }
+
+    #[test]
+    fn a_credentials_ack_patches_the_bridge_or_the_named_agent() {
+        let mut st = MachinesState::default();
+        st.apply_session_list(
+            "pk",
+            &list(&[], json!({ "agents": [{ "id": "claude-code", "displayName": "Claude Code" }] })),
+            10,
         );
-        // the Claude Code fields were never touched by any of this.
-        assert_eq!(st.machine("pk").unwrap().models, None);
-        assert_eq!(st.machine("pk").unwrap().models_error, None);
+        let set = |id: &str| CredentialStatus {
+            id: id.into(),
+            label: id.into(),
+            present: true,
+            from_env: false,
+            valid: Some(true),
+        };
+        st.apply_credential_statuses("pk", Some("claude-code"), &[set("anthropic_api_key")]);
+        st.apply_credential_statuses("pk", None, &[set("github_pat")]);
+        let m = st.machine("pk").unwrap();
+        assert_eq!(m.agent("claude-code").unwrap().credentials[0].id, "anthropic_api_key");
+        assert_eq!(m.credentials[0].id, "github_pat");
     }
 
     #[test]
@@ -1067,7 +1109,7 @@ mod tests {
         assert_eq!(hydrated["pk1"].label.as_deref(), Some("Laptop"));
         assert!(hydrated["pk1"].machine_offline); // honest until a live heartbeat
         assert_eq!(
-            hydrated["pk1"].models.as_ref().unwrap()[0].id,
+            hydrated["pk1"].models["claude-code"].models.as_ref().unwrap()[0].id,
             "opus"
         );
     }

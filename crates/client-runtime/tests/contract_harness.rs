@@ -210,13 +210,14 @@ async fn scenario_a_pair_session_output_input_ack_restart_reconnect_sync_gap_ref
             // --- create a session, then let the harness's fake SDK answer ---
             core.dispatch(Intent::CreateSession {
                 machine: machine.clone(),
+                agent: "claude-code".into(),
                 cwd: None,
                 create_cwd: None,
+                mode: None,
+                effort: None,
                 model: None,
-                default_effort: None,
                 provider_id: None,
                 test_session: None,
-                backend: None,
             })
             .await;
 
