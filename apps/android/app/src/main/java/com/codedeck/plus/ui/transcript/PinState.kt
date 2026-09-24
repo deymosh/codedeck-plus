@@ -1,11 +1,11 @@
 package com.codedeck.plus.ui.transcript
 
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -134,7 +134,23 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
         if (itemCount == 0) return
         dispatch(PinEvent.ProgrammaticScrollStart)
         try {
-            listState.animateScrollToItem(itemCount - 1)
+            // animateScrollToItem aligns an item's TOP with the viewport:
+            // jumping to the last entry while it is already in view would
+            // yank a tall, still-streaming reply back to its start, so only
+            // jump when it is not.
+            if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != itemCount - 1) {
+                listState.animateScrollToItem(itemCount - 1)
+            }
+            // A last entry taller than the viewport still ends below it —
+            // scroll the rest of the way. Item offsets are measured from the
+            // start of the content area, so the true bottom is the viewport
+            // end minus the list's bottom padding.
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()
+            if (last != null && last.index == itemCount - 1) {
+                val overflow = last.offset + last.size - (layout.viewportEndOffset - layout.afterContentPadding)
+                if (overflow > 0) listState.animateScrollBy(overflow.toFloat())
+            }
         } finally {
             dispatch(PinEvent.ProgrammaticScrollEnd)
         }
@@ -172,23 +188,34 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
         }
     }
 
-    // Detect layout-driven viewport shifts: when bars appear/disappear below the
-    // LazyColumn (keyboard, ThinkingIndicator, PendingPermissionBar, attachment
-    // strip, quick prompts, SendFailedBar, SessionControlsBar, composer) the
-    // list's height shrinks and the viewport slides down. `itemCount` is
-    // unchanged so the NewEntries effect above never fires. We watch the last
-    // visible item index — if it falls behind itemCount - 1 while pinned, the
-    // viewport was pushed off the bottom by a layout change, so we scroll back.
-    val lastVisibleIndex by derivedStateOf {
-        if (itemCount == 0) -1 else listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-    }
-
-    LaunchedEffect(state.pinned, lastVisibleIndex, itemCount) {
-        if (state.pinned && lastVisibleIndex < itemCount - 1) scrollToBottom()
+    // Layout-driven viewport shifts: a bar appearing below the list (keyboard,
+    // ThinkingIndicator, PendingPermissionBar, attachment strip, quick
+    // prompts, SendFailedBar, SessionControlsBar, composer) or an entry
+    // growing in place shrinks the room at the bottom with no scroll and no
+    // new entry, so neither effect above sees it. Whenever the list comes to
+    // rest able to scroll further, report that geometry as LeftBottom — an
+    // event, not a scroll: the owner effect below decides whether to move
+    // (pinned) or not (unpinned, where it only records the geometry). While
+    // a scroll is in flight it is ignored — that is the user's drag (the
+    // drag handler owns intent) or the owner's own scroll. `canScrollForward`
+    // rather than the last visible index: a tall last entry stays "visible"
+    // while its end is pushed below the viewport.
+    var restedOffBottom by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.canScrollForward && !listState.isScrollInProgress }
+            .collect { offBottom ->
+                if (offBottom) {
+                    dispatch(PinEvent.LeftBottom)
+                    // A key for the owner effect: `atBottom` may already be
+                    // false (a scroll that ended short of a still-growing
+                    // bottom), and an unchanged key would not re-run it.
+                    restedOffBottom++
+                }
+            }
     }
 
     // ★ THE single pin-owner effect — the only scroll driver. ★
-    LaunchedEffect(state.pinned, state.atBottom, itemCount) {
+    LaunchedEffect(state.pinned, state.atBottom, itemCount, restedOffBottom) {
         if (state.pinned && itemCount > 0 && !state.atBottom) scrollToBottom()
     }
 
