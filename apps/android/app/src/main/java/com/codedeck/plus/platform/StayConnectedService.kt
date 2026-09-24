@@ -26,6 +26,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.persistedRelays
 import uniffi.client_ffi.persistedTorProxyEnabled
@@ -72,6 +74,11 @@ class StayConnectedService : Service() {
     private var connectivity: Connectivity? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+
+    /** Latest summary for the notification; written by the collector in
+     *  [onCreate], read whenever the notification is (re)built. */
+    @Volatile
+    private var status = stayConnectedStatus(0, emptyList(), null, 0, 0)
 
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
@@ -130,6 +137,26 @@ class StayConnectedService : Service() {
                 val stayConnected = view?.stayConnected ?: return@collect
                 if (stayConnected) promote() else demote()
             }
+        }
+        // Keep the notification's machines/sessions/relays summary live. Only
+        // a changed summary reposts, and only while the notification is up —
+        // demoted, there is nothing to update.
+        scope.launch {
+            combine(core.machines, core.connection, core.settings) { machines, connection, settings ->
+                val all = machines?.machines.orEmpty()
+                stayConnectedStatus(
+                    machineCount = all.size,
+                    sessionStates = all.flatMap { m -> m.sessions.map { it.state } },
+                    connectionStatus = connection?.status,
+                    connectedRelays = connection?.connectedRelays?.size ?: 0,
+                    configuredRelays = settings?.relays?.size ?: 0,
+                )
+            }
+                .distinctUntilChanged()
+                .collect { status ->
+                    this@StayConnectedService.status = status
+                    if (foreground.value == true) updateNotification()
+                }
         }
     }
 
@@ -234,6 +261,14 @@ class StayConnectedService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         }
 
+    /** Re-posting under the foreground notification's own id replaces it in
+     *  place; the platform drops the post silently when notifications are
+     *  not permitted, which leaves nothing to update anyway. */
+    private fun updateNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
     private fun repostNotification() {
         try {
             startForegroundNotification()
@@ -312,9 +347,13 @@ class StayConnectedService : Service() {
             // hard-crashes the process with `CannotPostForegroundServiceNotificationException`
             // rather than posting an icon-less notification.
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("CodeDeck+")
-            .setContentText("Staying connected")
+            .setContentTitle(status.title)
+            .setContentText(status.text)
             .setOngoing(true)
+            // Summary updates replace the notification silently and carry
+            // no meaningful post time.
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
             .setDeleteIntent(repostIntent)
