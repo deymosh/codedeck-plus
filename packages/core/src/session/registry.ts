@@ -18,13 +18,7 @@
 import { mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import type {
-  EffortLevel,
-  PermissionMode,
-  RemoteSessionInfo,
-  SessionBackend,
-  SessionState,
-} from '@codedeck/protocol';
+import type { RemoteSessionInfo, SessionState } from '@codedeck/protocol';
 
 export interface SessionRecord {
   sessionId: string;
@@ -44,15 +38,15 @@ export interface SessionRecord {
   /** CDX-062: id of the custom provider profile this session was bound to at
    *  creation (absent = Anthropic). Survives resume-on-boot + auto-restart. */
   providerId?: string;
-  /** Agent backend this session was created on. Absent means 'claude-code'
-   *  (sessions created before the OpenCode backend existed have no value
-   *  here and must keep resolving to Claude Code). Survives resume-on-boot
-   *  the same way `providerId` does — a bridge restart must reattach an
-   *  OpenCode session to `openCodeFacade`, not silently fall back to Claude
+  /** The agent this session runs on (an agent descriptor id). Survives
+   *  resume-on-boot the same way `providerId` does — a bridge restart must
+   *  reattach an OpenCode session to its facade, not fall back to Claude
    *  Code. */
-  backend?: SessionBackend;
-  effortLevel?: EffortLevel;
-  permissionMode?: PermissionMode;
+  agent: string;
+  /** The agent's effort level id. */
+  effort?: string;
+  /** The agent's mode id. */
+  mode?: string;
   title: string | null;
   project: string;
   createdAt: string;
@@ -115,9 +109,14 @@ export class SessionRegistry {
     try {
       const parsed = JSON.parse(raw) as RegistryFile;
       for (const rec of parsed.sessions ?? []) {
-        if (rec && typeof rec.sessionId === 'string' && rec.sessionId.length > 0) {
-          this.records.set(rec.sessionId, rec);
+        if (!rec || typeof rec.sessionId !== 'string' || rec.sessionId.length === 0) continue;
+        // A record without an agent predates protocol v11 (which needs a clean
+        // install) — it cannot be advertised, so it is not loaded.
+        if (typeof rec.agent !== 'string' || rec.agent.length === 0) {
+          this.log(`[Registry] Skipping session ${rec.sessionId}: no agent (pre-v11 record)`);
+          continue;
         }
+        this.records.set(rec.sessionId, rec);
       }
       this.removed = (parsed.removedSessions ?? []).filter(
         (id): id is string => typeof id === 'string',
@@ -249,6 +248,7 @@ export class SessionRegistry {
       const seqHigh = transcript.seqHigh(rec.sessionId);
       const info: RemoteSessionInfo = {
         id: rec.sessionId,
+        agent: rec.agent,
         slug: rec.sessionId.slice(0, 8),
         cwd: rec.cwd,
         lastActivity: rec.lastActivity,
@@ -258,13 +258,12 @@ export class SessionRegistry {
         state: rec.state,
         seqHigh,
       };
-      if (rec.permissionMode !== undefined) { info.permissionMode = rec.permissionMode; }
-      if (rec.effortLevel !== undefined) { info.effortLevel = rec.effortLevel; }
+      if (rec.mode !== undefined) { info.mode = rec.mode; }
+      if (rec.effort !== undefined) { info.effort = rec.effort; }
       if (rec.model !== undefined) { info.model = rec.model; }
       // CDX-062: providerLabel is NOT resolved here — the orchestrator owns
       // the live profile lookup at publish time (label survives deletion).
       if (rec.providerId !== undefined) { info.providerId = rec.providerId; }
-      if (rec.backend !== undefined) { info.backend = rec.backend; }
       if (rec.committed) { info.committed = true; }
       if (rec.contextWindow !== undefined) { info.contextWindow = rec.contextWindow; }
       if (rec.contextPercentage !== undefined) { info.contextPercentage = rec.contextPercentage; }

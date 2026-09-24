@@ -1,18 +1,18 @@
 /**
- * Phone → bridge command messages (published as COMMAND_KIND, stored, 1h expiry).
+ * Phone → bridge command messages (published as COMMAND_KIND, stored, 1h
+ * expiry) — v11 mirror of `crates/protocol/src/commands.rs`, which is
+ * authoritative.
  *
  * Every command carries an optional `v` (sender's PROTOCOL_VERSION) and `caps`
- * so version/capability negotiation is two-directional — the bridge can degrade
- * or reject instead of silently ignoring what it doesn't understand.
+ * so version/capability negotiation is two-directional.
  */
 import { z } from 'zod';
 import {
+  credentialValuesSchema,
   deviceConfigSchema,
-  effortLevelSchema,
-  permissionModeSchema,
   providerBaseUrlSchema,
   providerModelSchema,
-  sessionBackendSchema,
+  sessionOptionSchema,
 } from './common';
 
 const versionFields = {
@@ -27,59 +27,58 @@ export const inputMessageSchema = z.object({
   type: z.literal('input'),
   sessionId: z.string().min(1),
   text: z.string(),
-  /** v10: client-generated id echoed back in `input-ack` — drives the phone's
+  /** Client-generated id echoed back in `input-ack` — drives the phone's
    *  outbox (pending → published → confirmed → failed). */
   inputId: z.string().optional(),
 });
 
-export const questionInputMessageSchema = z.object({
-  ...versionFields,
-  type: z.literal('question-input'),
-  sessionId: z.string().min(1),
-  text: z.string(),
-  optionCount: z.number().int().nonnegative(),
-});
-
+/** Answer to a `permission_request` entry: one of its `options[].id`. */
 export const permissionResponseMessageSchema = z.object({
   ...versionFields,
-  type: z.literal('permission-res'),
+  type: z.literal('permission-response'),
   sessionId: z.string().min(1),
   requestId: z.string().min(1),
-  allow: z.boolean(),
-  modifier: z.enum(['always', 'never']).optional(),
+  optionId: z.string().min(1),
 });
 
-/** Single raw keypress for TUI-style prompts (plan approval, question selection). */
-export const keypressMessageSchema = z.object({
+/** The answer to one question: chosen option indices (into the question's
+ *  `options`), or free text. */
+export const questionAnswerSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('options'), selected: z.array(z.number().int().nonnegative()) }),
+  z.object({ kind: z.literal('text'), text: z.string() }),
+]);
+export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;
+
+/** Answer to question `index` of a `question` ask (`requestId`). */
+export const questionResponseMessageSchema = z.object({
   ...versionFields,
-  type: z.literal('keypress'),
+  type: z.literal('question-response'),
   sessionId: z.string().min(1),
-  key: z.string().min(1),
-  context: z.enum(['plan-approval', 'question']).optional(),
+  requestId: z.string().min(1),
+  index: z.number().int().nonnegative(),
+  answer: questionAnswerSchema,
 });
 
-export const modeChangeMessageSchema = z.object({
+/** Answer to a `plan_approval` entry: one of its `options[].id`. */
+export const planResponseMessageSchema = z.object({
   ...versionFields,
-  type: z.literal('mode'),
+  type: z.literal('plan-response'),
   sessionId: z.string().min(1),
-  mode: permissionModeSchema,
+  requestId: z.string().min(1),
+  optionId: z.string().min(1),
 });
 
-export const effortChangeMessageSchema = z.object({
+/** Change a session option. `value` must be one the session's agent
+ *  advertises (a mode / effort id, or a model id). */
+export const setOptionMessageSchema = z.object({
   ...versionFields,
-  type: z.literal('effort'),
+  type: z.literal('set-option'),
   sessionId: z.string().min(1),
-  level: effortLevelSchema,
+  option: sessionOptionSchema,
+  value: z.string().min(1),
 });
 
-export const modelChangeMessageSchema = z.object({
-  ...versionFields,
-  type: z.literal('model'),
-  sessionId: z.string().min(1),
-  model: z.string().min(1),
-});
-
-// --- Transcript sync (v10; replaces history-request/history) ---
+// --- Transcript sync ---
 
 /** Inclusive seq range [from, to]. */
 export const seqRangeSchema = z.tuple([
@@ -97,8 +96,7 @@ export const syncRequestMessageSchema = z.object({
   haveRanges: z.array(seqRangeSchema),
 });
 
-/** Phone → bridge: acknowledges one delivered sync chunk. The bridge retries
- *  unacked chunks; anything still missing is re-requested on next connect. */
+/** Phone → bridge: acknowledges one delivered sync chunk. */
 export const syncAckMessageSchema = z.object({
   ...versionFields,
   type: z.literal('sync-ack'),
@@ -111,7 +109,11 @@ export const syncAckMessageSchema = z.object({
 export const createSessionMessageSchema = z.object({
   ...versionFields,
   type: z.literal('create-session'),
-  defaultEffort: effortLevelSchema.optional(),
+  /** The agent descriptor id to run on. */
+  agent: z.string().min(1),
+  /** Initial mode / effort (ids the agent advertises); absent = its default. */
+  mode: z.string().optional(),
+  effort: z.string().optional(),
   model: z.string().optional(),
   /** Attach on-device test MCP tools (adb) — test sessions only. */
   testSession: z.boolean().optional(),
@@ -120,17 +122,8 @@ export const createSessionMessageSchema = z.object({
   cwd: z.string().optional(),
   /** Create `cwd` (and `git init` it) when it doesn't exist yet. */
   createCwd: z.boolean().optional(),
-  /** CDX-062: bind the session to a stored custom provider profile for its
-   *  whole lifetime. Send ONLY when the bridge advertises 'custom-providers' —
-   *  an old bridge's zod silently strips the unknown field and would run the
-   *  session on Anthropic instead. */
+  /** Custom provider profile; only for agents with `supports.providers`. */
   providerId: z.string().min(1).optional(),
-  /** Select the agent backend for this session. Omitted means 'claude-code'
-   *  (today's behavior), so a phone that has never seen this field keeps
-   *  working unchanged. Send 'opencode' only when the bridge advertises the
-   *  'opencode' capability — an old bridge's zod silently strips the unknown
-   *  field and would run the session on Claude Code instead. */
-  backend: sessionBackendSchema.optional(),
 });
 
 export const refreshSessionsMessageSchema = z.object({
@@ -150,11 +143,10 @@ export const interruptMessageSchema = z.object({
   sessionId: z.string().min(1),
 });
 
-// --- Folder management (v10 first-class) ---
+// --- Folder management ---
 
-/** Phone → bridge: create a new project folder under a workspace root and
- *  `git init` it. Answered with `folder-ack`; the next session-list heartbeat
- *  carries the updated `folders[]`. */
+/** Create a new project folder under a workspace root and `git init` it.
+ *  Answered with `folder-ack`; the next heartbeat carries the new `folders[]`. */
 export const createFolderMessageSchema = z.object({
   ...versionFields,
   type: z.literal('create-folder'),
@@ -167,7 +159,7 @@ export const createFolderMessageSchema = z.object({
 
 // --- Image upload ---
 
-/** Legacy chunked upload (pre-Blossom fallback). */
+/** Chunked upload (pre-Blossom fallback). */
 export const uploadImageChunkMessageSchema = z.object({
   ...versionFields,
   type: z.literal('upload-image'),
@@ -215,22 +207,25 @@ export const gsdRequestMessageSchema = z.object({
   sessionId: z.string().min(1),
 });
 
-/** v10 (CDB-030): ask the bridge for the SDK's live supported-model list.
- *  `backend` scopes the request to a specific agent backend's model list;
- *  omitted means 'claude-code' (today's only backend, unchanged behaviour). */
+/** Ask for an agent's live model list (agents with `supports.models`). */
 export const modelsRequestMessageSchema = z.object({
   ...versionFields,
   type: z.literal('models-request'),
-  backend: sessionBackendSchema.optional(),
+  agent: z.string().min(1),
 });
 
 // --- Credentials / device config / pairing ---
 
+/** Store or clear credentials. `agent` names the agent they belong to; absent
+ *  = the bridge's own credentials (e.g. a GitHub token). `values` maps
+ *  credential ids (from the advertised `credentials`) to a new secret, or
+ *  `null` to clear; ids not listed are left unchanged. The only message a
+ *  credential secret ever rides. */
 export const setCredentialsMessageSchema = z.object({
   ...versionFields,
   type: z.literal('set-credentials'),
-  anthropicApiKey: z.string().nullable().optional(),
-  githubPat: z.string().nullable().optional(),
+  agent: z.string().min(1).optional(),
+  values: credentialValuesSchema,
 });
 
 export const setDeviceConfigMessageSchema = z.object({
@@ -250,10 +245,9 @@ export const pairRequestMessageSchema = z.object({
 
 // --- Custom AI provider profiles (CDX-062) ---
 
-/** Upsert or delete one provider profile stored bridge-side (mirrors the
- *  `set-credentials` secret handling). `profile: null` deletes the whole
- *  profile. Answered with `provider-profile-ack`; the bridge then broadcasts
- *  a fresh redacted `provider-profiles` list to all paired phones. */
+/** Upsert or delete one provider profile stored bridge-side. `profile: null`
+ *  deletes the whole profile. Answered with `provider-profile-ack`; the bridge
+ *  then broadcasts a fresh redacted `provider-profiles` list. */
 export const setProviderProfileMessageSchema = z.object({
   ...versionFields,
   type: z.literal('set-provider-profile'),
@@ -261,15 +255,11 @@ export const setProviderProfileMessageSchema = z.object({
   profile: z
     .object({
       label: z.string().min(1),
-      /** CDX-071: https, or http ONLY on loopback. This is the write gate both
-       *  ends share: `encodePhoneToBridge` validates on the way out, so a
-       *  cleartext profile throws at the phone (where the operator can fix it)
-       *  rather than being dropped mid-flight by the bridge's decode. */
+      /** CDX-071: https, or http ONLY on loopback — validated on the way out
+       *  too, so a cleartext profile fails at the sender. */
       baseUrl: providerBaseUrlSchema,
-      /** Tri-state secret, same convention as `set-credentials`: undefined =
-       *  keep the stored token, null = delete it, string = set it. This is the
-       *  ONLY message the token ever rides on — bridge→phone traffic carries
-       *  `hasToken` only (see providerProfileInfoSchema). */
+      /** Tri-state secret: undefined = keep the stored token, null = delete
+       *  it, string = set it. The ONLY message the token ever rides on. */
       authToken: z.string().min(1).nullable().optional(),
       models: z.array(providerModelSchema).min(1),
       defaultModel: z.string().optional(),
@@ -287,12 +277,10 @@ export const providerProfilesRequestMessageSchema = z.object({
 
 export const phoneToBridgeSchema = z.union([
   inputMessageSchema,
-  questionInputMessageSchema,
   permissionResponseMessageSchema,
-  keypressMessageSchema,
-  modeChangeMessageSchema,
-  effortChangeMessageSchema,
-  modelChangeMessageSchema,
+  questionResponseMessageSchema,
+  planResponseMessageSchema,
+  setOptionMessageSchema,
   syncRequestMessageSchema,
   syncAckMessageSchema,
   createSessionMessageSchema,
@@ -313,12 +301,10 @@ export const phoneToBridgeSchema = z.union([
 ]);
 
 export type InputMessage = z.infer<typeof inputMessageSchema>;
-export type QuestionInputMessage = z.infer<typeof questionInputMessageSchema>;
 export type PermissionResponseMessage = z.infer<typeof permissionResponseMessageSchema>;
-export type KeypressMessage = z.infer<typeof keypressMessageSchema>;
-export type ModeChangeMessage = z.infer<typeof modeChangeMessageSchema>;
-export type EffortChangeMessage = z.infer<typeof effortChangeMessageSchema>;
-export type ModelChangeMessage = z.infer<typeof modelChangeMessageSchema>;
+export type QuestionResponseMessage = z.infer<typeof questionResponseMessageSchema>;
+export type PlanResponseMessage = z.infer<typeof planResponseMessageSchema>;
+export type SetOptionMessage = z.infer<typeof setOptionMessageSchema>;
 export type SyncRequestMessage = z.infer<typeof syncRequestMessageSchema>;
 export type SyncAckMessage = z.infer<typeof syncAckMessageSchema>;
 export type CreateSessionMessage = z.infer<typeof createSessionMessageSchema>;

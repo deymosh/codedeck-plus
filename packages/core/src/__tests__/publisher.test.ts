@@ -20,6 +20,7 @@ import { decryptFrom } from '../nostr/crypto';
 
 const session: RemoteSessionInfo = {
   id: 'sess-1',
+  agent: 'claude-code',
   slug: 'sess',
   cwd: '/work',
   lastActivity: '2026-08-05T00:00:00Z',
@@ -47,7 +48,7 @@ const gsd: GsdState = {
   execution: null,
 };
 
-const entry = { entryType: 'text' as const, content: 'hi', timestamp: '2026-08-05T00:00:00Z' };
+const entry = { entryType: 'text' as const, role: 'agent' as const, text: 'hi', timestamp: '2026-08-05T00:00:00Z' };
 
 /**
  * One minimal valid sample per message type. The mapped type makes this record
@@ -55,7 +56,7 @@ const entry = { entryType: 'text' as const, content: 'hi', timestamp: '2026-08-0
  * sample here (and a route in kindForMessage) is a compile error.
  */
 const samples: { [K in BridgeToPhoneMessage['type']]: Extract<BridgeToPhoneMessage, { type: K }> } = {
-  'sessions': { type: 'sessions', machine: 'm', sessions: [], protocolVersion: 10 },
+  'sessions': { type: 'sessions', machine: 'm', sessions: [], agents: [], credentials: [], protocolVersion: 11 },
   'output': { type: 'output', sessionId: 's1', seq: 7, entry },
   'input-ack': { type: 'input-ack', sessionId: 's1', inputId: 'i1' },
   'sync-begin': { type: 'sync-begin', sessionId: 's1', syncId: 'y1', seqHigh: 9, ranges: [[0, 9]] },
@@ -67,14 +68,12 @@ const samples: { [K in BridgeToPhoneMessage['type']]: Extract<BridgeToPhoneMessa
   'input-failed': { type: 'input-failed', sessionId: 's1', reason: 'no-session' },
   'close-session-ack': { type: 'close-session-ack', sessionId: 's1', success: true },
   'session-replaced': { type: 'session-replaced', oldSessionId: 's1', newSession: session },
-  'mode-confirmed': { type: 'mode-confirmed', sessionId: 's1', mode: 'default' },
-  'effort-confirmed': { type: 'effort-confirmed', sessionId: 's1', level: 'high' },
-  'model-confirmed': { type: 'model-confirmed', sessionId: 's1', model: 'opus' },
+  'option-confirmed': { type: 'option-confirmed', sessionId: 's1', option: 'mode', value: 'default' },
   'folder-ack': { type: 'folder-ack', requestId: 'r1', success: true },
-  'usage': { type: 'usage', sessionId: 's1', usage: { available: false, subscriptionType: null, fetchedAt: 't' } },
+  'usage': { type: 'usage', sessionId: 's1', usage: { available: false, windows: [], fetchedAt: 't' } },
   'gsd-state': { type: 'gsd-state', sessionId: 's1', gsd },
-  'models': { type: 'models', models: [] },
-  'credentials-ack': { type: 'credentials-ack', machine: 'm', success: true, hasAnthropicKey: false, hasGithubPat: false },
+  'models': { type: 'models', agent: 'claude-code', models: [] },
+  'credentials-ack': { type: 'credentials-ack', machine: 'm', success: true, credentials: [] },
   'device-config-ack': { type: 'device-config-ack', success: true },
   'pair-ack': { type: 'pair-ack', machine: 'm', ok: true },
   // CDX-062: redacted profile list + per-set ack — stored responses, so a

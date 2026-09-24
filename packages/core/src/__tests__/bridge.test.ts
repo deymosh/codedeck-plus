@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import type { NostrEvent } from 'nostr-tools/core';
-import { FakeSdkFacade } from '@codedeck/testkit';
+import { FakeSdkFacade, entryText } from '@codedeck/testkit';
 import {
   COMMAND_KIND,
   LIVE_KIND,
@@ -172,6 +172,11 @@ function ofType<T extends BridgeToPhoneMessage['type']>(
     .filter((m): m is Extract<BridgeToPhoneMessage, { type: T }> => m.type === type);
 }
 
+/** The `option-confirmed` events published for one session option. */
+function confirmed(ctx: Ctx, option: 'mode' | 'effort' | 'model') {
+  return ofType(ctx, 'option-confirmed').filter((m) => m.option === option);
+}
+
 /** Feed a phone command into the bridge as a real encrypted kind-4515 event. */
 function sendCommand(ctx: Ctx, msg: PhoneToBridgeMessage): void {
   sendRawCommand(ctx, encodePhoneToBridge(msg));
@@ -213,7 +218,7 @@ function initMsg(sdkSessionId: string): SdkMessage {
 
 /** Drive create-session → SDK init → session-ready. Returns the sessionId. */
 async function createReadySession(ctx: Ctx): Promise<string> {
-  sendCommand(ctx, { type: 'create-session' });
+  sendCommand(ctx, { type: 'create-session', agent: 'claude-code' });
   await waitFor(() => ctx.facade.sessions.size >= 1 && ofType(ctx, 'session-pending').length >= 1);
   const sessionId = [...ctx.facade.sessions.keys()].at(-1)!;
   ctx.facade.emit(sessionId, initMsg(`sdk-${sessionId}`));
@@ -247,10 +252,20 @@ describe('BridgeCore', () => {
     expect(list.capabilities).toContain('folders');
     expect(list.folders).toEqual(['projA']);
     expect(list.machineOffline).toBeUndefined();
+    // The agent catalog: Claude Code only (no OpenCode facade configured).
+    expect(list.agents.map((a) => a.id)).toEqual(['claude-code']);
+    const claude = list.agents[0]!;
+    expect(claude.modes.map((m) => m.id)).toEqual(['plan', 'default', 'acceptEdits']);
+    expect(claude.defaultMode).toBe('plan');
+    expect(claude.efforts.map((e) => e.id)).toContain('max');
+    expect(claude.supports).toMatchObject({ models: true, usage: true, providers: true, interrupt: true });
+    expect(claude.credentials.map((c) => c.id)).toEqual(['anthropic_api_key']);
+    // The bridge's own credentials: status only, never a secret.
+    expect(list.credentials).toEqual([{ id: 'github_pat', label: 'GitHub token', present: false }]);
   });
 
   it('create-session: two-phase pending → ready, then the heartbeat lists the session', async () => {
-    sendCommand(ctx, { type: 'create-session', model: 'claude-opus-4', defaultEffort: 'high' });
+    sendCommand(ctx, { type: 'create-session', agent: 'claude-code', model: 'claude-opus-4', effort: 'high' });
     await waitFor(() => ofType(ctx, 'session-pending').length === 1 && ctx.facade.sessions.size === 1);
     const pending = ofType(ctx, 'session-pending')[0]!;
     expect(published(ctx).find((p) => p.msg.type === 'session-pending')?.kind).toBe(RESPONSE_KIND);
@@ -274,7 +289,7 @@ describe('BridgeCore', () => {
   });
 
   it('create-session in a requested cwd is confined to the workspace roots', async () => {
-    sendCommand(ctx, { type: 'create-session', cwd: '../../../etc' });
+    sendCommand(ctx, { type: 'create-session', agent: 'claude-code', cwd: '../../../etc' });
     await waitFor(() => ctx.facade.sessions.size === 1);
     const sessionId = [...ctx.facade.sessions.keys()][0]!;
     expect(ctx.facade.session(sessionId).options.cwd).toBe(ctx.wsRoot); // fell back to the root
@@ -292,7 +307,7 @@ describe('BridgeCore', () => {
     await waitFor(() => ofType(ctx, 'output').length >= 2); // init entry + text
     const outputs = ofType(ctx, 'output');
     expect(outputs.map((o) => o.seq)).toEqual([1, 2]);
-    expect(outputs[1]?.entry.content).toBe('hello phone');
+    expect(outputs[1]?.entry).toMatchObject({ text: 'hello phone' });
     const outputEvents = published(ctx).filter((p) => p.msg.type === 'output');
     expect(outputEvents.every((p) => p.kind === LIVE_KIND)).toBe(true);
   });
@@ -318,18 +333,33 @@ describe('BridgeCore', () => {
     const sessionId = await createReadySession(ctx);
     const sdkSession = ctx.facade.session(sessionId);
 
-    sendCommand(ctx, { type: 'mode', sessionId, mode: 'acceptEdits' });
-    await waitFor(() => ofType(ctx, 'mode-confirmed').length === 1);
+    sendCommand(ctx, { type: 'set-option', sessionId, option: 'mode', value: 'acceptEdits' });
+    await waitFor(() => confirmed(ctx, 'mode').length === 1);
     expect(sdkSession.modes).toEqual(['acceptEdits']);
 
-    sendCommand(ctx, { type: 'effort', sessionId, level: 'max' });
-    await waitFor(() => ofType(ctx, 'effort-confirmed').length === 1);
-    expect(ofType(ctx, 'effort-confirmed')[0]?.level).toBe('max');
+    sendCommand(ctx, { type: 'set-option', sessionId, option: 'effort', value: 'max' });
+    await waitFor(() => confirmed(ctx, 'effort').length === 1);
+    expect(confirmed(ctx, 'effort')[0]?.value).toBe('max');
     expect(sdkSession.efforts).toEqual(['max']);
 
-    sendCommand(ctx, { type: 'model', sessionId, model: 'claude-sonnet-4-6' });
-    await waitFor(() => ofType(ctx, 'model-confirmed').length === 1);
+    sendCommand(ctx, { type: 'set-option', sessionId, option: 'model', value: 'claude-sonnet-4-6' });
+    await waitFor(() => confirmed(ctx, 'model').length === 1);
     expect(sdkSession.models).toEqual(['claude-sonnet-4-6']);
+  });
+
+  it('a mode or effort the session\'s agent does not advertise is refused, unconfirmed', async () => {
+    const sessionId = await createReadySession(ctx);
+    const sdkSession = ctx.facade.session(sessionId);
+
+    sendCommand(ctx, { type: 'set-option', sessionId, option: 'mode', value: 'bypassPermissions' });
+    sendCommand(ctx, { type: 'set-option', sessionId, option: 'effort', value: 'ludicrous' });
+    // A valid change afterwards proves the refused ones were processed first.
+    sendCommand(ctx, { type: 'set-option', sessionId, option: 'mode', value: 'plan' });
+    await waitFor(() => confirmed(ctx, 'mode').length === 1);
+    expect(confirmed(ctx, 'mode')[0]?.value).toBe('plan');
+    expect(confirmed(ctx, 'effort')).toEqual([]);
+    expect(sdkSession.modes).toEqual(['plan']);
+    expect(sdkSession.efforts).toEqual([]);
   });
 
   it('sync: sync-request → begin/chunk, ack → end with honest deliveredRanges', async () => {
@@ -382,7 +412,7 @@ describe('BridgeCore', () => {
 
   it('models-request answers with the facade model list', async () => {
     ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
-    sendCommand(ctx, { type: 'models-request' });
+    sendCommand(ctx, { type: 'models-request', agent: 'claude-code' });
     await waitFor(() => ofType(ctx, 'models').length === 1);
     expect(ofType(ctx, 'models')[0]?.models).toEqual([{ id: 'claude-opus-4', label: 'Opus' }]);
   });
@@ -393,7 +423,7 @@ describe('BridgeCore', () => {
     // the reason, the phone renders it and keeps re-requesting (an empty
     // answer is no longer indistinguishable from a lost message).
     ctx.facade.models = [];
-    sendCommand(ctx, { type: 'models-request' });
+    sendCommand(ctx, { type: 'models-request', agent: 'claude-code' });
     await waitFor(() => ofType(ctx, 'models').length === 1);
     const msg = ofType(ctx, 'models')[0]!;
     expect(msg.models).toEqual([]);
@@ -403,7 +433,7 @@ describe('BridgeCore', () => {
 
   it('a real model list carries NO error field (CDX-035)', async () => {
     ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
-    sendCommand(ctx, { type: 'models-request' });
+    sendCommand(ctx, { type: 'models-request', agent: 'claude-code' });
     await waitFor(() => ofType(ctx, 'models').length === 1);
     expect(ofType(ctx, 'models')[0]?.error).toBeUndefined();
   });
@@ -429,6 +459,7 @@ describe('BridgeCore', () => {
         await registry.upsert({
           sessionId: 'persisted-1',
           sdkSessionId: 'sdk-persisted',
+          agent: 'claude-code',
           cwd: '/work/proj',
           title: 'Old work',
           project: 'proj',
@@ -488,8 +519,8 @@ describe('BridgeCore — usage / gsd / images / credentials / device-config hand
     const usage = ofType(ctx, 'usage')[0]!;
     expect(usage.sessionId).toBe(sessionId);
     expect(usage.usage.available).toBe(true);
-    expect(usage.usage.subscriptionType).toBe('max');
-    expect(usage.usage.fiveHour).toEqual({ utilization: 55, resetsAt: '2026-08-05T15:00:00Z' });
+    expect(usage.usage.plan).toBe('max');
+    expect(usage.usage.windows).toEqual([{ label: '5h', utilization: 55, resetsAt: '2026-08-05T15:00:00Z' }]);
     expect(usage.usage.sessionCostUsd).toBe(0.5);
     // Ephemeral storage class — usage rides the live kind.
     expect(published(ctx).find((p) => p.msg.type === 'usage')!.kind).toBe(LIVE_KIND);
@@ -581,14 +612,26 @@ describe('BridgeCore — usage / gsd / images / credentials / device-config hand
       });
 
       const SECRET_KEY = 'sk-ant-test-SECRETSECRET';
-      sendCommand(ctx, { type: 'set-credentials', anthropicApiKey: SECRET_KEY, githubPat: 'ghp_PATPAT' });
+      sendCommand(ctx, { type: 'set-credentials', agent: 'claude-code', values: { anthropic_api_key: SECRET_KEY } });
       await waitFor(() => ofType(ctx, 'credentials-ack').length === 1);
+      sendCommand(ctx, { type: 'set-credentials', values: { github_pat: 'ghp_PATPAT' } });
+      await waitFor(() => ofType(ctx, 'credentials-ack').length === 2);
 
-      const ack = ofType(ctx, 'credentials-ack')[0]!;
-      expect(ack.success).toBe(true);
-      expect(ack.hasAnthropicKey).toBe(true);
-      expect(ack.hasGithubPat).toBe(true);
-      expect(ack.keyValid).toBe(true); // 200 ≠ 401/403
+      const [ack, patAck] = ofType(ctx, 'credentials-ack');
+      expect(ack!.success).toBe(true);
+      expect(ack!.agent).toBe('claude-code');
+      // Status only, 200 ≠ 401/403 → valid.
+      expect(ack!.credentials).toEqual([
+        { id: 'anthropic_api_key', label: 'Anthropic API key', present: true, valid: true },
+      ]);
+      expect(patAck!.agent).toBeUndefined();
+      expect(patAck!.credentials).toEqual([{ id: 'github_pat', label: 'GitHub token', present: true }]);
+      // The heartbeat carries the new status to every phone.
+      await waitFor(() => ofType(ctx, 'sessions').at(-1)!.credentials[0]!.present === true);
+      expect(ofType(ctx, 'sessions').at(-1)!.agents[0]!.credentials[0]).toMatchObject({ present: true, valid: true });
+      // No secret rides any published message.
+      expect(JSON.stringify(published(ctx))).not.toContain(SECRET_KEY);
+      expect(JSON.stringify(published(ctx))).not.toContain('ghp_PATPAT');
 
       // Stored in host storage…
       const stored = JSON.parse(ctx.storage.get('credentials')!);
@@ -603,14 +646,43 @@ describe('BridgeCore — usage / gsd / images / credentials / device-config hand
       expect(ctx.logs.join('\n')).not.toContain('ghp_PATPAT');
 
       // Explicit null DELETES a credential (ported semantics).
-      sendCommand(ctx, { type: 'set-credentials', anthropicApiKey: null });
-      await waitFor(() => ofType(ctx, 'credentials-ack').length === 2);
-      const ack2 = ofType(ctx, 'credentials-ack')[1]!;
-      expect(ack2.hasAnthropicKey).toBe(false);
-      expect(ack2.hasGithubPat).toBe(true); // untouched
+      sendCommand(ctx, { type: 'set-credentials', agent: 'claude-code', values: { anthropic_api_key: null } });
+      await waitFor(() => ofType(ctx, 'credentials-ack').length === 3);
+      const ack3 = ofType(ctx, 'credentials-ack')[2]!;
+      // Cleared: not present, and no stale validity carried over.
+      expect(ack3.credentials).toEqual([{ id: 'anthropic_api_key', label: 'Anthropic API key', present: false }]);
       expect(JSON.parse(ctx.storage.get('credentials')!).anthropicApiKey).toBeUndefined();
+      expect(JSON.parse(ctx.storage.get('credentials')!).githubPat).toBe('ghp_PATPAT'); // untouched
     } finally {
       if (envBackup !== undefined) process.env.ANTHROPIC_API_KEY = envBackup;
+    }
+  });
+
+  it('set-credentials refuses an id outside the written scope, storing nothing', async () => {
+    const ctx = await start();
+    // The GitHub token is the bridge's own, not Claude Code's; the API key is
+    // Claude Code's, not the bridge's.
+    sendCommand(ctx, { type: 'set-credentials', agent: 'claude-code', values: { github_pat: 'ghp_X' } });
+    sendCommand(ctx, { type: 'set-credentials', values: { anthropic_api_key: 'sk-X' } });
+    sendCommand(ctx, { type: 'set-credentials', agent: 'pi', values: {} });
+    await waitFor(() => ofType(ctx, 'credentials-ack').length === 3);
+    const acks = ofType(ctx, 'credentials-ack');
+    expect(acks.every((a) => !a.success)).toBe(true);
+    expect(acks[0]!.error).toMatch(/Unknown credential: github_pat/);
+    expect(acks[1]!.error).toMatch(/Unknown credential: anthropic_api_key/);
+    expect(acks[2]!.error).toMatch(/no agent 'pi'/);
+    expect(ctx.storage.get('credentials')).toBeUndefined();
+  });
+
+  it('a key from the bridge environment is reported fromEnv', async () => {
+    const envBackup = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-from-env';
+    try {
+      const ctx = await start();
+      expect(ofType(ctx, 'sessions')[0]!.agents[0]!.credentials[0]).toMatchObject({ present: true, fromEnv: true });
+    } finally {
+      if (envBackup !== undefined) process.env.ANTHROPIC_API_KEY = envBackup;
+      else delete process.env.ANTHROPIC_API_KEY;
     }
   });
 
@@ -622,8 +694,9 @@ describe('BridgeCore — usage / gsd / images / credentials / device-config hand
         coreOpts: { fetchFn: (async () => new Response('{}', { status: 200 })) as typeof fetch },
       });
       const SECRET_KEY = 'sk-ant-test-ENVSPAWNSECRET';
-      sendCommand(ctx, { type: 'set-credentials', anthropicApiKey: SECRET_KEY, githubPat: 'ghp_ENVPAT' });
-      await waitFor(() => ofType(ctx, 'credentials-ack').length === 1);
+      sendCommand(ctx, { type: 'set-credentials', agent: 'claude-code', values: { anthropic_api_key: SECRET_KEY } });
+      sendCommand(ctx, { type: 'set-credentials', values: { github_pat: 'ghp_ENVPAT' } });
+      await waitFor(() => ofType(ctx, 'credentials-ack').length === 2);
 
       const sessionId = await createReadySession(ctx);
       const env = ctx.facade.session(sessionId).options.env;
@@ -869,6 +942,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
     const before = ctx.facade.sessions.size;
     sendCommand(ctx, {
       type: 'create-session',
+      agent: 'claude-code',
       ...(opts.providerId ? { providerId: opts.providerId } : {}),
       ...(opts.model ? { model: opts.model } : {}),
     });
@@ -1080,7 +1154,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
 
   it('unknown providerId → session-pending then immediate session-failed (no spawn)', async () => {
     const ctx = await start();
-    sendCommand(ctx, { type: 'create-session', providerId: 'ghost' });
+    sendCommand(ctx, { type: 'create-session', agent: 'claude-code', providerId: 'ghost' });
     await waitFor(() => ofType(ctx, 'session-failed').length === 1);
     const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
     const failed = ofType(ctx, 'session-failed')[0]!;
@@ -1093,7 +1167,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
     const ctx = await start({
       seedStorage: (storage) => seedProfiles(storage, kimiProfile({ authToken: undefined as unknown as string })),
     });
-    sendCommand(ctx, { type: 'create-session', providerId: 'kimi' });
+    sendCommand(ctx, { type: 'create-session', agent: 'claude-code', providerId: 'kimi' });
     await waitFor(() => ofType(ctx, 'session-failed').length === 1);
     expect(ofType(ctx, 'session-failed')[0]!.reason).toMatch(/no API token stored/);
     expect(ctx.facade.sessions.size).toBe(0);
@@ -1112,7 +1186,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
       // gate did not exist yet, so this row was legal when it was stored.
       seedStorage: (storage) => seedProfiles(storage, kimiProfile({ baseUrl: 'http://api.moonshot.ai/anthropic' })),
     });
-    sendCommand(ctx, { type: 'create-session', providerId: 'kimi' });
+    sendCommand(ctx, { type: 'create-session', agent: 'claude-code', providerId: 'kimi' });
     await waitFor(() => ofType(ctx, 'session-failed').length === 1);
 
     const failed = ofType(ctx, 'session-failed')[0]!;
@@ -1164,6 +1238,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
         await registry.upsert({
           sessionId: 'legacy-kimi',
           sdkSessionId: 'sdk-kimi-old',
+          agent: 'claude-code',
           cwd: '/work/proj',
           providerId: 'kimi',
           title: 'Kimi work',
@@ -1179,9 +1254,9 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
     expect(ctx.facade.sessions.has('legacy-kimi')).toBe(false);
     await waitFor(() => ctx.core.transcript.seqHigh('legacy-kimi') >= 1);
     const entries = await ctx.core.transcript.readRange('legacy-kimi', [1, 10]);
-    const error = entries.find((e) => e.entry.entryType === 'error');
-    expect(error?.entry.content).toContain(PROVIDER_BASE_URL_ERROR);
-    expect(error?.entry.content).toMatch(/insecure base URL/);
+    const error = entries.find((e) => e.entry.entryType === 'notice');
+    expect(entryText(error!.entry)).toContain(PROVIDER_BASE_URL_ERROR);
+    expect(entryText(error!.entry)).toMatch(/insecure base URL/);
     expect(ctx.logs.join('\n')).not.toContain(KIMI_TOKEN);
   });
 
@@ -1308,25 +1383,25 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
     const bound = await createProviderSession(ctx, 'kimi');
 
     // Off-list (Anthropic) model → rejected: log + NO model-confirmed.
-    sendCommand(ctx, { type: 'model', sessionId: bound, model: 'claude-sonnet-4-6' });
+    sendCommand(ctx, { type: 'set-option', sessionId: bound, option: 'model', value: 'claude-sonnet-4-6' });
     sendCommand(ctx, { type: 'refresh-sessions' });
     await waitFor(() => ofType(ctx, 'sessions').length >= 2);
-    expect(ofType(ctx, 'model-confirmed')).toHaveLength(0);
+    expect(confirmed(ctx, 'model')).toHaveLength(0);
     expect(ctx.facade.session(bound).models).toEqual([]);
     expect(ctx.logs.some((l) => l.includes('model change rejected'))).toBe(true);
 
     // In-list model → applied + confirmed.
-    sendCommand(ctx, { type: 'model', sessionId: bound, model: 'kimi-k3-turbo' });
-    await waitFor(() => ofType(ctx, 'model-confirmed').length === 1);
-    expect(ofType(ctx, 'model-confirmed')[0]).toMatchObject({ sessionId: bound, model: 'kimi-k3-turbo' });
+    sendCommand(ctx, { type: 'set-option', sessionId: bound, option: 'model', value: 'kimi-k3-turbo' });
+    await waitFor(() => confirmed(ctx, 'model').length === 1);
+    expect(confirmed(ctx, 'model')[0]).toMatchObject({ sessionId: bound, value: 'kimi-k3-turbo' });
 
     // Profile deleted → even in-list changes are rejected.
     sendCommand(ctx, { type: 'set-provider-profile', profileId: 'kimi', profile: null });
     await waitFor(() => ofType(ctx, 'provider-profile-ack').length === 1);
-    sendCommand(ctx, { type: 'model', sessionId: bound, model: 'kimi-k3' });
+    sendCommand(ctx, { type: 'set-option', sessionId: bound, option: 'model', value: 'kimi-k3' });
     sendCommand(ctx, { type: 'refresh-sessions' });
     await waitFor(() => ofType(ctx, 'sessions').length >= 3);
-    expect(ofType(ctx, 'model-confirmed')).toHaveLength(1); // unchanged
+    expect(confirmed(ctx, 'model')).toHaveLength(1); // unchanged
     expect(ctx.logs.some((l) => l.includes("provider profile 'kimi' was deleted"))).toBe(true);
   });
 
@@ -1363,14 +1438,14 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
     await createProviderSession(ctx, 'kimi');
 
     // Only a provider-bound handle is live — the facade must NOT let it answer.
-    sendCommand(ctx, { type: 'models-request' });
+    sendCommand(ctx, { type: 'models-request', agent: 'claude-code' });
     await waitFor(() => ofType(ctx, 'models').length === 1);
     expect(ofType(ctx, 'models')[0]!.models).toEqual([]);
     expect(ofType(ctx, 'models')[0]!.error).toMatch(/No live Claude session answered/);
 
     // With an Anthropic session alongside, the real list comes back.
     await createSession(ctx);
-    sendCommand(ctx, { type: 'models-request' });
+    sendCommand(ctx, { type: 'models-request', agent: 'claude-code' });
     await waitFor(() => ofType(ctx, 'models').length === 2);
     expect(ofType(ctx, 'models')[1]!.models).toEqual([{ id: 'claude-opus-4', label: 'Opus' }]);
   });
@@ -1383,6 +1458,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
         await registry.upsert({
           sessionId: 'kimi-persisted',
           sdkSessionId: 'sdk-kimi-old',
+          agent: 'claude-code',
           cwd: '/work/proj',
           model: 'kimi-k3',
           providerId: 'kimi',
@@ -1411,6 +1487,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
         await registry.upsert({
           sessionId: 'orphan-kimi',
           sdkSessionId: 'sdk-kimi-old',
+          agent: 'claude-code',
           cwd: '/work/proj',
           providerId: 'kimi',
           title: 'Kimi work',
@@ -1427,7 +1504,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
     await waitFor(() => ctx.core.transcript.seqHigh('orphan-kimi') >= 1);
     const entries = await ctx.core.transcript.readRange('orphan-kimi', [1, 10]);
     expect(entries.some((e) =>
-      e.entry.entryType === 'error' && /provider profile 'kimi' was deleted/.test(e.entry.content))).toBe(true);
+      e.entry.entryType === 'notice' && /provider profile 'kimi' was deleted/.test(entryText(e.entry)))).toBe(true);
   });
 
   it('buildSessionEnv: no profile delegates to sessionEnvFromCredentials; D4 recipe with one; throws without a token', () => {
@@ -1503,7 +1580,7 @@ describe('BridgeCore — custom provider profiles (CDX-062)', () => {
   });
 });
 
-describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
+describe('BridgeCore — OpenCode agent selection', () => {
   const started: Ctx[] = [];
 
   async function start(partial?: Parameters<typeof startCore>[0]): Promise<Ctx> {
@@ -1520,11 +1597,11 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     }
   });
 
-  it("create-session with backend: 'opencode' routes to the configured openCodeFacade, not the default facade", async () => {
+  it("create-session on the opencode agent routes to the configured openCodeFacade, not the default facade", async () => {
     const openCodeFacade = new FakeSdkFacade();
     const ctx = await start({ coreOpts: { openCodeFacade } });
 
-    sendCommand(ctx, { type: 'create-session', backend: 'opencode' });
+    sendCommand(ctx, { type: 'create-session', agent: 'opencode' });
     await waitFor(() => openCodeFacade.sessions.size >= 1 && ofType(ctx, 'session-pending').length >= 1);
 
     // Routed to openCodeFacade, and the default (Claude Code) facade never saw it.
@@ -1536,10 +1613,10 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     await waitFor(() => ofType(ctx, 'session-ready').some((m) => m.pendingId === sessionId));
   });
 
-  it("create-session with backend: 'opencode' and NO openCodeFacade configured → session-pending then immediate session-failed (no spawn)", async () => {
+  it("create-session on the opencode agent and NO openCodeFacade configured → session-pending then immediate session-failed (no spawn)", async () => {
     const ctx = await start(); // startCore never sets openCodeFacade unless asked
 
-    sendCommand(ctx, { type: 'create-session', backend: 'opencode' });
+    sendCommand(ctx, { type: 'create-session', agent: 'opencode' });
     await waitFor(() => ofType(ctx, 'session-failed').length === 1);
     const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
     const failed = ofType(ctx, 'session-failed')[0]!;
@@ -1548,14 +1625,14 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     expect(ctx.facade.sessions.size).toBe(0);
   });
 
-  it("create-session with backend: 'opencode' AND a providerId → session-failed, even with a valid profile and openCodeFacade configured", async () => {
+  it("create-session on the opencode agent AND a providerId → session-failed, even with a valid profile and openCodeFacade configured", async () => {
     const openCodeFacade = new FakeSdkFacade();
     const ctx = await start({
       coreOpts: { openCodeFacade },
       seedStorage: (storage) => seedProfiles(storage, kimiProfile()),
     });
 
-    sendCommand(ctx, { type: 'create-session', backend: 'opencode', providerId: 'kimi' });
+    sendCommand(ctx, { type: 'create-session', agent: 'opencode', providerId: 'kimi' });
     await waitFor(() => ofType(ctx, 'session-failed').length === 1);
     const pendingId = ofType(ctx, 'session-pending')[0]!.pendingId;
     const failed = ofType(ctx, 'session-failed')[0]!;
@@ -1566,16 +1643,29 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     expect(ctx.facade.sessions.size).toBe(0);
   });
 
-  it('heartbeat advertises the opencode capability only when openCodeFacade is configured', async () => {
+  it('the agent catalog lists opencode only when openCodeFacade is configured', async () => {
     const withoutOpenCode = await start();
-    expect(ofType(withoutOpenCode, 'sessions')[0]!.capabilities).not.toContain('opencode');
+    expect(ofType(withoutOpenCode, 'sessions')[0]!.agents.map((a) => a.id)).toEqual(['claude-code']);
 
     const openCodeFacade = new FakeSdkFacade();
     const withOpenCode = await start({ coreOpts: { openCodeFacade } });
-    expect(ofType(withOpenCode, 'sessions')[0]!.capabilities).toContain('opencode');
+    const agents = ofType(withOpenCode, 'sessions')[0]!.agents;
+    expect(agents.map((a) => a.id)).toEqual(['claude-code', 'opencode']);
+    const opencode = agents[1]!;
+    expect(opencode.modes.map((m) => m.id)).toEqual(['ask', 'default']);
+    expect(opencode.efforts).toEqual([]);
+    expect(opencode.supports).toMatchObject({ providers: false, usage: false, models: true });
   });
 
-  it("resume-on-boot: a persisted backend: 'opencode' session reattaches to openCodeFacade, not the default facade", async () => {
+  it('create-session on an agent this bridge does not have fails without a spawn', async () => {
+    const ctx = await start();
+    sendCommand(ctx, { type: 'create-session', agent: 'pi' });
+    await waitFor(() => ofType(ctx, 'session-failed').length === 1);
+    expect(ofType(ctx, 'session-failed')[0]!.reason).toMatch(/no agent 'pi'/);
+    expect(ctx.facade.sessions.size).toBe(0);
+  });
+
+  it("resume-on-boot: a persisted opencode session reattaches to openCodeFacade, not the default facade", async () => {
     const openCodeFacade = new FakeSdkFacade();
     const resumed = await start({
       coreOpts: { openCodeFacade },
@@ -1584,7 +1674,7 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
         await registry.upsert({
           sessionId: 'oc-persisted-1',
           sdkSessionId: 'oc-sdk-persisted',
-          backend: 'opencode',
+          agent: 'opencode',
           cwd: '/work/proj',
           title: 'Old OpenCode work',
           project: 'proj',
@@ -1603,29 +1693,29 @@ describe('BridgeCore — OpenCode backend selection (Task 2)', () => {
     await waitFor(() => resumed.core.registry.get('oc-persisted-1')?.state === 'idle');
   });
 
-  it("models-request with backend: 'opencode' answers from openCodeFacade's list, not the default facade's, and echoes backend", async () => {
+  it("models-request on the opencode agent answers from openCodeFacade's list, not the default facade's, and echoes the agent", async () => {
     const openCodeFacade = new FakeSdkFacade();
     openCodeFacade.models = [{ id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet (via OpenCode)' }];
     const ctx = await start({ coreOpts: { openCodeFacade } });
     ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
 
-    sendCommand(ctx, { type: 'models-request', backend: 'opencode' });
+    sendCommand(ctx, { type: 'models-request', agent: 'opencode' });
     await waitFor(() => ofType(ctx, 'models').length === 1);
     const msg = ofType(ctx, 'models')[0]!;
     expect(msg.models).toEqual([{ id: 'anthropic/claude-sonnet-4-6', label: 'Sonnet (via OpenCode)' }]);
-    expect(msg.backend).toBe('opencode');
+    expect(msg.agent).toBe('opencode');
   });
 
-  it("models-request with backend: 'opencode' and NO openCodeFacade configured → empty list + reason, never the default facade's list", async () => {
+  it("models-request on the opencode agent and NO openCodeFacade configured → empty list + reason, never the default facade's list", async () => {
     const ctx = await start(); // no openCodeFacade
     ctx.facade.models = [{ id: 'claude-opus-4', label: 'Opus' }];
 
-    sendCommand(ctx, { type: 'models-request', backend: 'opencode' });
+    sendCommand(ctx, { type: 'models-request', agent: 'opencode' });
     await waitFor(() => ofType(ctx, 'models').length === 1);
     const msg = ofType(ctx, 'models')[0]!;
     expect(msg.models).toEqual([]);
     expect(msg.error).toMatch(/no OpenCode backend configured/);
-    expect(msg.backend).toBe('opencode');
+    expect(msg.agent).toBe('opencode');
   });
 });
 
@@ -1901,6 +1991,7 @@ describe('BridgeCore — transcript retention (CDX-013)', () => {
         await registry.upsert({
           sessionId: 'live-sess',
           sdkSessionId: null,
+          agent: 'claude-code',
           cwd: path.join(stateDir, '..', 'workspace'),
           title: null,
           project: 'p',

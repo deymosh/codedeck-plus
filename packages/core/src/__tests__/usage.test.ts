@@ -22,17 +22,18 @@ describe('normalizeUsage', () => {
     };
 
     const u = normalizeUsage(res, NOW);
+    // Labelled windows in display order; absent/null windows are omitted, not fabricated.
     expect(u).toEqual({
       available: true,
-      subscriptionType: 'max',
-      fiveHour: { utilization: 42, resetsAt: '2026-08-05T15:00:00Z' },
-      sevenDay: { utilization: 10, resetsAt: '2026-08-10T00:00:00Z' },
-      sevenDayOpus: { utilization: 5, resetsAt: '2026-08-10T00:00:00Z' },
+      plan: 'max',
+      windows: [
+        { label: '5h', utilization: 42, resetsAt: '2026-08-05T15:00:00Z' },
+        { label: '7d', utilization: 10, resetsAt: '2026-08-10T00:00:00Z' },
+        { label: '7d Opus', utilization: 5, resetsAt: '2026-08-10T00:00:00Z' },
+      ],
       sessionCostUsd: 1.23,
       fetchedAt: '2026-08-05T12:00:00.000Z',
     });
-    // Absent/null windows are omitted, not fabricated.
-    expect(u).not.toHaveProperty('sevenDaySonnet');
   });
 
   it('handles a non-subscription (API-key) session', () => {
@@ -45,7 +46,7 @@ describe('normalizeUsage', () => {
     const u = normalizeUsage(res, NOW);
     expect(u).toEqual({
       available: false,
-      subscriptionType: null,
+      windows: [],
       fetchedAt: '2026-08-05T12:00:00.000Z',
     });
   });
@@ -55,7 +56,7 @@ describe('normalizeUsage', () => {
       rate_limits_available: true,
       rate_limits: { five_hour: { utilization: null, resets_at: null } },
     }, NOW);
-    expect(u?.fiveHour).toEqual({ utilization: null, resetsAt: null });
+    expect(u?.windows).toEqual([{ label: '5h', utilization: null, resetsAt: null }]);
   });
 
   it('returns null for shapes the experimental SDK might no longer produce', () => {

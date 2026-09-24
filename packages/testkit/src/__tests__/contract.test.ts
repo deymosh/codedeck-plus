@@ -42,7 +42,7 @@ import { FakeSdkFacade } from '../fakeSdk';
 import { InMemoryRelay } from '../inMemoryRelay';
 import { ManualTimers } from '../manualTimers';
 import { inMemoryPoolFactory } from '../relayPool';
-import { PhoneSimulator } from '../phoneSimulator';
+import { entryText, PhoneSimulator } from '../phoneSimulator';
 
 // --- Harness ---
 
@@ -306,26 +306,35 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
       const card = world.sim.permissionCards(sessionId)[0]!;
       expect(card.toolName).toBe('Bash');
       expect(card.requestId).toBe('tu-perm-1');
-      world.sim.permissionResponse(sessionId, card.requestId, true);
+      expect(card.options).toEqual(['allow', 'allow_always', 'deny']);
+      world.sim.permissionResponse(sessionId, card.requestId, 'allow');
       await expect(permissionPromise).resolves.toMatchObject({ behavior: 'allow' });
 
       // Plan approval round trip: pending ExitPlanMode surfaces as
-      // waiting_permission; keypress '1' approves + flips to acceptEdits.
+      // waiting_permission; approving with `acceptEdits` flips the mode.
       const planPromise = askPermission(facade1, sessionId, 'ExitPlanMode', { plan: 'the plan' }, 'tu-plan-1');
       await world.sim.until(
         () => world.sim.session(sessionId)?.info.state === 'waiting_permission',
         { label: 'plan pending visible' },
       );
-      world.sim.approvePlan(sessionId, '1');
+      world.sim.respondPlan(sessionId, 'tu-plan-1', 'acceptEdits');
       await expect(planPromise).resolves.toMatchObject({ behavior: 'allow' });
       await world.sim.until(
-        () => world.sim.receivedOfType('mode-confirmed').some((m) => m.mode === 'acceptEdits'),
+        () => world.sim.receivedOfType('option-confirmed')
+          .some((m) => m.option === 'mode' && m.value === 'acceptEdits'),
         { label: 'acceptEdits confirmed' },
       );
       expect(facade1.session(sessionId).modes).toContain('acceptEdits');
+      // Both cards were closed with a resolved entry.
+      await world.sim.until(
+        () => world.sim.resolvedCards(sessionId).size === 2,
+        { label: 'cards resolved' },
+      );
+      expect(world.sim.resolvedCards(sessionId).get('tu-perm-1')).toBe('Allowed');
 
       facade1.emit(sessionId, assistantMsg(`sdk-${sessionId}`, 'work done'));
-      const preRestartHigh = 4; // init, hello, permission card, work done
+      // init, hello, permission card, its resolution, plan card, its resolution, work done
+      const preRestartHigh = 7;
       await world.sim.until(
         () => world.sim.hasContiguousTranscript(sessionId, preRestartHigh),
         { label: 'pre-restart transcript' },
@@ -516,7 +525,7 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
       () => world.sim.session(sessionId)?.info.state === 'waiting_permission',
       { label: 'waiting_permission visible' },
     );
-    world.sim.permissionResponse(sessionId, 'tu-d1', false);
+    world.sim.permissionResponse(sessionId, 'tu-d1', 'deny');
     await expect(pending).resolves.toMatchObject({ behavior: 'deny' });
     await world.sim.until(() => world.sim.session(sessionId)?.info.state === 'running', { label: 'back to running' });
 
@@ -528,8 +537,10 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
         type: 'sessions',
         machine: 'contract-machine',
         sessions: [],
+        agents: [],
+        credentials: [],
         protocolVersion: PROTOCOL_VERSION,
-      } as BridgeToPhoneMessage)),
+      } satisfies BridgeToPhoneMessage)),
       SESSION_LIST_KIND,
       [['d', 'contract-machine']],
     );
@@ -713,9 +724,11 @@ describe('contract: BridgeCore ⇄ PhoneSimulator over the in-memory relay', () 
     const usage = world.sim.receivedOfType('usage')[0]!;
     expect(usage.sessionId).toBe(sessionId);
     expect(usage.usage.available).toBe(true);
-    expect(usage.usage.subscriptionType).toBe('max');
-    expect(usage.usage.fiveHour).toEqual({ utilization: 61, resetsAt: '2026-08-05T15:00:00Z' });
-    expect(usage.usage.sevenDay).toEqual({ utilization: 12, resetsAt: '2026-08-10T00:00:00Z' });
+    expect(usage.usage.plan).toBe('max');
+    expect(usage.usage.windows).toEqual([
+      { label: '5h', utilization: 61, resetsAt: '2026-08-05T15:00:00Z' },
+      { label: '7d', utilization: 12, resetsAt: '2026-08-10T00:00:00Z' },
+    ]);
     expect(usage.usage.sessionCostUsd).toBe(2.5);
     // Codec-validated on arrival — zero invalid payloads.
     expect(world.sim.receivedInvalid).toEqual([]);
@@ -738,9 +751,11 @@ describe('contract: custom provider profiles (CDX-062)', () => {
     });
     world.sim.connect();
 
-    // The bridge advertises the capability the phone must gate on.
-    await world.sim.until(() => world.sim.capabilities.includes('custom-providers'),
-      { label: 'custom-providers capability advertised' });
+    // The agent catalog tells the phone which agent takes provider profiles.
+    await world.sim.until(
+      () => world.sim.lastSessionList?.agents.some((a) => a.id === 'claude-code' && a.supports.providers) === true,
+      { label: 'provider support advertised in the agent catalog' },
+    );
 
     // 1. Store the profile from the phone.
     world.sim.setProviderProfile('kimi', {
@@ -877,7 +892,7 @@ describe('contract: custom provider profiles (CDX-062)', () => {
       expect(world.sim.transcriptSeqs(sessionId)).toEqual([1, 2]);
       const [bridgeLine] = await core.transcript.readRange(sessionId, [2, 2]);
       expect(world.sim.transcriptEntries(sessionId).find((e) => e.seq === 2)).toEqual(bridgeLine);
-      expect(world.sim.transcriptEntries(sessionId).find((e) => e.seq === 2)!.entry.content).toBe(huge);
+      expect(world.sim.transcriptEntries(sessionId).find((e) => e.seq === 2)!.entry).toMatchObject({ text: huge });
 
       // Nothing oversize ever reached the relay, and no fragment failed to decode.
       expect(world.relay.refusedOversize).toBe(0);
@@ -891,7 +906,7 @@ describe('contract: custom provider profiles (CDX-062)', () => {
         () => world.sim.hasContiguousTranscript(sessionId, 4),
         { label: 'consecutive small outputs' },
       );
-      expect(world.sim.transcriptEntries(sessionId).map((e) => e.entry.content)).toEqual([
+      expect(world.sim.transcriptEntries(sessionId).map((e) => entryText(e.entry))).toEqual([
         expect.any(String), // init banner
         huge,
         'small A',
@@ -911,7 +926,7 @@ describe('contract: custom provider profiles (CDX-062)', () => {
         () => fresh.hasContiguousTranscript(sessionId, 4),
         { label: 'catch-up sync rebuilt the oversize entry' },
       );
-      expect(fresh.transcriptEntries(sessionId).find((e) => e.seq === 2)!.entry.content).toBe(huge);
+      expect(fresh.transcriptEntries(sessionId).find((e) => e.seq === 2)!.entry).toMatchObject({ text: huge });
       expect(fresh.receivedInvalid).toEqual([]);
       expect(world.relay.refusedOversize).toBe(0);
     },

@@ -1,15 +1,16 @@
 /**
- * Translates Claude Agent SDK messages into Codedeck OutputEntry objects.
+ * Translates Claude Agent SDK messages into protocol v11 `OutputEntry`
+ * objects — typed, agent-neutral transcript entries the Nostr layer publishes
+ * to the phone.
  *
- * The SDK emits typed SDKMessage objects (assistant, user, result, system,
- * etc.) on its async generator. This module maps them into the OutputEntry
- * format that the Nostr layer publishes to the phone app.
- *
- * Ported faithfully from the old bridge's sdkAdapter.ts (battle-tested);
- * only the imports changed: OutputEntry now comes from @codedeck/protocol and
- * SDK types come through the sdk/facade seam.
+ * Interactive cards (permission requests, questions, plan approval) are NOT
+ * produced here: the permission broker emits them when the agent actually
+ * waits on the user, and resolves them when it stops waiting. This module only
+ * hides the tool calls behind those cards so they do not also render as
+ * ordinary tool actions.
  */
-import type { DiffData, DiffLine, OutputEntry } from '@codedeck/protocol';
+import type { DiffLine, OutputEntry, Subagent } from '@codedeck/protocol';
+import { toolKindOf, toolLocations, toolTitle } from '../agents';
 import type {
   SdkMessage,
   SdkAssistantMessage,
@@ -20,27 +21,37 @@ import type {
   SdkSessionStateChangedMessage,
 } from './facade';
 
-export interface AdapterOptions {
-  /**
-   * CDX-050: also emit an `entryType: 'diff'` entry (colored diff card) after
-   * each Edit/Write/MultiEdit tool_use. Default false — a pre-CDX-050 phone
-   * hard-fails zod on the unknown entryType, so the caller must only enable
-   * this once every known phone advertised the 'diff' capability. The tool_use
-   * entry is ALWAYS kept alongside (the tool group never loses its action).
-   */
-  emitDiffEntries?: boolean;
+/** Per-session state a translator keeps across messages. */
+export interface TranslateContext {
+  /** Tool-call ids whose call and result are not shown as tool actions
+   *  (questions and plan approval render as their own cards). */
+  hiddenCallIds: Set<string>;
 }
+
+export function newTranslateContext(): TranslateContext {
+  return { hiddenCallIds: new Set() };
+}
+
+/** A tool result's text is capped so one entry stays well inside a relay event. */
+export const MAX_TOOL_RESULT_CHARS = 2000;
+
+export function truncateToolResult(text: string): string {
+  return text.length > MAX_TOOL_RESULT_CHARS ? text.slice(0, MAX_TOOL_RESULT_CHARS) + '...[truncated]' : text;
+}
+
+/** Tools whose call renders as a dedicated card instead of a tool action. */
+const CARD_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
 /**
  * Convert a single SDKMessage into zero or more OutputEntry objects.
- * Returns empty array for message types we don't relay (stream_event, etc.).
+ * Returns an empty array for message types we don't relay (stream_event, …).
  */
-export function sdkMessageToEntries(msg: SdkMessage, opts?: AdapterOptions): OutputEntry[] {
+export function sdkMessageToEntries(msg: SdkMessage, ctx: TranslateContext): OutputEntry[] {
   switch (msg.type) {
     case 'assistant':
-      return parseAssistant(msg as SdkAssistantMessage, opts);
+      return parseAssistant(msg as SdkAssistantMessage, ctx);
     case 'user':
-      return parseUser(msg as SdkUserMessage);
+      return parseUser(msg as SdkUserMessage, ctx);
     case 'result':
       return parseResult(msg as SdkResultMessage);
     case 'system':
@@ -51,158 +62,108 @@ export function sdkMessageToEntries(msg: SdkMessage, opts?: AdapterOptions): Out
   }
 }
 
-function parseAssistant(msg: SdkAssistantMessage, opts?: AdapterOptions): OutputEntry[] {
+function subagentField(isSubAgent: boolean): { subagent?: Subagent } {
+  return isSubAgent ? { subagent: {} } : {};
+}
+
+function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): OutputEntry[] {
   const entries: OutputEntry[] = [];
   const ts = new Date().toISOString();
-  const model = msg.message.model;
 
-  // Check if this message contains tool_use blocks (excluding ExitPlanMode/AskUserQuestion
-  // which are handled as special cards, not collapsible tool actions)
+  // Text written alongside tool calls (or by a sub-agent) folds into the tool
+  // group; a message that is only text is the agent's answer and stands alone.
   const hasToolUse = msg.message.content.some(
-    (b: { type: string; name?: string }) =>
-      b.type === 'tool_use' && b.name !== 'ExitPlanMode' && b.name !== 'AskUserQuestion',
+    (b: { type: string; name?: string }) => b.type === 'tool_use' && !CARD_TOOLS.has(b.name ?? ''),
   );
-  // Sub-agent messages have a non-null parent_tool_use_id
+  // Sub-agent messages have a non-null parent_tool_use_id.
   const isSubAgent = !!msg.parent_tool_use_id;
-
-  // display_hint tells the phone whether to collapse text into tool groups or show it
-  // - 'collapse': text accompanies tool calls → hide under "X actions"
-  // - 'show': text is Claude's standalone response → show as full message
-  const displayHint = (hasToolUse || isSubAgent) ? 'collapse' : 'show';
+  const collapsible = hasToolUse || isSubAgent;
 
   for (const block of msg.message.content) {
     if (block.type === 'text') {
       entries.push({
         entryType: 'text',
-        content: block.text,
+        role: 'agent',
+        text: block.text,
         timestamp: ts,
-        metadata: {
-          role: 'assistant',
-          model,
-          display_hint: displayHint,
-          ...(isSubAgent ? { subagent: true } : {}),
-        },
+        ...(collapsible ? { collapsible: true } : {}),
+        ...subagentField(isSubAgent),
       });
     } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {
-      // Extended-thinking blocks get their own entry kind (previously dropped —
-      // the 3c phone UI noted the gap). Redacted thinking has no readable text;
-      // it is marked so the phone can render a placeholder instead of nothing.
+      // Redacted thinking has no readable text; the flag lets the phone show a
+      // placeholder instead of nothing.
       const redacted = block.type === 'redacted_thinking';
       entries.push({
         entryType: 'thinking',
-        content: redacted ? '' : (block as { thinking?: string }).thinking ?? '',
+        text: redacted ? '' : (block as { thinking?: string }).thinking ?? '',
         timestamp: ts,
-        metadata: {
-          role: 'assistant',
-          model,
-          ...(redacted ? { redacted: true } : {}),
-          ...(isSubAgent ? { subagent: true } : {}),
-        },
+        ...(redacted ? { redacted: true } : {}),
+        ...subagentField(isSubAgent),
       });
     } else if (block.type === 'tool_use') {
-      // Special handling for ExitPlanMode and AskUserQuestion
+      const input = (block.input ?? {}) as Record<string, unknown>;
       if (block.name === 'ExitPlanMode') {
-        const input = block.input as Record<string, unknown>;
-        const plan = (input.plan as string) || '';
-        if (plan) {
-          entries.push({
-            entryType: 'text',
-            content: plan,
-            timestamp: ts,
-            metadata: { role: 'assistant', model, special: 'plan', tool_use_id: block.id },
-          });
-        }
-        entries.push({
-          entryType: 'system',
-          content: 'Plan approval needed',
-          timestamp: ts,
-          metadata: { special: 'plan_approval', tool_use_id: block.id, has_plan: !!plan },
-        });
+        ctx.hiddenCallIds.add(block.id);
+        const plan = typeof input.plan === 'string' ? input.plan : '';
+        if (plan) entries.push({ entryType: 'plan', text: plan, timestamp: ts });
       } else if (block.name === 'AskUserQuestion') {
-        const input = block.input as Record<string, unknown>;
-        const questions = (input.questions as AskQuestionSpec[]) || [];
-        entries.push(...askQuestionEntries(block.id, questions, ts));
+        ctx.hiddenCallIds.add(block.id);
       } else {
         entries.push({
-          entryType: 'tool_use',
-          content: formatToolInput(block.name, block.input as Record<string, unknown>),
+          entryType: 'tool_call',
+          callId: block.id,
+          toolName: block.name,
+          kind: toolKindOf(block.name),
+          title: toolTitle(block.name, input),
+          ...withLocations(toolLocations(input)),
+          rawInput: block.input,
           timestamp: ts,
-          metadata: {
-            role: 'assistant',
-            tool_name: block.name,
-            tool_use_id: block.id,
-            tool_input: block.input,
-            ...(isSubAgent ? { subagent: true } : {}),
-          },
+          ...subagentField(isSubAgent),
         });
-        // CDX-050: colored diff card for file edits — emitted IN ADDITION to
-        // the tool_use above (the legacy bridge did the same: the tool group
-        // keeps its action, the diff renders as its own card). Gated on the
-        // phone-side 'diff' capability by the caller.
-        if (opts?.emitDiffEntries) {
-          const diff = extractDiff(block.name, block.input as Record<string, unknown>);
-          if (diff) {
-            entries.push({
-              entryType: 'diff',
-              content: renderDiffFallback(diff),
-              timestamp: ts,
-              metadata: {
-                role: 'assistant',
-                tool_name: block.name,
-                tool_use_id: block.id,
-                ...(isSubAgent ? { subagent: true } : {}),
-              },
-              diff,
-            });
-          }
+        // A colored diff card for file edits, alongside the tool call (the
+        // tool group keeps its action; the diff renders as its own card).
+        const diff = extractDiff(block.name, input);
+        if (diff) {
+          entries.push({
+            entryType: 'diff',
+            ...diff,
+            callId: block.id,
+            timestamp: ts,
+            ...subagentField(isSubAgent),
+          });
         }
       }
     }
   }
 
-  // Token usage
-  if (msg.message.usage) {
-    entries.push({
-      entryType: 'system',
-      content: `Tokens: ${msg.message.usage.input_tokens} in / ${msg.message.usage.output_tokens} out`,
-      timestamp: ts,
-      metadata: { usage: msg.message.usage },
-    });
-  }
-
   return entries;
 }
 
-function parseUser(msg: SdkUserMessage): OutputEntry[] {
+function withLocations(locations: string[]): { locations?: string[] } {
+  return locations.length > 0 ? { locations } : {};
+}
+
+function parseUser(msg: SdkUserMessage, ctx: TranslateContext): OutputEntry[] {
   const entries: OutputEntry[] = [];
   const ts = new Date().toISOString();
   const content = msg.message.content;
-  // Sub-agent prompts have a non-null parent_tool_use_id — collapse them into tool groups
+  // A sub-agent's prompt comes from the main agent, not the user: it folds
+  // into the tool group as agent text.
   const isSubAgent = !!msg.parent_tool_use_id;
-  const textMeta = isSubAgent
-    ? { role: 'assistant' as const, subagent: true, display_hint: 'collapse' as const }
-    : { role: 'user' as const };
+  const text = (t: string): OutputEntry =>
+    isSubAgent
+      ? { entryType: 'text', role: 'agent', text: t, collapsible: true, subagent: {}, timestamp: ts }
+      : { entryType: 'text', role: 'user', text: t, timestamp: ts };
 
-  // content can be string or array of content blocks
   if (typeof content === 'string') {
-    entries.push({
-      entryType: 'text',
-      content,
-      timestamp: ts,
-      metadata: textMeta,
-    });
+    entries.push(text(content));
   } else if (Array.isArray(content)) {
     for (const block of content) {
       if (block.type === 'text') {
-        entries.push({
-          entryType: 'text',
-          content: block.text,
-          timestamp: ts,
-          metadata: textMeta,
-        });
+        entries.push(text(block.text));
       } else if (block.type === 'tool_result') {
-        // tool_result content can be string or array
-        const text = typeof block.content === 'string'
+        if (ctx.hiddenCallIds.has(block.tool_use_id)) continue;
+        const resultText = typeof block.content === 'string'
           ? block.content
           : Array.isArray(block.content)
             ? block.content
@@ -210,12 +171,13 @@ function parseUser(msg: SdkUserMessage): OutputEntry[] {
                 .map((c: { text: string }) => c.text)
                 .join('\n')
             : '';
-        if (text) {
+        if (resultText) {
           entries.push({
             entryType: 'tool_result',
-            content: text.length > 2000 ? text.slice(0, 2000) + '...[truncated]' : text,
+            callId: block.tool_use_id,
+            text: truncateToolResult(resultText),
+            ...(block.is_error ? { isError: true } : {}),
             timestamp: ts,
-            metadata: { tool_use_id: block.tool_use_id },
           });
         }
       }
@@ -232,27 +194,24 @@ function parseResult(msg: SdkResultMessage): OutputEntry[] {
     const errorMsg = msg as SdkResultError;
     return [{
       entryType: 'error',
-      content: errorMsg.errors?.join('\n') || msg.subtype,
+      text: errorMsg.errors?.join('\n') || msg.subtype,
       timestamp: ts,
-      metadata: { error_type: msg.subtype },
+      agentExtras: { errorType: msg.subtype },
     }];
   }
   // When several queued background-task completions are answered by one
   // model call, the SDK still emits a result per completion, but every one
   // except the last is empty (num_turns: 0). Those carry no turn and no cost,
-  // so they get no "Session complete" row.
+  // so they get no summary row.
   if (msg.num_turns === 0) return [];
-  // Success result — emit cost summary
   return [{
-    entryType: 'system',
-    content: `Session complete — ${msg.num_turns} turns, $${msg.total_cost_usd.toFixed(4)}`,
+    entryType: 'status',
+    text: `Session complete — ${msg.num_turns} turns, $${msg.total_cost_usd.toFixed(4)}`,
     timestamp: ts,
-    metadata: {
-      subtype: 'result',
-      duration_ms: msg.duration_ms,
-      num_turns: msg.num_turns,
-      total_cost_usd: msg.total_cost_usd,
-      usage: msg.usage,
+    agentExtras: {
+      durationMs: msg.duration_ms,
+      numTurns: msg.num_turns,
+      totalCostUsd: msg.total_cost_usd,
     },
   }];
 }
@@ -260,31 +219,18 @@ function parseResult(msg: SdkResultMessage): OutputEntry[] {
 function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): OutputEntry[] {
   if (msg.subtype === 'init') {
     return [{
-      entryType: 'system',
-      content: `Claude Code ${msg.claude_code_version} (${msg.model})`,
+      entryType: 'status',
+      text: `Claude Code ${msg.claude_code_version} (${msg.model})`,
       timestamp: new Date().toISOString(),
-      metadata: {
-        subtype: 'init',
-        model: msg.model,
-        version: msg.claude_code_version,
-        tools: msg.tools,
-        permissionMode: msg.permissionMode,
-      },
     }];
   }
 
-  // Emit stream_end when SDK reports session is idle (turn complete).
-  // This is the authoritative signal that Claude finished responding and is
-  // waiting for user input. The phone uses stream_end to show the unread dot.
+  // The SDK reporting the session idle is the authoritative "turn over,
+  // waiting for input" signal (the phone's unread dot / notification).
   if (msg.subtype === 'session_state_changed') {
     const stateMsg = msg as unknown as { state: string };
     if (stateMsg.state === 'idle') {
-      return [{
-        entryType: 'system',
-        content: '',
-        timestamp: new Date().toISOString(),
-        metadata: { stream_end: true },
-      }];
+      return [{ entryType: 'turn_complete', timestamp: new Date().toISOString() }];
     }
     return [];
   }
@@ -294,12 +240,17 @@ function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): Out
 
 // --- Diff extraction (CDX-050) ---
 
-/** Wire caps: keep a diff entry comfortably inside one relay event. Exported
- *  so opencodeAdapter.ts's own diff rendering (OpenCode's FileDiff carries
- *  whole-file before/after text, not a snippet) shares the same truncation
- *  budget instead of picking its own. */
+/** Wire caps: keep a diff entry comfortably inside one relay event. Shared
+ *  with opencodeAdapter.ts, whose diffs carry whole-file text. */
 export const MAX_DIFF_LINES = 200;
 export const MAX_DIFF_LINE_CHARS = 500;
+
+/** A diff entry's payload (its path, lines, and whether lines were dropped). */
+export interface DiffPayload {
+  path: string;
+  lines: DiffLine[];
+  truncated?: boolean;
+}
 
 export function toDiffLines(text: string, type: DiffLine['type']): DiffLine[] {
   return text.split('\n').map((line) => ({
@@ -309,15 +260,12 @@ export function toDiffLines(text: string, type: DiffLine['type']): DiffLine[] {
 }
 
 /**
- * Build the structured diff payload from an Edit/Write/MultiEdit tool INPUT
+ * Build the diff payload from an Edit/Write/MultiEdit tool INPUT
  * (old_string/new_string/content — what the SDK message actually carries;
  * there are no line numbers, so this is a lines array, not unified hunks).
  * Returns null for non-edit tools or unusable input.
  */
-export function extractDiff(
-  toolName: string,
-  input: Record<string, unknown>,
-): DiffData | null {
+export function extractDiff(toolName: string, input: Record<string, unknown>): DiffPayload | null {
   const path = typeof input.file_path === 'string' ? input.file_path : '';
   if (!path) return null;
 
@@ -358,16 +306,8 @@ export function extractDiff(
   };
 }
 
-/** Plain-text +/− rendering of the diff — the entry's `content` fallback.
- *  Exported for opencodeAdapter.ts's diff entries to share the same
- *  rendering rather than duplicating it. */
-export function renderDiffFallback(diff: DiffData): string {
-  const prefix = { add: '+', del: '-', context: ' ' } as const;
-  return diff.lines.map((l) => prefix[l.type] + l.text).join('\n');
-}
-
-/** One question in an AskUserQuestion-shaped ask — Claude Code's own
- *  tool input, and what the OpenCode facade maps OpenCode's questions to. */
+/** One question in an AskUserQuestion-shaped ask — Claude Code's own tool
+ *  input, and what the OpenCode facade maps OpenCode's questions to. */
 export interface AskQuestionSpec {
   question: string;
   header?: string;
@@ -375,49 +315,22 @@ export interface AskQuestionSpec {
   multiSelect?: boolean;
 }
 
-/** The phone's question card: one `special: 'ask_question'` system entry per
- *  question, grouped by `toolUseId`. A later `tool_result` carrying the same
- *  id marks the card answered. Shared by both backends so a question renders
+/** The phone's question card: one `question` entry per question of the ask,
+ *  all sharing `requestId`. Shared by both agents so a question renders
  *  identically whoever asked it. */
-export function askQuestionEntries(toolUseId: string, questions: AskQuestionSpec[], ts: string): OutputEntry[] {
-  return questions.map((q, qi) => ({
-    entryType: 'system',
-    content: q.question,
+export function askQuestionEntries(requestId: string, questions: AskQuestionSpec[], ts: string): OutputEntry[] {
+  return questions.map((q, index) => ({
+    entryType: 'question',
+    requestId,
+    index,
+    count: questions.length,
+    ...(q.header ? { header: q.header } : {}),
+    question: q.question,
+    options: (q.options ?? []).map((o) => ({
+      label: o.label,
+      ...(o.description ? { description: o.description } : {}),
+    })),
+    ...(q.multiSelect ? { multiSelect: true } : {}),
     timestamp: ts,
-    metadata: {
-      special: 'ask_question',
-      tool_use_id: toolUseId,
-      header: q.header,
-      options: q.options,
-      multiSelect: q.multiSelect,
-      question_index: qi,
-      question_count: questions.length,
-    },
   }));
-}
-
-function formatToolInput(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName) {
-    case 'Bash':
-      return `Bash: ${input.command || ''}`;
-    case 'Read':
-      return `Read: ${input.file_path || ''}`;
-    case 'Write':
-      return `Write: ${input.file_path || ''}`;
-    case 'Edit':
-      return `Edit: ${input.file_path || ''}`;
-    case 'Glob':
-      return `Glob: ${input.pattern || ''}`;
-    case 'Grep':
-      return `Grep: ${input.pattern || ''}`;
-    case 'Task':
-    case 'Agent':
-      return `${toolName}: ${input.description || ''} (${input.subagent_type || ''})`;
-    case 'WebSearch':
-      return `WebSearch: ${input.query || ''}`;
-    case 'WebFetch':
-      return `WebFetch: ${input.url || ''}`;
-    default:
-      return `${toolName}: ${JSON.stringify(input).slice(0, 200)}`;
-  }
 }

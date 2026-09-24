@@ -24,7 +24,21 @@ import type {
   Query,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
+
+/** A session's permission mode — one of its agent's advertised mode ids
+ *  (agents.ts). */
+export type PermissionMode = string;
+/** A session's reasoning-effort level — one of its agent's advertised effort
+ *  ids (agents.ts); `auto` = the model default. */
+export type EffortLevel = string;
+
+type ClaudePermissionMode = 'default' | 'acceptEdits' | 'plan';
+
+/** Narrow a tracked mode to what the Claude Code SDK accepts. Modes come from
+ *  the Claude Code catalog, so anything else falls back to `default`. */
+export function toClaudePermissionMode(mode: PermissionMode): ClaudePermissionMode {
+  return mode === 'plan' || mode === 'acceptEdits' ? mode : 'default';
+}
 
 // --- Re-exported SDK types (type-only; the seam for everyone else) ---
 export type {
@@ -627,7 +641,7 @@ export function buildQueryOptions(
   return {
     ...(opts.resume ? { resume: opts.resume } : claimOwnId ? { sessionId: opts.sessionId } : {}),
     cwd: opts.cwd,
-    permissionMode: opts.permissionMode,
+    permissionMode: toClaudePermissionMode(opts.permissionMode),
     abortController,
     canUseTool: opts.canUseTool,
     settingSources: ['user', 'project'],
@@ -720,7 +734,7 @@ class RealSdkSessionHandle implements SdkSessionHandle {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
-    await this.q.setPermissionMode(mode);
+    await this.q.setPermissionMode(toClaudePermissionMode(mode));
   }
 
   async setModel(model: string): Promise<void> {
@@ -732,7 +746,7 @@ class RealSdkSessionHandle implements SdkSessionHandle {
     // session-scoped 'max' — the old mid-session max→xhigh downgrade is
     // obsolete (CDB-029) and deliberately not ported. 'auto' → null resets to
     // the model default.
-    await this.q.applyFlagSettings({ effortLevel: level === 'auto' ? null : level });
+    await this.q.applyFlagSettings({ effortLevel: toOptionsEffort(level) ?? null });
   }
 
   async interrupt(): Promise<void> {

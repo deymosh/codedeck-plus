@@ -1,5 +1,6 @@
 /**
- * Bridge → phone messages.
+ * Bridge → phone messages — v11 mirror of `crates/protocol/src/events.rs`,
+ * which is authoritative.
  *
  * Storage class per message (see kinds.ts):
  * - `sessions` rides SESSION_LIST_KIND (replaceable heartbeat).
@@ -10,14 +11,13 @@
  */
 import { z } from 'zod';
 import {
-  authStatusSchema,
-  effortLevelSchema,
+  agentDescriptorSchema,
+  credentialStatusSchema,
   gsdStateSchema,
   outputEntrySchema,
-  permissionModeSchema,
   providerProfileInfoSchema,
   remoteSessionInfoSchema,
-  sessionBackendSchema,
+  sessionOptionSchema,
   usageDataSchema,
 } from './common';
 import { seqRangeSchema } from './commands';
@@ -30,7 +30,10 @@ export const sessionListMessageSchema = z.object({
   /** Which host binary publishes this list (UI badge; identity is the keypair). */
   host: z.enum(['cli', 'vscode', 'service']).optional(),
   sessions: z.array(remoteSessionInfoSchema),
-  authStatus: authStatusSchema.optional(),
+  /** The agent backends this bridge can run sessions on. */
+  agents: z.array(agentDescriptorSchema),
+  /** The bridge's own credentials (not tied to an agent), e.g. a GitHub token. */
+  credentials: z.array(credentialStatusSchema).default([]),
   protocolVersion: z.number().int().positive(),
   capabilities: z.array(z.string()).optional(),
   /** Project folders per workspace root, relative paths. Valid `create-session.cwd` values. */
@@ -158,22 +161,13 @@ export const sessionReplacedMessageSchema = z.object({
   newSession: remoteSessionInfoSchema,
 });
 
-export const modeConfirmedMessageSchema = z.object({
-  type: z.literal('mode-confirmed'),
+/** A session option now has `value` — the reply to `set-option`, and also
+ *  sent when the agent changes an option on its own (e.g. entering plan mode). */
+export const optionConfirmedMessageSchema = z.object({
+  type: z.literal('option-confirmed'),
   sessionId: z.string().min(1),
-  mode: permissionModeSchema,
-});
-
-export const effortConfirmedMessageSchema = z.object({
-  type: z.literal('effort-confirmed'),
-  sessionId: z.string().min(1),
-  level: effortLevelSchema,
-});
-
-export const modelConfirmedMessageSchema = z.object({
-  type: z.literal('model-confirmed'),
-  sessionId: z.string().min(1),
-  model: z.string().min(1),
+  option: sessionOptionSchema,
+  value: z.string(),
 });
 
 export const folderAckMessageSchema = z.object({
@@ -199,9 +193,11 @@ export const gsdStateMessageSchema = z.object({
   gsd: gsdStateSchema,
 });
 
-/** v10 (CDB-030): the SDK's live supported-model list. */
+/** An agent's live model list. */
 export const modelsMessageSchema = z.object({
   type: z.literal('models'),
+  /** Echoes the request's `agent`. */
+  agent: z.string().min(1),
   models: z.array(
     z.object({
       id: z.string().min(1),
@@ -210,26 +206,22 @@ export const modelsMessageSchema = z.object({
   ),
   defaultModel: z.string().optional(),
   /** CDX-035: why the bridge could not answer with a list. Set ONLY alongside
-   *  an empty `models` — an empty list is "could not answer", never "this SDK
-   *  supports zero models", so the phone shows the reason, keeps whatever list
-   *  it already had, and keeps re-requesting. Optional: older bridges omit it
-   *  and older phones ignore it, so the wire stays compatible both ways. */
+   *  an empty `models` — an empty list is "could not answer", never "this
+   *  agent supports zero models", so the phone shows the reason, keeps
+   *  whatever list it already had, and keeps re-requesting. */
   error: z.string().optional(),
-  /** Echoes the request's `backend` — lets a phone with two in-flight
-   *  requests (one per backend) tell which answer is which. Absent means
-   *  'claude-code'. */
-  backend: sessionBackendSchema.optional(),
 });
 
 // --- Credentials / device config / pairing ---
 
+/** Reply to `set-credentials`: the resulting status of every credential in
+ *  the written scope (`agent`, or the bridge's own when absent). */
 export const credentialsAckMessageSchema = z.object({
   type: z.literal('credentials-ack'),
   machine: z.string(),
+  agent: z.string().optional(),
   success: z.boolean(),
-  hasAnthropicKey: z.boolean(),
-  hasGithubPat: z.boolean(),
-  keyValid: z.boolean().optional(),
+  credentials: z.array(credentialStatusSchema),
   error: z.string().optional(),
 });
 
@@ -293,9 +285,7 @@ export const bridgeToPhoneSchema = z.union([
   inputFailedMessageSchema,
   closeSessionAckMessageSchema,
   sessionReplacedMessageSchema,
-  modeConfirmedMessageSchema,
-  effortConfirmedMessageSchema,
-  modelConfirmedMessageSchema,
+  optionConfirmedMessageSchema,
   folderAckMessageSchema,
   usageMessageSchema,
   gsdStateMessageSchema,
@@ -319,9 +309,7 @@ export type SessionFailedMessage = z.infer<typeof sessionFailedMessageSchema>;
 export type InputFailedMessage = z.infer<typeof inputFailedMessageSchema>;
 export type CloseSessionAckMessage = z.infer<typeof closeSessionAckMessageSchema>;
 export type SessionReplacedMessage = z.infer<typeof sessionReplacedMessageSchema>;
-export type ModeConfirmedMessage = z.infer<typeof modeConfirmedMessageSchema>;
-export type EffortConfirmedMessage = z.infer<typeof effortConfirmedMessageSchema>;
-export type ModelConfirmedMessage = z.infer<typeof modelConfirmedMessageSchema>;
+export type OptionConfirmedMessage = z.infer<typeof optionConfirmedMessageSchema>;
 export type FolderAckMessage = z.infer<typeof folderAckMessageSchema>;
 export type UsageMessage = z.infer<typeof usageMessageSchema>;
 export type GsdStateMessage = z.infer<typeof gsdStateMessageSchema>;

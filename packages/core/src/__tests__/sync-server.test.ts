@@ -12,7 +12,7 @@ import { TranscriptStore } from '../session/transcript';
 import { SyncServer, type SyncTimers } from '../sync/server';
 
 function entry(n: number): OutputEntry {
-  return { entryType: 'text', content: `entry ${n}`, timestamp: '2026-08-05T00:00:00Z' };
+  return { entryType: 'text', role: 'agent', text: `entry ${n}`, timestamp: '2026-08-05T00:00:00Z' };
 }
 
 /** Deterministic manual timers — the sync server's injectable clock seam. */
@@ -302,8 +302,8 @@ describe('SyncServer', () => {
     expect(chunk.entries.map((e) => e.seq)).toEqual(
       Array.from({ length: 40 }, (_, i) => 81 + i),
     );
-    expect(chunk.entries[0]?.entry.content).toBe('entry 81');
-    expect(chunk.entries[39]?.entry.content).toBe('entry 120');
+    expect(chunk.entries[0]?.entry).toMatchObject({ text: 'entry 81' });
+    expect(chunk.entries[39]?.entry).toMatchObject({ text: 'entry 120' });
 
     server.handleAck(ofType('sync-begin')[0]!.syncId, [81, 120]);
     await waitFor(() => ofType('sync-end').length === 1);

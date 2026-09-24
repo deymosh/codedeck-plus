@@ -13,8 +13,9 @@
  */
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { PermissionMode } from '@codedeck/protocol';
-import type { SdkPermissionResult, SdkPermissionUpdate } from '../sdk/facade';
+import type { PermissionOption } from '@codedeck/protocol';
+import { AUTO_APPROVE_MODE, permissionOptionsFor } from '../agents';
+import type { PermissionMode, SdkPermissionResult, SdkPermissionUpdate } from '../sdk/facade';
 
 // --- Security helpers (ported from old sdkSession.ts / deviceActions.ts) ---
 
@@ -137,7 +138,9 @@ export function redactSecrets(text: string): string {
 /** Per-call context the session runner passes alongside the SDK's canUseTool args. */
 export interface PermissionContext {
   sessionId: string;
-  /** The session's CURRENT tracked permission mode. */
+  /** The agent the session runs on (decides which permission choices apply). */
+  agent: string;
+  /** The session's CURRENT tracked mode (an agent mode id). */
   permissionMode: PermissionMode;
   /** True when this session has the on-device adb MCP tools (device-test session).
    *  Enforces the secret-path deny-list regardless of permission mode. */
@@ -161,6 +164,8 @@ export interface PermissionCard {
   toolInput: Record<string, unknown>;
   title?: string;
   description?: string;
+  /** The choices the phone may answer with. */
+  options: PermissionOption[];
   /** Opaque sub-agent ID if this tool call originates inside a sub-agent. */
   agentId?: string;
   /** True when the request came from a sub-agent rather than the top-level turn. */
@@ -179,11 +184,14 @@ export interface QuestionSpec {
 export interface PermissionBrokerCallbacks {
   /** A generic tool call needs phone approval — publish a permission card. */
   onPermissionCard: (card: PermissionCard) => void;
-  /** An AskUserQuestion is blocking the turn — publish a question card. */
-  onQuestionCard: (sessionId: string, toolUseId: string, questions: QuestionSpec[]) => void;
-  /** An ExitPlanMode is pending — publish the dedicated plan card (the generic
+  /** An AskUserQuestion is blocking the turn — publish its question card. */
+  onQuestionCard: (sessionId: string, requestId: string, questions: QuestionSpec[]) => void;
+  /** An ExitPlanMode is pending — publish the plan approval card (the generic
    *  permission card is suppressed for it). */
-  onPlanCard: (sessionId: string, toolUseId: string) => void;
+  onPlanCard: (sessionId: string, requestId: string) => void;
+  /** A card stopped waiting — answered, timed out or drained. `summary` is a
+   *  short human description of the outcome. */
+  onResolved: (sessionId: string, requestId: string, summary: string) => void;
   /** The SDK autonomously changed permission mode (EnterPlanMode). The owner of
    *  the session state must update its tracked mode. */
   onAutoModeChange: (sessionId: string, mode: PermissionMode) => void;
@@ -202,6 +210,9 @@ export interface PermissionBrokerOptions {
 interface PendingPermission {
   sessionId: string;
   toolName: string;
+  /** A plan approval (ExitPlanMode) rather than a permission card. */
+  plan: boolean;
+  options: PermissionOption[];
   resolve: (result: SdkPermissionResult) => void;
 }
 
@@ -211,10 +222,8 @@ interface PendingQuestion {
   input: Record<string, unknown>;
   /** The questions array from the tool input. */
   questions: QuestionSpec[];
-  /** Accumulated answers so far (question text → selected answer). */
-  answers: Record<string, string>;
-  /** Number of answers still needed before resolving. */
-  remaining: number;
+  /** Answers so far, by question index. */
+  answers: Map<number, string>;
   /** Resolves the canUseTool promise with the collected answers. */
   resolve: (result: SdkPermissionResult) => void;
 }
@@ -227,16 +236,18 @@ export const DEFAULT_PERMISSION_TIMEOUT_MS = 60 * 60 * 1000;
  *  1. test-session secret-path hard deny (mode-independent)
  *  2. AskUserQuestion → pending-question promise + question card
  *  3. EnterPlanMode → auto-allow + tracked-mode flip callback
- *  4. mode 'default' → allow everything (YOLO)
+ *  4. auto-approve mode → allow everything (YOLO)
  *  5. narrow benign plans-dir write auto-allow
- *  6. ExitPlanMode → pending permission, dedicated plan card (generic card suppressed)
+ *  6. ExitPlanMode → pending permission, plan approval card (generic card suppressed)
  *  7. everything else → pending permission + permission card
+ *
+ * Every card it publishes is later closed by exactly one `onResolved`.
  */
 export class PermissionBroker {
   private readonly callbacks: PermissionBrokerCallbacks;
   private readonly timeoutMs: number;
 
-  /** Pending generic permissions, keyed by toolUseId (globally unique per SDK call). */
+  /** Pending permissions and plan approvals, keyed by toolUseId (globally unique per SDK call). */
   private pendingPermissions = new Map<string, PendingPermission>();
   /** Pending AskUserQuestion groups, keyed by toolUseId. */
   private pendingQuestions = new Map<string, PendingQuestion>();
@@ -256,6 +267,7 @@ export class PermissionBroker {
     options: PermissionCallOptions,
   ): Promise<SdkPermissionResult> {
     const { sessionId } = ctx;
+    const requestId = options.toolUseID;
 
     // SECURITY: device-test sessions run with full Read/Bash/Grep and (in YOLO mode) auto-approve.
     // Hard-deny any tool call that touches signing keystores / secret files, BEFORE the mode check,
@@ -273,13 +285,14 @@ export class PermissionBroker {
     // The SDK expects answers via updatedInput.answers (keyed by the FULL question text).
     if (toolName === 'AskUserQuestion') {
       const rawQuestions = (toolInput.questions as QuestionSpec[]) || [];
-      this.callbacks.onQuestionCard(sessionId, options.toolUseID, rawQuestions);
+      this.callbacks.onQuestionCard(sessionId, requestId, rawQuestions);
 
       return new Promise<SdkPermissionResult>((resolve) => {
         const timer = setTimeout(() => {
-          this.removeQuestion(options.toolUseID);
-          this.callbacks.log(`[perm] Question timed out (${options.toolUseID}) in ${sessionId}`);
+          this.removeQuestion(requestId);
+          this.callbacks.log(`[perm] Question timed out (${requestId}) in ${sessionId}`);
           resolve({ behavior: 'deny', message: 'Question timed out' });
+          this.callbacks.onResolved(sessionId, requestId, 'Timed out');
           // Notify so the phone clears the "waiting_question" state on timeout.
           this.callbacks.onPendingChanged?.(sessionId);
         }, this.timeoutMs);
@@ -290,22 +303,21 @@ export class PermissionBroker {
           resolve(result);
         };
 
-        this.pendingQuestions.set(options.toolUseID, {
+        this.pendingQuestions.set(requestId, {
           sessionId,
           input: toolInput,
           questions: rawQuestions,
-          answers: {},
-          remaining: rawQuestions.length,
+          answers: new Map(),
           resolve: wrappedResolve,
         });
         const order = this.questionOrder.get(sessionId) ?? [];
-        order.push(options.toolUseID);
+        order.push(requestId);
         this.questionOrder.set(sessionId, order);
 
         // Notify so the phone immediately shows a visible "waiting_question" state. Without this
         // the phone never learns the turn is blocked on the user — exactly how an unanswered
         // question deadlocks it.
-        this.callbacks.log(`[perm] WAITING ON ANSWER: AskUserQuestion (${options.toolUseID}) in ${sessionId}`);
+        this.callbacks.log(`[perm] WAITING ON ANSWER: AskUserQuestion (${requestId}) in ${sessionId}`);
         this.callbacks.onPendingChanged?.(sessionId);
       });
     }
@@ -319,9 +331,9 @@ export class PermissionBroker {
       return Promise.resolve({ behavior: 'allow' as const, updatedInput: {} });
     }
 
-    // Default mode = YOLO: auto-approve everything (matches old bridge behavior
-    // where the bridge simulated pressing '1' for every permission prompt)
-    if (ctx.permissionMode === 'default') {
+    // Auto-approve mode = YOLO: approve everything (matches old bridge behavior
+    // where the bridge simulated pressing '1' for every permission prompt).
+    if (ctx.permissionMode === AUTO_APPROVE_MODE) {
       return Promise.resolve({ behavior: 'allow', updatedInput: {} });
     }
 
@@ -334,16 +346,19 @@ export class PermissionBroker {
       return Promise.resolve({ behavior: 'allow', updatedInput: {} });
     }
 
-    // Plan / acceptEdits: forward to phone for manual approval. Capture sub-agent origin so the
+    // Any other mode: forward to the phone for manual approval. Capture sub-agent origin so the
     // phone can label the card ("Sub-agent wants to run ...") — canUseTool exposes only an opaque
     // agentID, not the agent type, so the friendly name is best-effort (ctx.agentLabel).
     const agentId = options.agentID;
     const isSubAgent = !!agentId;
+    const plan = toolName === 'ExitPlanMode';
+    const cardOptions = plan ? [] : permissionOptionsFor(ctx.agent);
     return new Promise<SdkPermissionResult>((resolve) => {
       const timer = setTimeout(() => {
-        this.pendingPermissions.delete(options.toolUseID);
-        this.callbacks.log(`[perm] Permission timed out for ${toolName} (${options.toolUseID}) in session ${sessionId}`);
+        this.pendingPermissions.delete(requestId);
+        this.callbacks.log(`[perm] Permission timed out for ${toolName} (${requestId}) in session ${sessionId}`);
         resolve({ behavior: 'deny', message: 'Permission timed out' });
+        this.callbacks.onResolved(sessionId, requestId, 'Timed out');
         this.callbacks.onPendingChanged?.(sessionId);
       }, this.timeoutMs);
       timer.unref?.();
@@ -353,21 +368,27 @@ export class PermissionBroker {
         resolve(result);
       };
 
-      this.pendingPermissions.set(options.toolUseID, { sessionId, toolName, resolve: wrappedResolve });
+      this.pendingPermissions.set(requestId, {
+        sessionId,
+        toolName,
+        plan,
+        options: cardOptions,
+        resolve: wrappedResolve,
+      });
 
-      // ExitPlanMode is surfaced via the dedicated plan card — the plan-approval / exit-plan
-      // handlers resolve this pending permission. Skip the generic permission card to avoid a
-      // duplicate prompt next to the plan card.
-      if (toolName === 'ExitPlanMode') {
-        this.callbacks.onPlanCard(sessionId, options.toolUseID);
+      // ExitPlanMode is answered through the plan approval card; skip the generic
+      // permission card to avoid a duplicate prompt next to it.
+      if (plan) {
+        this.callbacks.onPlanCard(sessionId, requestId);
       } else {
         this.callbacks.onPermissionCard({
           sessionId,
           toolName,
-          toolUseId: options.toolUseID,
+          toolUseId: requestId,
           toolInput,
           title: options.title,
           description: options.description,
+          options: cardOptions,
           agentId,
           isSubAgent,
           agentLabel: isSubAgent ? ctx.agentLabel : undefined,
@@ -376,28 +397,31 @@ export class PermissionBroker {
 
       // Notify so the phone immediately shows a visible "waiting_permission" state — a buried
       // prompt is exactly how a turn deadlocks.
-      this.callbacks.log(`[perm] WAITING ON APPROVAL: ${toolName} (${options.toolUseID})${isSubAgent ? ` [subagent ${agentId}]` : ''} in ${sessionId}`);
+      this.callbacks.log(`[perm] WAITING ON APPROVAL: ${toolName} (${requestId})${isSubAgent ? ` [subagent ${agentId}]` : ''} in ${sessionId}`);
       this.callbacks.onPendingChanged?.(sessionId);
     });
   }
 
-  /** Resolve a pending permission request from the phone. */
-  resolvePermission(requestId: string, allow: boolean, modifier?: 'always' | 'never'): boolean {
+  /** Answer a pending permission card with one of its options. Returns false
+   *  when nothing is pending under `requestId` or the option is not offered. */
+  resolvePermission(requestId: string, optionId: string): boolean {
     const pending = this.pendingPermissions.get(requestId);
-    if (!pending) {
+    if (!pending || pending.plan) {
       this.callbacks.log(`[perm] No pending permission for ${requestId}`);
+      return false;
+    }
+    const option = pending.options.find((o) => o.id === optionId);
+    if (!option) {
+      this.callbacks.log(`[perm] Option '${optionId}' is not offered for ${requestId}`);
       return false;
     }
 
     this.pendingPermissions.delete(requestId);
-    // Permission answered — notify so the phone clears the "waiting_permission" state.
-    this.callbacks.onPendingChanged?.(pending.sessionId);
-
-    if (allow) {
+    if (option.kind === 'allow_once' || option.kind === 'allow_always') {
       const result: SdkPermissionResult = { behavior: 'allow', updatedInput: {} };
       // "Always allow" → persist as a project-scoped allow rule so it survives across sessions.
       // Uses projectSettings (not session) because "Always Allow" implies persistence.
-      if (modifier === 'always') {
+      if (option.kind === 'allow_always') {
         const rule: SdkPermissionUpdate = {
           type: 'addRules',
           rules: [{ toolName: pending.toolName }],
@@ -407,60 +431,81 @@ export class PermissionBroker {
         result.updatedPermissions = [rule];
       }
       pending.resolve(result);
+      this.callbacks.onResolved(pending.sessionId, requestId, option.kind === 'allow_always' ? 'Always allowed' : 'Allowed');
     } else {
-      pending.resolve({
-        behavior: 'deny',
-        message: modifier === 'never' ? 'User denied (never ask again)' : 'User denied',
-      });
+      pending.resolve({ behavior: 'deny', message: 'User denied' });
+      this.callbacks.onResolved(pending.sessionId, requestId, 'Denied');
     }
+    // Permission answered — notify so the phone clears the "waiting_permission" state.
+    this.callbacks.onPendingChanged?.(pending.sessionId);
     return true;
   }
 
-  /** Find a pending permission by tool name (e.g. resolve ExitPlanMode from a plan-approval tap). */
-  findPendingPermission(sessionId: string, toolName: string): string | undefined {
-    for (const [toolUseId, pending] of this.pendingPermissions) {
-      if (pending.sessionId === sessionId && pending.toolName === toolName) return toolUseId;
+  /**
+   * Answer a pending plan approval: approve (the plan runs) or keep planning
+   * (ExitPlanMode is denied and the agent stays in plan mode). Returns false
+   * when no plan approval is pending under `requestId`.
+   */
+  resolvePlanApproval(requestId: string, approve: boolean, summary: string): boolean {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending || !pending.plan) {
+      this.callbacks.log(`[perm] No pending plan approval for ${requestId}`);
+      return false;
     }
-    return undefined;
+    this.pendingPermissions.delete(requestId);
+    pending.resolve(
+      approve
+        ? { behavior: 'allow', updatedInput: {} }
+        : { behavior: 'deny', message: 'The user wants to keep planning — revise the plan with their feedback.' },
+    );
+    this.callbacks.onResolved(pending.sessionId, requestId, summary);
+    this.callbacks.onPendingChanged?.(pending.sessionId);
+    return true;
   }
 
   /**
-   * Answer the active pending AskUserQuestion for a session.
-   * - `{ text }`: free-text answer to the next unanswered question in the group.
-   * - `{ keypress }`: 1-based option selection resolved against that question's options.
-   * Questions in a multi-question group are answered IN ORDER — the target index within the
-   * group is `questions.length - remaining` (how many are already answered). Keying off
-   * `remaining` — not any per-entry index — is what makes a 3-question group resolve q0,q1,q2
-   * instead of overwriting the last question three times.
-   * Returns false when no pending question matches (caller may fall back to plain input).
+   * Answer question `index` of the ask `requestId`. The ask resolves (and its
+   * card closes) once every question has an answer. Returns false when no such
+   * question is pending in this session.
    */
-  answerQuestion(sessionId: string, answer: { text: string } | { keypress: string }): boolean {
+  answerQuestion(sessionId: string, requestId: string, index: number, answer: string): boolean {
+    const pending = this.pendingQuestions.get(requestId);
+    if (!pending || pending.sessionId !== sessionId || index < 0 || index >= pending.questions.length) {
+      this.callbacks.log(`[perm] No pending question ${requestId}#${index} in ${sessionId}`);
+      return false;
+    }
+    this.recordAnswer(requestId, pending, index, answer);
+    return true;
+  }
+
+  /**
+   * Answer the first unanswered question of the session's active ask with
+   * free text — plain input typed while a question blocks the turn can only be
+   * its answer. Returns false when no question is pending.
+   */
+  answerActiveQuestion(sessionId: string, text: string): boolean {
     const active = this.activeQuestion(sessionId);
     if (!active) {
       this.callbacks.log(`[perm] No pending question for answer in ${sessionId}`);
       return false;
     }
-    const { toolUseId, pending } = active;
-    const idx = Math.max(0, pending.questions.length - pending.remaining);
-    const target = pending.questions[idx];
-
-    let answerText: string;
-    if ('text' in answer) {
-      answerText = answer.text;
-    } else {
-      const keyNum = parseInt(answer.keypress, 10);
-      if (isNaN(keyNum) || keyNum < 1) return false;
-      const options = target?.options;
-      if (!options || keyNum > options.length) {
-        this.callbacks.log(`[perm] No option ${answer.keypress} for pending question in ${sessionId}`);
-        return false;
-      }
-      answerText = options[keyNum - 1]!.label;
-    }
-
-    const questionText = target?.question ?? '';
-    this.recordAnswer(toolUseId, pending, questionText, answerText);
+    const { requestId, pending } = active;
+    const index = pending.questions.findIndex((_, i) => !pending.answers.has(i));
+    this.recordAnswer(requestId, pending, Math.max(0, index), text);
     return true;
+  }
+
+  /** The labels of a question's options at `indices` — how a chosen option
+   *  becomes an answer string. Null when the question or an index is unknown. */
+  optionLabels(requestId: string, index: number, indices: readonly number[]): string | null {
+    const options = this.pendingQuestions.get(requestId)?.questions[index]?.options ?? [];
+    const labels: string[] = [];
+    for (const i of indices) {
+      const label = options[i]?.label;
+      if (label === undefined) return null;
+      labels.push(label);
+    }
+    return labels.length > 0 ? labels.join(', ') : null;
   }
 
   /** True while any AskUserQuestion group is pending for the session (input should route here). */
@@ -468,7 +513,7 @@ export class PermissionBroker {
     return this.activeQuestion(sessionId) !== null;
   }
 
-  /** True while any generic permission is pending for the session. */
+  /** True while any permission or plan approval is pending for the session. */
   hasPendingPermissions(sessionId: string): boolean {
     for (const pending of this.pendingPermissions.values()) {
       if (pending.sessionId === sessionId) return true;
@@ -488,16 +533,18 @@ export class PermissionBroker {
    */
   denyAllPending(sessionId: string, reason: string): void {
     let changed = false;
-    for (const [toolUseId, pending] of this.pendingPermissions) {
+    for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.sessionId !== sessionId) continue;
-      this.pendingPermissions.delete(toolUseId);
+      this.pendingPermissions.delete(requestId);
       pending.resolve({ behavior: 'deny', message: reason });
+      this.callbacks.onResolved(sessionId, requestId, reason);
       changed = true;
     }
-    for (const [toolUseId, pending] of this.pendingQuestions) {
+    for (const [requestId, pending] of this.pendingQuestions) {
       if (pending.sessionId !== sessionId) continue;
-      this.removeQuestion(toolUseId);
+      this.removeQuestion(requestId);
       pending.resolve({ behavior: 'deny', message: reason });
+      this.callbacks.onResolved(sessionId, requestId, reason);
       changed = true;
     }
     if (changed) this.callbacks.onPendingChanged?.(sessionId);
@@ -506,25 +553,25 @@ export class PermissionBroker {
   // --- Internal ---
 
   /** Most-recently-asked still-pending question group for a session (matches the phone's active card). */
-  private activeQuestion(sessionId: string): { toolUseId: string; pending: PendingQuestion } | null {
+  private activeQuestion(sessionId: string): { requestId: string; pending: PendingQuestion } | null {
     const order = this.questionOrder.get(sessionId);
     if (!order) return null;
     for (let i = order.length - 1; i >= 0; i--) {
-      const toolUseId = order[i];
-      if (!toolUseId) continue;
-      const pending = this.pendingQuestions.get(toolUseId);
-      if (pending) return { toolUseId, pending };
+      const requestId = order[i];
+      if (!requestId) continue;
+      const pending = this.pendingQuestions.get(requestId);
+      if (pending) return { requestId, pending };
     }
     return null;
   }
 
-  private removeQuestion(toolUseId: string): void {
-    const pending = this.pendingQuestions.get(toolUseId);
-    this.pendingQuestions.delete(toolUseId);
+  private removeQuestion(requestId: string): void {
+    const pending = this.pendingQuestions.get(requestId);
+    this.pendingQuestions.delete(requestId);
     if (!pending) return;
     const order = this.questionOrder.get(pending.sessionId);
     if (order) {
-      const i = order.indexOf(toolUseId);
+      const i = order.indexOf(requestId);
       if (i >= 0) order.splice(i, 1);
       if (order.length === 0) this.questionOrder.delete(pending.sessionId);
     }
@@ -539,28 +586,25 @@ export class PermissionBroker {
    * Keying by header leaves the per-question lookup undefined and crashes the SDK's result
    * builder ("undefined is not an object ... map").
    */
-  private recordAnswer(
-    toolUseId: string,
-    pending: PendingQuestion,
-    questionText: string,
-    answer: string,
-  ): void {
-    pending.answers[questionText] = answer;
-    pending.remaining--;
+  private recordAnswer(requestId: string, pending: PendingQuestion, index: number, answer: string): void {
+    pending.answers.set(index, answer);
+    if (pending.answers.size < pending.questions.length) return;
 
-    if (pending.remaining <= 0) {
-      // All questions answered — resolve the canUseTool promise
-      this.removeQuestion(toolUseId);
+    // All questions answered — resolve the canUseTool promise.
+    this.removeQuestion(requestId);
+    const answers: Record<string, string> = {};
+    const summary: string[] = [];
+    pending.questions.forEach((q, i) => {
+      const a = pending.answers.get(i) ?? '';
+      answers[q.question] = a;
+      summary.push(a);
+    });
+    // Echo the original input (questions/options/multiSelect) and add the collected answers.
+    // The SDK fills AskUserQuestionInput.answers from here.
+    pending.resolve({ behavior: 'allow', updatedInput: { ...pending.input, answers } });
+    this.callbacks.onResolved(pending.sessionId, requestId, summary.join(' · '));
 
-      // Echo the original input (questions/options/multiSelect) and add the collected answers.
-      // The SDK fills AskUserQuestionInput.answers from here.
-      pending.resolve({
-        behavior: 'allow',
-        updatedInput: { ...pending.input, answers: pending.answers },
-      });
-
-      // Notify so the phone clears the "waiting_question" state now that the group is answered.
-      this.callbacks.onPendingChanged?.(pending.sessionId);
-    }
+    // Notify so the phone clears the "waiting_question" state now that the group is answered.
+    this.callbacks.onPendingChanged?.(pending.sessionId);
   }
 }

@@ -5,9 +5,8 @@
  * Spike 0B established that the *transfer* (not capture) is the bottleneck on
  * weak links, so we never ship the raw multi-MB PNG: we downscale to a small
  * PNG (default max 720px on the long edge) with pngjs (pure JS — no fragile
- * native deps), base64-embed it in an output entry's metadata, and publish
- * over the existing output path. The phone's transcript view renders the
- * inline image from metadata.
+ * native deps), base64-embed it in a `screenshot` notice entry's
+ * `agentExtras`, and publish over the existing output path.
  *
  * Retention: these ride the normal stored output events. Payloads are bounded
  * by the downscale, so no reaper is needed; old events age out of the relay
@@ -58,9 +57,9 @@ export function downscalePng(
 }
 
 /**
- * Build an OutputEntry carrying a downscaled screenshot as a base64 data URI
- * in metadata. The phone renders `metadata.imageDataUri` inline. Returns null
- * if the file can't be read.
+ * Build a `screenshot` notice entry carrying a downscaled screenshot as a
+ * base64 data URI in `agentExtras.imageDataUri`. Returns null if the file
+ * can't be read.
  */
 export function buildScreenshotEntry(
   artifactPath: string,
@@ -83,11 +82,11 @@ export function buildScreenshotEntry(
   const dataUri = `data:image/png;base64,${small.buffer.toString('base64')}`;
   return {
     entry: {
-      entryType: 'tool_result',
-      content: `Screenshot of ${serial} (${small.width}x${small.height})`,
+      entryType: 'notice',
+      kind: 'screenshot',
+      text: `Screenshot of ${serial} (${small.width}x${small.height})`,
       timestamp: new Date().toISOString(),
-      metadata: {
-        special: 'device_screenshot',
+      agentExtras: {
         imageDataUri: dataUri,
         imageWidth: small.width,
         imageHeight: small.height,

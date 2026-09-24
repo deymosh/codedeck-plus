@@ -58,7 +58,7 @@ function bigOutput(bytes: number): BridgeToPhoneMessage {
     type: 'output',
     sessionId: 'sess-abcdef',
     seq: 4242,
-    entry: { entryType: 'text', content: '', timestamp: '2026-08-05T00:00:00.000Z' },
+    entry: { entryType: 'text', role: 'agent', text: '', timestamp: '2026-08-05T00:00:00.000Z' },
   });
   const pad = Math.max(0, bytes - utf8Size(skeleton));
   return {
@@ -67,7 +67,8 @@ function bigOutput(bytes: number): BridgeToPhoneMessage {
     seq: 4242,
     entry: {
       entryType: 'text',
-      content: 'A'.repeat(pad),
+      role: 'agent',
+      text: 'A'.repeat(pad),
       timestamp: '2026-08-05T00:00:00.000Z',
     },
   };
@@ -86,7 +87,7 @@ describe('Publisher — small messages are unchanged', () => {
       type: 'output',
       sessionId: 's1',
       seq: 7,
-      entry: { entryType: 'text', content: 'short and sweet', timestamp: '2026-08-05T00:00:00Z' },
+      entry: { entryType: 'text', role: 'agent', text: 'short and sweet', timestamp: '2026-08-05T00:00:00Z' },
     };
     const ok = await publisher.publishToPhones(msg, [phone]);
 
@@ -156,11 +157,11 @@ describe('Publisher — oversize messages fragment (regression: content is too l
     await publisher.publishToPhones(bigOutput(160_000), [phone]); // seq 4242, many frames
     const afterBig = published.length;
     await publisher.publishToPhones(
-      { type: 'output', sessionId: 'sess-abcdef', seq: 4243, entry: { entryType: 'text', content: 'next', timestamp: '2026-08-05T00:00:00Z' } },
+      { type: 'output', sessionId: 'sess-abcdef', seq: 4243, entry: { entryType: 'text', role: 'agent', text: 'next', timestamp: '2026-08-05T00:00:00Z' } },
       [phone],
     );
     await publisher.publishToPhones(
-      { type: 'output', sessionId: 'sess-abcdef', seq: 4244, entry: { entryType: 'text', content: 'last', timestamp: '2026-08-05T00:00:00Z' } },
+      { type: 'output', sessionId: 'sess-abcdef', seq: 4244, entry: { entryType: 'text', role: 'agent', text: 'last', timestamp: '2026-08-05T00:00:00Z' } },
       [phone],
     );
 
@@ -176,7 +177,7 @@ describe('Publisher — oversize messages fragment (regression: content is too l
     const phoneSecret = generateSecretKey();
     const phone = getPublicKey(phoneSecret);
 
-    const entry = { entryType: 'text' as const, content: 'B'.repeat(70_000), timestamp: '2026-08-05T00:00:00Z' };
+    const entry = { entryType: 'text' as const, role: 'agent' as const, text: 'B'.repeat(70_000), timestamp: '2026-08-05T00:00:00Z' };
     const msg: BridgeToPhoneMessage = {
       type: 'sync-chunk',
       sessionId: 's1',

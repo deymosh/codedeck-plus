@@ -25,6 +25,7 @@ import {
   FakeSdkFacade,
   InMemoryRelay,
   PhoneSimulator,
+  entryText,
   inMemoryPoolFactory,
 } from '@codedeck/testkit';
 import { loadCliConfig } from '../config';
@@ -212,7 +213,7 @@ describe('bridge-cli end-to-end (real pairing-window flow)', () => {
 
     facade.emit(sessionId, assistantMsg(`sdk-${sessionId}`, 'echo back'));
     await sim.until(
-      () => sim.transcriptEntries(sessionId).some(({ entry }) => entry.content.includes('echo back')),
+      () => sim.transcriptEntries(sessionId).some(({ entry }) => entryText(entry).includes('echo back')),
       { label: 'assistant output in phone transcript' },
     );
 

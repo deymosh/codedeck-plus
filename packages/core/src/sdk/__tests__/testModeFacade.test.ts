@@ -13,6 +13,7 @@ function makeBroker(): PermissionBroker {
     onPermissionCard: () => {},
     onQuestionCard: () => {},
     onPlanCard: () => {},
+    onResolved: () => {},
     onAutoModeChange: () => {},
     log: () => {},
   });
@@ -20,6 +21,7 @@ function makeBroker(): PermissionBroker {
 
 const ctx = (mode: PermissionContext['permissionMode']): PermissionContext => ({
   sessionId: 's1',
+  agent: 'claude-code',
   permissionMode: mode,
 });
 
@@ -95,9 +97,9 @@ describe('TestModeSdkFacade', () => {
     plans.push(plan.input.plan as string);
     expect(plans[0]).toContain('Example plan');
 
-    // Approve it — same call a real plan-approval tap makes.
-    const toolUseId = broker.findPendingPermission('s1', 'ExitPlanMode')!;
-    broker.resolvePermission(toolUseId, true);
+    // Approve it — same call a real plan-approval tap makes (the request id is
+    // the ExitPlanMode tool_use id).
+    expect(broker.resolvePlanApproval(plan.id, true, 'Approve')).toBe(true);
     const rest = await drain(handle.messages(), 3);
     expect(textOf(rest)).toEqual(["Plan approved — I'll get started."]);
   });
@@ -110,9 +112,9 @@ describe('TestModeSdkFacade', () => {
       canUseTool: (name, input, opts) => broker.handleCanUseTool(ctx('plan'), name, input, opts),
     });
     handle.pushInput('/test-question');
-    await drain(handle.messages(), 1); // the AskUserQuestion tool_use
+    const ask = toolUseOf(await drain(handle.messages(), 1))[0]!; // the AskUserQuestion tool_use
 
-    expect(broker.answerQuestion('s1', { keypress: '2' })).toBe(true); // 'Careful'
+    expect(broker.answerQuestion('s1', ask.id, 0, broker.optionLabels(ask.id, 0, [1])!)).toBe(true); // 'Careful'
     const rest = await drain(handle.messages(), 3);
     expect(textOf(rest)).toEqual(['received Careful']);
   });
@@ -125,10 +127,10 @@ describe('TestModeSdkFacade', () => {
       canUseTool: (name, input, opts) => broker.handleCanUseTool(ctx('plan'), name, input, opts),
     });
     handle.pushInput('/test-question-multiple');
-    await drain(handle.messages(), 1);
+    const ask = toolUseOf(await drain(handle.messages(), 1))[0]!;
 
-    expect(broker.answerQuestion('s1', { keypress: '2' })).toBe(true); // 'Rust'
-    expect(broker.answerQuestion('s1', { keypress: '1' })).toBe(true); // 'Dev'
+    expect(broker.answerQuestion('s1', ask.id, 0, broker.optionLabels(ask.id, 0, [1])!)).toBe(true); // 'Rust'
+    expect(broker.answerQuestion('s1', ask.id, 1, broker.optionLabels(ask.id, 1, [0])!)).toBe(true); // 'Dev'
     const rest = await drain(handle.messages(), 3);
     expect(textOf(rest)).toEqual(['received Rust, Dev']);
   });

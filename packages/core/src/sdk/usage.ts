@@ -36,14 +36,18 @@ export function normalizeUsage(res: unknown, now: () => number = Date.now): Usag
   const snapshot = res as RawUsageSnapshot;
   if (typeof snapshot.rate_limits_available !== 'boolean') return null;
 
-  const win = (w: RawUsageWindow | null | undefined): UsageWindow | undefined =>
-    w ? { utilization: w.utilization ?? null, resetsAt: w.resets_at ?? null } : undefined;
-
   const rl = snapshot.rate_limits;
-  const fiveHour = win(rl?.five_hour);
-  const sevenDay = win(rl?.seven_day);
-  const sevenDayOpus = win(rl?.seven_day_opus);
-  const sevenDaySonnet = win(rl?.seven_day_sonnet);
+  // Labelled windows in display order; a window is listed only when the SDK
+  // reports it.
+  const raw: Array<[string, RawUsageWindow | null | undefined]> = [
+    ['5h', rl?.five_hour],
+    ['7d', rl?.seven_day],
+    ['7d Opus', rl?.seven_day_opus],
+    ['7d Sonnet', rl?.seven_day_sonnet],
+  ];
+  const windows: UsageWindow[] = raw.flatMap(([label, w]) =>
+    w ? [{ label, utilization: w.utilization ?? null, resetsAt: w.resets_at ?? null }] : [],
+  );
   const sessionCostUsd =
     typeof snapshot.session?.total_cost_usd === 'number'
       ? snapshot.session.total_cost_usd
@@ -51,11 +55,8 @@ export function normalizeUsage(res: unknown, now: () => number = Date.now): Usag
 
   return {
     available: snapshot.rate_limits_available,
-    subscriptionType: snapshot.subscription_type ?? null,
-    ...(fiveHour !== undefined ? { fiveHour } : {}),
-    ...(sevenDay !== undefined ? { sevenDay } : {}),
-    ...(sevenDayOpus !== undefined ? { sevenDayOpus } : {}),
-    ...(sevenDaySonnet !== undefined ? { sevenDaySonnet } : {}),
+    ...(snapshot.subscription_type ? { plan: snapshot.subscription_type } : {}),
+    windows,
     ...(sessionCostUsd !== undefined ? { sessionCostUsd } : {}),
     fetchedAt: new Date(now()).toISOString(),
   };

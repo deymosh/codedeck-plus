@@ -19,16 +19,19 @@
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type {
-  EffortLevel,
-  OutputEntry,
-  PermissionMode,
-  SessionBackend,
-  SessionState,
-  UsageData,
-} from '@codedeck/protocol';
+import type { OutputEntry, QuestionAnswer, SessionState, UsageData } from '@codedeck/protocol';
+import {
+  AUTO_APPROVE_MODE,
+  CLAUDE_CODE_AGENT_ID,
+  PLAN_APPROVAL_OPTIONS,
+  PLAN_REVISE,
+  defaultModeFor,
+  isKnownMode,
+} from '../agents';
 import {
   modelSupports1mContext,
+  type EffortLevel,
+  type PermissionMode,
   type SdkAuthStatusMessage,
   type SdkCanUseTool,
   type SdkContextUsage,
@@ -38,7 +41,7 @@ import {
   type SdkSessionOptions,
   type SdkSystemMessage,
 } from '../sdk/facade';
-import { sdkMessageToEntries } from '../sdk/adapter';
+import { newTranslateContext, sdkMessageToEntries, type TranslateContext } from '../sdk/adapter';
 import { normalizeUsage } from '../sdk/usage';
 
 const execFileAsync = promisify(execFile);
@@ -94,7 +97,7 @@ export interface SessionRunnerEvents {
   onFailed?: (sessionId: string, reason: string) => void;
   /** Registry-visible session state changed — republish the session list. */
   onStateChanged?: (sessionId: string) => void;
-  /** Tracked permission mode changed (keypress flow / SDK auto) — publish mode-confirmed. */
+  /** Tracked mode changed (plan approval / SDK auto) — publish option-confirmed. */
   onModeChanged?: (sessionId: string, mode: PermissionMode) => void;
   /** The session ended for good (stream closed, or died past the restart cap). */
   onEnded?: (sessionId: string) => void;
@@ -109,7 +112,7 @@ export interface SessionRunnerOptions {
   registry: SessionRegistry;
   broker: PermissionBroker;
   events: SessionRunnerEvents;
-  /** Initial permission mode. Defaults to 'plan' (matches the old bridge). */
+  /** Initial mode (an agent mode id). Defaults to the agent's default mode. */
   permissionMode?: PermissionMode;
   model?: string;
   /**
@@ -118,13 +121,12 @@ export interface SessionRunnerOptions {
    * spawn and persisted in the registry record (resume rehydrates it).
    */
   providerId?: string;
-  /** Agent backend this session runs on. Absent means 'claude-code' (today's
-   *  only backend) — persisted in the registry record and rehydrated on
+  /** The agent this session runs on (an agent descriptor id; default
+   *  `claude-code`). Persisted in the registry record and rehydrated on
    *  resume the same way `providerId` is, so `bridge.ts`'s resumeOnBoot picks
-   *  the right facade after a restart instead of defaulting back to Claude
-   *  Code. Purely declarative here: the runner never branches on it except to
-   *  round-trip it into the record and default `translateMessage`. */
-  backend?: SessionBackend;
+   *  the right facade after a restart. The runner uses it only for the
+   *  agent's catalog facts (valid modes, permission choices). */
+  agent?: string;
   effortLevel?: EffortLevel;
   /** Attach on-device test tooling semantics (secret-path hard deny in the broker). */
   testSession?: boolean;
@@ -150,20 +152,12 @@ export interface SessionRunnerOptions {
   /** Injectable git-HEAD reader (commit detection) — defaults to the real one. */
   gitHead?: (cwd: string) => Promise<string | null>;
   /**
-   * CDX-050: whether to emit `diff` entries for file edits, evaluated per SDK
-   * message. The orchestrator answers from the phone-side capability registry
-   * (every known phone must have advertised 'diff'); default off — pre-CDX-050
-   * phones reject the unknown entryType.
+   * Per-agent SDK-message-to-OutputEntry translator — defaults to
+   * `sdkMessageToEntries` (Claude Code). `bridge.ts`'s `makeRunner` passes
+   * `opencodeMessageToEntries` for an OpenCode session; the runner itself
+   * never branches on the agent to decide which one to call.
    */
-  emitDiffEntries?: () => boolean;
-  /**
-   * Per-backend SDK-message-to-OutputEntry translator, injected the same way
-   * `emitDiffEntries` is — defaults to `sdkMessageToEntries` (Claude Code).
-   * `bridge.ts`'s `makeRunner` passes `opencodeMessageToEntries` for an
-   * OpenCode session; the runner itself never branches on backend to decide
-   * which one to call.
-   */
-  translateMessage?: (msg: SdkMessage, opts?: { emitDiffEntries?: boolean }) => OutputEntry[];
+  translateMessage?: (msg: SdkMessage, ctx: TranslateContext) => OutputEntry[];
 }
 
 export class SessionRunner {
@@ -182,8 +176,8 @@ export class SessionRunner {
   private readonly mcpServers?: SdkSessionOptions['mcpServers'];
   private readonly claudePath?: string;
   private readonly sessionEnv?: (ctx: { providerId?: string }) => Record<string, string> | undefined;
-  private readonly emitDiffEntries?: () => boolean;
-  private readonly translateMessage: (msg: SdkMessage, opts?: { emitDiffEntries?: boolean }) => OutputEntry[];
+  private readonly translateMessage: (msg: SdkMessage, ctx: TranslateContext) => OutputEntry[];
+  private readonly translateCtx: TranslateContext = newTranslateContext();
 
   private handle: SdkSessionHandle | null = null;
   private _phase: RunnerPhase = 'pending';
@@ -194,7 +188,7 @@ export class SessionRunner {
   private model?: string;
   /** CDX-062: the profile id this session is bound to (absent = Anthropic). */
   private _providerId?: string;
-  private _backend?: SessionBackend;
+  private _agent: string;
   private effortLevel?: EffortLevel;
   /** The SDK's own session id — the --resume target. Updated from every init message. */
   private sdkSessionId: string | null = null;
@@ -267,17 +261,16 @@ export class SessionRunner {
     this.registry = opts.registry;
     this.broker = opts.broker;
     this.events = opts.events;
-    this.permissionMode = opts.permissionMode ?? 'plan';
+    this._agent = opts.agent ?? CLAUDE_CODE_AGENT_ID;
+    this.permissionMode = opts.permissionMode ?? defaultModeFor(this._agent);
     this.model = opts.model;
     this._providerId = opts.providerId;
-    this._backend = opts.backend;
     this.effortLevel = opts.effortLevel;
     this.testSession = !!opts.testSession;
     this.isResume = !!opts.resume;
     this.mcpServers = opts.mcpServers;
     this.claudePath = opts.pathToClaudeCodeExecutable;
     this.sessionEnv = opts.sessionEnv;
-    this.emitDiffEntries = opts.emitDiffEntries;
     this.translateMessage = opts.translateMessage ?? sdkMessageToEntries;
     this.gitHead = opts.gitHead ?? gitHeadHash;
     this.createdAt = new Date().toISOString();
@@ -293,12 +286,12 @@ export class SessionRunner {
         // startup log can say WHICH conversation was lost instead of implying
         // this session never had one.
         if (rec.previousSdkSessionId) this.previousSdkSessionId = rec.previousSdkSessionId;
-        this.permissionMode = rec.permissionMode ?? this.permissionMode;
+        this._agent = rec.agent;
+        this.permissionMode = rec.mode ?? this.permissionMode;
         this.model = rec.model ?? this.model;
         // CDX-062: the provider binding survives resume-on-boot via the record.
         this._providerId = rec.providerId ?? this._providerId;
-        this._backend = rec.backend ?? this._backend;
-        this.effortLevel = rec.effortLevel ?? this.effortLevel;
+        this.effortLevel = rec.effort ?? this.effortLevel;
         this.title = rec.title;
         this.projectOverride = rec.project;
         this.summarized = rec.title !== null; // don't re-ask for meta on resume
@@ -334,9 +327,14 @@ export class SessionRunner {
     return this._providerId;
   }
 
-  /** Agent backend this session runs on (undefined means 'claude-code'). */
-  get backend(): SessionBackend | undefined {
-    return this._backend;
+  /** The agent this session runs on. */
+  get agent(): string {
+    return this._agent;
+  }
+
+  /** The session's current mode (an agent mode id). */
+  get mode(): PermissionMode {
+    return this.permissionMode;
   }
 
   get alive(): boolean {
@@ -538,6 +536,7 @@ export class SessionRunner {
     this.broker.handleCanUseTool(
       {
         sessionId: this.sessionId,
+        agent: this._agent,
         permissionMode: this.permissionMode,
         testSession: this.testSession,
         ...(this.lastSubagentType ? { agentLabel: this.lastSubagentType } : {}),
@@ -595,10 +594,10 @@ export class SessionRunner {
           return;
         }
         await this.appendAndEmit([{
-          entryType: 'error',
-          content: `Authentication failed: ${auth.error}`,
+          entryType: 'notice',
+          kind: 'auth_error',
+          text: `Authentication failed: ${auth.error}`,
           timestamp: new Date().toISOString(),
-          metadata: { special: 'auth_error' },
         }]);
       }
       return; // never forward auth_status to the phone
@@ -609,11 +608,13 @@ export class SessionRunner {
     if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'init') {
       const init = msg as SdkSystemMessage;
       this.sdkSessionId = init.session_id;
-      // The protocol has no bypassPermissions — coerce anything unknown to 'default'.
-      this.permissionMode =
-        init.permissionMode === 'plan' || init.permissionMode === 'acceptEdits'
-          ? init.permissionMode
-          : 'default';
+      // Keep the reported mode when the agent advertises it. Claude Code's
+      // non-prompting modes the catalog does not list (bypassPermissions and
+      // friends) map to the auto-approve mode; for any other agent an
+      // unknown mode leaves the tracked one alone.
+      const reported = String(init.permissionMode ?? '');
+      if (isKnownMode(this._agent, reported)) this.permissionMode = reported;
+      else if (this._agent === CLAUDE_CODE_AGENT_ID) this.permissionMode = AUTO_APPROVE_MODE;
       // CDX-087: record the model the SDK actually RESOLVED. `this.model` only
       // held what the phone requested, so a session started on "Default model"
       // reported none at all and the phone's header badge had nothing to show.
@@ -636,7 +637,7 @@ export class SessionRunner {
         // heartbeat, and publish budget is not free.
         await this.registry.update(this.sessionId, {
           sdkSessionId: this.sdkSessionId,
-          permissionMode: this.permissionMode,
+          mode: this.permissionMode,
           ...(modelChanged && this.model ? { model: this.model } : {}),
         });
         this.events.onStateChanged?.(this.sessionId);
@@ -700,12 +701,10 @@ export class SessionRunner {
       this.bg('context refresh', this.refreshContextPercentage());
     }
 
-    const entries = this.translateMessage(msg, {
-      emitDiffEntries: this.emitDiffEntries?.() === true,
-    }).filter((entry) => {
+    const entries = this.translateMessage(msg, this.translateCtx).filter((entry) => {
       // CDX-082: drop an SDK echo of a message we already authored an entry for.
-      if (entry.entryType !== 'text' || entry.metadata?.role !== 'user') return true;
-      const i = this.authoredUserTexts.indexOf(entry.content);
+      if (entry.entryType !== 'text' || entry.role !== 'user') return true;
+      const i = this.authoredUserTexts.indexOf(entry.text);
       if (i === -1) return true;
       this.authoredUserTexts.splice(i, 1);
       return false;
@@ -715,9 +714,8 @@ export class SessionRunner {
     // Track the most recent sub-agent type so a sub-agent's permission card can
     // be labelled on the phone (best-effort, ported).
     for (const entry of entries) {
-      if (entry.entryType === 'tool_use'
-          && (entry.metadata?.tool_name === 'Task' || entry.metadata?.tool_name === 'Agent')) {
-        const sub = (entry.metadata?.tool_input as Record<string, unknown> | undefined)?.subagent_type;
+      if (entry.entryType === 'tool_call' && (entry.toolName === 'Task' || entry.toolName === 'Agent')) {
+        const sub = (entry.rawInput as Record<string, unknown> | undefined)?.subagent_type;
         if (typeof sub === 'string' && sub) this.lastSubagentType = sub;
       }
     }
@@ -727,10 +725,10 @@ export class SessionRunner {
     // manual commits are caught by the orchestrator's poll (ported).
     if (!this.committed) {
       for (const entry of entries) {
-        if (entry.entryType === 'tool_use'
-            && entry.metadata?.tool_name === 'Bash'
+        if (entry.entryType === 'tool_call'
+            && entry.kind === 'execute'
             && /\bgit\s+commit\b(?!\s+--help)/.test(
-                 String((entry.metadata?.tool_input as Record<string, unknown>)?.command ?? ''))) {
+                 String((entry.rawInput as Record<string, unknown> | undefined)?.command ?? ''))) {
           this.bg('commit detection', this.detectCommit().then((changed) => {
             if (changed) this.events.log(`[Runner] Git commit detected in session ${this.sessionId}`);
           }));
@@ -749,10 +747,10 @@ export class SessionRunner {
     // while `!this.summarized` (the old shape) leaks every repeat. A malformed
     // tag is stripped too: it is bridge plumbing either way, never user content.
     for (const entry of entries) {
-      if (entry.entryType !== 'text' || entry.metadata?.role !== 'assistant') continue;
-      const match = entry.content.match(/<!--\s*session-meta:\s*(\{[^}]+\})\s*-->/);
+      if (entry.entryType !== 'text' || entry.role !== 'agent') continue;
+      const match = entry.text.match(/<!--\s*session-meta:\s*(\{[^}]+\})\s*-->/);
       if (!match) continue;
-      entry.content = entry.content.replace(/<!--\s*session-meta:\s*\{[^}]+\}\s*-->/g, '').trim();
+      entry.text = entry.text.replace(/<!--\s*session-meta:\s*\{[^}]+\}\s*-->/g, '').trim();
       if (this.summarized) continue;
       try {
         const meta = JSON.parse(match[1]!) as { topic?: unknown; project?: unknown };
@@ -868,15 +866,15 @@ export class SessionRunner {
       // respawn AND endSession(), leaving a zombie: alive, 'ready', accepting
       // input into a closed channel, never removed from the phone's list.
       await this.tryAppend([{
-        entryType: 'system',
+        entryType: 'notice',
+        kind: 'session_restart',
         // CDX-056: when the conversation is gone, say what actually happens —
         // a fresh SDK conversation in the same workspace — instead of implying
         // a seamless resume the model's memory won't back up.
-        content: unresumable
+        text: unresumable
           ? `Session's SDK conversation was missing — starting a fresh conversation in the same workspace (attempt ${this.restartCount}). The transcript is preserved, but the model does not remember earlier turns.`
           : `Session interrupted — restarting (attempt ${this.restartCount})...`,
         timestamp: new Date().toISOString(),
-        metadata: { special: 'session_restart' },
       }]);
 
       try {
@@ -901,10 +899,10 @@ export class SessionRunner {
       } catch (spawnErr) {
         this.events.log(`[Runner] Restart spawn failed for ${this.sessionId}: ${spawnErr}`);
         await this.tryAppend([{
-          entryType: 'error',
-          content: `Session restart failed: ${spawnErr instanceof Error ? spawnErr.message : spawnErr}`,
+          entryType: 'notice',
+          kind: 'session_died',
+          text: `Session restart failed: ${spawnErr instanceof Error ? spawnErr.message : spawnErr}`,
           timestamp: new Date().toISOString(),
-          metadata: { special: 'session_died' },
         }]);
         await this.endSession();
         return;
@@ -917,12 +915,12 @@ export class SessionRunner {
     this.events.log(`[Runner] Session ${this.sessionId} failed after ${this.restartCount} restarts`);
     if (unresumable) this.dropResumeTarget();
     await this.tryAppend([{
-      entryType: 'error',
-      content: unresumable
+      entryType: 'notice',
+      kind: 'session_died',
+      text: unresumable
         ? 'Session ended: its SDK conversation was missing and the restart attempts are used up. The transcript is preserved; reopening this session starts a fresh conversation in the same workspace, and the model will not remember earlier turns.'
         : 'Session ended unexpectedly after multiple restart attempts.',
       timestamp: new Date().toISOString(),
-      metadata: { special: 'session_died' },
     }]);
     await this.endSession();
   }
@@ -937,10 +935,10 @@ export class SessionRunner {
   private async failResumedSpawn(err: unknown): Promise<void> {
     this.events.log(`[Runner] Session ${this.sessionId} resume spawn failed: ${err}`);
     await this.tryAppend([{
-      entryType: 'error',
-      content: `Session could not be resumed: ${err instanceof Error ? err.message : err}`,
+      entryType: 'notice',
+      kind: 'session_died',
+      text: `Session could not be resumed: ${err instanceof Error ? err.message : err}`,
       timestamp: new Date().toISOString(),
-      metadata: { special: 'session_died' },
     }]);
     await this.endSession();
   }
@@ -978,10 +976,10 @@ export class SessionRunner {
     // CDX-074: best-effort — onFailed resolves the phone's pending placeholder,
     // so a transcript I/O failure must not be able to strand it.
     await this.tryAppend([{
-      entryType: 'error',
-      content: `Session creation failed: ${reason}`,
+      entryType: 'notice',
+      kind: 'session_failed',
+      text: `Session creation failed: ${reason}`,
       timestamp: new Date().toISOString(),
-      metadata: { special: 'session_failed' },
     }]);
     this.events.onFailed?.(this.sessionId, reason);
   }
@@ -1043,7 +1041,7 @@ export class SessionRunner {
     if (!this._alive || !this.handle) return false;
 
     if (this.broker.hasPendingQuestions(this.sessionId)) {
-      return this.broker.answerQuestion(this.sessionId, { text });
+      return this.broker.answerActiveQuestion(this.sessionId, text);
     }
 
     /** CDX-082: the text the USER actually typed, before the meta request is
@@ -1099,9 +1097,9 @@ export class SessionRunner {
     if (this.authoredUserTexts.length > 16) this.authoredUserTexts.shift();
     void this.tryAppend([{
       entryType: 'text',
-      content: typed,
+      role: 'user',
+      text: typed,
       timestamp: this.lastActivity,
-      metadata: { role: 'user' },
     }]);
 
     this.handle.pushInput(text);
@@ -1121,63 +1119,51 @@ export class SessionRunner {
     this.events.onStateChanged?.(this.sessionId);
   }
 
-  /** Answer the active AskUserQuestion; falls back to plain input when none is pending. */
-  sendQuestionInput(text: string): boolean {
-    if (!this._alive || !this.handle) return false;
-    if (this.broker.answerQuestion(this.sessionId, { text })) {
-      this.lastActivity = new Date().toISOString();
-      return true;
+  /**
+   * Answer question `index` of the ask `requestId`: chosen option indices
+   * (joined as their labels) or free text. Returns false when that question is
+   * not pending or an option index is out of range.
+   */
+  answerQuestion(requestId: string, index: number, answer: QuestionAnswer): boolean {
+    if (!this._alive) return false;
+    const text = answer.kind === 'text'
+      ? answer.text
+      : this.broker.optionLabels(requestId, index, answer.selected);
+    if (text === null) {
+      this.events.log(`[Runner] Unknown option for question ${requestId}#${index} in ${this.sessionId}`);
+      return false;
     }
-    this.events.log(`[Runner] No pending question for question-input in ${this.sessionId} — falling back to sendInput`);
-    return this.sendInput(text);
+    if (!this.broker.answerQuestion(this.sessionId, requestId, index, text)) return false;
+    this.lastActivity = new Date().toISOString();
+    return true;
   }
 
   /**
-   * Handle a raw keypress for TUI-style prompts (ported from the old
-   * BridgeCore.onKeypress). Contexts per the v10 protocol:
-   * - 'plan-approval': 1 = approve + acceptEdits, 2 = approve + manual (default
-   *   mode), 3 = revise (deny ExitPlanMode, stay in plan mode).
-   * - 'question': 1-based option selection for the active AskUserQuestion.
+   * Answer the plan approval `requestId`. Every option but `revise` approves
+   * the plan and continues in the mode it names; `revise` keeps the agent
+   * planning (the user's feedback arrives as the next input). Returns false
+   * for an unknown option or when no such approval is pending.
    */
-  async handleKeypress(key: string, context?: 'plan-approval' | 'question'): Promise<void> {
-    if (!this._alive) return;
-
-    if (context === 'plan-approval') {
-      const toolUseId = this.broker.findPendingPermission(this.sessionId, 'ExitPlanMode');
-      switch (key) {
-        case '1': {
-          if (toolUseId) this.broker.resolvePermission(toolUseId, true);
-          await this.setPermissionMode('acceptEdits');
-          this.events.onModeChanged?.(this.sessionId, 'acceptEdits');
-          break;
-        }
-        case '2': {
-          if (toolUseId) this.broker.resolvePermission(toolUseId, true);
-          await this.setPermissionMode('default');
-          this.events.onModeChanged?.(this.sessionId, 'default');
-          break;
-        }
-        case '3': {
-          // Revise plan — deny ExitPlanMode so Claude stays in plan mode.
-          // The user's revision text arrives as the next input message.
-          if (toolUseId) this.broker.resolvePermission(toolUseId, false);
-          break;
-        }
-      }
-      return;
+  async respondPlan(requestId: string, optionId: string): Promise<boolean> {
+    if (!this._alive) return false;
+    const option = PLAN_APPROVAL_OPTIONS.find((o) => o.id === optionId);
+    if (!option) {
+      this.events.log(`[Runner] Unknown plan option '${optionId}' for ${this.sessionId}`);
+      return false;
     }
-
-    if (context === 'question') {
-      if (!this.broker.answerQuestion(this.sessionId, { keypress: key })) {
-        this.events.log(`[Runner] No pending question for keypress '${key}' in ${this.sessionId}`);
-      }
-      return;
+    if (optionId === PLAN_REVISE) {
+      return this.broker.resolvePlanApproval(requestId, false, option.label);
     }
+    if (!this.broker.resolvePlanApproval(requestId, true, option.label)) return false;
+    if (await this.setPermissionMode(optionId)) {
+      this.events.onModeChanged?.(this.sessionId, optionId);
+    }
+    return true;
   }
 
-  /** Resolve a pending permission request from the phone (routes through the broker). */
-  resolvePermission(requestId: string, allow: boolean, modifier?: 'always' | 'never'): boolean {
-    return this.broker.resolvePermission(requestId, allow, modifier);
+  /** Answer a pending permission card with one of its options (routes through the broker). */
+  resolvePermission(requestId: string, optionId: string): boolean {
+    return this.broker.resolvePermission(requestId, optionId);
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<boolean> {
@@ -1186,7 +1172,7 @@ export class SessionRunner {
       await this.handle.setPermissionMode(mode);
       this.permissionMode = mode;
       if (this._phase === 'ready') {
-        void this.registry.update(this.sessionId, { permissionMode: mode });
+        void this.registry.update(this.sessionId, { mode });
       }
       this.events.log(`[Runner] Permission mode set to ${mode} for ${this.sessionId}`);
       return true;
@@ -1203,7 +1189,7 @@ export class SessionRunner {
   applyAutoModeChange(mode: PermissionMode): void {
     this.permissionMode = mode;
     if (this._phase === 'ready') {
-      void this.registry.update(this.sessionId, { permissionMode: mode });
+      void this.registry.update(this.sessionId, { mode });
     }
     this.events.onStateChanged?.(this.sessionId);
   }
@@ -1218,7 +1204,7 @@ export class SessionRunner {
       await this.handle.setEffort(level);
       this.effortLevel = level;
       if (this._phase === 'ready') {
-        void this.registry.update(this.sessionId, { effortLevel: level });
+        void this.registry.update(this.sessionId, { effort: level });
       }
       this.events.log(`[Runner] Effort level set to ${level} for ${this.sessionId}`);
       return { applied: true, confirmedLevel: level };
@@ -1368,11 +1354,11 @@ export class SessionRunner {
       sdkSessionId: this.sdkSessionId,
       ...(this.previousSdkSessionId ? { previousSdkSessionId: this.previousSdkSessionId } : {}),
       cwd: this.cwd,
+      agent: this._agent,
       ...(this.model ? { model: this.model } : {}),
       ...(this._providerId ? { providerId: this._providerId } : {}),
-      ...(this._backend ? { backend: this._backend } : {}),
-      ...(this.effortLevel ? { effortLevel: this.effortLevel } : {}),
-      permissionMode: this.permissionMode,
+      ...(this.effortLevel ? { effort: this.effortLevel } : {}),
+      mode: this.permissionMode,
       title: this.title,
       project: this.project(),
       createdAt: this.createdAt,

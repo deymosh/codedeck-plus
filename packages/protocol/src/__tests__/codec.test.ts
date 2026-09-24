@@ -17,6 +17,7 @@ import type { BridgeToPhoneMessage, SessionListMessage } from '../schemas/events
 
 const session = {
   id: 'a1b2c3',
+  agent: 'claude-code',
   slug: 'fix-scroll',
   cwd: '/home/user/projects/app',
   lastActivity: '2026-08-05T10:00:00Z',
@@ -30,27 +31,29 @@ const session = {
 describe('phone → bridge codec', () => {
   const commands: PhoneToBridgeMessage[] = [
     { type: 'input', sessionId: 's1', text: 'hello', inputId: 'i-1', v: PROTOCOL_VERSION },
-    { type: 'question-input', sessionId: 's1', text: 'option B please', optionCount: 3 },
-    { type: 'permission-res', sessionId: 's1', requestId: 'r1', allow: true, modifier: 'always' },
-    { type: 'keypress', sessionId: 's1', key: '2', context: 'plan-approval' },
-    { type: 'mode', sessionId: 's1', mode: 'acceptEdits' },
-    { type: 'effort', sessionId: 's1', level: 'xhigh' },
-    { type: 'model', sessionId: 's1', model: 'claude-opus-5' },
+    { type: 'question-response', sessionId: 's1', requestId: 'q1', index: 1, answer: { kind: 'text', text: 'option B please' } },
+    { type: 'question-response', sessionId: 's1', requestId: 'q1', index: 0, answer: { kind: 'options', selected: [0, 2] } },
+    { type: 'permission-response', sessionId: 's1', requestId: 'r1', optionId: 'allow_always' },
+    { type: 'plan-response', sessionId: 's1', requestId: 'p1', optionId: 'acceptEdits' },
+    { type: 'set-option', sessionId: 's1', option: 'mode', value: 'acceptEdits' },
+    { type: 'set-option', sessionId: 's1', option: 'effort', value: 'xhigh' },
+    { type: 'set-option', sessionId: 's1', option: 'model', value: 'claude-opus-5' },
     { type: 'sync-request', sessionId: 's1', haveRanges: [[1, 100], [150, 200]] },
     { type: 'sync-ack', syncId: 'sy1', range: [101, 149] },
-    { type: 'create-session', cwd: 'my-project', createCwd: true, model: 'claude-opus-5', defaultEffort: 'high' },
+    { type: 'create-session', agent: 'claude-code', cwd: 'my-project', createCwd: true, model: 'claude-opus-5', effort: 'high' },
     { type: 'refresh-sessions' },
     { type: 'close-session', sessionId: 's1' },
     { type: 'interrupt', sessionId: 's1' },
     { type: 'create-folder', path: 'new-app', requestId: 'f1' },
     { type: 'usage-request', sessionId: 's1' },
     { type: 'gsd-request', sessionId: 's1' },
-    { type: 'models-request' },
-    { type: 'set-credentials', anthropicApiKey: null, githubPat: 'ghp_x' },
+    { type: 'models-request', agent: 'opencode' },
+    { type: 'set-credentials', agent: 'claude-code', values: { anthropic_api_key: null } },
+    { type: 'set-credentials', values: { github_pat: 'ghp_x' } },
     { type: 'pair-request', npub: 'npub1xyz', pubkeyHex: 'ab'.repeat(32), label: 'Phone', token: 'tok' },
   ];
 
-  it.each(commands.map((m) => [m.type, m] as const))('round-trips %s', (_t, msg) => {
+  it.each(commands.map((m, i) => [`${m.type} #${i}`, m] as const))('round-trips %s', (_t, msg) => {
     const decoded = decodePhoneToBridge(encodePhoneToBridge(msg));
     expect(decoded).toEqual({ ok: true, msg });
   });
@@ -74,8 +77,19 @@ describe('phone → bridge codec', () => {
 
   it('encode validates outbound — a malformed message fails at the sender', () => {
     expect(() =>
-      encodePhoneToBridge({ type: 'mode', sessionId: 's1', mode: 'yolo' } as never),
+      encodePhoneToBridge({ type: 'set-option', sessionId: 's1', option: 'temperature', value: '1' } as never),
     ).toThrow();
+  });
+
+  it('v10 answer and option commands are gone', () => {
+    for (const msg of [
+      { type: 'permission-res', sessionId: 's', requestId: 'r', allow: true },
+      { type: 'keypress', sessionId: 's', key: '1', context: 'plan-approval' },
+      { type: 'question-input', sessionId: 's', text: 'x', optionCount: 2 },
+      { type: 'mode', sessionId: 's', mode: 'plan' },
+    ]) {
+      expect(decodePhoneToBridge(JSON.stringify(msg)).ok, msg.type).toBe(false);
+    }
   });
 });
 
@@ -85,6 +99,18 @@ describe('bridge → phone codec', () => {
     machine: 'vps-1',
     host: 'cli',
     sessions: [session],
+    agents: [
+      {
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        modes: [{ id: 'default', label: 'Default' }, { id: 'plan', label: 'Plan' }],
+        efforts: [{ id: 'high', label: 'High' }],
+        defaultMode: 'default',
+        supports: { models: true, usage: true, providers: true, gsd: true, interrupt: true },
+        credentials: [{ id: 'anthropic_api_key', label: 'Anthropic API key', present: true, fromEnv: true }],
+      },
+    ],
+    credentials: [{ id: 'github_pat', label: 'GitHub token', present: false }],
     protocolVersion: PROTOCOL_VERSION,
     capabilities: ['sync/1', 'folders'],
     folders: ['app', 'tools/cli'],
@@ -97,7 +123,7 @@ describe('bridge → phone codec', () => {
       type: 'output',
       sessionId: 's1',
       seq: 918,
-      entry: { entryType: 'text', content: 'Done.', timestamp: '2026-08-05T10:00:01Z' },
+      entry: { entryType: 'text', role: 'agent', text: 'Done.', timestamp: '2026-08-05T10:00:01Z' },
     },
     { type: 'input-ack', sessionId: 's1', inputId: 'i-1' },
     { type: 'sync-begin', sessionId: 's1', syncId: 'sy1', seqHigh: 917, ranges: [[101, 149]] },
@@ -106,7 +132,12 @@ describe('bridge → phone codec', () => {
       sessionId: 's1',
       syncId: 'sy1',
       range: [101, 101],
-      entries: [{ seq: 101, entry: { entryType: 'tool_use', content: 'Read(x)', timestamp: 't' } }],
+      entries: [
+        {
+          seq: 101,
+          entry: { entryType: 'tool_call', callId: 'c1', toolName: 'Read', kind: 'read', title: 'x', timestamp: 't' },
+        },
+      ],
     },
     { type: 'sync-end', sessionId: 's1', syncId: 'sy1', deliveredRanges: [[101, 149]] },
     { type: 'session-pending', pendingId: 'p1', machine: 'vps-1', createdAt: 't' },
@@ -114,11 +145,32 @@ describe('bridge → phone codec', () => {
     { type: 'session-failed', pendingId: 'p1', reason: 'timeout' },
     { type: 'input-failed', sessionId: 's1', reason: 'no-session', inputId: 'i-1' },
     { type: 'close-session-ack', sessionId: 's1', success: true },
-    { type: 'mode-confirmed', sessionId: 's1', mode: 'plan' },
-    { type: 'effort-confirmed', sessionId: 's1', level: 'max' },
-    { type: 'model-confirmed', sessionId: 's1', model: 'claude-opus-5' },
+    { type: 'option-confirmed', sessionId: 's1', option: 'mode', value: 'plan' },
+    { type: 'option-confirmed', sessionId: 's1', option: 'effort', value: 'max' },
     { type: 'folder-ack', requestId: 'f1', success: true, path: 'new-app' },
-    { type: 'models', models: [{ id: 'claude-opus-5', label: 'Opus 5' }], defaultModel: 'claude-opus-5' },
+    {
+      type: 'models',
+      agent: 'claude-code',
+      models: [{ id: 'claude-opus-5', label: 'Opus 5' }],
+      defaultModel: 'claude-opus-5',
+    },
+    {
+      type: 'credentials-ack',
+      machine: 'vps-1',
+      agent: 'claude-code',
+      success: true,
+      credentials: [{ id: 'anthropic_api_key', label: 'Anthropic API key', present: true, valid: true }],
+    },
+    {
+      type: 'usage',
+      sessionId: 's1',
+      usage: {
+        available: true,
+        plan: 'max',
+        windows: [{ label: '5h', utilization: 42, resetsAt: 't' }],
+        fetchedAt: 't',
+      },
+    },
     { type: 'pair-ack', machine: 'vps-1', ok: false, reason: 'bad-token' },
   ];
 
@@ -128,26 +180,45 @@ describe('bridge → phone codec', () => {
   it('models round-trips an empty list carrying an error reason (CDX-035)', () => {
     const msg: BridgeToPhoneMessage = {
       type: 'models',
+      agent: 'claude-code',
       models: [],
       error: 'No live Claude session answered — start or open a session and try again.',
     };
     expect(decodeBridgeToPhone(encodeBridgeToPhone(msg))).toEqual({ ok: true, msg });
   });
 
-  it('models without `error` still decodes (older bridges stay wire-compatible)', () => {
-    const res = decodeBridgeToPhone(JSON.stringify({ type: 'models', models: [{ id: 'm1' }] }));
-    expect(res.ok).toBe(true);
+  it('models must name the agent it answers for', () => {
+    expect(decodeBridgeToPhone(JSON.stringify({ type: 'models', models: [{ id: 'm1' }] })).ok).toBe(false);
   });
 
-  it.each(events.map((m) => [m.type, m] as const))('round-trips %s', (_t, msg) => {
+  it.each(events.map((m, i) => [`${m.type} #${i}`, m] as const))('round-trips %s', (_t, msg) => {
     const decoded = decodeBridgeToPhone(encodeBridgeToPhone(msg));
     expect(decoded).toEqual({ ok: true, msg });
   });
 
-  it('session list REQUIRES protocolVersion in v10 (no more silent pre-v1 fallback)', () => {
+  it('session list REQUIRES protocolVersion and the agent catalog', () => {
     const { protocolVersion: _pv, ...withoutVersion } = sessionsMsg;
-    const res = decodeBridgeToPhone(JSON.stringify(withoutVersion));
-    expect(res.ok).toBe(false);
+    expect(decodeBridgeToPhone(JSON.stringify(withoutVersion)).ok).toBe(false);
+    const { agents: _a, ...withoutAgents } = sessionsMsg;
+    expect(decodeBridgeToPhone(JSON.stringify(withoutAgents)).ok).toBe(false);
+  });
+
+  it('agent descriptors default their optional lists', () => {
+    const res = decodeBridgeToPhone(JSON.stringify({
+      ...sessionsMsg,
+      agents: [{ id: 'pi', displayName: 'Pi' }],
+    }));
+    expect(res.ok).toBe(true);
+    if (res.ok && res.msg.type === 'sessions') {
+      expect(res.msg.agents[0]).toEqual({
+        id: 'pi',
+        displayName: 'Pi',
+        modes: [],
+        efforts: [],
+        supports: { models: false, usage: false, providers: false, gsd: false, interrupt: false },
+        credentials: [],
+      });
+    }
   });
 
   it('phone codec refuses bridge-only messages and vice versa', () => {
@@ -186,23 +257,20 @@ describe('CDX protocol nits — pair-ack extras, input-failed reasons, thinking 
     })).ok).toBe(false);
   });
 
-  it('output entries accept entryType "diff" with the structured payload (CDX-050)', () => {
+  it('output entries accept entryType "diff" with its lines (CDX-050)', () => {
     const msg: BridgeToPhoneMessage = {
       type: 'output',
       sessionId: 's1',
       seq: 8,
       entry: {
         entryType: 'diff',
-        content: '-const a = 1;\n+const a = 2;',
         timestamp: '2026-08-08T10:00:00Z',
-        metadata: { role: 'assistant', tool_name: 'Edit', tool_use_id: 'toolu_9' },
-        diff: {
-          path: 'src/app.ts',
-          lines: [
-            { type: 'del', text: 'const a = 1;' },
-            { type: 'add', text: 'const a = 2;' },
-          ],
-        },
+        path: 'src/app.ts',
+        callId: 'toolu_9',
+        lines: [
+          { type: 'del', text: 'const a = 1;' },
+          { type: 'add', text: 'const a = 2;' },
+        ],
       },
     };
     const decoded = decodeBridgeToPhone(encodeBridgeToPhone(msg));
@@ -211,45 +279,32 @@ describe('CDX protocol nits — pair-ack extras, input-failed reasons, thinking 
     // truncated flag round-trips
     const truncated: BridgeToPhoneMessage = {
       ...msg,
-      entry: {
-        ...msg.entry,
-        diff: { path: 'src/app.ts', lines: [{ type: 'add', text: 'x' }], truncated: true },
-      },
-    };
+      entry: { ...msg.entry, lines: [{ type: 'add', text: 'x' }], truncated: true },
+    } as BridgeToPhoneMessage;
     expect(decodeBridgeToPhone(encodeBridgeToPhone(truncated))).toEqual({ ok: true, msg: truncated });
 
     // a bad line type is rejected
     expect(decodeBridgeToPhone(JSON.stringify({
       ...msg,
-      entry: {
-        ...msg.entry,
-        diff: { path: 'src/app.ts', lines: [{ type: 'changed', text: 'x' }] },
-      },
-    })).ok).toBe(false);
-
-    // an empty path is rejected
-    expect(decodeBridgeToPhone(JSON.stringify({
-      ...msg,
-      entry: { ...msg.entry, diff: { path: '', lines: [] } },
+      entry: { ...msg.entry, lines: [{ type: 'changed', text: 'x' }] },
     })).ok).toBe(false);
   });
 
-  it('the diff capability string is advertised by bridge and phone (CDX-050)', () => {
-    expect(CAPABILITIES.diff).toBe('diff');
-    expect(ALL_BRIDGE_CAPABILITIES).toContain('diff');
-    expect(ALL_PHONE_CAPABILITIES).toContain('diff');
+  it('the capability lists match the Rust v11 set', () => {
+    expect(ALL_BRIDGE_CAPABILITIES).toEqual(['sync/1', 'folders', 'images', 'device-actions', 'chunked']);
+    expect(ALL_PHONE_CAPABILITIES).toEqual([CAPABILITIES.chunked]);
   });
 
-  it('output entries accept entryType "thinking" (with redacted metadata)', () => {
+  it('output entries accept entryType "thinking" (with the redacted flag)', () => {
     const msg: BridgeToPhoneMessage = {
       type: 'output',
       sessionId: 's1',
       seq: 7,
       entry: {
         entryType: 'thinking',
-        content: 'pondering…',
+        text: 'pondering…',
         timestamp: '2026-08-05T10:00:00Z',
-        metadata: { role: 'assistant', redacted: false },
+        redacted: false,
       },
     };
     const decoded = decodeBridgeToPhone(encodeBridgeToPhone(msg));
@@ -355,6 +410,7 @@ describe('CDX-062 — custom provider profiles', () => {
   it('create-session with providerId parses and providerId survives', () => {
     const msg: PhoneToBridgeMessage = {
       type: 'create-session',
+      agent: 'claude-code',
       cwd: 'my-project',
       model: 'kimi-k3',
       providerId: 'kimi',
@@ -482,12 +538,6 @@ describe('CDX-062 — custom provider profiles', () => {
       }],
     };
     expect(decodeBridgeToPhone(encodeBridgeToPhone(msg))).toEqual({ ok: true, msg });
-  });
-
-  it('the custom-providers capability is bridge-only (CDX-062)', () => {
-    expect(CAPABILITIES.customProviders).toBe('custom-providers');
-    expect(ALL_BRIDGE_CAPABILITIES).toContain('custom-providers');
-    expect(ALL_PHONE_CAPABILITIES).not.toContain('custom-providers');
   });
 
   // Old-peer safety, same mechanism the wrong-direction test above exercises:

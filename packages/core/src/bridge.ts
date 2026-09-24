@@ -27,24 +27,40 @@ import type { Filter } from 'nostr-tools/filter';
 import type { NostrEvent } from 'nostr-tools/core';
 import {
   ALL_BRIDGE_CAPABILITIES,
-  CAPABILITIES,
   createRelayAuthSigner,
   isValidProviderBaseUrl,
   PROTOCOL_VERSION,
   PROVIDER_BASE_URL_ERROR,
+  type AgentDescriptor,
   type CreateFolderMessage,
   type CreateSessionMessage,
+  type CredentialStatus,
+  type OutputEntry,
   type PairedPhone,
   type PairRequestMessage,
   type ProviderModel,
   type ProviderProfileInfo,
   type RemoteSessionInfo,
-  type SessionBackend,
   type SessionListMessage,
   type SetCredentialsMessage,
   type SetDeviceConfigMessage,
+  type SetOptionMessage,
   type SetProviderProfileMessage,
 } from '@codedeck/protocol';
+import {
+  ANTHROPIC_API_KEY_CREDENTIAL,
+  CLAUDE_CODE_AGENT_ID,
+  GITHUB_PAT_CREDENTIAL,
+  OPENCODE_AGENT_ID,
+  PLAN_APPROVAL_OPTIONS,
+  claudeCodeDescriptor,
+  isKnownEffort,
+  isKnownMode,
+  openCodeDescriptor,
+  toolKindOf,
+  toolLocations,
+  toolTitle,
+} from './agents';
 import type { BridgeHost, PairingHandle } from './host';
 import { keypairFromSecret, npubFromHex, type Keypair } from './nostr/crypto';
 import {
@@ -67,6 +83,7 @@ import { buildPairingUrl, DEFAULT_PAIRING_WINDOW_MS } from './pairing';
 import { TranscriptStore } from './session/transcript';
 import { SessionRegistry } from './session/registry';
 import { PermissionBroker, type PermissionCard } from './session/permissions';
+import { askQuestionEntries } from './sdk/adapter';
 import { SessionRunner, type SessionRunnerEvents } from './session/runner';
 import { SyncServer, type SyncTimers } from './sync/server';
 import type { SdkFacade } from './sdk/facade';
@@ -444,12 +461,11 @@ export interface BridgeCoreOptions {
   /** The bridge identity keypair's secret key. */
   secretKey: Uint8Array;
   facade: SdkFacade;
-  /** OpenCode backend facade — absent means this bridge cannot run
-   *  `create-session.backend: 'opencode'`. When present, the `opencode`
-   *  capability is added to the heartbeat and `handleCreateSession`/
-   *  `resumeOnBoot`/`makeRunner` route a session with `backend: 'opencode'`
-   *  here instead of to `facade`. See apps/bridge/src/commands.ts for the
-   *  `CODEDECK_OPENCODE_SERVER_URL`-driven construction. */
+  /** OpenCode facade — absent means this bridge cannot run the `opencode`
+   *  agent. When present, `opencode` joins the heartbeat's agent catalog and
+   *  `handleCreateSession`/`resumeOnBoot`/`makeRunner` route a session on
+   *  that agent here instead of to `facade`. See apps/bridge/src/commands.ts
+   *  for the `CODEDECK_OPENCODE_SERVER_URL`-driven construction. */
   openCodeFacade?: SdkFacade;
   /** Injectable relay pool for tests. Defaults to the real BridgePool. */
   poolFactory?: PoolFactory;
@@ -481,10 +497,17 @@ export interface BridgeCoreOptions {
 }
 
 /** Shared by handleCreateSession and the models-request handler — both must
- *  refuse a `backend: 'opencode'` request identically when this bridge has
- *  no working OpenCode facade configured. */
+ *  refuse the `opencode` agent identically when this bridge has no working
+ *  OpenCode facade configured. */
 const OPENCODE_NOT_CONFIGURED_REASON =
   'This bridge has no OpenCode backend configured (CODEDECK_OPENCODE_SERVER_URL is unset).';
+
+/** Why the bridge refuses an agent id it cannot run. */
+function unavailableAgentReason(agent: string): string {
+  return agent === OPENCODE_AGENT_ID
+    ? OPENCODE_NOT_CONFIGURED_REASON
+    : `This bridge has no agent '${agent}'.`;
+}
 
 export class BridgeCore {
   readonly keypair: Keypair;
@@ -519,18 +542,16 @@ export class BridgeCore {
 
   private readonly runners = new Map<string, SessionRunner>();
 
-  /**
-   * CDX-050: capability strings each phone advertised on its most recent
-   * command this boot (`caps`; `[]` for pre-CDX-050 phones, which omit the
-   * field). `diff` is the ONLY string consulted here — see phonesSupportDiff();
-   * `chunked` is stored but never read (transport beacon, see capabilities.ts).
-   * In-memory, per-boot, keyed by phone pubkey hex; never persisted or pruned.
-   */
-  private readonly phoneCaps = new Map<string, readonly string[]>();
   private paired: PairedPhone[] = [];
   /** Phone-set credentials, loaded at boot + kept current by set-credentials.
    *  Feeds sessionEnvFromCredentials at every SDK spawn. NEVER logged. */
   private storedCredentials: StoredCredentials = {};
+  /** The last check of the effective Anthropic API key against the API
+   *  (absent = not checked since it last changed). */
+  private anthropicKeyValid?: boolean;
+  /** Serializes set-credentials handling: each write reads the store, patches
+   *  it and writes it back, so two writes in flight would lose one. */
+  private credentialsQueue: Promise<void> = Promise.resolve();
   /** CDX-062: phone-managed custom provider profiles, loaded at boot + kept
    *  current by set-provider-profile. Looked up LIVE at every SDK spawn (token
    *  rotation reaches restarts). Token values NEVER logged. */
@@ -628,13 +649,28 @@ export class BridgeCore {
     this.broker = new PermissionBroker(
       {
         onPermissionCard: (card) => this.publishPermissionCard(card),
-        // AskUserQuestion + ExitPlanMode cards are already emitted by the SDK
-        // adapter inside the output stream — no extra out-of-band entry needed.
-        onQuestionCard: () => {},
-        onPlanCard: () => {},
+        onQuestionCard: (sessionId, requestId, questions) => {
+          this.appendCardEntries(sessionId, askQuestionEntries(requestId, questions, new Date().toISOString()));
+        },
+        onPlanCard: (sessionId, requestId) => {
+          this.appendCardEntries(sessionId, [{
+            entryType: 'plan_approval',
+            requestId,
+            options: PLAN_APPROVAL_OPTIONS,
+            timestamp: new Date().toISOString(),
+          }]);
+        },
+        onResolved: (sessionId, requestId, summary) => {
+          this.appendCardEntries(sessionId, [{
+            entryType: 'resolved',
+            requestId,
+            summary,
+            timestamp: new Date().toISOString(),
+          }]);
+        },
         onAutoModeChange: (sessionId, mode) => {
           this.runners.get(sessionId)?.applyAutoModeChange(mode);
-          void this.publishToPhones({ type: 'mode-confirmed', sessionId, mode });
+          void this.publishToPhones({ type: 'option-confirmed', sessionId, option: 'mode', value: mode });
         },
         onPendingChanged: (sessionId) => {
           if (this.stopped) return;
@@ -652,10 +688,6 @@ export class BridgeCore {
     this.ingest = new CommandIngest({
       secretKey: this.keypair.secretKey,
       handlers: this.commandHandlers(),
-      // CDX-050: every valid command refreshes the sender's capability record.
-      onPhoneCaps: (phone, caps) => {
-        this.phoneCaps.set(phone, caps);
-      },
       isPairedPhone: (pk) => this.paired.some((p) => p.pubkeyHex === pk),
       log,
       now: this.now,
@@ -823,7 +855,7 @@ export class BridgeCore {
         // CDX-062: the runner also rehydrates this from the record itself;
         // passing it keeps makeRunner's wiring explicit.
         ...(record.providerId ? { providerId: record.providerId } : {}),
-        ...(record.backend ? { backend: record.backend } : {}),
+        agent: record.agent,
         resume: true,
       });
       this.runners.set(record.sessionId, runner);
@@ -1190,18 +1222,10 @@ export class BridgeCore {
       machine: this.host.config.machineName,
       host: this.host.config.host,
       sessions: this.remoteSessions(),
+      agents: this.agentDescriptors(),
+      credentials: this.bridgeCredentials(),
       protocolVersion: PROTOCOL_VERSION,
-      // The full set, plus `opencode` only when this bridge actually has a
-      // working OpenCode facade configured — see CAPABILITIES.opencode's doc
-      // comment for why this one string is conditional while every other
-      // marker here is unconditional. Only `images` and `custom-providers`
-      // are read by the phone as gates; the rest are presence markers the
-      // phone detects via payload data instead (see the tier note in
-      // capabilities.ts).
-      capabilities: [
-        ...ALL_BRIDGE_CAPABILITIES,
-        ...(this.openCodeFacade ? [CAPABILITIES.opencode] : []),
-      ],
+      capabilities: [...ALL_BRIDGE_CAPABILITIES],
       folders: this.workspaceFolders(),
       // CDX-031: `folders` lists what is INSIDE the roots, so with several
       // `--workspace` roots the phone could reach every root's subfolders but
@@ -1242,6 +1266,39 @@ export class BridgeCore {
     return this.remoteSessions().find((s) => s.id === sessionId);
   }
 
+  // --- Agent catalog ---
+
+  /** The agents this bridge can run, as the heartbeat advertises them. */
+  private agentDescriptors(): AgentDescriptor[] {
+    return [
+      claudeCodeDescriptor(this.claudeCodeCredentials()),
+      ...(this.openCodeFacade ? [openCodeDescriptor()] : []),
+    ];
+  }
+
+  private isAvailableAgent(agent: string): boolean {
+    return agent === CLAUDE_CODE_AGENT_ID || (agent === OPENCODE_AGENT_ID && !!this.openCodeFacade);
+  }
+
+  /** Claude Code's credentials: the Anthropic API key, where the bridge's own
+   *  environment wins over a phone-stored key (the same precedence the
+   *  session env uses). Status only — never the secret. */
+  private claudeCodeCredentials(): CredentialStatus[] {
+    const fromEnv = !!process.env.ANTHROPIC_API_KEY;
+    return [{
+      id: ANTHROPIC_API_KEY_CREDENTIAL,
+      label: 'Anthropic API key',
+      present: fromEnv || !!this.storedCredentials.anthropicApiKey,
+      ...(fromEnv ? { fromEnv: true } : {}),
+      ...(this.anthropicKeyValid !== undefined ? { valid: this.anthropicKeyValid } : {}),
+    }];
+  }
+
+  /** The bridge's own credentials (not tied to an agent). */
+  private bridgeCredentials(): CredentialStatus[] {
+    return [{ id: GITHUB_PAT_CREDENTIAL, label: 'GitHub token', present: !!this.storedCredentials.githubPat }];
+  }
+
   // --- Command dispatch (validated ingest → engine) ---
 
   private commandHandlers(): CommandHandlers {
@@ -1270,76 +1327,25 @@ export class BridgeCore {
         }
       },
 
-      onQuestionInput: async (msg) => {
-        const runner = this.runners.get(msg.sessionId);
-        const sent = runner ? runner.sendQuestionInput(msg.text) : false;
-        if (!sent) {
-          await this.publishToPhones({
-            type: 'input-failed',
-            sessionId: msg.sessionId,
-            reason: runner ? 'error' : 'no-session',
-          });
-        }
-      },
-
       onPermissionResponse: (msg) => {
-        this.broker.resolvePermission(msg.requestId, msg.allow, msg.modifier);
-      },
-
-      onKeypress: async (msg) => {
-        await this.runners.get(msg.sessionId)?.handleKeypress(msg.key, msg.context);
-      },
-
-      onModeChange: async (msg) => {
-        const runner = this.runners.get(msg.sessionId);
-        if (!runner) return;
-        const ok = await runner.setPermissionMode(msg.mode);
-        if (ok) {
-          await this.publishToPhones({
-            type: 'mode-confirmed',
-            sessionId: msg.sessionId,
-            mode: msg.mode,
-          });
+        if (!this.runners.get(msg.sessionId)?.resolvePermission(msg.requestId, msg.optionId)) {
+          this.log(`[BridgeCore] permission-response for ${msg.requestId} in ${msg.sessionId} matched nothing pending`);
         }
       },
 
-      onEffortChange: async (msg) => {
-        const runner = this.runners.get(msg.sessionId);
-        if (!runner) return;
-        const { confirmedLevel } = await runner.setEffort(msg.level);
-        // Always confirm back so the phone UI stays in sync, even on failure.
-        await this.publishToPhones({
-          type: 'effort-confirmed',
-          sessionId: msg.sessionId,
-          level: confirmedLevel,
-        });
+      onQuestionResponse: (msg) => {
+        if (!this.runners.get(msg.sessionId)?.answerQuestion(msg.requestId, msg.index, msg.answer)) {
+          this.log(`[BridgeCore] question-response for ${msg.requestId}#${msg.index} in ${msg.sessionId} matched nothing pending`);
+        }
       },
 
-      onModelChange: async (msg) => {
-        const runner = this.runners.get(msg.sessionId);
-        if (!runner) return;
-        // CDX-062 (D3): a provider-bound session may only switch between the
-        // models its profile lists — an Anthropic model id would be sent to
-        // the custom provider verbatim. Profile deleted → reject too. On
-        // reject: log, NO model-confirmed (the phone keeps its known model).
-        if (runner.providerId) {
-          const profile = this.providerProfiles.get(runner.providerId);
-          if (!profile) {
-            this.log(`[BridgeCore] model change rejected for ${msg.sessionId}: provider profile '${runner.providerId}' was deleted`);
-            return;
-          }
-          if (!profile.models.some((m) => m.id === msg.model)) {
-            this.log(`[BridgeCore] model change rejected for ${msg.sessionId}: '${msg.model}' is not in provider profile '${profile.id}'`);
-            return;
-          }
+      onPlanResponse: async (msg) => {
+        if (!(await this.runners.get(msg.sessionId)?.respondPlan(msg.requestId, msg.optionId))) {
+          this.log(`[BridgeCore] plan-response for ${msg.requestId} in ${msg.sessionId} matched nothing pending`);
         }
-        const { confirmedModel } = await runner.setModel(msg.model);
-        await this.publishToPhones({
-          type: 'model-confirmed',
-          sessionId: msg.sessionId,
-          model: confirmedModel,
-        });
       },
+
+      onSetOption: (msg) => this.handleSetOption(msg),
 
       onSyncRequest: (msg, phone) => {
         this.syncServer.handleSyncRequest(msg, phone);
@@ -1379,19 +1385,14 @@ export class BridgeCore {
       onCreateFolder: (msg) => this.handleCreateFolder(msg),
 
       onModelsRequest: async (msg) => {
-        const backend = msg.backend;
-        const backendField = backend ? { backend } : {};
-        if (backend === 'opencode' && !this.openCodeFacade) {
-          this.log(`[BridgeCore] models-request: ${OPENCODE_NOT_CONFIGURED_REASON}`);
-          await this.publishToPhones({
-            type: 'models',
-            models: [],
-            error: OPENCODE_NOT_CONFIGURED_REASON,
-            ...backendField,
-          });
+        const agent = msg.agent;
+        if (!this.isAvailableAgent(agent)) {
+          const error = unavailableAgentReason(agent);
+          this.log(`[BridgeCore] models-request: ${error}`);
+          await this.publishToPhones({ type: 'models', agent, models: [], error });
           return;
         }
-        const models = await this.facadeFor(backend).supportedModels();
+        const models = await this.facadeFor(agent).supportedModels();
         // CDX-022/CDX-035: an empty list means "no live SDK session answered",
         // not "the SDK supports zero models". CDX-022 made us publish NOTHING
         // (so the phone kept retrying instead of freezing on an empty picker),
@@ -1401,14 +1402,14 @@ export class BridgeCore {
         // indistinguishable from a lost message.
         if (models.length === 0) {
           const error =
-            backend === 'opencode'
+            agent === OPENCODE_AGENT_ID
               ? 'The OpenCode server reported no configured models (or the request failed) — check its provider configuration.'
               : 'No live Claude session answered — start or open a session and try again.';
           this.log(`[BridgeCore] models-request: ${error}`);
-          await this.publishToPhones({ type: 'models', models: [], error, ...backendField });
+          await this.publishToPhones({ type: 'models', agent, models: [], error });
           return;
         }
-        await this.publishToPhones({ type: 'models', models, ...backendField });
+        await this.publishToPhones({ type: 'models', agent, models });
       },
 
       onUploadImage: (msg) => {
@@ -1442,7 +1443,11 @@ export class BridgeCore {
         await this.publishToPhones({ type: 'gsd-state', sessionId: msg.sessionId, gsd });
       },
 
-      onSetCredentials: (msg, phone) => this.handleSetCredentials(msg, phone),
+      onSetCredentials: (msg, phone) => {
+        const run = this.credentialsQueue.then(() => this.handleSetCredentials(msg, phone));
+        this.credentialsQueue = run.catch(() => undefined);
+        return run;
+      },
       onSetProviderProfile: (msg, phone) => this.handleSetProviderProfile(msg, phone),
       onProviderProfilesRequest: async (_msg, phone) => {
         // Always answerable straight from storage — no error case (unlike models).
@@ -1451,6 +1456,59 @@ export class BridgeCore {
       onSetDeviceConfig: (msg, phone) => this.handleSetDeviceConfig(msg, phone),
       onPairRequest: (msg, phone) => this.handlePairRequest(msg, phone),
     };
+  }
+
+  /**
+   * Change a session's mode, effort or model. The value must be one the
+   * session's agent advertises; a refused change publishes nothing, so the
+   * phone keeps showing the value it knew. A mode or model the agent refuses
+   * at runtime is not confirmed either; an effort change always confirms the
+   * level actually in force.
+   */
+  private async handleSetOption(msg: SetOptionMessage): Promise<void> {
+    const runner = this.runners.get(msg.sessionId);
+    if (!runner) return;
+    const confirm = (value: string) =>
+      this.publishToPhones({ type: 'option-confirmed', sessionId: msg.sessionId, option: msg.option, value });
+
+    switch (msg.option) {
+      case 'mode': {
+        if (!isKnownMode(runner.agent, msg.value)) {
+          this.log(`[BridgeCore] mode '${msg.value}' rejected for ${msg.sessionId}: not a ${runner.agent} mode`);
+          return;
+        }
+        if (await runner.setPermissionMode(msg.value)) await confirm(msg.value);
+        return;
+      }
+      case 'effort': {
+        if (!isKnownEffort(runner.agent, msg.value)) {
+          this.log(`[BridgeCore] effort '${msg.value}' rejected for ${msg.sessionId}: not a ${runner.agent} effort level`);
+          return;
+        }
+        const { confirmedLevel } = await runner.setEffort(msg.value);
+        await confirm(confirmedLevel);
+        return;
+      }
+      case 'model': {
+        // CDX-062 (D3): a provider-bound session may only switch between the
+        // models its profile lists — an Anthropic model id would be sent to
+        // the custom provider verbatim. Profile deleted → reject too.
+        if (runner.providerId) {
+          const profile = this.providerProfiles.get(runner.providerId);
+          if (!profile) {
+            this.log(`[BridgeCore] model change rejected for ${msg.sessionId}: provider profile '${runner.providerId}' was deleted`);
+            return;
+          }
+          if (!profile.models.some((m) => m.id === msg.value)) {
+            this.log(`[BridgeCore] model change rejected for ${msg.sessionId}: '${msg.value}' is not in provider profile '${profile.id}'`);
+            return;
+          }
+        }
+        const { confirmedModel } = await runner.setModel(msg.value);
+        await confirm(confirmedModel);
+        return;
+      }
+    }
   }
 
   /**
@@ -1470,7 +1528,7 @@ export class BridgeCore {
     // ever hit the log — never the token.
     const profile = msg.providerId ? this.providerProfiles.get(msg.providerId) : undefined;
 
-    this.log(`[BridgeCore] Create session ${sessionId} in ${cwd}${msg.model ? ` (model: ${msg.model})` : ''}${msg.defaultEffort ? ` (effort: ${msg.defaultEffort})` : ''}${msg.providerId ? ` (provider: ${msg.providerId}${profile ? ` "${profile.label}"` : ''})` : ''}`);
+    this.log(`[BridgeCore] Create ${msg.agent} session ${sessionId} in ${cwd}${msg.model ? ` (model: ${msg.model})` : ''}${msg.effort ? ` (effort: ${msg.effort})` : ''}${msg.mode ? ` (mode: ${msg.mode})` : ''}${msg.providerId ? ` (provider: ${msg.providerId}${profile ? ` "${profile.label}"` : ''})` : ''}`);
 
     await this.publishToPhones({
       type: 'session-pending',
@@ -1479,17 +1537,26 @@ export class BridgeCore {
       createdAt: new Date().toISOString(),
     });
 
+    // An agent this bridge cannot run fails immediately, keeping the two-phase
+    // pending→failed contract, rather than building a runner around a facade
+    // that doesn't exist.
+    if (!this.isAvailableAgent(msg.agent)) {
+      const reason = unavailableAgentReason(msg.agent);
+      this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
+      await this.publishToPhones({ type: 'session-failed', pendingId: sessionId, reason });
+      return;
+    }
+
     // A custom provider profile materializes as subprocess env (ANTHROPIC_API_KEY
     // / ANTHROPIC_BASE_URL) the SDK's own Claude Code CLI spawn picks up — the
     // OpenCode facade never spawns a subprocess per session (it speaks HTTP to
     // an already-running `opencode serve`), so it has nothing to inject a
     // per-session credential into and silently ignores both `providerId` and
     // the env SessionRunner would have computed for it. Refuse the combination
-    // here rather than let a session start that is attributed to a provider
-    // profile it never actually used. The mobile UI already hides the provider
-    // picker once OpenCode is selected (NewSessionModal.tsx), but nothing else
-    // stops a hand-crafted or future client from sending both.
-    if (msg.providerId && msg.backend === 'opencode') {
+    // here (the catalog advertises `supports.providers: false` for OpenCode)
+    // rather than let a session start attributed to a provider profile it
+    // never actually used.
+    if (msg.providerId && msg.agent === OPENCODE_AGENT_ID) {
       const reason =
         'Custom provider profiles are not supported with the OpenCode backend — OpenCode always uses its own configured providers.';
       this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
@@ -1516,28 +1583,24 @@ export class BridgeCore {
       return;
     }
 
-    // 'opencode' requested but this bridge has no working OpenCodeFacade
-    // configured — fail immediately with the same two-phase pending→failed
-    // shape the unknown-providerId case above uses, rather than letting
-    // makeRunner build a runner around a facade that doesn't exist.
-    if (msg.backend === 'opencode' && !this.openCodeFacade) {
-      const reason = OPENCODE_NOT_CONFIGURED_REASON;
-      this.log(`[BridgeCore] Create session ${sessionId} refused: ${reason}`);
-      await this.publishToPhones({ type: 'session-failed', pendingId: sessionId, reason });
-      return;
-    }
-
     // CDX-062: provider-bound sessions default their model from the profile
     // (the SDK's own default is an Anthropic model the provider doesn't have).
     const model = msg.model ?? profile?.defaultModel ?? profile?.models[0]?.id;
+    // A mode or effort the agent does not advertise is ignored (the agent's
+    // default applies) rather than failing the whole session.
+    const mode = msg.mode && isKnownMode(msg.agent, msg.mode) ? msg.mode : undefined;
+    const effort = msg.effort && isKnownEffort(msg.agent, msg.effort) ? msg.effort : undefined;
+    if (msg.mode && !mode) this.log(`[BridgeCore] Create session ${sessionId}: ignoring unknown mode '${msg.mode}'`);
+    if (msg.effort && !effort) this.log(`[BridgeCore] Create session ${sessionId}: ignoring unknown effort '${msg.effort}'`);
 
     const runner = this.makeRunner({
       sessionId,
       cwd,
+      agent: msg.agent,
       ...(model ? { model } : {}),
       ...(msg.providerId ? { providerId: msg.providerId } : {}),
-      ...(msg.backend ? { backend: msg.backend } : {}),
-      ...(msg.defaultEffort ? { effortLevel: msg.defaultEffort } : {}),
+      ...(mode ? { permissionMode: mode } : {}),
+      ...(effort ? { effortLevel: effort } : {}),
       ...(msg.testSession ? { testSession: true } : {}),
     });
     this.runners.set(sessionId, runner);
@@ -1579,15 +1642,40 @@ export class BridgeCore {
 
   /**
    * Store phone-set credentials in host storage and confirm with a
-   * credentials-ack to the requesting phone. Semantics ported from the
-   * standalone bridge: explicit null deletes a credential, undefined leaves it
-   * alone; the effective API key is env ANTHROPIC_API_KEY over the stored one;
-   * the key is optionally validated with a 1-token request. Credential VALUES
-   * are never logged and never echoed back over the wire.
+   * credentials-ack to the requesting phone. `msg.agent` scopes the write:
+   * Claude Code owns the Anthropic API key, the bridge itself (no agent) owns
+   * the GitHub token; an id outside the scope refuses the whole write. A string
+   * sets a credential, `null` deletes it, an id not listed is left alone. The
+   * effective API key is env ANTHROPIC_API_KEY over the stored one, and a
+   * written key is validated with a 1-token request. Credential VALUES are
+   * never logged and never echoed back over the wire — the ack carries status
+   * only.
    */
   private async handleSetCredentials(msg: SetCredentialsMessage, phone: string): Promise<void> {
     const machine = this.host.config.machineName;
-    this.log(`[BridgeCore] set-credentials from ${phone.slice(0, 8)}…`);
+    const scope = msg.agent;
+    this.log(`[BridgeCore] set-credentials (${scope ?? 'bridge'}) from ${phone.slice(0, 8)}…`);
+    const statuses = () => (scope === undefined ? this.bridgeCredentials() : this.claudeCodeCredentials());
+    const refuse = (error: string) =>
+      this.publisher.publishToPhones(
+        { type: 'credentials-ack', machine, ...(scope ? { agent: scope } : {}), success: false, credentials: [], error },
+        [phone],
+      );
+
+    const allowed = scope === undefined
+      ? [GITHUB_PAT_CREDENTIAL]
+      : scope === CLAUDE_CODE_AGENT_ID ? [ANTHROPIC_API_KEY_CREDENTIAL] : [];
+    if (scope !== undefined && !this.isAvailableAgent(scope)) {
+      await refuse(unavailableAgentReason(scope));
+      return;
+    }
+    // Credential ids are names, not secrets — safe to name in the error.
+    const unknown = Object.keys(msg.values).filter((id) => !allowed.includes(id));
+    if (unknown.length > 0) {
+      await refuse(`Unknown credential: ${unknown.join(', ')}`);
+      return;
+    }
+
     try {
       let stored: StoredCredentials = {};
       try {
@@ -1596,13 +1684,15 @@ export class BridgeCore {
       } catch { /* corrupt store — start fresh */ }
 
       const updated: StoredCredentials = { ...stored, updatedAt: new Date(this.now()).toISOString() };
-      if (msg.anthropicApiKey !== undefined) {
-        if (msg.anthropicApiKey === null) delete updated.anthropicApiKey;
-        else updated.anthropicApiKey = msg.anthropicApiKey;
+      const apiKey = msg.values[ANTHROPIC_API_KEY_CREDENTIAL];
+      if (apiKey !== undefined) {
+        if (apiKey === null) delete updated.anthropicApiKey;
+        else updated.anthropicApiKey = apiKey;
       }
-      if (msg.githubPat !== undefined) {
-        if (msg.githubPat === null) delete updated.githubPat;
-        else updated.githubPat = msg.githubPat;
+      const pat = msg.values[GITHUB_PAT_CREDENTIAL];
+      if (pat !== undefined) {
+        if (pat === null) delete updated.githubPat;
+        else updated.githubPat = pat;
       }
       await this.host.storage.set(STORAGE_KEY_CREDENTIALS, JSON.stringify(updated));
       // Runners read this at every spawn (sessionEnv getter) — future sessions
@@ -1612,51 +1702,56 @@ export class BridgeCore {
 
       const effectiveKey = process.env.ANTHROPIC_API_KEY || updated.anthropicApiKey;
       this.log(`[BridgeCore] Credentials saved (hasKey=${!!effectiveKey}, hasPat=${!!updated.githubPat})`);
-
-      // Validate the API key with a lightweight request (ported). Network
-      // errors omit keyValid rather than reporting invalid.
-      let keyValid: boolean | undefined;
-      if (effectiveKey) {
-        try {
-          const fetchFn = this.fetchFn ?? fetch;
-          const res = await fetchFn('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'x-api-key': effectiveKey,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 1,
-              messages: [{ role: 'user', content: 'hi' }],
-            }),
-          });
-          keyValid = res.status !== 401 && res.status !== 403;
-          this.log(`[BridgeCore] API key validation: status=${res.status}, valid=${keyValid}`);
-        } catch (err) {
-          this.log(`[BridgeCore] API key validation failed (network): ${err}`);
-        }
+      if (apiKey !== undefined) {
+        this.anthropicKeyValid = effectiveKey ? await this.validateAnthropicKey(effectiveKey) : undefined;
       }
 
       await this.publisher.publishToPhones({
         type: 'credentials-ack',
         machine,
+        ...(scope ? { agent: scope } : {}),
         success: true,
-        hasAnthropicKey: !!effectiveKey,
-        hasGithubPat: !!updated.githubPat,
-        ...(keyValid !== undefined ? { keyValid } : {}),
+        credentials: statuses(),
       }, [phone]);
+      // Every phone's settings show credential status from the heartbeat.
+      await this.publishSessionList();
     } catch (err) {
       this.log(`[BridgeCore] Failed to save credentials: ${err}`);
       await this.publisher.publishToPhones({
         type: 'credentials-ack',
         machine,
+        ...(scope ? { agent: scope } : {}),
         success: false,
-        hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
-        hasGithubPat: false,
+        credentials: statuses(),
         error: String(err),
       }, [phone]);
+    }
+  }
+
+  /** Check an Anthropic API key with a lightweight request (ported). A network
+   *  error answers undefined rather than reporting the key invalid. */
+  private async validateAnthropicKey(key: string): Promise<boolean | undefined> {
+    try {
+      const fetchFn = this.fetchFn ?? fetch;
+      const res = await fetchFn('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      const valid = res.status !== 401 && res.status !== 403;
+      this.log(`[BridgeCore] API key validation: status=${res.status}, valid=${valid}`);
+      return valid;
+    } catch (err) {
+      this.log(`[BridgeCore] API key validation failed (network): ${err}`);
+      return undefined;
     }
   }
 
@@ -1956,13 +2051,12 @@ export class BridgeCore {
 
   // --- Runner wiring ---
 
-  /** Resolve which SdkFacade a `backend` value routes to. `undefined` and
-   *  'claude-code' both mean the default facade. Callers requesting
+  /** Resolve which SdkFacade an agent id routes to. Callers requesting
    *  'opencode' must have already confirmed `openCodeFacade` is configured
-   *  (see makeRunner's `backend` doc comment) — the non-null assertion here
-   *  mirrors that existing contract rather than adding a new one. */
-  private facadeFor(backend?: SessionBackend): SdkFacade {
-    return backend === 'opencode' ? this.openCodeFacade! : this.facade;
+   *  (see makeRunner's `agent` doc comment) — the non-null assertion here
+   *  mirrors that contract rather than adding a new one. */
+  private facadeFor(agent: string): SdkFacade {
+    return agent === OPENCODE_AGENT_ID ? this.openCodeFacade! : this.facade;
   }
 
   private makeRunner(opts: {
@@ -1971,19 +2065,20 @@ export class BridgeCore {
     model?: string;
     /** CDX-062: bind the session to a stored custom provider profile. */
     providerId?: string;
-    /** Agent backend for this session; undefined means 'claude-code'. Callers
-     *  are responsible for confirming `openCodeFacade` is configured before
-     *  requesting 'opencode' from a FRESH session (handleCreateSession does
-     *  this up front, keeping the two-phase pending→failed contract clean —
-     *  see its own doc comment). resumeOnBoot has no such gate: a record from
-     *  before `CODEDECK_OPENCODE_SERVER_URL` was unset reaches here anyway,
-     *  and the facade lookup below resolves to `undefined`, which
-     *  `SessionRunner.start()`'s existing try/catch around
-     *  `facade.createSession()` already turns into a loud per-session error
-     *  entry (`failResumedSpawn`) instead of a bridge crash — the same path a
-     *  resumed session with a since-deleted provider profile already takes. */
-    backend?: SessionBackend;
-    effortLevel?: CreateSessionMessage['defaultEffort'];
+    /** The agent this session runs on. Callers are responsible for confirming
+     *  `openCodeFacade` is configured before requesting 'opencode' for a
+     *  FRESH session (handleCreateSession does this up front, keeping the
+     *  two-phase pending→failed contract clean). resumeOnBoot has no such
+     *  gate: a record from before `CODEDECK_OPENCODE_SERVER_URL` was unset
+     *  reaches here anyway, and the facade lookup below resolves to
+     *  `undefined`, which `SessionRunner.start()`'s try/catch around
+     *  `facade.createSession()` turns into a loud per-session error entry
+     *  (`failResumedSpawn`) instead of a bridge crash — the same path a
+     *  resumed session with a since-deleted provider profile takes. */
+    agent: string;
+    /** Initial mode; absent = the agent's default mode. */
+    permissionMode?: string;
+    effortLevel?: string;
     testSession?: boolean;
     resume?: boolean;
   }): SessionRunner {
@@ -2018,23 +2113,23 @@ export class BridgeCore {
           }),
         }
       : undefined;
-    const backend = opts.backend;
+    const agent = opts.agent;
     return new SessionRunner({
       sessionId: opts.sessionId,
       cwd: opts.cwd,
-      // See this method's `backend` doc comment above for why facadeFor's
+      // See this method's `agent` doc comment above for why facadeFor's
       // non-null assertion is safe even when `openCodeFacade` turns out to be
       // unconfigured.
-      facade: this.facadeFor(backend),
+      facade: this.facadeFor(agent),
       transcript: this.transcript,
       registry: this.registry,
       broker: this.broker,
       events: this.runnerEvents(),
-      permissionMode: 'plan',
+      agent,
+      ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.providerId ? { providerId: opts.providerId } : {}),
-      ...(backend ? { backend } : {}),
-      ...(backend === 'opencode' ? { translateMessage: opencodeMessageToEntries } : {}),
+      ...(agent === OPENCODE_AGENT_ID ? { translateMessage: opencodeMessageToEntries } : {}),
       ...(opts.effortLevel ? { effortLevel: opts.effortLevel } : {}),
       ...(opts.testSession ? { testSession: true } : {}),
       ...(mcpServers ? { mcpServers } : {}),
@@ -2056,25 +2151,7 @@ export class BridgeCore {
         }
         return buildSessionEnv(this.storedCredentials, profile);
       },
-      // CDX-050: diff cards, evaluated per SDK message against the live
-      // phone-capability registry.
-      emitDiffEntries: () => this.phonesSupportDiff(),
     });
-  }
-
-  /**
-   * CDX-050: may the adapter emit `entryType: 'diff'` entries? Only when at
-   * least one phone has sent a command this boot AND every phone heard from
-   * advertised the 'diff' capability — one pre-CDX-050 phone in the fleet
-   * (recorded as `[]`) keeps it off, because such a phone hard-fails zod on
-   * the unknown entryType and would drop whole output/sync-chunk messages.
-   */
-  private phonesSupportDiff(): boolean {
-    if (this.phoneCaps.size === 0) return false;
-    for (const caps of this.phoneCaps.values()) {
-      if (!caps.includes(CAPABILITIES.diff)) return false;
-    }
-    return true;
   }
 
   private runnerEvents(): SessionRunnerEvents {
@@ -2103,7 +2180,7 @@ export class BridgeCore {
         void this.publishSessionList();
       },
       onModeChanged: (sessionId, mode) => {
-        void this.publishToPhones({ type: 'mode-confirmed', sessionId, mode });
+        void this.publishToPhones({ type: 'option-confirmed', sessionId, option: 'mode', value: mode });
       },
       onEnded: (sessionId) => {
         this.runners.delete(sessionId);
@@ -2113,31 +2190,44 @@ export class BridgeCore {
     };
   }
 
-  /** Permission card → out-of-band system entry through the transcript (unique
-   *  seq — the CDB-025 fix now structural). Entry shape ported from old core.ts. */
+  /** Permission card → a `permission_request` entry through the transcript. */
   private publishPermissionCard(card: PermissionCard): void {
-    const runner = this.runners.get(card.sessionId);
+    const locations = toolLocations(card.toolInput);
+    // The SDK's own prompt sentence, when it sent one, describes the call.
+    const description = card.description ?? card.title;
+    this.appendCardEntries(card.sessionId, [{
+      entryType: 'permission_request',
+      requestId: card.toolUseId,
+      toolName: card.toolName,
+      kind: toolKindOf(card.toolName),
+      title: toolTitle(card.toolName, card.toolInput) || card.toolName,
+      ...(description ? { description } : {}),
+      ...(locations.length > 0 ? { locations } : {}),
+      rawInput: card.toolInput,
+      options: card.options,
+      ...(card.isSubAgent ? { subagent: card.agentLabel ? { label: card.agentLabel } : {} } : {}),
+      ...(card.agentId ? { agentExtras: { agentId: card.agentId } } : {}),
+      timestamp: new Date().toISOString(),
+    }]);
+  }
+
+  /**
+   * Out-of-band entries (permission / question / plan cards and their
+   * resolutions) through the session's transcript — unique, correctly-ordered
+   * seqs (the CDB-025 fix, structural). The transcript chains appends per
+   * session, so entries keep the order they are appended in.
+   */
+  private appendCardEntries(sessionId: string, entries: OutputEntry[]): void {
+    const runner = this.runners.get(sessionId);
     if (!runner) {
-      this.log(`[BridgeCore] Permission card for unknown session ${card.sessionId} — dropped`);
+      this.log(`[BridgeCore] Card entry for unknown session ${sessionId} — dropped`);
       return;
     }
-    void runner.appendEntry({
-      entryType: 'system',
-      content: card.title || `Permission needed: ${card.toolName}`,
-      timestamp: new Date().toISOString(),
-      metadata: {
-        special: 'permission_request',
-        tool_name: card.toolName,
-        tool_use_id: card.toolUseId,
-        tool_input: card.toolInput,
-        description: card.description,
-        subagent: card.isSubAgent || undefined,
-        agent_id: card.agentId,
-        agent_label: card.agentLabel,
-      },
-    }).catch((err) => {
-      this.log(`[BridgeCore] Failed to publish permission card: ${err}`);
-    });
+    for (const entry of entries) {
+      runner.appendEntry(entry).catch((err) => {
+        this.log(`[BridgeCore] Failed to publish ${entry.entryType} entry: ${err}`);
+      });
+    }
   }
 
   // --- Helpers ---

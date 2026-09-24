@@ -37,16 +37,15 @@ describe('downscalePng', () => {
 });
 
 describe('buildScreenshotEntry', () => {
-  it('builds a tool_result entry with an inline data URI + device metadata', () => {
+  it('builds a screenshot notice with an inline data URI + device details', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shot-'));
     const file = path.join(dir, 'cap.png');
     fs.writeFileSync(file, makePng(1080, 2400));
     try {
       const built = buildScreenshotEntry(file, '10.44.0.9:37123', { maxEdge: 240 });
       expect(built).not.toBeNull();
-      expect(built!.entry.entryType).toBe('tool_result');
-      const meta = built!.entry.metadata!;
-      expect(meta.special).toBe('device_screenshot');
+      expect(built!.entry).toMatchObject({ entryType: 'notice', kind: 'screenshot' });
+      const meta = built!.entry.agentExtras as Record<string, unknown>;
       expect(String(meta.imageDataUri)).toMatch(/^data:image\/png;base64,/);
       expect(meta.imageWidth).toBe(108);
       expect(meta.imageHeight).toBe(240);

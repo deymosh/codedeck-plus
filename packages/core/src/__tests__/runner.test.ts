@@ -1,14 +1,14 @@
 /**
  * SessionRunner: two-phase pending/ready creation, creation-failure path,
  * transcript append + seqHigh, resume-on-boot, and steering (input routing,
- * questions, keypresses, mode/effort/model, interrupt).
+ * questions, plan responses, mode/effort/model, interrupt).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { FakeSdkFacade, FakeSdkSession } from '@codedeck/testkit';
-import type { OutputEntry, PermissionMode } from '@codedeck/protocol';
+import { FakeSdkFacade, FakeSdkSession, entryText } from '@codedeck/testkit';
+import type { OutputEntry } from '@codedeck/protocol';
 import { TranscriptStore } from '../session/transcript';
 import { SessionRegistry, type SessionRecord } from '../session/registry';
 import { PermissionBroker, type PermissionCard } from '../session/permissions';
@@ -19,7 +19,7 @@ import {
   type SessionRunnerEvents,
   type SessionRunnerOptions,
 } from '../session/runner';
-import type { SdkMessage, SdkPermissionResult } from '../sdk/facade';
+import type { PermissionMode, SdkMessage, SdkPermissionResult } from '../sdk/facade';
 
 async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   const start = Date.now();
@@ -69,6 +69,7 @@ interface Ctx {
   broker: PermissionBroker;
   cards: PermissionCard[];
   planCards: string[];
+  resolved: Array<{ requestId: string; summary: string }>;
   outputs: Array<{ sessionId: string; entries: SeqEntry[] }>;
   ready: string[];
   failed: Array<{ sessionId: string; reason: string }>;
@@ -84,10 +85,12 @@ async function makeCtx(): Promise<Ctx> {
   const registry = new SessionRegistry(dir);
   const cards: PermissionCard[] = [];
   const planCards: string[] = [];
+  const resolved: Ctx['resolved'] = [];
   const broker = new PermissionBroker({
     onPermissionCard: (card) => { cards.push(card); },
     onQuestionCard: () => {},
-    onPlanCard: (_sessionId, toolUseId) => { planCards.push(toolUseId); },
+    onPlanCard: (_sessionId, requestId) => { planCards.push(requestId); },
+    onResolved: (_sessionId, requestId, summary) => { resolved.push({ requestId, summary }); },
     onAutoModeChange: () => {},
     log: () => {},
   });
@@ -104,7 +107,7 @@ async function makeCtx(): Promise<Ctx> {
     onModeChanged: (sessionId, mode) => { modeChanges.push({ sessionId, mode }); },
     log: () => {},
   };
-  return { dir, facade, transcript, registry, broker, cards, planCards, outputs, ready, failed, ended, modeChanges, events };
+  return { dir, facade, transcript, registry, broker, cards, planCards, resolved, outputs, ready, failed, ended, modeChanges, events };
 }
 
 function makeRunner(ctx: Ctx, opts: Partial<SessionRunnerOptions> & { sessionId: string }): SessionRunner {
@@ -169,7 +172,7 @@ describe('SessionRunner', () => {
     expect(runner.phase).toBe('ready');
     const rec = ctx.registry.get('s1');
     expect(rec?.sdkSessionId).toBe('sdk-real-1');
-    expect(rec?.permissionMode).toBe('plan');
+    expect(rec?.mode).toBe('plan');
     // CDX-087: the model the SDK RESOLVED wins over the one we asked for. The
     // request can be an alias (`opus[1m]`) or absent entirely ("Default model");
     // init.model is the only authoritative answer.
@@ -179,7 +182,7 @@ describe('SessionRunner', () => {
     // The init system entry went through the transcript with seq 1.
     await waitFor(() => ctx.outputs.length === 1);
     expect(ctx.outputs[0]?.entries[0]?.seq).toBe(1);
-    expect(ctx.outputs[0]?.entries[0]?.entry.entryType).toBe('system');
+    expect(ctx.outputs[0]?.entries[0]?.entry.entryType).toBe('status');
     expect(ctx.transcript.seqHigh('s1')).toBe(1);
   });
 
@@ -248,7 +251,7 @@ describe('SessionRunner', () => {
     expect(ctx.failed[0]?.reason).toContain('did not respond');
     expect(ctx.registry.get('s1')).toBeUndefined();
     const entries = await ctx.transcript.readRange('s1', [1, 10]);
-    expect(entries.some((e) => e.entry.entryType === 'error')).toBe(true);
+    expect(entries.some((e) => e.entry.entryType === 'notice' && e.entry.kind === 'session_failed')).toBe(true);
   });
 
   it('probe resolving AFTER init already flipped ready is a no-op (no double onReady)', async () => {
@@ -280,8 +283,8 @@ describe('SessionRunner', () => {
     // The failure is surfaced as an error entry in the output stream.
     const lines = await ctx.transcript.readRange('s1', [1, 10]);
     expect(lines).toHaveLength(1);
-    expect(lines[0]?.entry.entryType).toBe('error');
-    expect(lines[0]?.entry.content).toContain('Session creation failed');
+    expect(lines[0]?.entry.entryType).toBe('notice');
+    expect(entryText(lines[0]!.entry)).toContain('Session creation failed');
   });
 
   it('creation failure (facade throws synchronously): session-failed', async () => {
@@ -314,8 +317,8 @@ describe('SessionRunner', () => {
     expect(ctx.transcript.seqHigh('s1')).toBe(3);
     const emitted = ctx.outputs.flatMap((o) => o.entries);
     expect(emitted.map((e) => e.seq)).toEqual([1, 2, 3]);
-    expect(emitted[1]?.entry.content).toBe('hello');
-    expect(emitted[2]?.entry.content).toBe('world');
+    expect(entryText(emitted[1]!.entry)).toBe('hello');
+    expect(entryText(emitted[2]!.entry)).toBe('world');
 
     // Registry reports the transcript's seqHigh (the phone's sync target).
     const info = ctx.registry.toRemoteSessionInfo(ctx.transcript).find((s) => s.id === 's1');
@@ -328,9 +331,10 @@ describe('SessionRunner', () => {
     const record: SessionRecord = {
       sessionId: 's1',
       sdkSessionId: 'sdk-old',
+      agent: 'claude-code',
       cwd: '/work/proj',
       model: 'claude-opus-4',
-      permissionMode: 'acceptEdits',
+      mode: 'acceptEdits',
       title: 'Old title',
       project: 'proj',
       createdAt: '2026-08-05T00:00:00Z',
@@ -338,7 +342,7 @@ describe('SessionRunner', () => {
       state: 'offline',
     };
     await ctx.registry.upsert(record);
-    const entry: OutputEntry = { entryType: 'text', content: 'old', timestamp: 't' };
+    const entry: OutputEntry = { entryType: 'text', role: 'agent', text: 'old', timestamp: 't' };
     await ctx.transcript.append('s1', entry);
     await ctx.transcript.append('s1', entry);
 
@@ -364,7 +368,7 @@ describe('SessionRunner', () => {
     expect(ctx.transcript.seqHigh('s1')).toBe(4);
     const last = ctx.outputs.flatMap((o) => o.entries).at(-1);
     expect(last?.seq).toBe(4);
-    expect(last?.entry.content).toBe('fresh');
+    expect(entryText(last!.entry)).toBe('fresh');
   });
 
   it('sendInput pushes to the SDK, sets the title, and appends the session-meta request once', async () => {
@@ -413,25 +417,25 @@ describe('SessionRunner', () => {
 
     runner.sendInput('Fix the login bug');
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
-      .some(({ entry }) => entry.metadata?.role === 'user'));
+      .some(({ entry }) => entry.entryType === 'text' && entry.role === 'user'));
 
     const userEntries = ctx.outputs.flatMap((o) => o.entries)
-      .filter(({ entry }) => entry.entryType === 'text' && entry.metadata?.role === 'user');
+      .filter(({ entry }) => entry.entryType === 'text' && entry.role === 'user');
     expect(userEntries).toHaveLength(1);
     // The typed text only — the emit-session-meta request the SDK receives is
     // bridge plumbing and must never reach the transcript, or the phone's
     // outbox row (which holds the typed text) could not be matched to it.
-    expect(userEntries[0]!.entry.content).toBe('Fix the login bug');
-    expect(userEntries[0]!.entry.content).not.toContain('emit-session-meta');
+    expect(entryText(userEntries[0]!.entry)).toBe('Fix the login bug');
+    expect(entryText(userEntries[0]!.entry)).not.toContain('emit-session-meta');
     expect(session.inputs[0]).toContain('emit-session-meta');
 
     // Ordering is the whole point: the reply must sort AFTER the user entry.
     const userSeq = userEntries[0]!.seq;
     session.emit(assistantMsg('s1', ['done']));
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
-      .some(({ entry }) => entry.content === 'done'));
+      .some(({ entry }) => entryText(entry) === 'done'));
     const replySeq = ctx.outputs.flatMap((o) => o.entries)
-      .find(({ entry }) => entry.content === 'done')!.seq;
+      .find(({ entry }) => entryText(entry) === 'done')!.seq;
     expect(replySeq).toBeGreaterThan(userSeq);
   });
 
@@ -440,7 +444,7 @@ describe('SessionRunner', () => {
 
     runner.sendInput('hello there');
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
-      .some(({ entry }) => entry.metadata?.role === 'user'));
+      .some(({ entry }) => entry.entryType === 'text' && entry.role === 'user'));
 
     // Echo VERBATIM what the backend actually received (session.inputs[0]) —
     // the meta-request suffix included, exactly like a real echoing backend
@@ -456,10 +460,10 @@ describe('SessionRunner', () => {
     } as unknown as SdkMessage);
     session.emit(assistantMsg('s1', ['ack']));
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
-      .some(({ entry }) => entry.content === 'ack'));
+      .some(({ entry }) => entryText(entry) === 'ack'));
 
     const userEntries = ctx.outputs.flatMap((o) => o.entries)
-      .filter(({ entry }) => entry.entryType === 'text' && entry.metadata?.role === 'user');
+      .filter(({ entry }) => entry.entryType === 'text' && entry.role === 'user');
     expect(userEntries).toHaveLength(1);
   });
 
@@ -474,11 +478,11 @@ describe('SessionRunner', () => {
     // pattern in its own context. The parse is done, but the strip must not be.
     session.emit(assistantMsg('s1', ['second <!-- session-meta: {"topic": "Other", "project": "app"} -->']));
     await waitFor(() => ctx.outputs.flatMap((o) => o.entries)
-      .some(({ entry }) => entry.content.startsWith('second')));
+      .some(({ entry }) => entryText(entry).startsWith('second')));
 
     const texts = ctx.outputs.flatMap((o) => o.entries)
-      .filter(({ entry }) => entry.entryType === 'text' && entry.metadata?.role === 'assistant')
-      .map(({ entry }) => entry.content);
+      .filter(({ entry }) => entry.entryType === 'text' && entry.role === 'agent')
+      .map(({ entry }) => entryText(entry));
     expect(texts).toContain('first');
     expect(texts).toContain('second');
     expect(texts.join('\n')).not.toContain('session-meta');
@@ -518,7 +522,7 @@ describe('SessionRunner', () => {
     expect(session.inputs).toHaveLength(0); // never hit the input channel
   });
 
-  it('plan-approval keypress resolves ExitPlanMode and switches mode', async () => {
+  it('a plan response resolves ExitPlanMode and switches mode', async () => {
     const { runner, session } = await startReady(ctx, 's1');
 
     const resultPromise = session.canUseTool(
@@ -531,12 +535,12 @@ describe('SessionRunner', () => {
     expect(ctx.cards).toHaveLength(0);
     expect(runner.state()).toBe('waiting_permission');
 
-    await runner.handleKeypress('1', 'plan-approval');
+    expect(await runner.respondPlan('x1', 'acceptEdits')).toBe(true);
     const result = await resultPromise;
     expect(result.behavior).toBe('allow');
     expect(session.modes).toEqual(['acceptEdits']);
     expect(ctx.modeChanges).toEqual([{ sessionId: 's1', mode: 'acceptEdits' }]);
-    await waitFor(() => ctx.registry.get('s1')?.permissionMode === 'acceptEdits');
+    await waitFor(() => ctx.registry.get('s1')?.mode === 'acceptEdits');
   });
 
   it('mode/effort/model changes hit the SDK handle and persist to the registry', async () => {
@@ -556,8 +560,8 @@ describe('SessionRunner', () => {
 
     await waitFor(() => {
       const rec = ctx.registry.get('s1');
-      return rec?.permissionMode === 'acceptEdits'
-        && rec?.effortLevel === 'max'
+      return rec?.mode === 'acceptEdits'
+        && rec?.effort === 'max'
         && rec?.model === 'claude-sonnet-4-6';
     });
   });
@@ -605,8 +609,9 @@ describe('SessionRunner', () => {
     await ctx.registry.upsert({
       sessionId: 's1',
       sdkSessionId: null,
+      agent: 'claude-code',
       cwd: '/work/proj',
-      permissionMode: 'plan',
+      mode: 'plan',
       title: null,
       project: 'proj',
       createdAt: '2026-08-09T00:00:00Z',
@@ -667,9 +672,9 @@ describe('SessionRunner', () => {
 
     // …and the user is told the truthful thing: a plain restart, not a memory wipe.
     const restartEntry = ctx.outputs.flatMap((o) => o.entries)
-      .find((e) => e.entry.metadata?.special === 'session_restart');
-    expect(restartEntry?.entry.content).toMatch(/Session interrupted — restarting/);
-    expect(restartEntry?.entry.content).not.toMatch(/does not remember/);
+      .find((e) => e.entry.entryType === 'notice' && e.entry.kind === 'session_restart');
+    expect(entryText(restartEntry!.entry)).toMatch(/Session interrupted — restarting/);
+    expect(entryText(restartEntry!.entry)).not.toMatch(/does not remember/);
   });
 
   it('CDX-056: a turn-less session hit by a mid-life stream error restarts fresh (no resume of a nonexistent conversation)', async () => {
@@ -703,10 +708,13 @@ describe('SessionRunner', () => {
   it('appendEntry gives out-of-band entries unique store-assigned seqs (CDB-025)', async () => {
     const { runner } = await startReady(ctx, 's1');
     const card: OutputEntry = {
-      entryType: 'system',
-      content: 'Permission needed: Bash',
+      entryType: 'permission_request',
+      requestId: 'r1',
+      toolName: 'Bash',
+      kind: 'execute',
+      title: 'ls',
+      options: [],
       timestamp: 't',
-      metadata: { special: 'permission_request' },
     };
     const a = await runner.appendEntry(card);
     const b = await runner.appendEntry(card);
@@ -776,6 +784,7 @@ describe('SessionRunner — provider binding (CDX-062)', () => {
     await ctx.registry.upsert({
       sessionId: 's1',
       sdkSessionId: 'sdk-old',
+      agent: 'claude-code',
       cwd: '/work/proj',
       providerId: 'kimi',
       title: 'Old',
@@ -826,7 +835,7 @@ describe('SessionRunner — provider binding (CDX-062)', () => {
     expect(runner.alive).toBe(false);
     const entries = await ctx.transcript.readRange('s1', [1, 20]);
     expect(entries.some((e) =>
-      e.entry.entryType === 'error' && /provider profile 'kimi' was deleted/.test(e.entry.content))).toBe(true);
+      e.entry.entryType === 'notice' && /provider profile 'kimi' was deleted/.test(entryText(e.entry)))).toBe(true);
     // Exactly one live SDK spawn happened — the restart never spawned.
     expect(ctx.facade.sessions.size).toBe(1);
     expect(ctx.registry.get('s1')).toBeDefined(); // record kept (deliberate)
@@ -836,6 +845,7 @@ describe('SessionRunner — provider binding (CDX-062)', () => {
     await ctx.registry.upsert({
       sessionId: 's1',
       sdkSessionId: 'sdk-old',
+      agent: 'claude-code',
       cwd: '/work/proj',
       providerId: 'kimi',
       title: 'Old',
@@ -855,8 +865,8 @@ describe('SessionRunner — provider binding (CDX-062)', () => {
     expect(ctx.failed).toHaveLength(0); // not the pending-failure path
     const entries = await ctx.transcript.readRange('s1', [1, 10]);
     expect(entries.some((e) =>
-      e.entry.entryType === 'error' && /could not be resumed/.test(e.entry.content)
-      && /provider profile 'kimi' was deleted/.test(e.entry.content))).toBe(true);
+      e.entry.entryType === 'notice' && /could not be resumed/.test(entryText(e.entry))
+      && /provider profile 'kimi' was deleted/.test(entryText(e.entry)))).toBe(true);
   });
 });
 
@@ -875,9 +885,10 @@ async function startResumed(
   await ctx.registry.upsert({
     sessionId,
     sdkSessionId: opts.sdkSessionId,
+    agent: 'claude-code',
     ...(opts.previousSdkSessionId ? { previousSdkSessionId: opts.previousSdkSessionId } : {}),
     cwd: '/work/proj',
-    permissionMode: 'plan',
+    mode: 'plan',
     title: 'Long-running work',
     project: 'proj',
     createdAt: '2026-08-09T00:00:00Z',
@@ -887,9 +898,9 @@ async function startResumed(
   for (let i = 1; i <= (opts.historyEntries ?? 0); i++) {
     await ctx.transcript.append(sessionId, {
       entryType: 'text',
-      content: `earlier turn ${i}`,
+      role: 'agent',
+      text: `earlier turn ${i}`,
       timestamp: '2026-08-09T00:00:00Z',
-      metadata: { role: 'assistant' },
     });
   }
   const runner = makeRunner(ctx, {
@@ -903,7 +914,7 @@ async function startResumed(
 
 function restartNotice(ctx: Ctx): OutputEntry | undefined {
   return ctx.outputs.flatMap((o) => o.entries)
-    .find((e) => e.entry.metadata?.special === 'session_restart')?.entry;
+    .find((e) => e.entry.entryType === 'notice' && e.entry.kind === 'session_restart')?.entry;
 }
 
 describe('SessionRunner — the unresumable discriminator (CDX-073)', () => {
@@ -943,8 +954,8 @@ describe('SessionRunner — the unresumable discriminator (CDX-073)', () => {
     expect(ctx.registry.get('s1')?.previousSdkSessionId).toBe('sdk-old');
     expect(logs.some((l) => /kept as previousSdkSessionId/.test(l))).toBe(true);
 
-    expect(restartNotice(ctx)?.content).toMatch(/fresh conversation in the same workspace/);
-    expect(restartNotice(ctx)?.content).toMatch(/does not remember earlier turns/);
+    expect(entryText(restartNotice(ctx)!)).toMatch(/fresh conversation in the same workspace/);
+    expect(entryText(restartNotice(ctx)!)).toMatch(/does not remember earlier turns/);
   });
 
   it('CDX-073: a resume that WORKED is not dropped because the crash tail happens to carry the phrase', async () => {
@@ -972,7 +983,7 @@ describe('SessionRunner — the unresumable discriminator (CDX-073)', () => {
     expect(ctx.facade.session('s1').options.resume).toBe('sdk-old');
     expect(ctx.registry.get('s1')?.sdkSessionId).toBe('sdk-old');
     expect(ctx.registry.get('s1')?.previousSdkSessionId).toBeUndefined();
-    expect(restartNotice(ctx)?.content).toMatch(/Session interrupted — restarting/);
+    expect(entryText(restartNotice(ctx)!)).toMatch(/Session interrupted — restarting/);
   });
 
   it('CDX-073: "no conversation found" about SOME OTHER conversation never drops ours', async () => {
@@ -1014,9 +1025,9 @@ describe('SessionRunner — the unresumable discriminator (CDX-073)', () => {
     // admits the memory loss — was skipped, so the user was told only
     // "Session ended unexpectedly after multiple restart attempts."
     const died = ctx.outputs.flatMap((o) => o.entries)
-      .find((e) => e.entry.metadata?.special === 'session_died')?.entry;
-    expect(died?.content).toMatch(/its SDK conversation was missing/);
-    expect(died?.content).toMatch(/will not remember earlier turns/);
+      .find((e) => e.entry.entryType === 'notice' && e.entry.kind === 'session_died')?.entry;
+    expect(entryText(died!)).toMatch(/its SDK conversation was missing/);
+    expect(entryText(died!)).toMatch(/will not remember earlier turns/);
 
     await waitFor(() => ctx.registry.get('s1')?.sdkSessionId === null);
     expect(ctx.registry.get('s1')?.previousSdkSessionId).toBe('sdk-old');
@@ -1149,6 +1160,7 @@ describe('SessionRunner — no silent zombies (CDX-074)', () => {
     await ctx.registry.upsert({
       sessionId: 's1',
       sdkSessionId: 'sdk-old',
+      agent: 'claude-code',
       cwd: '/work/proj',
       title: 'Old',
       project: 'proj',
@@ -1219,8 +1231,8 @@ describe('SessionRunner — usage / context usage / git detection (CDX-005 remai
     const usage = await runner.getUsage();
     expect(usage).not.toBeNull();
     expect(usage!.available).toBe(true);
-    expect(usage!.subscriptionType).toBe('max');
-    expect(usage!.fiveHour).toEqual({ utilization: 30, resetsAt: '2026-08-05T15:00:00Z' });
+    expect(usage!.plan).toBe('max');
+    expect(usage!.windows).toEqual([{ label: '5h', utilization: 30, resetsAt: '2026-08-05T15:00:00Z' }]);
   });
 
   it('getUsage returns null for unsupported SDKs and dead sessions', async () => {

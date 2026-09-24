@@ -61,9 +61,7 @@ export function kindForMessage(msg: BridgeToPhoneMessage): PublishPolicy {
     case 'input-failed':
     case 'close-session-ack':
     case 'session-replaced':
-    case 'mode-confirmed':
-    case 'effort-confirmed':
-    case 'model-confirmed':
+    case 'option-confirmed':
     case 'folder-ack':
     case 'models':
     case 'credentials-ack':

@@ -45,7 +45,6 @@ function commandEvent(msg: PhoneToBridgeMessage, opts: Parameters<typeof phoneEv
 function makeIngest(handlers: CommandHandlers, opts: {
   isPairedPhone?: (pk: string) => boolean;
   lastSeenTimestamp?: number;
-  onPhoneCaps?: (phonePubkeyHex: string, caps: readonly string[]) => void;
 } = {}) {
   const logs: string[] = [];
   const ingest = new CommandIngest({
@@ -106,11 +105,11 @@ describe('CommandIngest', () => {
   it('dispatch narrows per type (different handlers for different messages)', () => {
     const calls: string[] = [];
     const { ingest } = makeIngest({
-      onModeChange: (msg) => { calls.push(`mode:${msg.mode}`); },
+      onSetOption: (msg) => { calls.push(`mode:${msg.value}`); },
       onInterrupt: (msg) => { calls.push(`interrupt:${msg.sessionId}`); },
     });
 
-    ingest.handleEvent(commandEvent({ type: 'mode', sessionId: 's1', mode: 'plan' }));
+    ingest.handleEvent(commandEvent({ type: 'set-option', sessionId: 's1', option: 'mode', value: 'plan' }));
     ingest.handleEvent(commandEvent({ type: 'interrupt', sessionId: 's2' }));
     // No handler registered for this one — silently fine.
     ingest.handleEvent(commandEvent({ type: 'refresh-sessions' }));
@@ -183,15 +182,15 @@ describe('CommandIngest', () => {
   // fix as mergeSessionList's property test). Give it explicit headroom.
   it('the dedup set is an LRU capped at 1000 — old ids age out', { timeout: 60_000 }, () => {
     let dispatched = 0;
-    const { ingest } = makeIngest({ onKeypress: () => { dispatched++; } });
+    const { ingest } = makeIngest({ onInterrupt: () => { dispatched++; } });
 
-    const first = commandEvent({ type: 'keypress', sessionId: 's1', key: '1' });
+    const first = commandEvent({ type: 'interrupt', sessionId: 's1' });
     ingest.handleEvent(first);
     expect(dispatched).toBe(1);
 
     // 1000 distinct ids. Cloning one signed event keeps this fast — ingest
     // dedups by id and does not re-verify signatures (the relay/pool layer does).
-    const template = commandEvent({ type: 'keypress', sessionId: 's1', key: 'k' });
+    const template = commandEvent({ type: 'interrupt', sessionId: 's2' });
     for (let i = 0; i < 1000; i++) {
       ingest.handleEvent({ ...template, id: `fake-id-${i}` });
     }
@@ -349,43 +348,5 @@ describe('CommandIngest', () => {
       ingest.handleEvent(event); // now paired: the same event must dispatch
       expect(dispatched).toBe(1);
     });
-  });
-});
-
-describe('phone capability recording (CDX-050)', () => {
-  it('reports advertised caps on every valid command, and [] when caps is absent', () => {
-    const seen: Array<[string, readonly string[]]> = [];
-    const { ingest } = makeIngest(
-      { onInput: () => {} },
-      { onPhoneCaps: (pk, caps) => { seen.push([pk, caps]); } },
-    );
-
-    ingest.handleEvent(commandEvent({
-      type: 'input', sessionId: 's1', text: 'hi', v: 10, caps: ['diff'],
-    }));
-    ingest.handleEvent(commandEvent({ type: 'refresh-sessions' }));
-
-    expect(seen).toEqual([
-      [phonePubkey, ['diff']],
-      [phonePubkey, []],
-    ]);
-  });
-
-  it('is not called for invalid or undecryptable payloads', () => {
-    const seen: string[] = [];
-    const { ingest } = makeIngest({}, { onPhoneCaps: (pk) => { seen.push(pk); } });
-    ingest.handleEvent(phoneEvent('{nope'));
-    ingest.handleEvent(phoneEvent(JSON.stringify({ type: 'launch-missiles' })));
-    expect(seen).toEqual([]);
-  });
-
-  it('an onPhoneCaps throw never blocks dispatch', () => {
-    const inputs: string[] = [];
-    const { ingest } = makeIngest(
-      { onInput: (msg) => { inputs.push(msg.text); } },
-      { onPhoneCaps: () => { throw new Error('registry busted'); } },
-    );
-    ingest.handleEvent(commandEvent({ type: 'input', sessionId: 's1', text: 'still works' }));
-    expect(inputs).toEqual(['still works']);
   });
 });

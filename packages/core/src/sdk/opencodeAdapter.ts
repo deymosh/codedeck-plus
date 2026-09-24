@@ -1,30 +1,30 @@
 /**
- * Translates synthesized OpenCode messages into Codedeck OutputEntry objects —
- * the OpenCode-backend counterpart of `sdk/adapter.ts`'s `sdkMessageToEntries`.
+ * Translates synthesized OpenCode messages into protocol v11 `OutputEntry`
+ * objects — the OpenCode counterpart of `sdk/adapter.ts`'s
+ * `sdkMessageToEntries`.
  *
  * `SdkSessionHandle.messages()` is typed as `AsyncIterable<SdkMessage>`, and
  * `SdkMessage` is a literal re-export of the Claude Agent SDK's own union —
  * `@opencode-ai/sdk`'s `Message`/`Part`/`Event` shapes have nothing to do with
  * it. `opencodeFacade.ts` bridges this by wrapping each OpenCode event it
  * cares about in one of the small envelopes below (cast `as unknown as
- * SdkMessage` at the seam, mirroring the existing `msg as unknown as
- * {state: string}` cast `session/runner.ts` already does for
- * `session_state_changed`) and this module is the ONLY place that unwraps and
- * reads them. `SessionRunner` never branches on which backend produced a
+ * SdkMessage` at the seam) and this module is the ONLY place that unwraps and
+ * reads them. `SessionRunner` never branches on which agent produced a
  * message — it calls whichever `translateMessage` function `bridge.ts`'s
- * `makeRunner` injected for the session's `backend`.
+ * `makeRunner` injected for the session's agent.
  */
-import type { DiffData, DiffLine, OutputEntry } from '@codedeck/protocol';
+import type { DiffLine, OutputEntry } from '@codedeck/protocol';
 import type { Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
-import { askQuestionEntries, MAX_DIFF_LINE_CHARS, MAX_DIFF_LINES, renderDiffFallback, toDiffLines } from './adapter';
-import type { AdapterOptions, AskQuestionSpec } from './adapter';
+import { toolKindOf, toolLocations, toolTitle } from '../agents';
+import { MAX_DIFF_LINE_CHARS, MAX_DIFF_LINES, toDiffLines, truncateToolResult } from './adapter';
+import type { AskQuestionSpec, DiffPayload, TranslateContext } from './adapter';
 import type { SdkMessage } from './facade';
 
 /**
  * Synthesized once, right after `probeReady()` resolves — drives the SAME
  * `type: 'system', subtype: 'init'` branch `session/runner.ts` already has
  * for Claude Code, so the runner picks up `sdkSessionId`/`model`/
- * `permissionMode` with no backend-specific code.
+ * `permissionMode` with no agent-specific code.
  */
 export interface OpenCodeInitMessage {
   type: 'system';
@@ -37,7 +37,7 @@ export interface OpenCodeInitMessage {
 /**
  * Synthesized on OpenCode's `session.idle` event — drives the SAME
  * `subtype: 'session_state_changed'` branch the runner already has for
- * Claude Code (stream_end / idle detection).
+ * Claude Code (turn-complete / idle detection).
  */
 export interface OpenCodeStateMessage {
   type: 'system';
@@ -85,23 +85,22 @@ export interface LegacyFileDiff {
   deletions: number;
 }
 
-/** Synthesized from OpenCode's `session.diff` event, translated here into the
- *  same `entryType: 'diff'` cards Claude Code's CDX-050 diff entries use.
- *  OpenCode 1.x sends each file as a unified `patch`; older servers sent
- *  whole-file `before`/`after` — both are read. A file changed through
- *  edit/write/apply_patch already got its card from that tool call
+/** Synthesized from OpenCode's `session.diff` event, translated here into
+ *  `diff` entries. OpenCode 1.x sends each file as a unified `patch`; older
+ *  servers sent whole-file `before`/`after` — both are read. A file changed
+ *  through edit/write/apply_patch already got its card from that tool call
  *  ([toolCallDiffs]), and `session.diff` often carries only counts, so the
- *  facade drops those files here; this path covers the rest (a file a
- *  shell command changed). */
+ *  facade drops those files here; this path covers the rest (a file a shell
+ *  command changed). */
 export interface OpenCodeDiffMessage {
   type: 'opencode-diff';
   files: Array<SnapshotFileDiff | LegacyFileDiff>;
 }
 
-/** OpenCode asked the user a question (its `question` tool). Rendered as the
- *  same question card Claude Code's AskUserQuestion produces; `toolUseId` is
- *  the question tool's call id, so that tool's own result later marks the
- *  card answered. */
+/** OpenCode asked the user a question (its `question` tool). The facade also
+ *  routes the ask through `canUseTool('AskUserQuestion')`, and the permission
+ *  broker emits the question card from there; this envelope only marks the
+ *  question tool's call as a card rather than a tool action. */
 export interface OpenCodeQuestionMessage {
   type: 'opencode-question';
   toolUseId: string;
@@ -117,50 +116,40 @@ export type OpenCodeAdapterMessage =
   | OpenCodeDiffMessage
   | OpenCodeQuestionMessage;
 
+/** OpenCode's own question tool: its call renders as the question card. */
+const QUESTION_TOOL = 'question';
+
 /**
  * Convert one synthesized OpenCode message envelope into zero or more
  * OutputEntry objects. Signature matches `sdkMessageToEntries` exactly so
  * `SessionRunnerOptions.translateMessage` can hold either interchangeably.
  */
-export function opencodeMessageToEntries(msg: SdkMessage, opts?: AdapterOptions): OutputEntry[] {
+export function opencodeMessageToEntries(msg: SdkMessage, ctx: TranslateContext): OutputEntry[] {
   const envelope = msg as unknown as OpenCodeAdapterMessage;
   switch (envelope.type) {
     case 'system':
       return parseSystem(envelope);
     case 'opencode-part':
-      return parsePart(envelope, opts);
+      return parsePart(envelope, ctx);
     case 'opencode-error':
-      return [{
-        entryType: 'error',
-        content: envelope.content,
-        timestamp: new Date().toISOString(),
-      }];
+      return [{ entryType: 'error', text: envelope.content, timestamp: new Date().toISOString() }];
     case 'opencode-resume-lost':
       return [{
-        entryType: 'system',
-        content:
+        entryType: 'notice',
+        kind: 'session_restart',
+        text:
           "OpenCode's session was missing — starting a fresh conversation in the same workspace. The transcript is preserved, but the model does not remember earlier turns.",
         timestamp: new Date().toISOString(),
-        metadata: { special: 'session_restart' },
       }];
     case 'opencode-diff':
-      // Gated on the phone-side 'diff' capability by the caller, same as
-      // Claude Code's own CDX-050 entries (adapter.ts) — the field is threaded
-      // through this function's signature but was never read before this.
-      if (!opts?.emitDiffEntries) return [];
       return envelope.files.flatMap((file) => {
-        const diff = toDiffData(file);
+        const diff = toDiffPayload(file);
         if (!diff) return [];
-        return {
-          entryType: 'diff',
-          content: renderDiffFallback(diff),
-          timestamp: new Date().toISOString(),
-          metadata: { role: 'assistant' },
-          diff,
-        } satisfies OutputEntry;
+        return { entryType: 'diff', ...diff, timestamp: new Date().toISOString() } satisfies OutputEntry;
       });
     case 'opencode-question':
-      return askQuestionEntries(envelope.toolUseId, envelope.questions, new Date().toISOString());
+      ctx.hiddenCallIds.add(envelope.toolUseId);
+      return [];
     default:
       // Any OpenCode Part kind this pass doesn't translate (file, subtask,
       // agent, step markers, snapshots, patches, retries, compaction) — skip,
@@ -172,102 +161,74 @@ export function opencodeMessageToEntries(msg: SdkMessage, opts?: AdapterOptions)
 function parseSystem(msg: OpenCodeInitMessage | OpenCodeStateMessage): OutputEntry[] {
   if (msg.subtype === 'init') {
     return [{
-      entryType: 'system',
-      content: `OpenCode session started${msg.model ? ` (${msg.model})` : ''}`,
+      entryType: 'status',
+      text: `OpenCode session started${msg.model ? ` (${msg.model})` : ''}`,
       timestamp: new Date().toISOString(),
-      metadata: {
-        subtype: 'init',
-        ...(msg.model ? { model: msg.model } : {}),
-        ...(msg.permissionMode ? { permissionMode: msg.permissionMode } : {}),
-      },
     }];
   }
 
   if (msg.state === 'idle') {
-    // Same authoritative "turn is over" signal the phone reads from Claude
-    // Code's session_state_changed — see sdk/adapter.ts's parseSystem.
-    return [{
-      entryType: 'system',
-      content: '',
-      timestamp: new Date().toISOString(),
-      metadata: { stream_end: true },
-    }];
+    // Same authoritative "turn is over" signal Claude Code's
+    // session_state_changed produces — see sdk/adapter.ts's parseSystem.
+    return [{ entryType: 'turn_complete', timestamp: new Date().toISOString() }];
   }
   return [];
 }
 
-function parsePart(msg: OpenCodePartMessage, opts?: AdapterOptions): OutputEntry[] {
+function parsePart(msg: OpenCodePartMessage, ctx: TranslateContext): OutputEntry[] {
   const { part, role } = msg;
   const ts = new Date().toISOString();
 
   switch (part.type) {
     case 'text':
       if (!part.text) return [];
-      return [{
-        entryType: 'text',
-        content: part.text,
-        timestamp: ts,
-        metadata: { role },
-      }];
+      return [{ entryType: 'text', role: role === 'user' ? 'user' : 'agent', text: part.text, timestamp: ts }];
     case 'reasoning':
       if (!part.text) return [];
-      return [{
-        entryType: 'thinking',
-        content: part.text,
-        timestamp: ts,
-        metadata: { role },
-      }];
+      return [{ entryType: 'thinking', text: part.text, timestamp: ts }];
     case 'tool':
-      return parseTool(part, ts, opts);
+      return parseTool(part, ts, ctx);
     default:
       return [];
   }
 }
 
-function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, opts?: AdapterOptions): OutputEntry[] {
+function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, ctx: TranslateContext): OutputEntry[] {
   const state = part.state;
+  if (part.tool === QUESTION_TOOL) ctx.hiddenCallIds.add(part.callID);
+  if (ctx.hiddenCallIds.has(part.callID)) return [];
 
   // 'pending' input may still be streaming in — nothing stable to show yet.
   if (state.status === 'pending') return [];
 
   if (state.status === 'running') {
+    const input = (state.input ?? {}) as Record<string, unknown>;
+    const locations = toolLocations(input);
     return [{
-      entryType: 'tool_use',
-      content: formatToolInput(part.tool, state.input as Record<string, unknown>),
+      entryType: 'tool_call',
+      callId: part.callID,
+      toolName: part.tool,
+      kind: toolKindOf(part.tool),
+      title: toolTitle(part.tool, input),
+      ...(locations.length > 0 ? { locations } : {}),
+      rawInput: state.input,
       timestamp: ts,
-      metadata: {
-        role: 'assistant',
-        tool_name: part.tool,
-        tool_use_id: part.callID,
-        tool_input: state.input,
-      },
     }];
   }
 
   if (state.status === 'completed') {
-    const output = state.output ?? '';
-    const text = output.length > 2000 ? output.slice(0, 2000) + '...[truncated]' : output;
     const entries: OutputEntry[] = [{
       entryType: 'tool_result',
-      content: text,
+      callId: part.callID,
+      text: truncateToolResult(state.output ?? ''),
       timestamp: ts,
-      metadata: { tool_use_id: part.callID },
     }];
     // A file-changing call gets the same diff cards Claude Code's Edit/Write
-    // calls do (adapter.ts), gated on the phone-side 'diff' capability the
-    // same way. Taken from the COMPLETED call — the change has actually
-    // been applied by then, and the tool's own metadata carries the real
-    // patch it applied.
-    if (opts?.emitDiffEntries) {
-      for (const diff of toolCallDiffs(part.tool, state.input, state.metadata)) {
-        entries.push({
-          entryType: 'diff',
-          content: renderDiffFallback(diff),
-          timestamp: ts,
-          metadata: { role: 'assistant', tool_name: part.tool, tool_use_id: part.callID },
-          diff,
-        });
-      }
+    // calls do (adapter.ts). Taken from the COMPLETED call — the change has
+    // actually been applied by then, and the tool's own metadata carries the
+    // real patch it applied.
+    for (const diff of toolCallDiffs(part.tool, state.input, state.metadata)) {
+      entries.push({ entryType: 'diff', ...diff, callId: part.callID, timestamp: ts });
     }
     return entries;
   }
@@ -275,14 +236,11 @@ function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, opts?: Ada
   // status === 'error'
   return [{
     entryType: 'tool_result',
-    content: state.error ?? 'Tool call failed',
+    callId: part.callID,
+    text: state.error ?? 'Tool call failed',
+    isError: true,
     timestamp: ts,
-    metadata: { tool_use_id: part.callID, error: true },
   }];
-}
-
-function formatToolInput(toolName: string, input: Record<string, unknown>): string {
-  return `${toolName}: ${JSON.stringify(input ?? {}).slice(0, 200)}`;
 }
 
 // --- session.diff translation ---
@@ -377,7 +335,7 @@ function patchLines(patch: string): DiffLine[] {
 
 /** `null` when the event carries no line content at all (only counts) —
  *  there is nothing to render as a card then. */
-function toDiffData(file: SnapshotFileDiff | LegacyFileDiff): DiffData | null {
+function toDiffPayload(file: SnapshotFileDiff | LegacyFileDiff): DiffPayload | null {
   let lines: DiffLine[];
   if ('patch' in file && typeof file.patch === 'string') {
     lines = patchLines(file.patch);
@@ -391,7 +349,7 @@ function toDiffData(file: SnapshotFileDiff | LegacyFileDiff): DiffData | null {
 
 /** A diff payload inside the shared wire caps; `null` when there are no
  *  lines to show. */
-function boundedDiff(path: string, lines: DiffLine[]): DiffData | null {
+function boundedDiff(path: string, lines: DiffLine[]): DiffPayload | null {
   if (lines.length === 0) return null;
   const truncated = lines.length > MAX_DIFF_LINES;
   return {
@@ -434,8 +392,8 @@ export function toolCallDiffs(
   tool: string,
   input: Record<string, unknown>,
   metadata: Record<string, unknown> | undefined,
-): DiffData[] {
-  const found: Array<DiffData | null> = [];
+): DiffPayload[] {
+  const found: Array<DiffPayload | null> = [];
   switch (tool) {
     case 'edit': {
       const filediff = record(metadata?.filediff);
@@ -485,5 +443,5 @@ export function toolCallDiffs(
     default:
       break;
   }
-  return found.filter((d): d is DiffData => d !== null);
+  return found.filter((d): d is DiffPayload => d !== null);
 }

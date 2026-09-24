@@ -17,7 +17,7 @@ export type DecodeResult<T> =
   | { ok: true; msg: T }
   | { ok: false; error: string };
 
-function decode<T>(schema: z.ZodType<T>, json: string): DecodeResult<T> {
+function decode<S extends z.ZodTypeAny>(schema: S, json: string): DecodeResult<z.output<S>> {
   let raw: unknown;
   try {
     raw = JSON.parse(json);
@@ -36,7 +36,7 @@ function decode<T>(schema: z.ZodType<T>, json: string): DecodeResult<T> {
       error: `schema mismatch for type "${type}": ${issue ? `${issue.path.join('.')} ${issue.message}` : 'unknown issue'}`,
     };
   }
-  return { ok: true, msg: parsed.data };
+  return { ok: true, msg: parsed.data as z.output<S> };
 }
 
 /** Bridge-side ingest: decode a message sent by a phone. */

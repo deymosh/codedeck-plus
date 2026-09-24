@@ -12,7 +12,7 @@ import type { OutputEntry } from '@codedeck/protocol';
 import { TranscriptStore } from '../session/transcript';
 
 function entry(n: number): OutputEntry {
-  return { entryType: 'text', content: `entry ${n}`, timestamp: '2026-08-05T00:00:00Z' };
+  return { entryType: 'text', role: 'agent', text: `entry ${n}`, timestamp: '2026-08-05T00:00:00Z' };
 }
 
 describe('TranscriptStore', () => {
@@ -75,7 +75,7 @@ describe('TranscriptStore', () => {
     for (let i = 1; i <= 10; i++) { await store.append('s1', entry(i)); }
     const lines = await store.readRange('s1', [3, 6]);
     expect(lines.map((l) => l.seq)).toEqual([3, 4, 5, 6]);
-    expect(lines[0]?.entry.content).toBe('entry 3');
+    expect(lines[0]?.entry).toMatchObject({ text: 'entry 3' });
   });
 
   it('readRange tolerates gaps in the file (post-prune)', async () => {
@@ -142,7 +142,7 @@ describe('TranscriptStore', () => {
     lines.forEach((line, i) => {
       const parsed = JSON.parse(line) as { seq: number; entry: OutputEntry };
       expect(parsed.seq).toBe(i + 1);
-      expect(parsed.entry.content).toBe(`entry ${i + 1}`);
+      expect(parsed.entry).toMatchObject({ text: `entry ${i + 1}` });
     });
   });
 
@@ -212,9 +212,9 @@ describe('TranscriptStore', () => {
     expect(lines.length).toBeGreaterThan(0);
     let prevSeq = 0;
     for (const line of lines) {
-      const parsed = JSON.parse(line) as { seq: number; entry: { content: string } };
+      const parsed = JSON.parse(line) as { seq: number; entry: { text: string } };
       expect(parsed.seq).toBeGreaterThan(prevSeq);
-      expect(parsed.entry.content).toBe(`entry ${parsed.seq}`); // un-torn original
+      expect(parsed.entry.text).toBe(`entry ${parsed.seq}`); // un-torn original
       prevSeq = parsed.seq;
     }
     expect(prevSeq).toBe(60); // the newest entry is never lost by a prune race

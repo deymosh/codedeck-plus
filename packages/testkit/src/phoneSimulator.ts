@@ -43,10 +43,9 @@ import {
   normalizeRanges,
   type BridgeToPhoneMessage,
   type CreateSessionMessage,
-  type EffortLevel,
   type OutputEntry,
-  type PermissionMode,
   type PhoneToBridgeMessage,
+  type QuestionAnswer,
   type RemoteSessionInfo,
   type SeqRange,
   type SessionListMessage,
@@ -88,12 +87,39 @@ export interface SyncProgress {
   end?: SyncEndMessage;
 }
 
-/** A permission card the bridge surfaced as a transcript system entry. */
+/** An entry's human-readable text: the text of a text / plan / thinking /
+ *  status / error / notice / tool-result entry, a card's title or question,
+ *  and '' for entries that carry none. */
+export function entryText(entry: OutputEntry): string {
+  switch (entry.entryType) {
+    case 'text':
+    case 'plan':
+    case 'thinking':
+    case 'status':
+    case 'error':
+    case 'notice':
+    case 'tool_result':
+      return entry.text;
+    case 'tool_call':
+    case 'permission_request':
+      return entry.title;
+    case 'question':
+      return entry.question;
+    case 'resolved':
+      return entry.summary;
+    default:
+      return '';
+  }
+}
+
+/** A permission card the bridge surfaced as a `permission_request` entry. */
 export interface PermissionCardView {
   seq: number;
   requestId: string;
   toolName: string;
-  content: string;
+  title: string;
+  /** The option ids the card offers. */
+  options: string[];
 }
 
 export interface PhoneSimulatorOptions {
@@ -422,49 +448,44 @@ export class PhoneSimulator {
     });
   }
 
-  createSession(opts: Omit<CreateSessionMessage, 'type' | 'v' | 'caps'> = {}): void {
-    this.send({ type: 'create-session', ...opts });
+  /** Create a session; `agent` defaults to Claude Code. */
+  createSession(
+    opts: Omit<CreateSessionMessage, 'type' | 'v' | 'caps' | 'agent'> & { agent?: string } = {},
+  ): void {
+    this.send({ type: 'create-session', ...opts, agent: opts.agent ?? 'claude-code' });
   }
 
   input(sessionId: string, text: string, inputId?: string): void {
     this.send({ type: 'input', sessionId, text, ...(inputId ? { inputId } : {}) });
   }
 
-  questionInput(sessionId: string, text: string, optionCount = 0): void {
-    this.send({ type: 'question-input', sessionId, text, optionCount });
+  /** Answer question `index` of the ask `requestId`. */
+  answerQuestion(sessionId: string, requestId: string, index: number, answer: QuestionAnswer): void {
+    this.send({ type: 'question-response', sessionId, requestId, index, answer });
   }
 
-  permissionResponse(
-    sessionId: string,
-    requestId: string,
-    allow: boolean,
-    modifier?: 'always' | 'never',
-  ): void {
-    this.send({
-      type: 'permission-res', sessionId, requestId, allow,
-      ...(modifier ? { modifier } : {}),
-    });
+  /** Answer a permission card with one of its option ids (`allow`,
+   *  `allow_always`, `deny`). */
+  permissionResponse(sessionId: string, requestId: string, optionId: string): void {
+    this.send({ type: 'permission-response', sessionId, requestId, optionId });
   }
 
-  keypress(sessionId: string, key: string, context?: 'plan-approval' | 'question'): void {
-    this.send({ type: 'keypress', sessionId, key, ...(context ? { context } : {}) });
+  /** Answer the plan approval `requestId`: `acceptEdits` / `default` approve
+   *  and continue in that mode, `revise` keeps planning. */
+  respondPlan(sessionId: string, requestId: string, optionId = 'acceptEdits'): void {
+    this.send({ type: 'plan-response', sessionId, requestId, optionId });
   }
 
-  /** Approve the pending plan: '1' = acceptEdits, '2' = manual, '3' = revise. */
-  approvePlan(sessionId: string, key: '1' | '2' | '3' = '1'): void {
-    this.keypress(sessionId, key, 'plan-approval');
+  setMode(sessionId: string, mode: string): void {
+    this.send({ type: 'set-option', sessionId, option: 'mode', value: mode });
   }
 
-  setMode(sessionId: string, mode: PermissionMode): void {
-    this.send({ type: 'mode', sessionId, mode });
-  }
-
-  setEffort(sessionId: string, level: EffortLevel): void {
-    this.send({ type: 'effort', sessionId, level });
+  setEffort(sessionId: string, level: string): void {
+    this.send({ type: 'set-option', sessionId, option: 'effort', value: level });
   }
 
   setModel(sessionId: string, model: string): void {
-    this.send({ type: 'model', sessionId, model });
+    this.send({ type: 'set-option', sessionId, option: 'model', value: model });
   }
 
   interrupt(sessionId: string): void {
@@ -484,12 +505,13 @@ export class PhoneSimulator {
     this.send({ type: 'create-folder', path, requestId, ...(root ? { root } : {}) });
   }
 
-  requestModels(): void {
-    this.send({ type: 'models-request' });
+  requestModels(agent = 'claude-code'): void {
+    this.send({ type: 'models-request', agent });
   }
 
-  /** Store credentials on the bridge (tri-state per field: undefined = keep,
-   *  null = delete, string = set). Answered with a credentials-ack. */
+  /** Store credentials on the bridge (`values`: string = set, null = delete,
+   *  absent id = keep; `agent` absent = the bridge's own). Answered with a
+   *  credentials-ack. */
   setCredentials(opts: Omit<SetCredentialsMessage, 'type' | 'v' | 'caps'>): void {
     this.send({ type: 'set-credentials', ...opts });
   }
@@ -571,17 +593,28 @@ export class PhoneSimulator {
     return seqs.length === high && seqs[0] === 1;
   }
 
-  /** Permission cards surfaced in a session's transcript (system entries with
-   *  `special: 'permission_request'`), oldest first. */
+  /** Permission cards surfaced in a session's transcript, oldest first. */
   permissionCards(sessionId: string): PermissionCardView[] {
-    return this.transcriptEntries(sessionId)
-      .filter(({ entry }) => entry.metadata?.special === 'permission_request')
-      .map(({ seq, entry }) => ({
-        seq,
-        requestId: String(entry.metadata?.tool_use_id ?? ''),
-        toolName: String(entry.metadata?.tool_name ?? ''),
-        content: entry.content,
-      }));
+    return this.transcriptEntries(sessionId).flatMap(({ seq, entry }) =>
+      entry.entryType === 'permission_request'
+        ? [{
+            seq,
+            requestId: entry.requestId,
+            toolName: entry.toolName,
+            title: entry.title,
+            options: entry.options.map((o) => o.id),
+          }]
+        : [],
+    );
+  }
+
+  /** Outcome summaries of resolved cards in a session's transcript, by request id. */
+  resolvedCards(sessionId: string): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const { entry } of this.transcriptEntries(sessionId)) {
+      if (entry.entryType === 'resolved') out.set(entry.requestId, entry.summary);
+    }
+    return out;
   }
 
   /**

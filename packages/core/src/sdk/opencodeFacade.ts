@@ -35,10 +35,11 @@ import type {
   Session,
   SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
-import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
 import type { AskQuestionSpec } from './adapter';
 import { toolCallDiffs } from './opencodeAdapter';
 import type {
+  EffortLevel,
+  PermissionMode,
   SdkCanUseTool,
   SdkContextUsage,
   SdkFacade,
@@ -449,10 +450,8 @@ class OpenCodeSessionHandle implements SdkSessionHandle {
         }
         case 'session.diff': {
           if (event.properties.sessionID !== sessionId) continue;
-          // Gating on the phone's 'diff' capability happens in
-          // opencodeAdapter.ts (opts.emitDiffEntries), same as Claude Code's
-          // adapter.ts — pushed unconditionally here, exactly like every other
-          // event this switch turns into a queue message.
+          // Translated into diff entries by opencodeAdapter.ts, like every
+          // other event this switch turns into a queue message.
           const files = this.changedDiffs(event.properties.diff);
           if (files.length > 0) {
             this.queue.push({ type: 'opencode-diff', files } as unknown as SdkMessage);

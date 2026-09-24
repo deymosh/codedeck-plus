@@ -78,12 +78,10 @@ type Handler<K extends PhoneToBridgeMessage['type']> = (
  *  async; rejections are caught and logged, never propagated. */
 export interface CommandHandlers {
   onInput?: Handler<'input'>;
-  onQuestionInput?: Handler<'question-input'>;
-  onPermissionResponse?: Handler<'permission-res'>;
-  onKeypress?: Handler<'keypress'>;
-  onModeChange?: Handler<'mode'>;
-  onEffortChange?: Handler<'effort'>;
-  onModelChange?: Handler<'model'>;
+  onPermissionResponse?: Handler<'permission-response'>;
+  onQuestionResponse?: Handler<'question-response'>;
+  onPlanResponse?: Handler<'plan-response'>;
+  onSetOption?: Handler<'set-option'>;
   onSyncRequest?: Handler<'sync-request'>;
   onSyncAck?: Handler<'sync-ack'>;
   onCreateSession?: Handler<'create-session'>;
@@ -105,13 +103,6 @@ export interface CommandHandlers {
 export interface CommandIngestOptions {
   secretKey: Uint8Array;
   handlers: CommandHandlers;
-  /**
-   * CDX-050: called for EVERY validly-decoded main-path command with the
-   * sender's advertised capability strings (`caps`, `[]` when the command
-   * carries none — pre-CDX-050 phones omit the field). Feeds the bridge's
-   * phone-capability registry, which gates diff-entry emission.
-   */
-  onPhoneCaps?: (phonePubkeyHex: string, caps: readonly string[]) => void;
   /** When provided, main-path events whose author fails this check are dropped
    *  (the pairing path never consults it — unpaired phones are its point). */
   isPairedPhone?: (pubkeyHex: string) => boolean;
@@ -133,7 +124,6 @@ export interface CommandIngestOptions {
 export class CommandIngest {
   private readonly secretKey: Uint8Array;
   private readonly handlers: CommandHandlers;
-  private readonly onPhoneCaps?: (phonePubkeyHex: string, caps: readonly string[]) => void;
   private readonly isPairedPhone?: (pubkeyHex: string) => boolean;
   private readonly logFn?: (msg: string) => void;
   private readonly now: () => number;
@@ -156,7 +146,6 @@ export class CommandIngest {
   constructor(options: CommandIngestOptions) {
     this.secretKey = options.secretKey;
     this.handlers = options.handlers;
-    this.onPhoneCaps = options.onPhoneCaps;
     this.isPairedPhone = options.isPairedPhone;
     this.logFn = options.log;
     this.now = options.now ?? Date.now;
@@ -214,14 +203,6 @@ export class CommandIngest {
     }
 
     this.log(`[Ingest] Received ${decoded.msg.type} from ${event.pubkey.slice(0, 8)}...`);
-    // CDX-050: record the sender's advertised capabilities on every valid
-    // command — a phone that omits `caps` is recorded as [] (pre-CDX-050),
-    // which keeps diff-entry emission off for mixed fleets.
-    try {
-      this.onPhoneCaps?.(event.pubkey, decoded.msg.caps ?? []);
-    } catch (err) {
-      this.log(`[Ingest] onPhoneCaps error: ${err}`);
-    }
     this.dispatch(decoded.msg, event.pubkey);
   }
 
@@ -275,12 +256,10 @@ export class CommandIngest {
   private dispatch(msg: PhoneToBridgeMessage, pubkey: string): void {
     switch (msg.type) {
       case 'input': return this.invoke('onInput', this.handlers.onInput, msg, pubkey);
-      case 'question-input': return this.invoke('onQuestionInput', this.handlers.onQuestionInput, msg, pubkey);
-      case 'permission-res': return this.invoke('onPermissionResponse', this.handlers.onPermissionResponse, msg, pubkey);
-      case 'keypress': return this.invoke('onKeypress', this.handlers.onKeypress, msg, pubkey);
-      case 'mode': return this.invoke('onModeChange', this.handlers.onModeChange, msg, pubkey);
-      case 'effort': return this.invoke('onEffortChange', this.handlers.onEffortChange, msg, pubkey);
-      case 'model': return this.invoke('onModelChange', this.handlers.onModelChange, msg, pubkey);
+      case 'permission-response': return this.invoke('onPermissionResponse', this.handlers.onPermissionResponse, msg, pubkey);
+      case 'question-response': return this.invoke('onQuestionResponse', this.handlers.onQuestionResponse, msg, pubkey);
+      case 'plan-response': return this.invoke('onPlanResponse', this.handlers.onPlanResponse, msg, pubkey);
+      case 'set-option': return this.invoke('onSetOption', this.handlers.onSetOption, msg, pubkey);
       case 'sync-request': return this.invoke('onSyncRequest', this.handlers.onSyncRequest, msg, pubkey);
       case 'sync-ack': return this.invoke('onSyncAck', this.handlers.onSyncAck, msg, pubkey);
       case 'create-session': return this.invoke('onCreateSession', this.handlers.onCreateSession, msg, pubkey);

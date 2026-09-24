@@ -39,14 +39,14 @@ function outputOfSize(targetBytes: number): BridgeToPhoneMessage {
     type: 'output',
     sessionId: 'S'.repeat(36),
     seq: 12345,
-    entry: { entryType: 'text', content: '', timestamp: '2026-08-05T00:00:00.000Z' },
+    entry: { entryType: 'text', role: 'agent', text: '', timestamp: '2026-08-05T00:00:00.000Z' },
   });
   const pad = Math.max(0, targetBytes - utf8Size(base));
   return {
     type: 'output',
     sessionId: 'S'.repeat(36),
     seq: 12345,
-    entry: { entryType: 'text', content: 'x'.repeat(pad), timestamp: '2026-08-05T00:00:00.000Z' },
+    entry: { entryType: 'text', role: 'agent', text: 'x'.repeat(pad), timestamp: '2026-08-05T00:00:00.000Z' },
   };
 }
 
@@ -79,7 +79,7 @@ describe('frameEncodedMessage', () => {
       type: 'output',
       sessionId: 's1',
       seq: 7,
-      entry: { entryType: 'text', content: 'hello', timestamp: '2026-08-05T00:00:00Z' },
+      entry: { entryType: 'text', role: 'agent', text: 'hello', timestamp: '2026-08-05T00:00:00Z' },
     });
     const frames = frameEncodedMessage(json, cidGen());
     expect(frames).toEqual([json]);
@@ -127,7 +127,7 @@ describe('frameEncodedMessage', () => {
       type: 'output',
       sessionId: 's1',
       seq: 1,
-      entry: { entryType: 'text', content: nasty, timestamp: '2026-08-05T00:00:00Z' },
+      entry: { entryType: 'text', role: 'agent', text: nasty, timestamp: '2026-08-05T00:00:00Z' },
     });
     const frames = frameEncodedMessage(json, cidGen());
     expect(frames.length).toBeGreaterThan(1);

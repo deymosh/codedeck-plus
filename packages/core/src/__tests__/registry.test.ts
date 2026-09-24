@@ -12,6 +12,7 @@ function record(id: string, patch: Partial<SessionRecord> = {}): SessionRecord {
   return {
     sessionId: id,
     sdkSessionId: null,
+    agent: 'claude-code',
     cwd: `/work/${id}`,
     title: null,
     project: 'proj',
@@ -35,7 +36,7 @@ describe('SessionRegistry', () => {
 
   it('mutations persist across a new instance (restart)', async () => {
     const reg = new SessionRegistry(dir);
-    await reg.upsert(record('s1', { model: 'opus', effortLevel: 'high' }));
+    await reg.upsert(record('s1', { model: 'opus', effort: 'high' }));
     await reg.upsert(record('s2'));
     await reg.update('s1', { sdkSessionId: 'sdk-abc', state: 'running', title: 'Fix the bug' });
     await reg.remove('s2');
@@ -49,6 +50,18 @@ describe('SessionRegistry', () => {
     expect(s1?.model).toBe('opus');
     expect(reopened.get('s2')).toBeUndefined();
     expect(reopened.removedSessions()).toEqual(['s2']);
+  });
+
+  it('does not load a record without an agent (it predates protocol v11)', async () => {
+    const { agent: _agent, ...legacy } = record('old');
+    await fs.writeFile(
+      path.join(dir, 'registry.json'),
+      JSON.stringify({ sessions: [legacy, record('new')], removedSessions: [] }),
+    );
+    const logs: string[] = [];
+    const reg = new SessionRegistry(dir, (m) => logs.push(m));
+    expect(reg.list().map((r) => r.sessionId)).toEqual(['new']);
+    expect(logs.some((l) => l.includes('old') && l.includes('pre-v11'))).toBe(true);
   });
 
   it('update of an unknown session resolves undefined without creating it', async () => {
@@ -125,8 +138,8 @@ describe('SessionRegistry', () => {
     const reg = new SessionRegistry(dir);
     await reg.upsert(record('session-alpha', {
       model: 'opus',
-      effortLevel: 'high',
-      permissionMode: 'acceptEdits',
+      effort: 'high',
+      mode: 'acceptEdits',
       title: 'T',
       state: 'running',
     }));
@@ -138,6 +151,7 @@ describe('SessionRegistry', () => {
     const alpha = infos.find((i) => i.id === 'session-alpha');
     expect(alpha).toMatchObject({
       id: 'session-alpha',
+      agent: 'claude-code',
       slug: 'session-',
       cwd: '/work/session-alpha',
       lineCount: 42,
@@ -146,8 +160,8 @@ describe('SessionRegistry', () => {
       project: 'proj',
       state: 'running',
       model: 'opus',
-      effortLevel: 'high',
-      permissionMode: 'acceptEdits',
+      effort: 'high',
+      mode: 'acceptEdits',
     });
 
     const beta = infos.find((i) => i.id === 'session-beta');

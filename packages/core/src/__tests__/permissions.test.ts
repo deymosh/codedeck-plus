@@ -13,8 +13,9 @@ import {
 
 interface Recorded {
   permissionCards: PermissionCard[];
-  questionCards: Array<{ sessionId: string; toolUseId: string; questions: QuestionSpec[] }>;
-  planCards: Array<{ sessionId: string; toolUseId: string }>;
+  questionCards: Array<{ sessionId: string; requestId: string; questions: QuestionSpec[] }>;
+  planCards: Array<{ sessionId: string; requestId: string }>;
+  resolved: Array<{ sessionId: string; requestId: string; summary: string }>;
   modeChanges: Array<{ sessionId: string; mode: string }>;
   pendingChanged: string[];
   logs: string[];
@@ -25,6 +26,7 @@ function makeBroker(opts?: { timeoutMs?: number }): { broker: PermissionBroker; 
     permissionCards: [],
     questionCards: [],
     planCards: [],
+    resolved: [],
     modeChanges: [],
     pendingChanged: [],
     logs: [],
@@ -32,8 +34,9 @@ function makeBroker(opts?: { timeoutMs?: number }): { broker: PermissionBroker; 
   const broker = new PermissionBroker(
     {
       onPermissionCard: (card) => rec.permissionCards.push(card),
-      onQuestionCard: (sessionId, toolUseId, questions) => rec.questionCards.push({ sessionId, toolUseId, questions }),
-      onPlanCard: (sessionId, toolUseId) => rec.planCards.push({ sessionId, toolUseId }),
+      onQuestionCard: (sessionId, requestId, questions) => rec.questionCards.push({ sessionId, requestId, questions }),
+      onPlanCard: (sessionId, requestId) => rec.planCards.push({ sessionId, requestId }),
+      onResolved: (sessionId, requestId, summary) => rec.resolved.push({ sessionId, requestId, summary }),
       onAutoModeChange: (sessionId, mode) => rec.modeChanges.push({ sessionId, mode }),
       onPendingChanged: (sessionId) => rec.pendingChanged.push(sessionId),
       log: (msg) => rec.logs.push(msg),
@@ -45,6 +48,7 @@ function makeBroker(opts?: { timeoutMs?: number }): { broker: PermissionBroker; 
 
 const ctx = (patch: Partial<PermissionContext> = {}): PermissionContext => ({
   sessionId: 's1',
+  agent: 'claude-code',
   permissionMode: 'plan',
   ...patch,
 });
@@ -86,16 +90,19 @@ describe('PermissionBroker — arbitration order', () => {
     expect(rec.modeChanges).toEqual([{ sessionId: 's1', mode: 'plan' }]);
   });
 
-  it('(4) default mode auto-approves everything else', async () => {
+  it('(4) the auto-approve mode approves everything else, for any agent', async () => {
     const { broker, rec } = makeBroker();
-    const result = await broker.handleCanUseTool(
-      ctx({ permissionMode: 'default' }),
-      'Bash',
-      { command: 'rm -rf build' },
-      { toolUseID: 'tu3' },
-    );
-    expect(result).toEqual({ behavior: 'allow', updatedInput: {} });
+    for (const agent of ['claude-code', 'opencode']) {
+      const result = await broker.handleCanUseTool(
+        ctx({ agent, permissionMode: 'default' }),
+        'Bash',
+        { command: 'rm -rf build' },
+        { toolUseID: `tu3-${agent}` },
+      );
+      expect(result).toEqual({ behavior: 'allow', updatedInput: {} });
+    }
     expect(rec.permissionCards).toHaveLength(0);
+    expect(rec.resolved).toHaveLength(0);
   });
 
   it('(5) benign plans-dir write is auto-allowed in plan mode', async () => {
@@ -126,11 +133,26 @@ describe('PermissionBroker — arbitration order', () => {
       title: 'Run npm test',
       isSubAgent: false,
     });
+    expect(rec.permissionCards[0]!.options.map((o) => o.id)).toEqual(['allow', 'allow_always', 'deny']);
     expect(broker.hasPendingPermissions('s1')).toBe(true);
 
-    broker.resolvePermission('tu5', true);
+    expect(broker.resolvePermission('tu5', 'allow')).toBe(true);
     await expect(p).resolves.toEqual({ behavior: 'allow', updatedInput: {} });
     expect(broker.hasPendingPermissions('s1')).toBe(false);
+    expect(rec.resolved).toEqual([{ sessionId: 's1', requestId: 'tu5', summary: 'Allowed' }]);
+  });
+
+  it('any mode other than the auto-approve one asks (OpenCode\'s ask mode)', async () => {
+    const { broker, rec } = makeBroker();
+    void broker.handleCanUseTool(
+      ctx({ agent: 'opencode', permissionMode: 'ask' }),
+      'bash',
+      { command: 'ls' },
+      { toolUseID: 'tu-oc' },
+    );
+    expect(rec.permissionCards).toHaveLength(1);
+    // OpenCode cannot persist an allow rule, so it offers no "Always allow".
+    expect(rec.permissionCards[0]!.options.map((o) => o.id)).toEqual(['allow', 'deny']);
   });
 
   it('labels sub-agent cards with agentId and agentLabel', async () => {
@@ -146,16 +168,16 @@ describe('PermissionBroker — arbitration order', () => {
       agentId: 'agent-1',
       agentLabel: 'Plan',
     });
-    broker.resolvePermission('tu6', false);
+    broker.resolvePermission('tu6', 'deny');
     await expect(p).resolves.toMatchObject({ behavior: 'deny' });
   });
 });
 
-describe('PermissionBroker — resolvePermission modifiers', () => {
-  it('always → allow with a persisted project-scoped addRules update', async () => {
-    const { broker } = makeBroker();
+describe('PermissionBroker — resolvePermission options', () => {
+  it('allow_always → allow with a persisted project-scoped addRules update', async () => {
+    const { broker, rec } = makeBroker();
     const p = broker.handleCanUseTool(ctx(), 'Bash', { command: 'ls' }, { toolUseID: 'tu1' });
-    broker.resolvePermission('tu1', true, 'always');
+    broker.resolvePermission('tu1', 'allow_always');
     await expect(p).resolves.toEqual({
       behavior: 'allow',
       updatedInput: {},
@@ -166,30 +188,32 @@ describe('PermissionBroker — resolvePermission modifiers', () => {
         destination: 'projectSettings',
       }],
     });
+    expect(rec.resolved[0]!.summary).toBe('Always allowed');
   });
 
-  it('never → deny with the never-ask-again message', async () => {
-    const { broker } = makeBroker();
+  it('deny → "User denied"', async () => {
+    const { broker, rec } = makeBroker();
     const p = broker.handleCanUseTool(ctx(), 'Bash', { command: 'ls' }, { toolUseID: 'tu1' });
-    broker.resolvePermission('tu1', false, 'never');
-    await expect(p).resolves.toEqual({ behavior: 'deny', message: 'User denied (never ask again)' });
-  });
-
-  it('plain deny → "User denied"', async () => {
-    const { broker } = makeBroker();
-    const p = broker.handleCanUseTool(ctx(), 'Bash', { command: 'ls' }, { toolUseID: 'tu1' });
-    broker.resolvePermission('tu1', false);
+    broker.resolvePermission('tu1', 'deny');
     await expect(p).resolves.toEqual({ behavior: 'deny', message: 'User denied' });
+    expect(rec.resolved[0]!.summary).toBe('Denied');
+  });
+
+  it('an option the card does not offer is refused and keeps the request pending', () => {
+    const { broker } = makeBroker();
+    void broker.handleCanUseTool(ctx({ agent: 'opencode', permissionMode: 'ask' }), 'bash', {}, { toolUseID: 'tu1' });
+    expect(broker.resolvePermission('tu1', 'allow_always')).toBe(false);
+    expect(broker.hasPendingPermissions('s1')).toBe(true);
   });
 
   it('unknown requestId no-ops and returns false', () => {
     const { broker } = makeBroker();
-    expect(broker.resolvePermission('nope', true)).toBe(false);
+    expect(broker.resolvePermission('nope', 'allow')).toBe(false);
   });
 });
 
 describe('PermissionBroker — ExitPlanMode', () => {
-  it('suppresses the generic card and emits the dedicated plan card', async () => {
+  it('suppresses the generic card and emits the plan approval card', async () => {
     const { broker, rec } = makeBroker();
     const p = broker.handleCanUseTool(
       ctx({ permissionMode: 'plan' }),
@@ -198,13 +222,22 @@ describe('PermissionBroker — ExitPlanMode', () => {
       { toolUseID: 'tu-plan' },
     );
     expect(rec.permissionCards).toHaveLength(0);
-    expect(rec.planCards).toEqual([{ sessionId: 's1', toolUseId: 'tu-plan' }]);
+    expect(rec.planCards).toEqual([{ sessionId: 's1', requestId: 'tu-plan' }]);
+    expect(broker.hasPendingPermissions('s1')).toBe(true);
 
-    // The plan-approval tap finds the pending ExitPlanMode by tool name.
-    const id = broker.findPendingPermission('s1', 'ExitPlanMode');
-    expect(id).toBe('tu-plan');
-    broker.resolvePermission(id!, true);
+    // A plan approval is not answerable as a permission card.
+    expect(broker.resolvePermission('tu-plan', 'allow')).toBe(false);
+    expect(broker.resolvePlanApproval('tu-plan', true, 'Approve')).toBe(true);
     await expect(p).resolves.toMatchObject({ behavior: 'allow' });
+    expect(rec.resolved).toEqual([{ sessionId: 's1', requestId: 'tu-plan', summary: 'Approve' }]);
+  });
+
+  it('keeping the plan denies ExitPlanMode so the agent stays planning', async () => {
+    const { broker } = makeBroker();
+    const p = broker.handleCanUseTool(ctx(), 'ExitPlanMode', { plan: 'x' }, { toolUseID: 'tu-plan' });
+    expect(broker.resolvePlanApproval('tu-plan', false, 'Keep planning')).toBe(true);
+    await expect(p).resolves.toMatchObject({ behavior: 'deny' });
+    expect(broker.resolvePlanApproval('tu-plan', true, 'late')).toBe(false);
   });
 });
 
@@ -215,43 +248,32 @@ describe('PermissionBroker — AskUserQuestion', () => {
       questions: [{ question: 'Which color?', header: 'Color', options: [{ label: 'red' }, { label: 'blue' }] }],
     };
     const p = broker.handleCanUseTool(ctx(), 'AskUserQuestion', input, { toolUseID: 'q1' });
-    expect(rec.questionCards).toHaveLength(1);
-    expect(rec.questionCards[0]!.questions[0]!.question).toBe('Which color?');
+    expect(rec.questionCards).toEqual([{ sessionId: 's1', requestId: 'q1', questions: input.questions }]);
     expect(broker.hasPendingQuestions('s1')).toBe(true);
 
-    expect(broker.answerQuestion('s1', { text: 'green actually' })).toBe(true);
+    expect(broker.answerQuestion('s1', 'q1', 0, 'green actually')).toBe(true);
     await expect(p).resolves.toEqual({
       behavior: 'allow',
       // Echoes the original input and keys answers by FULL question text, not header.
       updatedInput: { ...input, answers: { 'Which color?': 'green actually' } },
     });
     expect(broker.hasPendingQuestions('s1')).toBe(false);
+    expect(rec.resolved).toEqual([{ sessionId: 's1', requestId: 'q1', summary: 'green actually' }]);
   });
 
-  it('resolves a keypress against that question\'s options (1-based)', async () => {
+  it('optionLabels turns chosen option indices into the answer text', () => {
     const { broker } = makeBroker();
-    const input = { questions: [{ question: 'Pick one', options: [{ label: 'Option A' }, { label: 'Option B' }] }] };
-    const p = broker.handleCanUseTool(ctx(), 'AskUserQuestion', input, { toolUseID: 'q1' });
-
-    expect(broker.answerQuestion('s1', { keypress: '2' })).toBe(true);
-    await expect(p).resolves.toMatchObject({
-      updatedInput: { answers: { 'Pick one': 'Option B' } },
-    });
+    const input = { questions: [{ question: 'Pick', options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
+    void broker.handleCanUseTool(ctx(), 'AskUserQuestion', input, { toolUseID: 'q1' });
+    expect(broker.optionLabels('q1', 0, [1])).toBe('B');
+    expect(broker.optionLabels('q1', 0, [0, 2])).toBe('A, C');
+    expect(broker.optionLabels('q1', 0, [5])).toBeNull();
+    expect(broker.optionLabels('q1', 3, [0])).toBeNull();
+    expect(broker.optionLabels('nope', 0, [0])).toBeNull();
   });
 
-  it('rejects an out-of-range keypress without consuming the question', async () => {
-    const { broker } = makeBroker();
-    const input = { questions: [{ question: 'Pick one', options: [{ label: 'A' }] }] };
-    const p = broker.handleCanUseTool(ctx(), 'AskUserQuestion', input, { toolUseID: 'q1' });
-
-    expect(broker.answerQuestion('s1', { keypress: '5' })).toBe(false);
-    expect(broker.hasPendingQuestions('s1')).toBe(true);
-    expect(broker.answerQuestion('s1', { keypress: '1' })).toBe(true);
-    await expect(p).resolves.toMatchObject({ behavior: 'allow' });
-  });
-
-  it('answers a multi-question group IN ORDER and resolves once all are answered', async () => {
-    const { broker } = makeBroker();
+  it('answers questions by index, in any order, and resolves once all are answered', async () => {
+    const { broker, rec } = makeBroker();
     const input = {
       questions: [
         { question: 'Q-first?', options: [{ label: 'f1' }, { label: 'f2' }] },
@@ -261,10 +283,10 @@ describe('PermissionBroker — AskUserQuestion', () => {
     };
     const p = broker.handleCanUseTool(ctx(), 'AskUserQuestion', input, { toolUseID: 'q1' });
 
-    broker.answerQuestion('s1', { keypress: '2' });      // → Q-first: f2
+    expect(broker.answerQuestion('s1', 'q1', 2, 'free text')).toBe(true);
     expect(broker.hasPendingQuestions('s1')).toBe(true); // group not done yet
-    broker.answerQuestion('s1', { keypress: '1' });      // → Q-second: s1
-    broker.answerQuestion('s1', { text: 'free text' });  // → Q-third
+    expect(broker.answerQuestion('s1', 'q1', 0, 'f2')).toBe(true);
+    expect(broker.answerQuestion('s1', 'q1', 1, 's1')).toBe(true);
 
     await expect(p).resolves.toEqual({
       behavior: 'allow',
@@ -273,11 +295,30 @@ describe('PermissionBroker — AskUserQuestion', () => {
         answers: { 'Q-first?': 'f2', 'Q-second?': 's1', 'Q-third?': 'free text' },
       },
     });
+    expect(rec.resolved[0]!.summary).toBe('f2 · s1 · free text');
+  });
+
+  it('plain input answers the active ask\'s first unanswered question', async () => {
+    const { broker } = makeBroker();
+    const input = { questions: [{ question: 'A?' }, { question: 'B?' }] };
+    const p = broker.handleCanUseTool(ctx(), 'AskUserQuestion', input, { toolUseID: 'q1' });
+    expect(broker.answerQuestion('s1', 'q1', 0, 'one')).toBe(true);
+    expect(broker.answerActiveQuestion('s1', 'two')).toBe(true);
+    await expect(p).resolves.toMatchObject({ updatedInput: { answers: { 'A?': 'one', 'B?': 'two' } } });
+  });
+
+  it('refuses an unknown ask, a wrong session or an out-of-range index', () => {
+    const { broker } = makeBroker();
+    void broker.handleCanUseTool(ctx(), 'AskUserQuestion', { questions: [{ question: 'Q?' }] }, { toolUseID: 'q1' });
+    expect(broker.answerQuestion('s1', 'nope', 0, 'x')).toBe(false);
+    expect(broker.answerQuestion('s2', 'q1', 0, 'x')).toBe(false);
+    expect(broker.answerQuestion('s1', 'q1', 1, 'x')).toBe(false);
+    expect(broker.hasPendingQuestions('s1')).toBe(true);
   });
 
   it('returns false when no question is pending (caller falls back to plain input)', () => {
     const { broker } = makeBroker();
-    expect(broker.answerQuestion('s1', { text: 'hello' })).toBe(false);
+    expect(broker.answerActiveQuestion('s1', 'hello')).toBe(false);
   });
 });
 
@@ -286,7 +327,7 @@ describe('PermissionBroker — timeouts', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it('denies a pending question after the (injectable) timeout', async () => {
-    const { broker } = makeBroker({ timeoutMs: 1000 });
+    const { broker, rec } = makeBroker({ timeoutMs: 1000 });
     const p = broker.handleCanUseTool(
       ctx(),
       'AskUserQuestion',
@@ -296,16 +337,18 @@ describe('PermissionBroker — timeouts', () => {
     vi.advanceTimersByTime(1001);
     await expect(p).resolves.toEqual({ behavior: 'deny', message: 'Question timed out' });
     expect(broker.hasPendingQuestions('s1')).toBe(false);
+    expect(rec.resolved).toEqual([{ sessionId: 's1', requestId: 'q1', summary: 'Timed out' }]);
     // A late answer finds nothing to resolve.
-    expect(broker.answerQuestion('s1', { text: 'too late' })).toBe(false);
+    expect(broker.answerQuestion('s1', 'q1', 0, 'too late')).toBe(false);
   });
 
   it('denies a pending permission after the timeout', async () => {
-    const { broker } = makeBroker({ timeoutMs: 1000 });
+    const { broker, rec } = makeBroker({ timeoutMs: 1000 });
     const p = broker.handleCanUseTool(ctx(), 'Bash', { command: 'ls' }, { toolUseID: 'tu1' });
     vi.advanceTimersByTime(1001);
     await expect(p).resolves.toEqual({ behavior: 'deny', message: 'Permission timed out' });
-    expect(broker.resolvePermission('tu1', true)).toBe(false);
+    expect(rec.resolved[0]!.summary).toBe('Timed out');
+    expect(broker.resolvePermission('tu1', 'allow')).toBe(false);
   });
 
   it('defaults to 1 hour (deliberate change from the old 24h)', () => {
@@ -337,11 +380,16 @@ describe('PermissionBroker — denyAllPending', () => {
     expect(broker.hasPendingPermissions('s1')).toBe(false);
     expect(broker.hasPendingQuestions('s1')).toBe(false);
     expect(broker.hasPendingPermissions('s2')).toBe(true);
+    // Every drained card is closed with the reason.
+    expect(rec.resolved).toEqual([
+      { sessionId: 's1', requestId: 'tu1', summary: 'Interrupted by user' },
+      { sessionId: 's1', requestId: 'q1', summary: 'Interrupted by user' },
+    ]);
 
     // A late phone answer finds the entries gone and no-ops (cannot double-resolve).
-    expect(broker.resolvePermission('tu1', true)).toBe(false);
+    expect(broker.resolvePermission('tu1', 'allow')).toBe(false);
 
-    broker.resolvePermission('tu2', true);
+    broker.resolvePermission('tu2', 'allow');
     await expect(other).resolves.toMatchObject({ behavior: 'allow' });
     expect(rec.pendingChanged).toContain('s2');
   });

@@ -19,7 +19,7 @@ import type {
   SdkSessionHandle,
   SdkSessionOptions,
 } from '@codedeck/core';
-import type { EffortLevel, PermissionMode } from '@codedeck/protocol';
+import type { EffortLevel, PermissionMode } from '@codedeck/core';
 
 export class FakeSdkSession implements SdkSessionHandle {
   readonly options: SdkSessionOptions;

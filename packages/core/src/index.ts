@@ -19,6 +19,7 @@ export * from './session/registry';
 export * from './session/permissions';
 export * from './session/runner';
 export * from './sync/server';
+export * from './agents';
 export * from './sdk/facade';
 export * from './sdk/adapter';
 export * from './sdk/testModeFacade';
