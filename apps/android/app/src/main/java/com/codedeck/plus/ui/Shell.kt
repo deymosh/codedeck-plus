@@ -24,6 +24,7 @@ import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiIntent
 
@@ -65,6 +66,15 @@ private val ScreenSaver = listSaver<Screen, String>(
  *  notification tap or a `codedeck://session/…` link). */
 data class OpenSessionRequest(val machine: String, val sessionId: String)
 
+/** A just-created session to open once the bridge reports it: its id is not
+ *  known when the create is sent, so the first session on [machine] that is
+ *  not in [knownIds] is the new one. */
+private data class AwaitedSession(val machine: String, val knownIds: Set<String>)
+
+/** How long the shell keeps waiting for a created session to appear before
+ *  it stops trying to open it; the list's pending card still tracks it. */
+private const val AWAIT_CREATED_SESSION_MS = 120_000L
+
 /**
  * App shell — one full-screen page at a time, driven by a single saved
  * [Screen]. The sessions list (`SessionsScreen`) is home; a session,
@@ -100,8 +110,10 @@ fun Shell(
     val selectedSession = ui?.selectedSession
 
     var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen>(Screen.Sessions) }
+    var awaited by remember { mutableStateOf<AwaitedSession?>(null) }
 
     fun openSession(machine: String, sessionId: String) {
+        awaited = null
         screen = Screen.Session(machine, sessionId)
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
@@ -129,6 +141,20 @@ fun Shell(
         val request = openRequest ?: return@LaunchedEffect
         openSession(request.machine, request.sessionId)
         onOpenRequestHandled()
+    }
+
+    // Open a just-created session as soon as it shows up — unless the user
+    // has already moved on from the list in the meantime.
+    LaunchedEffect(awaited, machines) {
+        val wait = awaited ?: return@LaunchedEffect
+        val machine = machines.find { it.pubkeyHex == wait.machine } ?: return@LaunchedEffect
+        val created = machine.sessions.firstOrNull { it.id !in wait.knownIds } ?: return@LaunchedEffect
+        if (screen == Screen.Sessions) openSession(wait.machine, created.id) else awaited = null
+    }
+    LaunchedEffect(awaited) {
+        if (awaited == null) return@LaunchedEffect
+        delay(AWAIT_CREATED_SESSION_MS)
+        awaited = null
     }
 
     // A session deleted while open (another device, the bridge) clears the
@@ -160,6 +186,10 @@ fun Shell(
                     core,
                     machinePubkey = current.machine,
                     onClose = { screen = Screen.Sessions },
+                    onCreated = { knownIds ->
+                        awaited = AwaitedSession(current.machine, knownIds)
+                        screen = Screen.Sessions
+                    },
                 )
                 is Screen.Session -> SessionScreen(
                     core,

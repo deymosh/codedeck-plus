@@ -121,6 +121,7 @@ fun NewSessionScreen(
     core: CoreHost,
     machinePubkey: String,
     onClose: () -> Unit,
+    onCreated: (knownSessionIds: Set<String>) -> Unit,
 ) {
     val machinesView by core.machines.collectAsState()
     val settings by core.settings.collectAsState()
@@ -151,6 +152,7 @@ fun NewSessionScreen(
         events = core.events,
         dispatch = ::dispatch,
         onClose = onClose,
+        onCreated = onCreated,
     )
 }
 
@@ -162,6 +164,7 @@ private fun NewSessionBody(
     events: SharedFlow<CoreEvent>,
     dispatch: (UniffiIntent) -> Unit,
     onClose: () -> Unit,
+    onCreated: (knownSessionIds: Set<String>) -> Unit,
 ) {
     // Preferences (CDX-047 parity) pre-select model/effort; '' stays "bridge
     // default" the same way every other field here uses '' for that. Re-keyed
@@ -234,6 +237,9 @@ private fun NewSessionBody(
         creating = true
         createError = null
         val cwd = if (folderChoice == NEW_FOLDER) newFolderPath else folderChoice
+        // The machine's sessions before this create: whatever appears beyond
+        // them afterwards is the session this create made.
+        val knownSessionIds = machine.sessions.map { it.id }.toSet()
         scope.launch {
             // No explicit refresh is needed on success — CoreHost refreshes
             // its views from the very StateChanged events watched here.
@@ -267,8 +273,8 @@ private fun NewSessionBody(
             when (settled) {
                 is CoreEvent.StateChanged ->
                     // Accepted; the sessions list's pending card takes over
-                    // from here (mobile's optimistic flow).
-                    onClose()
+                    // until the session is live, and the shell then opens it.
+                    onCreated(knownSessionIds)
                 is CoreEvent.ActionFailed -> createError = actionFailedCopy(settled.kind)
                 else -> createError = "The bridge did not confirm — check the session list."
             }
