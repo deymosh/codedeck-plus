@@ -14,7 +14,11 @@
 #                 driver, NIP-42 AUTH, relay frame codec, publish verdicts,
 #                 behind a small `Transport` port. Depends on protocol only;
 #                 shared by client-runtime and the bridge runtime.
-# client-core   = client domain logic (reducers, stores as state machines,
+# agent-protocol = the driver protocol between the bridge and its agent host
+#                 (the Node sidecar running agent SDKs): JSON-lines frames,
+#                 pure types + codec. Depends on protocol only. The host's
+#                 TypeScript types are generated from it.
+# client-core  = client domain logic (reducers, stores as state machines,
 #                 sync, merge, pairing FSM, presentation). Depends on protocol.
 #                 No tokio, no sockets, no I/O, no Tauri/Android/Node/
 #                 filesystem. Deterministic. The part that is never duplicated
@@ -35,7 +39,7 @@
 # apps/android is built).
 [workspace]
 resolver = "2"
-members = ["crates/protocol", "crates/nostr-transport", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
+members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol","crates/client-core", "crates/client-runtime", "crates/client-ffi"]
 exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
 
 [workspace.package]

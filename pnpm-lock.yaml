@@ -48,6 +48,31 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.0.1))
 
+  packages/agent-host:
+    dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.3.280
+        version: 0.3.280(@anthropic-ai/sdk@0.120.0(zod@3.25.76))(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))(zod@3.25.76)
+      '@opencode-ai/sdk':
+        specifier: ^1.18.32
+        version: 1.18.32
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.0.1(@noble/hashes@2.0.1))
+
   packages/core:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':

@@ -113,6 +113,69 @@ jobs:
         if: steps.filter.outputs.core != 'true'
         run: echo "no Rust changes; cargo job skipped."
 
+  # The driver protocol between the bridge and its agent host: the host's
+  # TypeScript types are generated from crates/agent-protocol (regenerated
+  # here, failing on drift), and the real host bundle is spawned and driven
+  # by the Rust codec (fake + test-mode Claude Code drivers), so a TS change
+  # that emits something the Rust types reject fails here.
+  agent-host:
+    name: driver protocol (generated types + host spawn test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect driver-protocol changes
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            host:
+              - 'crates/agent-protocol/**'
+              - 'crates/protocol/**'
+              - 'packages/agent-host/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'pnpm-lock.yaml'
+
+      - uses: pnpm/action-setup@v6
+        if: steps.filter.outputs.host == 'true'
+
+      - uses: actions/setup-node@v5
+        if: steps.filter.outputs.host == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        if: steps.filter.outputs.host == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.host == 'true'
+        with:
+          workspaces: .
+
+      - name: Generated TypeScript drift check
+        if: steps.filter.outputs.host == 'true'
+        run: |
+          cargo test --locked -p agent-protocol --test gen_ts_bindings -- --ignored
+          git diff --exit-code -- packages/agent-host/src/generated || {
+            echo "::error::packages/agent-host/src/generated is stale — a driver-protocol type changed without regenerating it. Run: cargo test -p agent-protocol --test gen_ts_bindings -- --ignored" >&2
+            exit 1
+          }
+
+      - name: Build the host and drive it from Rust
+        if: steps.filter.outputs.host == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @codedeck/agent-host run build
+          cargo test --locked -p agent-protocol --test agent_host -- --ignored
+
+      - name: No driver-protocol changes — skipped
+        if: steps.filter.outputs.host != 'true'
+        run: echo "no driver-protocol changes; agent-host job skipped."
+
   # apps/android (F3.3): Gradle unit tests + Paparazzi screenshot verification
   # + the UniFFI Kotlin bindings drift check. Path-filtered like the cargo job
   # above; `core` (crates/**) is included because a client-runtime/client-core
