@@ -32,7 +32,8 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxDefaults
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -385,7 +386,15 @@ private fun SwipeToDeleteSessionCard(
     // stale one.
     val currentOnDelete by rememberUpdatedState(onDelete)
     val currentSession by rememberUpdatedState(session)
-    val dismissState = rememberSwipeToDismissBoxState()
+    // Plain `remember`, NOT `rememberSwipeToDismissBoxState` (which is
+    // `rememberSaveable`): the list keeps each item key's saveable state after
+    // the item leaves, so a session brought back by Undo came back already
+    // swiped away — drawn as its red Delete panel, and the settled
+    // EndToStart value fired the delete below all over again (a fresh toast,
+    // and the close-session sent once that new window ran out). A card that
+    // (re)enters the list must always start settled.
+    val positionalThreshold = SwipeToDismissBoxDefaults.positionalThreshold
+    val dismissState = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold) }
 
     // Delete fires once a left swipe settles at EndToStart (observing the
     // value rather than a confirmValueChange veto — deprecated without
