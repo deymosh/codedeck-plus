@@ -80,17 +80,17 @@ private fun sessionNeedsAttention(state: String?, isUnread: Boolean): Boolean =
     state == "waiting_permission" || state == "waiting_question" || isUnread
 
 /**
- * The session sidebar — machine-grouped session list with a per-machine "+"
- * for a new session. Port of `apps/mobile/src/ui/Sidebar.tsx`: pending/
- * failed session placeholder cards, pull-to-refresh, swipe-left-to-delete
- * with the shell's undo toast, the attention/unread dot, the committed
- * badge, and the decrypt-failure pairing banner. Machine group order and
- * per-group session order come from the shared [orderedMachines]/
- * [orderedSessions] helpers so the swipe carousel's navigation order can
- * never diverge from this display order.
+ * The sessions page — the app's home screen: a full-screen, machine-grouped
+ * session list with a per-machine "+" for a new session. Port of
+ * `apps/mobile/src/ui/Sidebar.tsx` (a side panel there; a page of its own
+ * here, never shown beside a session): pending/failed session placeholder
+ * cards, pull-to-refresh, swipe-left-to-delete with the shell's undo toast,
+ * the attention/unread dot, the committed badge, and the decrypt-failure
+ * pairing banner. The card of the core's selected session (the one last
+ * opened) keeps a highlight so it is easy to find again.
  */
 @Composable
-fun Sidebar(
+fun SessionsScreen(
     core: CoreHost,
     machines: List<UniffiMachineSummary>,
     pendingSessions: List<UniffiPendingSession>,
@@ -108,7 +108,6 @@ fun Sidebar(
 ) {
     Column(
         modifier
-            .fillMaxHeight()
             .background(Tokens.Surface)
             .padding(Tokens.Space3),
     ) {
@@ -307,7 +306,7 @@ fun Sidebar(
 }
 
 /**
- * Port of `Sidebar.tsx`'s `.groupHeading`: a presence dot, the machine name
+ * Port of mobile `Sidebar.tsx`'s `.groupHeading`: a presence dot, the machine name
  * in caps (`text-transform: uppercase`, bold, letter-spaced, muted — this
  * whole row is a label, not body text), an optional host badge, and the "+".
  */

@@ -102,7 +102,7 @@ fun SelectField(
             // The trigger otherwise looks like plain bordered text, not
             // something tappable — a small affordance glyph, the same plain-
             // Unicode-glyph idiom this app already uses for its other
-            // chrome (Sidebar's "+", NavChevron's "‹"/"›") rather than
+            // chrome (SessionsScreen's "+", NavChevron's "‹"/"›") rather than
             // pulling in a Material icon for one character.
             Text("▾", color = if (enabled) Tokens.TextMuted else Tokens.TextDim, fontSize = Tokens.TextXs)
         }

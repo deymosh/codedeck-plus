@@ -1,25 +1,23 @@
 package com.codedeck.plus.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.screens.NewSessionScreen
 import com.codedeck.plus.ui.screens.PairingScreen
@@ -29,23 +27,66 @@ import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiIntent
 
-/** Narrow ↔ wide breakpoint, matching `apps/mobile`'s `(min-width: 700px)`
- *  media query (`App.tsx`'s `isWide`) — same threshold, same meaning: wide
- *  shows the sessions list beside the session, narrow shows one at a time. */
-private val WIDE_BREAKPOINT = 700.dp
+/** Which full-screen page the shell shows. Exactly one at a time, whatever
+ *  the orientation or window width: the sessions list is the home page and
+ *  every other page replaces it until Back returns there. */
+private sealed interface Screen {
+    data object Sessions : Screen
+    data class Session(val machine: String, val sessionId: String) : Screen
+    data class NewSession(val machine: String) : Screen
+    data object Settings : Screen
+    data object Pairing : Screen
+}
+
+/** Saves [Screen] as a flat string list, so the open page survives rotation
+ *  and process recreation. */
+private val ScreenSaver = listSaver<Screen, String>(
+    save = { screen ->
+        when (screen) {
+            Screen.Sessions -> listOf("sessions")
+            is Screen.Session -> listOf("session", screen.machine, screen.sessionId)
+            is Screen.NewSession -> listOf("new-session", screen.machine)
+            Screen.Settings -> listOf("settings")
+            Screen.Pairing -> listOf("pairing")
+        }
+    },
+    restore = { saved ->
+        when (saved.firstOrNull()) {
+            "session" -> Screen.Session(saved[1], saved[2])
+            "new-session" -> Screen.NewSession(saved[1])
+            "settings" -> Screen.Settings
+            "pairing" -> Screen.Pairing
+            else -> Screen.Sessions
+        }
+    },
+)
+
+/** A session the shell should open, from outside the composition (a
+ *  notification tap or a `codedeck://session/…` link). */
+data class OpenSessionRequest(val machine: String, val sessionId: String)
 
 /**
- * App shell (F3.3.3) — port of `apps/mobile/src/ui/App.tsx`'s core
- * composition: a machine-grouped sessions list (`Sidebar`) beside the
- * session (`MainPanel`) on wide screens; on phones the list is the home
- * screen and a session opens over it. Settings, Pairing, and
- * New Session are all full-screen replacements of this whole shell while
- * open (F4.1.5, F4.4), not overlays. The undo toast (`UndoToast.kt`) is
- * mounted here at the root so the post-delete undo window is reachable from
- * any screen; the keyboard-inset controller is still later work.
+ * App shell — one full-screen page at a time, driven by a single saved
+ * [Screen]. The sessions list (`SessionsScreen`) is home; a session,
+ * New Session, Settings and Pairing each replace it, and Back returns to it.
+ *
+ * Which session is open is this navigation state, not the core's selection:
+ * opening a session also dispatches `SelectSession` (the core's unread and
+ * notification bookkeeping follow it), but re-selecting the already-selected
+ * session changes nothing in the core, so navigation cannot be derived from
+ * selection changes. [openRequest] is the explicit channel for opens that
+ * start outside the composition; the shell consumes it through
+ * [onOpenRequestHandled].
+ *
+ * The undo toast (`UndoToast.kt`) and the action-failed banner are mounted
+ * here at the root so they are reachable from any page.
  */
 @Composable
-fun Shell(core: CoreHost) {
+fun Shell(
+    core: CoreHost,
+    openRequest: OpenSessionRequest? = null,
+    onOpenRequestHandled: () -> Unit = {},
+) {
     val machinesView by core.machines.collectAsState()
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -57,39 +98,49 @@ fun Shell(core: CoreHost) {
     val machines = machinesView?.machines ?: emptyList()
     val selectedMachine = ui?.selectedMachine
     val selectedSession = ui?.selectedSession
-    // Values the sidebar needs from the ui/settings/pending-sessions slices
-    // (unread dot, committed badge, pairing banner, placeholder cards).
-    val unreadSessions = ui?.unreadSessions.orEmpty().toSet()
-    val showCommitBadge = settings?.showCommitBadge ?: false
-    val needsPairingCheck = connection?.needsPairingCheck ?: false
-    val pending = pendingSessions?.pending.orEmpty()
 
-    var newSessionFor by remember { mutableStateOf<String?>(null) }
-    var settingsOpen by remember { mutableStateOf(false) }
-    var pairingOpen by remember { mutableStateOf(false) }
-    // First run (no machines paired) starts on pairing — same as
-    // `apps/mobile`'s `App.tsx`. Waits for the first real `MachinesView`
-    // fetch (`machinesView != null`) rather than deciding off the empty
-    // pre-hydration list, so a phone that DOES have paired machines never
-    // flashes the pairing screen while `CoreHost.start()`'s initial fetch
-    // is still in flight.
-    var pairingAutoOpenDecided by remember { mutableStateOf(false) }
+    var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen>(Screen.Sessions) }
+
+    fun openSession(machine: String, sessionId: String) {
+        screen = Screen.Session(machine, sessionId)
+        scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
+    }
+
+    // First run (no machines paired) starts on pairing. Waits for the first
+    // real `MachinesView` fetch (`machinesView != null`) rather than deciding
+    // off the empty pre-hydration list, so a phone that DOES have paired
+    // machines never flashes the pairing screen while `CoreHost.start()`'s
+    // initial fetch is still in flight.
+    var pairingAutoOpenDecided by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(machinesView) {
         if (!pairingAutoOpenDecided && machinesView != null) {
             pairingAutoOpenDecided = true
-            if (machines.isEmpty()) pairingOpen = true
+            if (machines.isEmpty()) screen = Screen.Pairing
         }
     }
-    // A deep link (`codedeck://pair…`, F4.2.3) can stage or begin a pair
-    // from anywhere in the app — surface it the same way `App.tsx`'s own
-    // effect does, regardless of what's currently open.
+    // A deep link (`codedeck://pair…`) can stage or begin a pair from
+    // anywhere in the app — surface it regardless of what's currently open.
     LaunchedEffect(pairing?.phase, pairing?.staged) {
         val p = pairing
-        if (p != null && (p.phase != "idle" || p.staged != null)) pairingOpen = true
+        if (p != null && (p.phase != "idle" || p.staged != null)) screen = Screen.Pairing
     }
 
-    fun selectSession(machine: String, sessionId: String) {
-        scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
+    LaunchedEffect(openRequest) {
+        val request = openRequest ?: return@LaunchedEffect
+        openSession(request.machine, request.sessionId)
+        onOpenRequestHandled()
+    }
+
+    // A session deleted while open (another device, the bridge) clears the
+    // core's selection; fall back to the list instead of an empty page. Only
+    // a non-null → null change counts: a freshly opened session may not be
+    // selected in the core yet.
+    var previousSelection by remember { mutableStateOf(selectedSession) }
+    LaunchedEffect(selectedSession) {
+        if (previousSelection != null && selectedSession == null && screen is Screen.Session) {
+            screen = Screen.Sessions
+        }
+        previousSelection = selectedSession
     }
 
     // The failure banner floats over the top of the content, so its arrival
@@ -99,108 +150,40 @@ fun Shell(core: CoreHost) {
     // composer's Send — and takes space only while it is showing.
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            // System Back returns from a full-screen replacement to the shell,
-            // like its own close button — without these it finished the activity.
-            if (settingsOpen) {
-                // Full-screen replacement, not an overlay: while Settings is open it
-                // owns the window — the wide/narrow split simply isn't composed
-                // underneath it, so returning shows the shell exactly as it was.
-                BackHandler { settingsOpen = false }
-                SettingsScreen(core, onClose = { settingsOpen = false })
-            } else if (pairingOpen) {
-                BackHandler { pairingOpen = false }
-                PairingScreen(core, onClose = { pairingOpen = false })
-            } else if (newSessionFor != null) {
-                BackHandler { newSessionFor = null }
-                NewSessionScreen(core, machinePubkey = newSessionFor!!, onClose = { newSessionFor = null })
-            } else {
-                BoxWithConstraints(Modifier.fillMaxSize()) {
-                    val isWide = maxWidth >= WIDE_BREAKPOINT
-    
-                    val sessionContent: @Composable (String, String, (() -> Unit)?) -> Unit = { machine, sessionId, onBack ->
-                        SessionScreen(core, machine, sessionId, onBack = onBack, modifier = Modifier.fillMaxSize())
-                    }
-    
-                    if (isWide) {
-                        Row(Modifier.fillMaxSize()) {
-                            Sidebar(
-                                core = core,
-                                machines = machines,
-                                pendingSessions = pending,
-                                connectionStatus = connection?.status,
-                                needsPairingCheck = needsPairingCheck,
-                                showCommitBadge = showCommitBadge,
-                                unreadSessions = unreadSessions,
-                                selectedMachine = selectedMachine,
-                                selectedSession = selectedSession,
-                                onSelectSession = ::selectSession,
-                                onNewSession = { newSessionFor = it },
-                                onOpenSettings = { settingsOpen = true },
-                                onOpenPairing = { pairingOpen = true },
-                                modifier = Modifier.width(Tokens.SidebarWidth),
-                            )
-                            MainPanel(
-                                selectedMachine = selectedMachine,
-                                selectedSession = selectedSession,
-                                isWide = true,
-                                onOpenSidebar = {},
-                                modifier = Modifier.weight(1f),
-                                sessionContent = sessionContent,
-                            )
-                        }
-                    } else {
-                        // Phone: the Sessions list IS the home screen, full
-                        // width, and a session opens over it; Back (or the
-                        // session's back arrow) returns to the list, and Back on
-                        // the list leaves the app. `showingSession` is separate
-                        // from the core's selection so going back to the list
-                        // keeps the selection intact. The app starts on the list.
-                        var showingSession by rememberSaveable { mutableStateOf(false) }
-                        // A selection that changes after this point (a tap in the
-                        // list, a notification tap, a deep link) opens it.
-                        var seenSelection by remember { mutableStateOf(selectedMachine to selectedSession) }
-                        LaunchedEffect(selectedMachine, selectedSession) {
-                            val current = selectedMachine to selectedSession
-                            if (current != seenSelection) {
-                                seenSelection = current
-                                if (selectedSession != null) showingSession = true
-                            }
-                        }
-                        if (showingSession && selectedSession != null) {
-                            BackHandler { showingSession = false }
-                            MainPanel(
-                                selectedMachine = selectedMachine,
-                                selectedSession = selectedSession,
-                                isWide = false,
-                                onOpenSidebar = { showingSession = false },
-                                modifier = Modifier.fillMaxSize(),
-                                sessionContent = sessionContent,
-                            )
-                        } else {
-                            Sidebar(
-                                core = core,
-                                machines = machines,
-                                pendingSessions = pending,
-                                connectionStatus = connection?.status,
-                                needsPairingCheck = needsPairingCheck,
-                                showCommitBadge = showCommitBadge,
-                                unreadSessions = unreadSessions,
-                                selectedMachine = selectedMachine,
-                                selectedSession = selectedSession,
-                                onSelectSession = { machine, sessionId ->
-                                    selectSession(machine, sessionId)
-                                    // Re-opening the already-selected session
-                                    // changes no selection, so open it here too.
-                                    showingSession = true
-                                },
-                                onNewSession = { newSessionFor = it },
-                                onOpenSettings = { settingsOpen = true },
-                                onOpenPairing = { pairingOpen = true },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
-                    }
-                }
+            // System Back on any page returns to the sessions list, like each
+            // page's own close/back control; Back on the list leaves the app.
+            if (screen != Screen.Sessions) BackHandler { screen = Screen.Sessions }
+            when (val current = screen) {
+                Screen.Settings -> SettingsScreen(core, onClose = { screen = Screen.Sessions })
+                Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
+                is Screen.NewSession -> NewSessionScreen(
+                    core,
+                    machinePubkey = current.machine,
+                    onClose = { screen = Screen.Sessions },
+                )
+                is Screen.Session -> SessionScreen(
+                    core,
+                    current.machine,
+                    current.sessionId,
+                    onBack = { screen = Screen.Sessions },
+                    modifier = Modifier.fillMaxSize().background(Tokens.Bg),
+                )
+                Screen.Sessions -> SessionsScreen(
+                    core = core,
+                    machines = machines,
+                    pendingSessions = pendingSessions?.pending.orEmpty(),
+                    connectionStatus = connection?.status,
+                    needsPairingCheck = connection?.needsPairingCheck ?: false,
+                    showCommitBadge = settings?.showCommitBadge ?: false,
+                    unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
+                    selectedMachine = selectedMachine,
+                    selectedSession = selectedSession,
+                    onSelectSession = ::openSession,
+                    onNewSession = { screen = Screen.NewSession(it) },
+                    onOpenSettings = { screen = Screen.Settings },
+                    onOpenPairing = { screen = Screen.Pairing },
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
         }

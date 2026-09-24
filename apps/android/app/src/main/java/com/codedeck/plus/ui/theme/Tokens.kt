@@ -50,8 +50,6 @@ object Tokens {
     /** Inner padding of the small rectangular header/badge chips. */
     val ChipPadH = 6.dp
     val ChipPadV = 2.dp
-    /** Fixed-px, deliberately not scale-coupled — matches tokens.css exactly. */
-    val SidebarWidth = 260.dp
 
     // --- Radii (tokens.css --radius-*) ---
     val RadiusSm = 4.dp

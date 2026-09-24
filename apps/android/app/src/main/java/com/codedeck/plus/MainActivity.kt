@@ -29,15 +29,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
+import com.codedeck.plus.ui.OpenSessionRequest
 import com.codedeck.plus.ui.Shell
 import com.codedeck.plus.ui.theme.CodeDeckTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
 /**
  * Holds the [CoreHost] reference handed back once [MainActivity] binds to
@@ -50,30 +49,26 @@ class MainViewModel : ViewModel() {
     private val _core = MutableStateFlow<CoreHost?>(null)
     val core: StateFlow<CoreHost?> = _core.asStateFlow()
 
-    /** Deep link arriving before the core attached; replayed in [attach].
-     *  Main-thread-only access, so a plain var holds. */
-    private var pendingSession: Pair<String, String>? = null
+    /**
+     * A session a notification tap / deep link asked to open, held until the
+     * shell consumes it — which also covers a link arriving before the core
+     * attached, since the shell only composes once it has. The shell both
+     * navigates and selects: selecting alone would not open anything when
+     * the session is already the core's selection.
+     */
+    private val _openRequest = MutableStateFlow<OpenSessionRequest?>(null)
+    val openRequest: StateFlow<OpenSessionRequest?> = _openRequest.asStateFlow()
 
     fun attach(core: CoreHost) {
         _core.value = core
-        pendingSession?.let { (machine, sessionId) ->
-            pendingSession = null
-            dispatchSelectSession(machine, sessionId)
-        }
     }
 
-    fun selectSession(machine: String, sessionId: String) {
-        if (_core.value != null) {
-            dispatchSelectSession(machine, sessionId)
-        } else {
-            pendingSession = machine to sessionId
-        }
+    fun requestOpenSession(machine: String, sessionId: String) {
+        _openRequest.value = OpenSessionRequest(machine, sessionId)
     }
 
-    private fun dispatchSelectSession(machine: String, sessionId: String) {
-        viewModelScope.launch {
-            _core.value?.dispatch(uniffi.client_ffi.UniffiIntent.SelectSession(machine, sessionId))
-        }
+    fun openRequestHandled() {
+        _openRequest.value = null
     }
 }
 
@@ -128,11 +123,18 @@ class MainActivity : ComponentActivity() {
                         // Density and fontScale multiply together so dp spacing
                         // and sp text scale as one, like the TSX multiplier.
                         val settings by current.settings.collectAsState()
+                        val openRequest by viewModel.openRequest.collectAsState()
                         val scale = settings?.uiScale?.toFloat() ?: 1f
                         val d = LocalDensity.current
                         CompositionLocalProvider(
                             LocalDensity provides Density(d.density * scale, d.fontScale * scale),
-                        ) { Shell(current) }
+                        ) {
+                            Shell(
+                                current,
+                                openRequest = openRequest,
+                                onOpenRequestHandled = viewModel::openRequestHandled,
+                            )
+                        }
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()
@@ -165,7 +167,7 @@ class MainActivity : ComponentActivity() {
         // path segment per key part, already decoded by Uri here.
         val segments = uri.pathSegments
         if (segments.size == 2 && segments.none { it.isBlank() }) {
-            viewModel.selectSession(segments[0], segments[1])
+            viewModel.requestOpenSession(segments[0], segments[1])
         }
     }
 }

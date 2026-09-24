@@ -442,7 +442,7 @@ private fun NewSessionBody(
  * Section label — the reference renders these (`NewSessionModal.module.css`'s
  * `.sectionTitle`, and the settings screen's own equivalent) as uppercase,
  * semibold, letter-spaced, muted text: a label, not body text. Same treatment
- * `Sidebar.kt`'s MachineHeader gives machine names — `String.uppercase()`,
+ * `SessionsScreen.kt`'s MachineHeader gives machine names — `String.uppercase()`,
  * `FontWeight.Bold`, 0.05 em tracking on the muted color.
  */
 @Composable

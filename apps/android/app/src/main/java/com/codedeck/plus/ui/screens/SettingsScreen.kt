@@ -645,7 +645,7 @@ private fun MachineSection(
 /**
  * Section label — the reference (`SettingsScreen.tsx`'s section titles) is
  * uppercase, semibold, letter-spaced, muted text: a label, not body text.
- * Same treatment `Sidebar.kt`'s MachineHeader gives machine names and
+ * Same treatment `SessionsScreen.kt`'s MachineHeader gives machine names and
  * `NewSessionScreen.kt`'s SectionHeading gives its pickers —
  * `String.uppercase()`, `FontWeight.Bold`, 0.05 em tracking on the muted
  * color.
@@ -762,7 +762,7 @@ private fun RelayRow(url: String, connected: Boolean, canRemove: Boolean, onRemo
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        // Same shape as `Sidebar`'s private PresenceDot (its own copy —
+        // Same shape as `SessionsScreen`'s private PresenceDot (its own copy —
         // that helper is file-private to the ui package). Absent from
         // `ConnectionView.connectedRelays` doesn't mean unreachable, just
         // not currently subscribed.
