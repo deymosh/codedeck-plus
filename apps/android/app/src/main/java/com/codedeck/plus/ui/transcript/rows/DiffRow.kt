@@ -4,18 +4,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DiffLine
 import com.codedeck.plus.ui.transcript.OutputEntry
@@ -61,20 +66,22 @@ fun DiffRow(entry: OutputEntry, expanded: Boolean, onToggle: () -> Unit) {
             .padding(Tokens.Space2),
     ) {
         if (diff.path.isNotEmpty()) {
-            Row {
-                Text(
-                    diff.path,
-                    color = Tokens.TextMuted,
-                    fontFamily = Tokens.FontMono,
-                    fontSize = Tokens.TextXs,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (diff.truncated == true) {
-                    Text(" (truncated)", color = Tokens.TextDim, fontFamily = Tokens.FontMono, fontSize = Tokens.TextXs)
-                }
-            }
+            // The whole path, wrapped onto as many lines as it needs: which
+            // file changed is the card's headline, and an ellipsis cut the
+            // one part that tells files apart. The truncation note flows
+            // right after it in the same text.
+            Text(
+                buildAnnotatedString {
+                    append(diff.path)
+                    if (diff.truncated == true) {
+                        withStyle(SpanStyle(color = Tokens.TextDim)) { append(" (truncated)") }
+                    }
+                },
+                color = Tokens.TextMuted,
+                fontFamily = Tokens.FontMono,
+                fontSize = Tokens.TextXs,
+            )
+            HorizontalDivider(Modifier.padding(vertical = Tokens.Space1), color = Tokens.Border)
         }
         // Lines never wrap — a wrapped code line breaks the +/- column and the
         // indentation — so the block scrolls sideways instead, as one unit.
@@ -90,13 +97,18 @@ fun DiffRow(entry: OutputEntry, expanded: Boolean, onToggle: () -> Unit) {
             }
         }
         if (overflow > 0) {
+            HorizontalDivider(Modifier.padding(top = Tokens.Space1), color = Tokens.Border)
+            // The whole full-width strip is the tap target, label centered.
             Text(
                 if (expanded) "Show less" else "$overflow more line${if (overflow != 1) "s" else ""}",
                 color = Tokens.TextMuted,
                 fontSize = Tokens.TextXs,
+                textAlign = TextAlign.Center,
                 modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
                     .minimumInteractiveComponentSize()
-                    .clickable(onClick = onToggle),
+                    .wrapContentHeight(Alignment.CenterVertically),
             )
         }
     }
