@@ -212,9 +212,11 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   failure; fix the root cause.
 - The image (`docker/Dockerfile`) and the release archives lay the bridge out as
   `codedeck-bridge` with `agent-host/dist/main.js` beside it; the binary looks
-  there by default — keep them consistent. The image's `claude` is a symlink to
-  the Agent SDK's own platform binary (no global Claude Code install), so its
-  version follows the lockfile.
+  there by default — keep them consistent. Neither ships the agents' own
+  binaries: the agent host installs them on demand at the version and sha512
+  pnpm-lock.yaml pins (the image into the `/data` volume); only an image built
+  with `BUNDLE_AGENTS=1` bakes them in. Never add a global Claude Code or
+  OpenCode install — the version must follow the lockfile.
 
 ## History note
 

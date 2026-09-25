@@ -82,9 +82,10 @@ provider env vars like `ANTHROPIC_API_KEY`. See
 providers and how to configure each.
 
 For **auto-start under Docker**, run the one-time interactive login once the
-container is up, and it will survive container recreation (the image
-redirects OpenCode's config/auth storage under `/data`, the same volume the
-bridge's own identity lives in):
+container is up and OpenCode has been installed (the bridge log says
+`OpenCode installed at …`; the image puts it on `PATH`). The login survives
+container recreation: the image redirects OpenCode's config/auth storage
+under `/data`, the same volume the bridge's own identity lives in.
 
 ```bash
 docker compose exec codedeck-bridge opencode auth login

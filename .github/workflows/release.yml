@@ -453,9 +453,9 @@ jobs:
             | Bridge for Linux x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.xz` |
             | Bridge for Linux aarch64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.xz` |
             | Bridge for Windows x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-windows-x86_64.zip` |
-            | Bridge image (agents included) | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
+            | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
 
-            The archives install Claude Code (and OpenCode, with auto-start on) on first use when the machine has none; see docs/BRIDGE.md.
+            The archives and the image install Claude Code (and OpenCode, with auto-start on) on first use when there is none; see docs/BRIDGE.md.
 
             Auto-generated changelog below.
           files: |
