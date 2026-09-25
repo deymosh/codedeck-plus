@@ -180,8 +180,9 @@ which publishes one GitHub Release with every artifact of that version:
 | Bridge for Windows (the same, zipped) | `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` |
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
 
-The archives leave out the agents' own binaries and install them on first use
-(see [`docs/BRIDGE.md`](docs/BRIDGE.md)); the container image includes them.
+The archives and the image leave out the agents' own binaries and install
+them on first use, pinned to the lockfile (see [`docs/BRIDGE.md`](docs/BRIDGE.md));
+`CODEDECK_BUNDLE_AGENTS=1` builds an image that carries them.
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
 `:latest`. The version is bumped in the tree in the commit that gets tagged (one

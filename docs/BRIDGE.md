@@ -76,7 +76,17 @@ moves the pin installs the new one and removes the old. A failed download
   `NODE_USE_ENV_PROXY=1` set. The Tor proxy is for relay traffic only and is
   not used here.
 
-The container image ships both agents, so it needs none of this.
+The container image works the same way, with the binaries in the `/data`
+volume (`/data/agents`), so a container recreated from a newer image reuses
+them until the pin moves. `/data/agents/bin` holds each one under a stable
+name and is on the container's `PATH`, so `docker compose exec codedeck-bridge
+claude …` (or `opencode …`) works once it is installed. For a host without
+internet access, build with `CODEDECK_BUNDLE_AGENTS=1` in `.env`: the image
+then carries both agents, as before.
+
+The links in `<home>/agents/bin` are for people. The agent host never uses
+them to find an agent, because after an upgrade they may still point at the
+previous version until the new one is installed.
 
 **systemd:** `deploy/codedeck-bridge.service` — its header comments are the
 install runbook.

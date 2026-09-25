@@ -665,6 +665,9 @@ export interface OpenCodeDriverOptions {
   binaryPath?: string;
   /** Installs `opencode` for auto-start when none is found. */
   installOpenCode?: () => Promise<string>;
+  /** The environment to look for an installed `opencode` in (PATH,
+   *  CODEDECK_OPENCODE_PATH); the host's own by default. */
+  lookupEnv?: NodeJS.ProcessEnv;
   port?: number;
   log: (message: string) => void;
 }
@@ -693,7 +696,7 @@ export class OpenCodeDriver implements Driver {
       if (options.autoStart) options.log('[opencode] both a server URL and auto-start are configured — using the server URL');
       driver.connect(options.serverUrl);
     } else if (options.autoStart) {
-      const bin = resolveOpenCodePath(options.binaryPath);
+      const bin = resolveOpenCodePath(options.binaryPath, options.lookupEnv);
       if (!bin && options.installOpenCode) {
         driver.installs = true;
         driver.launchInstalled();

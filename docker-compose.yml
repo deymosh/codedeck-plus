@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        # 1 = bake the agents' binaries into the image (hosts without internet
+        # access); by default they are installed into /data/agents on first use.
+        BUNDLE_AGENTS: ${CODEDECK_BUNDLE_AGENTS:-0}
     container_name: codedeck-bridge
     restart: unless-stopped
     networks:
