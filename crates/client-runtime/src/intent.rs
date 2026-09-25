@@ -1,4 +1,4 @@
-//! Intent — the closed set of user actions (migration plan §2.2). `apply`
+//! Intent — the closed set of user actions. `apply`
 //! folds one into the `CoreStores` and returns an [`IntentResult`]: commands to
 //! sign+publish, stores to persist, and the transport-affecting effects
 //! (`resubscribe`, a new relay list, a Tor toggle).
@@ -49,7 +49,7 @@ pub struct OutboxSend {
 }
 
 /// A session image the loop uploads then attaches to `session_id`'s input.
-/// Bytes + mime, never a platform type (plan §2.2) — the UI decodes whatever
+/// Bytes + mime, never a platform type — the UI decodes whatever
 /// picker/camera/resize API it has into this shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -135,10 +135,10 @@ impl IntentResult {
 
 /// The user action. Serializable so a binding can pass it across the FFI.
 /// Serde shape: externally tagged (`{"SendInput": {...}}` / `{"UndoDelete":
-/// null}`), `camelCase` field names within each variant. Not yet load-bearing
-/// on a real wire — the binding surface is stabilized, not frozen, until F3
-/// (plan §2.5) — but a binding needing a stable JSON shape can start from
-/// this rather than hand-rolling its own encoding.
+/// null}`), `camelCase` field names within each variant. The Android app never
+/// sees this JSON (it crosses `client_ffi::UniffiIntent` instead), but a
+/// binding needing a stable JSON shape can start from this rather than
+/// hand-rolling its own encoding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Intent {

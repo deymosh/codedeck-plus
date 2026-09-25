@@ -10,7 +10,7 @@ lifecycle = "2.11.0"
 activityCompose = "1.13.0"
 composeBom = "2026.09.00"
 coroutines = "1.11.0"
-# F3.3.4: decodes the JSON `crates/client-ffi`'s `views.rs` crosses for
+# Decodes the JSON `crates/client-ffi`'s `views.rs` crosses for
 # the already-grouped transcript (`display_entries_json`) and the pending-
 # permission summary — see `ui/transcript/DisplayEntries.kt`.
 kotlinxSerialization = "1.9.0"

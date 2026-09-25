@@ -96,7 +96,7 @@ object Tokens {
 }
 
 /** A minimal Material3 `Typography` built from `Tokens`' type scale — filled
- *  in as screens actually need named text styles (F3.3+), not exhaustively
+ *  in as screens actually need named text styles, not exhaustively
  *  up front. */
 val CodeDeckTypography = Typography(
     bodyMedium = TextStyle(fontFamily = Tokens.FontSans, fontSize = Tokens.TextMd),

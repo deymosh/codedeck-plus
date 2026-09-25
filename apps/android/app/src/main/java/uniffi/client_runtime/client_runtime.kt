@@ -989,7 +989,7 @@ data class ConnectionView (
      * `idle` | `connecting` | `connected` | `waiting-retry` | `offline` | `stopped`.
      *
      * Owned `String`, not `&'static str`: UniFFI's `uniffi::Record` derive
-     * (F3) has no `FfiConverter` for a borrowed, 'static-lifetime string —
+     * has no `FfiConverter` for a borrowed, 'static-lifetime string —
      * crossing the FFI boundary needs ownership. Same JSON wire shape either
      * way (serde serializes both identically), so this costs one allocation
      * per view read and changes no consumer-visible behavior.

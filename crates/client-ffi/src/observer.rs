@@ -14,9 +14,7 @@ use protocol::events::BridgeToPhone;
 /// `uniffi::Enum` directly — see that crate's `uniffi` feature) — no parallel
 /// DTO needed for the event stream, only for `Intent` (see `intent.rs`'s doc
 /// comment for why that one differs). `ConnectionView.connected_relays` (the
-/// per-relay status dot's data, F4.1.5) is the same real type too — added
-/// straight to `ConnectionView` once Android's Settings screen actually
-/// needed it, exactly as this comment used to say to do.
+/// Settings screen's per-relay status dots) is the same real type too.
 #[uniffi::export(with_foreign)]
 pub trait CoreListener: Send + Sync {
     fn connection_changed(&self, view: ConnectionView);
@@ -51,7 +49,7 @@ impl CoreObserver for UniffiObserver {
         foreign_call("connection_changed", || self.listener.connection_changed(view));
     }
 
-    /// Deferred (not dropped): F3's first slice drives the app through
+    /// Deferred (not dropped): the app is driven through
     /// Views/Intents/CoreEvents only, never a raw wire message. Wire this up
     /// (with its own `protocol::events::BridgeToPhone` -> UniFFI mapping,
     /// mirroring `intent.rs`'s approach) the day a Kotlin call site actually

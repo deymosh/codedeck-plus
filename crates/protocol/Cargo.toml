@@ -11,8 +11,8 @@ publish.workspace = true
 name = "protocol"
 
 [dependencies]
-# NIP-44 v2 + keys + NIP-42 AUTH signing — verified against this crate in the
-# F0 uniffi probe. default-features = false keeps the tree tight.
+# NIP-44 v2 + keys + NIP-42 AUTH signing. default-features = false keeps the
+# dependency tree tight.
 nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
 thiserror = "1"
 hex = "0.4"

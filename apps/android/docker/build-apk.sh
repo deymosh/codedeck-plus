@@ -6,9 +6,8 @@
 #   (default targets: aarch64-linux-android x86_64-linux-android — a real
 #   device and an emulator, both in one APK)
 #
-# Release/signed builds are not wired yet (F3's scaffold has no keystore
-# story of its own) — see apps/mobile/docker/build-apk.sh for that shape
-# once apps/android needs it.
+# Debug builds only: the signed release APK is built by
+# .github/workflows/release.yml from a version tag.
 #
 # First run builds the toolchain image (Android SDK/NDK 28 + Rust) — several
 # GB, several minutes. Reruns reuse Docker's layer cache plus the cargo and
@@ -110,8 +109,11 @@ for target in "${TARGETS[@]}"; do
 done
 
 echo "==> Building the debug APK (Gradle)"
+# The container's copy of the tree has no .git, so the commit the APK's
+# versionName carries is resolved here, on the host (see build.gradle.kts).
+GIT_REV="$(git describe --always --dirty --exclude='*')"
 dexec -w /workspace/apps/android -e ANDROID_HOME=/opt/android-sdk "$CONTAINER" \
-  gradle assembleDebug --console=plain
+  gradle assembleDebug -PcodedeckGitRev="$GIT_REV" --console=plain
 
 OUT="apps/android/app/build/outputs/apk/debug/app-debug.apk"
 DEST="dist/codedeck-android-debug.apk"

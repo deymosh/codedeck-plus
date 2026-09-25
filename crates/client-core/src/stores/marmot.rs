@@ -1,7 +1,7 @@
-//! `marmot` store — Marmot (MLS) group DMs (CDX-012, Phase 6). Port of the pure
+//! `marmot` store — Marmot (MLS) group DMs (CDX-012). Port of the pure
 //! half of `apps/mobile/src/core/stores/marmot.ts`.
 //!
-//! Split of labour (plan §5b): the MDK engine in Rust (`client-runtime`, its own
+//! Split of labour: the MDK engine in Rust (`client-runtime`, its own
 //! encrypted SQLite store) does ALL the MLS crypto + group state; this state
 //! machine owns transport bookkeeping + presentation. Every outgoing event
 //! comes back from the engine as JSON for the app relay client to publish;
@@ -235,7 +235,7 @@ pub fn should_mint_key_package(
     }
 }
 
-/// The Phase 6 unified conversation list: both protocols, newest first. `key` is
+/// The unified conversation list: both protocols, newest first. `key` is
 /// what the UI routes on (peer pubkey for NIP-17, group id for Marmot).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnifiedConversation {
@@ -494,7 +494,7 @@ impl MarmotState {
     }
 
     /// A decrypted group message from the engine. Chat rumors are kind 9;
-    /// reactions / deletes etc. are out of Phase 6 scope and dropped by kind.
+    /// reactions / deletes etc. are not supported and dropped by kind.
     pub fn apply_group_message(&mut self, m: &MarmotMessageResult, me: &str) -> Option<AddOutcome> {
         if m.kind != 9 {
             return None;

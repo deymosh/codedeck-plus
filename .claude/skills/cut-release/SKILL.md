@@ -50,7 +50,13 @@ Packages write enabled for Actions in repo settings.
      `cargo update -w --offline` — CI's `cargo test --locked` fails if they
      disagree
 
-   The Android `versionCode` is **derived at build time** from the tag
+   - `versionCode` in `apps/android/app/build.gradle.kts`: **+1** over the
+     previous release (a plain counter, 1 for v1.0.0 — never derived from the
+     version, and a prerelease takes its own number too, since Android only
+     installs over a lower code). Skip it only for the very first release,
+     which ships the initial 1.
+
+   The Android `versionName` is stamped at build time from the tag
    (`-PcodedeckVersion`), and the release build stamps the same number into
    the bridge binary and image (`CODEDECK_VERSION`), so nothing else carries a
    version to bump.

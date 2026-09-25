@@ -188,7 +188,7 @@ jobs:
         if: steps.filter.outputs.host == 'false'
         run: echo "no driver-protocol changes; agent-host job skipped."
 
-  # apps/android (F3.3): Gradle unit tests + Paparazzi screenshot verification
+  # apps/android: Gradle unit tests + Paparazzi screenshot verification
   # + the UniFFI Kotlin bindings drift check. Path-filtered like the cargo job
   # above; `core` (crates/**) is included because a client-runtime/client-core
   # change behind the `uniffi` feature can change

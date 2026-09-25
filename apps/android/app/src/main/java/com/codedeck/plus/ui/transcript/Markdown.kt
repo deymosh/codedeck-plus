@@ -40,8 +40,8 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  *
  * Syntax highlighting stays plain monochrome (no `-code` module, no
  * Rust-side span generation) — matches the TS renderer's own lazy/
- * progressive-enhancement treatment of `rehype-highlight`; a deliberately
- * separate decision, not bundled into this pass (master plan §9 risk #2).
+ * progressive-enhancement treatment of `rehype-highlight`; highlighting is a
+ * deliberately separate decision.
  */
 @Composable
 fun TranscriptMarkdown(content: String, modifier: Modifier = Modifier) {

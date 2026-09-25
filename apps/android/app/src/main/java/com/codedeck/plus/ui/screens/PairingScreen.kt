@@ -59,10 +59,10 @@ import uniffi.client_ffi.UniffiPairingView
 private const val PHONE_LABEL = "Android"
 
 /**
- * F4.2.2 — pairing screen, rendered as a full-screen replacement the shell
+ * The pairing screen, rendered as a full-screen replacement the shell
  * swaps in (same pattern `SettingsScreen.kt` established): port of
  * `apps/mobile/src/ui/screens/PairingScreen.tsx`'s flow states, including
- * the in-app QR camera scan (F4.2.4, [PairingScanView]). Its decoded text
+ * the in-app QR camera scan ([PairingScanView]). Its decoded text
  * lands in the same `url` field a manual paste fills and is dispatched via
  * the same [UniffiIntent.BeginPairing] — one path, no scan-specific parsing.
  *
@@ -82,8 +82,8 @@ private const val PHONE_LABEL = "Android"
  * "This phone's npub" asks the live core for its own identity
  * ([CoreHost.identityNpub] — the core derived it at construction from the
  * same secret it holds) so the secret never leaves the FFI layer for a mere
- * display string. Still omitted: the CDX-028 mesh-join banner (Mesh is F6,
- * off by default).
+ * display string. Still omitted: the CDX-028 mesh-join banner (the app
+ * has no mesh support).
  */
 @Composable
 fun PairingScreen(core: CoreHost, onClose: () -> Unit) {

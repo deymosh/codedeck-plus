@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import com.codedeck.plus.BuildConfig
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.PickerOption
@@ -73,13 +74,13 @@ private fun preferenceOptions(choices: List<UniffiOptionChoice>, stored: String)
 }
 
 /**
- * F4.1.5 — the settings screen, rendered as a full-screen replacement the
+ * The settings screen, rendered as a full-screen replacement the
  * shell swaps in (not an overlay): port of `apps/mobile/src/ui/screens/
  * SettingsScreen.tsx`'s global-preference surface — UI scale, defaults for
  * new sessions, notifications/badges, stay-connected, Orbot routing, the
  * blossom server, the quick-prompt editor, relay management with per-relay
- * connection dots, and (F4.3) per-machine credentials/AI-provider blocks.
- * Deliberately absent: mesh (deferred to F6, off by default upstream).
+ * connection dots, and per-machine credentials/AI-provider blocks.
+ * Deliberately absent: mesh (off by default upstream, not supported here).
  */
 @Composable
 fun SettingsScreen(core: CoreHost, onClose: () -> Unit) {
@@ -354,7 +355,7 @@ private fun SettingsBody(
                         "Android only: a foreground service holds the process and radio " +
                             "awake (persistent notification shows the live connection state). " +
                             "It asks for notification permission on first start. Off = the OS " +
-                            "may pause CodeDeck in the background; it resyncs when you return.",
+                            "may pause CodeDeck+ in the background; it resyncs when you return.",
                         color = Tokens.TextDim,
                         fontSize = Tokens.TextSm,
                     )
@@ -529,7 +530,7 @@ private fun SettingsBody(
                     )
                 }
 
-                // --- Machines (F4.3) ---
+                // --- Machines ---
                 if (machines.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
                         SectionHeading("Machines")
@@ -545,6 +546,12 @@ private fun SettingsBody(
                         }
                     }
                 }
+
+                Text(
+                    "CodeDeck+ ${BuildConfig.VERSION_NAME}",
+                    color = Tokens.TextDim,
+                    fontSize = Tokens.TextSm,
+                )
             }
         }
     }

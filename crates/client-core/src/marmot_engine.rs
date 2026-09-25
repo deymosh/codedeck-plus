@@ -1,4 +1,4 @@
-//! Marmot (MLS) DMs — CDX-012, plan §5b. Feature `marmot` only.
+//! Marmot (MLS) DMs — CDX-012. Feature `marmot` only.
 //!
 //! Relocated verbatim from `apps/mobile/src-tauri/src/marmot.rs` (the
 //! `#[tauri::command]` layer stays there and calls into this). MDK 0.8 does ALL
@@ -316,8 +316,8 @@ impl MarmotService {
             }
             // Commits/proposals: `process_message` already merged what needed
             // merging for the 1:1 scope; nothing to show. (Multi-member leave
-            // auto-commit publishing — yenn VEIL-309 — is out of Phase 6 UI
-            // scope; the data model still converges on the admin's commits.)
+            // auto-commit publishing — yenn VEIL-309 — is not
+            // supported; the data model still converges on the admin's commits.)
             Ok(_) => Ok(Ingested::None),
             // First re-feed of an already-processed 445 surfaces as an error
             // (SecretReuseError). If a cached rumor exists this IS that case.

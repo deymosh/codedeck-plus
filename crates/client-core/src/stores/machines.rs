@@ -73,7 +73,7 @@ pub struct MergeOptions {
     pub stale_grace_ms: u64,
 }
 
-/// Phase 6 title-merge guard: a `null` incoming title must not wipe a title we
+/// Title-merge guard: a `null` incoming title must not wipe a title we
 /// already hold (the client-side first-message stopgap), but a non-null
 /// incoming title always wins. TS: `incoming.title ?? prev.title`.
 fn with_guarded_title(incoming: &RemoteSessionInfo, prev: Option<&SessionView>) -> RemoteSessionInfo {
@@ -315,7 +315,7 @@ pub fn hydrate_machines(raw: Option<&str>) -> BTreeMap<String, MachineView> {
     out
 }
 
-/// The machines store as a pure state machine (plan F2a). Every method mutates
+/// The machines store as a pure state machine. Every method mutates
 /// only `self`; the runtime persists `serialize_machines(&self.machines)` after
 /// anything that changes `machines`. `dismissed_sessions` is in-memory only.
 #[derive(Debug, Default, Clone, PartialEq)]

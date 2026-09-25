@@ -1,19 +1,17 @@
 //! `UniffiIntent` — a hand-mapped, deliberately partial mirror of
-//! `client_runtime::intent::Intent` for the surface F3's first vertical slice
-//! actually drives (send input, interrupt, close/refresh/create a session,
-//! respond to a permission/question/keypress card, change mode), grown since
-//! with the session image upload (Blossom-first, relay-chunk fallback).
+//! `client_runtime::intent::Intent` covering exactly the actions the Android
+//! app drives.
 //!
 //! This is a disclosed narrowing, not an oversight: `uniffi::Enum` is
 //! all-or-nothing for the whole enum it's derived on, and the real `Intent`
 //! has 49 variants — the ones still excluded here (the DM/Marmot intents,
 //! the DM-image path, a few settings intents) carry payloads that would need
-//! their own UniFFI derive rollout disproportionate to what the driving
-//! milestones have needed so far. Every other boundary type this crate touches
+//! their own UniFFI derive rollout, disproportionate while no Android screen
+//! uses them. Every other boundary type this crate touches
 //! (`CoreEvent`, `ConnectionView`) is the REAL `client_runtime` type — see
 //! that crate's `uniffi` feature — so this file is the one place with
-//! parallel DTOs, and it grows (never shrinks) as later F3/F4 milestones
-//! wire more of the app.
+//! parallel DTOs, and it grows (never shrinks) as the app wires more of the
+//! core.
 //!
 //! Wire enums (e.g. `SetOption`'s `option`) cross as plain strings (Kotlin
 //! has no reason to see a Rust enum type here) and are parsed via the SAME
@@ -217,14 +215,14 @@ pub enum UniffiIntent {
         option: String,
         value: String,
     },
-    /// F3.3: selects (or, with `session_id: None`, deselects) a session in
+    /// Selects (or, with `session_id: None`, deselects) a session in
     /// the shared `UiView` — the sidebar's tap-to-open and the shell's
     /// "no selection" empty state both read `UiView::selected_session` back.
     SelectSession {
         machine: String,
         session_id: Option<String>,
     },
-    /// F3.3: records which plan-approval option the user tapped so the
+    /// Records which plan-approval option the user tapped so the
     /// resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
     /// actual answer (`RespondPlan`), not
     /// instead of it — same contract the TS `PlanApprovalCard.tsx` had.
@@ -232,7 +230,7 @@ pub enum UniffiIntent {
         card_id: String,
         key: String,
     },
-    /// F3.3.5: `OutboxRow`'s Retry button — re-publishes the same signed
+    /// `OutboxRow`'s Retry button — re-publishes the same signed
     /// event (idempotent; the bridge dedupes by id), not a fresh send.
     RetryOutboxItem {
         machine: String,

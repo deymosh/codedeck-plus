@@ -1,4 +1,4 @@
-//! Platform seams the runtime needs (migration plan §2.4). `client-core` stays
+//! Platform seams the runtime needs. `client-core` stays
 //! effect-based and never calls these — the runtime does the I/O on its behalf
 //! after interpreting a store's returned effects/outcomes.
 //!
