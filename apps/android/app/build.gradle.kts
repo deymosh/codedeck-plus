@@ -152,17 +152,17 @@ dependencies {
     implementation("com.google.crypto.tink:tink-android:1.19.0")
 
     // Pairing-QR camera scan (ui/screens/PairingScanView.kt): CameraX for the
-    // preview/analysis pipeline, ML Kit's BUNDLED barcode model (no Play
-    // Services needed at runtime) restricted to QR by its scanner options.
-    // Neither library is covered by the Compose BOM, so they are pinned
-    // explicitly; release R8 strips the parts and model weight the scan
-    // surface doesn't touch, debug builds just carry them (same trade as the
-    // icons dependency above).
+    // preview/analysis pipeline, ZXing's core decoder for the QR code — a
+    // plain Java library with no dependencies of its own. Not ML Kit: it
+    // brings Play Services, Firebase components and a usage-reporting
+    // transport (a startup provider, a background upload job) into every
+    // launch, all to read one QR code. Neither library is covered by the
+    // Compose BOM, so they are pinned explicitly.
     val camerax = "1.6.2"
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
-    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.zxing:core:3.5.4")
 
     // Compose-native Markdown for assistant/plan transcript rows.
     // GFM (tables, task lists, strikethrough, autolinks) is the renderer's
