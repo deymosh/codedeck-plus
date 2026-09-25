@@ -42,7 +42,7 @@ private val CHANNEL_MESSAGES =
 private val CHANNEL_ACTION =
     ChannelSpec(CHANNEL_ACTION_ID, "Action needed", NotificationManager.IMPORTANCE_HIGH, NotificationCompat.PRIORITY_HIGH)
 private val CHANNEL_UPDATES =
-    ChannelSpec(CHANNEL_UPDATES_ID, "Session updates", NotificationManager.IMPORTANCE_LOW, NotificationCompat.PRIORITY_LOW)
+    ChannelSpec(CHANNEL_UPDATES_ID, "Session updates", NotificationManager.IMPORTANCE_DEFAULT, NotificationCompat.PRIORITY_DEFAULT)
 
 /** Kind (from `NotifyEvent::kind_str` in crates/client-core) → channel.
  *  Unknown kinds land on Messages rather than being dropped. */

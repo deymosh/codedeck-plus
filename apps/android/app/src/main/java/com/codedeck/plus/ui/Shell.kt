@@ -81,8 +81,9 @@ private const val AWAIT_CREATED_SESSION_MS = 120_000L
  * New Session, Settings and Pairing each replace it, and Back returns to it.
  *
  * Which session is open is this navigation state, not the core's selection:
- * opening a session also dispatches `SelectSession` (the core's unread and
- * notification bookkeeping follow it), but re-selecting the already-selected
+ * opening a session also dispatches `SelectSession`, and leaving it clears
+ * the selection (the core's unread and notification bookkeeping follow
+ * both), but re-selecting the already-selected
  * session changes nothing in the core, so navigation cannot be derived from
  * selection changes. [openRequest] is the explicit channel for opens that
  * start outside the composition; the shell consumes it through
@@ -167,6 +168,18 @@ fun Shell(
             screen = Screen.Sessions
         }
         previousSelection = selectedSession
+    }
+
+    // The core's selection is what it treats as "the session on screen": that
+    // session gets no notification and no unread dot. So leaving a session
+    // page (Back to the list, Settings, …) deselects it, or the session just
+    // left would keep going silent. Keyed on the selection too, so a select
+    // that lands after the user already left is undone as well.
+    LaunchedEffect(screen, selectedSession) {
+        val machine = selectedMachine
+        if (screen !is Screen.Session && selectedSession != null && machine != null) {
+            core.dispatch(UniffiIntent.SelectSession(machine, null))
+        }
     }
 
     // The failure banner floats over the top of the content, so its arrival

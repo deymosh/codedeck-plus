@@ -1,6 +1,7 @@
 package com.codedeck.plus.ui.transcript
 
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
@@ -124,6 +125,11 @@ data class TranscriptPin(
 fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptPin {
     var state by remember { mutableStateOf(initialPinState.copy(atBottom = false)) }
     var prevCount by remember { mutableIntStateOf(itemCount) }
+    // The first positioning (opening the session, or the activity being
+    // recreated by a rotation) jumps instead of animating: an animated
+    // scroll across the whole history reads as the list starting at the
+    // top. Every later follow of new output animates.
+    var positioned by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun dispatch(event: PinEvent) {
@@ -132,6 +138,7 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
 
     suspend fun scrollToBottom() {
         if (itemCount == 0) return
+        val animate = positioned
         dispatch(PinEvent.ProgrammaticScrollStart)
         try {
             // animateScrollToItem aligns an item's TOP with the viewport:
@@ -139,7 +146,7 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
             // yank a tall, still-streaming reply back to its start, so only
             // jump when it is not.
             if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != itemCount - 1) {
-                listState.animateScrollToItem(itemCount - 1)
+                if (animate) listState.animateScrollToItem(itemCount - 1) else listState.scrollToItem(itemCount - 1)
             }
             // A last entry taller than the viewport still ends below it —
             // scroll the rest of the way. Item offsets are measured from the
@@ -149,8 +156,11 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
             val last = layout.visibleItemsInfo.lastOrNull()
             if (last != null && last.index == itemCount - 1) {
                 val overflow = last.offset + last.size - (layout.viewportEndOffset - layout.afterContentPadding)
-                if (overflow > 0) listState.animateScrollBy(overflow.toFloat())
+                if (overflow > 0) {
+                    if (animate) listState.animateScrollBy(overflow.toFloat()) else listState.scrollBy(overflow.toFloat())
+                }
             }
+            positioned = true
         } finally {
             dispatch(PinEvent.ProgrammaticScrollEnd)
         }

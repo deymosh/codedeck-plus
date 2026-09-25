@@ -90,7 +90,10 @@ pub fn default_settings() -> SettingsData {
     SettingsData {
         relays,
         ui_scale: UI_SCALE_DEFAULT,
-        stay_connected: false,
+        // On: a phone that drives agents must keep hearing from its bridges
+        // while in the background, which on Android takes the foreground
+        // service this setting holds.
+        stay_connected: true,
         tor_proxy_enabled: false,
         mesh_test_target: false,
         blossom_server: String::new(),
@@ -362,7 +365,7 @@ mod tests {
         assert_eq!(h.ui_scale, UI_SCALE_MAX); // clamped
         assert_eq!(h.default_mode, ""); // non-string -> default
         assert_eq!(h.default_effort, "high"); // agent ids are kept as-is
-        assert!(!h.stay_connected); // non-bool -> default
+        assert_eq!(h.stay_connected, default_settings().stay_connected); // non-bool -> default
         assert_eq!(h.relays, vec!["wss://x", "wss://y"]); // custom list kept
     }
 

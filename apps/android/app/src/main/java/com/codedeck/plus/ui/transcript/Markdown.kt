@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import com.codedeck.plus.ui.theme.Tokens
+import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
@@ -23,28 +24,14 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  * An earlier renderer probe found tables rendering as stacked
  * plain lines and task-list checkboxes as plain bullets at renderer version
  * 0.27 (2024-era), flagging both as needing custom `markdownComponents`
- * work. Re-checked against the actual 0.43.0 source
- * (`markdownComponents()`'s own defaults in `compose/components/
- * MarkdownComponents.kt`) as part of this milestone: `table` now defaults to
- * a real `MarkdownTable` grid and `checkbox` to a real `MarkdownCheckBox` —
- * both gaps that probe found are already closed upstream; no override needed
- * here. This file's own Paparazzi golden (`MarkdownParityTest`) is the
- * guardrail against a future renderer bump silently regressing either one.
- *
- * Wide tables already scroll horizontally through the library's own default:
- * 0.43.0's `MarkdownTable` (`compose/elements/MarkdownTable.kt`) wraps its
- * column stack in `horizontalScroll` with `requiredWidth(columns *
- * tableCellWidth)` whenever that nominal width exceeds the available one —
- * every multi-column table at phone width (the default cell width is 160 dp).
- * Residual narrowing vs the TS renderer, disclosed: cells stay equal-width,
- * sized by column count rather than content, and cell text is single-line
- * with ellipsis — a long cell truncates instead of widening its column.
- * Changing that means overriding the table's headerBlock/rowBlock, i.e.
- * redesigning the table, deliberately not done here. A plain outer
- * `horizontalScroll` wrapper (via `markdownComponents(table = …)`) was
- * evaluated and rejected as redundant: the default renderer already scrolls,
- * and the wrapper's unbounded width constraints would flip the library's own
- * scroll decision (its `maxWidth <= tableWidth` test) for narrow tables.
+ * work. Re-checked against the actual 0.43.0 source: `checkbox` defaults to
+ * a real `MarkdownCheckBox`, so it needs no override. `table` defaults to a
+ * real grid too, but one with equal-width columns and single-line,
+ * ellipsized cells — a long cell in an agent's table would be cut off — so
+ * it is replaced by [TranscriptMarkdownTable] (content-sized columns, full
+ * cell text, horizontal scroll when wider than the row). This file's own
+ * Paparazzi golden (`MarkdownParityTest`) is the guardrail against a future
+ * renderer bump silently regressing either one.
  *
  * `immediate = true`: transcript rows are already-received text, not a
  * live-typed editor buffer — synchronous parsing costs one frame on a cold
@@ -88,6 +75,9 @@ fun TranscriptMarkdown(content: String, modifier: Modifier = Modifier) {
                 code = monoStyle(),
                 inlineCode = monoStyle(),
                 table = bodyStyle(),
+            ),
+            components = markdownComponents(
+                table = { TranscriptMarkdownTable(it.content, it.node, it.typography.table) },
             ),
             modifier = modifier.fillMaxWidth(),
         )

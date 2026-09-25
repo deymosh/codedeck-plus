@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
@@ -89,7 +89,6 @@ private fun TranscriptListContent(
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
     var expandedGroups by remember(sessionId) { mutableStateOf(setOf<Long>()) }
 
     val visibleOutbox = remember(outboxItems, displayEntries, machine, sessionId) {
@@ -97,7 +96,6 @@ private fun TranscriptListContent(
     }
     val showSyncGap = !contiguous && (syncState == "requested" || syncState == "syncing" || syncState == "failed")
     val itemCount = displayEntries.size + visibleOutbox.size + (if (showSyncGap) 1 else 0)
-    val pin = rememberTranscriptPin(listState, itemCount)
 
     if (itemCount == 0) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -109,6 +107,16 @@ private fun TranscriptListContent(
         }
         return
     }
+
+    // Created only once there is something to show (the transcript loads
+    // asynchronously, so the first frames of an opened session — or of an
+    // activity recreated by a rotation — are empty), and created AT the last
+    // row: the list's first frame is already the bottom of the conversation
+    // instead of its top followed by a visible scroll down. The pin owner's
+    // first positioning finishes the job for a last row taller than the
+    // viewport.
+    val listState = remember { LazyListState(firstVisibleItemIndex = itemCount - 1) }
+    val pin = rememberTranscriptPin(listState, itemCount)
 
     Box(modifier.fillMaxSize()) {
         LazyColumn(
