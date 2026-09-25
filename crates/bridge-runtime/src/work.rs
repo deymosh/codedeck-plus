@@ -28,9 +28,8 @@ pub async fn git_head(cwd: &Path) -> Option<String> {
 }
 
 /// Check a provider token with the smallest possible request to the
-/// provider's own endpoint. 401/403 = invalid; any other status = valid; a
-/// network error = could not tell. The caller has already checked that
-/// `base_url` is https (or loopback http).
+/// provider's own endpoint. The caller has already checked that `base_url`
+/// is https (or loopback http).
 pub async fn check_provider_token(http: &reqwest::Client, base_url: &str, token: &str, model: &str) -> Option<bool> {
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let body = serde_json::json!({"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]});
@@ -38,12 +37,25 @@ pub async fn check_provider_token(http: &reqwest::Client, base_url: &str, token:
         Ok(res) => {
             let status = res.status().as_u16();
             log::info!("[Work] Provider token check at {base_url}: status {status}");
-            Some(status != 401 && status != 403)
+            token_verdict(status)
         }
         Err(err) => {
             log::warn!("[Work] Provider token check at {base_url} failed (network): {err}");
             None
         }
+    }
+}
+
+/// What a token check's HTTP status says about the token. 401/403: rejected.
+/// Success, or an error the provider only returns once it has accepted the
+/// credentials (a malformed request, a rate limit): valid. Anything else —
+/// 404 from a wrong base URL, a redirect, a 5xx — never reached the
+/// credential check, so it proves nothing either way.
+fn token_verdict(status: u16) -> Option<bool> {
+    match status {
+        401 | 403 => Some(false),
+        200..=299 | 400 | 422 | 429 => Some(true),
+        _ => None,
     }
 }
 
@@ -75,6 +87,19 @@ pub async fn register_pubkey(http: &reqwest::Client, endpoint: &RegisterEndpoint
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_status_past_the_credential_check_is_a_token_verdict() {
+        assert_eq!(token_verdict(200), Some(true));
+        assert_eq!(token_verdict(400), Some(true));
+        assert_eq!(token_verdict(429), Some(true));
+        assert_eq!(token_verdict(401), Some(false));
+        assert_eq!(token_verdict(403), Some(false));
+        assert_eq!(token_verdict(404), None, "a wrong base URL says nothing about the token");
+        assert_eq!(token_verdict(301), None);
+        assert_eq!(token_verdict(500), None);
+        assert_eq!(token_verdict(503), None);
+    }
 
     #[tokio::test]
     async fn registration_refuses_plaintext_and_bad_keys_before_any_request() {
