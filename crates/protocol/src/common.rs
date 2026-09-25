@@ -164,9 +164,17 @@ pub const PROVIDER_BASE_URL_ERROR: &str =
     "Base URL must be https:// (http:// is allowed only for localhost, 127.0.0.1 or [::1])";
 
 /// Is `raw` an acceptable custom-provider base URL? https anywhere, or http
-/// ONLY on loopback (`localhost` / `127.0.0.1` / `::1` / `[::1]`, matched
-/// exactly). A local model server has no cert and its traffic never leaves the
-/// machine; anything else is a network hop carrying a bearer token.
+/// ONLY on loopback (`localhost` / `127.0.0.1` / `[::1]`, matched exactly). A
+/// local model server has no cert and its traffic never leaves the machine;
+/// anything else is a network hop carrying a bearer token.
+///
+/// The http branch refuses whatever the WHATWG URL parser (what actually
+/// dials, e.g. reqwest) could read differently from this minimal split:
+/// userinfo (`http://evil.com@localhost`), a backslash (a path separator
+/// there, so `http://evil.com\@localhost` dials evil.com), and whitespace or
+/// control characters (silently removed there). Refusing is the safe side of
+/// any remaining disagreement: a host this split does not recognise as
+/// loopback is rejected, never guessed at.
 pub fn is_valid_provider_base_url(raw: &str) -> bool {
     // Minimal scheme+host split — no url crate (protocol package stays dep-light).
     let rest = match raw.split_once("://") {
@@ -177,19 +185,25 @@ pub fn is_valid_provider_base_url(raw: &str) -> bool {
         },
         None => return false,
     };
+    if rest.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\') {
+        return false;
+    }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // strip userinfo, then split host[:port]
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
-    let host = if let Some(stripped) = host_port.strip_prefix('[') {
-        // IPv6 literal: [::1]:port or [::1]
+    if authority.contains('@') {
+        return false;
+    }
+    let host = if let Some(stripped) = authority.strip_prefix('[') {
+        // IPv6 literal: [::1] or [::1]:port — nothing else after the bracket.
         match stripped.split_once(']') {
-            Some((h, _)) => return matches!(h.to_ascii_lowercase().as_str(), "::1"),
+            Some((h, after)) => {
+                return h == "::1" && (after.is_empty() || after.starts_with(':'))
+            }
             None => return false,
         }
     } else {
-        host_port.rsplit_once(':').map_or(host_port, |(h, _)| h)
+        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
     };
-    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
+    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -612,6 +626,26 @@ mod tests {
         assert!(!is_valid_provider_base_url("ftp://localhost"));
         assert!(!is_valid_provider_base_url("not a url"));
         assert!(!is_valid_provider_base_url("https://"));
+    }
+
+    #[test]
+    fn provider_base_url_rule_refuses_what_a_whatwg_parser_reads_differently() {
+        assert!(is_valid_provider_base_url("http://LOCALHOST:8080"));
+        assert!(is_valid_provider_base_url("http://[::1]"));
+        // WHATWG dials evil.com for each of these.
+        assert!(!is_valid_provider_base_url(r"http://evil.com\@localhost"));
+        assert!(!is_valid_provider_base_url(r"http://evil.com\@localhost/v1"));
+        assert!(!is_valid_provider_base_url("http://localhost@evil.com"));
+        // Userinfo, even when the host really is loopback.
+        assert!(!is_valid_provider_base_url("http://evil.com@localhost"));
+        assert!(!is_valid_provider_base_url("http://user:pass@127.0.0.1:1234"));
+        // Characters WHATWG strips before parsing.
+        assert!(!is_valid_provider_base_url("http://local\thost"));
+        assert!(!is_valid_provider_base_url("http://evil.com\n@localhost"));
+        assert!(!is_valid_provider_base_url("http://localhost :80"));
+        // Junk after an IPv6 literal.
+        assert!(!is_valid_provider_base_url("http://[::1]evil.com"));
+        assert!(!is_valid_provider_base_url("http://[::2]:80"));
     }
 
     #[test]

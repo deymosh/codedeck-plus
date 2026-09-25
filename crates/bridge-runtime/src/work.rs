@@ -47,18 +47,12 @@ pub async fn check_provider_token(http: &reqwest::Client, base_url: &str, token:
     }
 }
 
-fn is_loopback_http(url: &str) -> bool {
-    let Some(rest) = url.strip_prefix("http://") else { return false };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = if let Some(v6) = host.strip_prefix('[') { v6.split(']').next().unwrap_or("") } else { host.rsplit_once(':').map_or(host, |(h, _)| h) };
-    matches!(host, "localhost" | "127.0.0.1" | "::1")
-}
-
 /// Register a paired phone's pubkey with an admin endpoint
 /// (`POST {pubkey}` with a Bearer token; 200 already registered, 201
 /// registered). The token never goes over plaintext except to loopback.
 pub async fn register_pubkey(http: &reqwest::Client, endpoint: &RegisterEndpoint, pubkey_hex: &str) -> Result<&'static str, String> {
-    if !(endpoint.url.starts_with("https://") || is_loopback_http(&endpoint.url)) {
+    // The same https-or-loopback-http rule as provider base URLs.
+    if !protocol::common::is_valid_provider_base_url(&endpoint.url) {
         return Err("insecure endpoint (the admin token requires https)".into());
     }
     if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -82,20 +76,13 @@ pub async fn register_pubkey(http: &reqwest::Client, endpoint: &RegisterEndpoint
 mod tests {
     use super::*;
 
-    #[test]
-    fn only_loopback_may_use_plain_http() {
-        assert!(is_loopback_http("http://localhost:8787/api/register-agent"));
-        assert!(is_loopback_http("http://127.0.0.1/x"));
-        assert!(is_loopback_http("http://[::1]:80/x"));
-        assert!(!is_loopback_http("http://relay.example/x"));
-        assert!(!is_loopback_http("https://localhost/x"));
-    }
-
     #[tokio::test]
     async fn registration_refuses_plaintext_and_bad_keys_before_any_request() {
         let http = http_client();
         let insecure = RegisterEndpoint { url: "http://relay.example/api".into(), token: "t".into() };
         assert!(register_pubkey(&http, &insecure, &"a".repeat(64)).await.unwrap_err().contains("insecure"));
+        let smuggled = RegisterEndpoint { url: r"http://relay.example\@localhost/api".into(), token: "t".into() };
+        assert!(register_pubkey(&http, &smuggled, &"a".repeat(64)).await.unwrap_err().contains("insecure"));
         let ok = RegisterEndpoint { url: "https://relay.example/api".into(), token: "t".into() };
         assert_eq!(register_pubkey(&http, &ok, "zz").await.unwrap_err(), "invalid pubkey");
     }
