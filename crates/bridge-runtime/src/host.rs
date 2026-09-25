@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use agent_protocol::codec::MAX_LINE_BYTES;
 use agent_protocol::{decode_host_frame, encode_frame, BridgeFrame};
 use bridge_core::Input;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -142,22 +143,26 @@ async fn serve(
     rx: &mut mpsc::UnboundedReceiver<Cmd>,
 ) -> (String, Option<oneshot::Sender<()>>) {
     let mut stdin = child.stdin.take();
-    let mut stdout = BufReader::new(child.stdout.take().expect("piped")).lines();
-    let mut stderr = BufReader::new(child.stderr.take().expect("piped")).lines();
+    let mut stdout = BoundedLines::new(child.stdout.take().expect("piped"), MAX_LINE_BYTES);
+    let mut stderr = BoundedLines::new(child.stderr.take().expect("piped"), MAX_LOG_LINE_BYTES);
     let mut stderr_open = true;
     loop {
         tokio::select! {
             line = stdout.next_line() => match line {
-                Ok(Some(line)) => match decode_host_frame(&line) {
+                Ok(Some(Ok(line))) => match decode_host_frame(&line) {
                     Ok(frame) => {
                         let _ = inputs.send(Input::HostFrame(frame));
                     }
                     Err(err) => log::warn!("[Host] Undecodable frame from the agent host ({err}) — dropped"),
                 },
+                Ok(Some(Err(len))) => log::warn!(
+                    "[Host] A {len}-byte frame from the agent host exceeds the {MAX_LINE_BYTES}-byte limit — dropped"
+                ),
                 Ok(None) | Err(_) => return (exit_reason(child).await, None),
             },
             line = stderr.next_line(), if stderr_open => match line {
-                Ok(Some(line)) => log::info!("[agent-host] {line}"),
+                Ok(Some(Ok(line))) => log::info!("[agent-host] {line}"),
+                Ok(Some(Err(len))) => log::info!("[agent-host] <{len}-byte line elided>"),
                 _ => stderr_open = false,
             },
             cmd = rx.recv() => match cmd {
@@ -189,6 +194,65 @@ async fn serve(
     }
 }
 
+/// Longest stderr line logged whole.
+const MAX_LOG_LINE_BYTES: usize = 64 * 1024;
+
+/// `\n`-separated lines with a length cap enforced WHILE reading: a longer
+/// line is consumed and discarded chunk by chunk, never held in memory whole
+/// (`BufReader::lines` would buffer all of it before any check could run, so
+/// a runaway host could exhaust the bridge's memory with one line).
+///
+/// Cancel-safe, like `Lines::next_line`: all progress lives in `self`, and
+/// input is consumed only in the same poll that records it.
+struct BoundedLines<R> {
+    reader: BufReader<R>,
+    max: usize,
+    line: Vec<u8>,
+    /// Bytes of an overlong line dropped so far; 0 while not discarding.
+    discarded: usize,
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> BoundedLines<R> {
+    fn new(inner: R, max: usize) -> Self {
+        Self { reader: BufReader::new(inner), max, line: Vec::new(), discarded: 0 }
+    }
+
+    /// `Some(Ok(line))` (lossy UTF-8, without the `\n`), `Some(Err(len))`
+    /// for a line over the cap, or `None` at the end of the stream.
+    async fn next_line(&mut self) -> std::io::Result<Option<Result<String, usize>>> {
+        loop {
+            let available = self.reader.fill_buf().await?;
+            if available.is_empty() {
+                // A final line without its `\n` still counts.
+                return Ok(if self.discarded > 0 || !self.line.is_empty() { Some(self.take()) } else { None });
+            }
+            let (chunk, used, ended) = match available.iter().position(|&b| b == b'\n') {
+                Some(i) => (&available[..i], i + 1, true),
+                None => (available, available.len(), false),
+            };
+            if self.discarded > 0 || self.line.len() + chunk.len() > self.max {
+                self.discarded += self.line.len() + chunk.len();
+                self.line = Vec::new();
+            } else {
+                self.line.extend_from_slice(chunk);
+            }
+            self.reader.consume(used);
+            if ended {
+                return Ok(Some(self.take()));
+            }
+        }
+    }
+
+    fn take(&mut self) -> Result<String, usize> {
+        if self.discarded > 0 {
+            return Err(std::mem::take(&mut self.discarded));
+        }
+        let line = std::mem::take(&mut self.line);
+        let line = line.strip_suffix(b"\r").unwrap_or(&line);
+        Ok(String::from_utf8_lossy(line).into_owned())
+    }
+}
+
 async fn exit_reason(child: &mut Child) -> String {
     match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
         Ok(Ok(status)) => status.to_string(),
@@ -197,6 +261,46 @@ async fn exit_reason(child: &mut Child) -> String {
             let _ = child.kill().await;
             "its output closed; killed".into()
         }
+    }
+}
+
+#[cfg(test)]
+mod bounded_lines_tests {
+    use super::*;
+
+    async fn lines(input: &'static [u8], max: usize) -> Vec<Result<String, usize>> {
+        // A 3-byte pipe: every line straddles several reads.
+        let (mut tx, rx) = tokio::io::duplex(3);
+        tokio::spawn(async move {
+            tx.write_all(input).await.unwrap();
+        });
+        let mut reader = BoundedLines::new(rx, max);
+        let mut out = Vec::new();
+        while let Some(line) = reader.next_line().await.unwrap() {
+            out.push(line);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn lines_within_the_cap_come_through_whole() {
+        assert_eq!(
+            lines(b"one\ntwo\r\n\nlast", 8).await,
+            vec![Ok("one".into()), Ok("two".into()), Ok(String::new()), Ok("last".into())]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overlong_line_is_reported_by_length_and_the_next_one_survives() {
+        assert_eq!(
+            lines(b"short\nthis line is too long\nok\ntoo long again", 8).await,
+            vec![Ok("short".into()), Err(21), Ok("ok".into()), Err(14)]
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_is_kept_lossily_instead_of_ending_the_stream() {
+        assert_eq!(lines(b"a\xffb\nnext\n", 8).await, vec![Ok("a\u{fffd}b".into()), Ok("next".into())]);
     }
 }
 
