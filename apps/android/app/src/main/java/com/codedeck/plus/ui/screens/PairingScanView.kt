@@ -40,12 +40,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.codedeck.plus.ui.theme.Tokens
-import com.google.mlkit.vision.barcode.BarcodeScanner
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.ReaderException
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -60,12 +62,18 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * exactly once per opening — the analyzer disarms itself on the first read
  * so already-queued frames cannot produce a second result.
  *
- * Threading invariant: everything that touches the camera or the scanner
- * client (provider await, binding, the analyzer, dispose-time unbind/close)
- * runs on the main executor. That makes the disposed-flag check before
- * [ProcessCameraProvider.bindToLifecycle] and the dispose-time teardown
- * atomic with respect to each other — Compose can only interleave them at a
- * suspension point, and there is none between the check and the bind.
+ * Frames are decoded on the device by ZXing's QR reader: no Play Services,
+ * no ML Kit, nothing that registers components, schedules jobs or reports
+ * usage.
+ *
+ * Threading invariant: everything that touches the camera (provider await,
+ * binding, dispose-time unbind) runs on the main executor. That makes the
+ * disposed-flag check before [ProcessCameraProvider.bindToLifecycle] and the
+ * dispose-time teardown atomic with respect to each other — Compose can only
+ * interleave them at a suspension point, and there is none between the check
+ * and the bind. Decoding runs on the scan's own single thread (a frame takes
+ * tens of milliseconds, too long for the main thread); a decoded text is
+ * handed back to the main executor, where [onDecoded] runs.
  *
  * The caller composes this only while the scan is open AND the CAMERA
  * permission is granted (PairingScreen's launcher gates composition), so the
@@ -84,14 +92,7 @@ fun PairingScanView(
     val previewView = remember {
         PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
     }
-    val scanner = remember {
-        // QR only: the pairing QR is the only payload this surface decodes.
-        BarcodeScanning.getClient(
-            BarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build(),
-        )
-    }
+    val decodeExecutor = remember { Executors.newSingleThreadExecutor() }
     // Plain atomics, not Compose state: the analyzer's entry point is called
     // from camera executor callbacks outside the snapshot system.
     val delivered = remember { AtomicBoolean(false) }
@@ -102,15 +103,15 @@ fun PairingScanView(
 
     DisposableEffect(Unit) {
         onDispose {
-            // Order matters: disarm the analyzer before closing the scanner
-            // client so no in-flight frame can touch a closed client, then
-            // release the camera. bindToLifecycle only auto-releases when
-            // its LifecycleOwner stops — the activity — which does NOT
-            // happen between two scan openings, so an explicit unbind here
-            // is what actually frees the camera.
+            // Order matters: disarm the analyzer so a frame in flight
+            // delivers nothing, release the camera, then let the decode
+            // thread finish. bindToLifecycle only auto-releases when its
+            // LifecycleOwner stops — the activity — which does NOT happen
+            // between two scan openings, so an explicit unbind here is what
+            // actually frees the camera.
             disposed.set(true)
             boundProvider.value?.unbindAll()
-            scanner.close()
+            decodeExecutor.shutdown()
         }
     }
 
@@ -141,14 +142,13 @@ fun PairingScanView(
             )
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
-        // Read once at bind: CameraX derives each frame's rotationDegrees
-        // from this, which is what the ML Kit input consumes. A pairing scan
-        // is a seconds-long gesture; mid-scan device rotation is not a case
-        // worth an orientation listener.
-        previewView.display?.let { display -> analysis.targetRotation = display.rotation }
+        // No rotation handling: a QR code is found by its finder patterns in
+        // any orientation, so frames are decoded as the sensor delivers them.
         analysis.setAnalyzer(
-            mainExecutor,
-            PairingQrAnalyzer(scanner, delivered, disposed, onQr = onDecoded),
+            decodeExecutor,
+            PairingQrAnalyzer(delivered, disposed) { text ->
+                mainExecutor.execute { if (!disposed.get()) onDecoded(text) }
+            },
         )
         try {
             provider.unbindAll()
@@ -191,46 +191,44 @@ fun PairingScanView(
 }
 
 /**
- * Feeds CameraX frames to the QR-only scanner. The [delivered] guard is
+ * Decodes CameraX frames on the decode thread. The [delivered] guard is
  * checked before any work so a decode that already closed the surface turns
- * queued frames into no-ops, and [disposed] does the same during teardown —
- * a frame in flight when the surface closes is still released through the
- * process listener's completion callback, so CameraX never sees a stuck
- * buffer and ML Kit never receives input after its client is closed.
+ * queued frames into no-ops, and [disposed] does the same during teardown.
+ * Every frame is closed on every path, or CameraX wedges the stream.
  */
 private class PairingQrAnalyzer(
-    private val scanner: BarcodeScanner,
     private val delivered: AtomicBoolean,
     private val disposed: AtomicBoolean,
     private val onQr: (String) -> Unit,
 ) : ImageAnalysis.Analyzer {
     override fun analyze(imageProxy: ImageProxy) {
-        if (delivered.get() || disposed.get()) {
-            imageProxy.close()
-            return
+        imageProxy.use { frame ->
+            if (delivered.get() || disposed.get()) return
+            // YUV_420_888, ImageAnalysis's default: plane 0 is the luminance
+            // plane, one byte per pixel, rows `rowStride` bytes apart.
+            val plane = frame.planes[0]
+            val buffer = plane.buffer
+            val luminance = ByteArray(plane.rowStride * frame.height)
+            buffer.get(luminance, 0, minOf(buffer.remaining(), luminance.size))
+            val text = decodeQr(luminance, plane.rowStride, frame.width, frame.height)
+            if (text != null && delivered.compareAndSet(false, true) && !disposed.get()) onQr(text)
         }
-        val mediaImage = imageProxy.image
-        if (mediaImage == null) {
-            imageProxy.close()
-            return
-        }
-        val input = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        try {
-            scanner.process(input)
-                .addOnSuccessListener { barcodes ->
-                    val text = barcodes.firstNotNullOfOrNull { it.rawValue }?.trim()
-                    if (!text.isNullOrEmpty() && delivered.compareAndSet(false, true) && !disposed.get()) {
-                        // ML Kit task listeners default to the main thread,
-                        // so handing the result up here is main-thread safe.
-                        onQr(text)
-                    }
-                }
-                .addOnCompleteListener { imageProxy.close() }
-        } catch (e: Exception) {
-            // The scanner client can already be closed during teardown; the
-            // proxy must still be released or CameraX wedges the stream.
-            imageProxy.close()
-        }
+    }
+}
+
+private val QR_HINTS = mapOf(DecodeHintType.CHARACTER_SET to "UTF-8")
+
+/**
+ * The text of a QR code in an 8-bit luminance frame (`width`×`height`
+ * pixels, rows `rowStride` bytes apart), trimmed; null when the frame holds
+ * no readable QR code — the normal case for most frames.
+ */
+internal fun decodeQr(luminance: ByteArray, rowStride: Int, width: Int, height: Int): String? {
+    val source = PlanarYUVLuminanceSource(luminance, rowStride, height, 0, 0, width, height, false)
+    return try {
+        QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), QR_HINTS).text?.trim()?.ifEmpty { null }
+    } catch (e: ReaderException) {
+        null
     }
 }
 

@@ -112,9 +112,20 @@ Packages write enabled for Actions in repo settings.
 
 ## Dry run without tagging
 
-`workflow_dispatch` on `release.yml` runs the same pipeline; pass `version`
-(e.g. `v1.2.3`) and optionally tick `prerelease`. Useful to shake out a signing
-or toolchain problem before committing to a real tag.
+`workflow_dispatch` on `release.yml` runs the same pipeline, on any branch;
+pass `version` (e.g. `v1.2.3-rc1`). With `publish` left unticked (the
+default) it is a dry run: every artifact is built, smoke-tested and uploaded
+to the run (kept one day) and the image is built, but no GitHub Release is
+created and nothing is pushed to ghcr. Useful to shake out a signing,
+toolchain or packaging problem before committing to a real tag:
+
+```
+gh workflow run release.yml --ref <branch> -f version=v1.2.3-rc1
+gh run download <run-id> -D /tmp/dry-run      # inspect the archives and APK
+```
+
+Ticking `publish` makes it a real manual cut (a Release named after
+`version`, image pushed); prefer a tag for that.
 
 ## If a release build fails
 

@@ -10,8 +10,10 @@ name: Release
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
 # A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
-# move the `:latest` image tag. `workflow_dispatch` runs the same pipeline for a
-# dry run / manual cut without pushing a tag.
+# move the `:latest` image tag. `workflow_dispatch` runs the same pipeline
+# without a tag: a dry run by default (every artifact is built and uploaded to
+# the run for inspection; no GitHub Release, no image push), or a manual cut
+# with `publish` ticked.
 #
 # Required repository secrets for APK signing (same names as the maintainer's
 # other Android project):
@@ -34,6 +36,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish:
+        description: "Publish the GitHub Release and push the image (unticked: a dry run)"
+        required: false
+        default: false
+        type: boolean
 
 # Read-only by default; the two jobs that publish widen it for themselves.
 permissions:
@@ -51,6 +58,8 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       number: ${{ steps.v.outputs.number }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      # A pushed tag always publishes; a manual run only when asked to.
+      publish: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
     steps:
       - id: v
         shell: bash
@@ -166,6 +175,7 @@ jobs:
           if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
             echo "::error::an agent platform binary is in the archive" >&2; exit 1
           fi
+          scripts/release/smoke-agent-host.sh "$STAGE/node" "$STAGE/agent-host/dist/main.js"
           # xz: about 30% smaller than gzip on these binaries.
           XZ_OPT='-6 -T0' tar -C "$RUNNER_TEMP" -cJf "dist/$NAME.tar.xz" "$NAME"
           ls -la dist
@@ -219,9 +229,16 @@ jobs:
           TMP="$(cygpath -u "$RUNNER_TEMP")"
           pnpm install --frozen-lockfile --filter @codedeck/agent-host...
           pnpm --filter @codedeck/agent-host run build
-          pnpm --filter @codedeck/agent-host deploy --prod --legacy "$TMP/agent-host"
-          rm -rf "$TMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@* \
+          # Hoisted: a flat node_modules of real directories. pnpm's default
+          # layout is made of junctions on Windows, which 7-Zip cannot follow
+          # into a zip. .bin holds only CLI launchers nothing here runs.
+          pnpm --filter @codedeck/agent-host deploy --prod --legacy --config.node-linker=hoisted "$TMP/agent-host"
+          rm -rf "$TMP"/agent-host/node_modules/@anthropic-ai/claude-agent-sdk-* \
+                 "$TMP"/agent-host/node_modules/.bin \
                  "$TMP"/agent-host/src "$TMP"/agent-host/tsconfig.json "$TMP"/agent-host/build.mjs
+          if find "$TMP/agent-host" -type l | grep -q .; then
+            echo "::error::the deployed agent host still contains links" >&2; exit 1
+          fi
 
       - name: Package
         run: |
@@ -246,6 +263,7 @@ jobs:
           if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
             echo "::error::an agent platform binary is in the archive" >&2; exit 1
           fi
+          scripts/release/smoke-agent-host.sh "$STAGE/node.exe" "$STAGE/agent-host/dist/main.js"
           (cd "$TMP" && 7z a -tzip "$GITHUB_WORKSPACE/dist/$NAME.zip" "$NAME" >/dev/null)
           ls -la dist
 
@@ -270,6 +288,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: needs.meta.outputs.publish == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -294,7 +313,8 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile
-          push: true
+          # A dry run still builds the image, which proves it builds.
+          push: ${{ needs.meta.outputs.publish == 'true' }}
           tags: ${{ steps.tags.outputs.list }}
           build-args: CODEDECK_VERSION=${{ needs.meta.outputs.number }}
           provenance: false
@@ -415,6 +435,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [meta, bridge-binary, bridge-windows, bridge-image, android-apk]
+    if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

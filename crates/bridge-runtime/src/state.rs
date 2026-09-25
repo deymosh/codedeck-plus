@@ -234,7 +234,14 @@ mod tests {
         assert_eq!(lock_holder(dir.path()), Some(Holder { pid: Some(std::process::id()) }));
         assert!(acquire_lock(dir.path()).err().unwrap().contains("already running"));
         drop(lock);
-        assert_eq!(lock_holder(dir.path()), None);
+        // A flock belongs to the open file, which a child process that another
+        // test forks at that moment shares until it execs; the lock is only
+        // free once it has. Released means released within a short while.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while lock_holder(dir.path()).is_some() {
+            assert!(std::time::Instant::now() < deadline, "the lock was not released after the drop");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         acquire_lock(dir.path()).unwrap();
     }
 }
