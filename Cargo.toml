@@ -18,6 +18,11 @@
 #                 (the Node sidecar running agent SDKs): JSON-lines frames,
 #                 pure types + codec. Depends on protocol only. The host's
 #                 TypeScript types are generated from it.
+# bridge-core  = the bridge engine (pure): sessions, cards, transcript seqs
+#                 and sync, pairing, ingest, credentials, as one sans-IO state
+#                 machine (inputs in, effects out). Depends on protocol and
+#                 agent-protocol. No tokio, no sockets, no filesystem — the
+#                 bridge runtime owns those.
 # client-core  = client domain logic (reducers, stores as state machines,
 #                 sync, merge, pairing FSM, presentation). Depends on protocol.
 #                 No tokio, no sockets, no I/O, no Tauri/Android/Node/
@@ -39,7 +44,7 @@
 # apps/android is built).
 [workspace]
 resolver = "2"
-members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol","crates/client-core", "crates/client-runtime", "crates/client-ffi"]
+members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol", "crates/bridge-core", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
 exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
 
 [workspace.package]
