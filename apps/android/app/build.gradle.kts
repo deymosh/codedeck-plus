@@ -63,7 +63,7 @@ android {
         // 12000 for its last 0.12.0): Android refuses to install over that
         // app, and the uninstall it forces drops state no protocol v11 peer
         // can use.
-        versionCode = 1
+        versionCode = 2
         // A release stamps its name from the tag (`-PcodedeckVersion=1.2.3`,
         // or `1.2.3-rc1` for a prerelease); any other build is named after
         // the tree it came from, see devVersionName().

@@ -1,6 +1,6 @@
 {
   "name": "@codedeck/agent-host",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "CodeDeck+ agent host — the Node sidecar the bridge runs agent SDKs in (Claude Code, OpenCode), spoken to over the driver protocol on stdio.",
