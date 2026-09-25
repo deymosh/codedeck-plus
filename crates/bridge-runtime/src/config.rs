@@ -150,7 +150,26 @@ fn hostname() -> String {
 
 /// The directory the running binary sits in (None when it cannot be resolved).
 fn exe_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|exe| fs::canonicalize(exe).ok()).and_then(|exe| exe.parent().map(Path::to_path_buf))
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| fs::canonicalize(exe).ok())
+        .map(strip_verbatim)
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+}
+
+/// On Windows `fs::canonicalize` returns a verbatim path (`\\?\C:\...`,
+/// `\\?\UNC\server\share\...`). Node cannot load a main module from one — its
+/// module resolver ends up at `lstat('C:')` and dies with EISDIR — so paths
+/// handed to `node` are turned back into their ordinary form.
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\").filter(|r| r.as_bytes().get(1) == Some(&b':')) {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
 }
 
 /// The Node executable's file name on this platform.
@@ -287,6 +306,16 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_windows_paths_are_made_ordinary() {
+        let s = |p: &str| strip_verbatim(PathBuf::from(p)).to_string_lossy().into_owned();
+        assert_eq!(s(r"\\?\C:\bridge\codedeck-bridge.exe"), r"C:\bridge\codedeck-bridge.exe");
+        assert_eq!(s(r"\\?\UNC\server\share\codedeck-bridge.exe"), r"\\server\share\codedeck-bridge.exe");
+        // A verbatim path with no drive letter has no ordinary form: kept as is.
+        assert_eq!(s(r"\\?\Volume{0}\codedeck-bridge.exe"), r"\\?\Volume{0}\codedeck-bridge.exe");
+        assert_eq!(s("/opt/codedeck/codedeck-bridge"), "/opt/codedeck/codedeck-bridge");
+    }
 
     #[test]
     fn a_bundled_node_is_preferred_only_when_present() {
