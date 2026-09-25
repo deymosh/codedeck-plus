@@ -10,8 +10,10 @@ name: Release
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
 # A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
-# move the `:latest` image tag. `workflow_dispatch` runs the same pipeline for a
-# dry run / manual cut without pushing a tag.
+# move the `:latest` image tag. `workflow_dispatch` runs the same pipeline
+# without a tag: a dry run by default (every artifact is built and uploaded to
+# the run for inspection; no GitHub Release, no image push), or a manual cut
+# with `publish` ticked.
 #
 # Required repository secrets for APK signing (same names as the maintainer's
 # other Android project):
@@ -34,6 +36,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish:
+        description: "Publish the GitHub Release and push the image (unticked: a dry run)"
+        required: false
+        default: false
+        type: boolean
 
 # Read-only by default; the two jobs that publish widen it for themselves.
 permissions:
@@ -51,6 +58,8 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       number: ${{ steps.v.outputs.number }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      # A pushed tag always publishes; a manual run only when asked to.
+      publish: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
     steps:
       - id: v
         shell: bash
@@ -270,6 +279,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: needs.meta.outputs.publish == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -294,7 +304,8 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile
-          push: true
+          # A dry run still builds the image, which proves it builds.
+          push: ${{ needs.meta.outputs.publish == 'true' }}
           tags: ${{ steps.tags.outputs.list }}
           build-args: CODEDECK_VERSION=${{ needs.meta.outputs.number }}
           provenance: false
@@ -415,6 +426,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [meta, bridge-binary, bridge-windows, bridge-image, android-apk]
+    if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
