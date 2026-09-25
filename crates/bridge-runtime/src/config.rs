@@ -249,6 +249,8 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     let test_mode = flags.test_mode || env_bool("CODEDECK_TEST_MODE").unwrap_or(false);
     put("CODEDECK_TEST_MODE", test_mode.then(|| "1".into()));
     put("CODEDECK_AGENT_HOST_DRIVERS", env("CODEDECK_AGENT_HOST_DRIVERS"));
+    // Agent binaries the host installs on demand live under the bridge's home.
+    put("CODEDECK_AGENT_CACHE", Some(home.join("agents").to_string_lossy().into_owned()));
 
     let agent_host_path = flags
         .agent_host

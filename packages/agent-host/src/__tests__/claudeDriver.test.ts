@@ -366,3 +366,58 @@ describe('Claude options and setup', () => {
     expect(await offline.checkCredential('other', 'x')).toBeUndefined();
   });
 });
+
+describe('Claude Code installed on demand', () => {
+  const params = { sessionId: 's1', agent: 'claude-code', cwd: '/w' };
+
+  it('a session waits for the install, keeping the input and options sent meanwhile', async () => {
+    const facade = new ScriptedFacade();
+    let finish!: (path: string) => void;
+    const driver = new ClaudeDriver({ facade, installClaude: () => new Promise<string>((r) => (finish = r)) });
+    const ctx = recordingContext();
+    const session = driver.startSession(params, ctx);
+    session.prompt('hello');
+    await session.setOption('effort', 'high');
+    expect(facade.sessions).toHaveLength(0);
+
+    finish('/cache/claude');
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(facade.last.opts.pathToClaudeCodeExecutable).toBe('/cache/claude');
+    expect(facade.last.opts.effortLevel).toBe('high');
+    expect(facade.last.handle.pushed).toEqual(['hello']);
+  });
+
+  it('a failed install ends the session with the reason, and the next session retries', async () => {
+    const facade = new ScriptedFacade();
+    const attempts: string[] = [];
+    const driver = new ClaudeDriver({
+      facade,
+      installClaude: async () => {
+        attempts.push('try');
+        if (attempts.length === 1) throw new Error('Claude Code could not be installed: HTTP 503');
+        return '/cache/claude';
+      },
+    });
+    const first = recordingContext();
+    driver.startSession(params, first);
+    expect((await first.ended()).error).toMatch(/could not be installed: HTTP 503/);
+    expect(driver.info().unavailableReason).toBeUndefined();
+
+    const second = recordingContext();
+    driver.startSession({ ...params, sessionId: 's2' }, second);
+    await second.waitFor((e) => e.type === 'ready');
+    expect(attempts).toHaveLength(2);
+    expect(facade.last.opts.pathToClaudeCodeExecutable).toBe('/cache/claude');
+  });
+
+  it('an explicit path is used as is, with no install', async () => {
+    const facade = new ScriptedFacade();
+    let installs = 0;
+    const driver = new ClaudeDriver({ facade, claudePath: '/usr/bin/claude', installClaude: async () => `${++installs}` });
+    const ctx = recordingContext();
+    driver.startSession(params, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(facade.last.opts.pathToClaudeCodeExecutable).toBe('/usr/bin/claude');
+    expect(installs).toBe(0);
+  });
+});

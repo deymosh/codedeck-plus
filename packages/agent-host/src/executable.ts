@@ -18,6 +18,14 @@ export function isFile(p: string): boolean {
   }
 }
 
+/** Linux with musl libc instead of glibc (Alpine): Node's own build reports
+ *  no glibc version there. Platform binaries come in a separate musl build. */
+export function isMusl(): boolean {
+  if (process.platform !== 'linux') return false;
+  const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined;
+  return !report?.header?.glibcVersionRuntime;
+}
+
 /** `name` as an executable file name: `name.exe` on Windows, `name` elsewhere. */
 export function exeName(name: string, platform: NodeJS.Platform = process.platform): string {
   return platform === 'win32' ? `${name}.exe` : name;

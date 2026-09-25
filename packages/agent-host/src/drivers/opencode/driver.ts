@@ -663,6 +663,8 @@ export interface OpenCodeDriverOptions {
   autoStart?: boolean;
   /** `opencode` executable for auto-start (else resolved from PATH). */
   binaryPath?: string;
+  /** Installs `opencode` for auto-start when none is found. */
+  installOpenCode?: () => Promise<string>;
   port?: number;
   log: (message: string) => void;
 }
@@ -675,6 +677,11 @@ export class OpenCodeDriver implements Driver {
   private clientPromise: Promise<OpencodeClient> | null = null;
   private server: OpenCodeServerHandle | null = null;
   private unavailable: string | undefined;
+  /** Auto-start with no `opencode` on the machine: it is installed, then
+   *  started, in the background; a failed attempt is retried by the next
+   *  session. */
+  private installs = false;
+  private stopped = false;
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
 
@@ -687,7 +694,10 @@ export class OpenCodeDriver implements Driver {
       driver.connect(options.serverUrl);
     } else if (options.autoStart) {
       const bin = resolveOpenCodePath(options.binaryPath);
-      if (!bin) {
+      if (!bin && options.installOpenCode) {
+        driver.installs = true;
+        driver.launchInstalled();
+      } else if (!bin) {
         driver.unavailable =
           'OpenCode auto-start is enabled but the `opencode` executable was not found (set CODEDECK_OPENCODE_PATH).';
       } else {
@@ -717,6 +727,33 @@ export class OpenCodeDriver implements Driver {
     this.clientPromise = Promise.resolve(createOpencodeClient({ baseUrl }));
   }
 
+  /** Install `opencode`, start its server and connect — sessions started
+   *  meanwhile wait on the same promise. */
+  private launchInstalled(): void {
+    const { installOpenCode, port, log } = this.options;
+    const attempt = (async (): Promise<OpencodeClient> => {
+      const bin = await installOpenCode!();
+      let server: OpenCodeServerHandle;
+      try {
+        server = await startOpenCodeServer({ command: bin, ...(port !== undefined ? { port } : {}) });
+      } catch (err) {
+        throw new Error(`The OpenCode server failed to start: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (this.stopped) {
+        await server.close();
+        throw new Error('the agent host is shutting down');
+      }
+      this.server = server;
+      log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})`);
+      return createOpencodeClient({ baseUrl: server.url });
+    })();
+    this.clientPromise = attempt;
+    attempt.catch((err: unknown) => {
+      log(`[opencode] unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      if (this.clientPromise === attempt) this.clientPromise = null;
+    });
+  }
+
   info(): AgentInfo {
     return {
       id: OPENCODE_AGENT_ID,
@@ -733,6 +770,7 @@ export class OpenCodeDriver implements Driver {
   }
 
   startSession(params: StartSession, ctx: SessionContext): DriverSession {
+    if (!this.clientPromise && this.installs && !this.stopped) this.launchInstalled();
     if (!this.clientPromise) throw new Error(this.unavailable ?? NOT_CONFIGURED);
     if (params.mode !== undefined && !OPENCODE_MODES.some((m) => m.id === params.mode)) {
       throw new Error(`OpenCode has no mode '${params.mode}'`);
@@ -762,6 +800,7 @@ export class OpenCodeDriver implements Driver {
   }
 
   async shutdown(): Promise<void> {
+    this.stopped = true;
     await this.server?.close();
   }
 }
