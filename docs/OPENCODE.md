@@ -1,15 +1,15 @@
 # OpenCode backend
 
-CodeDeck+ can run sessions against two different coding-agent backends: Claude
-Code (the default, always available) and [OpenCode](https://opencode.ai) — a
-second `SessionBackend` a phone can pick per-session from the "New session"
-sheet once the bridge advertises the `opencode` capability. This is optional:
-a bridge with no OpenCode configuration behaves exactly as it always has.
+CodeDeck+ runs sessions on any agent its agent host has a driver for: Claude
+Code (always available) and [OpenCode](https://opencode.ai). A phone picks the
+agent per session from the "New session" sheet, which lists the agents the
+bridge advertises in its heartbeat. OpenCode is optional: without its
+configuration it is simply not advertised.
 
-The bridge never bundles or manages OpenCode's model access itself — it talks
-to a running `opencode serve` HTTP server over `@opencode-ai/sdk`
-(`packages/core/src/sdk/opencodeFacade.ts`). There are two ways to get it that
-server:
+The bridge never manages OpenCode's model access itself — the OpenCode driver
+(`packages/agent-host/src/drivers/opencode/`) talks to a running
+`opencode serve` HTTP server through `@opencode-ai/sdk`. There are two ways to
+give it that server:
 
 ## Mode 1 — point at an external OpenCode server
 
@@ -59,9 +59,9 @@ exclusively for the bridge's own use and is never configurable to listen on
 any wider interface.
 
 If `opencode` can't be resolved, or the spawned process fails to come up, the
-bridge logs one actionable line and continues running Claude-Code-only — a
-broken or missing OpenCode install never blocks the bridge from serving
-Claude Code sessions.
+agent host logs one actionable line and reports OpenCode as unavailable (it
+is not advertised, and a session on it fails with that reason) — a broken or
+missing OpenCode install never blocks Claude Code sessions.
 
 If both `openCodeServerUrl` and `openCodeAutoStart` are set, the external URL
 wins (logged as a warning — usually a leftover setting from switching modes).
@@ -90,5 +90,5 @@ docker compose exec codedeck-bridge opencode auth login
 - No automated credential setup — that one `opencode auth login` step (or
   equivalent env vars) is on you.
 - No support for multiple simultaneous OpenCode servers.
-- No change to session/model routing on the wire — this only controls how the
-  bridge obtains the `baseUrl` it hands `OpenCodeFacade`.
+- No change to the wire — this only controls how the OpenCode driver finds its
+  server.
