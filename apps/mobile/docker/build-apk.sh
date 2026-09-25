@@ -28,7 +28,7 @@
 #             auto-generates and is NOT a real release identity — it exists
 #             solely so a release-optimized build can be sideloaded. For an
 #             actually signed release (one an update mechanism/store would
-#             trust) see vendor/mobile/scripts/build-release-apk.sh, which
+#             trust) see upstream codedeck-next-mobile's scripts/build-release-apk.sh, which
 #             needs a real keystore nobody has generated yet.
 #
 # First run builds the toolchain image (Android SDK/NDK 28 + Rust +

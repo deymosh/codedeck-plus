@@ -19,20 +19,18 @@ androidxTestExtJunit = "1.3.0"
 androidxTestRunner = "1.7.0"
 androidxTestCore = "1.7.0"
 robolectric = "4.16"
-# F3.3.2: spike/markdown-compose-probe (see its README) proved 1.3.5 on an
-# older Kotlin/AGP pair (2.0.21/8.7.3). Verified against THIS project's real
-# AGP 9.4.0 as part of this milestone: 1.3.5's Gradle plugin calls AGP's
+# 1.3.5 was proven on an older Kotlin/AGP pair (2.0.21/8.7.3), but its
+# Gradle plugin calls AGP's
 # `BaseExtension`, removed in AGP 9 — a hard configuration-time failure, not
 # a warning. 2.0.0-alpha05 is the first release with AGP 9 / the new
 # `com.android.application`-without-`BaseExtension` API support; still
 # pre-1.0, tracked here rather than pinned quietly.
 paparazzi = "2.0.0-alpha05"
 # 0.43.0: current as of this pass. Since 0.33.0 `Markdown(content)` parses
-# asynchronously by default (breaks a static Paparazzi snapshot, per the
-# spike) — `rememberMarkdownState(content, immediate = true)` is the
-# documented synchronous escape hatch introduced after the spike's 0.27 was
-# current; used instead of pinning back to a version that predates table
-# rendering.
+# asynchronously by default (breaks a static Paparazzi snapshot) —
+# `rememberMarkdownState(content, immediate = true)` is the documented
+# synchronous escape hatch; used instead of pinning back to a version that
+# predates table rendering.
 markdownRenderer = "0.43.0"
 
 [libraries]
@@ -75,8 +73,7 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 # 9.0").
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-# F3.3.2: Paparazzi 1.3.1+ supports application modules (not just library
-# modules, its original limitation) — 1.3.5 is spike/markdown-compose-probe's
-# proven version, on an older Kotlin/AGP pair than this project's real one;
-# re-verified against the real toolchain, not assumed.
+# Paparazzi 1.3.1+ supports application modules (not just library modules,
+# its original limitation); the version above is verified against this
+# project's real toolchain.
 paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }

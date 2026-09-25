@@ -1,7 +1,5 @@
-//! F3.1's actual Go/No-Go: everything spike/uniffi-binding-probe proved
-//! feasible against a throwaway stand-in, re-proven here against the REAL
-//! `client_runtime::Core` through this crate's own `#[uniffi::export]`
-//! surface — spawn (dedicated thread + `LocalSet`), dispatch (`async fn` ->
+//! The real `client_runtime::Core` driven through this crate's own
+//! `#[uniffi::export]` surface — spawn (dedicated thread + `LocalSet`), dispatch (`async fn` ->
 //! the eventual Kotlin `suspend fun`), observe (the foreign `CoreListener`
 //! callback), and a clean shutdown (thread actually joins, no leak).
 //!
@@ -10,10 +8,8 @@
 //! generated Kotlin is a thin, mechanical trampoline onto exactly these
 //! `#[uniffi::export]` functions. What it does NOT exercise is UniFFI's own
 //! generated async-cancellation glue (a JVM `Job.cancel()` reaching into the
-//! Rust future) — that needs a real Kotlin coroutine test once `apps/android`
-//! exists (tracked as an F3.2+ follow-up, same as spike's own README flagged
-//! it). What CAN be proven here, and is the actual risk the coroutine note
-//! was about, is Rust-level cancellation safety: does dropping an in-flight
+//! Rust future) — that needs a Kotlin coroutine test. What CAN be proven
+//! here, and is the actual risk behind it, is Rust-level cancellation safety: does dropping an in-flight
 //! `dispatch()` future lose the intent, corrupt the Core, or hang? See
 //! `dropping_an_in_flight_dispatch_future_does_not_lose_the_intent` below.
 

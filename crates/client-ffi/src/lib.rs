@@ -1,27 +1,20 @@
-//! F3: the Android UniFFI binding surface, wrapping the REAL
-//! `client_runtime::core::Core` (not spike/uniffi-binding-probe's stand-in).
-//! Every hard case that spike proved feasible — foreign callback, `async fn`
-//! -> Kotlin `suspend fun`, typed error, object lifecycle with a background
-//! task, concurrency — is re-proven here against production code
-//! (`tests/real_core_over_ffi.rs`).
+//! The Android UniFFI binding surface over `client_runtime::Core`: foreign
+//! callbacks, `async fn` -> Kotlin `suspend fun`, typed errors, and an object
+//! lifecycle with a background task, proven end to end in
+//! `tests/real_core_over_ffi.rs`.
 //!
 //! `Core::spawn` must run inside a `tokio::task::LocalSet` (its internals use
 //! `Rc`/`!Send` closures) — this crate's `Core::new` spins up a dedicated OS
-//! thread with a current-thread runtime + `LocalSet` to host it, exactly the
-//! pattern `apps/mobile/src-tauri/src/native_core.rs`'s `core_init` already
-//! uses for Tauri. The `client_runtime::Core` *handle* it produces is cheap
-//! to clone and `Send` (just an `mpsc::UnboundedSender`), so every exported
-//! method below can be called from any thread without hopping onto that one.
+//! thread with a current-thread runtime + `LocalSet` to host it. The
+//! `client_runtime::Core` *handle* it produces is cheap to clone and `Send`
+//! (just an `mpsc::UnboundedSender`), so every exported method below can be
+//! called from any thread without hopping onto that one.
 //!
-//! F3.1's ports were all in-memory (`CorePorts::default()`) — no persistence,
-//! no real network. F4.1.4 added the first real port, `notifier` (see
-//! `notifier.rs`), the same "wire a port only once something actually drives
-//! it" rule the rest still follow: real SQLite/WS ports are still
-//! `CorePorts::default()`'s in-memory/no-op stand-ins until a screen needs
-//! them. HTTP is the second wired port: the `http` constructor parameter
-//! takes a Kotlin-implemented [`UniffiHttpFetch`] (`None` falls back to
-//! `NoHttpFetch`), so Blossom image uploads route through the app's own
-//! network stack.
+//! Ports: persistence is SQLite (`db.rs`: the KV and the transcript store),
+//! notifications go to a Kotlin [`UniffiNotifier`], and HTTP (Blossom image
+//! uploads) to a Kotlin [`UniffiHttpFetch`] so it rides the app's own network
+//! stack (`None` falls back to `NoHttpFetch`). The relay transport is the
+//! runtime's own WebSocket driver.
 
 mod android_log;
 pub mod db;

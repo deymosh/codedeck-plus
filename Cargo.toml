@@ -41,7 +41,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol", "crates/bridge-core", "crates/bridge-runtime", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
-exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
+exclude = ["apps", "docker", "data", "dist"]
 
 [workspace.package]
 edition = "2021"

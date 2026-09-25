@@ -1,8 +1,7 @@
 # Allow-list: the build context is only what docker/Dockerfile COPYs — the
 # root workspace manifests, the Rust crates, the agent host and docker/.
-# Everything else (apps/*, the TypeScript bridge packages, vendor/, runtime
-# data/, Rust target/, toolchains) is never read by the image, so it is never
-# sent to the daemon or hashed.
+# Everything else (apps/*, docs, runtime data/, Rust target/, toolchains) is
+# never read by the image, so it is never sent to the daemon or hashed.
 *
 !Cargo.toml
 !Cargo.lock

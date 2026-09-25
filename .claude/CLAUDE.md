@@ -18,11 +18,9 @@ upstream did not design for:
 
 ### Non-negotiable structure
 
-- **`vendor/bridge/` and `vendor/mobile/` are pristine `git subtree` mirrors of
-  upstream — never hand-edit a file under `vendor/`.** New upstream work arrives
-  via `scripts/sync-upstream.sh` (a real `git subtree pull`); porting what
-  matters into this tree is a deliberate, reviewed change. `vendor/*` exists only
-  as the honest diff base.
+- **No upstream tracking.** The protocol and both halves have been rewritten,
+  so upstream changes are not pulled in mechanically; an idea worth taking from
+  upstream is re-implemented here as an ordinary change.
 - The **editable** code is `crates/*`, `packages/agent-host` and `apps/android`.
   `apps/mobile` (the Tauri app) is frozen on protocol v10, outside the pnpm
   workspace and CI; it is kept as the base of a future desktop client.
@@ -84,9 +82,6 @@ applies:**
 ./codedeck apk                               # debug APK into dist/ (Docker)
 apps/android/scripts/build-apk-local.sh      # debug APK, Linux/local path
 ./codedeck gen-android-bindings              # regenerate the UniFFI Kotlin bindings
-
-# Pull upstream into vendor/* for porting
-./codedeck sync
 ```
 
 Narrower loops: `cargo test -p <crate>`; `pnpm --filter @codedeck/agent-host
@@ -193,7 +188,7 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 
 ## Absolute constraints (do not suggest workarounds)
 
-- Never hand-edit `vendor/*`. Never introduce pre-v11 protocol compatibility.
+- Never introduce pre-v11 protocol compatibility.
 - Every phone-wire change starts in `crates/protocol` (with a corpus fixture);
   every driver-protocol change in `crates/agent-protocol` (then regenerate the
   host's types). Keep the decoders total.
@@ -215,10 +210,10 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   the Agent SDK's own platform binary (no global Claude Code install), so its
   version follows the lockfile.
 
-## Vendored history note
+## History note
 
-Commit `c0d8676` restructured the two vendored repos into this monorepo as a pure
-`git mv`. Everything since is this fork's own work: NIP-42, Tor/SOCKS5, Orbot,
-event fragmentation, the native Android app, protocol v11 and the Rust bridge.
-`docs/PROTOCOL.md` is the contributor contract; `crates/protocol` and
+Commit `c0d8676` restructured the two upstream repos into this monorepo as a
+pure `git mv`. Everything since is this fork's own work: NIP-42, Tor/SOCKS5,
+Orbot, event fragmentation, the native Android app, protocol v11 and the Rust
+bridge. `docs/PROTOCOL.md` is the contributor contract; `crates/protocol` and
 `crates/agent-protocol` are authoritative where they disagree.

@@ -36,8 +36,8 @@ marmot = [
 # (protocol depends on nothing in this workspace, so a future Rust bridge can
 # consume it too without reorganizing anything here).
 protocol = { path = "../protocol" }
-# NIP-44 v2 + keys, verified against this crate in the F0 uniffi probe.
-# default-features = false keeps the tree tight (see spike/uniffi-binding-probe).
+# NIP-44 v2 + keys. default-features = false keeps the dependency tree tight
+# (it is cross-compiled into the Android .so).
 nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
 thiserror = "1"
 hex = "0.4"

@@ -20,14 +20,14 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  * module" the way `remark-gfm` is a separate plugin on the TS side;
  * `GFMFlavourDescriptor` is `Markdown()`'s own default flavour.
  *
- * `spike/markdown-compose-probe`'s README found tables rendering as stacked
+ * An earlier renderer probe found tables rendering as stacked
  * plain lines and task-list checkboxes as plain bullets at renderer version
  * 0.27 (2024-era), flagging both as needing custom `markdownComponents`
  * work. Re-checked against the actual 0.43.0 source
  * (`markdownComponents()`'s own defaults in `compose/components/
  * MarkdownComponents.kt`) as part of this milestone: `table` now defaults to
  * a real `MarkdownTable` grid and `checkbox` to a real `MarkdownCheckBox` —
- * both gaps the spike found are already closed upstream; no override needed
+ * both gaps that probe found are already closed upstream; no override needed
  * here. This file's own Paparazzi golden (`MarkdownParityTest`) is the
  * guardrail against a future renderer bump silently regressing either one.
  *

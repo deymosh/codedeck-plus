@@ -17,11 +17,10 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * F3.3.2 — reproduces `spike/markdown-compose-probe`'s verdict for real,
- * inside `apps/android` itself, against this project's actual Kotlin 2.4.20/
- * AGP 9.4.0/Compose BOM 2026.09.00 toolchain (the spike ran on an older,
- * throwaway pin). A screenshot regression here is the guardrail the spike's
- * README asked F3 to set up before deleting it.
+ * Pins the Markdown renderer's output (tables, task lists, code blocks) on
+ * this project's actual Kotlin/AGP/Compose toolchain: the library was chosen
+ * on an older pin, and a screenshot regression here is the guardrail that
+ * a renderer or toolchain bump did not quietly break those cases.
  */
 class MarkdownParityTest {
 

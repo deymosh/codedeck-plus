@@ -4,10 +4,9 @@ package com.codedeck.plus.ui.transcript
  * A fixed corpus of the markdown shapes CodeDeck's transcript actually
  * renders, distilled from `apps/mobile/src/ui/transcript/displayEntries.ts`
  * and `rows/Markdown.tsx`'s pipeline (`react-markdown` + `remark-gfm` +
- * `rehype-highlight`). Ported near-verbatim from
- * `spike/markdown-compose-probe/ui/src/main/kotlin/probe/Corpus.kt` — the
- * one place that spike's findings are exercised for real, in the app the
- * verdict was about.
+ * `rehype-highlight`). Carried over near-verbatim from the renderer probe
+ * that chose the Markdown library, so its verdict stays exercised in the
+ * app itself.
  */
 object MarkdownCorpus {
     val ASSISTANT_MARKDOWN = """

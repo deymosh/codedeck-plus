@@ -15,17 +15,15 @@ name = "client_runtime"
 # compiles `MarmotEngineImpl`. Off by default so the pure-logic tests and the
 # byte-identical mobile build stay lean.
 marmot = ["client-core/marmot"]
-# F3: adds `#[derive(uniffi::Enum)]`/`uniffi::Record` alongside the existing
+# Adds `#[derive(uniffi::Enum)]`/`uniffi::Record` alongside the existing
 # `Serialize`/`specta::Type` on the handful of boundary types simple enough to
-# serve Tauri (JSON) and Android (UniFFI) from ONE definition — `CoreEvent`,
-# `SliceId`, `ActionFailed`, `ConnectionView` (see spike/uniffi-binding-probe's
-# verdict: the two derive families compose on the same type with no
-# conflict). `Intent`'s 49 variants are NOT covered here — a `uniffi::Enum`
-# derive is all-or-nothing for the whole enum, and several variants carry
-# `protocol` wire payloads (e.g. `SendSessionImage`) that would need their own
-# derive rollout disproportionate to what F3's first slice actually needs;
-# `crates/client-ffi` instead hand-maps a small, growing `UniffiIntent`
-# subset onto the real `Intent` — a disclosed, deliberate narrowing from "no
+# serve JSON and Android (UniFFI) from ONE definition — `CoreEvent`,
+# `SliceId`, `ActionFailed`, `ConnectionView` (the two derive families
+# compose on the same type with no conflict). `Intent` is NOT covered — a
+# `uniffi::Enum` derive is all-or-nothing for the whole enum, and several
+# variants carry `protocol` wire payloads (e.g. `SendSessionImage`) that
+# would each need their own derive; `crates/client-ffi` instead hand-maps a
+# `UniffiIntent` onto the real `Intent` — a deliberate narrowing from "no
 # DTO duplication", not an oversight. Off by default: derive-only, but still
 # a real optional dependency, unlike the always-on `specta` above.
 uniffi = ["dep:uniffi"]
@@ -47,7 +45,7 @@ specta-typescript = "0.0.12"
 # Derive macros only here (`uniffi::Enum`/`uniffi::Record`) — the
 # `#[uniffi::export(async_runtime = "tokio")]` surface itself lives in
 # `crates/client-ffi`, which pulls in uniffi's "tokio" feature on its own.
-# Version matches spike/uniffi-binding-probe's validated 0.28.
+# Keep the version in step with client-ffi's.
 uniffi = { version = "0.28", optional = true }
 
 # The relay transport (WebSocket + SOCKS5 driver), shared with other runtimes.

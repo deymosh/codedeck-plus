@@ -57,8 +57,9 @@ upstream projects didn't design for:
 - the bridge reaching the network only over **Tor** (SOCKS5)
 - the phone routing through **Orbot** (Android's Tor app)
 
-The original MIT license and attribution are preserved; `vendor/` keeps
-pristine `git subtree` mirrors of both upstreams.
+The original MIT license and attribution are preserved. Upstream is not
+tracked mechanically any more: the protocol and both halves have been
+rewritten, so ideas from upstream are re-implemented here as ordinary changes.
 
 ## Repository layout
 
@@ -78,22 +79,16 @@ codedeck-plus/
 ├── apps/
 │   ├── android/           # the native Android app (Kotlin + the Rust client core)
 │   └── mobile/            # the former Tauri app — frozen (future desktop client)
-├── vendor/              # pristine git-subtree mirrors of upstream — never hand-edited
 ├── docker/              # the bridge image (Dockerfile, entrypoint, helpers)
 ├── deploy/              # systemd unit for the bridge
 ├── docs/                # PROTOCOL.md (contract) · BRIDGE.md (operating it) · OPENCODE.md
-├── scripts/             # sync-upstream.sh, toolchain installer
+├── scripts/             # toolchain installer (Linux), shared shell helpers
 ├── .github/workflows/   # ci.yml · release.yml (tag → release)
 ├── .claude/             # CLAUDE.md + skills for Claude Code
 ├── codedeck             # ./codedeck — bridge / Tor / APK / checks wrapper
 ├── docker-compose.yml
 └── data/                # runtime volume (bridge identity, paired phones, sessions)
 ```
-
-See `scripts/sync-upstream.sh` for how to pull future upstream changes —
-`vendor/*` stays a real `git subtree`, so pulling in new fixes is a real
-`git subtree pull`; porting them into this tree is a deliberate, reviewed
-change.
 
 ## Local patches on top of upstream
 

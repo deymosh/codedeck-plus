@@ -3,9 +3,8 @@
 # the optional Tor daemon, Android APK builds, and workspace checks.
 #
 # Everything here just wraps commands already established elsewhere in the
-# repo (docker compose, apps/android/docker/build-apk.sh,
-# scripts/sync-upstream.sh) — this script adds no new mechanism, only a
-# short memorable surface over them.
+# repo (docker compose, apps/android/docker/build-apk.sh, cargo, pnpm) — this
+# script adds no new mechanism, only a short memorable surface over them.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -51,9 +50,6 @@ Bindings (run in a throwaway Rust container):
                            from crates/client-ffi via uniffi-bindgen
                            (source of truth — see that crate's own doc
                            comment). CI fails if this drifts.
-
-Upstream sync:
-  sync                     Refresh vendor/* from upstream (scripts/sync-upstream.sh)
 
   help                     Show this
 EOF
@@ -231,10 +227,6 @@ run_checks() {
   (check_rust "$1")
 }
 
-cmd_sync() {
-  exec ./scripts/sync-upstream.sh
-}
-
 # --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
 # crates/client-ffi/src/lib.rs's own doc comment — the Kotlin binding
 # surface is a build artifact of `uniffi-bindgen`'s library-mode generation,
@@ -276,7 +268,6 @@ case "${1:-help}" in
   typecheck) run_checks typecheck ;;
   test) run_checks test ;;
   gen-android-bindings) cmd_gen_android_bindings ;;
-  sync) cmd_sync ;;
   help|-h|--help) usage ;;
   *)
     echo "unknown command: $1" >&2
