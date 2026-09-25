@@ -57,6 +57,38 @@ export function registryUrl(env: NodeJS.ProcessEnv = process.env): string {
   return (env.CODEDECK_NPM_REGISTRY?.trim() || DEFAULT_REGISTRY).replace(/\/+$/, '');
 }
 
+/** `<cache>/bin`: a stable name for each installed binary, for people (a
+ *  shell in the container puts it on PATH). */
+export function agentBinDir(cacheDir: string): string {
+  return path.join(cacheDir, 'bin');
+}
+
+/**
+ * `env` with `<cache>/bin` dropped from its PATH, for the drivers' own
+ * lookups. A link there points at whatever version was installed last, so a
+ * driver that found it on PATH would never install the version this build
+ * pins after an upgrade moved the pin; drivers resolve the pinned binary
+ * through installBinary instead.
+ */
+export function withoutAgentBin(env: NodeJS.ProcessEnv, cacheDir: string): NodeJS.ProcessEnv {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+  const value = key ? env[key] : undefined;
+  if (!key || !value) return env;
+  const bin = realPath(agentBinDir(cacheDir));
+  const kept = value.split(path.delimiter).filter((dir) => dir.length > 0 && realPath(dir) !== bin);
+  return { ...env, [key]: kept.join(path.delimiter) };
+}
+
+/** Symlinks resolved when the path exists (the image reaches /data/agents as
+ *  ~/.codedeck/agents), else just made absolute. */
+function realPath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 /** Install `binary` if it is not cached yet, and return its path. */
 export async function installBinary(binary: PackagedBinary, options: InstallOptions): Promise<string> {
   const pin = (options.pins ?? PLATFORM_PACKAGES)[binary.pkg];
@@ -65,7 +97,10 @@ export async function installBinary(binary: PackagedBinary, options: InstallOpti
   const prefix = `${binary.pkg.replace('/', '+')}@`;
   const dir = path.join(options.cacheDir, `${prefix}${pin.version}`);
   const target = path.join(dir, ...binary.file.split('/'));
-  if (isFile(target)) return target;
+  if (isFile(target)) {
+    linkIntoBin(options.cacheDir, target);
+    return target;
+  }
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const tarball = path.join(dir, `.download-${process.pid}.tgz`);
@@ -117,8 +152,33 @@ export async function installBinary(binary: PackagedBinary, options: InstallOpti
   }
 
   pruneOtherVersions(options.cacheDir, prefix, path.basename(dir));
+  linkIntoBin(options.cacheDir, target);
   options.log(`[install] ${binary.label} installed at ${target}`);
   return target;
+}
+
+/** Point `<cache>/bin/<name>` at `target` (replacing a link to an older
+ *  version). Best effort, and skipped on Windows, where creating a symlink
+ *  needs a privilege a normal account lacks. */
+function linkIntoBin(cacheDir: string, target: string): void {
+  if (process.platform === 'win32') return;
+  const bin = agentBinDir(cacheDir);
+  const link = path.join(bin, path.basename(target));
+  const relative = path.relative(bin, target);
+  try {
+    if (fs.readlinkSync(link) === relative) return;
+  } catch {
+    /* no link yet */
+  }
+  const staged = `${link}.tmp-${process.pid}`;
+  try {
+    fs.mkdirSync(bin, { recursive: true });
+    removeQuietly(staged);
+    fs.symlinkSync(relative, staged);
+    fs.renameSync(staged, link);
+  } catch {
+    removeQuietly(staged);
+  }
 }
 
 /** Best-effort cleanup: a leftover must never mask the install's outcome. */

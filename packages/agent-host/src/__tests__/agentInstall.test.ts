@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractFile, installBinary, type PackagedBinary } from '../agentInstall';
+import { extractFile, installBinary, type PackagedBinary, withoutAgentBin } from '../agentInstall';
 
 /** One ustar header + body, padded to 512-byte blocks. */
 function tarEntry(name: string, body: Buffer | string, type = '0'): Buffer {
@@ -129,5 +129,62 @@ describe('installBinary', () => {
   it('reports an HTTP failure', async () => {
     const fetchFn = (async () => new Response('nope', { status: 404 })) as unknown as typeof fetch;
     await expect(installBinary(binary, { cacheDir: cache, pins, log, fetchFn })).rejects.toThrow(/Tool could not be installed: HTTP 404/);
+  });
+});
+
+// Symlinks need a privilege on Windows, so the installer does not make them there.
+describe.skipIf(process.platform === 'win32')('the stable links in <cache>/bin', () => {
+  let cache: string;
+  const log = (): void => {};
+  const binary: PackagedBinary = { pkg: 'tool-linux-x64', file: 'bin/tool', label: 'Tool' };
+  const build = (text: string) => tarball(tarEntry('package/bin/tool', text));
+
+  beforeEach(() => {
+    cache = fs.mkdtempSync(path.join(os.tmpdir(), 'links-'));
+  });
+  afterEach(() => fs.rmSync(cache, { recursive: true, force: true }));
+
+  it('points at the installed version, follows a moved pin, and is restored when missing', async () => {
+    const v1 = build('one');
+    const v2 = build('two');
+    const fetchOf = (tgz: Buffer) => (async () => new Response(tgz)) as unknown as typeof fetch;
+    const link = path.join(cache, 'bin', 'tool');
+
+    await installBinary(binary, { cacheDir: cache, log, fetchFn: fetchOf(v1), pins: { 'tool-linux-x64': { version: '1.0.0', integrity: sha512(v1) } } });
+    expect(fs.readFileSync(link, 'utf8')).toBe('one');
+
+    const pins2 = { 'tool-linux-x64': { version: '2.0.0', integrity: sha512(v2) } };
+    await installBinary(binary, { cacheDir: cache, log, fetchFn: fetchOf(v2), pins: pins2 });
+    expect(fs.readFileSync(link, 'utf8')).toBe('two');
+    expect(fs.readlinkSync(link)).toBe(path.join('..', 'tool-linux-x64@2.0.0', 'bin', 'tool'));
+
+    fs.rmSync(link);
+    await installBinary(binary, { cacheDir: cache, log, pins: pins2 }); // a cache hit: no fetch
+    expect(fs.readFileSync(link, 'utf8')).toBe('two');
+  });
+});
+
+describe('withoutAgentBin', () => {
+  it("drops only <cache>/bin from PATH, keeping the variable's own name", () => {
+    const cache = path.resolve('/srv/agents');
+    const other = path.resolve('/usr/bin');
+    const env = { Path: [other, path.join(cache, 'bin'), `${path.join(cache, 'bin')}${path.sep}`].join(path.delimiter), HOME: '/h' };
+    expect(withoutAgentBin(env, cache)).toEqual({ Path: other, HOME: '/h' });
+    expect(withoutAgentBin({ HOME: '/h' }, cache)).toEqual({ HOME: '/h' });
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('withoutAgentBin through a symlinked home', () => {
+  it('drops <cache>/bin when PATH names it by its real location', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+    try {
+      const data = path.join(root, 'data');
+      fs.mkdirSync(path.join(data, 'agents', 'bin'), { recursive: true });
+      fs.symlinkSync(data, path.join(root, '.codedeck'));
+      const env = { PATH: `/usr/bin:${path.join(data, 'agents', 'bin')}` };
+      expect(withoutAgentBin(env, path.join(root, '.codedeck', 'agents')).PATH).toBe('/usr/bin');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

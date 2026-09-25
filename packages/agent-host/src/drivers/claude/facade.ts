@@ -375,15 +375,15 @@ function toOptionsEffort(effort?: EffortLevel): 'low' | 'medium' | 'high' | 'xhi
  * too, as `claude.exe`). Returns null when nothing is found (the SDK then
  * falls back to the binary its platform package ships).
  */
-export function resolveClaudeExecutable(explicitPath?: string): string | null {
+export function resolveClaudeExecutable(explicitPath?: string, env: NodeJS.ProcessEnv = process.env): string | null {
   if (explicitPath && isFile(explicitPath)) return explicitPath;
 
-  const env = process.env.CODEDECK_CLAUDE_PATH?.trim();
-  if (env && isFile(env)) return env;
+  const fromEnv = env.CODEDECK_CLAUDE_PATH?.trim();
+  if (fromEnv && isFile(fromEnv)) return fromEnv;
 
   const home = os.homedir();
   return (
-    findOnPath('claude') ??
+    findOnPath('claude', env) ??
     findInDirs(
       [
         path.join(home, '.claude', 'local'),
