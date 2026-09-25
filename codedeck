@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # codedeck — one entrypoint for managing this fork: the bridge container,
-# the optional Tor daemon, mobile APK builds, and workspace checks.
+# the optional Tor daemon, Android APK builds, and workspace checks.
 #
 # Everything here just wraps commands already established elsewhere in the
-# repo (docker compose, apps/mobile/docker/build-apk.sh,
-# scripts/sync-upstream.sh) — this script adds no new mechanism, only a
-# short memorable surface over them.
+# repo (docker compose, apps/android/docker/build-apk.sh, cargo, pnpm) — this
+# script adds no new mechanism, only a short memorable surface over them.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -36,19 +35,21 @@ Tor (optional codedeck-tor service, Compose `tor` profile):
                            since Compose profiles apply per `up` invocation)
   tor down                Stop codedeck-tor
 
-Mobile APK (apps/mobile/docker/build-apk.sh — see that file for details):
-  apk debug                Full symbols, ~300MB, Android's own debug keystore
-  apk release              Minified+stripped, UNSIGNED — Android won't install it
-  apk benchmark            Same build as release, but signed so it installs
+Android APK (apps/android/docker/build-apk.sh — see that file for details):
+  apk [--target <triple>]  Debug APK of the native app into dist/ (default:
+                           arm64 device + x86_64 emulator)
 
-Workspace checks (run in a throwaway Node container — nothing installed
+Workspace checks (throwaway Node and Rust containers — nothing installed
 locally is required):
-  check                    typecheck + test, every package
-  typecheck                typecheck only
+  check                    typecheck + test: the agent host and every crate
+  typecheck                typecheck only (agent host + cargo check)
   test                     test only
 
-Upstream sync:
-  sync                     Refresh vendor/* from upstream (scripts/sync-upstream.sh)
+Bindings (run in a throwaway Rust container):
+  gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
+                           from crates/client-ffi via uniffi-bindgen
+                           (source of truth — see that crate's own doc
+                           comment). CI fails if this drifts.
 
   help                     Show this
 EOF
@@ -89,12 +90,13 @@ cmd_bridge() {
       # acquire it, so this reads the QR the running `run` command already
       # printed (it opens a pairing window on its own whenever nothing's
       # paired) rather than trying to trigger a new one.
-      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL:"; then
+      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL"; then
         echo "No pairing QR found in the logs yet. If the window already" >&2
         echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
         exit 1
       fi
-      docker compose logs codedeck-bridge 2>&1 | grep -A 25 "Pairing URL:" | tail -27
+      # The QR is printed just above its URL line.
+      docker compose logs --no-log-prefix codedeck-bridge 2>&1 | grep -B 32 -A 1 "Pairing URL" | tail -34
       ;;
     shell)
       require_running_bridge
@@ -128,55 +130,69 @@ cmd_tor() {
 }
 
 cmd_apk() {
-  case "${1:-}" in
-    debug|release|benchmark)
-      exec ./apps/mobile/docker/build-apk.sh "$1"
-      ;;
-    *)
-      echo "usage: $0 apk {debug|release|benchmark}" >&2
-      exit 1
-      ;;
-  esac
+  # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
+  exec ./apps/android/docker/build-apk.sh "$@"
 }
 
-# --- Workspace checks: run in a throwaway node:22-slim container, same
-# pattern used throughout development here — nothing needs to be installed
-# on the host. `git` is installed on the fly (packages/core's folders.test.ts
-# needs it); the container is removed on exit either way. ---
-run_in_workspace_container() {
-  local name="codedeck-check-$$"
+# shellcheck source=scripts/lib/pack-repo.sh
+. scripts/lib/pack-repo.sh
+
+# Start a throwaway container that is removed when the script exits, whether
+# it succeeds, fails or is interrupted. Extra args go to `docker create`
+# (volumes, limits); MSYS path conversion is off so `-v vol:/path` survives.
+start_throwaway() {
+  local name="$1" image="$2"
+  shift 2
   docker rm -f "$name" >/dev/null 2>&1 || true
-  docker create --name "$name" node:22-slim sleep infinity >/dev/null
+  MSYS_NO_PATHCONV=1 docker create --name "$name" "$@" "$image" sleep infinity >/dev/null
   docker start "$name" >/dev/null
   # Double-quoted so $name is baked in NOW, as a literal — the trap fires
-  # after this function has already returned (local vars gone by then), so a
-  # single-quoted trap referencing $name would fail under `set -u`.
+  # after the calling function has returned (its locals are gone by then), so
+  # a single-quoted trap referencing $name would fail under `set -u`.
   trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
+}
 
-  local tarball
-  tarball="$(mktemp).tar.gz"
-  tar --exclude='.git' --exclude='vendor' --exclude='data' --exclude='dist' \
-      --exclude='node_modules' --exclude='*/node_modules' -czf "$tarball" .
-  docker cp "$tarball" "$name":/repo.tar.gz
-  rm -f "$tarball"
+# Build a small tool image from an inline Dockerfile (no build context).
+# Docker's layer cache makes every run after the first a no-op, so per-run
+# `apt-get install` / `npm install -g` cost is paid once per machine.
+ensure_image() {
+  local tag="$1"
+  shift
+  echo "==> Preparing $tag image (cached after the first run)"
+  docker build -q -t "$tag" "$@" - >/dev/null
+}
 
-  dexec "$name" mkdir -p /app
-  dexec -w /app "$name" tar -xzf /repo.tar.gz
+# --- Workspace checks, in throwaway containers — nothing needs to be
+# installed on the host.
+#
+# TypeScript (the agent host): a Node image with git and the pnpm pinned by
+# package.json's packageManager; downloaded packages persist in the
+# codedeck-pnpm-store volume, so `pnpm install` only fetches what the lockfile
+# changed. Only the pnpm workspace is copied.
+#
+# Rust (every crate): the stock Rust image with clippy; the cargo registry
+# and target dir live in named volumes, so a rerun only recompiles what
+# changed. Only the cargo workspace is copied. ---
+check_typescript() {
+  local name="codedeck-check-$$" pnpm_version
+  pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
+  ensure_image codedeck-check --build-arg "PNPM_VERSION=$pnpm_version" <<'DOCKERFILE'
+FROM node:22-slim
+ARG PNPM_VERSION
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "pnpm@${PNPM_VERSION}"
+ENV npm_config_store_dir=/pnpm-store
+DOCKERFILE
+  start_throwaway "$name" codedeck-check -v codedeck-pnpm-store:/pnpm-store
+
+  pack_repo_into "$name" /app package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json packages
   echo "==> Installing dependencies"
-  dexec -w /app "$name" npm install -g pnpm@10.8.0 >/dev/null
   dexec -w /app "$name" pnpm install --frozen-lockfile
-  if [ "$1" != "typecheck" ]; then
-    echo "==> Installing git (packages/core's folders.test.ts shells out to it)"
-    dexec "$name" bash -c "apt-get update -qq && apt-get install -y -qq git" >/dev/null 2>&1
-  fi
-
   case "$1" in
-    typecheck)
-      dexec -w /app "$name" pnpm -r --no-bail run typecheck
-      ;;
-    test)
-      dexec -w /app "$name" pnpm -r --no-bail run test
-      ;;
+    typecheck) dexec -w /app "$name" pnpm -r --no-bail run typecheck ;;
+    test) dexec -w /app "$name" pnpm -r --no-bail run test ;;
     check)
       dexec -w /app "$name" pnpm -r --no-bail run typecheck
       dexec -w /app "$name" pnpm -r --no-bail run test
@@ -184,18 +200,74 @@ run_in_workspace_container() {
   esac
 }
 
-cmd_sync() {
-  exec ./scripts/sync-upstream.sh
+check_rust() {
+  local name="codedeck-check-rust-$$"
+  ensure_image codedeck-check-rust <<'DOCKERFILE'
+FROM rust:1-bookworm
+RUN rustup component add clippy
+DOCKERFILE
+  start_throwaway "$name" codedeck-check-rust \
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-check-target:/repo/target
+
+  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock
+  case "$1" in
+    typecheck) dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings ;;
+    test) dexec -w /repo "$name" cargo test --locked --workspace ;;
+    check)
+      dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings
+      dexec -w /repo "$name" cargo test --locked --workspace
+      ;;
+  esac
+}
+
+# Each in a subshell: start_throwaway's EXIT trap removes that container.
+run_checks() {
+  (check_typescript "$1")
+  (check_rust "$1")
+}
+
+# --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
+# crates/client-ffi/src/lib.rs's own doc comment — the Kotlin binding
+# surface is a build artifact of `uniffi-bindgen`'s library-mode generation,
+# never hand-edited). Builds the cdylib
+# for the HOST target (the generated Kotlin source is architecture-
+# independent — it only reads the crate's embedded UniFFI metadata, not the
+# target triple), runs the bindgen binary, copies the output back. Does NOT
+# cross-compile the actual .so for an Android ABI — that's a separate,
+# NDK-dependent build step (apps/android's own Gradle Rust task, once it
+# exists), out of scope for a pure Kotlin-source regeneration command. Only
+# the cargo workspace is copied; the cargo registry and target dir are
+# cached volumes. ---
+cmd_gen_android_bindings() {
+  local name="codedeck-gen-android-bindings-$$"
+  start_throwaway "$name" rust:1-bookworm \
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-uniffi-target:/repo/target
+
+  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock
+  echo "==> Building crates/client-ffi (host target)"
+  dexec -w /repo "$name" cargo build --locked -p client-ffi --lib
+  echo "==> Running uniffi-bindgen (Kotlin, library mode)"
+  dexec -w /repo "$name" cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
+    generate --library target/debug/libclient_ffi.so --language kotlin \
+    --out-dir /tmp/uniffi-kotlin-out
+
+  local dest="apps/android/app/src/main/java/uniffi"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  docker cp "$name":/tmp/uniffi-kotlin-out/uniffi/. "$dest"
+  echo "==> Wrote $dest/**"
 }
 
 case "${1:-help}" in
   bridge) shift; cmd_bridge "$@" ;;
   tor) shift; cmd_tor "$@" ;;
   apk) shift; cmd_apk "$@" ;;
-  check) run_in_workspace_container check ;;
-  typecheck) run_in_workspace_container typecheck ;;
-  test) run_in_workspace_container test ;;
-  sync) cmd_sync ;;
+  check) run_checks check ;;
+  typecheck) run_checks typecheck ;;
+  test) run_checks test ;;
+  gen-android-bindings) cmd_gen_android_bindings ;;
   help|-h|--help) usage ;;
   *)
     echo "unknown command: $1" >&2

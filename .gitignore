@@ -8,8 +8,8 @@ pnpm-debug.log*
 .pnpm-store/
 
 # Build outputs
-apps/bridge/out/
 apps/mobile/dist/
+packages/agent-host/dist/
 **/target/
 **/*.tsbuildinfo
 
@@ -22,3 +22,11 @@ apps/mobile/dist/
 # APKs built via apps/mobile/docker/build-apk.sh land here — never commit a
 # built binary.
 /dist/
+# Rust client workspace (migration F1)
+/target
+/crates/**/target
+
+# scripts/install-toolchain.sh's local Android SDK/NDK (Linux host builds,
+# apps/android/scripts/build-apk-local.sh) — project-scoped on purpose, never
+# a system path, so it never collides with another project's SDK/NDK version.
+/toolchain/
