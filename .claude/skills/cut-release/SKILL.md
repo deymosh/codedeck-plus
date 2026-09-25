@@ -104,8 +104,8 @@ Packages write enabled for Actions in repo settings.
    not direct pushes.
 
 8. **Confirm the release** has all its artifacts, each on the `vX.Y.Z`
-   convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz`,
-   `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.gz`,
+   convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.xz`,
+   `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.xz`,
    `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` attached, and the
    `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+ `:latest` for a
    non-prerelease).

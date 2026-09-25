@@ -1,9 +1,11 @@
 # The CodeDeck bridge as a systemd service.
 #
-# Install (from a release archive, codedeck-bridge-vX.Y.Z-linux-<arch>.tar.gz):
+# Install (from a release archive, codedeck-bridge-vX.Y.Z-linux-<arch>.tar.xz):
 #   sudo useradd -r -m -s /usr/sbin/nologin codedeck   # once
 #   sudo mkdir -p /opt/codedeck-bridge
-#   sudo tar -xzf codedeck-bridge-*.tar.gz -C /opt/codedeck-bridge --strip-components=1
+#   sudo tar -xJf codedeck-bridge-*.tar.xz -C /opt/codedeck-bridge --strip-components=1
+# The first session installs Claude Code under CODEDECK_HOME/agents unless
+# a `claude` is on the service's PATH (see docs/BRIDGE.md).
 #   sudo cp codedeck-bridge.service /etc/systemd/system/
 #   sudo mkdir -p /etc/codedeck-bridge && sudo touch /etc/codedeck-bridge/env
 #   sudo systemctl daemon-reload && sudo systemctl enable --now codedeck-bridge

@@ -104,8 +104,9 @@ a driver-protocol type, regenerate the host's types with
   that PR and would only crowd the 10 GB quota).
 - `.github/workflows/release.yml` runs on a `vMAJOR.MINOR.PATCH` tag: it builds
   and publishes one GitHub Release with the signed APK, the bridge for Linux
-  x86_64 and aarch64 and for Windows x86_64 (self-contained archives: binary
-  + agent host + Node),
+  x86_64 and aarch64 and for Windows x86_64 (archives: binary + agent host +
+  Node; the agents' own binaries are installed on demand, pinned to
+  pnpm-lock.yaml's sha512),
   and the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A
   tag with a hyphen (`v1.2.3-rc1`) is a prerelease. See the `cut-release`
   skill.

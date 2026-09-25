@@ -3,8 +3,9 @@ name: Release
 # A single `vMAJOR.MINOR.PATCH` tag publishes ONE GitHub Release carrying every
 # artifact of that version:
 #   - the signed Android APK               (codedeck-vX.Y.Z.apk, the native app in apps/android)
-#   - the bridge for Linux x86_64/aarch64  (codedeck-bridge-vX.Y.Z-linux-<arch>.tar.gz:
-#                                           binary + agent host + Node — nothing to install)
+#   - the bridge for Linux x86_64/aarch64  (codedeck-bridge-vX.Y.Z-linux-<arch>.tar.xz:
+#                                           binary + agent host + Node; the agents'
+#                                           own binaries are installed on demand)
 #   - the bridge for Windows x86_64        (codedeck-bridge-vX.Y.Z-windows-x86_64.zip, the same)
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
@@ -126,15 +127,15 @@ jobs:
             '
           ./target/release/codedeck-bridge version
 
-      # The agent host runs the agent SDKs; the SDK ships the Claude Code
-      # binary for this runner's architecture, so each archive is built on
-      # its own architecture.
+      # The agent host runs the agent SDKs. The Claude Code binary (the SDK's
+      # per-platform package, ~230 MB) is left out: the host installs it on
+      # demand, pinned to the lockfile's sha512, when the machine has none.
       - name: Build and deploy the agent host
         run: |
           pnpm install --frozen-lockfile --filter @codedeck/agent-host...
           pnpm --filter @codedeck/agent-host run build
           pnpm --filter @codedeck/agent-host deploy --prod --legacy "$RUNNER_TEMP/agent-host"
-          rm -rf "$RUNNER_TEMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-*-musl@* \
+          rm -rf "$RUNNER_TEMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@* \
                  "$RUNNER_TEMP"/agent-host/src "$RUNNER_TEMP"/agent-host/tsconfig.json "$RUNNER_TEMP"/agent-host/build.mjs
 
       - name: Package
@@ -162,21 +163,25 @@ jobs:
           "$STAGE/codedeck-bridge" status --home "$RUNNER_TEMP/smoke-home" | tee /tmp/status.txt
           # Not `! grep`: errexit ignores a negated command, so it never fails.
           if grep -q MISSING /tmp/status.txt; then exit 1; fi
-          tar -C "$RUNNER_TEMP" -czf "dist/$NAME.tar.gz" "$NAME"
+          if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
+            echo "::error::an agent platform binary is in the archive" >&2; exit 1
+          fi
+          # xz: about 30% smaller than gzip on these binaries.
+          XZ_OPT='-6 -T0' tar -C "$RUNNER_TEMP" -cJf "dist/$NAME.tar.xz" "$NAME"
           ls -la dist
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bridge-linux-${{ matrix.arch }}
-          path: dist/*.tar.gz
+          path: dist/*.tar.xz
           if-no-files-found: error
           # Only a hand-off to the release job, which attaches the file to
           # the GitHub Release.
           retention-days: 1
 
-  # The same archive for Windows: `codedeck-bridge.exe`, the agent host (its
-  # Claude Code binary is the SDK's win32 package, installed by pnpm for this
-  # runner) and `node.exe`, zipped.
+  # The same archive for Windows: `codedeck-bridge.exe`, the agent host
+  # (without the Claude Code binary, installed on demand as on Linux) and
+  # `node.exe`, zipped.
   bridge-windows:
     name: Bridge — Windows x86_64
     needs: [meta, verify]
@@ -215,7 +220,8 @@ jobs:
           pnpm install --frozen-lockfile --filter @codedeck/agent-host...
           pnpm --filter @codedeck/agent-host run build
           pnpm --filter @codedeck/agent-host deploy --prod --legacy "$TMP/agent-host"
-          rm -rf "$TMP"/agent-host/src "$TMP"/agent-host/tsconfig.json "$TMP"/agent-host/build.mjs
+          rm -rf "$TMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@* \
+                 "$TMP"/agent-host/src "$TMP"/agent-host/tsconfig.json "$TMP"/agent-host/build.mjs
 
       - name: Package
         run: |
@@ -237,6 +243,9 @@ jobs:
           "$STAGE/codedeck-bridge.exe" version
           "$STAGE/codedeck-bridge.exe" status --home "$TMP/smoke-home" | tee "$TMP/status.txt"
           if grep -q MISSING "$TMP/status.txt"; then exit 1; fi
+          if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
+            echo "::error::an agent platform binary is in the archive" >&2; exit 1
+          fi
           (cd "$TMP" && 7z a -tzip "$GITHUB_WORKSPACE/dist/$NAME.zip" "$NAME" >/dev/null)
           ls -la dist
 
@@ -441,13 +450,15 @@ jobs:
             | Component | File |
             |---|---|
             | Android app (signed, aarch64) | `codedeck-${{ needs.meta.outputs.version }}.apk` |
-            | Bridge for Linux x86_64 (binary + agent host + Node, self-contained) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` |
-            | Bridge for Linux aarch64 (binary + agent host + Node, self-contained) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz` |
-            | Bridge for Windows x86_64 (binary + agent host + Node, self-contained) | `codedeck-bridge-${{ needs.meta.outputs.version }}-windows-x86_64.zip` |
-            | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
+            | Bridge for Linux x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.xz` |
+            | Bridge for Linux aarch64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.xz` |
+            | Bridge for Windows x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-windows-x86_64.zip` |
+            | Bridge image (agents included) | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
+
+            The archives install Claude Code (and OpenCode, with auto-start on) on first use when the machine has none; see docs/BRIDGE.md.
 
             Auto-generated changelog below.
           files: |
             dist/*.apk
-            dist/*.tar.gz
+            dist/*.tar.xz
             dist/*.zip

@@ -64,8 +64,10 @@ RUN --mount=type=cache,id=codedeck-pnpm-store,target=/root/.local/share/pnpm/sto
 
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS opencode
-# Keep in step with the @opencode-ai/sdk version in pnpm-lock.yaml — the
-# agent host speaks that SDK's HTTP API to this binary.
+# Keep in step with the `@opencode-ai/sdk` version in pnpm-lock.yaml — the
+# agent host speaks that SDK's HTTP API to this binary — and with the agent
+# host's `opencode-ai` dev dependency, which pins the build the release
+# archives install on demand.
 ARG OPENCODE_VERSION=1.18.32
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
     && cp -L "$(readlink -f /usr/local/bin/opencode)" /opencode \
