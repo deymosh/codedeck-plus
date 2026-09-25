@@ -175,6 +175,7 @@ jobs:
           if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
             echo "::error::an agent platform binary is in the archive" >&2; exit 1
           fi
+          scripts/release/smoke-agent-host.sh "$STAGE/node" "$STAGE/agent-host/dist/main.js"
           # xz: about 30% smaller than gzip on these binaries.
           XZ_OPT='-6 -T0' tar -C "$RUNNER_TEMP" -cJf "dist/$NAME.tar.xz" "$NAME"
           ls -la dist
@@ -228,9 +229,16 @@ jobs:
           TMP="$(cygpath -u "$RUNNER_TEMP")"
           pnpm install --frozen-lockfile --filter @codedeck/agent-host...
           pnpm --filter @codedeck/agent-host run build
-          pnpm --filter @codedeck/agent-host deploy --prod --legacy "$TMP/agent-host"
-          rm -rf "$TMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@* \
+          # Hoisted: a flat node_modules of real directories. pnpm's default
+          # layout is made of junctions on Windows, which 7-Zip cannot follow
+          # into a zip. .bin holds only CLI launchers nothing here runs.
+          pnpm --filter @codedeck/agent-host deploy --prod --legacy --config.node-linker=hoisted "$TMP/agent-host"
+          rm -rf "$TMP"/agent-host/node_modules/@anthropic-ai/claude-agent-sdk-* \
+                 "$TMP"/agent-host/node_modules/.bin \
                  "$TMP"/agent-host/src "$TMP"/agent-host/tsconfig.json "$TMP"/agent-host/build.mjs
+          if find "$TMP/agent-host" -type l | grep -q .; then
+            echo "::error::the deployed agent host still contains links" >&2; exit 1
+          fi
 
       - name: Package
         run: |
@@ -255,6 +263,7 @@ jobs:
           if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
             echo "::error::an agent platform binary is in the archive" >&2; exit 1
           fi
+          scripts/release/smoke-agent-host.sh "$STAGE/node.exe" "$STAGE/agent-host/dist/main.js"
           (cd "$TMP" && 7z a -tzip "$GITHUB_WORKSPACE/dist/$NAME.zip" "$NAME" >/dev/null)
           ls -la dist
 
