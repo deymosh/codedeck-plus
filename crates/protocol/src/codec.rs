@@ -14,14 +14,30 @@ pub type DecodeResult<T> = Result<T, String>;
 
 fn decode<T: DeserializeOwned>(json: &str) -> DecodeResult<T> {
     let raw: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("invalid JSON: {e}"))?;
+        serde_json::from_str(json).map_err(|e| format!("invalid JSON: {}", loggable(&e.to_string(), 200)))?;
     serde_json::from_value::<T>(raw.clone()).map_err(|e| {
         let ty = raw
             .get("type")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("<missing>");
-        format!("schema mismatch for type \"{ty}\": {e}")
+        format!("schema mismatch for type \"{}\": {}", loggable(ty, 64), loggable(&e.to_string(), 200))
     })
+}
+
+/// The error text quotes the sender's own bytes (its `type`, and serde
+/// echoes unknown variants and field names), and callers log it: control
+/// characters are escaped so a payload cannot forge log lines or terminal
+/// escapes, and the length is capped.
+fn loggable(text: &str, max_chars: usize) -> String {
+    let mut out: String = text
+        .chars()
+        .take(max_chars)
+        .flat_map(|c| if c.is_control() { c.escape_debug().collect::<Vec<_>>() } else { vec![c] })
+        .collect();
+    if text.chars().nth(max_chars).is_some() {
+        out.push('…');
+    }
+    out
 }
 
 /// Bridge-side ingest: decode a message sent by a phone.
@@ -77,6 +93,18 @@ mod tests {
 
         let unknown = decode_phone_to_bridge(r#"{"type":"teleport"}"#);
         assert!(unknown.unwrap_err().contains(r#"type "teleport""#));
+    }
+
+    #[test]
+    fn decode_errors_escape_and_cap_the_senders_bytes() {
+        let forged = json!({"type":"x\n[Engine] Paired phone attacker\u{1b}[2J"}).to_string();
+        let err = decode_phone_to_bridge(&forged).unwrap_err();
+        assert!(!err.chars().any(char::is_control), "{err:?}");
+        assert!(err.contains(r"x\n[Engine]"), "{err}");
+
+        let long = json!({"type": "t".repeat(10_000)}).to_string();
+        let err = decode_phone_to_bridge(&long).unwrap_err();
+        assert!(err.len() < 600, "{} bytes", err.len());
     }
 
     #[test]

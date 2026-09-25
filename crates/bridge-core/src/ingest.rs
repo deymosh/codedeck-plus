@@ -121,7 +121,9 @@ impl Ingest {
         }
         match protocol::decode_phone_to_bridge(&plaintext) {
             Ok(PhoneToBridge::PairRequest(msg)) => {
-                log::info!("[Ingest] Valid pair-request from \"{}\" ({}...)", msg.label, short(&event.pubkey));
+                // The label is unverified sender input (the token is checked
+                // later): Debug-quoted, so it cannot inject log lines.
+                log::info!("[Ingest] Valid pair-request from {:?} ({}...)", msg.label, short(&event.pubkey));
                 Some(msg)
             }
             _ => None,
