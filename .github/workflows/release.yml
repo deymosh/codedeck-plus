@@ -79,11 +79,59 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # The whole CI suite on the tagged commit, path filters off. Nothing is
-  # built — let alone published — unless it passes: a tag on a broken
-  # commit fails here instead of shipping.
+  # Whether this exact commit already passed CI: a ci.yml run for it in which
+  # every test job RAN and passed. A green run is not enough on its own —
+  # ci.yml is path-filtered, so a run can be green with a job skipped while
+  # an earlier commit left that area broken. ci.yml's packaging job is not
+  # required: this workflow builds the image and smoke-tests every archive
+  # itself. Any doubt (no such run, an API error, a renamed job) means the
+  # full suite runs.
+  prior-ci:
+    name: Prior CI on this commit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      verified: ${{ steps.check.outputs.verified }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          REQUIRED=(
+            "cargo test + clippy, driver protocol, bridge end to end"
+            "agent host — typecheck + test + build"
+            "Android (Gradle + Paparazzi + UniFFI bindings)"
+            "bridge on Windows"
+          )
+          verified=false
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=20" \
+                   --jq '.workflow_runs[].id' || true)
+          for run in $runs; do
+            passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" \
+                       --jq '[.jobs[] | select(.conclusion == "success") | .name]' || echo '[]')
+            ok=true
+            for job in "${REQUIRED[@]}"; do
+              jq -e --arg j "$job" 'index($j) != null' <<<"$passed" >/dev/null || { ok=false; break; }
+            done
+            if $ok; then
+              verified=true
+              echo "CI run $run already ran and passed every test job on $GITHUB_SHA; not repeating it."
+              break
+            fi
+          done
+          [ "$verified" = true ] || echo "No complete CI run on $GITHUB_SHA: the full suite runs."
+          echo "verified=$verified" >> "$GITHUB_OUTPUT"
+
+  # The whole CI suite on the tagged commit, path filters off, unless
+  # prior-ci found it already done. Nothing is built — let alone published —
+  # unless it passes: a tag on a broken commit fails here instead of
+  # shipping.
   verify:
     name: Verify (full CI)
+    needs: prior-ci
+    if: ${{ !cancelled() && needs.prior-ci.outputs.verified != 'true' }}
     uses: ./.github/workflows/ci.yml
     with:
       full: true
@@ -91,6 +139,8 @@ jobs:
   bridge-binary:
     name: Bridge — Linux ${{ matrix.arch }}
     needs: [meta, verify]
+    # verify is skipped when prior-ci found the commit already verified.
+    if: ${{ !cancelled() && needs.meta.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.verify.result) }}
     strategy:
       matrix:
         include:
@@ -195,6 +245,8 @@ jobs:
   bridge-windows:
     name: Bridge — Windows x86_64
     needs: [meta, verify]
+    # verify is skipped when prior-ci found the commit already verified.
+    if: ${{ !cancelled() && needs.meta.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.verify.result) }}
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -277,6 +329,8 @@ jobs:
   bridge-image:
     name: Bridge — container image
     needs: [meta, verify]
+    # verify is skipped when prior-ci found the commit already verified.
+    if: ${{ !cancelled() && needs.meta.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.verify.result) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -327,6 +381,8 @@ jobs:
   android-apk:
     name: Android — signed release APK
     needs: [meta, verify]
+    # verify is skipped when prior-ci found the commit already verified.
+    if: ${{ !cancelled() && needs.meta.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.verify.result) }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -435,7 +491,12 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [meta, bridge-binary, bridge-windows, bridge-image, android-apk]
-    if: needs.meta.outputs.publish == 'true'
+    # Every artifact built, spelled out: with verify possibly skipped, the
+    # implicit "all dependencies succeeded" check cannot be relied on.
+    if: >-
+      ${{ !cancelled() && needs.meta.outputs.publish == 'true'
+          && needs.bridge-binary.result == 'success' && needs.bridge-windows.result == 'success'
+          && needs.bridge-image.result == 'success' && needs.android-apk.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -96,9 +96,14 @@ Packages write enabled for Actions in repo settings.
    ```
 
 7. **Watch the run:** `gh run watch` (or `gh run list --workflow=release.yml`).
-   Jobs: `meta` → `verify` (the full CI) → (`bridge-binary` (x86_64 +
-   aarch64), `bridge-windows`, `bridge-image`, `android-apk` in parallel) →
-   `release`. The `release` job creates the GitHub
+   Jobs: `meta` → `prior-ci` → `verify` (the full CI) → (`bridge-binary`
+   (x86_64 + aarch64), `bridge-windows`, `bridge-image`, `android-apk` in
+   parallel) → `release`. `verify` is skipped when `prior-ci` finds a `ci.yml`
+   run on the tagged commit in which all four test jobs (Rust + e2e, agent
+   host, Android, Windows) ran and passed — which the version-bump commit's
+   own CI on `master` normally is, since it touches all four areas. So tag
+   only after that `master` run is green, and the release saves the ~10
+   minute re-run; otherwise it simply runs the full suite. The `release` job creates the GitHub
    Release with `generate_release_notes: true`, so the changelog is the
    merged-PR list since the previous tag — another reason to land work as PRs,
    not direct pushes.
