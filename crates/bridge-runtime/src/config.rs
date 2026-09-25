@@ -119,7 +119,7 @@ pub fn home_dir(flags: &Flags) -> PathBuf {
         .unwrap_or_else(|| user_home().join(".codedeck"))
 }
 
-fn user_home() -> PathBuf {
+pub fn user_home() -> PathBuf {
     env("HOME").or_else(|| env("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 

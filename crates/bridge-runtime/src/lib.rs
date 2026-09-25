@@ -7,7 +7,11 @@
 //! what happened.
 
 pub mod config;
+pub mod devices;
+pub mod gsd;
 pub mod host;
+pub mod images;
+pub mod mesh;
 pub mod qr;
 pub mod relay;
 pub mod runtime;
