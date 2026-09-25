@@ -26,9 +26,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.client_ffi.persistedRelays
 import uniffi.client_ffi.persistedTorProxyEnabled
 
@@ -68,24 +71,36 @@ class StayConnectedService : Service() {
      *  state; cancelled in [onDestroy] with the rest of the teardown. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    lateinit var core: CoreHost
-        private set
+    /**
+     * The process's one [CoreHost]; `null` until it has opened. Opening
+     * hydrates from the local database and can take seconds, so it runs off
+     * the main thread: blocking [onCreate] on it would hold up the
+     * `startForeground` the platform requires within ~5 s of
+     * `startForegroundService` (a crash) and freeze the main thread (an ANR).
+     */
+    private val _core = MutableStateFlow<CoreHost?>(null)
+    val core: StateFlow<CoreHost?> = _core.asStateFlow()
+
+    /** Guards [destroyed] against the core finishing its open concurrently
+     *  with [onDestroy], so a core that opens late is still stopped. */
+    private val coreLock = Any()
+    private var destroyed = false
 
     private var connectivity: Connectivity? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
     /** Latest summary for the notification; written by the collector in
-     *  [onCreate], read whenever the notification is (re)built. */
+     *  [observe], read whenever the notification is (re)built. */
     @Volatile
     private var status = stayConnectedStatus(0, emptyList(), null, 0, 0)
 
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
-            if (::core.isInitialized) core.resume()
+            _core.value?.resume()
         }
         override fun onStop(owner: LifecycleOwner) {
-            if (::core.isInitialized) core.pause()
+            _core.value?.pause()
         }
     }
 
@@ -97,6 +112,29 @@ class StayConnectedService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        connectivity = Connectivity(applicationContext)
+        scope.launch(Dispatchers.IO) {
+            val core = openCore()
+            val keep = synchronized(coreLock) {
+                if (!destroyed) _core.value = core
+                !destroyed
+            }
+            if (!keep) {
+                core.stop()
+                return@launch
+            }
+            core.start()
+            // Registered only now: adding the observer replays the current
+            // app visibility at once, which must reach a started core.
+            withContext(Dispatchers.Main) {
+                ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+            }
+            observe(core)
+        }
+    }
+
+    /** Blocking: reads the persisted settings and opens the core. */
+    private fun openCore(): CoreHost {
         val identitySecretHex = readOrCreateIdentitySecretHex(applicationContext)
         val notifier = Notifier(applicationContext)
         // `Core::spawn` dials its WebSocket transport from the constructor's
@@ -111,7 +149,7 @@ class StayConnectedService : Service() {
         val dbPath = applicationContext.getDatabasePath("codedeck.db").absolutePath
         val relays = persistedRelays(dbPath)
         val torProxyEnabled = persistedTorProxyEnabled(dbPath)
-        core = CoreHost(
+        return CoreHost(
             relays = relays,
             identitySecretHex = identitySecretHex,
             notifier = notifier,
@@ -122,9 +160,9 @@ class StayConnectedService : Service() {
             proxy = "127.0.0.1:9050",
             tor = torProxyEnabled,
         )
-        core.start()
-        connectivity = Connectivity(applicationContext)
-        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+    }
+
+    private fun observe(core: CoreHost) {
         // The stay-connected setting drives THIS service's foreground state —
         // the settings screen only flips the stored value. Collecting here is
         // mobile's attach-reconcile too: the StateFlow replays the persisted
@@ -166,7 +204,7 @@ class StayConnectedService : Service() {
             // foreground notifications since Android 14). The service kept
             // running; put the notification back while staying connected is
             // on, so the always-on connection stays visible and controllable.
-            if (core.settings.value?.stayConnected != false) repostNotification()
+            if (_core.value?.settings?.value?.stayConnected != false) repostNotification()
             return START_STICKY
         }
         // MainActivity launches this service via startForegroundService, which
@@ -184,7 +222,7 @@ class StayConnectedService : Service() {
             // the core still runs unforegrounded until the OS allows a retry.
             stopSelf()
         }
-        if (core.settings.value?.stayConnected == false) demote()
+        if (_core.value?.settings?.value?.stayConnected == false) demote()
         return START_STICKY
     }
 
@@ -201,7 +239,11 @@ class StayConnectedService : Service() {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         connectivity?.close()
         releaseLocks()
-        if (::core.isInitialized) core.stop()
+        // A core still opening is stopped by the opener once it sees this.
+        synchronized(coreLock) {
+            destroyed = true
+            _core.value
+        }?.stop()
         foreground.value = null
         super.onDestroy()
     }

@@ -253,6 +253,8 @@ impl Core {
     /// Builds the identity, spawns the dedicated core thread, and blocks
     /// (this call is sync — Kotlin sees a plain constructor, not a suspend
     /// fun) until the real `client_runtime::Core` has hydrated and is ready.
+    /// Hydration reads the whole local database, so this can take seconds on
+    /// a slow device: never call it on a UI or service main thread.
     #[uniffi::constructor]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -321,6 +323,7 @@ impl Core {
                     };
                     let core = RealCore::spawn(config, ports, observer, clock, entropy).await;
                     log::info!("core thread: RealCore::spawn ready");
+                    let watched = core.clone();
                     let _ = ready_tx.send(Ok(core));
                     // Keep the LocalSet alive (drives the loop/timers/socket
                     // tasks) until `Core::stop()` fires the shutdown signal —
@@ -332,8 +335,20 @@ impl Core {
                     // caller that unexpectedly drops its `Arc<Core>` (see the
                     // `Drop` impl above) or ever adds an unwanted early
                     // `Core::stop()` shows up here.
-                    let shutdown_result = shutdown_rx.await;
-                    log::warn!("core thread: shutdown_rx resolved ({shutdown_result:?}) — LocalSet exiting, core is now dead");
+                    tokio::select! {
+                        shutdown_result = shutdown_rx => {
+                            log::warn!("core thread: shutdown_rx resolved ({shutdown_result:?}) — LocalSet exiting, core is now dead");
+                        }
+                        // The event loop panicked. Carrying on would leave
+                        // the app on a plausible but frozen UI (every view
+                        // query answers empty, no relay traffic) with
+                        // nothing telling the user; aborting lets the OS
+                        // restart the process onto a freshly hydrated core.
+                        () = watched.closed() => {
+                            log::error!("core thread: the core event loop died (panic) — aborting the process");
+                            std::process::abort();
+                        }
+                    }
                 })
             })
             .map_err(|e| CoreInitError::ThreadSpawn { detail: e.to_string() })?;

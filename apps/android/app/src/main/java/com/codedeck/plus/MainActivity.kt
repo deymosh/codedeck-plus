@@ -29,14 +29,19 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.lifecycleScope
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.OpenSessionRequest
 import com.codedeck.plus.ui.Shell
 import com.codedeck.plus.ui.theme.CodeDeckTheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * Holds the [CoreHost] reference handed back once [MainActivity] binds to
@@ -78,12 +83,21 @@ class MainActivity : ComponentActivity() {
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op either way — Notifier.notify() re-checks itself before every post */ }
 
+    /** Waits for the bound service's core to finish opening (the spinner
+     *  shows meanwhile); cancelled with the binding. */
+    private var attachJob: Job? = null
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val service = (binder as? StayConnectedService.LocalBinder)?.getService() ?: return
-            viewModel.attach(service.core)
+            attachJob?.cancel()
+            attachJob = lifecycleScope.launch {
+                viewModel.attach(service.core.filterNotNull().first())
+            }
         }
-        override fun onServiceDisconnected(name: ComponentName?) {}
+        override fun onServiceDisconnected(name: ComponentName?) {
+            attachJob?.cancel()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,6 +165,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        attachJob?.cancel()
         unbindService(connection)
         super.onStop()
     }

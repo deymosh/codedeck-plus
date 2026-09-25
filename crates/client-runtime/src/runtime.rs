@@ -375,6 +375,14 @@ impl Core {
         Self { tx }
     }
 
+    /// Resolves when the event loop has ended. The loop holds senders to
+    /// itself, so it never ends on its own: this resolving means the loop
+    /// task panicked, and every later call on this handle is a silent no-op.
+    /// A host watches it to fail loudly instead of rendering a dead core.
+    pub async fn closed(&self) {
+        self.tx.closed().await;
+    }
+
     pub fn start(&self) {
         let _ = self.tx.send(Msg::Start);
     }
