@@ -139,7 +139,7 @@ if [ -n "$GIT_REPO" ]; then
   done
 fi
 
-# Start CodeDeck from the shared root so its default process.cwd() workspace
+# Start CodeDeck from the shared root so its default working-directory workspace
 # includes configured repositories, repositories cloned later by Claude, and
 # local folders created under /data/workspaces.
 mkdir -p "/data/workspaces"
@@ -147,4 +147,4 @@ cd "/data/workspaces"
 
 # 5. Start the CodeDeck bridge
 echo "Starting CodeDeck bridge..."
-exec node /app/main.js run
+exec /app/codedeck-bridge run

@@ -1,0 +1,51 @@
+[package]
+name = "bridge-runtime"
+description = "CodeDeck+ bridge binary (codedeck-bridge): relays, the agent host process, storage and the CLI around the bridge-core engine."
+edition.workspace = true
+# std's file locks (bridge.lock) need 1.89.
+rust-version = "1.89"
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "codedeck-bridge"
+path = "src/main.rs"
+
+[lib]
+name = "bridge_runtime"
+
+[dependencies]
+bridge-core = { path = "../bridge-core" }
+protocol = { path = "../protocol" }
+agent-protocol = { path = "../agent-protocol" }
+nostr-transport = { path = "../nostr-transport" }
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "process", "signal", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive", "env"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+hex = "0.4"
+# HTTP for the few non-relay calls (provider token checks, pubkey
+# registration, image downloads). rustls on ring, matching the relay
+# transport. Never routed through the Tor proxy: that is for relay traffic.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+qrcode = { version = "0.14", default-features = false }
+# Image uploads: AES-256-GCM blobs, sha256 ids, base64 chunks; device
+# screenshots are downscaled PNGs.
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+# The phone side of the end-to-end test, and the loopback relay it runs.
+client-runtime = { path = "../client-runtime" }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
