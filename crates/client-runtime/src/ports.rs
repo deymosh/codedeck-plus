@@ -197,6 +197,168 @@ impl TranscriptStore for MemoryTranscriptStore {
     }
 }
 
+/// A [`TranscriptStore`] that keeps the rows of the most recently read session
+/// in memory. The transcript view re-reads a session's rows `1..=high` after
+/// every append; with this in front, that costs a store read of only the rows
+/// past the cached `high`, instead of the whole session each time (SQLite on
+/// device, on the core's single event-loop thread).
+///
+/// The cache is exact, not a guess: it holds every stored row of its session
+/// with `seq <= high`, because every write goes through this wrapper and is
+/// mirrored (an insert below `high` — a gap refill — is added, a removal
+/// drops the cache). Whenever an async completion finds that the cache moved
+/// on underneath it, it drops the cache rather than reason about the
+/// interleaving; the next read rebuilds it. It must therefore be the only
+/// writer of the inner store.
+pub struct CachedTranscriptStore {
+    inner: Rc<dyn TranscriptStore>,
+    cache: RefCell<Option<CachedSession>>,
+    /// Bumped on every cache change, so a completion can tell whether the
+    /// cache it started from is still the current one.
+    generation: std::cell::Cell<u64>,
+}
+
+struct CachedSession {
+    machine: String,
+    session: String,
+    high: u64,
+    rows: BTreeMap<u64, serde_json::Value>,
+}
+
+impl CachedSession {
+    fn is(&self, machine: &str, session: &str) -> bool {
+        self.machine == machine && self.session == session
+    }
+
+    fn rows(&self, from: u64, to: u64) -> Vec<TranscriptRow> {
+        self.rows
+            .range(from..=to)
+            .map(|(seq, entry)| TranscriptRow { seq: *seq, entry: entry.clone() })
+            .collect()
+    }
+}
+
+impl CachedTranscriptStore {
+    pub fn new(inner: Rc<dyn TranscriptStore>) -> Self {
+        Self { inner, cache: RefCell::new(None), generation: std::cell::Cell::new(0) }
+    }
+
+    fn set_cache(&self, cache: Option<CachedSession>) {
+        *self.cache.borrow_mut() = cache;
+        self.bump();
+    }
+
+    fn bump(&self) {
+        self.generation.set(self.generation.get() + 1);
+    }
+
+    fn caches(&self, machine: &str, session: &str) -> bool {
+        self.cache.borrow().as_ref().is_some_and(|c| c.is(machine, session))
+    }
+}
+
+impl TranscriptStore for CachedTranscriptStore {
+    fn insert_ignore(
+        &self,
+        machine: &str,
+        session: &str,
+        rows: &[TranscriptRow],
+    ) -> LocalBoxFuture<'_, Vec<u64>> {
+        let started = self.generation.get();
+        let key = (machine.to_string(), session.to_string());
+        // Only rows of the cached session can matter to the cache.
+        let mirror: Option<Vec<TranscriptRow>> = self.caches(machine, session).then(|| rows.to_vec());
+        let insert = self.inner.insert_ignore(machine, session, rows);
+        Box::pin(async move {
+            let inserted = insert.await;
+            if !self.caches(&key.0, &key.1) {
+                return inserted;
+            }
+            let Some(mirror) = mirror.filter(|_| self.generation.get() == started) else {
+                // The cache covering this session was (re)built while this
+                // insert was in flight: it may or may not hold the rows.
+                self.set_cache(None);
+                return inserted;
+            };
+            if let Some(cache) = self.cache.borrow_mut().as_mut() {
+                for row in mirror {
+                    if row.seq <= cache.high && inserted.contains(&row.seq) {
+                        cache.rows.insert(row.seq, row.entry);
+                    }
+                }
+            }
+            self.bump();
+            inserted
+        })
+    }
+
+    fn seqs(&self, machine: &str, session: &str) -> LocalBoxFuture<'_, Vec<u64>> {
+        self.inner.seqs(machine, session)
+    }
+
+    fn read_range(
+        &self,
+        machine: &str,
+        session: &str,
+        from: u64,
+        to: u64,
+    ) -> LocalBoxFuture<'_, Vec<TranscriptRow>> {
+        let (cached, high) = match self.cache.borrow().as_ref() {
+            Some(c) if c.is(machine, session) => {
+                if to <= c.high {
+                    let rows = c.rows(from, to);
+                    return Box::pin(async move { rows });
+                }
+                (Some(c.rows(from, c.high)), c.high)
+            }
+            _ => (None, 0),
+        };
+        // Only a read from the start can (re)build the cache: the cache must
+        // hold every row up to its `high`.
+        if cached.is_none() && from != 1 {
+            return self.inner.read_range(machine, session, from, to);
+        }
+        let started = self.generation.get();
+        let key = (machine.to_string(), session.to_string());
+        let fetch_from = if cached.is_some() { high + 1 } else { 1 };
+        let fetch = self.inner.read_range(machine, session, fetch_from.max(from), to);
+        Box::pin(async move {
+            let fetched = fetch.await;
+            // `from > high + 1` skips rows the cache would need, so such a
+            // read never extends it.
+            let may_cache = self.generation.get() == started && from <= fetch_from;
+            let mut rows = cached.unwrap_or_default();
+            if may_cache {
+                let mut slot = self.cache.borrow_mut();
+                if !slot.as_ref().is_some_and(|c| c.is(&key.0, &key.1)) {
+                    *slot = Some(CachedSession {
+                        machine: key.0,
+                        session: key.1,
+                        high: 0,
+                        rows: BTreeMap::new(),
+                    });
+                }
+                let cache = slot.as_mut().expect("set just above");
+                for row in &fetched {
+                    cache.rows.insert(row.seq, row.entry.clone());
+                }
+                cache.high = to;
+                drop(slot);
+                self.bump();
+            }
+            rows.extend(fetched);
+            rows
+        })
+    }
+
+    fn remove(&self, machine: &str, session: &str) -> LocalBoxFuture<'_, ()> {
+        if self.caches(machine, session) {
+            self.set_cache(None);
+        }
+        self.inner.remove(machine, session)
+    }
+}
+
 // --- Notifier ---------------------------------------------------------------
 
 /// OS-notification delivery. The core decides WHEN to notify
@@ -275,6 +437,95 @@ mod tests {
         reboot.delete("a").await;
         assert_eq!(kv.get("a").await, None);
         assert_eq!(kv.dump(), BTreeMap::from([("b".to_string(), "2".to_string())]));
+    }
+
+    /// A [`MemoryTranscriptStore`] that logs every `read_range` it serves.
+    #[derive(Default, Clone)]
+    struct CountingStore {
+        inner: MemoryTranscriptStore,
+        reads: Rc<RefCell<Vec<(String, u64, u64)>>>,
+    }
+
+    impl TranscriptStore for CountingStore {
+        fn insert_ignore(&self, m: &str, s: &str, rows: &[TranscriptRow]) -> LocalBoxFuture<'_, Vec<u64>> {
+            self.inner.insert_ignore(m, s, rows)
+        }
+        fn seqs(&self, m: &str, s: &str) -> LocalBoxFuture<'_, Vec<u64>> {
+            self.inner.seqs(m, s)
+        }
+        fn read_range(&self, m: &str, s: &str, from: u64, to: u64) -> LocalBoxFuture<'_, Vec<TranscriptRow>> {
+            self.reads.borrow_mut().push((s.to_string(), from, to));
+            self.inner.read_range(m, s, from, to)
+        }
+        fn remove(&self, m: &str, s: &str) -> LocalBoxFuture<'_, ()> {
+            self.inner.remove(m, s)
+        }
+    }
+
+    fn rows(seqs: &[u64]) -> Vec<TranscriptRow> {
+        seqs.iter().map(|s| TranscriptRow { seq: *s, entry: json!({ "seq": s }) }).collect()
+    }
+
+    fn seqs_of(rows: &[TranscriptRow]) -> Vec<u64> {
+        rows.iter().map(|r| r.seq).collect()
+    }
+
+    #[tokio::test]
+    async fn the_cached_store_reads_only_new_rows_after_an_append() {
+        let inner = CountingStore::default();
+        let store = CachedTranscriptStore::new(Rc::new(inner.clone()));
+        store.insert_ignore("m", "s", &rows(&[1, 2, 3])).await;
+        assert_eq!(seqs_of(&store.read_range("m", "s", 1, 3).await), vec![1, 2, 3]);
+
+        store.insert_ignore("m", "s", &rows(&[4])).await;
+        assert_eq!(seqs_of(&store.read_range("m", "s", 1, 4).await), vec![1, 2, 3, 4]);
+        // Unchanged: served from memory entirely.
+        assert_eq!(seqs_of(&store.read_range("m", "s", 1, 4).await), vec![1, 2, 3, 4]);
+        assert_eq!(seqs_of(&store.read_range("m", "s", 2, 3).await), vec![2, 3]);
+
+        assert_eq!(*inner.reads.borrow(), vec![("s".into(), 1, 3), ("s".into(), 4, 4)]);
+    }
+
+    #[tokio::test]
+    async fn the_cached_store_mirrors_gap_refills_and_removals() {
+        let inner = CountingStore::default();
+        let store = CachedTranscriptStore::new(Rc::new(inner.clone()));
+        store.insert_ignore("m", "s", &rows(&[1, 3])).await;
+        assert_eq!(seqs_of(&store.read_range("m", "s", 1, 3).await), vec![1, 3]);
+
+        // A sync chunk fills the gap below the cached high.
+        assert_eq!(store.insert_ignore("m", "s", &rows(&[2, 3])).await, vec![2]);
+        assert_eq!(seqs_of(&store.read_range("m", "s", 1, 3).await), vec![1, 2, 3]);
+        assert_eq!(inner.reads.borrow().len(), 1, "the refill was mirrored, not re-read");
+
+        store.remove("m", "s").await;
+        assert!(store.read_range("m", "s", 1, 3).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_cached_store_answers_exactly_like_the_store_it_wraps() {
+        let plain = MemoryTranscriptStore::new();
+        let cached = CachedTranscriptStore::new(Rc::new(MemoryTranscriptStore::new()));
+        // Two sessions interleaved, out-of-order arrivals, partial reads.
+        let script: &[(&str, &[u64], u64, u64)] = &[
+            ("a", &[1, 2], 1, 2),
+            ("a", &[5], 1, 5),
+            ("b", &[1], 1, 1),
+            ("a", &[3, 4], 1, 5),
+            ("a", &[6], 3, 6),
+            ("b", &[2, 3], 2, 3),
+            ("a", &[7], 1, 7),
+            ("a", &[], 1, 9),
+        ];
+        for (session, seqs, from, to) in script {
+            let r = rows(seqs);
+            assert_eq!(plain.insert_ignore("m", session, &r).await, cached.insert_ignore("m", session, &r).await);
+            assert_eq!(
+                plain.read_range("m", session, *from, *to).await,
+                cached.read_range("m", session, *from, *to).await,
+                "{session} {from}..={to}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -282,6 +282,12 @@ impl Core {
         entropy: Rc<dyn Entropy>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel::<Msg>();
+        // The open transcript is re-read after every append; keep its rows
+        // in memory. The runtime is the store's only writer from here on.
+        let ports = CorePorts {
+            transcript_store: Rc::new(crate::ports::CachedTranscriptStore::new(ports.transcript_store)),
+            ..ports
+        };
 
         let hydrated = hydrate(
             ports.kv.as_ref(),
