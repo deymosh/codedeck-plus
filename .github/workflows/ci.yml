@@ -24,6 +24,17 @@ on:
       - 'LICENSE'
       - '.gitignore'
       - '.gitattributes'
+  # release.yml runs the whole suite before it builds anything. `full` skips
+  # every path filter below: a release verifies the tagged commit, not a diff.
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: false
+
+# Read-only token: nothing here writes to the repository or a registry.
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -36,12 +47,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         # version is read from "packageManager" in package.json
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: pnpm
@@ -68,31 +79,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Detect Rust changes
         id: filter
-        uses: dorny/paths-filter@v4
+        if: ${{ !inputs.full }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             core:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
 
       - name: Install Rust
-        if: steps.filter.outputs.core == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.core != 'false'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
-        if: steps.filter.outputs.core == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: steps.filter.outputs.core != 'false'
         with:
           workspaces: .
 
       - name: cargo test + clippy (crates)
-        if: steps.filter.outputs.core == 'true'
+        if: steps.filter.outputs.core != 'false'
         env:
           CARGO_BUILD_JOBS: "4"
         run: |
@@ -105,7 +118,7 @@ jobs:
           cargo clippy -p client-runtime --features marmot --all-targets --locked -- -D warnings
 
       - name: No Rust changes — skipped
-        if: steps.filter.outputs.core != 'true'
+        if: steps.filter.outputs.core == 'false'
         run: echo "no Rust changes; cargo job skipped."
 
   # The driver protocol between the bridge and its agent host: the host's
@@ -120,11 +133,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Detect driver-protocol changes
         id: filter
-        uses: dorny/paths-filter@v4
+        if: ${{ !inputs.full }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             host:
@@ -133,27 +147,28 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
 
-      - uses: pnpm/action-setup@v6
-        if: steps.filter.outputs.host == 'true'
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        if: steps.filter.outputs.host != 'false'
 
-      - uses: actions/setup-node@v5
-        if: steps.filter.outputs.host == 'true'
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: steps.filter.outputs.host != 'false'
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install Rust
-        if: steps.filter.outputs.host == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.host != 'false'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@v2
-        if: steps.filter.outputs.host == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: steps.filter.outputs.host != 'false'
         with:
           workspaces: .
 
       - name: Generated TypeScript drift check
-        if: steps.filter.outputs.host == 'true'
+        if: steps.filter.outputs.host != 'false'
         run: |
           cargo test --locked -p agent-protocol --test gen_ts_bindings -- --ignored
           git diff --exit-code -- packages/agent-host/src/generated || {
@@ -162,7 +177,7 @@ jobs:
           }
 
       - name: Build the host and drive it from Rust
-        if: steps.filter.outputs.host == 'true'
+        if: steps.filter.outputs.host != 'false'
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter @codedeck/agent-host run build
@@ -170,7 +185,7 @@ jobs:
           cargo test --locked -p bridge-runtime --test e2e -- --ignored
 
       - name: No driver-protocol changes — skipped
-        if: steps.filter.outputs.host != 'true'
+        if: steps.filter.outputs.host == 'false'
         run: echo "no driver-protocol changes; agent-host job skipped."
 
   # apps/android (F3.3): Gradle unit tests + Paparazzi screenshot verification
@@ -184,33 +199,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Detect Android/client-ffi changes
         id: filter
-        uses: dorny/paths-filter@v4
+        if: ${{ !inputs.full }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             android:
               - 'apps/android/**'
               - 'crates/client-ffi/**'
+              - '.github/workflows/ci.yml'
             core:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
 
       - name: Install Rust
-        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.android != 'false' || steps.filter.outputs.core != 'false'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@v2
-        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: steps.filter.outputs.android != 'false' || steps.filter.outputs.core != 'false'
         with:
           workspaces: .
 
       - name: Set up JDK 21
-        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
-        uses: actions/setup-java@v5
+        if: steps.filter.outputs.android != 'false' || steps.filter.outputs.core != 'false'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -223,7 +240,7 @@ jobs:
       # the real cross-compiled .so. `cargo build --lib` below only needs the
       # HOST Linux cdylib for uniffi-bindgen's own metadata extraction.
       - name: Install Android SDK platform 37 / build-tools
-        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        if: steps.filter.outputs.android != 'false' || steps.filter.outputs.core != 'false'
         run: |
           echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             --install "platforms;android-37.2" "build-tools;37.0.0" >/dev/null
@@ -233,7 +250,7 @@ jobs:
       # generation, never hand-edited — regenerate and fail on drift. Mirrors
       # `./codedeck gen-android-bindings` exactly.
       - name: UniFFI Kotlin bindings drift check
-        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        if: steps.filter.outputs.android != 'false' || steps.filter.outputs.core != 'false'
         run: |
           cargo build --locked -p client-ffi --lib
           cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
@@ -247,10 +264,54 @@ jobs:
           }
 
       - name: Gradle test + Paparazzi verify
-        if: steps.filter.outputs.android == 'true' || steps.filter.outputs.core == 'true'
+        if: steps.filter.outputs.android != 'false' || steps.filter.outputs.core != 'false'
         working-directory: apps/android
         run: ./gradlew testDebugUnitTest verifyPaparazziDebug --console=plain
 
       - name: No Android/client-ffi changes — skipped
-        if: steps.filter.outputs.android != 'true' && steps.filter.outputs.core != 'true'
+        if: steps.filter.outputs.android == 'false' && steps.filter.outputs.core == 'false'
         run: echo "no Android/client-ffi changes; android job skipped."
+
+  # The deployment side, which no other job touches: every shell script must
+  # at least parse, and the bridge image must build (never pushed here). The
+  # image build is path-filtered — it compiles the whole bridge in release
+  # mode — and always runs in a release's full verification.
+  packaging:
+    name: scripts + bridge image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Shell scripts parse
+        run: |
+          for f in codedeck $(git ls-files '*.sh'); do
+            bash -n "$f" || { echo "::error file=$f::does not parse"; exit 1; }
+          done
+
+      - name: Detect image changes
+        id: filter
+        if: ${{ !inputs.full }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        with:
+          filters: |
+            image:
+              - 'docker/**'
+              - '.dockerignore'
+              - '.github/workflows/ci.yml'
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        if: steps.filter.outputs.image != 'false'
+
+      - name: Build the bridge image
+        if: steps.filter.outputs.image != 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false

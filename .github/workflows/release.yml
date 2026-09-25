@@ -33,9 +33,9 @@ on:
         default: false
         type: boolean
 
+# Read-only by default; the two jobs that publish widen it for themselves.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -68,9 +68,18 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # The whole CI suite on the tagged commit, path filters off. Nothing is
+  # built — let alone published — unless it passes: a tag on a broken
+  # commit fails here instead of shipping.
+  verify:
+    name: Verify (full CI)
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
+
   bridge-binary:
     name: Bridge — Linux ${{ matrix.arch }}
-    needs: meta
+    needs: [meta, verify]
     strategy:
       matrix:
         include:
@@ -86,11 +95,11 @@ jobs:
       # agent host on the same runtime.
       NODE_BUNDLE_VERSION: v24.20.0
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: pnpm
@@ -154,7 +163,7 @@ jobs:
           tar -C "$RUNNER_TEMP" -czf "dist/$NAME.tar.gz" "$NAME"
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bridge-linux-${{ matrix.arch }}
           path: dist/*.tar.gz
@@ -162,15 +171,18 @@ jobs:
 
   bridge-image:
     name: Bridge — container image
-    needs: meta
+    needs: [meta, verify]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -191,7 +203,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: docker/Dockerfile
@@ -207,23 +219,23 @@ jobs:
 
   android-apk:
     name: Android — signed release APK
-    needs: meta
+    needs: [meta, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Install Rust (aarch64-linux-android)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: .
 
@@ -303,7 +315,7 @@ jobs:
           cp "$APK" "dist/codedeck-${{ needs.meta.outputs.version }}.apk"
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: android-apk
           path: dist/*.apk
@@ -313,16 +325,18 @@ jobs:
     name: Publish GitHub Release
     needs: [meta, bridge-binary, bridge-image, android-apk]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       # Download by explicit name — a blanket download also pulls the auto
       # ".dockerbuild" run-artifact from build-push-action, and one flaky fetch
       # in that set fails the whole step.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: android-apk
           path: dist
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: bridge-linux-*
           merge-multiple: true
@@ -331,7 +345,7 @@ jobs:
       - run: ls -la dist
 
       - name: Create the release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ needs.meta.outputs.version }}
           name: ${{ needs.meta.outputs.version }}
