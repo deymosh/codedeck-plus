@@ -45,4 +45,7 @@ regex = "1"
 
 [dev-dependencies]
 tempfile = "3"
-nostr-transport = { path = "../nostr-transport", features = ["mock"] }
+# The phone side of the end-to-end test, and the loopback relay it runs.
+client-runtime = { path = "../client-runtime" }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

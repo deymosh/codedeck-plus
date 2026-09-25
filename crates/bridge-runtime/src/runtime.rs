@@ -71,6 +71,18 @@ pub struct Options {
     pub pairing_window_ms: Option<u64>,
     /// Where the transcripts live (default `<home>/sessions/transcripts`).
     pub transcripts_dir: Option<PathBuf>,
+    /// Stop on SIGINT / SIGTERM (off when embedded, e.g. in tests).
+    pub signals: bool,
+    /// Stops the bridge when it fires (or is dropped).
+    pub stop: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// Also receives every pairing URL shown to the operator.
+    pub pairing_urls: Option<mpsc::UnboundedSender<String>>,
+}
+
+impl Options {
+    pub fn new(mode: Mode) -> Self {
+        Self { mode, pairing_window_ms: None, transcripts_dir: None, signals: true, stop: None, pairing_urls: None }
+    }
 }
 
 struct Runtime {
@@ -92,6 +104,7 @@ struct Runtime {
     mesh: Rc<Mesh>,
     /// Mesh join info for the pairing QR (`pair` only).
     mesh_join: Option<MeshJoin>,
+    pairing_urls: Option<mpsc::UnboundedSender<String>>,
 }
 
 fn say(line: &str) {
@@ -107,7 +120,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     let mut engine_config = EngineConfig::new(keys.clone(), config.machine.clone());
     engine_config.host_kind = Some(config.host_kind);
     engine_config.relays = config.relays.clone();
-    engine_config.bridge_version = env!("CARGO_PKG_VERSION").to_string();
+    engine_config.bridge_version = crate::version().to_string();
     engine_config.device_tools = devices::tool_specs();
     let user_home = crate::config::user_home();
     let first_root = config.workspace_roots[0].clone();
@@ -128,7 +141,16 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         HostCommand::node(&config.node_path, config.agent_host_path.clone(), config.host_env.clone()),
         inputs.clone(),
     );
-    watch_signals(inputs.clone());
+    if options.signals {
+        watch_signals(inputs.clone());
+    }
+    if let Some(stop) = options.stop {
+        let inputs = inputs.clone();
+        tokio::task::spawn_local(async move {
+            let _ = stop.await;
+            let _ = inputs.send(Input::Shutdown);
+        });
+    }
 
     let gsd = Gsd::new(config.node_path.clone(), &user_home);
     let devices = Devices::new(config.adb_path.clone(), &user_home);
@@ -150,6 +172,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         devices: Rc::new(tokio::sync::Mutex::new(devices)),
         mesh: Rc::new(mesh),
         mesh_join: None,
+        pairing_urls: options.pairing_urls,
     };
 
     rt.step(Input::Start).await;
@@ -241,7 +264,12 @@ impl Runtime {
             }
             Effect::OpenPairingSubscription { since } => self.relays.open_pairing(since),
             Effect::ClosePairingSubscription => self.relays.close_pairing(),
-            Effect::PresentPairing(info) => present_pairing(&info),
+            Effect::PresentPairing(info) => {
+                present_pairing(&info);
+                if let Some(urls) = &self.pairing_urls {
+                    let _ = urls.send(info.url);
+                }
+            }
             Effect::PairingClosed { reason, phone } => self.pairing_closed(reason, phone.map(|p| format!("\"{}\" ({})", p.label, p.npub))),
             Effect::Notify { level, text } => match level {
                 NotifyLevel::Info => {

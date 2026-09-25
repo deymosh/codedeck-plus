@@ -117,9 +117,11 @@ jobs:
   # TypeScript types are generated from crates/agent-protocol (regenerated
   # here, failing on drift), and the real host bundle is spawned and driven
   # by the Rust codec (fake + test-mode Claude Code drivers), so a TS change
-  # that emits something the Rust types reject fails here.
+  # that emits something the Rust types reject fails here. Then the whole
+  # bridge end to end: the real runtime and agent host, driven by the real
+  # phone core through a loopback relay.
   agent-host:
-    name: driver protocol (generated types + host spawn test)
+    name: driver protocol + bridge end to end
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -131,9 +133,9 @@ jobs:
         with:
           filters: |
             host:
-              - 'crates/agent-protocol/**'
-              - 'crates/protocol/**'
+              - 'crates/**'
               - 'packages/agent-host/**'
+              - 'packages/protocol/fixtures/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'pnpm-lock.yaml'
@@ -171,6 +173,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @codedeck/agent-host run build
           cargo test --locked -p agent-protocol --test agent_host -- --ignored
+          cargo test --locked -p bridge-runtime --test e2e -- --ignored
 
       - name: No driver-protocol changes — skipped
         if: steps.filter.outputs.host != 'true'

@@ -1,19 +1,23 @@
 # Allow-list: the build context is only what docker/Dockerfile COPYs — the
-# root workspace manifests, packages/*, apps/bridge and docker/. Everything
-# else (apps/mobile, apps/android, crates/, vendor/, runtime data/, Rust
-# target/, toolchains) is never read by the image, so it is never sent to the
-# daemon or hashed.
+# root workspace manifests, the Rust crates, the agent host and docker/.
+# Everything else (apps/*, the TypeScript bridge packages, vendor/, runtime
+# data/, Rust target/, toolchains) is never read by the image, so it is never
+# sent to the daemon or hashed.
 *
+!Cargo.toml
+!Cargo.lock
+!crates/
 !pnpm-workspace.yaml
 !package.json
 !pnpm-lock.yaml
 !tsconfig.base.json
-!packages/
-!apps/bridge/
+!packages/agent-host/
+!packages/protocol/fixtures/
 !docker/
 
 # Inside the allowed trees: build output, deps, and tests. Tests are excluded
 # so editing one never invalidates the image's build layers.
+**/target
 **/node_modules
 **/out
 **/dist

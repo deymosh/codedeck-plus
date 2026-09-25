@@ -105,7 +105,7 @@ fn main() -> ExitCode {
     };
     let command = cli.command.unwrap_or(Command::Run);
     if let Command::Version = command {
-        println!("codedeck-bridge {} (protocol v{PROTOCOL_VERSION})", env!("CARGO_PKG_VERSION"));
+        println!("codedeck-bridge {} (protocol v{PROTOCOL_VERSION})", bridge_runtime::version());
         return ExitCode::SUCCESS;
     }
     let config = match config::load(&flags) {
@@ -176,7 +176,7 @@ fn serve(config: Config, mode: Mode) -> Result<ExitCode, String> {
     }
     println!(
         "codedeck-bridge {}{}\n  machine:    {} (host: {})\n  npub:       {}\n  relays:     {}{}\n  workspaces: {}\n  paired:     {} phone(s)",
-        env!("CARGO_PKG_VERSION"),
+        bridge_runtime::version(),
         if config.test_mode { " — TEST MODE (agents answer canned test commands)" } else { "" },
         config.machine,
         config.host_kind.as_wire(),
@@ -188,7 +188,7 @@ fn serve(config: Config, mode: Mode) -> Result<ExitCode, String> {
     );
     let tokio = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
     let local = tokio::task::LocalSet::new();
-    let options = Options { mode, pairing_window_ms: None, transcripts_dir: None };
+    let options = Options::new(mode);
     let outcome = local.block_on(&tokio, runtime::run(config, state, keys, options))?;
     Ok(match outcome {
         Outcome::Stopped | Outcome::Paired => ExitCode::SUCCESS,

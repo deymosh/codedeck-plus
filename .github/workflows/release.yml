@@ -3,7 +3,8 @@ name: Release
 # A single `vMAJOR.MINOR.PATCH` tag publishes ONE GitHub Release carrying every
 # artifact of that version:
 #   - the signed Android APK               (codedeck-vX.Y.Z.apk, the native app in apps/android)
-#   - the bridge npm tarball               (codedeck-bridge-X.Y.Z.tgz, for `npx`)
+#   - the bridge for Linux x86_64/aarch64  (codedeck-bridge-vX.Y.Z-linux-<arch>.tar.gz: the
+#                                           codedeck-bridge binary + its agent host; needs Node 22+)
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
 # A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
@@ -67,13 +68,26 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-  bridge-npm:
-    name: Bridge — npm tarball
+  bridge-binary:
+    name: Bridge — Linux ${{ matrix.arch }}
     needs: meta
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
 
       - uses: pnpm/action-setup@v6
 
@@ -82,49 +96,46 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Build the binary
+        env:
+          CODEDECK_VERSION: ${{ needs.meta.outputs.number }}
+        run: cargo build --release --locked -p bridge-runtime
 
-      - name: Stamp the release version
+      # The agent host runs the agent SDKs; the SDK ships the Claude Code
+      # binary for this runner's architecture, so each archive is built on
+      # its own architecture.
+      - name: Build and deploy the agent host
         run: |
-          cd apps/bridge
-          npm version "${{ needs.meta.outputs.number }}" --no-git-tag-version --allow-same-version
+          pnpm install --frozen-lockfile --filter @codedeck/agent-host...
+          pnpm --filter @codedeck/agent-host run build
+          pnpm --filter @codedeck/agent-host deploy --prod --legacy "$RUNNER_TEMP/agent-host"
+          rm -rf "$RUNNER_TEMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-*-musl@* \
+                 "$RUNNER_TEMP"/agent-host/src "$RUNNER_TEMP"/agent-host/tsconfig.json "$RUNNER_TEMP"/agent-host/build.mjs
 
-      - name: Typecheck + test (bridge and its workspace deps)
+      - name: Package
         run: |
-          pnpm --filter @codedeck/protocol --filter @codedeck/core --filter @codedeck/bridge run typecheck
-          pnpm --filter @codedeck/protocol --filter @codedeck/core --filter @codedeck/bridge run test
-
-      - name: Build the bundle
-        run: pnpm --filter @codedeck/bridge run build
-
-      - name: Smoke-test the artifact
-        run: |
-          node apps/bridge/out/main.js version
-          node apps/bridge/out/main.js doctor || true
-
-      - name: npm pack
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cd apps/bridge
-          npm pack --pack-destination "$GITHUB_WORKSPACE/dist"
-          # npm names the tarball from package.json (codedeck-bridge-X.Y.Z.tgz);
-          # rename it to the release's vX.Y.Z convention, matching the APK and
-          # the image tag. The tarball's own package.json version is unchanged.
-          mv "$GITHUB_WORKSPACE"/dist/codedeck-bridge-*.tgz \
-             "$GITHUB_WORKSPACE/dist/codedeck-bridge-${{ needs.meta.outputs.version }}.tgz"
+          NAME="codedeck-bridge-${{ needs.meta.outputs.version }}-linux-${{ matrix.arch }}"
+          STAGE="$RUNNER_TEMP/$NAME"
+          mkdir -p "$STAGE" dist
+          cp target/release/codedeck-bridge "$STAGE/"
+          mv "$RUNNER_TEMP/agent-host" "$STAGE/agent-host"
+          "$STAGE/codedeck-bridge" version
+          "$STAGE/codedeck-bridge" status --home "$RUNNER_TEMP/smoke-home" | tee /tmp/status.txt
+          ! grep -q MISSING /tmp/status.txt
+          tar -C "$RUNNER_TEMP" -czf "dist/$NAME.tar.gz" "$NAME"
+          ls -la dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: bridge-npm
-          path: dist/*.tgz
+          name: bridge-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   bridge-image:
     name: Bridge — container image
     needs: meta
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -157,6 +168,7 @@ jobs:
           file: docker/Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.list }}
+          build-args: CODEDECK_VERSION=${{ needs.meta.outputs.number }}
           provenance: false
         env:
           # Don't emit the auto ".dockerbuild" run artifact — the release job
@@ -270,7 +282,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [meta, bridge-npm, bridge-image, android-apk]
+    needs: [meta, bridge-binary, bridge-image, android-apk]
     runs-on: ubuntu-latest
     steps:
       # Download by explicit name — a blanket download also pulls the auto
@@ -283,7 +295,8 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: bridge-npm
+          pattern: bridge-linux-*
+          merge-multiple: true
           path: dist
 
       - run: ls -la dist
@@ -303,11 +316,11 @@ jobs:
             | Component | File |
             |---|---|
             | Android app (signed, aarch64) | `codedeck-${{ needs.meta.outputs.version }}.apk` |
-            | Bridge CLI (`npx`) | `codedeck-bridge-${{ needs.meta.outputs.version }}.tgz` |
+            | Bridge for Linux x86_64 (binary + agent host, needs Node 22+) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` |
+            | Bridge for Linux aarch64 (binary + agent host, needs Node 22+) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz` |
             | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
 
             Auto-generated changelog below.
           files: |
             dist/*.apk
-            dist/*.tgz
-            dist/*.tgz
+            dist/*.tar.gz

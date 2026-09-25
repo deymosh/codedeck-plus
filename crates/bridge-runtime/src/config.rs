@@ -148,10 +148,14 @@ fn hostname() -> String {
         .unwrap_or_else(|| "bridge".into())
 }
 
-/// Where the agent host bundle is by default: `agent-host/main.js` beside the
-/// binary (the release layout and the image), else the workspace build.
+/// Where the agent host bundle is by default: `agent-host/dist/main.js` beside
+/// the binary (the release archive and the image lay it out so), else the
+/// workspace build.
 fn default_agent_host() -> PathBuf {
-    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("agent-host").join("main.js")));
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| fs::canonicalize(exe).ok())
+        .and_then(|exe| exe.parent().map(|d| d.join("agent-host").join("dist").join("main.js")));
     match beside {
         Some(p) if p.exists() => p,
         _ => PathBuf::from("packages/agent-host/dist/main.js"),

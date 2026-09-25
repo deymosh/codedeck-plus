@@ -404,7 +404,9 @@ dependencies = [
  "base64 0.22.1",
  "bridge-core",
  "clap",
+ "client-runtime",
  "env_logger",
+ "futures-util",
  "hex",
  "image",
  "log",
@@ -420,6 +422,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 

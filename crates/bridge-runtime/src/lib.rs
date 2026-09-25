@@ -19,3 +19,12 @@ pub mod state;
 pub mod transcripts;
 pub mod work;
 pub mod workspace;
+
+/// The bridge's version: the release number stamped at build time
+/// (`CODEDECK_VERSION`), else the crate version.
+pub fn version() -> &'static str {
+    match option_env!("CODEDECK_VERSION") {
+        Some(v) if !v.is_empty() => v,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
