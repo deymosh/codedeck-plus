@@ -159,7 +159,8 @@ jobs:
           test -x "$STAGE/node"
           "$STAGE/codedeck-bridge" version
           "$STAGE/codedeck-bridge" status --home "$RUNNER_TEMP/smoke-home" | tee /tmp/status.txt
-          ! grep -q MISSING /tmp/status.txt
+          # Not `! grep`: errexit ignores a negated command, so it never fails.
+          if grep -q MISSING /tmp/status.txt; then exit 1; fi
           tar -C "$RUNNER_TEMP" -czf "dist/$NAME.tar.gz" "$NAME"
           ls -la dist
 
@@ -168,6 +169,9 @@ jobs:
           name: bridge-linux-${{ matrix.arch }}
           path: dist/*.tar.gz
           if-no-files-found: error
+          # Only a hand-off to the release job, which attaches the file to
+          # the GitHub Release.
+          retention-days: 1
 
   bridge-image:
     name: Bridge — container image
@@ -235,9 +239,12 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      # Restores master's cache; saving one here would be scoped to this tag
+      # and never read again.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: .
+          save-if: false
 
       - name: Install NDK + SDK platform
         run: |
@@ -320,6 +327,7 @@ jobs:
           name: android-apk
           path: dist/*.apk
           if-no-files-found: error
+          retention-days: 1
 
   release:
     name: Publish GitHub Release
