@@ -47,7 +47,7 @@ rust-version = "1.87"
 # agent host's package.json and the release tag (see the cut-release skill).
 # The wire has its own numbers: protocolVersion (phone) and the driver
 # protocol's `v`.
-version = "1.0.0"
+version = "1.0.1"
 license = "MIT"
 publish = false
 

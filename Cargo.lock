@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "agent-protocol"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "protocol",
  "serde",
@@ -385,7 +385,7 @@ checksum = "e79769241dcd44edf79a732545e8b5cec84c247ac060f5252cd51885d093a8fc"
 
 [[package]]
 name = "bridge-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "agent-protocol",
  "log",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-runtime"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aes-gcm",
  "agent-protocol",
@@ -607,7 +607,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "client-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "client-ffi"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "android_logger",
  "client-runtime",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "client-runtime"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-transport"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "futures-util",
  "log",
@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "protocol"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "hex",
  "nostr",
