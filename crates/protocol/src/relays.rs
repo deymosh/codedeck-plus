@@ -1,4 +1,4 @@
-//! Default relay lists. Mirror of `packages/protocol/src/relays.ts`.
+//! Default relay lists. Originally mirrored from the TypeScript protocol package.
 //!
 //! Changing `DEFAULT_RELAYS`? `LEGACY_DEFAULT_RELAY_SETS` in
 //! `client_core::stores::settings` must gain the OUTGOING default in the same

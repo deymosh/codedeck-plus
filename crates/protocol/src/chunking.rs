@@ -1,5 +1,5 @@
 //! Event-content fragmentation — the transport layer BELOW the semantic
-//! protocol. Port of `packages/protocol/src/chunking.ts`.
+//! protocol. Originally ported from the TypeScript protocol package.
 //!
 //! Every bridge→phone message rides one Nostr event as `base64(NIP-44(JSON))` in
 //! `event.content`. Relays cap `content` at 65535 bytes. A large model reply is

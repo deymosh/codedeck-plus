@@ -83,7 +83,7 @@ trap 'docker rm -f "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 # shellcheck source=../../../scripts/lib/pack-repo.sh
 . scripts/lib/pack-repo.sh
 pack_repo_into "$CONTAINER" /workspace \
-  Cargo.toml Cargo.lock crates packages/protocol/fixtures apps/android
+  Cargo.toml Cargo.lock crates apps/android
 
 echo "==> Regenerating the UniFFI Kotlin bindings (host target, no NDK needed for this step)"
 dexec -w /workspace "$CONTAINER" cargo build --locked -p client-ffi --lib

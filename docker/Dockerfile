@@ -33,8 +33,6 @@ WORKDIR /src
 # even though only the bridge (and what it depends on) is compiled.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# crates/protocol's build script resolves the codec conformance corpus.
-COPY packages/protocol/fixtures ./packages/protocol/fixtures
 # The release number `codedeck-bridge version` reports (empty = the crate version).
 ARG CODEDECK_VERSION=
 RUN --mount=type=cache,id=codedeck-cargo-registry,target=/usr/local/cargo/registry \

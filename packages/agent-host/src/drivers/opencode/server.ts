@@ -3,7 +3,7 @@
  * `opencode serve` as a child process the bridge owns for its own lifetime —
  * the counterpart to `OpenCodeFacade({ baseUrl })`'s EXTERNAL-server mode for
  * bridges that would rather run their own OpenCode server than point at one
- * running elsewhere (`apps/bridge/src/commands.ts` picks between the two).
+ * running elsewhere (the driver picks between the two).
  *
  * `@opencode-ai/sdk`'s own `createOpencodeServer()` cannot be reused for this:
  * it always spawns the literal string `opencode` (PATH-resolved by

@@ -1,5 +1,4 @@
-//! Nostr event kinds for the CodeDeck protocol v10. Port of
-//! `packages/protocol/src/kinds.ts`.
+//! Nostr event kinds for the CodeDeck protocol (unchanged since v10).
 //!
 //! Traffic is split by storage class so the client's stored-event subscription
 //! stays low-frequency — this is what structurally fixes the old since-filter

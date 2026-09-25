@@ -1,4 +1,4 @@
-//! The only place wire JSON is parsed. Port of `packages/protocol/src/codec.ts`.
+//! The only place wire JSON is parsed. Originally ported from the TypeScript protocol package.
 //! Both sides call these at ingest — a raw `serde_json::from_str` into a message
 //! type is banned everywhere else. Invalid payloads come back as a structured
 //! error to log-and-drop, never a panic or a lying value.

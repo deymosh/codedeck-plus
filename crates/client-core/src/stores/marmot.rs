@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use super::dm::{DmConversation, DmProtocol};
 
-// --- Kinds + constants (standard Marmot, NOT packages/protocol) ---
+// --- Kinds + constants (standard Marmot, NOT the protocol crate) ---
 
 pub const KEY_PACKAGE_KIND: u16 = 30443;
 pub const WELCOME_RUMOR_KIND: i64 = 444;

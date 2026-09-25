@@ -1,15 +1,11 @@
-# The Rust client workspace (migration plan F1/F2). Node/TS packages under
-# packages/* and apps/bridge are unaffected — this only governs crates/*.
+# The Rust workspace: the protocol, the phone's client core and the bridge.
+# The only TypeScript left is packages/agent-host (agent SDKs are JavaScript).
 #
 # protocol       = the wire contract (codec, schemas, ranges, chunking,
 #                 NIP-42/crypto primitives). Depends on nothing else in this
-#                 workspace — client-core depends on it, never the reverse, so
-#                 a future Rust bridge (bridge-core/bridge-runtime, see
-#                 docs/CLIENT-CORE.md) can consume it too without reorganizing
-#                 anything here. Mirrors packages/protocol (TS), which stays
-#                 the normative zod spec for now; see this crate's own doc
-#                 comment and `tests/codec_conformance.rs` for the anti-drift
-#                 mechanism.
+#                 workspace — the phone and the bridge both depend on it,
+#                 never the reverse. The source of truth for the wire;
+#                 `fixtures/corpus.json` pins its JSON shape.
 # nostr-transport = the relay transport: WebSocket + SOCKS5 (Tor/Orbot)
 #                 driver, NIP-42 AUTH, relay frame codec, publish verdicts,
 #                 behind a small `Transport` port. Depends on protocol only;

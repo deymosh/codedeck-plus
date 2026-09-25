@@ -5,7 +5,7 @@
 //! decodes on the other side of the FFI boundary. One committed fixture, two
 //! consumers (this test's default run, and a Kotlin JVM test reading the
 //! same bytes copied to `apps/android/app/src/test/resources/`) — the same
-//! anti-drift shape `packages/protocol/fixtures/corpus.json` uses for the
+//! anti-drift shape `crates/protocol/fixtures/corpus.json` uses for the
 //! phone-bridge wire.
 //!
 //! Regenerate after a deliberate shape change:

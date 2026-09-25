@@ -1,4 +1,4 @@
-//! NIP-42 relay AUTH — port of `packages/protocol/src/nip42.ts`.
+//! NIP-42 relay AUTH — originally ported from the TypeScript protocol package.
 //!
 //! Both the bridge and the phone answer a relay's `["AUTH", challenge]` with a
 //! kind-22242 event signed by their OWN identity keypair — the same pubkey

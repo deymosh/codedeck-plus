@@ -30,8 +30,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The agent host: the only TypeScript left (agent SDKs are JavaScript).
   verify:
-    name: typecheck + test + build
+    name: agent host — typecheck + test + build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -57,13 +58,9 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Smoke-test the bridge artifact
-        run: |
-          node apps/bridge/out/main.js version
-          node apps/bridge/out/main.js doctor || true
-
-  # Rust coverage for the crates/* workspace (protocol, nostr-transport,
-  # client-core, client-runtime, client-ffi). Path-filtered so JS-only pushes
+  # Rust coverage for the crates/* workspace (protocol, agent-protocol,
+  # nostr-transport, bridge-core, bridge-runtime, client-core, client-runtime,
+  # client-ffi). Path-filtered so JS-only pushes
   # stay fast. apps/mobile/src-tauri is frozen on protocol v10 and no longer
   # built here.
   cargo:
@@ -82,8 +79,6 @@ jobs:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              # the shared codec conformance corpus (also consumed by pnpm test)
-              - 'packages/protocol/fixtures/**'
 
       - name: Install Rust
         if: steps.filter.outputs.core == 'true'
@@ -135,7 +130,6 @@ jobs:
             host:
               - 'crates/**'
               - 'packages/agent-host/**'
-              - 'packages/protocol/fixtures/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'pnpm-lock.yaml'

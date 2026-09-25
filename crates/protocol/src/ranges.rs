@@ -1,5 +1,5 @@
 //! Seq-range math shared by the sync server (bridge) and the transcript store
-//! (client). Port of `packages/protocol/src/ranges.ts`. Ranges are inclusive
+//! (client). Originally ported from the TypeScript protocol package. Ranges are inclusive
 //! `(from, to)` pairs over non-negative seqs; `to < from` is treated as empty.
 
 use std::num::NonZeroU64;

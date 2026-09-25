@@ -8,8 +8,9 @@
 //! primitives) lives in the `protocol` crate, not here — this crate depends
 //! on it, never redefines it. See `protocol`'s own doc comment for why.
 //!
-//! Ported module-by-module from `apps/mobile/src/core` + the consumed parts of
-//! `packages/protocol`; each port keeps the TS behaviour as its contract.
+//! Ported module-by-module from `apps/mobile/src/core` (and the TypeScript
+//! protocol package the phone once used); each port keeps that behaviour as
+//! its contract.
 
 pub mod bridge_api;
 pub mod connection;

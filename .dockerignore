@@ -12,7 +12,6 @@
 !pnpm-lock.yaml
 !tsconfig.base.json
 !packages/agent-host/
-!packages/protocol/fixtures/
 !docker/
 
 # Inside the allowed trees: build output, deps, and tests. Tests are excluded

@@ -1,5 +1,5 @@
 {
-  "_note": "Shared codec conformance corpus for protocol v11. crates/protocol is authoritative; this corpus is consumed by crates/protocol/tests/codec_conformance.rs and, while the TypeScript bridge still exists, by packages/protocol/src/__tests__/fixtures.test.ts (the zod mirror). A schema change mirrored on only one side fails CI there. Keep entries minimal-but-representative — the per-message unit tests on each side cover field-combo depth.",
+  "_note": "Codec conformance corpus for protocol v11, run by crates/protocol/tests/codec_conformance.rs (see fixtures/README.md). Keep entries minimal-but-representative — the per-message unit tests cover field-combo depth.",
   "phoneToBridge": {
     "valid": [
       { "type": "input", "sessionId": "s", "text": "hi" },

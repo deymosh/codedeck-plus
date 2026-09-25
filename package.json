@@ -2,12 +2,11 @@
   "name": "codedeck-plus",
   "private": true,
   "version": "0.12.0",
-  "description": "CodeDeck+ community continuation of CodeDeck Next — unified bridge + mobile monorepo with Tor/SOCKS5 transport and NIP-42 relay auth.",
+  "description": "CodeDeck+ — run coding agents on your machine and drive them from your phone over end-to-end-encrypted Nostr. This manifest holds the one TypeScript package left: the agent host.",
   "scripts": {
     "typecheck": "pnpm -r --no-bail run typecheck",
     "test": "pnpm -r --no-bail run test",
-    "build": "pnpm -r --no-bail run build",
-    "build:bridge": "pnpm --filter @codedeck/bridge... run build"
+    "build": "pnpm -r --no-bail run build"
   },
   "engines": {
     "node": ">=22"
@@ -15,9 +14,7 @@
   "packageManager": "pnpm@10.8.0",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "esbuild",
-      "workerd"
+      "esbuild"
     ],
     "peerDependencyRules": {
       "allowedVersions": {

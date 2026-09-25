@@ -2,7 +2,7 @@
 //! `apps/mobile/src/core/stores/dm.ts` (CDX-011 Phase 5b).
 //!
 //! DM content is standard Nostr (kind 14 rumor → kind 13 seal → kind 1059 gift
-//! wrap) — deliberately protocol-independent, no `packages/protocol` schemas.
+//! wrap) — deliberately protocol-independent, no `protocol` crate schemas.
 //! The gift-wrap crypto (`nip59` seal/wrap/unwrap), the transport subscription
 //! with its epoch guard, the kind-10050 relay-list publish and the async
 //! profile fetch all live in `client-runtime`; this module is the state
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use protocol::crypto::{hex_from_npub, npub_from_hex};
 
-// --- Kinds + constants (standard Nostr, NOT packages/protocol) ---
+// --- Kinds + constants (standard Nostr, NOT the protocol crate) ---
 
 pub const GIFT_WRAP_KIND: u16 = 1059;
 pub const DM_RUMOR_KIND: i64 = 14;

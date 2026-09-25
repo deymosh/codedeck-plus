@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # codedeck — one entrypoint for managing this fork: the bridge container,
-# the optional Tor daemon, mobile APK builds, and workspace checks.
+# the optional Tor daemon, Android APK builds, and workspace checks.
 #
 # Everything here just wraps commands already established elsewhere in the
-# repo (docker compose, apps/mobile/docker/build-apk.sh,
+# repo (docker compose, apps/android/docker/build-apk.sh,
 # scripts/sync-upstream.sh) — this script adds no new mechanism, only a
 # short memorable surface over them.
 set -euo pipefail
@@ -36,25 +36,17 @@ Tor (optional codedeck-tor service, Compose `tor` profile):
                            since Compose profiles apply per `up` invocation)
   tor down                Stop codedeck-tor
 
-Mobile APK (apps/mobile/docker/build-apk.sh — see that file for details):
-  apk debug                Full symbols, ~300MB, Android's own debug keystore
-  apk release              Minified+stripped, UNSIGNED — Android won't install it
-  apk benchmark            Same build as release, but signed so it installs
-                           (every build hosts the in-process Rust
-                           client-runtime by default — see [features] in
-                           apps/mobile/src-tauri/Cargo.toml)
+Android APK (apps/android/docker/build-apk.sh — see that file for details):
+  apk [--target <triple>]  Debug APK of the native app into dist/ (default:
+                           arm64 device + x86_64 emulator)
 
-Workspace checks (run in a throwaway Node container — nothing installed
+Workspace checks (throwaway Node and Rust containers — nothing installed
 locally is required):
-  check                    typecheck + test, every package
-  typecheck                typecheck only
+  check                    typecheck + test: the agent host and every crate
+  typecheck                typecheck only (agent host + cargo check)
   test                     test only
 
-Protocol bindings (run in a throwaway Rust container):
-  gen-protocol-types       Regenerate apps/mobile/src/core/
-                           nativeCoreTypes.generated.ts from Rust's
-                           View/Intent/CoreEvent types (source of truth —
-                           see gen_ts_bindings.rs). CI fails if this drifts.
+Bindings (run in a throwaway Rust container):
   gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
                            from crates/client-ffi via uniffi-bindgen
                            (source of truth — see that crate's own doc
@@ -102,12 +94,13 @@ cmd_bridge() {
       # acquire it, so this reads the QR the running `run` command already
       # printed (it opens a pairing window on its own whenever nothing's
       # paired) rather than trying to trigger a new one.
-      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL:"; then
+      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL"; then
         echo "No pairing QR found in the logs yet. If the window already" >&2
         echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
         exit 1
       fi
-      docker compose logs codedeck-bridge 2>&1 | grep -A 25 "Pairing URL:" | tail -27
+      # The QR is printed just above its URL line.
+      docker compose logs --no-log-prefix codedeck-bridge 2>&1 | grep -B 32 -A 1 "Pairing URL" | tail -34
       ;;
     shell)
       require_running_bridge
@@ -141,16 +134,8 @@ cmd_tor() {
 }
 
 cmd_apk() {
-  case "${1:-}" in
-    debug|release|benchmark)
-      # extra args pass through, e.g. `./codedeck apk benchmark --target x86_64`
-      exec ./apps/mobile/docker/build-apk.sh "$@"
-      ;;
-    *)
-      echo "usage: $0 apk {debug|release|benchmark} [--features <list>]" >&2
-      exit 1
-      ;;
-  esac
+  # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
+  exec ./apps/android/docker/build-apk.sh "$@"
 }
 
 # shellcheck source=scripts/lib/pack-repo.sh
@@ -181,17 +166,21 @@ ensure_image() {
   docker build -q -t "$tag" "$@" - >/dev/null
 }
 
-# --- Workspace checks: run in a throwaway Node container — nothing needs to
-# be installed on the host. The image carries git (packages/core's
-# folders.test.ts shells out to it) and the pnpm pinned by package.json's
-# packageManager; downloaded packages persist in the codedeck-pnpm-store
-# volume, so `pnpm install` only fetches what the lockfile changed. Vendored
-# upstream, the Rust-only trees, apps/android and the frozen apps/mobile are
-# not part of the pnpm workspace and are left out of the copy. ---
-run_in_workspace_container() {
+# --- Workspace checks, in throwaway containers — nothing needs to be
+# installed on the host.
+#
+# TypeScript (the agent host): a Node image with git and the pnpm pinned by
+# package.json's packageManager; downloaded packages persist in the
+# codedeck-pnpm-store volume, so `pnpm install` only fetches what the lockfile
+# changed. Only the pnpm workspace is copied.
+#
+# Rust (every crate): the stock Rust image with clippy; the cargo registry
+# and target dir live in named volumes, so a rerun only recompiles what
+# changed. Only the cargo workspace is copied. ---
+check_typescript() {
   local name="codedeck-check-$$" pnpm_version
   pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
-  ensure_image codedeck-check --build-arg "PNPM_VERSION=$pnpm_version" <<'EOF'
+  ensure_image codedeck-check --build-arg "PNPM_VERSION=$pnpm_version" <<'DOCKERFILE'
 FROM node:22-slim
 ARG PNPM_VERSION
 RUN apt-get update \
@@ -199,21 +188,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g "pnpm@${PNPM_VERSION}"
 ENV npm_config_store_dir=/pnpm-store
-EOF
+DOCKERFILE
   start_throwaway "$name" codedeck-check -v codedeck-pnpm-store:/pnpm-store
 
-  pack_repo_into "$name" /app \
-    ':(exclude)vendor' ':(exclude)spike' ':(exclude)crates' ':(exclude)apps/android' ':(exclude)apps/mobile' ':(exclude)docs'
+  pack_repo_into "$name" /app package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json packages
   echo "==> Installing dependencies"
   dexec -w /app "$name" pnpm install --frozen-lockfile
-
   case "$1" in
-    typecheck)
-      dexec -w /app "$name" pnpm -r --no-bail run typecheck
-      ;;
-    test)
-      dexec -w /app "$name" pnpm -r --no-bail run test
-      ;;
+    typecheck) dexec -w /app "$name" pnpm -r --no-bail run typecheck ;;
+    test) dexec -w /app "$name" pnpm -r --no-bail run test ;;
     check)
       dexec -w /app "$name" pnpm -r --no-bail run typecheck
       dexec -w /app "$name" pnpm -r --no-bail run test
@@ -221,66 +204,56 @@ EOF
   esac
 }
 
+check_rust() {
+  local name="codedeck-check-rust-$$"
+  ensure_image codedeck-check-rust <<'DOCKERFILE'
+FROM rust:1-bookworm
+RUN rustup component add clippy
+DOCKERFILE
+  start_throwaway "$name" codedeck-check-rust \
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-check-target:/repo/target
+
+  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock
+  case "$1" in
+    typecheck) dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings ;;
+    test) dexec -w /repo "$name" cargo test --locked --workspace ;;
+    check)
+      dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings
+      dexec -w /repo "$name" cargo test --locked --workspace
+      ;;
+  esac
+}
+
+# Each in a subshell: start_throwaway's EXIT trap removes that container.
+run_checks() {
+  (check_typescript "$1")
+  (check_rust "$1")
+}
+
 cmd_sync() {
   exec ./scripts/sync-upstream.sh
 }
 
-# --- Regenerate apps/mobile/src/core/nativeCoreTypes.generated.ts from Rust
-# (see apps/mobile/src-tauri/tests/gen_ts_bindings.rs's own doc comment —
-# Rust's View/Intent/CoreEvent types are the source of truth, this file is a
-# build artifact). Runs the SAME command CI's drift check does, just without
-# the `git diff --exit-code`: this command's whole point is to update the
-# working tree, not fail on an already-known difference.
-#
-# The Tauri Linux system deps are baked into a cached image, and the cargo
-# registry and apps/mobile/src-tauri's target dir live in named volumes, so a
-# rerun only recompiles what changed. Only the Rust trees the build reads are
-# copied: apps/mobile (src-tauri, its tauri-plugin-* path deps, and the
-# generated file's destination), crates/* (path deps) and packages/protocol's
-# fixtures (crates/protocol's build.rs embeds the conformance corpus). ---
-cmd_gen_protocol_types() {
-  local name="codedeck-gen-protocol-types-$$"
-  ensure_image codedeck-tauri-rust <<'EOF'
-FROM rust:1-bookworm
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
-       libayatana-appindicator3-dev librsvg2-dev patchelf pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-EOF
-  start_throwaway "$name" codedeck-tauri-rust \
-    -v codedeck-cargo-registry:/usr/local/cargo/registry \
-    -v codedeck-tauri-target:/repo/apps/mobile/src-tauri/target
-
-  pack_repo_into "$name" /repo apps/mobile crates packages/protocol/fixtures Cargo.toml Cargo.lock
-  echo "==> Regenerating nativeCoreTypes.generated.ts"
-  dexec -w /repo/apps/mobile/src-tauri "$name" \
-    cargo test --locked --features native-core --test gen_ts_bindings -- --ignored
-
-  docker cp "$name":/repo/apps/mobile/src/core/nativeCoreTypes.generated.ts \
-    apps/mobile/src/core/nativeCoreTypes.generated.ts
-  echo "==> Wrote apps/mobile/src/core/nativeCoreTypes.generated.ts"
-}
-
-
 # --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
 # crates/client-ffi/src/lib.rs's own doc comment — the Kotlin binding
 # surface is a build artifact of `uniffi-bindgen`'s library-mode generation,
-# never hand-edited). Same shape as cmd_gen_protocol_types: builds the cdylib
+# never hand-edited). Builds the cdylib
 # for the HOST target (the generated Kotlin source is architecture-
 # independent — it only reads the crate's embedded UniFFI metadata, not the
 # target triple), runs the bindgen binary, copies the output back. Does NOT
 # cross-compile the actual .so for an Android ABI — that's a separate,
 # NDK-dependent build step (apps/android's own Gradle Rust task, once it
 # exists), out of scope for a pure Kotlin-source regeneration command. Only
-# the cargo workspace (plus the protocol corpus crates/protocol's build.rs
-# embeds) is copied; the cargo registry and target dir are cached volumes. ---
+# the cargo workspace is copied; the cargo registry and target dir are
+# cached volumes. ---
 cmd_gen_android_bindings() {
   local name="codedeck-gen-android-bindings-$$"
   start_throwaway "$name" rust:1-bookworm \
     -v codedeck-cargo-registry:/usr/local/cargo/registry \
     -v codedeck-uniffi-target:/repo/target
 
-  pack_repo_into "$name" /repo crates packages/protocol/fixtures Cargo.toml Cargo.lock
+  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock
   echo "==> Building crates/client-ffi (host target)"
   dexec -w /repo "$name" cargo build --locked -p client-ffi --lib
   echo "==> Running uniffi-bindgen (Kotlin, library mode)"
@@ -299,10 +272,9 @@ case "${1:-help}" in
   bridge) shift; cmd_bridge "$@" ;;
   tor) shift; cmd_tor "$@" ;;
   apk) shift; cmd_apk "$@" ;;
-  check) run_in_workspace_container check ;;
-  typecheck) run_in_workspace_container typecheck ;;
-  test) run_in_workspace_container test ;;
-  gen-protocol-types) cmd_gen_protocol_types ;;
+  check) run_checks check ;;
+  typecheck) run_checks typecheck ;;
+  test) run_checks test ;;
   gen-android-bindings) cmd_gen_android_bindings ;;
   sync) cmd_sync ;;
   help|-h|--help) usage ;;
