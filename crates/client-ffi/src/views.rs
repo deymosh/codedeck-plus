@@ -6,8 +6,8 @@
 //! is genuinely untyped bridge-supplied JSON) or fields no Android screen has
 //! a use for yet (`UiView`'s device-config map is Mesh territory — the
 //! `SetDeviceConfig` test loop — deferred with the rest of it;
-//! `SettingsData`'s `mesh_test_target` likewise — Mesh is F6, off by default,
-//! out of this crate's scope). The rest of `UiView` this surface needs IS
+//! `SettingsData`'s `mesh_test_target` likewise — Mesh is not implemented
+//! on Android). The rest of `UiView` this surface needs IS
 //! projected: the credentials/provider-profile status maps — see
 //! `UniffiCredentialsAck`/`UniffiProviderProfileAck` below — and the undo
 //! toast + unread set — see `UniffiUndoToast`/`UniffiUiView.unread_sessions`
@@ -16,8 +16,7 @@
 //! than deriving `uniffi::Record` on those real types
 //! — which would drag every transitive field into the FFI surface whether a
 //! screen exists for it or not — this module hand-builds a small,
-//! Android-specific projection of each, grown as later milestones need more
-//! of it, never widened "just in case" the way `UniffiIntent`'s own doc
+//! Android-specific projection of each, grown as screens need more of it, never widened "just in case" the way `UniffiIntent`'s own doc
 //! comment already commits to for the intent side.
 //!
 //! `TranscriptRowsView`'s crossing goes one step further: `client_core`'s

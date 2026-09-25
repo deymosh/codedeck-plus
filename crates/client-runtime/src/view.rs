@@ -1,5 +1,5 @@
 //! Views — the read-only, per-capability projections the bindings serialize
-//! and hand to the UI (migration plan §2.1). Plain serde data, sliced so a
+//! and hand to the UI. Plain serde data, sliced so a
 //! consumer subscribes only to what it paints.
 //!
 //! The store `*State` structs were designed as the serde wire shape, so the
@@ -8,8 +8,9 @@
 //! has no `Serialize` and is projected by hand. `TranscriptRowsView` is the
 //! one view backed by a port (`TranscriptStore`, SQLite on device) rather
 //! than a synchronous in-memory snapshot, so it alone needs I/O to build.
-//! The interaction-card *content* view (plan §2.1's `CardsView`, distinct
-//! from `UiView`'s optimistic bookkeeping) still has no home yet.
+//! There is no separate interaction-card *content* view (distinct from
+//! `UiView`'s optimistic bookkeeping): card content rides in the transcript
+//! rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -39,7 +40,7 @@ pub struct ConnectionView {
     /// `idle` | `connecting` | `connected` | `waiting-retry` | `offline` | `stopped`.
     ///
     /// Owned `String`, not `&'static str`: UniFFI's `uniffi::Record` derive
-    /// (F3) has no `FfiConverter` for a borrowed, 'static-lifetime string —
+    /// has no `FfiConverter` for a borrowed, 'static-lifetime string —
     /// crossing the FFI boundary needs ownership. Same JSON wire shape either
     /// way (serde serializes both identically), so this costs one allocation
     /// per view read and changes no consumer-visible behavior.
@@ -153,13 +154,10 @@ impl QuickPromptsView {
 
 // --- ui (selection + optimistic interaction-card bookkeeping) --------------
 //
-// This is `UiState` verbatim, NOT the plan §2.1 `CardsView` (that one is a
-// per-session, row-backed projection of actual card CONTENT that lands with
-// the transcript-view work — a different, larger thing). `UiState` only
-// holds the optimistic bookkeeping around cards (selection, unread dots,
-// responded-card ids, plan-approval labels, ack round-trip status, the undo
-// toast) — small, flat, and already fully ported in F2a, so it gets a thin
-// view now rather than waiting on that bigger design.
+// This is `UiState` verbatim, not card CONTENT (that rides in the transcript
+// rows). `UiState` only holds the optimistic bookkeeping around cards
+// (selection, unread dots, responded-card ids, plan-approval labels, ack
+// round-trip status, the undo toast) — small and flat, so a thin view.
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -212,7 +210,7 @@ pub struct PairingView {
     /// enough of its parsed content to show what it wants to pair with
     /// before the user confirms — the same narrow shape `candidate` uses,
     /// dropping the one-time token and mesh-join fields `ParsedPairingUrl`
-    /// itself still carries (mesh join is F6, out of scope for this view).
+    /// itself still carries (no client offers a mesh join).
     pub staged: Option<PairingCandidateView>,
     /// The candidate under negotiation, if any.
     pub candidate: Option<PairingCandidateView>,
@@ -404,8 +402,8 @@ pub struct TranscriptRowView {
 
 /// Everything a phone needs to render one session's transcript: the rows
 /// (`1..=local_high`, the same "give me everything, the UI virtualizes"
-/// contract `TranscriptStoreState.entriesOf` has today — no pagination yet,
-/// see plan §2.1's future `transcript_view(id, from, to)`), the sync status,
+/// contract `TranscriptStoreState.entriesOf` has today — no pagination yet),
+/// the sync status,
 /// and the coverage `have_ranges` a sync-request would carry.
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]

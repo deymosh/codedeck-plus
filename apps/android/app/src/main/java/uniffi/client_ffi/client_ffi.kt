@@ -2365,9 +2365,7 @@ public object FfiConverterTypeCore: FfiConverter<Core, Pointer> {
  * `uniffi::Enum` directly — see that crate's `uniffi` feature) — no parallel
  * DTO needed for the event stream, only for `Intent` (see `intent.rs`'s doc
  * comment for why that one differs). `ConnectionView.connected_relays` (the
- * per-relay status dot's data, F4.1.5) is the same real type too — added
- * straight to `ConnectionView` once Android's Settings screen actually
- * needed it, exactly as this comment used to say to do.
+ * Settings screen's per-relay status dots) is the same real type too.
  */
 public interface CoreListener {
     
@@ -2386,9 +2384,7 @@ public interface CoreListener {
  * `uniffi::Enum` directly — see that crate's `uniffi` feature) — no parallel
  * DTO needed for the event stream, only for `Intent` (see `intent.rs`'s doc
  * comment for why that one differs). `ConnectionView.connected_relays` (the
- * per-relay status dot's data, F4.1.5) is the same real type too — added
- * straight to `ConnectionView` once Android's Settings screen actually
- * needed it, exactly as this comment used to say to do.
+ * Settings screen's per-relay status dots) is the same real type too.
  */
 open class CoreListenerImpl: Disposable, AutoCloseable, CoreListener {
 
@@ -5453,7 +5449,7 @@ sealed class UniffiIntent {
     }
     
     /**
-     * F3.3: selects (or, with `session_id: None`, deselects) a session in
+     * Selects (or, with `session_id: None`, deselects) a session in
      * the shared `UiView` — the sidebar's tap-to-open and the shell's
      * "no selection" empty state both read `UiView::selected_session` back.
      */
@@ -5464,7 +5460,7 @@ sealed class UniffiIntent {
     }
     
     /**
-     * F3.3: records which plan-approval option the user tapped so the
+     * Records which plan-approval option the user tapped so the
      * resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
      * actual answer (`RespondPlan`), not
      * instead of it — same contract the TS `PlanApprovalCard.tsx` had.
@@ -5476,7 +5472,7 @@ sealed class UniffiIntent {
     }
     
     /**
-     * F3.3.5: `OutboxRow`'s Retry button — re-publishes the same signed
+     * `OutboxRow`'s Retry button — re-publishes the same signed
      * event (idempotent; the bridge dedupes by id), not a fresh send.
      */
     data class RetryOutboxItem(

@@ -6,9 +6,8 @@
 #   (default targets: aarch64-linux-android x86_64-linux-android — a real
 #   device and an emulator, both in one APK)
 #
-# Release/signed builds are not wired yet (F3's scaffold has no keystore
-# story of its own) — see apps/mobile/docker/build-apk.sh for that shape
-# once apps/android needs it.
+# Debug builds only: the signed release APK is built by
+# .github/workflows/release.yml from a version tag.
 #
 # First run builds the toolchain image (Android SDK/NDK 28 + Rust) — several
 # GB, several minutes. Reruns reuse Docker's layer cache plus the cargo and

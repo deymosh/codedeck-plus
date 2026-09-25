@@ -4,9 +4,8 @@
 //! NIP-44-encrypted between the bridge keypair and one client keypair; the
 //! relay only ever sees ciphertext.
 //!
-//! Backed by the `nostr` crate's vetted NIP-44 v2 implementation (F0
-//! `uniffi-binding-probe` sized its dependency tree — tight with minimal
-//! features). The `decrypt_from` path is total from the caller's side: it
+//! Backed by the `nostr` crate's vetted NIP-44 v2 implementation (pulled in
+//! with minimal features to keep the dependency tree tight). The `decrypt_from` path is total from the caller's side: it
 //! returns `Err`, never panics, on garbage / tampered / not-for-us ciphertext,
 //! and ingest code drops those.
 

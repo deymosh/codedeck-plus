@@ -81,7 +81,7 @@ private fun rootLabel(root: String): String {
 }
 
 /**
- * F4.1 — the new-session screen, rendered as a full-screen replacement the
+ * The new-session screen, rendered as a full-screen replacement the
  * shell swaps in (same pattern `SettingsScreen.kt`/`PairingScreen.kt`
  * established), replacing `NewSessionSheet.kt`'s single-button placeholder:
  * port of `apps/mobile/src/ui/NewSessionModal.tsx`'s folder/agent/provider/

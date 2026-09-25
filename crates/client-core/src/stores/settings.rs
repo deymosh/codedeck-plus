@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use protocol::relays::{DEFAULT_RELAYS, MARMOT_RELAYS};
 
-/// UI-scale slider range (plan §5).
+/// UI-scale slider range.
 pub const UI_SCALE_MIN: f64 = 0.85;
 pub const UI_SCALE_MAX: f64 = 1.4;
 pub const UI_SCALE_DEFAULT: f64 = 1.0;

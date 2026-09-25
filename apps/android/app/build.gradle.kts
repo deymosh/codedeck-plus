@@ -136,7 +136,7 @@ dependencies {
     implementation("androidx.camera:camera-view:$camerax")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
-    // F3.3.2: Compose-native Markdown for assistant/plan transcript rows.
+    // Compose-native Markdown for assistant/plan transcript rows.
     // GFM (tables, task lists, strikethrough, autolinks) is the renderer's
     // own default AST handling, no separate "GFM module" — see
     // ui/transcript/Markdown.kt's doc comment.

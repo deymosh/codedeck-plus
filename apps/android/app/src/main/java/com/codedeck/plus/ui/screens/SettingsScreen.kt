@@ -73,13 +73,13 @@ private fun preferenceOptions(choices: List<UniffiOptionChoice>, stored: String)
 }
 
 /**
- * F4.1.5 — the settings screen, rendered as a full-screen replacement the
+ * The settings screen, rendered as a full-screen replacement the
  * shell swaps in (not an overlay): port of `apps/mobile/src/ui/screens/
  * SettingsScreen.tsx`'s global-preference surface — UI scale, defaults for
  * new sessions, notifications/badges, stay-connected, Orbot routing, the
  * blossom server, the quick-prompt editor, relay management with per-relay
- * connection dots, and (F4.3) per-machine credentials/AI-provider blocks.
- * Deliberately absent: mesh (deferred to F6, off by default upstream).
+ * connection dots, and per-machine credentials/AI-provider blocks.
+ * Deliberately absent: mesh (off by default upstream, not supported here).
  */
 @Composable
 fun SettingsScreen(core: CoreHost, onClose: () -> Unit) {
@@ -529,7 +529,7 @@ private fun SettingsBody(
                     )
                 }
 
-                // --- Machines (F4.3) ---
+                // --- Machines ---
                 if (machines.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
                         SectionHeading("Machines")
