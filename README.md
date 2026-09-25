@@ -6,7 +6,8 @@
 
 **Control coding agents (Claude Code, OpenCode) running on your laptop or VPS
 from your Android phone, over end-to-end encrypted Nostr.** No accounts and no
-central server — the phone and the bridge pair directly by scanning a QR code.
+CodeDeck server: the phone and the bridge pair by scanning a QR code and talk
+through ordinary Nostr relays — public ones, or your own.
 
 [![CI](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml)
 [![latest release](https://img.shields.io/github/v/release/deymosh/codedeck-plus?sort=semver&label=release)](https://github.com/deymosh/codedeck-plus/releases/latest)
@@ -18,8 +19,9 @@ central server — the phone and the bridge pair directly by scanning a QR code.
 
 ## What it does
 
-Two halves pair directly over Nostr (NIP-44) — no accounts, no server between
-them:
+Two halves exchange NIP-44 encrypted messages through one or more Nostr relays
+of your choice. The relays only store and forward ciphertext: they cannot read
+your sessions, and no account or CodeDeck-run service sits in between.
 
 - **The bridge** — `codedeck-bridge`, a headless service that runs agent
   sessions on the machine where your code lives and exposes them over encrypted
@@ -27,7 +29,7 @@ them:
   ([`docs/BRIDGE.md`](docs/BRIDGE.md)).
 - **The Android app** — drives those sessions from your phone: review plans,
   approve tool permissions, answer the agent's questions, switch models, and
-  chat with several sessions at once.
+  chat with several sessions at once ([`docs/CLIENT.md`](docs/CLIENT.md)).
 
 Pairing is a one-time QR scan; it survives restarts on both ends.
 
@@ -39,8 +41,8 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - Claude Code and [OpenCode](https://opencode.ai), chosen per session — the
   protocol is agent-neutral, so another agent is one driver away
   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
-- Encrypted Nostr DMs — NIP-17 and Marmot (MLS) side by side
-- Project/folder management on every paired bridge host
+- Image attachments, and project/folder management on every paired bridge
+- NIP-42 `AUTH` relays, and Tor on both ends (see below)
 
 ## About this fork
 
@@ -54,7 +56,7 @@ upstream projects didn't design for:
 
 - **NIP-42 `AUTH`** relays — e.g. a self-hosted
   [Haven](https://github.com/bitvora/haven) relay
-- the bridge reaching the network only over **Tor** (SOCKS5)
+- the bridge reaching its relays only over **Tor** (SOCKS5)
 - the phone routing through **Orbot** (Android's Tor app)
 
 The original MIT license and attribution are preserved. Upstream is not
@@ -81,7 +83,7 @@ codedeck-plus/
 │   └── mobile/            # the former Tauri app — frozen (future desktop client)
 ├── docker/              # the bridge image (Dockerfile, entrypoint, helpers)
 ├── deploy/              # systemd unit for the bridge
-├── docs/                # PROTOCOL.md (contract) · BRIDGE.md (operating it) · OPENCODE.md
+├── docs/                # PROTOCOL.md (contract) · BRIDGE.md · CLIENT.md · OPENCODE.md
 ├── scripts/             # toolchain installer (Linux), shared shell helpers
 ├── .github/workflows/   # ci.yml · release.yml (tag → release)
 ├── .claude/             # CLAUDE.md + skills for Claude Code
@@ -90,19 +92,23 @@ codedeck-plus/
 └── data/                # runtime volume (bridge identity, paired phones, sessions)
 ```
 
-## Local patches on top of upstream
+## Relays and Tor
 
 - **NIP-42 relay auth** (`crates/protocol/src/nip42.rs`): the bridge and the
   phone each answer a relay's `AUTH` challenge with their own existing identity
   keypair — no new secret to configure. Just allowlist the bridge's pairing
   npub (and the phone's, if your relay gates reads too) in your relay's ACL.
 - **Tor/SOCKS5 for the bridge** (`crates/nostr-transport`): set
-  `CODEDECK_TOR_PROXY_URL` and every relay connection routes through it. See
-  the optional `codedeck-tor` Compose service below.
-- **Orbot for the phone**: a settings toggle routes the app's relay traffic
-  through Orbot's SOCKS5 proxy — off by default.
+  `CODEDECK_TOR_PROXY_URL` and every relay connection routes through it (the
+  agents' own API traffic does not). See the optional `codedeck-tor` Compose
+  service below.
+- **Orbot for the phone**: a settings toggle routes the app's relay and image
+  traffic through Orbot's SOCKS5 proxy — off by default.
 
-## Environment variables
+## Running the bridge with Docker
+
+Other ways to run it (release archives, systemd, from source) are in
+[`docs/BRIDGE.md`](docs/BRIDGE.md).
 
 Create a `.env` file in the root directory:
 
@@ -142,7 +148,7 @@ it through `gh-codedeck-secret`. Keep real values only in your untracked
 `.env` file, use least-privilege tokens, and rotate them if they appear in
 logs or source control.
 
-## Quick start
+### Start it
 
 1. Build and start the container:
 ```bash
@@ -186,6 +192,7 @@ the full runbook.
 ## More docs
 
 - [`docs/BRIDGE.md`](docs/BRIDGE.md) — the bridge: install, commands, config, files, systemd
+- [`docs/CLIENT.md`](docs/CLIENT.md) — the phone: the Rust client core, the Android app, transport rules, building the APK
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v11 wire contract, the driver protocol, adding an agent
 - [`docs/OPENCODE.md`](docs/OPENCODE.md) — the optional OpenCode session backend: external server vs. bridge-managed, config, Docker setup
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook

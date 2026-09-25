@@ -6,7 +6,7 @@
  * the in-process Rust `client_runtime::Core` owns the entire bridge protocol
  * + store layer, present whenever this APK is built with the `native-core`
  * Cargo feature (`core_available` probes for it — see `platform/nativeCore.ts`
- * and `docs/CLIENT-CORE.md`). The pre-F2b WebView-driven composition (every
+ * and the git history of `docs/CLIENT-CORE.md`). The pre-F2b WebView-driven composition (every
  * store, the connection FSM, and the bridge protocol codec running in TS over
  * a real relay transport) is retired — see git history — along with plain-
  * browser dev (`pnpm dev` without Tauri has no Tauri commands to probe at

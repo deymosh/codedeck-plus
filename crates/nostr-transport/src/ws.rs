@@ -7,7 +7,7 @@
 //! current-thread runtime inside a `LocalSet` (the FG service's client thread);
 //! every task is `spawn_local`. This mirrors the TS `this`-bound model exactly.
 //!
-//! What lives here and NOT in a relay-pool crate (see docs/CLIENT-CORE.md):
+//! What lives here and NOT in a relay-pool crate (see docs/CLIENT.md):
 //! * **no auto-reconnect** — a dead socket surfaces as ONE `on_close`; the
 //!   connection FSM owns backoff and calls [`WsTransport::ensure_connected`].
 //! * **ping liveness** — a socket with no traffic for [`DEAD_AFTER`] is dropped

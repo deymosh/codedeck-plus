@@ -195,8 +195,9 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 - **The Tor/SOCKS proxy is for Nostr relay traffic only.** When one is set,
   every bridge relay connection goes through it; other outbound calls (HTTP
   checks, image downloads, the agents' own API traffic) do not use it and are
-  not a proxy bypass. No phone network path may bypass the Orbot WebView proxy
-  override. Cleartext `ws://` is allowed only for `.onion` relays (and
+  not a proxy bypass. On the phone, the Orbot setting covers relay and Blossom
+  image traffic alike: no phone network path may bypass it while it is on.
+  Cleartext `ws://` is allowed only for `.onion` relays (and
   loopback, for tests).
 - Secrets — API keys, GitHub PATs, custom-provider tokens, Android keystore
   material — are never logged, never echoed back over the wire, and are wiped
@@ -216,4 +217,5 @@ Commit `c0d8676` restructured the two upstream repos into this monorepo as a
 pure `git mv`. Everything since is this fork's own work: NIP-42, Tor/SOCKS5,
 Orbot, event fragmentation, the native Android app, protocol v11 and the Rust
 bridge. `docs/PROTOCOL.md` is the contributor contract; `crates/protocol` and
-`crates/agent-protocol` are authoritative where they disagree.
+`crates/agent-protocol` are authoritative where they disagree. `docs/BRIDGE.md`
+and `docs/CLIENT.md` describe each half as it is today.

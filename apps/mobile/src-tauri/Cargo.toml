@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 # F2b: the in-process Rust client-runtime (the entire bridge protocol + store
 # layer, not just F1's transport/crypto) hosted in the app process instead of
-# the WebView. Field-tested (see docs/CLIENT-CORE.md) and now the default and
+# the WebView. Field-tested (see the git history of docs/CLIENT-CORE.md) and now the default and
 # only composition — `apps/mobile/src/core`'s local, WebView-driven
 # implementation was deleted the same day this flipped (see git history).
 # `tauri-plugin-http/socks` is forwarded here, not requested unconditionally
