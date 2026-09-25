@@ -354,7 +354,7 @@ private fun SettingsBody(
                         "Android only: a foreground service holds the process and radio " +
                             "awake (persistent notification shows the live connection state). " +
                             "It asks for notification permission on first start. Off = the OS " +
-                            "may pause CodeDeck in the background; it resyncs when you return.",
+                            "may pause CodeDeck+ in the background; it resyncs when you return.",
                         color = Tokens.TextDim,
                         fontSize = Tokens.TextSm,
                     )
