@@ -12,6 +12,14 @@ use crate::out::TimerKind;
 use crate::pairing::{pairing_url, PairingUrlParts};
 use crate::time::iso;
 
+/// Token comparison in time independent of where the tokens first differ, so
+/// response timing over the relay says nothing about a guess's prefix. (The
+/// length may leak; every token the bridge issues has the same length.)
+fn same_token(expected: &str, given: &str) -> bool {
+    let (expected, given) = (expected.as_bytes(), given.as_bytes());
+    expected.len() == given.len() && expected.iter().zip(given).fold(0u8, |diff, (a, b)| diff | (a ^ b)) == 0
+}
+
 impl Engine {
     /// Open a window (replacing any open one).
     pub(super) fn open_pairing(&mut self, duration_ms: Option<u64>, mesh: Option<MeshJoin>) {
@@ -55,7 +63,7 @@ impl Engine {
         let short = from.get(..8).unwrap_or(from);
         let rejection = match &self.pairing {
             None => Some(PairAckReason::WindowClosed),
-            Some(window) if window.token != m.token => Some(PairAckReason::BadToken),
+            Some(window) if !same_token(&window.token, &m.token) => Some(PairAckReason::BadToken),
             Some(_) => None,
         };
         if let Some(reason) = rejection {
@@ -107,5 +115,20 @@ impl Engine {
         );
         self.out.push(Effect::Notify { level: NotifyLevel::Info, text: format!("Phone \"{label}\" paired") });
         self.out.push(Effect::RegisterPhone { pubkey_hex: from.to_string(), label });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_token;
+
+    #[test]
+    fn same_token_is_plain_equality() {
+        assert!(same_token("abc123", "abc123"));
+        assert!(!same_token("abc123", "abc124"));
+        assert!(!same_token("abc123", "xbc123"));
+        assert!(!same_token("abc123", "abc12"));
+        assert!(!same_token("abc123", ""));
+        assert!(same_token("", ""));
     }
 }
