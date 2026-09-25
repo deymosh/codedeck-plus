@@ -155,6 +155,12 @@ pub struct Engine {
     list_dirty: bool,
     /// Store the registry once the current input is handled.
     registry_dirty: bool,
+    /// Only `last_activity` changed since the registry was stored: written
+    /// with the next heartbeat (or any structural change, or shutdown) rather
+    /// than per output batch — each store rewrites and syncs the whole state
+    /// file, credentials included, and a busy session appends many times a
+    /// second. A crash loses at most one heartbeat's worth of that timestamp.
+    activity_dirty: bool,
 }
 
 impl Engine {
@@ -188,6 +194,7 @@ impl Engine {
             stopped: false,
             list_dirty: false,
             registry_dirty: false,
+            activity_dirty: false,
         }
     }
 
@@ -333,6 +340,7 @@ impl Engine {
         match kind {
             TimerKind::Heartbeat => {
                 self.persist_cursor();
+                self.registry_dirty |= self.activity_dirty;
                 self.list_dirty = true;
                 self.arm(self.config.heartbeat_interval_ms, TimerKind::Heartbeat);
             }
@@ -458,7 +466,7 @@ impl Engine {
         let now = self.now_iso();
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.rec.last_activity = now;
-            self.registry_dirty |= session.listed;
+            self.activity_dirty |= session.listed;
         }
     }
 
@@ -479,6 +487,7 @@ impl Engine {
 
     fn persist_registry(&mut self) {
         self.registry_dirty = false;
+        self.activity_dirty = false;
         let doc = RegistryDoc {
             sessions: self.sessions.values().filter(|s| s.listed).map(|s| s.rec.clone()).collect(),
             removed_sessions: self.tombstones.ids(),

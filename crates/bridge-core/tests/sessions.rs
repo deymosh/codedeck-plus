@@ -406,3 +406,21 @@ fn shutdown_publishes_every_session_offline_and_stops() {
     rig.send(json!({"type":"refresh-sessions"}));
     assert!(rig.take().is_empty(), "a stopped engine does nothing");
 }
+
+#[test]
+fn output_alone_does_not_rewrite_the_state_store_until_the_heartbeat() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    let before = rig.store.snapshot()["registry"].clone();
+
+    rig.advance(5_000);
+    rig.say(&s, "busy");
+    rig.say(&s, "still busy");
+    assert_eq!(rig.store.snapshot()["registry"], before, "only lastActivity changed: not stored per batch");
+
+    rig.advance(60_000); // the default heartbeat interval
+    let after = rig.store.snapshot()["registry"].clone();
+    assert_ne!(after, before, "the heartbeat stores the new lastActivity");
+    assert!(after.contains(&s));
+}
