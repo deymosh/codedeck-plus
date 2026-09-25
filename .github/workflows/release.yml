@@ -159,7 +159,8 @@ jobs:
           test -x "$STAGE/node"
           "$STAGE/codedeck-bridge" version
           "$STAGE/codedeck-bridge" status --home "$RUNNER_TEMP/smoke-home" | tee /tmp/status.txt
-          ! grep -q MISSING /tmp/status.txt
+          # Not `! grep`: errexit ignores a negated command, so it never fails.
+          if grep -q MISSING /tmp/status.txt; then exit 1; fi
           tar -C "$RUNNER_TEMP" -czf "dist/$NAME.tar.gz" "$NAME"
           ls -la dist
 
