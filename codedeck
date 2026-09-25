@@ -250,7 +250,7 @@ cmd_gen_android_bindings() {
   dexec -w /repo "$name" cargo build --locked -p client-ffi --lib
   echo "==> Running uniffi-bindgen (Kotlin, library mode)"
   dexec -w /repo "$name" cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
-    generate --library target/debug/libclient_ffi.so --language kotlin \
+    generate --library target/debug/libclient_ffi.so --language kotlin --no-format \
     --out-dir /tmp/uniffi-kotlin-out
 
   local dest="apps/android/app/src/main/java/uniffi"

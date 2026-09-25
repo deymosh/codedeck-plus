@@ -60,7 +60,7 @@ ndk_clang_target_of() {
 echo "==> Regenerating the UniFFI Kotlin bindings (host target)"
 cargo build --locked -p client-ffi --lib
 cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
-  generate --library target/debug/libclient_ffi.so --language kotlin \
+  generate --library target/debug/libclient_ffi.so --language kotlin --no-format \
   --out-dir /tmp/uniffi-kotlin-out-$$
 rm -rf apps/android/app/src/main/java/uniffi
 cp -r "/tmp/uniffi-kotlin-out-$$/uniffi" apps/android/app/src/main/java/uniffi

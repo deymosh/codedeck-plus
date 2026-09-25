@@ -56,7 +56,7 @@ tempfile = "3"
 
 # Generates the Kotlin bindings (library mode — reads the already-built
 # cdylib's embedded metadata, no `.udl`):
-#   cargo run --bin uniffi-bindgen -- generate --library <path-to-.so> \
+#   cargo run --bin uniffi-bindgen -- generate --library <path-to-.so> --no-format \
 #     --language kotlin --out-dir apps/android/app/src/main/java
 # Wired into `./codedeck gen-android-bindings`; CI fails if the committed
 # bindings drift from it.

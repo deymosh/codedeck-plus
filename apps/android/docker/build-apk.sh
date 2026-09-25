@@ -88,7 +88,7 @@ pack_repo_into "$CONTAINER" /workspace \
 echo "==> Regenerating the UniFFI Kotlin bindings (host target, no NDK needed for this step)"
 dexec -w /workspace "$CONTAINER" cargo build --locked -p client-ffi --lib
 dexec -w /workspace "$CONTAINER" cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
-  generate --library target/debug/libclient_ffi.so --language kotlin \
+  generate --library target/debug/libclient_ffi.so --language kotlin --no-format \
   --out-dir /tmp/uniffi-kotlin-out
 dexec "$CONTAINER" rm -rf /workspace/apps/android/app/src/main/java/uniffi
 dexec "$CONTAINER" cp -r /tmp/uniffi-kotlin-out/uniffi /workspace/apps/android/app/src/main/java/uniffi
