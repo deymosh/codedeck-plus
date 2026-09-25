@@ -29,6 +29,7 @@ object MarkdownCorpus {
         | `connection.ts` | `core::connection` | low |
         | `bridgeApi.ts` | `core::bridge_api` | medium |
         | `marmot.rs` | `core::marmot` (feature) | build |
+        | `crypto.ts` | stays in TypeScript until the NIP-44 port lands and the fixture corpus round-trips on both sides | high |
 
         > Absence never deletes — a stale session is marked, not dropped.
 
