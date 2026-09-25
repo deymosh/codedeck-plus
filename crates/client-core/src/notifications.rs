@@ -3,8 +3,9 @@
 //!
 //! NEVER event-sniff: every event is derived from state the phone core already
 //! ingested through the typed protocol. The decision is a PURE function of
-//! `(event, app visibility)` — a foregrounded app never posts an OS
-//! notification (the UI is the notification). Sync catch-up never notifies:
+//! `(event, app visibility, session on screen)` — only the session the user
+//! is looking at goes without an OS notification (there the UI is the
+//! notification). Sync catch-up never notifies:
 //! only the LIVE output path calls [`classify_output_entry`].
 
 use protocol::common::{EntryBody, NoticeKind, OutputEntry};
@@ -129,10 +130,20 @@ pub fn notify_tag(event: &NotifyEvent) -> String {
 
 // --- pure decisions ---
 
-/// A visible app never posts OS notifications; everything here already passed
-/// its store-level gate, so `hidden → notify` for every type.
-pub fn decide_notify(_event: &NotifyEvent, visible: bool) -> bool {
-    !visible
+/// Post an OS notification unless the user is already looking at what it
+/// would point them to: a hidden app notifies for every type (everything here
+/// already passed its store-level gate); a visible one still notifies for a
+/// session event unless that exact session is on screen — someone reading
+/// session A, or the session list, must still hear that session B finished
+/// or wants an answer. A DM never notifies over a visible app.
+pub fn decide_notify(event: &NotifyEvent, visible: bool, active_session_key: Option<&str>) -> bool {
+    if !visible {
+        return true;
+    }
+    match event.session() {
+        None => false,
+        Some((m, s)) => Some(session_key_of(m, s).as_str()) != active_session_key,
+    }
 }
 
 /// The in-app chime: ping when hidden, OR when the user is viewing a DIFFERENT
@@ -338,7 +349,7 @@ impl NotificationCoordinator {
         if !enabled {
             return vec![];
         }
-        let want_notify = decide_notify(event, visible);
+        let want_notify = decide_notify(event, visible, active_session_key);
         let want_ping = ping_available && decide_ping(event, visible, active_session_key);
         if !want_notify && !want_ping {
             return vec![];
@@ -409,10 +420,18 @@ mod tests {
     }
 
     #[test]
-    fn decide_notify_is_just_hidden() {
-        assert!(decide_notify(&perm("m", "s"), false));
-        assert!(!decide_notify(&perm("m", "s"), true));
-        assert!(decide_notify(&dm("p"), false));
+    fn decide_notify_matrix() {
+        // hidden -> always
+        assert!(decide_notify(&perm("m", "s"), false, Some("m s")));
+        assert!(decide_notify(&dm("p"), false, None));
+        // visible + viewing this session -> no
+        assert!(!decide_notify(&perm("m", "s"), true, Some("m s")));
+        // visible + viewing a different session -> yes
+        assert!(decide_notify(&perm("m", "s"), true, Some("m other")));
+        // visible + no session panel (e.g. the session list) -> yes
+        assert!(decide_notify(&perm("m", "s"), true, None));
+        // visible dm -> no
+        assert!(!decide_notify(&dm("p"), true, None));
     }
 
     #[test]
@@ -616,9 +635,18 @@ mod tests {
     }
 
     #[test]
-    fn ping_only_when_the_os_notification_is_suppressed_but_the_user_is_elsewhere() {
+    fn a_visible_user_elsewhere_gets_both_the_ping_and_the_notification() {
         let mut co = NotificationCoordinator::default();
         let eff = co.emit(&perm("m", "s"), EmitInputs { active_session_key: Some("m other"), ..inputs(true, true, true) });
+        assert_eq!(eff.len(), 2);
+        assert_eq!(eff[0], NotifyEffect::Ping);
+        assert!(matches!(eff[1], NotifyEffect::Notify { .. }));
+    }
+
+    #[test]
+    fn ping_only_for_a_visible_dm() {
+        let mut co = NotificationCoordinator::default();
+        let eff = co.emit(&dm("p"), EmitInputs { active_session_key: Some("m s"), ..inputs(true, true, true) });
         assert_eq!(eff, vec![NotifyEffect::Ping]);
     }
 
