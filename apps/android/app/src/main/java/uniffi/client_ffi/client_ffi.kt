@@ -884,6 +884,8 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -931,6 +933,8 @@ internal interface UniffiLib : Library {
     fun uniffi_client_ffi_fn_method_core_quick_prompts_view(`ptr`: Pointer,
     ): Long
     fun uniffi_client_ffi_fn_method_core_resume(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_client_ffi_fn_method_core_set_online(`ptr`: Pointer,`online`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_client_ffi_fn_method_core_settings_view(`ptr`: Pointer,
     ): Long
@@ -1126,6 +1130,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_ffi_checksum_method_core_resume(
     ): Short
+    fun uniffi_client_ffi_checksum_method_core_set_online(
+    ): Short
     fun uniffi_client_ffi_checksum_method_core_settings_view(
     ): Short
     fun uniffi_client_ffi_checksum_method_core_shutdown(
@@ -1215,6 +1221,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_core_resume() != 44586.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_core_set_online() != 14329.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_core_settings_view() != 2639.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1257,7 +1266,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_uniffinotifier_cancel() != 23418.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 58260.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 46945.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1769,6 +1778,13 @@ public interface CoreInterface {
      */
     fun `resume`()
     
+    /**
+     * Whether the device has a usable network. Offline parks the connection
+     * (no retries against a dead radio); coming back online reconnects at
+     * once with a fresh backoff instead of waiting out the current delay.
+     */
+    fun `setOnline`(`online`: kotlin.Boolean)
+    
     suspend fun `settingsView`(): UniffiSettingsView?
     
     /**
@@ -1815,6 +1831,8 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
      * Builds the identity, spawns the dedicated core thread, and blocks
      * (this call is sync — Kotlin sees a plain constructor, not a suspend
      * fun) until the real `client_runtime::Core` has hydrated and is ready.
+     * Hydration reads the whole local database, so this can take seconds on
+     * a slow device: never call it on a UI or service main thread.
      */
     constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
         this(
@@ -2082,6 +2100,22 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_resume(
         it, _status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Whether the device has a usable network. Offline parks the connection
+     * (no retries against a dead radio); coming back online reconnects at
+     * once with a fresh backoff instead of waiting out the current delay.
+     */override fun `setOnline`(`online`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_set_online(
+        it, FfiConverterBoolean.lower(`online`),_status)
 }
     }
     

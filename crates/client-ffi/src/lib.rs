@@ -394,6 +394,13 @@ impl Core {
         self.handle.resume();
     }
 
+    /// Whether the device has a usable network. Offline parks the connection
+    /// (no retries against a dead radio); coming back online reconnects at
+    /// once with a fresh backoff instead of waiting out the current delay.
+    pub fn set_online(&self, online: bool) {
+        self.handle.set_online(online);
+    }
+
     /// `suspend fun dispatch(intent: UniffiIntent)` in Kotlin. Fire-and-forget,
     /// same as the real `Intent` — errors surface later via
     /// `CoreListener::on_event(CoreEvent::ActionFailed)`, not a `Result` here.

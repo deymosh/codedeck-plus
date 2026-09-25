@@ -163,6 +163,11 @@ class StayConnectedService : Service() {
     }
 
     private fun observe(core: CoreHost) {
+        // Network reachability drives the connection FSM's offline/online
+        // transitions; the first emission reconciles the state at startup.
+        connectivity?.let { network ->
+            scope.launch { network.online.collect { core.setOnline(it) } }
+        }
         // The stay-connected setting drives THIS service's foreground state —
         // the settings screen only flips the stored value. Collecting here is
         // mobile's attach-reconcile too: the StateFlow replays the persisted

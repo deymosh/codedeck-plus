@@ -168,6 +168,9 @@ class CoreHost(
     /** The OS foregrounded the app. */
     fun resume() = core.resume()
 
+    /** Whether the device has a usable network — see `Connectivity`. */
+    fun setOnline(online: Boolean) = core.setOnline(online)
+
     suspend fun dispatch(intent: UniffiIntent) = core.dispatch(intent)
 
     /**
