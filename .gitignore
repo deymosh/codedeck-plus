@@ -8,10 +8,8 @@ pnpm-debug.log*
 .pnpm-store/
 
 # Build outputs
-apps/bridge/out/
 apps/mobile/dist/
 packages/agent-host/dist/
-tools/contract-harness/out/
 **/target/
 **/*.tsbuildinfo
 

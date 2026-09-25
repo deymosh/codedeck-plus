@@ -4,9 +4,9 @@
 
 # CodeDeck+
 
-**Control Claude Code sessions running on your laptop or VPS from your Android
-phone, over end-to-end encrypted Nostr.** No accounts and no central server —
-the phone and the bridge pair directly by scanning a QR code.
+**Control coding agents (Claude Code, OpenCode) running on your laptop or VPS
+from your Android phone, over end-to-end encrypted Nostr.** No accounts and no
+central server — the phone and the bridge pair directly by scanning a QR code.
 
 [![CI](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml)
 [![latest release](https://img.shields.io/github/v/release/deymosh/codedeck-plus?sort=semver&label=release)](https://github.com/deymosh/codedeck-plus/releases/latest)
@@ -21,22 +21,24 @@ the phone and the bridge pair directly by scanning a QR code.
 Two halves pair directly over Nostr (NIP-44) — no accounts, no server between
 them:
 
-- **The bridge** — a headless CLI / systemd connector that runs Claude Code
+- **The bridge** — `codedeck-bridge`, a headless service that runs agent
   sessions on the machine where your code lives and exposes them over encrypted
-  Nostr. This repo ships it as a Docker image and an `npx`-installable tarball.
+  Nostr. It ships as a Docker image and as Linux archives
+  ([`docs/BRIDGE.md`](docs/BRIDGE.md)).
 - **The Android app** — drives those sessions from your phone: review plans,
-  approve tool permissions, switch models, and chat with several sessions at
-  once.
+  approve tool permissions, answer the agent's questions, switch models, and
+  chat with several sessions at once.
 
-Pairing is a one-time QR scan; it survives restarts and reinstalls on both ends.
+Pairing is a one-time QR scan; it survives restarts on both ends.
 
-- Multiple concurrent Claude Code sessions, switchable from one screen
-- Plan approval, permission cards and AskUserQuestion prompts on the phone
-- Transcripts that survive restarts, offline gaps and reinstalls (ranged sync)
-- Per-session model and effort, plus custom AI provider profiles (Kimi K3,
-  OpenRouter, any Anthropic-compatible endpoint)
-- Optional [OpenCode](https://opencode.ai) backend, selectable per session
-  alongside Claude Code
+- Several concurrent sessions, switchable from one screen
+- Plan approval, permission cards and agent questions on the phone
+- Transcripts that survive restarts and offline gaps (ranged sync)
+- Per-session mode, model and effort, plus custom AI provider profiles (Kimi
+  K3, OpenRouter, any Anthropic-compatible endpoint)
+- Claude Code and [OpenCode](https://opencode.ai), chosen per session — the
+  protocol is agent-neutral, so another agent is one driver away
+  ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
 - Encrypted Nostr DMs — NIP-17 and Marmot (MLS) side by side
 - Project/folder management on every paired bridge host
 
@@ -46,8 +48,9 @@ CodeDeck+ is a community-maintained continuation of **CodeDeck Next** by
 [JeroenOnNostr](https://github.com/JeroenOnNostr)
 ([mobile](https://github.com/JeroenOnNostr/codedeck-next-mobile) ·
 [bridge](https://github.com/JeroenOnNostr/codedeck-next-bridge)), consolidated
-into one pnpm monorepo. It adds infrastructure the upstream projects didn't
-design for:
+into one repository and since rebuilt: the protocol, the bridge and the phone's
+core are Rust, and the Android app is native. It adds infrastructure the
+upstream projects didn't design for:
 
 - **NIP-42 `AUTH`** relays — e.g. a self-hosted
   [Haven](https://github.com/bitvora/haven) relay
@@ -55,64 +58,54 @@ design for:
 - the phone routing through **Orbot** (Android's Tor app)
 
 The original MIT license and attribution are preserved; `vendor/` keeps
-pristine `git subtree` mirrors of both upstreams. Docker builds and runs only
-the **bridge**; the Android app lives here too (for the shared packages and its
-own Tor/Orbot patch) but builds with its own Android/Rust toolchain.
+pristine `git subtree` mirrors of both upstreams.
 
 ## Repository layout
 
 ```
 codedeck-plus/
-├── vendor/              # pristine git-subtree mirrors of upstream — never hand-edited
-│   ├── bridge/           #   codedeck-next-bridge @ main (carries its own package.json / pnpm-*,
-│   └── mobile/           #   codedeck-next-mobile @ main   inert — not in the workspace glob)
-├── packages/             # shared workspace packages (the actual, editable code)
-│   ├── protocol/          #   wire format + NIP-42 signer, used by both apps
-│   ├── core/               #   bridge engine (Node-only: Tor/SOCKS5 transport lives here)
-│   └── testkit/
+├── crates/              # the Rust workspace
+│   ├── protocol/          #   the phone wire (source of truth) + its conformance corpus
+│   ├── agent-protocol/    #   the driver protocol: bridge ⇄ agent host
+│   ├── nostr-transport/   #   relay WebSocket + SOCKS5 (Tor) driver, NIP-42 AUTH
+│   ├── bridge-core/       #   the bridge engine (pure state machine)
+│   ├── bridge-runtime/    #   the codedeck-bridge binary
+│   ├── client-core/       #   the phone's core (pure)
+│   ├── client-runtime/    #   the phone's async host
+│   └── client-ffi/        #   UniFFI surface for the Android app
+├── packages/
+│   └── agent-host/        # Node sidecar running the agent SDKs (one driver per agent)
 ├── apps/
-│   ├── bridge/            # the headless CLI/systemd bridge — what Docker builds
-│   └── mobile/             # Tauri v2 + React Android app (not built by Docker)
-├── docker/
-│   ├── Dockerfile
-│   ├── entrypoint.sh
-│   └── main.js          # container entry shim (WebSocket global → built bridge CLI)
-├── docs/
-│   ├── PROTOCOL.md      # the wire contract (packages/protocol/src/ is authoritative)
-│   └── OPENCODE.md      # the optional OpenCode session backend: setup, both config modes
-├── scripts/
-│   └── sync-upstream.sh  # pulls upstream into vendor/*, for hand-merging
-├── .github/workflows/   # ci.yml (typecheck + test + build + cargo) · release.yml (tag → release)
+│   ├── android/           # the native Android app (Kotlin + the Rust client core)
+│   └── mobile/            # the former Tauri app — frozen (future desktop client)
+├── vendor/              # pristine git-subtree mirrors of upstream — never hand-edited
+├── docker/              # the bridge image (Dockerfile, entrypoint, helpers)
+├── deploy/              # systemd unit for the bridge
+├── docs/                # PROTOCOL.md (contract) · BRIDGE.md (operating it) · OPENCODE.md
+├── scripts/             # sync-upstream.sh, toolchain installer
+├── .github/workflows/   # ci.yml · release.yml (tag → release)
 ├── .claude/             # CLAUDE.md + skills for Claude Code
-├── codedeck             # ./codedeck — bridge / Tor / APK / test wrapper (Docker, no host toolchain)
+├── codedeck             # ./codedeck — bridge / Tor / APK / checks wrapper
 ├── docker-compose.yml
-├── pnpm-workspace.yaml
-└── data/                 # runtime volume (bridge identity, paired phones, sessions)
+└── data/                # runtime volume (bridge identity, paired phones, sessions)
 ```
 
 See `scripts/sync-upstream.sh` for how to pull future upstream changes —
 `vendor/*` stays a real `git subtree`, so pulling in new fixes is a real
-`git subtree pull`, not a manual re-diff against a tarball. What lands in
-`packages/*` and `apps/bridge`/`apps/mobile` after that is still a deliberate,
-reviewed merge (they've diverged from `vendor/*` on purpose).
+`git subtree pull`; porting them into this tree is a deliberate, reviewed
+change.
 
 ## Local patches on top of upstream
 
-- **NIP-42 relay auth** (`packages/protocol/src/nip42.ts`): the bridge and
-  the phone each answer a relay's `AUTH` challenge with their own existing
-  identity keypair — no new secret to configure. Just allowlist the bridge's
-  pairing npub (and the phone's, if your relay gates reads too) in your
-  relay's ACL.
-- **Tor/SOCKS5 for the bridge** (`packages/core/src/nostr/transport.ts`):
-  set `CODEDECK_TOR_PROXY_URL` and every relay connection routes through it.
-  See the optional `codedeck-tor` Compose service below.
-- **Orbot for the phone** (`apps/mobile/tauri-plugin-tor-proxy`): a settings
-  toggle routes the WebView's relay traffic through Orbot's SOCKS5 proxy via
-  `androidx.webkit.ProxyController` — Android-only, off by default.
-- Relay reconnection (`BridgePool` / the phone's connection FSM) was already
-  solid upstream (epoch-guarded reconnects, exponential backoff) — see the
-  code comments in `packages/core/src/nostr/pool.ts` for what's original vs.
-  new.
+- **NIP-42 relay auth** (`crates/protocol/src/nip42.rs`): the bridge and the
+  phone each answer a relay's `AUTH` challenge with their own existing identity
+  keypair — no new secret to configure. Just allowlist the bridge's pairing
+  npub (and the phone's, if your relay gates reads too) in your relay's ACL.
+- **Tor/SOCKS5 for the bridge** (`crates/nostr-transport`): set
+  `CODEDECK_TOR_PROXY_URL` and every relay connection routes through it. See
+  the optional `codedeck-tor` Compose service below.
+- **Orbot for the phone**: a settings toggle routes the app's relay traffic
+  through Orbot's SOCKS5 proxy — off by default.
 
 ## Environment variables
 
@@ -130,7 +123,7 @@ GIT_REPO=https://github.com/your-username/your-repo.git
 CODEDECK_RELAYS=
 CODEDECK_TOR_PROXY_URL=
 
-# Optional — a second, OpenCode-backed session type. See docs/OPENCODE.md.
+# Optional — OpenCode, a second agent alongside Claude Code. See docs/OPENCODE.md.
 CODEDECK_OPENCODE_SERVER_URL=
 CODEDECK_OPENCODE_AUTO_START=
 CODEDECK_OPENCODE_PORT=
@@ -182,7 +175,7 @@ which publishes one GitHub Release with every artifact of that version:
 | Component | Artifact |
 |---|---|
 | Android app | `codedeck-vX.Y.Z.apk` — release aarch64 build, signed |
-| Bridge CLI (`npx` / global install) | `codedeck-bridge-vX.Y.Z.tgz` |
+| Bridge for Linux (binary + agent host; needs Node 22+) | `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz`, `…-linux-aarch64.tar.gz` |
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
@@ -197,9 +190,8 @@ the full runbook.
 
 ## More docs
 
-- [`apps/bridge/README.md`](apps/bridge/README.md) — the bridge CLI: commands, config, systemd
-- [`apps/mobile/README.md`](apps/mobile/README.md) — the Android app: stack, layout, building an APK
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v10 wire contract
+- [`docs/BRIDGE.md`](docs/BRIDGE.md) — the bridge: install, commands, config, files, systemd
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v11 wire contract, the driver protocol, adding an agent
 - [`docs/OPENCODE.md`](docs/OPENCODE.md) — the optional OpenCode session backend: external server vs. bridge-managed, config, Docker setup
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 

@@ -1,5 +1,18 @@
 # `client-core` / `client-runtime` — the shared Rust client
 
+Status: **historical.** This documents the F1/F2 migration that moved the
+phone's logic from TypeScript (`apps/mobile/src/core`, `apps/mobile/src-tauri`)
+into Rust. The migration is long done, and the repository has moved on since:
+the same treatment gave the bridge `crates/bridge-core` + `crates/bridge-runtime`
+(protocol v11, agent-neutral), `apps/android` is the phone, and the TypeScript
+bridge packages are gone. Read this as the record of where `client-core` came
+from and why it is shaped the way it is; for today's wire see
+[`PROTOCOL.md`](PROTOCOL.md).
+
+The rest is as written when F2b finished.
+
+---
+
 Status: **F2b complete — the stop-point** (migration plan). The Node/TS side
 (`packages/*`, `apps/bridge`) is unaffected. `apps/mobile/src-tauri`'s
 `native-core` feature is now the **default** (field-tested on a real device;
@@ -125,16 +138,15 @@ pickers, tray/menus.
   event only on `unreachable` (transient); `rejected` from every relay will
   reject it identically, `accepted`/`unconfirmed` mean the bridge has it.
 
-## Anti-drift with `packages/protocol`
+## Anti-drift with the wire (historical form)
 
-`packages/protocol` stays the **normative spec** (zod). The Rust `wire` codec
-is a mirror. `packages/protocol/fixtures/corpus.json` is the executable
-contract: `packages/protocol/src/__tests__/fixtures.test.ts` (vitest) and
-`crates/client-core/tests/codec_conformance.rs` (cargo) run the identical
-assertions — decode every `valid` entry + semantic round-trip, reject every
-`rejected` entry, ignore extra fields on `forwardCompatible` — on the identical
-bytes. A schema change mirrored on only one side fails CI there. The `cargo`
-job's `core` path filter includes `packages/protocol/fixtures/**`.
+At the time of the migration the wire had two implementations: the Rust codec
+below and a TypeScript zod mirror, kept from drifting by a shared corpus both
+sides tested against. That mirror is gone — `crates/protocol` is now the only
+implementation and the **source of truth**. The corpus moved with it:
+`crates/protocol/fixtures/corpus.json`, run by
+`crates/protocol/tests/codec_conformance.rs`, which also asserts every message
+type has a fixture (see the corpus README).
 
 ## Port-tracking
 

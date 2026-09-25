@@ -4,34 +4,40 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Project identity
 
-CodeDeck+ is a community-maintained continuation of CodeDeck Next: run Claude Code
-sessions on a laptop/VPS ("the bridge") and drive them from an Android phone over
-end-to-end-encrypted Nostr. This repo consolidates the two upstream projects
-(`codedeck-next-bridge`, `codedeck-next-mobile`) into one pnpm monorepo and adds
-infrastructure the upstream did not design for:
+CodeDeck+ is a community-maintained continuation of CodeDeck Next: run coding
+agents (Claude Code, OpenCode, …) on a laptop/VPS ("the bridge") and drive them
+from an Android phone over end-to-end-encrypted Nostr. It started as a merge of
+the two upstream projects (`codedeck-next-bridge`, `codedeck-next-mobile`) and
+has since been rebuilt: the protocol, the bridge and the phone's core are Rust;
+the only TypeScript left runs the agent SDKs. It adds infrastructure the
+upstream did not design for:
 
 - a Nostr relay that requires **NIP-42 `AUTH`** (e.g. a self-hosted Haven relay),
-- a bridge that only reaches the network over **Tor** (SOCKS5),
+- a bridge that only reaches its relays over **Tor** (SOCKS5),
 - the phone routing through **Orbot** instead (Android's Tor app).
 
 ### Non-negotiable structure
 
 - **`vendor/bridge/` and `vendor/mobile/` are pristine `git subtree` mirrors of
   upstream — never hand-edit a file under `vendor/`.** New upstream work arrives
-  via `scripts/sync-upstream.sh` (a real `git subtree pull`); what then lands in
-  `packages/*` / `apps/*` is a deliberate, reviewed merge. `vendor/*` exists only
+  via `scripts/sync-upstream.sh` (a real `git subtree pull`); porting what
+  matters into this tree is a deliberate, reviewed change. `vendor/*` exists only
   as the honest diff base.
-- The **editable** code is `packages/{protocol,core,testkit}` and
-  `apps/{bridge,mobile}`.
-- **`packages/protocol` is the single source of truth for the wire.** Every
-  message is a zod schema; TS types are `z.infer<>`; both peers `safeParse` at
-  ingest; `decodeBridgeToPhone` / `decodePhoneToBridge` are **total** (they
-  return a typed result and never throw). Protocol version 10 is a **clean break**
-  — there is no compatibility with pre-v10 peers, so do not add version-ladder
-  logic; gate new features on capability strings instead.
-- The package is deliberately runtime-agnostic: its only deps are `nostr-tools`
-  and `zod`, no `@types/node`, no DOM lib. Keep it that way — a second client
-  (e.g. a native one) must be able to treat it as the spec.
+- The **editable** code is `crates/*`, `packages/agent-host` and `apps/android`.
+  `apps/mobile` (the Tauri app) is frozen on protocol v10, outside the pnpm
+  workspace and CI; it is kept as the base of a future desktop client.
+- **`crates/protocol` is the single source of truth for the phone wire**, and
+  **`crates/agent-protocol` for the driver protocol** (bridge ⇄ agent host).
+  Decoders are **total** (they return a result, never panic or throw).
+  Protocol v11 is a **clean break** — no compatibility with earlier peers, no
+  version-ladder logic; gate new features on capability strings or on the
+  agent catalog's `supports` flags. `crates/protocol` depends on nothing else in
+  the workspace, so any client can treat it as the spec.
+- **Nothing outside a driver knows a particular agent.** Agent-specific
+  behaviour (SDK translation, modes, permission policy, credential and provider
+  mapping) lives in `packages/agent-host/src/drivers/<agent>/`; the bridge and
+  the phone work from the catalog the host reports. See `docs/PROTOCOL.md`,
+  "Adding an agent".
 
 ## Commands
 
@@ -46,35 +52,26 @@ applies:**
   Docker slow for anything iterative (many builds/edits in a row, e.g. an
   Android session): build the toolchain image ONCE, `docker create`+`start`
   ONE long-lived container from it, then run each step as a separate
-  `docker exec` against that same container — same pattern already used for
-  `codedeck-rust`/`codedeck-node` throughout this repo's own Rust/TS
-  verification workflow — and only `docker rm -f` it once the whole session
-  of work is actually done. Don't spin up a fresh container (and re-tar the
-  repo into it) per command.
+  `docker exec` against that same container, and only `docker rm -f` it once
+  the whole session of work is actually done. Don't spin up a fresh
+  container (and re-tar the repo into it) per command.
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
   or any bare Linux machine):** `scripts/install-toolchain.sh` installs a
   COMPLETE toolchain — JDK, Rust (+ the Android targets), Node.js, the exact
   pinned pnpm, the Android SDK/NDK, and a Zig host-`cc` shim (active only
   when the machine has no C compiler; cargo needs one to link build
   scripts/proc macros/test binaries) — into `./toolchain/` (gitignored),
-  independent of anything already on that machine (a different project's
-  Java/Rust/Node/Android-SDK version is never at risk, and a bare machine
-  with none of them works the same as one with all of them already
-  installed for something else). Run it once, then `source toolchain/env.sh`
-  in any shell that needs `cargo`/`node`/`pnpm`/`java`/`sdkmanager` from it.
-  `apps/android/scripts/build-apk-local.sh` uses this directly — no Docker,
-  no tar, no container, just the host. The one thing it does NOT cover:
-  apps/mobile's Tauri DESKTOP target needs system GUI libraries
-  (webkit2gtk/gtk3/etc.) — genuine OS packages, not vendorable; install
-  those via the distro's package manager if that specific build is needed.
+  independent of anything already on that machine. Run it once, then
+  `source toolchain/env.sh` in any shell that needs
+  `cargo`/`node`/`pnpm`/`java`/`sdkmanager` from it.
+  `apps/android/scripts/build-apk-local.sh` uses this directly — no Docker.
 
 ```bash
-# Workspace verification — run these in a throwaway node container on
-# Windows (nothing installed locally is required), or directly with the
-# toolchain/ pnpm on Linux. A change is not done until `check` is green.
-./codedeck check         # typecheck + test, every package
-./codedeck typecheck     # typecheck only
-./codedeck test          # test only
+# Workspace verification, in throwaway containers (nothing installed locally
+# is required). A change is not done until `check` is green.
+./codedeck check         # agent host typecheck + test, cargo clippy + test (every crate)
+./codedeck typecheck     # typecheck / clippy only
+./codedeck test          # tests only
 
 # The deployed bridge service (Docker Compose)
 ./codedeck bridge up     # build if needed and start
@@ -82,34 +79,36 @@ applies:**
 ./codedeck bridge pair   # print the most recent pairing QR/URL
 ./codedeck bridge down
 
-# Local Android APK — Windows: Docker (its own toolchain image, several GB
-# first run); Linux: scripts/install-toolchain.sh once, then the *-local
-# variant, direct on the host, no Docker.
-./codedeck apk debug                         # fast, unstripped, Android debug keystore
-./codedeck apk benchmark                     # release-optimized .so, debug-signed so it installs
-apps/android/docker/build-apk.sh             # apps/android debug apk, Windows/Docker path
-apps/android/scripts/build-apk-local.sh      # apps/android debug apk, Linux/local path
+# The Android app — Windows: Docker (its own toolchain image, several GB
+# first run); Linux: scripts/install-toolchain.sh once, then the -local script.
+./codedeck apk                               # debug APK into dist/ (Docker)
+apps/android/scripts/build-apk-local.sh      # debug APK, Linux/local path
+./codedeck gen-android-bindings              # regenerate the UniFFI Kotlin bindings
 
-# Pull upstream into vendor/* for hand-merging
+# Pull upstream into vendor/* for porting
 ./codedeck sync
 ```
 
-If you must run a single package's tests, the container path is
-`pnpm --filter <pkg> run test` — but prefer `./codedeck test` unless iterating.
+Narrower loops: `cargo test -p <crate>`; `pnpm --filter @codedeck/agent-host
+run test`. Tests marked `#[ignore]` need Node and a built agent host
+(`pnpm --filter @codedeck/agent-host run build`): the driver-protocol spawn
+test (`-p agent-protocol --test agent_host`) and the bridge end-to-end test
+(`-p bridge-runtime --test e2e`) — run them with `-- --ignored`. After changing
+a driver-protocol type, regenerate the host's types with
+`cargo test -p agent-protocol --test gen_ts_bindings -- --ignored`.
 
 ### CI and releases
 
-- `.github/workflows/ci.yml` runs on every push to `master` and every PR:
-  `typecheck` + `test` + `build` (recursive) + a bridge-artifact smoke test, plus
-  a path-filtered `cargo test` for `apps/mobile/src-tauri` and the
-  `tauri-plugin-*` crates.
+- `.github/workflows/ci.yml` runs on every push to `master` and every PR: the
+  agent host's typecheck + test + build; cargo test + clippy for every crate;
+  the driver-protocol drift check, host spawn test and bridge end-to-end test;
+  and the Android unit/screenshot tests with the UniFFI bindings drift check
+  (Rust and Android jobs are path-filtered).
 - `.github/workflows/release.yml` runs on a `vMAJOR.MINOR.PATCH` tag: it builds
-  and publishes one GitHub Release with the signed APK, the bridge npm tarball,
-  and the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A tag
+  and publishes one GitHub Release with the signed APK, the bridge for Linux
+  x86_64 and aarch64 (`codedeck-bridge` + its agent host; needs Node 22+), and
+  the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A tag
   with a hyphen (`v1.2.3-rc1`) is a prerelease. See the `cut-release` skill.
-- `pnpm build` at the root is recursive (bridge + mobile web bundle);
-  `pnpm build:bridge` is the bridge-only form. `docker/Dockerfile` invokes the
-  filtered form directly, so the image build is independent of the root script.
 
 ## Workflow
 
@@ -151,70 +150,74 @@ If you must run a single package's tests, the container path is
 - Do not reference the current task, the PR, or "the fix" in code comments — the
   comment outlives all three.
 
+
 ## Architecture and layering
 
 ```
-packages/protocol   wire contract: schemas, codec (total), kinds, chunking,
-                    capabilities, nip42 signer. Depends on nothing internal.
-        │
-        ├── packages/core        the BRIDGE engine (Node-only): SDK adapter,
-        │                        session runner/registry/permissions, sync
-        │                        server, nostr pool/publisher/ingest, pairing,
-        │                        mesh admin, folders, Tor/SOCKS5 transport.
-        │        │
-        │        └── apps/bridge  thin CLI / systemd wrapper, esbuild-bundled.
-        │
-        └── apps/mobile          Tauri v2 + React Android app:
-              src/core             stores, connection FSM, bridgeApi, nostrClient,
-                                   crypto (mirrors core's crypto, does NOT import it)
-              src/ui               screens + components + transcript renderers
-              src/platform         Tauri seams — every one `isTauri`-guarded with
-                                   a browser/desktop fallback
-              src-tauri            Rust host + tauri-plugin-* (background relay,
-              tauri-plugin-*       mesh VpnService, STT, tor-proxy, marmot/MLS)
+crates/protocol          the phone wire: messages, total codec, kinds, ranges,
+    │                    chunking, capabilities, NIP-44/NIP-42 primitives.
+    │                    Depends on nothing internal.
+    ├── crates/agent-protocol    the driver protocol (bridge ⇄ agent host);
+    │                            the host's TS types are generated from it.
+    ├── crates/nostr-transport   relay WebSocket + SOCKS5 driver, NIP-42 AUTH.
+    │
+    ├── crates/bridge-core       the bridge engine: sessions, restarts, cards,
+    │        │                   seqs, sync, pairing, ingest, credentials — a
+    │        │                   pure state machine (inputs in, effects out).
+    │        └── crates/bridge-runtime   the `codedeck-bridge` binary: relays,
+    │                            agent host process, state/transcript files,
+    │                            workspace, images, GSD, device tools, CLI.
+    │                                 │ stdio (driver protocol)
+    │                            packages/agent-host   Node: one driver per agent
+    │                            (claude, opencode, fake) around its SDK.
+    │
+    └── crates/client-core       the phone's pure core: stores, connection FSM,
+             │                   sync/merge, presentation.
+             └── crates/client-runtime   async host (tokio, transport, ports)
+                      └── crates/client-ffi   UniFFI surface → apps/android
 ```
 
-- **The phone must not import `@codedeck/core` (or `@codedeck/testkit`) in
-  production code.** `apps/mobile/src/__tests__/layering.test.ts` enforces this;
-  `apps/mobile/src/core/crypto.ts` deliberately re-implements the crypto helpers
-  rather than importing them. `@codedeck/core` is the bridge's engine.
-- **Capability negotiation has three tiers** — see the note at the top of
-  `packages/protocol/src/capabilities.ts`. `images`, `custom-providers` and
-  `diff` are HARD GATES (absence changes behaviour). `sync/1`, `folders`, `gsd`,
-  `usage`, `models`, `device-actions` are PRESENCE MARKERS (the feature is
-  detected from payload data, not the string). `chunked` is a TRANSPORT BEACON
-  (advertised on both sides, gated by neither). Do not add a new string as a
-  "gate" unless a peer that has not seen it would otherwise hard-fail.
-- Reusable UI primitives live in `apps/mobile/src/ui/shared.module.css` +
-  `shared.ts` (buttons, cards, badges, banners, the `.screen` scroll column).
-  Check there before adding a new one.
-- `apps/mobile/src/platform/poolOptions.ts` is the single place every phone
-  `SimplePool` is configured; a test scans the source tree to enforce it.
+- **Pure cores stay pure.** `crates/client-core` and `crates/bridge-core` have
+  no tokio, no sockets, no filesystem: they return effects (or read through
+  small synchronous ports) and are tested deterministically with in-memory
+  ports. I/O belongs in the runtimes.
+- **The phone and the bridge share only `protocol` (and `nostr-transport`).**
+  Neither core depends on the other.
+- **Capability negotiation** — see the note at the top of
+  `crates/protocol/src/capabilities.rs`. `images` is a HARD GATE; `sync/1`,
+  `folders`, `device-actions` are PRESENCE MARKERS; `chunked` is a TRANSPORT
+  BEACON. What an agent can do is catalog data (`supports`), not a capability.
+  Do not add a new string as a "gate" unless a peer that has not seen it would
+  otherwise hard-fail.
 
 ## Absolute constraints (do not suggest workarounds)
 
-- Never hand-edit `vendor/*`. Never introduce pre-v10 protocol compatibility.
-- Every wire change starts as a `packages/protocol` schema. Keep the decoders
-  total (return a result, never throw). Keep `packages/protocol` free of
-  `@types/node` / DOM / non-`nostr-tools`-non-`zod` deps.
-- No bridge network path that bypasses the configured SOCKS proxy when one is
-  set; no phone network path that bypasses the Orbot WebView proxy override.
-  Cleartext `ws://` is allowed only for `.onion` relays.
-- Secrets — Anthropic API keys, GitHub PATs, custom-provider tokens, Android
-  keystore material — are never logged, never echoed back over the wire, and are
-  wiped from component state immediately after send.
+- Never hand-edit `vendor/*`. Never introduce pre-v11 protocol compatibility.
+- Every phone-wire change starts in `crates/protocol` (with a corpus fixture);
+  every driver-protocol change in `crates/agent-protocol` (then regenerate the
+  host's types). Keep the decoders total.
+- **The Tor/SOCKS proxy is for Nostr relay traffic only.** When one is set,
+  every bridge relay connection goes through it; other outbound calls (HTTP
+  checks, image downloads, the agents' own API traffic) do not use it and are
+  not a proxy bypass. No phone network path may bypass the Orbot WebView proxy
+  override. Cleartext `ws://` is allowed only for `.onion` relays (and
+  loopback, for tests).
+- Secrets — API keys, GitHub PATs, custom-provider tokens, Android keystore
+  material — are never logged, never echoed back over the wire, and are wiped
+  from component state immediately after send. In Rust they travel as
+  `agent_protocol::Secret`, whose `Debug` is redacted.
 - Do not downgrade Node / TypeScript / Rust / NDK versions to work around a build
   failure; fix the root cause.
-- The `docker/main.js` shim (copied to `/app/main.js` in the image) and
-  `docker/Dockerfile` both assume the bridge builds to `apps/bridge/out/main.js`,
-  which `pnpm deploy` lands at `/app/out/main.js` — keep them consistent if that
-  changes. The image's `claude` is a symlink to the Agent SDK's own platform
-  binary (no global Claude Code install), so its version follows the lockfile.
+- The image (`docker/Dockerfile`) and the release archives lay the bridge out as
+  `codedeck-bridge` with `agent-host/dist/main.js` beside it; the binary looks
+  there by default — keep them consistent. The image's `claude` is a symlink to
+  the Agent SDK's own platform binary (no global Claude Code install), so its
+  version follows the lockfile.
 
 ## Vendored history note
 
 Commit `c0d8676` restructured the two vendored repos into this monorepo as a pure
-`git mv` (verified: no file content changed). Everything since is additive
-(NIP-42, Tor/SOCKS5, Orbot, event fragmentation, APK build tooling, CI/release).
-`docs/PROTOCOL.md` is the promoted contributor contract; `packages/protocol/src/`
-is authoritative where they disagree.
+`git mv`. Everything since is this fork's own work: NIP-42, Tor/SOCKS5, Orbot,
+event fragmentation, the native Android app, protocol v11 and the Rust bridge.
+`docs/PROTOCOL.md` is the contributor contract; `crates/protocol` and
+`crates/agent-protocol` are authoritative where they disagree.

@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Cut a CodeDeck+ release — a single vMAJOR.MINOR.PATCH tag that publishes one GitHub Release with the signed APK, the bridge npm tarball, and the bridge container image. Use when asked to cut, tag, or ship a release.
+description: Cut a CodeDeck+ release — a single vMAJOR.MINOR.PATCH tag that publishes one GitHub Release with the signed APK, the bridge for Linux x86_64/aarch64, and the bridge container image. Use when asked to cut, tag, or ship a release.
 ---
 
 # Cutting a CodeDeck+ release
@@ -44,21 +44,21 @@ Packages write enabled for Actions in repo settings.
    version N, even a component unchanged since N-1 — the version is a
    compatibility snapshot, not a per-component changelog; wire compatibility is
    `protocolVersion`, tracked separately). Set `X.Y.Z` in:
-   - `package.json` (root), every `apps/*/package.json` and `packages/*/package.json`
-   - `apps/mobile/src-tauri/tauri.conf.json` `version`
-   - `apps/mobile/src-tauri/Cargo.toml` `version` + the `codedeck-mobile` entry
-     in `Cargo.lock` (one line; CI's `cargo test --locked` fails if they disagree)
+   - `package.json` (root) and `packages/agent-host/package.json`, then run
+     `pnpm install` so `pnpm-lock.yaml` records it
+   - `crates/bridge-runtime/Cargo.toml` `version` + its `Cargo.lock` entry
+     (one line; CI's `cargo test --locked` fails if they disagree)
 
-   The Android `versionCode` is **derived** from `version`
-   (`major·1_000_000 + minor·1_000 + patch`), so bumping `version` is enough — do
-   not pin `bundle.android.versionCode` in `tauri.conf.json` (a pin turns the
-   monotonic-integer guarantee into manual bookkeeping).
+   The Android `versionCode` is **derived at build time** from the tag
+   (`-PcodedeckVersion`), and the release build stamps the same number into
+   the bridge binary and image (`CODEDECK_VERSION`), so nothing else carries a
+   version to bump.
 
    Land this bump on `master` (a small dedicated PR is fine) so the repo always
-   states its own current version. `release.yml` re-stamps the same number at
-   build time with `--allow-same-version`, so the CI stamp is a **no-op safety
-   net** — it only does real work for a `workflow_dispatch` run given an
-   arbitrary version input, never the mechanism a real tag relies on.
+   states its own current version. The release build re-stamps the same number,
+   so that stamping is a **no-op safety net** — it only does real work for a
+   `workflow_dispatch` run given an arbitrary version input, never the
+   mechanism a real tag relies on.
 
    Semver. A pre-release gets a hyphen suffix (`v1.2.0-rc1`) — published as a
    GitHub *prerelease*, and `:latest` does not move.
@@ -89,15 +89,17 @@ Packages write enabled for Actions in repo settings.
    ```
 
 7. **Watch the run:** `gh run watch` (or `gh run list --workflow=release.yml`).
-   Jobs: `meta` → (`bridge-npm`, `bridge-image`, `android-apk` in parallel) →
-   `release`. The `release` job creates the GitHub Release with
-   `generate_release_notes: true`, so the changelog is the merged-PR list since
-   the previous tag — another reason to land work as PRs, not direct pushes.
+   Jobs: `meta` → (`bridge-binary` (x86_64 + aarch64), `bridge-image`,
+   `android-apk` in parallel) → `release`. The `release` job creates the GitHub
+   Release with `generate_release_notes: true`, so the changelog is the
+   merged-PR list since the previous tag — another reason to land work as PRs,
+   not direct pushes.
 
-8. **Confirm the release** has all three artifacts, each on the `vX.Y.Z`
-   convention: `codedeck-vX.Y.Z.apk` and `codedeck-bridge-vX.Y.Z.tgz` attached,
-   and the `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+
-   `:latest` for a non-prerelease).
+8. **Confirm the release** has all its artifacts, each on the `vX.Y.Z`
+   convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz`,
+   `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.gz` attached, and the
+   `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+ `:latest` for a
+   non-prerelease).
 
 ## Dry run without tagging
 
