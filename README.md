@@ -177,6 +177,7 @@ which publishes one GitHub Release with every artifact of that version:
 |---|---|
 | Android app | `codedeck-vX.Y.Z.apk` — release aarch64 build, signed |
 | Bridge for Linux (binary + agent host + Node, self-contained; glibc ≥ 2.35) | `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz`, `…-linux-aarch64.tar.gz` |
+| Bridge for Windows (the same, zipped) | `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` |
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move

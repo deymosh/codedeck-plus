@@ -29,6 +29,22 @@ To put it on `PATH`, extract it somewhere stable (e.g. `/opt/codedeck-bridge`)
 and symlink the binary: it finds its agent host and Node through the symlink.
 Upgrading is extracting the new archive over the old one.
 
+**Windows** — `codedeck-bridge-vX.Y.Z-windows-x86_64.zip`, the same bundle
+(`codedeck-bridge.exe`, its agent host, `node.exe`). Extract it and run
+`codedeck-bridge.exe run` from a terminal; state lives in
+`%USERPROFILE%\.codedeck`. Things that differ from Linux:
+
+- Claude Code's Bash tool needs [Git for Windows](https://git-scm.com/downloads/win)
+  (set `CLAUDE_CODE_GIT_BASH_PATH` if its `bash.exe` is not found).
+- The state and config files get no extra permission tightening: they rely
+  on the user profile folder being private to your account, as it is by
+  default.
+- OpenCode is found on `PATH` only as `opencode.exe`; npm's global install
+  adds just an `opencode.cmd` shim, so point `CODEDECK_OPENCODE_PATH` at the
+  real binary in that case.
+- There is no service unit: run it in a terminal, or start it at logon with
+  Task Scheduler. Under WSL2, the Linux archive works as on Linux.
+
 The Claude Code binary ships inside the agent host; it authenticates with
 `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, an existing `claude` login, or
 a key set from the phone.
