@@ -1,0 +1,56 @@
+//! CodeDeck+ client async host. Wraps `client-core` with the tokio reactor,
+//! the `Transport` driver, live `ChunkAssembler`, lifecycle
+//! (`start`/`stop`/`pause`/`resume`), the platform ports, and the composed
+//! store layer. Bindings (`crates/client-ffi` for Android) attach to this
+//! crate, never to `client-core`.
+//!
+//! Layering: `nostr_client` (epoch-guarded per-class subscription FSM) sits
+//! behind a `Transport` port; `transport::ws` is the real WebSocket + SOCKS5
+//! driver; `runtime::Core` composes the connection FSM, `bridge_api`, the
+//! `dispatch::Router` over every store, the `intent` surface, the `view`
+//! projections, the `CoreEvent` stream and the DM runtime behind one tokio
+//! event loop — the handle the bindings attach to.
+
+// UniFFI's `#[derive(uniffi::Record)]`/`uniffi::Enum` need a `UniFfiTag` in
+// THIS crate regardless of the fact that the actual `#[uniffi::export]`
+// surface lives in `crates/client-ffi`, not here — a "types" crate with no
+// exported functions of its own still needs its own scaffolding call so its
+// derived types are referenceable from the crate that does the exporting.
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
+pub mod attachments;
+pub mod deadline;
+pub mod dispatch;
+pub mod giftwrap;
+pub mod intent;
+pub mod marmot;
+pub mod nostr_client;
+pub mod ports;
+pub mod runtime;
+pub mod stores;
+pub mod view;
+
+/// The relay transport (WebSocket + SOCKS5 driver, frame codec, publish
+/// verdicts), shared with other runtimes as the `nostr-transport` crate.
+pub use nostr_transport as transport;
+
+pub use runtime::{
+    ActionFailedKind, Clock, Core, CoreConfig, CoreEvent, CoreObserver, CorePorts, Entropy, SliceId,
+    SystemClock, TimeEntropy,
+};
+pub use dispatch::StoreId;
+pub use intent::{Intent, IntentCtx, SessionImageSend};
+pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, TranscriptStore};
+pub use stores::{CoreStores, HydratedCore};
+pub use view::{
+    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
+    PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, TranscriptRowView,
+    TranscriptSyncView, UiView,
+};
+
+/// Re-export the pure core and the wire contract so hosts have one
+/// dependency edge each, without needing `protocol`/`client-core` as direct
+/// Cargo dependencies of their own just to name a type.
+pub use client_core;
+pub use protocol;

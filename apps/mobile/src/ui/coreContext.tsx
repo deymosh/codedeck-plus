@@ -7,7 +7,7 @@
  */
 import { createContext, useContext } from 'react';
 import { useStore } from 'zustand';
-import type { PhoneCore } from '../core/createPhoneCore';
+import type { PhoneCore } from '../core/phoneCore';
 import type { ConnectionStoreState } from '../core/stores/connection';
 import type { DmStoreState } from '../core/stores/dm';
 import type { MarmotStoreState } from '../core/stores/marmot';

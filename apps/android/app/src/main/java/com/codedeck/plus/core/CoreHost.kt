@@ -1,0 +1,252 @@
+package com.codedeck.plus.core
+
+import com.codedeck.plus.platform.CoreHttpFetch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.launch
+import uniffi.client_runtime.ActionFailedKind
+import uniffi.client_runtime.ConnectionView
+import uniffi.client_runtime.CoreEvent
+import uniffi.client_runtime.SliceId
+import uniffi.client_ffi.Core
+import uniffi.client_ffi.CoreListener
+import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiMachinesView
+import uniffi.client_ffi.UniffiNotifier
+import uniffi.client_ffi.UniffiOutboxView
+import uniffi.client_ffi.UniffiPairingView
+import uniffi.client_ffi.UniffiPendingSessionsView
+import uniffi.client_ffi.UniffiQuickPromptsView
+import uniffi.client_ffi.UniffiSettingsView
+import uniffi.client_ffi.UniffiTranscriptRowsView
+import uniffi.client_ffi.UniffiUiView
+
+/**
+ * The Kotlin-side counterpart to `apps/mobile/src/core/nativeCore.ts` and
+ * `apps/mobile/src-tauri/src/native_core.rs`'s `TauriObserver`: owns the
+ * generated `Core` object, implements the generated `CoreListener` callback
+ * interface, and republishes each callback as a `StateFlow`/`Flow` a
+ * Composable can collect. Nothing here understands the wire protocol, a
+ * session, or a transcript — that is entirely `crates/client-runtime` and
+ * `crates/client-ffi`'s job on the other side of the FFI boundary.
+ *
+ * `CoreListener`'s callbacks are plain (non-`suspend`) Kotlin functions
+ * invoked from the core's own background thread — refreshing a `*View` needs
+ * a `suspend` call back across the FFI boundary, so this class owns a small
+ * `CoroutineScope` to launch those from a synchronous callback, the same
+ * shape `MainActivity.kt`'s `MainViewModel` already uses `viewModelScope`
+ * for.
+ */
+class CoreHost(
+    relays: List<String>,
+    identitySecretHex: String,
+    notifier: UniffiNotifier,
+    dbPath: String,
+    proxy: String?,
+    tor: Boolean,
+) : CoreListener {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val _connection = MutableStateFlow<ConnectionView?>(null)
+    val connection: StateFlow<ConnectionView?> = _connection.asStateFlow()
+
+    /**
+     * Every `CoreEvent`, in order. Deliberately a `SharedFlow` and not a
+     * `StateFlow`: a `StateFlow` drops a value `equals` to its current one
+     * (two back-to-back `TranscriptAppended` for the same session are equal
+     * data-class instances, so the second would vanish) and conflates
+     * whatever a slow collector has not read yet. No replay: a waiter must
+     * subscribe BEFORE dispatching the intent whose outcome it waits for
+     * (`CoroutineStart.UNDISPATCHED` does that — see `NewSessionScreen`).
+     * The buffer only protects slow collectors from each other; it is not a
+     * history.
+     */
+    private val _events = MutableSharedFlow<CoreEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<CoreEvent> = _events.asSharedFlow()
+
+    private val _machines = MutableStateFlow<UniffiMachinesView?>(null)
+    val machines: StateFlow<UniffiMachinesView?> = _machines.asStateFlow()
+
+    /** Selection + optimistic card-response bookkeeping — see
+     *  `crates/client-ffi/src/views.rs`'s doc comment for why this is a
+     *  narrowed projection rather than the real (much larger) `UiView`. */
+    private val _ui = MutableStateFlow<UniffiUiView?>(null)
+    val ui: StateFlow<UniffiUiView?> = _ui.asStateFlow()
+
+    private val _outbox = MutableStateFlow<UniffiOutboxView?>(null)
+    val outbox: StateFlow<UniffiOutboxView?> = _outbox.asStateFlow()
+
+    private val _settings = MutableStateFlow<UniffiSettingsView?>(null)
+    val settings: StateFlow<UniffiSettingsView?> = _settings.asStateFlow()
+
+    private val _quickPrompts = MutableStateFlow<UniffiQuickPromptsView?>(null)
+    val quickPrompts: StateFlow<UniffiQuickPromptsView?> = _quickPrompts.asStateFlow()
+
+    /** Placeholder cards for sessions the bridge announced but that never
+     *  became real (`pending`) or failed to start (`failed`, stays until the
+     *  user dismisses) — the sidebar renders them above/interleaved with the
+     *  real session cards. */
+    private val _pendingSessions = MutableStateFlow<UniffiPendingSessionsView?>(null)
+    val pendingSessions: StateFlow<UniffiPendingSessionsView?> = _pendingSessions.asStateFlow()
+
+    private val _pairing = MutableStateFlow<UniffiPairingView?>(null)
+    val pairing: StateFlow<UniffiPairingView?> = _pairing.asStateFlow()
+
+    /**
+     * Re-reads one view slice on request. Reads for a slice never overlap and
+     * requests arriving mid-read collapse into ONE follow-up read, so an
+     * older snapshot can never land after — and overwrite — a newer one (two
+     * independent concurrent reads could complete in either order), and a
+     * burst of `StateChanged` events costs at most two FFI round trips.
+     */
+    private inner class SliceRefresher<T>(sink: MutableStateFlow<T?>, read: suspend () -> T) {
+        private val requests = Channel<Unit>(Channel.CONFLATED)
+
+        init {
+            scope.launch { for (request in requests) sink.value = read() }
+        }
+
+        fun request() {
+            requests.trySend(Unit)
+        }
+    }
+
+    private val machinesRefresher = SliceRefresher(_machines) { core.machinesView() }
+    private val uiRefresher = SliceRefresher(_ui) { core.uiView() }
+    private val outboxRefresher = SliceRefresher(_outbox) { core.outboxView() }
+    private val settingsRefresher = SliceRefresher(_settings) { core.settingsView() }
+    private val quickPromptsRefresher = SliceRefresher(_quickPrompts) { core.quickPromptsView() }
+    private val pendingSessionsRefresher = SliceRefresher(_pendingSessions) { core.pendingSessionsView() }
+    private val pairingRefresher = SliceRefresher(_pairing) { core.pairingView() }
+
+    // Constructed last: `Core` holds `this` as its listener and may call back
+    // from its own thread straight away, so every field a callback touches
+    // (the refreshers above) must already be initialized.
+    private val core: Core = Core(relays, identitySecretHex, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
+
+    fun start() {
+        core.start()
+        // First hydration: nothing has changed yet, so no `StateChanged`
+        // will fire on its own — fetch each slice once up front. Mirrors
+        // `apps/mobile`'s `hydrateFromCore` fix (see this repo's own
+        // addendum on the C1 regression that pattern closed): without an
+        // explicit initial fetch, a freshly-attached listener has nothing to
+        // show until the first unrelated event happens to land.
+        refreshMachines()
+        refreshUi()
+        refreshOutbox()
+        refreshSettings()
+        refreshQuickPrompts()
+        refreshPendingSessions()
+        refreshPairing()
+    }
+
+    fun stop() = core.stop()
+
+    /** The OS backgrounded the app — debounced, never tears a healthy socket.
+     *  Called from `platform/StayConnectedService.kt`'s `ProcessLifecycleOwner`
+     *  observer. */
+    fun pause() = core.pause()
+
+    /** The OS foregrounded the app. */
+    fun resume() = core.resume()
+
+    suspend fun dispatch(intent: UniffiIntent) = core.dispatch(intent)
+
+    /**
+     * The phone's own Nostr id in bech32 `npub1…` form — derived by the core
+     * at construction from the identity secret it holds, so callers get the
+     * answer without ever touching that secret themselves. A pure field read
+     * on the Rust side; screens still fetch it once off the main thread (see
+     * `PairingScreen`).
+     */
+    fun identityNpub(): String = core.identityNpub()
+
+    /**
+     * One session's grouped, ready-to-render transcript — emits once
+     * immediately, then again on every `CoreEvent` that could have changed
+     * it: `TranscriptAppended` naming this exact session, or a `StateChanged`
+     * on the `TRANSCRIPT` slice (sync-status-only changes, e.g. a gap being
+     * filled) or the `UI` slice (a card being answered flips
+     * `respondedCards`, which `TranscriptRowsView`'s pending-permission
+     * projection reads). A screen collects this for as long as it shows that
+     * session; cancelling the collection (leaving the screen) stops it.
+     *
+     * The event subscription is in place BEFORE the initial read (the
+     * synthetic trigger is emitted from `onSubscription`), so an append that
+     * lands between the two is never missed. Triggers that arrive while a
+     * read is in flight are conflated into one follow-up read — a streaming
+     * turn appends far faster than a full view needs re-reading.
+     */
+    fun transcriptFlow(machine: String, sessionId: String): Flow<UniffiTranscriptRowsView> =
+        events
+            .onSubscription { emit(CoreEvent.StateChanged(SliceId.TRANSCRIPT)) }
+            .filter { event ->
+                when (event) {
+                    is CoreEvent.TranscriptAppended -> event.machine == machine && event.sessionId == sessionId
+                    is CoreEvent.StateChanged -> event.slice == SliceId.TRANSCRIPT || event.slice == SliceId.UI
+                    else -> false
+                }
+            }
+            .conflate()
+            .map { core.transcriptView(machine, sessionId) }
+
+    override fun connectionChanged(view: ConnectionView) {
+        _connection.value = view
+    }
+
+    override fun onEvent(event: CoreEvent) {
+        _events.tryEmit(event)
+        when (event) {
+            is CoreEvent.StateChanged -> when (event.slice) {
+                SliceId.MACHINES -> refreshMachines()
+                SliceId.UI -> refreshUi()
+                SliceId.OUTBOX -> refreshOutbox()
+                SliceId.SETTINGS -> refreshSettings()
+                SliceId.QUICK_PROMPTS -> refreshQuickPrompts()
+                SliceId.PENDING_SESSIONS -> refreshPendingSessions()
+                SliceId.PAIRING -> refreshPairing()
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    override fun actionFailed(kind: ActionFailedKind) {
+        // Also surfaced as a CoreEvent.ActionFailed on `events` (client-runtime
+        // emits both) — that flow is what `ui/ActionFailedBanner.kt`, mounted
+        // once at the shell's root, watches to show the transient failure
+        // banner, so nothing extra is needed in this callback.
+    }
+
+    private fun refreshMachines() = machinesRefresher.request()
+
+    private fun refreshUi() = uiRefresher.request()
+
+    private fun refreshOutbox() = outboxRefresher.request()
+
+    private fun refreshSettings() = settingsRefresher.request()
+
+    private fun refreshQuickPrompts() = quickPromptsRefresher.request()
+
+    private fun refreshPendingSessions() = pendingSessionsRefresher.request()
+
+    private fun refreshPairing() = pairingRefresher.request()
+}

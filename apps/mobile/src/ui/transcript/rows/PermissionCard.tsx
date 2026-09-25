@@ -21,7 +21,8 @@ export function summarizeToolInput(toolName: string, input: unknown): string {
     return undefined;
   };
   const summary =
-    first('command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description') ??
+    // snake_case keys are Claude Code tool inputs, camelCase ones OpenCode's.
+    first('command', 'file_path', 'filePath', 'notebook_path', 'pattern', 'url', 'query', 'description') ??
     JSON.stringify(obj);
   return summary.length > 200 ? `${summary.slice(0, 200)}…` : summary;
 }
@@ -48,7 +49,8 @@ export function PermissionCard({
 
   // Resolved (proof: the answering tool_result reached the transcript).
   if (item.answered !== undefined) {
-    const denied = /denied|deny/i.test(item.answered);
+    // Claude Code reports "denied"; OpenCode says the user "rejected" the permission.
+    const denied = /denied|deny|rejected/i.test(item.answered);
     return (
       <div className={styles.cardAnswered} data-row="permission">
         <div className={styles.title}>{item.toolName}</div>

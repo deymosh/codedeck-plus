@@ -1,0 +1,79 @@
+[versions]
+# Latest stable of every toolchain piece as of this week — not the versions
+# apps/mobile's Tauri-generated gen/android happens to sit on (AGP 8.11/
+# Kotlin 1.9.25/compileSdk 36), which is Tauri's own scaffold and is
+# regenerated on demand rather than kept current.
+agp = "9.4.0"
+kotlin = "2.4.20"
+coreKtx = "1.19.0"
+lifecycle = "2.11.0"
+activityCompose = "1.13.0"
+composeBom = "2026.09.00"
+coroutines = "1.11.0"
+# F3.3.4: decodes the JSON `crates/client-ffi`'s `views.rs` crosses for
+# the already-grouped transcript (`display_entries_json`) and the pending-
+# permission summary — see `ui/transcript/DisplayEntries.kt`.
+kotlinxSerialization = "1.9.0"
+junit = "4.13.2"
+androidxTestExtJunit = "1.3.0"
+androidxTestRunner = "1.7.0"
+androidxTestCore = "1.7.0"
+robolectric = "4.16"
+# 1.3.5 was proven on an older Kotlin/AGP pair (2.0.21/8.7.3), but its
+# Gradle plugin calls AGP's
+# `BaseExtension`, removed in AGP 9 — a hard configuration-time failure, not
+# a warning. 2.0.0-alpha05 is the first release with AGP 9 / the new
+# `com.android.application`-without-`BaseExtension` API support; still
+# pre-1.0, tracked here rather than pinned quietly.
+paparazzi = "2.0.0-alpha05"
+# 0.43.0: current as of this pass. Since 0.33.0 `Markdown(content)` parses
+# asynchronously by default (breaks a static Paparazzi snapshot) —
+# `rememberMarkdownState(content, immediate = true)` is the documented
+# synchronous escape hatch; used instead of pinning back to a version that
+# predates table rendering.
+markdownRenderer = "0.43.0"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+junit = { module = "junit:junit", version.ref = "junit" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+markdown-renderer = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-android", version.ref = "markdownRenderer" }
+markdown-renderer-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
+
+[bundles]
+compose = [
+	"androidx-ui",
+	"androidx-ui-graphics",
+	"androidx-ui-tooling-preview",
+	"androidx-material3",
+	"androidx-foundation",
+]
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+# No separate "org.jetbrains.kotlin.android" plugin: AGP 9+ has Kotlin support
+# built in (applying it is now a hard error — "no longer required since AGP
+# 9.0").
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+# Paparazzi 1.3.1+ supports application modules (not just library modules,
+# its original limitation); the version above is verified against this
+# project's real toolchain.
+paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }

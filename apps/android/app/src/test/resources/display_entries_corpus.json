@@ -1,0 +1,257 @@
+{
+  "displayEntries": [
+    {
+      "kind": "userMessage",
+      "seq": 1,
+      "text": "port the connection reducer to rust"
+    },
+    {
+      "isPlan": false,
+      "kind": "agentMessage",
+      "seq": 2,
+      "text": "## Refactor plan\n\nHere's what I'll do, in order."
+    },
+    {
+      "kind": "toolGroup",
+      "seq": 3,
+      "steps": [
+        {
+          "redacted": false,
+          "seq": 3,
+          "step": "thinking",
+          "text": "Start with the pool."
+        },
+        {
+          "seq": 4,
+          "step": "text",
+          "text": "Reading the pool first."
+        },
+        {
+          "callId": "tu-read",
+          "isSubAgent": false,
+          "result": {
+            "isError": false,
+            "text": "42 lines"
+          },
+          "seq": 5,
+          "step": "call",
+          "subagent": null,
+          "title": "pool.ts",
+          "toolKind": "read",
+          "toolName": "Read"
+        },
+        {
+          "callId": "tu-grep",
+          "isSubAgent": true,
+          "result": {
+            "isError": false,
+            "text": "3 matches"
+          },
+          "seq": 6,
+          "step": "call",
+          "subagent": "explorer",
+          "title": "SimplePool",
+          "toolKind": "search",
+          "toolName": "Grep"
+        }
+      ],
+      "summary": "3 actions"
+    },
+    {
+      "agentLabel": null,
+      "answered": "Allowed",
+      "description": "Read packages/core/src/nostr/pool.ts",
+      "isSubAgent": false,
+      "kind": "permissionRequest",
+      "locations": [],
+      "options": [
+        {
+          "id": "allow",
+          "kind": "allow_once",
+          "label": "Allow"
+        },
+        {
+          "id": "allow_always",
+          "kind": "allow_always",
+          "label": "Always allow"
+        },
+        {
+          "id": "deny",
+          "kind": "reject_once",
+          "label": "Deny"
+        }
+      ],
+      "requestId": "tu-read",
+      "seq": 8,
+      "title": "pool.ts",
+      "toolKind": "read",
+      "toolName": "Read"
+    },
+    {
+      "kind": "diff",
+      "lines": [
+        {
+          "text": "  const pool = new SimplePool();",
+          "type": "context"
+        },
+        {
+          "text": "  pool.trackRelays = true;",
+          "type": "del"
+        },
+        {
+          "text": "  pool.idleTimeout = 0x7fffffff; // CDX-020",
+          "type": "add"
+        }
+      ],
+      "path": "packages/core/src/nostr/pool.ts",
+      "seq": 11,
+      "truncated": false
+    },
+    {
+      "kind": "error",
+      "seq": 12,
+      "text": "bridge disconnected"
+    },
+    {
+      "kind": "status",
+      "seq": 13,
+      "text": "status: idle"
+    },
+    {
+      "kind": "notice",
+      "notice": "session_restart",
+      "seq": 14,
+      "text": "restarted"
+    },
+    {
+      "isPlan": true,
+      "kind": "agentMessage",
+      "seq": 15,
+      "text": "1. Extract the reducer\n2. Wire the effects interpreter"
+    },
+    {
+      "answered": null,
+      "kind": "planApproval",
+      "options": [
+        {
+          "id": "acceptEdits",
+          "label": "Approve, auto-accept edits"
+        },
+        {
+          "id": "default",
+          "label": "Approve"
+        },
+        {
+          "description": "Stay in plan mode and send feedback",
+          "id": "revise",
+          "label": "Keep planning"
+        }
+      ],
+      "requestId": "tu-plan",
+      "seq": 16
+    },
+    {
+      "answered": null,
+      "kind": "question",
+      "questions": [
+        {
+          "header": "Direction",
+          "index": 0,
+          "multiSelect": false,
+          "options": [
+            {
+              "label": "Extract first"
+            },
+            {
+              "label": "Rewrite in one pass"
+            }
+          ],
+          "question": "Which approach?"
+        }
+      ],
+      "requestId": "tu-solo-question",
+      "seq": 17
+    },
+    {
+      "answered": null,
+      "kind": "question",
+      "questions": [
+        {
+          "header": "Scope",
+          "index": 0,
+          "multiSelect": false,
+          "options": [
+            {
+              "label": "Narrow"
+            },
+            {
+              "label": "Wide"
+            }
+          ],
+          "question": "How wide?"
+        },
+        {
+          "header": "Timeline",
+          "index": 1,
+          "multiSelect": true,
+          "options": [
+            {
+              "label": "This week"
+            },
+            {
+              "label": "Next sprint"
+            }
+          ],
+          "question": "When?"
+        }
+      ],
+      "requestId": "tu-question-group",
+      "seq": 18
+    },
+    {
+      "agentLabel": null,
+      "answered": null,
+      "description": null,
+      "isSubAgent": false,
+      "kind": "permissionRequest",
+      "locations": [],
+      "options": [
+        {
+          "id": "allow",
+          "kind": "allow_once",
+          "label": "Allow"
+        },
+        {
+          "id": "deny",
+          "kind": "reject_once",
+          "label": "Deny"
+        }
+      ],
+      "requestId": "tu-permission",
+      "seq": 20,
+      "title": "cargo test",
+      "toolKind": "execute",
+      "toolName": "Bash"
+    }
+  ],
+  "pendingPermission": {
+    "agentLabel": null,
+    "description": null,
+    "isSubAgent": false,
+    "options": [
+      {
+        "id": "allow",
+        "kind": "allow_once",
+        "label": "Allow"
+      },
+      {
+        "id": "deny",
+        "kind": "reject_once",
+        "label": "Deny"
+      }
+    ],
+    "requestId": "tu-permission",
+    "title": "cargo test",
+    "toolName": "Bash"
+  }
+}

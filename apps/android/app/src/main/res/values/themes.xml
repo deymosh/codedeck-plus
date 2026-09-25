@@ -1,0 +1,13 @@
+<resources>
+    <!-- The actual token/color work lives in Kotlin (ui/theme/Tokens.kt,
+         Theme.kt) via Compose's MaterialTheme — this XML theme only sets the
+         Activity's pre-Compose window background so there's no white flash
+         before the first frame, matching the app's dark-only design. The
+         status/navigation bar colors are deliberately NOT set here: the
+         activity calls enableEdgeToEdge() and draws behind transparent bars
+         (enforced outright on targetSdk 35+, where these items are ignored
+         anyway), and the app content clears the bars via insets padding. -->
+    <style name="Theme.CodeDeck" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

@@ -1,0 +1,11 @@
+<resources>
+    <!-- Launcher icon tile color. The mark in drawable-nodpi/
+         ic_launcher_foreground.png draws its yin-yang "dark halves" as
+         transparent cutouts — the tile behind it supplies them — so this
+         must stay the near-black the logo was drawn against or the shape
+         falls apart on the launcher. #0A0A0A is Surface from
+         ui/theme/Tokens.kt (the app's dark-only palette, translated from
+         tokens.css), keeping the icon on the same ramp as the app it
+         opens; the mark's gold/cyan arcs read strongly against it. -->
+    <color name="ic_launcher_background">#0A0A0A</color>
+</resources>

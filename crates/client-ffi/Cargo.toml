@@ -1,0 +1,65 @@
+# The Android binding surface: the one workspace crate allowed to know about
+# a host binding technology — here, UniFFI. Wraps `client_runtime::Core`
+# behind `#[uniffi::export]`, compiled to the `.so` `apps/android` loads via
+# JNA-generated Kotlin bindings.
+[package]
+name = "client-ffi"
+description = "CodeDeck+ Android bindings — UniFFI over the real client-runtime Core."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "client_ffi"
+# cdylib: what Kotlin (JNA, via the generated bindings) loads at runtime.
+# lib:    so `tests/` can link and drive it directly, same as any other crate.
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+client-runtime = { path = "../client-runtime", features = ["uniffi"] }
+protocol = { path = "../protocol" }
+# Same version as client-runtime's derive-only dependency. "cli" is the
+# `uniffi-bindgen` binary below; "tokio" lets `#[uniffi::export(async_runtime
+# = "tokio")]` export `async fn`s as Kotlin `suspend fun`s.
+uniffi = { version = "0.28", features = ["tokio", "cli"] }
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+serde = "1"
+serde_json = "1"
+thiserror = "1"
+# Plain `bundled` (no SQLCipher/OpenSSL) — this port stores no Marmot/MLS
+# key material, so it doesn't need `client-core`'s `bundled-sqlcipher-vendored-openssl`
+# feature, just a real embedded SQLite that cross-compiles to Android without
+# a system SQLite dev package.
+rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
+# Every log:: call site in this crate AND in client-runtime/client-core routes
+# through this facade — see `android_log.rs` for who installs the backend.
+log = "0.4"
+
+# `android_log.rs`'s actual logcat backend + panic-to-logcat hook — Android
+# only, so `cargo test` on the host (Linux/Mac/Windows CI, `tests/*.rs`) never
+# links against `liblog.so`.
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+log-panics = { version = "2", features = ["with-backtrace"] }
+
+# Host-side stand-in so the SAME log:: call sites are exercisable under
+# `cargo test -- --nocapture` with `RUST_LOG=debug`, without pulling
+# `android_logger` into a build that will never run on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+env_logger = "0.11"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "test-util"] }
+tempfile = "3"
+
+# Generates the Kotlin bindings (library mode — reads the already-built
+# cdylib's embedded metadata, no `.udl`):
+#   cargo run --bin uniffi-bindgen -- generate --library <path-to-.so> \
+#     --language kotlin --out-dir apps/android/app/src/main/java
+# Wired into `./codedeck gen-android-bindings`; CI fails if the committed
+# bindings drift from it.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

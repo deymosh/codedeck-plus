@@ -37,7 +37,7 @@
  * Answered-state detection: a tool_result whose tool_use_id matches a card's
  * id means the card was resolved — resolved cards render the outcome inline.
  */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../core/nativeCoreTypes';
 
 export interface SeqEntry {
   seq: number;

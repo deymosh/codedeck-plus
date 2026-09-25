@@ -20,16 +20,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   CAPABILITIES,
-  effortLevelSchema,
-  type EffortLevel,
+  EFFORT_LEVELS,
+  isEffortLevel,
   type SessionBackend,
-} from '@codedeck/protocol';
+} from '../core/protocolConstants';
 import { useMachines, usePhoneCore } from './coreContext';
 import { ScreenOverlay } from './ScreenOverlay';
 import { cx, shared as s } from './shared';
 import styles from './NewSessionModal.module.css';
-
-const EFFORT_LEVELS = effortLevelSchema.options;
 
 /** Radio value for the free-text "new folder" branch. */
 const NEW_FOLDER = '__new__';
@@ -175,13 +173,12 @@ export function NewSessionModal({
     setCreating(true);
     setError(null);
     const cwd = folderChoice === NEW_FOLDER ? newFolderPath : folderChoice;
-    const effortLevel = effortLevelSchema.safeParse(effort);
     try {
       const sent = await core.api.createSession(machinePubkey, {
         ...(cwd !== '' ? { cwd } : {}),
         ...(folderChoice === NEW_FOLDER ? { createCwd: true } : {}),
         ...(model !== '' ? { model } : {}),
-        ...(effortLevel.success ? { defaultEffort: effortLevel.data as EffortLevel } : {}),
+        ...(isEffortLevel(effort) ? { defaultEffort: effort } : {}),
         // CDX-062: bind the session to the chosen provider profile. Sent even
         // when the profile vanished from the list while the sheet was open
         // (deleted on another phone): the bridge is authoritative and answers
