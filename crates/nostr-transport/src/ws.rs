@@ -11,12 +11,19 @@
 //! * **no auto-reconnect** — a dead socket surfaces as ONE `on_close`; the
 //!   connection FSM owns backoff and calls [`WsTransport::ensure_connected`].
 //! * **ping liveness** — a socket with no traffic for [`DEAD_AFTER`] is dropped
-//!   so a silently-rotted relay is detected, not trusted.
+//!   so a silently-rotted relay is detected, not trusted. Reading and writing
+//!   run concurrently, so a write stuck on a full socket buffer can neither
+//!   stall inbound frames nor postpone that check; a write that stays stuck
+//!   for [`WRITE_TIMEOUT`] drops the socket too.
+//! * **bounded everything** — a dial (TCP, SOCKS5, TLS, WS handshake) has a
+//!   deadline, and a relay's outbound queue holds at most [`OUTBOUND_QUEUE`]
+//!   frames: a relay that cannot drain it is dropped and redialled rather than
+//!   buffered without limit.
 //! * **NIP-42 AUTH** answered with the identity key; a `CLOSED: auth-required`
 //!   re-sends that subscription's REQ once AUTH is in.
 //! * **`publish_confirmed`** keeps the CDX-086 four-way verdict end to end.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
@@ -28,7 +35,8 @@ use protocol::nostr_event::SignedEvent;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_socks::tcp::Socks5Stream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::MaybeTlsStream;
@@ -50,6 +58,20 @@ const DEAD_AFTER: Duration = Duration::from_secs(75);
 pub const PUBLISH_CONFIRM_BUDGET: Duration = Duration::from_secs(12);
 /// Max publishes of the SAME signed event within the budget.
 pub const PUBLISH_CONFIRM_ATTEMPTS: u32 = 3;
+/// Deadline for a direct dial: TCP connect, TLS and the WS handshake.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
+/// Deadline for a dial through the SOCKS5 proxy — building a Tor circuit
+/// (an onion service's especially) routinely takes tens of seconds.
+const DIAL_TIMEOUT_PROXIED: Duration = Duration::from_secs(60);
+/// A single frame write that has not completed in this long means the peer
+/// stopped reading (or the path is gone): the socket is dropped.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Frames queued for one relay's socket. Far above anything a healthy relay
+/// accumulates (a REQ per subscription on connect, then a trickle); a relay
+/// that lets it fill is dropped and redialled.
+const OUTBOUND_QUEUE: usize = 1024;
+/// How long a deliberate close waits to say goodbye before just dropping.
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 type RelayStream =
     tokio_tungstenite::WebSocketStream<MaybeTlsStream<Either<TcpStream, Socks5Stream<TcpStream>>>>;
@@ -58,11 +80,63 @@ type OnEvent = Rc<dyn Fn(&NostrEvent)>;
 type OnEose = Rc<dyn Fn()>;
 type OnClose = Rc<dyn Fn(Option<String>)>;
 
-/// What a relay's write half accepts.
-enum Out {
-    Text(String),
-    /// Close the socket deliberately (never surfaces as `on_close`).
-    Close,
+/// The connection timings, a field so tests can shrink them.
+#[derive(Clone, Copy)]
+struct Timing {
+    ping_every: Duration,
+    dead_after: Duration,
+    dial: Duration,
+    dial_proxied: Duration,
+    write: Duration,
+}
+
+const TIMING: Timing = Timing {
+    ping_every: PING_EVERY,
+    dead_after: DEAD_AFTER,
+    dial: DIAL_TIMEOUT,
+    dial_proxied: DIAL_TIMEOUT_PROXIED,
+    write: WRITE_TIMEOUT,
+};
+
+/// Why a relay's task must end without waiting on its socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopReason {
+    /// Teardown or redial — never surfaces as `on_close`.
+    Deliberate,
+    /// The outbound queue filled up: a failure, reported like a dead socket.
+    Overflow,
+}
+
+/// A one-way stop request from the transport to a relay's task.
+#[derive(Default)]
+struct Stop {
+    reason: Cell<Option<StopReason>>,
+    notify: Notify,
+}
+
+impl Stop {
+    /// A deliberate stop overrides an overflow still pending; otherwise the
+    /// first request wins.
+    fn request(&self, reason: StopReason) {
+        match (self.reason.get(), reason) {
+            (None, _) | (Some(StopReason::Overflow), StopReason::Deliberate) => {
+                self.reason.set(Some(reason));
+                // `notify_one` keeps a permit when nobody waits yet, so a stop
+                // requested before the task first polls `wait` is not lost.
+                self.notify.notify_one();
+            }
+            _ => {}
+        }
+    }
+
+    async fn wait(&self) -> StopReason {
+        loop {
+            if let Some(reason) = self.reason.get() {
+                return reason;
+            }
+            self.notify.notified().await;
+        }
+    }
 }
 
 struct SubEntry {
@@ -73,7 +147,8 @@ struct SubEntry {
 }
 
 struct Conn {
-    tx: mpsc::UnboundedSender<Out>,
+    tx: mpsc::Sender<String>,
+    stop: Rc<Stop>,
     /// `false` until the WS handshake completes. A REQ / EVENT is sent from
     /// `subscribe` / `publish_confirmed` only to `up` relays; a relay that
     /// connects later gets every stored sub's REQ replayed by `on_relay_up`, so
@@ -84,6 +159,36 @@ struct Conn {
     /// that task's up/dead callbacks carry its own generation so they can
     /// never mark, replay onto, or remove the replacement connection.
     generation: u64,
+}
+
+impl Conn {
+    /// Queue one frame. Never blocks: a full queue stops the connection as a
+    /// failure instead (the connection FSM then redials, and the REQs are
+    /// replayed on connect), so a stalled relay cannot grow memory unbounded.
+    fn send(&self, frame: String) {
+        match self.tx.try_send(frame) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                if self.stop.reason.get().is_none() {
+                    log::warn!("ws: outbound queue full ({OUTBOUND_QUEUE} frames) — dropping the connection");
+                }
+                self.stop.request(StopReason::Overflow);
+            }
+            // The task is already ending; it reports that itself.
+            Err(TrySendError::Closed(_)) => {}
+        }
+    }
+
+    /// Close the socket deliberately (never surfaces as `on_close`).
+    fn close(&self) {
+        self.stop.request(StopReason::Deliberate);
+    }
+}
+
+/// How one live connection ended.
+enum Ended {
+    Deliberate,
+    Failed(String),
 }
 
 struct State {
@@ -98,6 +203,7 @@ struct State {
     publishes: HashMap<String, oneshot::Sender<PublishResult>>,
     sub_seq: u64,
     next_generation: u64,
+    timing: Timing,
 }
 
 impl State {
@@ -165,6 +271,7 @@ impl WsTransport {
                 publishes: HashMap::new(),
                 sub_seq: 0,
                 next_generation: 0,
+                timing: TIMING,
             })),
         }
     }
@@ -214,7 +321,7 @@ impl WsTransport {
             relays.iter().filter_map(|r| st.detach(r)).collect()
         };
         for c in conns {
-            let _ = c.tx.send(Out::Close);
+            c.close();
         }
     }
 
@@ -264,7 +371,7 @@ impl WsTransport {
                 let frame = frames::event_frame(event);
                 for relay in &targets {
                     if let Some(c) = st.conns.get(relay) {
-                        let _ = c.tx.send(Out::Text(frame.clone()));
+                        c.send(frame.clone());
                     }
                 }
             }
@@ -299,24 +406,42 @@ impl WsTransport {
     // --- internals ---------------------------------------------------
 
     fn spawn_relay(&self, relay: String) {
-        let (tx, rx) = mpsc::unbounded_channel::<Out>();
+        let (tx, rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
+        let stop = Rc::new(Stop::default());
         let generation = {
             let mut st = self.state.borrow_mut();
             st.next_generation += 1;
             let generation = st.next_generation;
-            st.conns.insert(relay.clone(), Conn { tx, up: false, generation });
+            st.conns.insert(relay.clone(), Conn { tx, stop: Rc::clone(&stop), up: false, generation });
             generation
         };
         let this = self.clone();
         tokio::task::spawn_local(async move {
-            this.run_relay(relay, generation, rx).await;
+            this.run_relay(relay, generation, rx, stop).await;
         });
     }
 
-    async fn run_relay(self, relay: String, generation: u64, mut rx: mpsc::UnboundedReceiver<Out>) {
-        let proxy = self.state.borrow().proxy.clone();
+    async fn run_relay(
+        self,
+        relay: String,
+        generation: u64,
+        mut rx: mpsc::Receiver<String>,
+        stop: Rc<Stop>,
+    ) {
+        let (proxy, timing) = {
+            let st = self.state.borrow();
+            (st.proxy.clone(), st.timing)
+        };
+        let budget = if proxy.is_some() { timing.dial_proxied } else { timing.dial };
         log::debug!("ws: dialing {relay} (proxy={proxy:?})");
-        let mut ws = match dial(&relay, proxy).await {
+        let dialed = tokio::select! {
+            dialed = tokio::time::timeout(budget, dial(&relay, proxy)) => {
+                dialed.unwrap_or_else(|_| Err(format!("timed out after {budget:?}")))
+            }
+            // A teardown mid-dial abandons the dial at once.
+            StopReason::Deliberate = stop.wait() => return,
+        };
+        let ws = match dialed {
             Ok(ws) => ws,
             Err(err) => {
                 log::warn!("ws: dial failed for {relay}: {err}");
@@ -324,50 +449,73 @@ impl WsTransport {
                 return;
             }
         };
+        let (mut sink, mut stream) = ws.split();
         if !self.on_relay_up(&relay, generation) {
             // Detached while dialing (teardown or redial): this socket is no
             // longer wanted.
-            let _ = ws.close(None).await;
+            let _ = tokio::time::timeout(CLOSE_GRACE, sink.close()).await;
             return;
         }
         log::info!("ws: {relay} connected");
 
-        let mut ping = tokio::time::interval(PING_EVERY);
-        ping.tick().await; // consume the immediate first tick
-        let mut last_seen = tokio::time::Instant::now();
-
-        loop {
-            tokio::select! {
-                out = rx.recv() => match out {
-                    Some(Out::Text(t)) => {
-                        if ws.send(Message::Text(t)).await.is_err() { break; }
+        // Writer and reader are polled side by side in this one task: a
+        // write parked on a full socket buffer leaves the reader running,
+        // so inbound frames keep flowing and the liveness deadline still
+        // fires.
+        let ended = {
+            let writer = async {
+                let mut ping = tokio::time::interval(timing.ping_every);
+                ping.tick().await; // consume the immediate first tick
+                loop {
+                    let message = tokio::select! {
+                        frame = rx.recv() => match frame {
+                            Some(text) => Message::Text(text),
+                            // Every sender gone: the entry was detached.
+                            None => return Ended::Deliberate,
+                        },
+                        _ = ping.tick() => Message::Ping(Vec::new()),
+                    };
+                    match tokio::time::timeout(timing.write, sink.send(message)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => return Ended::Failed(format!("write failed: {err}")),
+                        Err(_) => return Ended::Failed(format!("write stalled for {:?}", timing.write)),
                     }
-                    Some(Out::Close) | None => {
-                        let _ = ws.close(None).await;
-                        return; // deliberate — no on_close
-                    }
-                },
-                frame = ws.next() => match frame {
-                    Some(Ok(Message::Text(txt))) => {
-                        last_seen = tokio::time::Instant::now();
-                        self.on_frame(&relay, &txt);
-                    }
-                    Some(Ok(Message::Binary(_))) | Some(Ok(Message::Pong(_)))
-                    | Some(Ok(Message::Ping(_))) => {
-                        last_seen = tokio::time::Instant::now();
-                    }
-                    Some(Ok(Message::Close(_))) | Some(Ok(Message::Frame(_))) | None => break,
-                    Some(Err(_)) => break,
-                },
-                _ = ping.tick() => {
-                    if tokio::time::Instant::now().duration_since(last_seen) > DEAD_AFTER {
-                        break;
-                    }
-                    if ws.send(Message::Ping(Vec::new())).await.is_err() { break; }
                 }
+            };
+            let reader = async {
+                loop {
+                    // Any inbound frame — text, Pong, Ping — restarts the
+                    // deadline; the writer's pings make a live relay answer.
+                    match tokio::time::timeout(timing.dead_after, stream.next()).await {
+                        Err(_) => {
+                            return Ended::Failed(format!("no traffic for {:?}", timing.dead_after))
+                        }
+                        Ok(Some(Ok(Message::Text(text)))) => self.on_frame(&relay, &text),
+                        Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                            return Ended::Failed("socket closed".to_string())
+                        }
+                        Ok(Some(Err(err))) => return Ended::Failed(format!("read failed: {err}")),
+                        Ok(Some(Ok(_))) => {}
+                    }
+                }
+            };
+            tokio::select! {
+                ended = writer => ended,
+                ended = reader => ended,
+                reason = stop.wait() => match reason {
+                    StopReason::Deliberate => Ended::Deliberate,
+                    StopReason::Overflow => {
+                        Ended::Failed(format!("outbound queue full ({OUTBOUND_QUEUE} frames)"))
+                    }
+                },
             }
+        };
+        match ended {
+            Ended::Deliberate => {
+                let _ = tokio::time::timeout(CLOSE_GRACE, sink.close()).await;
+            }
+            Ended::Failed(reason) => self.on_relay_dead(&relay, generation, reason),
         }
-        self.on_relay_dead(&relay, generation, "socket closed".to_string());
     }
 
     /// `false` when this dial's entry has been detached or replaced — the
@@ -388,7 +536,7 @@ impl WsTransport {
         let st = self.state.borrow();
         if let Some(c) = st.conns.get(relay) {
             for frame in replays {
-                let _ = c.tx.send(Out::Text(frame));
+                c.send(frame);
             }
         }
         true
@@ -454,7 +602,7 @@ impl WsTransport {
                             .map(|e| frames::req_frame(&sub_id, std::slice::from_ref(&e.filter)))
                     };
                     if let (Some(frame), Some(c)) = (frame, self.state.borrow().conns.get(&relay)) {
-                        let _ = c.tx.send(Out::Text(frame));
+                        c.send(frame);
                     }
                 }
                 RouterAction::PublishSettled { event_id, result } => {
@@ -486,7 +634,7 @@ impl WsTransport {
             }
         };
         if let Some(c) = self.state.borrow().conns.get(relay) {
-            let _ = c.tx.send(Out::Text(frame));
+            c.send(frame);
         }
     }
 }
@@ -517,7 +665,7 @@ impl Transport for WsTransport {
             let st = self.state.borrow();
             for relay in &targets {
                 if let Some(c) = st.conns.get(relay) {
-                    let _ = c.tx.send(Out::Text(frame.clone()));
+                    c.send(frame.clone());
                 }
             }
         }
@@ -537,7 +685,7 @@ impl Transport for WsTransport {
             dead.into_iter().filter_map(|r| st.detach(&r)).collect()
         };
         for c in to_kill {
-            let _ = c.tx.send(Out::Close);
+            c.close();
         }
         self.ensure_connected();
     }
@@ -555,7 +703,7 @@ impl Transport for WsTransport {
             relays.iter().filter_map(|r| st.detach(r)).collect()
         };
         for c in to_kill {
-            let _ = c.tx.send(Out::Close);
+            c.close();
         }
         self.ensure_connected();
     }
@@ -576,7 +724,7 @@ impl TransportSub for WsSub {
         // relay would sit in its queue ahead of the REQs `on_relay_up` replays
         // and arrive out of order.
         for c in st.conns.values().filter(|c| c.up) {
-            let _ = c.tx.send(Out::Text(frame.clone()));
+            c.send(frame.clone());
         }
     }
 }
@@ -780,10 +928,13 @@ mod tests {
         let t = transport(&mock, &phone);
         let url = mock.url.clone();
         // The live replacement (generation 7), already up.
-        let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
+        let (tx, mut rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
         {
             let mut st = t.state.borrow_mut();
-            st.conns.insert(url.clone(), Conn { tx, up: true, generation: 7 });
+            st.conns.insert(
+                url.clone(),
+                Conn { tx, stop: Rc::new(Stop::default()), up: true, generation: 7 },
+            );
             st.router.relay_connected(&url);
         }
 
@@ -798,6 +949,130 @@ mod tests {
         t.on_relay_dead(&url, 7, "socket closed".into());
         assert!(!t.state.borrow().conns.contains_key(&url));
         assert!(t.connected_relays().is_empty());
+    }
+
+    fn fast_timing() -> Timing {
+        Timing {
+            ping_every: Duration::from_millis(50),
+            dead_after: Duration::from_millis(300),
+            dial: Duration::from_millis(300),
+            dial_proxied: Duration::from_millis(300),
+            write: Duration::from_millis(300),
+        }
+    }
+
+    fn counting_sub(t: &WsTransport, phone: &Keypair) -> (Box<dyn TransportSub>, Rc<RefCell<u32>>) {
+        let closes = Rc::new(RefCell::new(0u32));
+        let c = Rc::clone(&closes);
+        let sub = t.subscribe(
+            a_filter(phone),
+            SubCallbacks {
+                on_event: Rc::new(|_| {}),
+                on_eose: Rc::new(|| {}),
+                on_close: Rc::new(move |_| *c.borrow_mut() += 1),
+            },
+        );
+        (sub, closes)
+    }
+
+    #[tokio::test]
+    async fn a_dial_that_never_completes_its_handshake_times_out() {
+        LocalSet::new()
+            .run_until(async {
+                // Accepts TCP, never answers the WS handshake.
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}", listener.local_addr().unwrap());
+                let held = tokio::spawn(async move {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    drop(tcp);
+                });
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig { relays: vec![url], identity: phone, proxy: None });
+                t.state.borrow_mut().timing = fast_timing();
+                t.ensure_connected();
+                assert_eq!(t.state.borrow().conns.len(), 1);
+                // The failed dial frees the entry, so the FSM can redial.
+                wait_until(|| t.state.borrow().conns.is_empty()).await;
+                held.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_goes_silent_is_dropped_and_reported() {
+        LocalSet::new()
+            .run_until(async {
+                // Completes the handshake, then neither reads nor writes:
+                // our pings go unanswered.
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}", listener.local_addr().unwrap());
+                let held = tokio::spawn(async move {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    drop(ws);
+                });
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![url],
+                    identity: phone.clone(),
+                    proxy: None,
+                });
+                t.state.borrow_mut().timing = fast_timing();
+                t.ensure_connected();
+                let (_sub, closes) = counting_sub(&t, &phone);
+                wait_until(|| !t.connected_relays().is_empty()).await;
+
+                wait_until(|| t.connected_relays().is_empty()).await;
+                assert!(t.state.borrow().conns.is_empty());
+                assert_eq!(*closes.borrow(), 1);
+                held.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_full_outbound_queue_stops_the_connection_as_a_failure() {
+        let (tx, _rx) = mpsc::channel::<String>(1);
+        let conn = Conn { tx, stop: Rc::new(Stop::default()), up: true, generation: 1 };
+        conn.send("first".into());
+        assert_eq!(conn.stop.reason.get(), None);
+        conn.send("second".into());
+        assert_eq!(conn.stop.reason.get(), Some(StopReason::Overflow));
+        // A teardown still wins over a pending overflow: no on_close then.
+        conn.close();
+        assert_eq!(conn.stop.wait().await, StopReason::Deliberate);
+    }
+
+    #[tokio::test]
+    async fn a_teardown_while_dialing_abandons_the_dial() {
+        LocalSet::new()
+            .run_until(async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}", listener.local_addr().unwrap());
+                let held = tokio::spawn(async move {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    drop(tcp);
+                });
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![url],
+                    identity: phone.clone(),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                let (_sub, closes) = counting_sub(&t, &phone);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                t.shutdown();
+                // The abandoned dial is gone and never reports a close.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                assert_eq!(*closes.borrow(), 0);
+                assert!(t.state.borrow().conns.is_empty());
+                held.abort();
+            })
+            .await;
     }
 
     fn a_filter(phone: &Keypair) -> Filter {
