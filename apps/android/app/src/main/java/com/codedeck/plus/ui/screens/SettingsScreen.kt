@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import com.codedeck.plus.BuildConfig
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.PickerOption
@@ -545,6 +546,12 @@ private fun SettingsBody(
                         }
                     }
                 }
+
+                Text(
+                    "CodeDeck+ ${BuildConfig.VERSION_NAME}",
+                    color = Tokens.TextDim,
+                    fontSize = Tokens.TextSm,
+                )
             }
         }
     }

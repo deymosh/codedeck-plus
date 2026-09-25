@@ -109,8 +109,11 @@ for target in "${TARGETS[@]}"; do
 done
 
 echo "==> Building the debug APK (Gradle)"
+# The container's copy of the tree has no .git, so the commit the APK's
+# versionName carries is resolved here, on the host (see build.gradle.kts).
+GIT_REV="$(git describe --always --dirty --exclude='*')"
 dexec -w /workspace/apps/android -e ANDROID_HOME=/opt/android-sdk "$CONTAINER" \
-  gradle assembleDebug --console=plain
+  gradle assembleDebug -PcodedeckGitRev="$GIT_REV" --console=plain
 
 OUT="apps/android/app/build/outputs/apk/debug/app-debug.apk"
 DEST="dist/codedeck-android-debug.apk"

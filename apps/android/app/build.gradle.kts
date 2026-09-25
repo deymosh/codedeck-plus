@@ -5,6 +5,34 @@ plugins {
     alias(libs.plugins.paparazzi)
 }
 
+// `<workspace version>-dev+<commit>` (`-dirty` when the tree has local
+// changes) for a build not stamped from a release tag, so an installed debug
+// APK says exactly what it was built from. The version is the root
+// Cargo.toml's `[workspace.package]` one. The commit comes from
+// `-PcodedeckGitRev` when given (the Docker build copies the tree into its
+// container without `.git`), else from git itself; without either the name
+// is just `<version>-dev`.
+fun devVersionName(): String {
+    val cargoToml = rootProject.layout.projectDirectory.file("../../Cargo.toml")
+    val version = providers.fileContents(cargoToml).asText.orNull
+        ?.lineSequence()
+        ?.dropWhile { it.trim() != "[workspace.package]" }
+        ?.drop(1)
+        ?.takeWhile { !it.trimStart().startsWith("[") }
+        ?.firstNotNullOfOrNull { Regex("""^version\s*=\s*"([^"]+)"""").find(it.trim())?.groupValues?.get(1) }
+        ?: "0.0.0"
+    val rev = (findProperty("codedeckGitRev") as String?)?.trim()
+        ?: runCatching {
+            providers.exec {
+                // --exclude=* ignores every tag, so this is the abbreviated
+                // commit hash plus the --dirty suffix.
+                commandLine("git", "describe", "--always", "--dirty", "--exclude=*")
+                isIgnoreExitValue = true
+            }.standardOutput.asText.get().trim()
+        }.getOrNull()
+    return if (rev.isNullOrEmpty()) "$version-dev" else "$version-dev+$rev"
+}
+
 android {
     namespace = "com.codedeck.plus"
     // AGP 9's platform DSL — Android 17 (API 37) ships minor platform
@@ -16,8 +44,8 @@ android {
     }
 
     defaultConfig {
-        // The same identity the frozen Tauri app (apps/mobile) shipped under,
-        // so a signed release installs over it as an upgrade.
+        // The same identity the frozen Tauri app (apps/mobile) shipped under;
+        // see versionCode below for why it still cannot install over it.
         applicationId = "com.codedeck.plus"
         // 26, not apps/mobile's 24: the JNA runtime uniffi-bindgen's
         // generated Kotlin depends on uses MethodHandle.invoke/invokeExact,
@@ -29,18 +57,18 @@ android {
         targetSdk {
             version = release(37)
         }
-        // A release stamps its version from the tag (`-PcodedeckVersion=1.2.3`,
-        // or `1.2.3-rc1` for a prerelease). The code keeps the Tauri app's
-        // scheme, major*1_000_000 + minor*1_000 + patch, so it keeps rising
-        // across the switch from that app.
-        val stamped = (findProperty("codedeckVersion") as String?)?.removePrefix("v")
-        versionName = stamped ?: "0.0.0-dev"
-        versionCode = stamped
-            ?.substringBefore('-')
-            ?.split('.')
-            ?.map { it.toInt() }
-            ?.let { (major, minor, patch) -> major * 1_000_000 + minor * 1_000 + patch }
-            ?: 1
+        // A plain counter, raised by one in every release's version commit
+        // (see the cut-release skill). It restarted at 1 with 1.0.0, below
+        // the Tauri app's codes (major*1_000_000 + minor*1_000 + patch, so
+        // 12000 for its last 0.12.0): Android refuses to install over that
+        // app, and the uninstall it forces drops state no protocol v11 peer
+        // can use.
+        versionCode = 1
+        // A release stamps its name from the tag (`-PcodedeckVersion=1.2.3`,
+        // or `1.2.3-rc1` for a prerelease); any other build is named after
+        // the tree it came from, see devVersionName().
+        versionName = (findProperty("codedeckVersion") as String?)?.removePrefix("v")
+            ?: devVersionName()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
