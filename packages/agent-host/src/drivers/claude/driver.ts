@@ -74,10 +74,20 @@ const PLAIN_CONTEXT_WINDOW = 200_000;
 const USER_DENIED = 'User denied';
 const KEEP_PLANNING = 'The user wants to keep planning — revise the plan with their feedback.';
 
+/** What one session needs. */
 export interface ClaudeDriverOptions {
   facade: SdkFacade;
-  /** Explicit `claude` executable (else the SDK's own resolution). */
+  /** The `claude` executable, or its on-demand install still in progress
+   *  (the session waits for it). Unset: the SDK's own resolution. */
+  claudePath?: string | Promise<string>;
+}
+
+export interface ClaudeDriverDeps {
+  facade: SdkFacade;
+  /** An explicit `claude` executable. */
   claudePath?: string;
+  /** Installs the binary when there is none (and no `claudePath`). */
+  installClaude?: () => Promise<string>;
   /** Outbound HTTP for the API-key check. */
   httpPost?: HttpPost;
 }
@@ -88,6 +98,9 @@ export class ClaudeSession implements DriverSession {
   private readonly resumeTarget: string | null;
   private mode: string;
   private model: string | undefined;
+  private effort: string | undefined;
+  /** Input sent while the Claude Code binary is still being installed. */
+  private queuedInput: string[] = [];
   private ready = false;
   private ended = false;
   /** Messages seen on this spawn. >0 proves the subprocess came up and (if a
@@ -115,12 +128,29 @@ export class ClaudeSession implements DriverSession {
     this.resumeTarget = params.resume ?? null;
     this.mode = params.mode ?? DEFAULT_MODE;
     this.model = params.model ?? undefined;
+    this.effort = params.effort ?? undefined;
   }
 
   /** Spawn the query. Throws synchronously for an unusable session (a
-   *  provider binding that must not be used) — nothing has started then. */
+   *  provider binding that must not be used) — nothing has started then.
+   *  While the Claude Code binary is still being installed, the spawn waits
+   *  for it; a failed install ends the session with the reason. */
   start(): void {
     const env = buildClaudeEnv(this.params);
+    const claudePath = this.options.claudePath;
+    if (typeof claudePath === 'object') {
+      claudePath.then(
+        (resolved) => {
+          if (!this.ended) this.spawn(env, resolved);
+        },
+        (err) => this.finish(err instanceof Error ? err.message : String(err)),
+      );
+    } else {
+      this.spawn(env, claudePath);
+    }
+  }
+
+  private spawn(env: ReturnType<typeof buildClaudeEnv>, claudePath: string | undefined): void {
     const hostTools = this.params.hostTools ?? [];
     const opts: SdkSessionOptions = {
       sessionId: this.params.sessionId,
@@ -128,7 +158,7 @@ export class ClaudeSession implements DriverSession {
       permissionMode: this.mode,
       canUseTool: this.canUseTool,
       ...(this.model ? { model: this.model } : {}),
-      ...(this.params.effort ? { effortLevel: this.params.effort } : {}),
+      ...(this.effort ? { effortLevel: this.effort } : {}),
       // A provider-bound session must never fall back to an Anthropic model,
       // and never answers the machine-wide model list.
       ...(this.params.provider ? { providerId: this.params.provider.id, fallbackModel: null } : {}),
@@ -136,11 +166,12 @@ export class ClaudeSession implements DriverSession {
       ...(hostTools.length > 0
         ? { mcpServers: { [HOST_MCP_SERVER]: hostToolsServer(hostTools, (tool, args) => this.ctx.callHostTool(tool, args)) } }
         : {}),
-      ...(this.options.claudePath ? { pathToClaudeCodeExecutable: this.options.claudePath } : {}),
+      ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       ...(env ? { env } : {}),
     };
     const handle = this.options.facade.createSession(opts);
     this.handle = handle;
+    for (const text of this.queuedInput.splice(0)) handle.pushInput(text);
     if (this.resumeTarget) {
       // A resumed query accepts input right away; its init follows the
       // first turn.
@@ -435,8 +466,9 @@ export class ClaudeSession implements DriverSession {
   }
 
   prompt(text: string): void {
-    if (!this.handle || this.ended) return;
-    this.handle.pushInput(text);
+    if (this.ended) return;
+    if (this.handle) this.handle.pushInput(text);
+    else this.queuedInput.push(text);
     // Turn-state fallback until the SDK sends its own state events: a turn
     // runs from the moment input is handed over until its `result`.
     if (!this.sawStateEvents && this.turn !== 'running') this.setTurn('running');
@@ -446,20 +478,23 @@ export class ClaudeSession implements DriverSession {
     await this.handle?.interrupt();
   }
 
+  /** Before the query is spawned (the binary still installing), a change is
+   *  kept and applied at the spawn. */
   async setOption(option: SessionOption, value: string): Promise<void> {
-    if (!this.handle || this.ended) throw new Error('the session is not running');
+    if (this.ended) throw new Error('the session is not running');
     switch (option) {
       case 'mode':
         if (!isMode(value)) throw new Error(`Claude Code has no mode '${value}'`);
-        await this.handle.setPermissionMode(value);
+        await this.handle?.setPermissionMode(value);
         this.mode = value;
         return;
       case 'effort':
         if (!isEffort(value)) throw new Error(`Claude Code has no effort level '${value}'`);
-        await this.handle.setEffort(value);
+        await this.handle?.setEffort(value);
+        this.effort = value;
         return;
       case 'model':
-        await this.handle.setModel(value);
+        await this.handle?.setModel(value);
         this.model = value;
         return;
     }
@@ -485,7 +520,27 @@ export class ClaudeSession implements DriverSession {
 }
 
 export class ClaudeDriver implements Driver {
-  constructor(private readonly options: ClaudeDriverOptions) {}
+  /** The on-demand install in progress or done; dropped when it fails, so
+   *  the next session tries again (a bridge started offline recovers). */
+  private install: Promise<string> | null = null;
+
+  constructor(private readonly options: ClaudeDriverDeps) {
+    // Start at once, so the binary is usually in place by the first session.
+    if (options.installClaude) void this.claudePath();
+  }
+
+  private claudePath(): string | Promise<string> | undefined {
+    const { claudePath, installClaude } = this.options;
+    if (claudePath !== undefined || !installClaude) return claudePath;
+    if (!this.install) {
+      const attempt = installClaude();
+      this.install = attempt;
+      attempt.catch(() => {
+        if (this.install === attempt) this.install = null;
+      });
+    }
+    return this.install;
+  }
 
   info(): AgentInfo {
     return {
@@ -506,7 +561,11 @@ export class ClaudeDriver implements Driver {
     if (params.effort !== undefined && params.effort !== null && !isEffort(params.effort)) {
       throw new Error(`Claude Code has no effort level '${params.effort}'`);
     }
-    const session = new ClaudeSession(params, ctx, this.options);
+    const claudePath = this.claudePath();
+    const session = new ClaudeSession(params, ctx, {
+      facade: this.options.facade,
+      ...(claudePath !== undefined ? { claudePath } : {}),
+    });
     session.start();
     return session;
   }

@@ -46,9 +46,13 @@ local process on a machine you control.
 Additional settings for this mode:
 
 - `--opencode-path <path>` / `CODEDECK_OPENCODE_PATH` / `"openCodePath"` —
-  explicit path to the `opencode` binary. Otherwise the bridge resolves it
-  from `which opencode` and a few well-known global-install locations
-  (mirroring how it resolves `claude` and `nvpn`).
+  explicit path to the `opencode` binary. Otherwise the agent host looks for
+  it on `PATH` and in a few well-known global-install locations (mirroring
+  how it resolves `claude`), and when there is none it **installs it**: the
+  `opencode-<os>-<arch>` build pinned in `pnpm-lock.yaml` (the `baseline`
+  variant on x64, which needs no AVX2), downloaded in the background into
+  `<home>/agents/` — see "Agent binaries" in [`BRIDGE.md`](BRIDGE.md).
+  Sessions started meanwhile wait for it.
 - `CODEDECK_OPENCODE_PORT` / `"openCodePort"` (env/config-file only, no flag —
   a rarely hand-typed knob) — fixes the port instead of the default OS-assigned
   ephemeral one. Useful if you also want to point OpenCode's own TUI at the
@@ -58,10 +62,11 @@ The embedded server always binds to `127.0.0.1` only — it is spawned
 exclusively for the bridge's own use and is never configurable to listen on
 any wider interface.
 
-If `opencode` can't be resolved, or the spawned process fails to come up, the
-agent host logs one actionable line and reports OpenCode as unavailable (it
-is not advertised, and a session on it fails with that reason) — a broken or
-missing OpenCode install never blocks Claude Code sessions.
+If an installed `opencode` fails to come up, the agent host logs one
+actionable line and reports OpenCode as unavailable (a session on it fails
+with that reason). If the on-demand install or the server it starts fails,
+the session that waited on it fails with the reason and the next session
+tries again. Either way, OpenCode never blocks Claude Code sessions.
 
 If both `openCodeServerUrl` and `openCodeAutoStart` are set, the external URL
 wins (logged as a warning — usually a leftover setting from switching modes).

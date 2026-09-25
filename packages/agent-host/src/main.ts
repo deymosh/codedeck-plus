@@ -12,15 +12,21 @@
  *   CODEDECK_OPENCODE_SERVER_URL  an OpenCode server to use
  *   CODEDECK_OPENCODE_AUTO_START=1, CODEDECK_OPENCODE_PATH, CODEDECK_OPENCODE_PORT
  *                                 spawn and manage an OpenCode server instead
+ *   CODEDECK_AGENT_CACHE          where agent binaries installed on demand live
+ *                                 (the bridge passes `<home>/agents`)
+ *   CODEDECK_NPM_REGISTRY         an npm mirror to install them from
  */
 import * as readline from 'node:readline';
 import pkg from '../package.json';
+import { agentCacheDir, installBinary, registryUrl } from './agentInstall';
 import type { Driver } from './driver';
 import { ClaudeDriver } from './drivers/claude/driver';
 import { RealSdkFacade, resolveClaudeExecutable } from './drivers/claude/facade';
+import { bundledClaudeExecutable, claudeBinary } from './drivers/claude/install';
 import { TestModeSdkFacade } from './drivers/claude/testModeFacade';
 import { FakeDriver } from './drivers/fake';
 import { OpenCodeDriver } from './drivers/opencode/driver';
+import { openCodeBinary } from './drivers/opencode/install';
 import { AgentHost, type HostIo } from './host';
 import { httpPost } from './net';
 
@@ -47,12 +53,17 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
     switch (name) {
       case 'claude-code': {
         const testMode = env.CODEDECK_TEST_MODE === '1';
-        const claudePath = testMode ? null : resolveClaudeExecutable(env.CODEDECK_CLAUDE_PATH);
-        if (!testMode && !claudePath) log('[agent-host] claude executable not found — relying on the SDK to locate it');
+        const claudePath = testMode ? null : (resolveClaudeExecutable(env.CODEDECK_CLAUDE_PATH) ?? bundledClaudeExecutable());
         drivers.push(
           new ClaudeDriver({
             facade: testMode ? new TestModeSdkFacade() : new RealSdkFacade(),
             ...(claudePath ? { claudePath } : {}),
+            // Nothing on the machine: the driver installs it in the
+            // background, so the agent is listed right away and the first
+            // session waits for it.
+            ...(!testMode && !claudePath
+              ? { installClaude: () => installBinary(claudeBinary(), { cacheDir: agentCacheDir(env), registry: registryUrl(env), log }) }
+              : {}),
             httpPost,
           }),
         );
@@ -65,6 +76,7 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
             ...(env.CODEDECK_OPENCODE_SERVER_URL ? { serverUrl: env.CODEDECK_OPENCODE_SERVER_URL } : {}),
             autoStart: env.CODEDECK_OPENCODE_AUTO_START === '1' || env.CODEDECK_OPENCODE_AUTO_START === 'true',
             ...(env.CODEDECK_OPENCODE_PATH ? { binaryPath: env.CODEDECK_OPENCODE_PATH } : {}),
+            installOpenCode: () => installBinary(openCodeBinary(), { cacheDir: agentCacheDir(env), registry: registryUrl(env), log }),
             ...(port !== undefined && Number.isInteger(port) ? { port } : {}),
             log,
           }),

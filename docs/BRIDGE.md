@@ -14,13 +14,14 @@ the agent host itself; you never run it directly.
 **Docker** (from the repo root): `docker compose up -d --build`, or
 `./codedeck bridge up`. See the root README for the `.env` it reads.
 
-**A release archive** — `codedeck-bridge-vX.Y.Z-linux-<x86_64|aarch64>.tar.gz`
+**A release archive** — `codedeck-bridge-vX.Y.Z-linux-<x86_64|aarch64>.tar.xz`
 from the [releases](https://github.com/deymosh/codedeck-plus/releases). It
-bundles the binary, its agent host and a Node runtime: nothing needs to be
-installed. The binary needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
+bundles the binary, its agent host and a Node runtime; the agents' own
+binaries are installed on first use (see [Agent binaries](#agent-binaries)).
+The binary needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
 
 ```sh
-tar -xzf codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz
+tar -xJf codedeck-bridge-vX.Y.Z-linux-x86_64.tar.xz
 cd codedeck-bridge-vX.Y.Z-linux-x86_64
 ./codedeck-bridge run
 ```
@@ -39,15 +40,43 @@ Upgrading is extracting the new archive over the old one.
 - The state and config files get no extra permission tightening: they rely
   on the user profile folder being private to your account, as it is by
   default.
-- OpenCode is found on `PATH` only as `opencode.exe`; npm's global install
-  adds just an `opencode.cmd` shim, so point `CODEDECK_OPENCODE_PATH` at the
-  real binary in that case.
+- An existing OpenCode is found on `PATH` only as `opencode.exe`; npm's
+  global install adds just an `opencode.cmd` shim, so point
+  `CODEDECK_OPENCODE_PATH` at the real binary (or let auto-start install one).
 - There is no service unit: run it in a terminal, or start it at logon with
   Task Scheduler. Under WSL2, the Linux archive works as on Linux.
 
-The Claude Code binary ships inside the agent host; it authenticates with
-`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, an existing `claude` login, or
-a key set from the phone.
+Claude Code authenticates with `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+an existing `claude` login, or a key set from the phone.
+
+### Agent binaries
+
+The archives leave out the agents' own CLI binaries (a couple of hundred MB
+each). An agent uses one already on the machine — its path setting, then
+`PATH` and the usual install locations — and otherwise the agent host
+installs it on first use:
+
+- **Claude Code**: always, the Agent SDK's platform package, at the version
+  the SDK is locked to.
+- **OpenCode**: when auto-start is on (`CODEDECK_OPENCODE_AUTO_START=1`) and
+  no `opencode` is found; a server URL instead needs nothing installed.
+
+The download starts in the background as the bridge starts, so the agents
+are listed at once and a first session waits for it (about 100 MB for Claude
+Code, 60 MB for OpenCode). It comes from the npm registry and is checked
+against the sha512 in this build's `pnpm-lock.yaml`; a mismatch is refused.
+Binaries live in `<home>/agents/`, one version per package; an upgrade that
+moves the pin installs the new one and removes the old. A failed download
+(no network) is retried by the next session.
+
+- Offline machines: install `claude` (or `opencode`) yourself and it is used
+  as is, or copy an `agents/` directory from another machine.
+- A mirror: `CODEDECK_NPM_REGISTRY=https://…` (the sha512 still applies).
+- An HTTP(S) proxy for the download: Node reads `HTTPS_PROXY` only with
+  `NODE_USE_ENV_PROXY=1` set. The Tor proxy is for relay traffic only and is
+  not used here.
+
+The container image ships both agents, so it needs none of this.
 
 **systemd:** `deploy/codedeck-bridge.service` — its header comments are the
 install runbook.
