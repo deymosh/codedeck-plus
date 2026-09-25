@@ -125,18 +125,34 @@ impl Store for StateFile {
     }
 }
 
-/// `bridge.lock`: an exclusive OS lock held for the life of the process, with
-/// the holder's pid inside for messages. The OS drops it when the process
-/// dies, however it dies, so a stale lock can never block a restart.
+/// `bridge.lock`: an exclusive OS lock held for the life of the process. The
+/// OS drops it when the process dies, however it dies, so a stale lock can
+/// never block a restart. The holder's pid goes in `bridge.pid` beside it,
+/// for messages only: Windows locks are mandatory, so another process cannot
+/// read a locked file, and whether a bridge runs is the lock's answer alone.
 pub struct Lock {
     _file: File,
+}
+
+/// A running bridge found holding the lock; its pid when `bridge.pid` could
+/// be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Holder {
+    pub pid: Option<u32>,
+}
+
+impl Holder {
+    /// ` (pid N)`, or nothing when the pid is unknown.
+    pub fn pid_suffix(&self) -> String {
+        self.pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
+    }
 }
 
 pub fn acquire_lock(home: &Path) -> Result<Lock, String> {
     // First run: the home directory may not exist yet.
     fs::create_dir_all(home).map_err(|e| format!("cannot create {}: {e}", home.display()))?;
     let path = home.join("bridge.lock");
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
@@ -146,7 +162,7 @@ pub fn acquire_lock(home: &Path) -> Result<Lock, String> {
     match file.try_lock() {
         Ok(()) => {}
         Err(fs::TryLockError::WouldBlock) => {
-            let holder = lock_holder(home).map(|pid| format!(" (pid {pid})")).unwrap_or_default();
+            let holder = lock_holder(home).map(|h| h.pid_suffix()).unwrap_or_default();
             return Err(format!(
                 "a bridge is already running on {}{holder}. Stop it first, or use a different --home.",
                 home.display()
@@ -154,17 +170,17 @@ pub fn acquire_lock(home: &Path) -> Result<Lock, String> {
         }
         Err(fs::TryLockError::Error(e)) => return Err(format!("cannot lock {}: {e}", path.display())),
     }
-    file.set_len(0).and_then(|_| file.write_all(std::process::id().to_string().as_bytes())).map_err(|e| e.to_string())?;
+    let pid_file = home.join("bridge.pid");
+    fs::write(&pid_file, std::process::id().to_string()).map_err(|e| format!("cannot write {}: {e}", pid_file.display()))?;
     Ok(Lock { _file: file })
 }
 
-/// The pid of a running bridge on `home`, if one holds the lock.
-pub fn lock_holder(home: &Path) -> Option<u32> {
-    let path = home.join("bridge.lock");
-    let file = OpenOptions::new().read(true).write(true).open(&path).ok()?;
+/// The running bridge on `home`, if one holds the lock.
+pub fn lock_holder(home: &Path) -> Option<Holder> {
+    let file = OpenOptions::new().read(true).write(true).open(home.join("bridge.lock")).ok()?;
     match file.try_lock() {
         Ok(()) => None,
-        Err(_) => fs::read_to_string(&path).ok()?.trim().parse().ok(),
+        Err(_) => Some(Holder { pid: fs::read_to_string(home.join("bridge.pid")).ok().and_then(|s| s.trim().parse().ok()) }),
     }
 }
 
@@ -215,7 +231,7 @@ mod tests {
     fn a_second_lock_is_refused_and_released_on_drop() {
         let dir = tempfile::tempdir().unwrap();
         let lock = acquire_lock(dir.path()).unwrap();
-        assert_eq!(lock_holder(dir.path()), Some(std::process::id()));
+        assert_eq!(lock_holder(dir.path()), Some(Holder { pid: Some(std::process::id()) }));
         assert!(acquire_lock(dir.path()).err().unwrap().contains("already running"));
         drop(lock);
         assert_eq!(lock_holder(dir.path()), None);

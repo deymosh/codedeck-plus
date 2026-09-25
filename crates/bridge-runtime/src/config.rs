@@ -153,10 +153,13 @@ fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok().and_then(|exe| fs::canonicalize(exe).ok()).and_then(|exe| exe.parent().map(Path::to_path_buf))
 }
 
+/// The Node executable's file name on this platform.
+const NODE_BIN: &str = if cfg!(windows) { "node.exe" } else { "node" };
+
 /// A `node` shipped beside the binary — the release archives bundle one so
 /// they need nothing installed.
 fn bundled_node(exe_dir: Option<&Path>) -> Option<String> {
-    let node = exe_dir?.join("node");
+    let node = exe_dir?.join(NODE_BIN);
     node.is_file().then(|| node.to_string_lossy().into_owned())
 }
 
@@ -287,9 +290,9 @@ mod tests {
     fn a_bundled_node_is_preferred_only_when_present() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(bundled_node(Some(dir.path())), None);
-        std::fs::write(dir.path().join("node"), "#!/bin/sh").unwrap();
+        std::fs::write(dir.path().join(NODE_BIN), "#!/bin/sh").unwrap();
         let bundled = bundled_node(Some(dir.path())).unwrap();
-        assert!(bundled.ends_with("node"));
+        assert!(bundled.ends_with(NODE_BIN));
     }
 
     #[test]

@@ -97,13 +97,15 @@ a driver-protocol type, regenerate the host's types with
 - `.github/workflows/ci.yml` runs on every push to `master` and every PR: the
   agent host's typecheck + test + build; cargo test + clippy for every crate;
   the driver-protocol drift check, host spawn test and bridge end-to-end test;
+  the bridge crates, agent host tests and end-to-end test again on Windows;
   and the Android unit/screenshot tests with the UniFFI bindings drift check.
   A `changes` job path-filters every other job, so an untouched area costs no
   runner; only `master` runs save the Rust caches (a PR's cache is scoped to
   that PR and would only crowd the 10 GB quota).
 - `.github/workflows/release.yml` runs on a `vMAJOR.MINOR.PATCH` tag: it builds
   and publishes one GitHub Release with the signed APK, the bridge for Linux
-  x86_64 and aarch64 (self-contained archives: binary + agent host + Node),
+  x86_64 and aarch64 and for Windows x86_64 (self-contained archives: binary
+  + agent host + Node),
   and the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A
   tag with a hyphen (`v1.2.3-rc1`) is a prerelease. See the `cut-release`
   skill.

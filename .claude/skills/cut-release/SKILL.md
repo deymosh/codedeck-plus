@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Cut a CodeDeck+ release — a single vMAJOR.MINOR.PATCH tag that publishes one GitHub Release with the signed APK, the bridge for Linux x86_64/aarch64, and the bridge container image. Use when asked to cut, tag, or ship a release.
+description: Cut a CodeDeck+ release — a single vMAJOR.MINOR.PATCH tag that publishes one GitHub Release with the signed APK, the bridge for Linux x86_64/aarch64 and Windows x86_64, and the bridge container image. Use when asked to cut, tag, or ship a release.
 ---
 
 # Cutting a CodeDeck+ release
@@ -96,15 +96,17 @@ Packages write enabled for Actions in repo settings.
    ```
 
 7. **Watch the run:** `gh run watch` (or `gh run list --workflow=release.yml`).
-   Jobs: `meta` → (`bridge-binary` (x86_64 + aarch64), `bridge-image`,
-   `android-apk` in parallel) → `release`. The `release` job creates the GitHub
+   Jobs: `meta` → `verify` (the full CI) → (`bridge-binary` (x86_64 +
+   aarch64), `bridge-windows`, `bridge-image`, `android-apk` in parallel) →
+   `release`. The `release` job creates the GitHub
    Release with `generate_release_notes: true`, so the changelog is the
    merged-PR list since the previous tag — another reason to land work as PRs,
    not direct pushes.
 
 8. **Confirm the release** has all its artifacts, each on the `vX.Y.Z`
    convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz`,
-   `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.gz` attached, and the
+   `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.gz`,
+   `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` attached, and the
    `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+ `:latest` for a
    non-prerelease).
 
