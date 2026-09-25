@@ -44,7 +44,7 @@
 # apps/android is built).
 [workspace]
 resolver = "2"
-members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol", "crates/bridge-core", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
+members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol", "crates/bridge-core", "crates/bridge-runtime", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
 exclude = ["apps", "vendor", "spike", "docker", "data", "dist"]
 
 [workspace.package]
