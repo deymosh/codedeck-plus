@@ -1,7 +1,7 @@
 {
   "name": "codedeck-plus",
   "private": true,
-  "version": "0.12.0",
+  "version": "1.0.0",
   "description": "CodeDeck+ — run coding agents on your machine and drive them from your phone over end-to-end-encrypted Nostr. This manifest holds the one TypeScript package left: the agent host.",
   "scripts": {
     "typecheck": "pnpm -r --no-bail run typecheck",

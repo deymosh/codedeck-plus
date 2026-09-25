@@ -44,10 +44,11 @@ Packages write enabled for Actions in repo settings.
    version N, even a component unchanged since N-1 — the version is a
    compatibility snapshot, not a per-component changelog; wire compatibility is
    `protocolVersion`, tracked separately). Set `X.Y.Z` in:
-   - `package.json` (root) and `packages/agent-host/package.json`, then run
-     `pnpm install` so `pnpm-lock.yaml` records it
-   - `crates/bridge-runtime/Cargo.toml` `version` + its `Cargo.lock` entry
-     (one line; CI's `cargo test --locked` fails if they disagree)
+   - `package.json` (root) and `packages/agent-host/package.json`
+   - `[workspace.package] version` in the root `Cargo.toml` (every crate
+     inherits it), then refresh the workspace entries in `Cargo.lock` with
+     `cargo update -w --offline` — CI's `cargo test --locked` fails if they
+     disagree
 
    The Android `versionCode` is **derived at build time** from the tag
    (`-PcodedeckVersion`), and the release build stamps the same number into

@@ -4,7 +4,7 @@ description = "CodeDeck+ bridge binary (codedeck-bridge): relays, the agent host
 edition.workspace = true
 # std's file locks (bridge.lock) need 1.89.
 rust-version = "1.89"
-version = "0.13.0"
+version.workspace = true
 license.workspace = true
 publish.workspace = true
 
