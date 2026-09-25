@@ -1,0 +1,32 @@
+//! The wire contract — the AUTHORITATIVE definition of the CodeDeck+ agent
+//! control protocol (v11). Every other implementation mirrors this crate;
+//! the corpus `fixtures/corpus.json`, run by `tests/codec_conformance.rs`,
+//! is the executable spec they can be checked against. Strict: an unknown message `type` or an unknown enum value is a
+//! decode error; unknown extra fields are ignored.
+//!
+//! Depends on nothing in this workspace — the phone (`client-core`) and the
+//! bridge (`bridge-core`) both depend on it, never the other way around.
+//! Also carries the crypto/event primitives the wire format itself needs
+//! (NIP-44 encryption, NIP-42 AUTH signing, the flattened Nostr event shape)
+//! — these are part of "how the wire is secured," not client domain logic,
+//! so they live here rather than in `client-core`.
+
+pub mod capabilities;
+pub mod chunking;
+pub mod codec;
+pub mod commands;
+pub mod common;
+pub mod crypto;
+pub mod defaults;
+pub mod events;
+pub mod kinds;
+pub mod nip42;
+pub mod nostr_event;
+pub mod ranges;
+pub mod relays;
+pub mod tristate;
+
+pub use codec::{
+    decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone, encode_phone_to_bridge,
+    DecodeResult,
+};

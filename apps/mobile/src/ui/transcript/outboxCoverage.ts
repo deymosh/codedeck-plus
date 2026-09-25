@@ -42,7 +42,7 @@
  * transcript forever. Rows still shown regardless of age: pending / published /
  * failed, and confirmed rows while a sync gap could still deliver the echo.
  */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../core/nativeCoreTypes';
 import type { OutboxItem } from '../../core/stores/outbox';
 
 export interface UserEntryLite {

@@ -8,7 +8,7 @@
  * keep their transcript order, so reasoning appears where it actually happened
  * — before the calls it motivated.
  */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import type { SeqEntry } from '../displayEntries';
 import styles from './rows.module.css';
 

@@ -1,0 +1,49 @@
+# The CodeDeck bridge as a systemd service.
+#
+# Install (from a release archive, codedeck-bridge-vX.Y.Z-linux-<arch>.tar.gz):
+#   sudo useradd -r -m -s /usr/sbin/nologin codedeck   # once
+#   sudo mkdir -p /opt/codedeck-bridge
+#   sudo tar -xzf codedeck-bridge-*.tar.gz -C /opt/codedeck-bridge --strip-components=1
+#   sudo cp codedeck-bridge.service /etc/systemd/system/
+#   sudo mkdir -p /etc/codedeck-bridge && sudo touch /etc/codedeck-bridge/env
+#   sudo systemctl daemon-reload && sudo systemctl enable --now codedeck-bridge
+# Pair: `run` opens a pairing window by itself while no phone is paired —
+#   the QR is in `journalctl -u codedeck-bridge`. To pair another phone later:
+#   sudo systemctl stop codedeck-bridge   # the state lock refuses a double run
+#   sudo -u codedeck env CODEDECK_HOME=/home/codedeck/.codedeck \
+#     /opt/codedeck-bridge/codedeck-bridge pair
+#   sudo systemctl start codedeck-bridge
+#
+# /etc/codedeck-bridge/env takes CODEDECK_* overrides, e.g.:
+#   CODEDECK_MACHINE_NAME=my-vps
+#   CODEDECK_RELAYS=wss://relay2.descendant.io,wss://relay.primal.net
+#   CODEDECK_WORKSPACE_ROOTS=/home/codedeck/projects
+#   CODEDECK_TOR_PROXY_URL=socks5h://127.0.0.1:9050
+#   ANTHROPIC_API_KEY=... (or CLAUDE_CODE_OAUTH_TOKEN=...)
+
+[Unit]
+Description=CodeDeck Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codedeck
+Group=codedeck
+WorkingDirectory=/home/codedeck
+# The unit's INVOCATION_ID makes the bridge advertise host:"service".
+ExecStart=/opt/codedeck-bridge/codedeck-bridge run --workspace /home/codedeck/projects
+Environment=CODEDECK_HOME=/home/codedeck/.codedeck
+EnvironmentFile=-/etc/codedeck-bridge/env
+Restart=always
+RestartSec=5
+# SIGTERM → graceful shutdown: the bridge ends its sessions and publishes its
+# session list with every session offline before exiting. Give it time.
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/codedeck
+
+[Install]
+WantedBy=multi-user.target

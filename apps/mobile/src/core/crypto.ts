@@ -2,8 +2,9 @@
  * Phone-side keypair + NIP-44 helpers, on nostr-tools directly.
  *
  * Deliberately mirrors @codedeck/core's nostr/crypto.ts WITHOUT importing it:
- * production phone code never depends on the bridge engine — the wire contract
- * (@codedeck/protocol) is the only shared code.
+ * production phone code depends on neither the bridge engine nor the wire
+ * protocol package at runtime — see `protocolConstants.ts` for the same
+ * reasoning applied to the wire protocol's own constants and validators.
  */
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { encrypt, decrypt, getConversationKey } from 'nostr-tools/nip44';

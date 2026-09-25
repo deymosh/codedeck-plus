@@ -7,7 +7,7 @@
 # For a signed RELEASE build (one a store or update mechanism would trust)
 # you'd need a real keystore at
 # apps/mobile/src-tauri/gen/android/keystore.properties (see
-# vendor/mobile/scripts/build-release-apk.sh for that path) — out of scope
+# upstream codedeck-next-mobile's scripts/build-release-apk.sh for that path) — out of scope
 # here since nobody has generated one yet. The debug keystore baked in below
 # is NOT that — it's only for locally sideloading a benchmark build.
 FROM eclipse-temurin:21-jdk-jammy
@@ -25,7 +25,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 # --- Android SDK (cmdline-tools) + NDK 28 + platform 36 ---
 # Matches apps/mobile/src-tauri/gen/android/app/build.gradle.kts
-# (compileSdk/targetSdk 36) and vendor/mobile/scripts/build-release-apk.sh
+# (compileSdk/targetSdk 36) and upstream codedeck-next-mobile's scripts/build-release-apk.sh
 # (NDK 28.2.13676358 — the exact version the RANLIB_/AR_ exports below target).
 ENV ANDROID_HOME=/opt/android-sdk
 ENV ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/28.2.13676358
@@ -51,7 +51,7 @@ ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
 ENV PATH=${CARGO_HOME}/bin:${PATH}
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
-    && rustup target add aarch64-linux-android
+    && rustup target add aarch64-linux-android x86_64-linux-android
 
 # Gradle's rustBuildArm64Debug task shells out to `cargo tauri ...` (a Cargo
 # SUBCOMMAND, from the tauri-cli crate) -- separate from the npm
@@ -60,13 +60,18 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
 # "error: no such command: `tauri`".
 RUN cargo install tauri-cli --version "^2" --locked
 
-# CDX-012 NDK trap (see vendor/mobile/scripts/build-release-apk.sh): these
+# CDX-012 NDK trap (see upstream codedeck-next-mobile's scripts/build-release-apk.sh): these
 # exports only matter on the tauri-CLI-drives-cargo path — gen/android's
 # BuildTask.kt sets them itself when GRADLE drives the CLI, but a plain
 # `tauri android build` from the CLI does not.
 ENV TOOLBIN=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin
 ENV RANLIB_aarch64_linux_android=${TOOLBIN}/llvm-ranlib
 ENV AR_aarch64_linux_android=${TOOLBIN}/llvm-ar
+# Same for the x86_64 emulator ABI (`build-apk.sh ... --target x86_64`): the
+# vendored-OpenSSL `make install_dev` under rusqlite's bundled-sqlcipher needs
+# the NDK ar/ranlib for its target too, or it links host binutils and fails.
+ENV RANLIB_x86_64_linux_android=${TOOLBIN}/llvm-ranlib
+ENV AR_x86_64_linux_android=${TOOLBIN}/llvm-ar
 
 # --- Debug keystore, for signing "benchmark" (release-optimized, debug-
 # signed) builds so they can actually be installed — Android refuses to

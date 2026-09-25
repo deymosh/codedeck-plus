@@ -3,7 +3,7 @@
  * (session_died / session_failed / auth_error), labelled so a dead session is
  * unmistakable in the scrollback.
  */
-import type { OutputEntry } from '@codedeck/protocol';
+import type { OutputEntry } from '../../../core/nativeCoreTypes';
 import styles from './rows.module.css';
 
 const LABELS: Record<string, string> = {

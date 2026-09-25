@@ -1,0 +1,22 @@
+[package]
+name = "bridge-core"
+description = "CodeDeck+ bridge engine (pure): sessions, cards, transcript sync, pairing and ingest as one sans-IO state machine."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bridge_core"
+
+[dependencies]
+# The phone wire (messages, crypto, ranges) and the driver protocol to the
+# agent host — the two protocols this engine sits between.
+protocol = { path = "../protocol" }
+agent-protocol = { path = "../agent-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Facade only: the runtime installs the backend.
+log = "0.4"
+regex = "1"

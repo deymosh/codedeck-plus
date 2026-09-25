@@ -1,0 +1,24 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+key.properties
+keystore.properties
+
+# crates/client-ffi's compiled .so, cross-compiled per ABI by
+# docker/build-apk.sh / scripts/build-apk-local.sh — a build artifact, never
+# committed (unlike app/src/main/java/uniffi/**, which IS committed: that's
+# generated SOURCE, checked in the same way nativeCoreTypes.generated.ts is).
+app/src/main/jniLibs/
+*.hprof

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ManualTimers } from '@codedeck/testkit';
-import type { PermissionMode } from '@codedeck/protocol';
+import type { PermissionMode } from '../nativeCoreTypes';
 import {
   MODE_CONFIRM_TIMEOUT_MS,
   MODE_CYCLE,

@@ -1,0 +1,39 @@
+[package]
+name = "nostr-transport"
+description = "CodeDeck+ Nostr relay transport — WebSocket + SOCKS5 relay driver, NIP-42 AUTH, publish verdicts. Shared by the phone and bridge runtimes."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "nostr_transport"
+
+[features]
+# A scriptable in-process WebSocket relay for tests (`mock::mock_relay`).
+# Consumers enable it from their [dev-dependencies] only.
+mock = []
+
+[dependencies]
+protocol = { path = "../protocol" }
+serde_json = "1"
+log = "0.4"
+# Hand-rolled on these rather than a relay-pool crate — see `ws.rs`. rustls
+# (not native-tls) so wss:// cross-compiles for Android without OpenSSL.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+# Direct (not just transitive through tokio-tungstenite): `rustls-tls-webpki-roots`
+# alone leaves NEITHER of rustls 0.23's crypto backends selected, which panics
+# on the first TLS handshake instead of picking one — see `ws.rs`'s
+# `install_crypto_provider`. `ring` cross-compiles to Android with no C++
+# toolchain (unlike `aws-lc-rs`, which needs one).
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio-socks = "0.5"
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+url = "2"
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util"] }

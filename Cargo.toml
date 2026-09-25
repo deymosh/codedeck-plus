@@ -1,0 +1,56 @@
+# The Rust workspace: the protocol, the phone's client core and the bridge.
+# The only TypeScript left is packages/agent-host (agent SDKs are JavaScript).
+#
+# protocol       = the wire contract (codec, schemas, ranges, chunking,
+#                 NIP-42/crypto primitives). Depends on nothing else in this
+#                 workspace — the phone and the bridge both depend on it,
+#                 never the reverse. The source of truth for the wire;
+#                 `fixtures/corpus.json` pins its JSON shape.
+# nostr-transport = the relay transport: WebSocket + SOCKS5 (Tor/Orbot)
+#                 driver, NIP-42 AUTH, relay frame codec, publish verdicts,
+#                 behind a small `Transport` port. Depends on protocol only;
+#                 shared by client-runtime and the bridge runtime.
+# agent-protocol = the driver protocol between the bridge and its agent host
+#                 (the Node sidecar running agent SDKs): JSON-lines frames,
+#                 pure types + codec. Depends on protocol only. The host's
+#                 TypeScript types are generated from it.
+# bridge-core  = the bridge engine (pure): sessions, cards, transcript seqs
+#                 and sync, pairing, ingest, credentials, as one sans-IO state
+#                 machine (inputs in, effects out). Depends on protocol and
+#                 agent-protocol. No tokio, no sockets, no filesystem — the
+#                 bridge runtime owns those.
+# client-core  = client domain logic (reducers, stores as state machines,
+#                 sync, merge, pairing FSM, presentation). Depends on protocol.
+#                 No tokio, no sockets, no I/O, no Tauri/Android/Node/
+#                 filesystem. Deterministic. The part that is never duplicated
+#                 between Android and a future desktop client.
+# client-runtime = the async host (tokio reactor, Transport driver, lifecycle,
+#                 ports wiring). Depends on client-core AND protocol. Bindings
+#                 attach here.
+# client-ffi  = the Android binding surface: UniFFI `#[uniffi::export]`
+#                 objects/callbacks wrapping the client-runtime `Core`,
+#                 compiled to the `.so` `apps/android` loads. Depends on
+#                 client-runtime (feature `uniffi`) only — it is the one crate
+#                 allowed to know about UniFFI.
+#
+# apps/mobile/src-tauri (the frozen Tauri app, still on protocol v10) keeps its
+# own build and is deliberately not a member.
+[workspace]
+resolver = "2"
+members = ["crates/protocol", "crates/nostr-transport", "crates/agent-protocol", "crates/bridge-core", "crates/bridge-runtime", "crates/client-core", "crates/client-runtime", "crates/client-ffi"]
+exclude = ["apps", "docker", "data", "dist"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.87"
+# The release version: every crate inherits it, and it moves in step with the
+# agent host's package.json and the release tag (see the cut-release skill).
+# The wire has its own numbers: protocolVersion (phone) and the driver
+# protocol's `v`.
+version = "1.0.0"
+license = "MIT"
+publish = false
+
+[workspace.lints.clippy]
+# keep the pure core honest
+all = { level = "warn", priority = -1 }

@@ -10,7 +10,7 @@
  * at it), but a session blocked on the user must light up even while it IS
  * the foreground session.
  */
-import type { SessionState } from '@codedeck/protocol';
+import type { SessionState } from './nativeCoreTypes';
 
 export function sessionNeedsAttention(
   state: SessionState | undefined,

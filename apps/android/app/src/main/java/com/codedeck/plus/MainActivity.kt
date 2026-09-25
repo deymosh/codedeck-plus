@@ -1,0 +1,188 @@
+package com.codedeck.plus
+
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.os.IBinder
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.lifecycleScope
+import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.platform.StayConnectedService
+import com.codedeck.plus.ui.OpenSessionRequest
+import com.codedeck.plus.ui.Shell
+import com.codedeck.plus.ui.theme.CodeDeckTheme
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+/**
+ * Holds the [CoreHost] reference handed back once [MainActivity] binds to
+ * [StayConnectedService] — the service, not this `ViewModel`, owns the
+ * `CoreHost`'s actual lifecycle (see that class's own doc comment for why
+ * a plain `ViewModel` isn't enough: it survives configuration changes but
+ * not process death).
+ */
+class MainViewModel : ViewModel() {
+    private val _core = MutableStateFlow<CoreHost?>(null)
+    val core: StateFlow<CoreHost?> = _core.asStateFlow()
+
+    /**
+     * A session a notification tap / deep link asked to open, held until the
+     * shell consumes it — which also covers a link arriving before the core
+     * attached, since the shell only composes once it has. The shell both
+     * navigates and selects: selecting alone would not open anything when
+     * the session is already the core's selection.
+     */
+    private val _openRequest = MutableStateFlow<OpenSessionRequest?>(null)
+    val openRequest: StateFlow<OpenSessionRequest?> = _openRequest.asStateFlow()
+
+    fun attach(core: CoreHost) {
+        _core.value = core
+    }
+
+    fun requestOpenSession(machine: String, sessionId: String) {
+        _openRequest.value = OpenSessionRequest(machine, sessionId)
+    }
+
+    fun openRequestHandled() {
+        _openRequest.value = null
+    }
+}
+
+class MainActivity : ComponentActivity() {
+    private val viewModel: MainViewModel by viewModels()
+
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op either way — Notifier.notify() re-checks itself before every post */ }
+
+    /** Waits for the bound service's core to finish opening (the spinner
+     *  shows meanwhile); cancelled with the binding. */
+    private var attachJob: Job? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as? StayConnectedService.LocalBinder)?.getService() ?: return
+            attachJob?.cancel()
+            attachJob = lifecycleScope.launch {
+                viewModel.attach(service.core.filterNotNull().first())
+            }
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            attachJob?.cancel()
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleDeepLink(intent)
+        // Draws behind the status/navigation bars on every supported API
+        // level — targetSdk 35+ enforces this regardless. The app consumes
+        // the bar + keyboard insets itself (the root Surface below); without
+        // that, headers render under the clock/battery area and the keyboard
+        // covers the composer.
+        enableEdgeToEdge()
+        // Only when not already granted: onCreate reruns on every
+        // configuration change, and each launch is an activity-result round
+        // trip even when the system answers without showing a dialog.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Launched unconditionally of the "stay connected" setting: this
+        // service hosts the CoreHost the whole app runs on, so it must
+        // exist whenever the app does. It reconciles its own foreground
+        // state against the setting (see StayConnectedService).
+        ContextCompat.startForegroundService(this, Intent(this, StayConnectedService::class.java))
+        setContent {
+            CodeDeckTheme {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .systemBarsPadding()
+                        .imePadding(),
+                ) {
+                    val core by viewModel.core.collectAsState()
+                    val current = core
+                    if (current != null) {
+                        // Density and fontScale multiply together so dp spacing
+                        // and sp text scale as one, like the TSX multiplier.
+                        val settings by current.settings.collectAsState()
+                        val openRequest by viewModel.openRequest.collectAsState()
+                        val scale = settings?.uiScale?.toFloat() ?: 1f
+                        val d = LocalDensity.current
+                        CompositionLocalProvider(
+                            LocalDensity provides Density(d.density * scale, d.fontScale * scale),
+                        ) {
+                            Shell(
+                                current,
+                                openRequest = openRequest,
+                                onOpenRequestHandled = viewModel::openRequestHandled,
+                            )
+                        }
+                    } else {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        bindService(Intent(this, StayConnectedService::class.java), connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        attachJob?.cancel()
+        unbindService(connection)
+        super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "codedeck" || uri.host != "session") return
+        // Notifier.kt builds codedeck://session/<machine>/<sessionId> — one
+        // path segment per key part, already decoded by Uri here.
+        val segments = uri.pathSegments
+        if (segments.size == 2 && segments.none { it.isBlank() }) {
+            viewModel.requestOpenSession(segments[0], segments[1])
+        }
+    }
+}

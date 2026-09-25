@@ -22,8 +22,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanup, render, screen } from '@testing-library/react';
-import { createPhoneCore } from '../../../core/createPhoneCore';
-import { memoryKV, type PhoneTransport } from '../../../core/ports';
+import { buildFakePhoneCore } from '../../../core/__tests__/nativeCoreFixture';
 import type { DmProfile } from '../../../core/stores/dm';
 import type { UnifiedConversation } from '../../../core/stores/marmot';
 import { PhoneCoreProvider } from '../../coreContext';
@@ -31,14 +30,6 @@ import { conversationLabel, DmTile } from '../../DmTile';
 import { DmSection } from '../../DmSection';
 
 afterEach(cleanup);
-
-const makeCore = () => {
-  const transport: PhoneTransport = {
-    subscribe: () => ({ close: () => {} }),
-    publish: async () => true,
-  };
-  return createPhoneCore({ kv: memoryKV(), transport });
-};
 
 const dmDir = path.dirname(fileURLToPath(import.meta.url));
 const dmCss = readFileSync(path.join(dmDir, '..', 'dm.module.css'), 'utf8');
@@ -132,8 +123,11 @@ describe('conversationLabel', () => {
 
 describe('DmTile renders the identity, not just an avatar', () => {
   it('shows name, preview, protocol badge and time', async () => {
-    const core = await makeCore();
+    const { phone: core } = await buildFakePhoneCore();
     const peer = 'a'.repeat(64);
+    // Profile resolution is a pure local cache the native adapter still owns
+    // directly (see nativeDm.ts) — `setState` reaches the real zustand store
+    // underneath regardless of composition, same as the old local one.
     core.dm.setState((st) => ({
       profiles: { ...st.profiles, [peer]: { displayName: 'Tycho', fetchedAt: 1, status: 'ok' } },
     }));
@@ -154,10 +148,23 @@ describe('DmTile renders the identity, not just an avatar', () => {
   });
 
   it('a single-protocol list drops the badge — the name gets that width', async () => {
-    const core = await makeCore();
-    core.dm.getState().startConversation('b'.repeat(64));
-    core.dm.getState().startConversation('c'.repeat(64));
-    core.dm.getState().setActivePeer(null);
+    // Seeded directly rather than via startConversation (a real dispatch +
+    // async re-fetch in native mode) — this test is about DmSection's own
+    // badge-hiding logic given a resolved conversation list, not about the
+    // start-conversation round trip.
+    const { phone: core } = await buildFakePhoneCore({
+      dm: {
+        conversations: [
+          { peerPubkey: 'b'.repeat(64), protocol: 'nip17', lastMessageAt: 2, unreadCount: 0, lastPreview: '' },
+          { peerPubkey: 'c'.repeat(64), protocol: 'nip17', lastMessageAt: 1, unreadCount: 0, lastPreview: '' },
+        ],
+        messages: {},
+        activePeer: null,
+        eventsReceived: 0,
+        unwrapFailures: 0,
+        invalidRumors: 0,
+      },
+    });
 
     render(
       <PhoneCoreProvider value={core}>

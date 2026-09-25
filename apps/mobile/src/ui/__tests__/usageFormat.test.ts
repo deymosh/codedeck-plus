@@ -2,7 +2,7 @@
  * CDX-011: usage-panel polish — the pure session-header formatting functions.
  */
 import { describe, it, expect } from 'vitest';
-import type { UsageData } from '@codedeck/protocol';
+import type { UsageData } from '../../core/nativeCoreTypes';
 import { contextBadge, formatReset, formatTokens, usageBadges } from '../usageFormat';
 
 describe('formatTokens', () => {
