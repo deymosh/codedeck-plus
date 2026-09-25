@@ -148,14 +148,23 @@ fn hostname() -> String {
         .unwrap_or_else(|| "bridge".into())
 }
 
+/// The directory the running binary sits in (None when it cannot be resolved).
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|exe| fs::canonicalize(exe).ok()).and_then(|exe| exe.parent().map(Path::to_path_buf))
+}
+
+/// A `node` shipped beside the binary — the release archives bundle one so
+/// they need nothing installed.
+fn bundled_node(exe_dir: Option<&Path>) -> Option<String> {
+    let node = exe_dir?.join("node");
+    node.is_file().then(|| node.to_string_lossy().into_owned())
+}
+
 /// Where the agent host bundle is by default: `agent-host/dist/main.js` beside
 /// the binary (the release archive and the image lay it out so), else the
 /// workspace build.
 fn default_agent_host() -> PathBuf {
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| fs::canonicalize(exe).ok())
-        .and_then(|exe| exe.parent().map(|d| d.join("agent-host").join("dist").join("main.js")));
+    let beside = exe_dir().map(|d| d.join("agent-host").join("dist").join("main.js"));
     match beside {
         Some(p) if p.exists() => p,
         _ => PathBuf::from("packages/agent-host/dist/main.js"),
@@ -256,7 +265,10 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         blossom_register,
         tor_proxy,
         transcript_keep_last,
-        node_path: env("CODEDECK_NODE_PATH").or(file.node_path).unwrap_or_else(|| "node".into()),
+        node_path: env("CODEDECK_NODE_PATH")
+            .or(file.node_path)
+            .or_else(|| bundled_node(exe_dir().as_deref()))
+            .unwrap_or_else(|| "node".into()),
         agent_host_path: absolute(&agent_host_path),
         test_mode,
         host_env,
@@ -270,6 +282,15 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bundled_node_is_preferred_only_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(bundled_node(Some(dir.path())), None);
+        std::fs::write(dir.path().join("node"), "#!/bin/sh").unwrap();
+        let bundled = bundled_node(Some(dir.path())).unwrap();
+        assert!(bundled.ends_with("node"));
+    }
 
     #[test]
     fn proxy_urls_become_host_port() {

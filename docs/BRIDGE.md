@@ -15,7 +15,9 @@ the agent host itself; you never run it directly.
 `./codedeck bridge up`. See the root README for the `.env` it reads.
 
 **A release archive** — `codedeck-bridge-vX.Y.Z-linux-<x86_64|aarch64>.tar.gz`
-from the [releases](https://github.com/deymosh/codedeck-plus/releases):
+from the [releases](https://github.com/deymosh/codedeck-plus/releases). It
+bundles the binary, its agent host and a Node runtime: nothing needs to be
+installed. The binary needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
 
 ```sh
 tar -xzf codedeck-bridge-vX.Y.Z-linux-x86_64.tar.gz
@@ -23,10 +25,13 @@ cd codedeck-bridge-vX.Y.Z-linux-x86_64
 ./codedeck-bridge run
 ```
 
-It needs Node 22 or newer on `PATH` (for the agent host). The Claude Code
-binary is included; it authenticates with `ANTHROPIC_API_KEY`,
-`CLAUDE_CODE_OAUTH_TOKEN`, an existing `claude` login, or a key set from the
-phone.
+To put it on `PATH`, extract it somewhere stable (e.g. `/opt/codedeck-bridge`)
+and symlink the binary: it finds its agent host and Node through the symlink.
+Upgrading is extracting the new archive over the old one.
+
+The Claude Code binary ships inside the agent host; it authenticates with
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, an existing `claude` login, or
+a key set from the phone.
 
 **systemd:** `deploy/codedeck-bridge.service` — its header comments are the
 install runbook.
@@ -63,7 +68,7 @@ Precedence: flags > environment > `<home>/config.json` > defaults. Home:
 | `blossomRegisterEndpoint` / `blossomRegisterToken` | `CODEDECK_BLOSSOM_REGISTER_ENDPOINT` / `..._TOKEN` | The same for the image server, so uploads do not fall back to relay chunking |
 | `nvpnPath`, `meshAdminEnabled`, `adbPath` | `CODEDECK_NVPN_PATH`, `CODEDECK_MESH_ADMIN`, `CODEDECK_ADB_PATH` | Mesh onboarding and on-device test tools (optional) |
 | `transcriptKeepLast` | `CODEDECK_TRANSCRIPT_KEEP_LAST` | Entries kept per session transcript (default 5000; 0 keeps all) |
-| `agentHostPath`, `nodePath` | `CODEDECK_AGENT_HOST` / `--agent-host`, `CODEDECK_NODE_PATH` | Where the agent host and Node are (defaults: `agent-host/` beside the binary, `node` on `PATH`) |
+| `agentHostPath`, `nodePath` | `CODEDECK_AGENT_HOST` / `--agent-host`, `CODEDECK_NODE_PATH` | Where the agent host and Node are (defaults: `agent-host/` beside the binary; the `node` beside the binary, else `node` on `PATH`) |
 
 The Tor proxy carries relay traffic only; the agents' own API calls and the
 bridge's HTTP checks go direct.

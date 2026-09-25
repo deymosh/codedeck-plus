@@ -133,6 +133,8 @@ pub struct Lock {
 }
 
 pub fn acquire_lock(home: &Path) -> Result<Lock, String> {
+    // First run: the home directory may not exist yet.
+    fs::create_dir_all(home).map_err(|e| format!("cannot create {}: {e}", home.display()))?;
     let path = home.join("bridge.lock");
     let mut file = OpenOptions::new()
         .read(true)
@@ -197,6 +199,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("state.json"), "{torn").unwrap();
         assert!(StateFile::open(dir.path()).err().unwrap().contains("corrupt state file"));
+    }
+
+    #[test]
+    fn the_first_run_creates_its_home_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("deep").join("codedeck");
+        let lock = acquire_lock(&home).unwrap();
+        assert!(home.join("bridge.lock").exists());
+        drop(lock);
+        acquire_lock(&home).unwrap();
     }
 
     #[test]

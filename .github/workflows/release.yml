@@ -3,8 +3,8 @@ name: Release
 # A single `vMAJOR.MINOR.PATCH` tag publishes ONE GitHub Release carrying every
 # artifact of that version:
 #   - the signed Android APK               (codedeck-vX.Y.Z.apk, the native app in apps/android)
-#   - the bridge for Linux x86_64/aarch64  (codedeck-bridge-vX.Y.Z-linux-<arch>.tar.gz: the
-#                                           codedeck-bridge binary + its agent host; needs Node 22+)
+#   - the bridge for Linux x86_64/aarch64  (codedeck-bridge-vX.Y.Z-linux-<arch>.tar.gz:
+#                                           binary + agent host + Node — nothing to install)
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
 # A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
@@ -80,14 +80,13 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    env:
+      # The Node bundled into the archive. Keep it in step with
+      # docker/Dockerfile's NODE_IMAGE, so the image and the archives run the
+      # agent host on the same runtime.
+      NODE_BUNDLE_VERSION: v24.20.0
     steps:
       - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
 
       - uses: pnpm/action-setup@v6
 
@@ -96,10 +95,26 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # Built inside an ubuntu:22.04 container on purpose: the binary then
+      # links against glibc 2.35, so the archive runs on Ubuntu 22.04+ and
+      # Debian 12+ instead of only the newest distros. The container image is
+      # built separately (docker/Dockerfile) on its own base and carries its
+      # own glibc, so it does not care.
       - name: Build the binary
         env:
           CODEDECK_VERSION: ${{ needs.meta.outputs.number }}
-        run: cargo build --release --locked -p bridge-runtime
+        run: |
+          docker run --rm -v "$PWD":/src -w /src \
+            -e CODEDECK_VERSION -e CARGO_NET_RETRY=10 \
+            ubuntu:22.04 bash -euxo pipefail -c '
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates gcc libclang-dev clang >/dev/null
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path
+              . "$HOME/.cargo/env"
+              cargo build --release --locked -p bridge-runtime
+              chown --reference=/src target/release/codedeck-bridge
+            '
+          ./target/release/codedeck-bridge version
 
       # The agent host runs the agent SDKs; the SDK ships the Claude Code
       # binary for this runner's architecture, so each archive is built on
@@ -119,6 +134,20 @@ jobs:
           mkdir -p "$STAGE" dist
           cp target/release/codedeck-bridge "$STAGE/"
           mv "$RUNNER_TEMP/agent-host" "$STAGE/agent-host"
+          # A node beside the binary: the archive needs nothing installed.
+          case "${{ matrix.arch }}" in
+            x86_64) NODE_ARCH=linux-x64 ;;
+            aarch64) NODE_ARCH=linux-arm64 ;;
+          esac
+          NODE_DIST="node-${NODE_BUNDLE_VERSION}-${NODE_ARCH}"
+          curl -fsSL -o "$RUNNER_TEMP/$NODE_DIST.tar.gz" \
+            "https://nodejs.org/dist/${NODE_BUNDLE_VERSION}/$NODE_DIST.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/SHASUMS256.txt" \
+            "https://nodejs.org/dist/${NODE_BUNDLE_VERSION}/SHASUMS256.txt"
+          (cd "$RUNNER_TEMP" && grep " $NODE_DIST.tar.gz\$" SHASUMS256.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$NODE_DIST.tar.gz" -C "$STAGE" \
+            --strip-components=2 "$NODE_DIST/bin/node"
+          test -x "$STAGE/node"
           "$STAGE/codedeck-bridge" version
           "$STAGE/codedeck-bridge" status --home "$RUNNER_TEMP/smoke-home" | tee /tmp/status.txt
           ! grep -q MISSING /tmp/status.txt
@@ -316,8 +345,8 @@ jobs:
             | Component | File |
             |---|---|
             | Android app (signed, aarch64) | `codedeck-${{ needs.meta.outputs.version }}.apk` |
-            | Bridge for Linux x86_64 (binary + agent host, needs Node 22+) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` |
-            | Bridge for Linux aarch64 (binary + agent host, needs Node 22+) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz` |
+            | Bridge for Linux x86_64 (binary + agent host + Node, self-contained) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` |
+            | Bridge for Linux aarch64 (binary + agent host + Node, self-contained) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz` |
             | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
 
             Auto-generated changelog below.

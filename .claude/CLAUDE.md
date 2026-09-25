@@ -106,9 +106,10 @@ a driver-protocol type, regenerate the host's types with
   (Rust and Android jobs are path-filtered).
 - `.github/workflows/release.yml` runs on a `vMAJOR.MINOR.PATCH` tag: it builds
   and publishes one GitHub Release with the signed APK, the bridge for Linux
-  x86_64 and aarch64 (`codedeck-bridge` + its agent host; needs Node 22+), and
-  the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A tag
-  with a hyphen (`v1.2.3-rc1`) is a prerelease. See the `cut-release` skill.
+  x86_64 and aarch64 (self-contained archives: binary + agent host + Node),
+  and the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A
+  tag with a hyphen (`v1.2.3-rc1`) is a prerelease. See the `cut-release`
+  skill.
 
 ## Workflow
 
