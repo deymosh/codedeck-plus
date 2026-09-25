@@ -17,7 +17,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { findInDirs, findOnPath, isFile } from '../../executable';
 import type {
   CanUseTool,
   McpServerConfig,
@@ -370,38 +370,32 @@ function toOptionsEffort(effort?: EffortLevel): 'low' | 'medium' | 'high' | 'xhi
 
 /**
  * Locate the `claude` executable for Options.pathToClaudeCodeExecutable.
- * Order: explicit config path → CODEDECK_CLAUDE_PATH env → `which claude` →
- * common install locations. Returns null when nothing is found (the SDK then
- * falls back to its own resolution).
+ * Order: explicit config path → CODEDECK_CLAUDE_PATH env → PATH → common
+ * install locations (the native installer's `~/.local/bin` covers Windows
+ * too, as `claude.exe`). Returns null when nothing is found (the SDK then
+ * falls back to the binary its platform package ships).
  */
 export function resolveClaudeExecutable(explicitPath?: string): string | null {
-  const isFile = (p: string): boolean => {
-    try { return fs.statSync(p).isFile(); } catch { return false; }
-  };
-
   if (explicitPath && isFile(explicitPath)) return explicitPath;
 
   const env = process.env.CODEDECK_CLAUDE_PATH?.trim();
   if (env && isFile(env)) return env;
 
-  try {
-    const out = execFileSync('which', ['claude'], { timeout: 3000, encoding: 'utf8' }).trim();
-    if (out && isFile(out)) return out;
-  } catch { /* not on PATH */ }
-
   const home = os.homedir();
-  const candidates = [
-    path.join(home, '.claude', 'local', 'claude'),
-    path.join(home, '.local', 'bin', 'claude'),
-    path.join(home, 'bin', 'claude'),
-    '/usr/local/bin/claude',
-    '/usr/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ];
-  for (const p of candidates) {
-    if (isFile(p)) return p;
-  }
-  return null;
+  return (
+    findOnPath('claude') ??
+    findInDirs(
+      [
+        path.join(home, '.claude', 'local'),
+        path.join(home, '.local', 'bin'),
+        path.join(home, 'bin'),
+        '/usr/local/bin',
+        '/usr/bin',
+        '/opt/homebrew/bin',
+      ],
+      'claude',
+    )
+  );
 }
 
 /**

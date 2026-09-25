@@ -10,52 +10,47 @@
  * cross-spawn) with no way to hand it an explicit binary path or extra env,
  * and returns only a bare `close()` closure with no pid/lifecycle visibility.
  * This module resolves the binary the same way `resolveClaudeExecutable`
- * (facade.ts) and `resolveNvpnPath` (mesh/meshAdmin.ts) resolve theirs —
- * explicit path → env var → `which` → well-known install locations — and
- * spawns it directly so the bridge controls exactly what runs and how it
- * shuts down.
+ * (facade.ts) resolves Claude's — explicit path → env var → PATH →
+ * well-known install locations — and spawns it directly so the bridge
+ * controls exactly what runs and how it shuts down.
  */
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import * as fs from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { findInDirs, findOnPath, isFile } from '../../executable';
 
 /** Resolve the `opencode` binary: explicit path → CODEDECK_OPENCODE_PATH →
- *  `which opencode` → well-known global-install locations → null. Mirrors
- *  resolveClaudeExecutable's order (facade.ts) and resolveNvpnPath's shape
- *  (mesh/meshAdmin.ts) — kept consistent rather than inventing a third
- *  resolution order for a third optional binary. */
+ *  PATH → well-known global-install locations → null. Same order as
+ *  resolveClaudeExecutable (facade.ts). On Windows only an `opencode.exe`
+ *  is found: npm's global install puts a `.cmd` shim on PATH, which cannot
+ *  be spawned directly, so point CODEDECK_OPENCODE_PATH at the real binary
+ *  in that case. */
 export function resolveOpenCodePath(
   explicitPath?: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
 ): string | null {
-  const isFile = (p: string): boolean => {
-    try { return fs.statSync(p).isFile(); } catch { return false; }
-  };
-
   if (explicitPath && isFile(explicitPath)) return explicitPath;
 
   const fromEnv = env.CODEDECK_OPENCODE_PATH?.trim();
   if (fromEnv && isFile(fromEnv)) return fromEnv;
 
-  try {
-    const out = execFileSync('which', ['opencode'], { timeout: 3000, encoding: 'utf8' }).trim();
-    if (out && isFile(out)) return out;
-  } catch { /* not on PATH */ }
-
-  const candidates = [
-    path.join(homedir, '.local', 'share', 'pnpm', 'opencode'),
-    path.join(homedir, '.npm-global', 'bin', 'opencode'),
-    path.join(homedir, '.local', 'bin', 'opencode'),
-    '/usr/local/bin/opencode',
-    '/usr/bin/opencode',
-    '/opt/homebrew/bin/opencode',
-  ];
-  for (const p of candidates) {
-    if (isFile(p)) return p;
-  }
-  return null;
+  return (
+    findOnPath('opencode', env, platform) ??
+    findInDirs(
+      [
+        path.join(homedir, '.local', 'share', 'pnpm'),
+        path.join(homedir, '.npm-global', 'bin'),
+        path.join(homedir, '.local', 'bin'),
+        '/usr/local/bin',
+        '/usr/bin',
+        '/opt/homebrew/bin',
+      ],
+      'opencode',
+      platform,
+    )
+  );
 }
 
 /** Injectable spawn seam for tests — same spirit as meshAdmin.ts's ExecFn. */
