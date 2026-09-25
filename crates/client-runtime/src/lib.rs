@@ -1,15 +1,15 @@
-//! CodeDeck+ client async host (migration plan §2.6). Wraps `client-core` with
-//! the tokio reactor, the `Transport` driver, live `ChunkAssembler`, lifecycle
+//! CodeDeck+ client async host. Wraps `client-core` with the tokio reactor,
+//! the `Transport` driver, live `ChunkAssembler`, lifecycle
 //! (`start`/`stop`/`pause`/`resume`), the platform ports, and the composed
-//! store layer. The UniFFI (Android) and `#[tauri::command]` (Desktop)
-//! bindings attach to this crate.
+//! store layer. Bindings (`crates/client-ffi` for Android) attach to this
+//! crate, never to `client-core`.
 //!
 //! Layering: `nostr_client` (epoch-guarded per-class subscription FSM) sits
 //! behind a `Transport` port; `transport::ws` is the real WebSocket + SOCKS5
-//! driver; `core::Core` composes the connection FSM, `bridge_api`, the
+//! driver; `runtime::Core` composes the connection FSM, `bridge_api`, the
 //! `dispatch::Router` over every store, the `intent` surface, the `view`
-//! projections, the `CoreEvent` stream and the NIP-17 DM runtime behind one
-//! tokio event loop — the handle the bindings attach to.
+//! projections, the `CoreEvent` stream and the DM runtime behind one tokio
+//! event loop — the handle the bindings attach to.
 
 // UniFFI's `#[derive(uniffi::Record)]`/`uniffi::Enum` need a `UniFfiTag` in
 // THIS crate regardless of the fact that the actual `#[uniffi::export]`
@@ -20,7 +20,6 @@
 uniffi::setup_scaffolding!();
 
 pub mod attachments;
-pub mod core;
 pub mod deadline;
 pub mod dispatch;
 pub mod giftwrap;
@@ -28,6 +27,7 @@ pub mod intent;
 pub mod marmot;
 pub mod nostr_client;
 pub mod ports;
+pub mod runtime;
 pub mod stores;
 pub mod view;
 
@@ -35,7 +35,7 @@ pub mod view;
 /// verdicts), shared with other runtimes as the `nostr-transport` crate.
 pub use nostr_transport as transport;
 
-pub use core::{
+pub use runtime::{
     ActionFailedKind, Clock, Core, CoreConfig, CoreEvent, CoreObserver, CorePorts, Entropy, SliceId,
     SystemClock, TimeEntropy,
 };

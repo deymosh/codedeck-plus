@@ -111,7 +111,7 @@ async function boot(): Promise<PhoneCore> {
   // `nativeSettings.ts`'s `setTorProxyEnabled`) redials every relay through
   // `WsTransport::set_proxy`, using the SOCKS5 address `core.init` always
   // sends (regardless of whether Tor started on or off) — see
-  // `client_runtime::core::Loop`'s `tor_proxy_address`.
+  // `client_runtime::runtime::Loop`'s `tor_proxy_address`.
 
   // The in-app attention chime: Rust decides WHEN to ping
   // (`client_core::notifications::decide_ping`) and emits `CoreEvent::Ping`

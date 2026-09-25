@@ -4,8 +4,8 @@
 //!
 //! Only three ports are genuinely needed: key/value persistence, transcript-row
 //! storage, and OS-notification delivery. Timers are `tokio::time` directly;
-//! the wall clock and jitter source are [`crate::core::Clock`] /
-//! [`crate::core::Entropy`].
+//! the wall clock and jitter source are [`crate::Clock`] /
+//! [`crate::Entropy`].
 //!
 //! Async trait methods return a boxed `!Send` future — the `Core` runs on a
 //! current-thread `LocalSet`, so nothing here needs to cross threads.

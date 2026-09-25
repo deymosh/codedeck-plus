@@ -1,16 +1,16 @@
-//! `Core` — the F1 runtime handle. One tokio event loop (on the FG service's
+//! The event loop and its handle, [`Core`]. One tokio loop (on the host's
 //! `LocalSet`) composes:
 //!
 //! * the connection FSM ([`client_core::connection`]) — every connectivity
 //!   signal in, `OpenSocket` / `ScheduleRetry` / … effects out;
 //! * the epoch-guarded subscription client ([`crate::nostr_client::NostrClient`])
 //!   over the real [`WsTransport`];
-//! * [`client_core::bridge_api`] — egress `build_command`, total `ingest`.
+//! * [`client_core::bridge_api`] — egress `build_command`, total `ingest`;
+//! * the store layer ([`CoreStores`]) behind the `Intent` / view / `CoreEvent`
+//!   surface, the NIP-17 DM and Marmot subscriptions, and the timers.
 //!
-//! The UniFFI (Android) and `#[tauri::command]` (Desktop) bindings attach here.
-//! The F1 surface is deliberately minimal — enough to run transport + crypto in
-//! the background service behind a flag. The View / Intent / CoreEvent API
-//! (plan §2) is stabilised with the mobile app in F2.
+//! Bindings (`crates/client-ffi` for Android) wrap the handle; nothing here
+//! knows which host it runs in.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -64,7 +64,7 @@ const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
 /// straight away from turning this into a hot loop.
 const SUB_REARM_DELAY_MS: u64 = 30_000;
 
-// --- ports (F1 minimal) ------------------------------------------------------
+// --- clock and entropy ports -----------------------------------------------
 
 /// Injected wall clock (ms). `SystemClock` in production, a fake in tests.
 pub trait Clock {
@@ -100,7 +100,7 @@ impl Entropy for TimeEntropy {
     }
 }
 
-// --- observer (seed of the F2 CoreEvent stream) --------------------------
+// --- observer and the CoreEvent stream ------------------------------------
 
 /// Why a user-visible action did not land. Semantic — the UI writes the copy.
 /// Named `ActionFailedKind`, not `ActionFailed`: a type with the same name as
@@ -131,12 +131,12 @@ pub trait CoreObserver {
     /// A decoded bridge→phone message for the given machine.
     fn bridge_message(&self, machine: String, msg: BridgeToPhone);
     fn action_failed(&self, _kind: ActionFailedKind) {}
-    /// The semantic event stream (plan §2.3). No UI strings — the consumer
+    /// The semantic event stream. No UI strings — the consumer
     /// decides how to surface each one and re-reads the named view slice.
     fn on_event(&self, _event: CoreEvent) {}
 }
 
-/// A read-projection slice (plan §2.1) — the granularity a consumer
+/// A read-projection slice — the granularity a consumer
 /// re-subscribes to on a [`CoreEvent::StateChanged`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -156,7 +156,7 @@ pub enum SliceId {
     Ui,
 }
 
-/// The closed, semantic event set (plan §2.3). Serde shape: externally
+/// The closed, semantic event set. Serde shape: externally
 /// tagged, camelCase (same convention as [`crate::intent::Intent`]) — e.g.
 /// `{"stateChanged": {"slice": "machines"}}`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
@@ -189,8 +189,8 @@ pub enum CoreEvent {
     },
     /// The in-app attention chime — `client_core::notifications::decide_ping`
     /// already decided this event needs it (app hidden, or a different
-    /// session is active); Rust has no audio API of its own, so this is the
-    /// seam the WebView plays `platform/pingSound.ts`'s tone through.
+    /// session is active); the core has no audio API of its own, so the host
+    /// plays its chime on this event.
     Ping,
 }
 
@@ -205,7 +205,7 @@ pub struct CoreConfig {
     /// to switch back to; `tor` below is the separate flag deciding whether
     /// it's actually in use, at boot and hereafter.
     pub proxy: Option<String>,
-    /// Whether the proxy above is in use at boot. [`Loop`] remembers `proxy`
+    /// Whether the proxy above is in use at boot. The loop remembers `proxy`
     /// regardless, so `Intent::SetTorEnabled` can toggle between `Some` and
     /// `None` without needing the phone to resend the address.
     pub tor: bool,
@@ -215,17 +215,17 @@ pub struct CoreConfig {
 }
 
 /// The platform I/O seams the composed `Core` needs. [`Default`] wires
-/// in-memory implementations (tests, and the transitional native-core seam
-/// where the WebView still owns persistence).
+/// in-memory / no-op implementations (tests, and any port a host does not
+/// bind).
 pub struct CorePorts {
     pub kv: Rc<dyn Kv>,
     pub transcript_store: Rc<dyn TranscriptStore>,
     pub notifier: Rc<dyn Notifier>,
-    /// Blossom image upload/download. `NoHttpFetch` until the platform binds
-    /// real networking.
+    /// Blossom image upload/download. `NoHttpFetch` when the host binds no
+    /// networking (image sends then fall back to relay chunks).
     pub http: Rc<dyn crate::attachments::HttpFetch>,
-    /// The MDK / MLS engine. `NoMarmot` until the engine is relocated into this
-    /// crate — Marmot chats are unavailable, NIP-17 only, until then.
+    /// The MDK / MLS engine: `MarmotEngineImpl` (feature `marmot`), or
+    /// `NoMarmot` — then Marmot chats are unavailable and DMs are NIP-17 only.
     pub marmot: Rc<dyn crate::marmot::MarmotEngine>,
 }
 
@@ -469,7 +469,7 @@ impl Core {
         }
     }
 
-    /// Read-projection snapshots (plan §2.1). Each answers off the loop's own
+    /// Read-projection snapshots. Each answers off the loop's own
     /// store state, so a reader that just attached gets a consistent view.
     pub async fn machines_view(&self) -> MachinesView {
         self.query(ViewQuery::Machines).await.unwrap_or(MachinesView {
@@ -713,7 +713,7 @@ struct Loop {
     /// Pending re-open after a relay closed the Marmot subscription.
     marmot_rearm_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
-    // --- F2b: the composed store layer ---
+    // --- the composed store layer ---
     stores: CoreStores,
     kv: Rc<dyn Kv>,
     transcript_store: Rc<dyn TranscriptStore>,
@@ -971,10 +971,9 @@ impl Loop {
             .ingest(&incoming, &self.identity, known, self.clock.now_ms());
         match ingested {
             Ingested::Message(msg) => {
-                // F2b: fold the decoded message into the composed store layer,
-                // then carry out its effects. The observer callback stays for
-                // the transitional native-core seam (the WebView still consumes
-                // decoded messages until `apps/mobile` is re-pointed).
+                // Fold the decoded message into the store layer, then carry
+                // out its effects. The raw `bridge_message` observer callback
+                // below is kept for hosts that want the decoded message too.
                 let machine = event.pubkey.clone();
                 let now = self.clock.now_ms();
                 let visible = self.conn.visible;
@@ -987,10 +986,8 @@ impl Loop {
                 );
                 router.visible = visible;
                 router.notify_enabled = notify_enabled;
-                // `CoreEvent::Ping` gives the WebView somewhere to play
-                // `platform/pingSound.ts`'s chime through now — the seam
-                // `Router::new`'s conservative `ping_available: false`
-                // default was written to wait for.
+                // `CoreEvent::Ping` is the host's cue to play its chime, so
+                // the router may decide one (`Router::new` defaults to not).
                 router.ping_available = true;
                 let result = router.route(&machine, &msg).await;
                 self.interpret_route(result).await;
@@ -1093,7 +1090,7 @@ impl Loop {
             None => {}
         }
         // `r.heartbeat` is already covered by the pre-decode path above;
-        // `r.mesh_join` needs a platform seam (F2b).
+        // `r.mesh_join` has no platform seam yet: one-QR mesh join is not wired.
     }
 
     async fn persist_store(&self, id: StoreId) {
@@ -1305,7 +1302,7 @@ impl Loop {
             self.nostr.set_proxy(proxy.clone());
             self.http.set_proxy(proxy.as_deref());
         }
-        // `r.mesh_join` needs a mesh seam (F2b ports).
+        // `r.mesh_join` has no platform seam yet: one-QR mesh join is not wired.
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
@@ -3168,7 +3165,7 @@ mod tests {
             .await;
     }
 
-    // --- F2b: the composed store layer ---
+    // --- the composed store layer ---
 
     #[tokio::test]
     async fn connection_view_query_reflects_the_live_status() {

@@ -1,8 +1,7 @@
 //! `CoreListener` — the foreign (Kotlin) callback interface, and
 //! `UniffiObserver`, the adapter that implements the real
-//! `client_runtime::core::CoreObserver` and forwards into it. Exactly the
-//! role `apps/mobile/src-tauri/src/native_core.rs`'s `TauriObserver` plays for
-//! Tauri — `client_runtime` itself stays binding-agnostic either way.
+//! `client_runtime::CoreObserver` and forwards into it, so `client_runtime`
+//! itself stays binding-agnostic.
 
 use std::sync::Arc;
 

@@ -1079,7 +1079,7 @@ public object FfiConverterTypeActionFailedKind: FfiConverterRustBuffer<ActionFai
 
 
 /**
- * The closed, semantic event set (plan §2.3). Serde shape: externally
+ * The closed, semantic event set. Serde shape: externally
  * tagged, camelCase (same convention as [`crate::intent::Intent`]) — e.g.
  * `{"stateChanged": {"slice": "machines"}}`.
  */
@@ -1148,8 +1148,8 @@ sealed class CoreEvent {
     /**
      * The in-app attention chime — `client_core::notifications::decide_ping`
      * already decided this event needs it (app hidden, or a different
-     * session is active); Rust has no audio API of its own, so this is the
-     * seam the WebView plays `platform/pingSound.ts`'s tone through.
+     * session is active); the core has no audio API of its own, so the host
+     * plays its chime on this event.
      */
     object Ping : CoreEvent()
     
@@ -1299,7 +1299,7 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
 
 
 /**
- * A read-projection slice (plan §2.1) — the granularity a consumer
+ * A read-projection slice — the granularity a consumer
  * re-subscribes to on a [`CoreEvent::StateChanged`].
  */
 

@@ -2,7 +2,7 @@
 //! state (its own encrypted SQLite store); it lands in this crate as a
 //! feature-gated module when `apps/mobile/src-tauri/src/marmot.rs` is
 //! relocated. Until then this is the port + a `NoMarmot` stub, plus the
-//! transport-side routing the [`crate::core::Core`] does regardless: a kind-444
+//! transport-side routing the [`crate::Core`] does regardless: a kind-444
 //! welcome rumor arriving on the 1059 subscription is handed to the engine, and
 //! a kind-445 subscription is opened over the joined groups' `h` tags.
 //!

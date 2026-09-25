@@ -29,7 +29,7 @@ use client_runtime::client_core::connection::ConnectionStatus;
 use client_runtime::protocol::commands::PhoneToBridge;
 use client_runtime::protocol::crypto::keypair_from_secret_hex;
 use client_runtime::protocol::events::BridgeToPhone;
-use client_runtime::core::{
+use client_runtime::runtime::{
     ActionFailedKind, Clock, CoreObserver, CorePorts, Entropy, SystemClock, TimeEntropy,
 };
 use client_runtime::{
