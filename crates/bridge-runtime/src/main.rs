@@ -218,7 +218,7 @@ fn status(config: &Config) -> Result<ExitCode, String> {
             config.agent_host_path.display(),
             if config.agent_host_path.exists() { "" } else { " (MISSING)" }
         ),
-        format!("  bridge:     {}", holder.map_or("not running".into(), |pid| format!("running (pid {pid})"))),
+        format!("  bridge:     {}", holder.map_or("not running".into(), |h| format!("running{}", h.pid_suffix()))),
         format!("  paired:     {} phone(s)", phones.len()),
     ];
     lines.extend(phones.iter().map(|p| format!("    - {} {} (paired {})", p.label, p.npub, p.paired_at)));
@@ -232,8 +232,8 @@ fn status(config: &Config) -> Result<ExitCode, String> {
 }
 
 fn unpair(config: &Config, target: Option<String>, all: bool) -> Result<ExitCode, String> {
-    if let Some(pid) = lock_holder(&config.home) {
-        return Err(format!("a bridge is running (pid {pid}) and owns the state file. Stop it first, then unpair."));
+    if let Some(holder) = lock_holder(&config.home) {
+        return Err(format!("a bridge is running{} and owns the state file. Stop it first, then unpair.", holder.pid_suffix()));
     }
     if !all && target.is_none() {
         return Err("usage: codedeck-bridge unpair <npub|pubkey-hex|label> | --all".into());

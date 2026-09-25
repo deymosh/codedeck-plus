@@ -97,7 +97,8 @@ In `<home>`:
   and provider profiles, the session registry. Owner-only (0600, directory
   0700). Keep it private and back it up: losing it means pairing again.
 - `sessions/transcripts/<session>.jsonl` — one transcript per session.
-- `bridge.lock` — held while a bridge runs, so two never share one identity.
+- `bridge.lock` — held while a bridge runs, so two never share one identity;
+  `bridge.pid` beside it names the process holding it.
 - `config.json` — optional; tightened to 0600 when read (it may hold admin tokens).
 
 ## Build from source
