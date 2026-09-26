@@ -15,7 +15,7 @@ import type { HttpPost } from '../../net';
 import { isBenignPlanDirWrite, SECRET_PATH_DENIAL, touchesSecretPath } from '../../policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
-import type { AgentInfo, ModelEntry, OptionChoice, OutputEntry, SessionOption, StartSession, UsageData } from '../../types';
+import type { AgentInfo, ModelEntry, OptionChoice, OutputEntry, ProviderBinding, SessionOption, StartSession, UsageData } from '../../types';
 import { sdkMessageToEntries } from './adapter';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
 import {
@@ -26,6 +26,7 @@ import {
   type SdkCanUseTool,
   type SdkFacade,
   type SdkMessage,
+  type SdkModelDescriptor,
   type SdkPermissionResult,
   type SdkPermissionUpdate,
   type SdkSessionHandle,
@@ -76,12 +77,49 @@ const PLAIN_CONTEXT_WINDOW = 200_000;
 const USER_DENIED = 'User denied';
 const KEEP_PLANNING = 'The user wants to keep planning — revise the plan with their feedback.';
 
+/** A model id compared the way the CLI would: case aside, and without the
+ *  `[1m]` context marker it strips before sending. */
+const modelKey = (id: string): string => id.replace(/\[1m\]$/i, '').toLowerCase();
+/** A gateway's `<channel>/<model>` id without its channel. */
+const lastSegment = (id: string): string => id.slice(id.lastIndexOf('/') + 1);
+
+/**
+ * Why Claude Code cannot run `model` — undefined when it can, or when that
+ * cannot be told. A provider-bound session runs only its profile's models
+ * (when the profile lists any). Otherwise the model must be one the CLI's
+ * model list offers — by id, by the canonical id an alias row resolves to,
+ * or, for a gateway's `<channel>/<model>` ids, by the model part — or a
+ * plain `claude-*` id, which the Anthropic API and gateways both route even
+ * when the list only names it by alias. With no list known yet, anything is
+ * let through rather than guessed at.
+ */
+export function unsupportedModelReason(
+  model: string,
+  known: SdkModelDescriptor[],
+  provider?: ProviderBinding | null,
+): string | undefined {
+  const key = modelKey(model);
+  if (provider) {
+    if (provider.models.length === 0 || provider.models.some((m) => modelKey(m.id) === key)) return undefined;
+    return `The provider profile '${provider.id}' does not offer the model '${model}' — choose one of its models.`;
+  }
+  if (known.length === 0 || /^claude-[^/]*$/.test(key)) return undefined;
+  const offered = known.some((m) => {
+    const ids = [m.id, ...(m.resolvedModel ? [m.resolvedModel] : [])].map(modelKey);
+    return ids.includes(key) || ids.some((id) => lastSegment(id) === lastSegment(key));
+  });
+  if (offered) return undefined;
+  return `Claude Code does not offer the model '${model}' on this bridge — choose one from its model list.`;
+}
+
 /** What one session needs. */
 export interface ClaudeDriverOptions {
   facade: SdkFacade;
   /** The `claude` executable, or its on-demand install still in progress
    *  (the session waits for it). Unset: the SDK's own resolution. */
   claudePath?: string | Promise<string>;
+  /** Why the session cannot switch to a model, if it cannot. */
+  checkModel?: (model: string) => string | undefined;
 }
 
 export interface ClaudeDriverDeps {
@@ -504,10 +542,15 @@ export class ClaudeSession implements DriverSession {
         await this.handle?.setEffort(value);
         this.effort = value;
         return;
-      case 'model':
+      case 'model': {
+        const refused = this.params.provider
+          ? unsupportedModelReason(value, [], this.params.provider)
+          : this.options.checkModel?.(value);
+        if (refused) throw new Error(refused);
         await this.handle?.setModel(value);
         this.model = value;
         return;
+      }
     }
   }
 
@@ -534,6 +577,9 @@ export class ClaudeDriver implements Driver {
   /** The on-demand install in progress or done; dropped when it fails, so
    *  the next session tries again (a bridge started offline recovers). */
   private install: Promise<string> | null = null;
+  /** The last non-empty model list — what a requested model is checked
+   *  against. Empty until one has been fetched. */
+  private knownModels: SdkModelDescriptor[] = [];
 
   constructor(private readonly options: ClaudeDriverDeps) {
     // Start at once, so the binary is usually in place by the first session.
@@ -573,10 +619,15 @@ export class ClaudeDriver implements Driver {
     if (params.effort !== undefined && params.effort !== null && !isEffort(params.effort)) {
       throw new Error(`Claude Code has no effort level '${params.effort}'`);
     }
+    // A resumed conversation already ran on its model; only a new start is
+    // checked.
+    const refused = params.model && !params.resume ? unsupportedModelReason(params.model, this.knownModels, params.provider) : undefined;
+    if (refused) throw new Error(refused);
     const claudePath = this.claudePath();
     const session = new ClaudeSession(params, ctx, {
       facade: this.options.facade,
       ...(claudePath !== undefined ? { claudePath } : {}),
+      checkModel: (model) => unsupportedModelReason(model, this.knownModels),
     });
     session.start();
     return session;
@@ -584,6 +635,7 @@ export class ClaudeDriver implements Driver {
 
   async listModels(): Promise<{ models: ModelEntry[]; defaultModel: string }> {
     const models = await this.options.facade.supportedModels(this.options.discoverModels ? await this.discovery() : undefined);
+    if (models.length > 0) this.knownModels = models;
     return {
       models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })),
       defaultModel: DEFAULT_MODEL,

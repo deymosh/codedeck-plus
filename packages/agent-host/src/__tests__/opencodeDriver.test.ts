@@ -365,3 +365,34 @@ describe('OpenCode default model', () => {
     await session.end();
   });
 });
+
+describe('OpenCode model checks', () => {
+  const catalog = {
+    providers: vi.fn().mockResolvedValue({
+      data: { providers: [{ id: 'opencode', models: { 'big-pickle': { id: 'big-pickle', name: 'Big Pickle', cost: { input: 0, output: 0 }, status: 'active' } } }], default: {} },
+      error: undefined,
+    }),
+    get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  };
+  const withCatalog = (client: FakeClient) => Object.assign(client, { config: catalog });
+
+  it('refuses an id that is not provider/model at once', () => {
+    expect(() => start(clientWith([]), { model: 'claude-opus-5-5' })).toThrow(/not an OpenCode provider\/model id/);
+  });
+
+  it('fails a new session on a model no provider offers, before creating anything', async () => {
+    const client = withCatalog(clientWith([]));
+    const ctx = start(client, { model: 'anthropic/claude-opus-5-5' });
+    expect((await ctx.ended()).error).toMatch(/OpenCode does not offer the model 'anthropic\/claude-opus-5-5'/);
+    expect(ctx.events.some((e) => e.type === 'ready')).toBe(false);
+    expect(client.session.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a switch to a model no provider offers', async () => {
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(withCatalog(clientWith([]))).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await expect(session.setOption('model', 'anthropic/claude-opus-5-5')).rejects.toThrow(/does not offer/);
+    await session.setOption('model', 'opencode/big-pickle');
+    await session.end();
+  });
+});

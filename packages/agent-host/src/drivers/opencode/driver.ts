@@ -131,6 +131,13 @@ export function pickDefaultModel(
   return undefined;
 }
 
+/** Why OpenCode cannot run `model`: none of its providers offers it. When
+ *  the model list could not be fetched, nothing is refused. */
+export function unsupportedModelReason(model: string, models: ModelEntry[]): string | undefined {
+  if (models.length === 0 || models.some((m) => m.id === model)) return undefined;
+  return `OpenCode does not offer the model '${model}' — none of its configured providers serves it; choose one from its model list.`;
+}
+
 /** Best-effort human-readable text out of OpenCode's error-union shapes
  *  (ProviderAuthError / UnknownError / MessageOutputLengthError /
  *  MessageAbortedError / ApiError) without importing every member by name —
@@ -285,7 +292,14 @@ export class OpenCodeSession implements DriverSession {
       // With no model named, the session runs the default the phone was
       // shown, sent with every prompt — never whatever OpenCode would pick on
       // its own (the last model used, possibly one with no credential).
-      const model = params.model ?? (await this.catalog()).defaultModel;
+      // A resumed conversation already ran on its model; only a new start is
+      // checked against what the providers offer.
+      const catalog = !params.model || !params.resume ? await this.catalog() : { models: [] };
+      if (params.model && !params.resume) {
+        const refused = unsupportedModelReason(params.model, catalog.models);
+        if (refused) throw new Error(refused);
+      }
+      const model = params.model ?? catalog.defaultModel;
       if (!params.model) this.model = splitModelId(model);
       // Subscribe BEFORE resolving/creating the session so no event in the gap
       // between "session exists" and "we started listening" is missed. The
@@ -662,6 +676,8 @@ export class OpenCodeSession implements DriverSession {
         // Model selection is per prompt in OpenCode; the next prompt uses it.
         const split = splitModelId(value);
         if (!split) throw new Error(`'${value}' is not an OpenCode provider/model id`);
+        const refused = unsupportedModelReason(value, (await this.catalog()).models);
+        if (refused) throw new Error(refused);
         this.model = split;
         return;
       }
@@ -819,6 +835,9 @@ export class OpenCodeDriver implements Driver {
     if (!this.clientPromise) throw new Error(this.unavailable ?? NOT_CONFIGURED);
     if (params.mode !== undefined && !OPENCODE_MODES.some((m) => m.id === params.mode)) {
       throw new Error(`OpenCode has no mode '${params.mode}'`);
+    }
+    if (params.model && !splitModelId(params.model)) {
+      throw new Error(`'${params.model}' is not an OpenCode provider/model id — choose one from its model list.`);
     }
     return new OpenCodeSession(params, ctx, this.clientPromise, () => this.listModels());
   }

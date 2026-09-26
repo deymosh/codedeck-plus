@@ -5,7 +5,7 @@
  * Code's modes their meaning.
  */
 import { describe, it, expect } from 'vitest';
-import { ClaudeDriver, PLAN_APPROVAL_OPTIONS } from '../drivers/claude/driver';
+import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../drivers/claude/driver';
 import type {
   ModelDiscoveryOptions,
   SdkCanUseTool,
@@ -465,5 +465,46 @@ describe('Claude model discovery', () => {
     const facade = new ScriptedFacade();
     await new ClaudeDriver({ facade }).listModels();
     expect(facade.discoveries).toEqual([undefined]);
+  });
+});
+
+describe('Claude model checks', () => {
+  const known = [
+    { id: 'default', label: 'Default', resolvedModel: 'claude-opus-5-5' },
+    { id: 'sonnet[1m]', label: 'Sonnet (1M)', resolvedModel: 'claude-sonnet-5' },
+    { id: 'Golem/local-model', label: 'local-model' },
+  ];
+
+  it('accepts listed ids, resolved ids, gateway model parts and plain claude ids', () => {
+    for (const model of ['sonnet[1m]', 'claude-sonnet-5', 'claude-opus-5-5[1m]', 'local-model', 'Golem/local-model', 'claude-haiku-4-5']) {
+      expect(unsupportedModelReason(model, known)).toBeUndefined();
+    }
+  });
+
+  it("refuses another agent's model, and lets anything through while no list is known", () => {
+    expect(unsupportedModelReason('opencode/nemotron-3.5-lightning-free', known)).toMatch(/does not offer the model 'opencode\/nemotron/);
+    expect(unsupportedModelReason('opencode/nemotron-3.5-lightning-free', [])).toBeUndefined();
+  });
+
+  it('holds a provider-bound session to its profile', () => {
+    const provider = { id: 'kimi', baseUrl: 'https://x', authToken: 't', models: [{ id: 'kimi-k3' }] };
+    expect(unsupportedModelReason('kimi-k3', [], provider)).toBeUndefined();
+    expect(unsupportedModelReason('claude-opus-5-5', known, provider)).toMatch(/profile 'kimi' does not offer/);
+  });
+
+  it('refuses a new session, and a switch, to a model the list does not offer', async () => {
+    const facade = new ScriptedFacade();
+    const driver = new ClaudeDriver({ facade });
+    await driver.listModels();
+    const params = { sessionId: 's1', agent: 'claude-code', cwd: '/w' };
+    expect(() => driver.startSession({ ...params, model: 'opencode/big-pickle' }, recordingContext())).toThrow(/does not offer/);
+    // A resumed conversation is not second-guessed.
+    expect(() => driver.startSession({ ...params, model: 'opencode/big-pickle', resume: 'n1' }, recordingContext())).not.toThrow();
+
+    const ctx = recordingContext();
+    const session = driver.startSession(params, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await expect(session.setOption('model', 'opencode/big-pickle')).rejects.toThrow(/does not offer/);
+    await session.setOption('model', 'claude-sonnet-5');
   });
 });
