@@ -114,9 +114,11 @@ a driver-protocol type, regenerate the host's types with
 ## Workflow
 
 - **Branch + PR, never direct commits to `master`.** Start from an up-to-date
-  `master`, create `claude/<short-kebab-slug>`, do all of a request's commits
-  there (one branch per request, not per commit), then open a PR with
-  `gh pr create` and a real summary. Leave the PR open for the user to merge
+  `master`, create `<type>/<short-kebab-slug>` with the conventional type the
+  work's commits would use — `fix/`, `feat/`, `ci/`, `build/`, `test/`,
+  `perf/`, `docs/`, `chore/` — do all of a request's commits there (one branch
+  per request, not per commit), then open a PR with `gh pr create` and a real
+  summary. Leave the PR open for the user to merge
   unless they explicitly say to merge it. Small doc/config housekeeping the user
   is directing turn-by-turn may go straight to the working branch they name.
 - **Multi-part requests: one task at a time.** Implement, verify with
