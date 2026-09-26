@@ -136,7 +136,47 @@ fn an_unknown_mode_or_effort_falls_back_to_the_agent_default() {
     rig.host_up();
     rig.send(json!({"type":"create-session","agent":"alpha","mode":"warp","effort":"max"}));
     let (_, p) = rig.start_request();
+    assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
+}
+
+#[test]
+fn a_session_without_mode_or_effort_records_the_agent_defaults() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    let (_, p) = rig.start_request();
+    assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
+    // An agent with no default effort leaves it unset.
+    rig.send(json!({"type":"create-session","agent":"beta"}));
+    let (_, p) = rig.start_request();
     assert_eq!((p.mode.as_deref(), p.effort), (Some("ask"), None));
+}
+
+#[test]
+fn a_session_started_on_the_default_model_is_listed_with_it() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    let (id, p) = rig.start_request();
+    assert_eq!(p.model, None);
+    rig.host_reply(&id, HostMessage::Ack);
+    rig.host_event(&p.session_id, SessionEvent::Info {
+        native_session_id: None,
+        model: Some("m-default".into()),
+        mode: None,
+        context_window: None,
+        context_percentage: None,
+    });
+    rig.host_event(&p.session_id, SessionEvent::Ready {});
+    let ready = rig
+        .messages()
+        .into_iter()
+        .find_map(|m| match m {
+            BridgeToPhone::SessionReady(r) => Some(r),
+            _ => None,
+        })
+        .expect("session-ready");
+    assert_eq!(ready.session.model.as_deref(), Some("m-default"));
 }
 
 #[test]

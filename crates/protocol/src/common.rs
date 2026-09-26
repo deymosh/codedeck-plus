@@ -87,6 +87,9 @@ pub struct AgentDescriptor {
     pub efforts: Vec<OptionChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_mode: Option<String>,
+    /// The effort a session runs at when none is chosen; one of `efforts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
     #[serde(default)]
     pub supports: AgentSupports,
     /// Credentials this agent can use, with their current status.

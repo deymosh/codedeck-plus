@@ -68,10 +68,19 @@ event-id set alongside the cursor so the replay is a no-op.
 
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
-`efforts[]`, `defaultMode`, `supports {models, usage, providers, gsd,
-interrupt}` and `credentials[]` status. Phones build every picker from it and
-offer a feature only when the session's agent `supports` it. Mode, effort and
-model values are opaque strings the bridge validates against the catalog.
+`efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
+providers, gsd, interrupt}` and `credentials[]` status. Phones build every
+picker from it and offer a feature only when the session's agent `supports`
+it. Mode, effort and model values are opaque strings the bridge validates
+against the catalog.
+
+Defaults are reported, never left implicit: a session created without a mode
+or effort records the agent's `defaultMode` / `defaultEffort`, and one created
+without a model reports (in the session list) the model the agent runs it on.
+The default model is per agent and can change with the agent's own
+configuration, so it rides the `models` reply as `defaultModel` rather than
+the catalog. The agent refuses a model it does not offer; the session then
+fails with that reason.
 
 An agent the bridge has but cannot run here (not configured) is not
 advertised; creating a session on it fails with the reason.

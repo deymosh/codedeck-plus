@@ -5,8 +5,9 @@
  * Code's modes their meaning.
  */
 import { describe, it, expect } from 'vitest';
-import { ClaudeDriver, PLAN_APPROVAL_OPTIONS } from '../drivers/claude/driver';
+import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../drivers/claude/driver';
 import type {
+  ModelDiscoveryOptions,
   SdkCanUseTool,
   SdkContextUsage,
   SdkFacade,
@@ -83,6 +84,7 @@ class ScriptedHandle implements SdkSessionHandle {
 
 class ScriptedFacade implements SdkFacade {
   readonly sessions: Array<{ opts: SdkSessionOptions; handle: ScriptedHandle }> = [];
+  readonly discoveries: Array<ModelDiscoveryOptions | undefined> = [];
   nextProbe: Promise<void> = Promise.resolve();
 
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
@@ -92,7 +94,8 @@ class ScriptedFacade implements SdkFacade {
     return handle;
   }
 
-  async supportedModels(): Promise<SdkModelDescriptor[]> {
+  async supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]> {
+    this.discoveries.push(discovery);
     return [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }];
   }
 
@@ -419,5 +422,90 @@ describe('Claude Code installed on demand', () => {
     await ctx.waitFor((e) => e.type === 'ready');
     expect(facade.last.opts.pathToClaudeCodeExecutable).toBe('/usr/bin/claude');
     expect(installs).toBe(0);
+  });
+});
+
+describe('Claude model discovery', () => {
+  it('lists models at start, through a discovery session on the installed binary', async () => {
+    const facade = new ScriptedFacade();
+    let finishInstall: (path: string) => void = () => {};
+    const driver = new ClaudeDriver({
+      facade,
+      discoverModels: true,
+      installClaude: () => new Promise((resolve) => (finishInstall = resolve)),
+    });
+    // The start-up listing waits for the binary it needs.
+    await Promise.resolve();
+    expect(facade.discoveries).toEqual([]);
+    finishInstall('/cache/claude');
+    await expect.poll(() => facade.discoveries).toEqual([{ pathToClaudeCodeExecutable: '/cache/claude' }]);
+    expect((await driver.listModels()).models).toEqual([{ id: 'claude-sonnet-5', label: 'Sonnet 5' }]);
+  });
+
+  it('reports Opus 5.5 as the default model, and runs a session with no model on it', async () => {
+    expect(new ClaudeDriver({ facade: new ScriptedFacade() }).info()).toMatchObject({ defaultMode: 'plan', defaultEffort: 'medium' });
+    expect((await new ClaudeDriver({ facade: new ScriptedFacade() }).listModels()).defaultModel).toBe('claude-opus-5-5');
+    const { ctx, facade } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(facade.last.opts.model).toBe('claude-opus-5-5');
+    expect(ctx.events.slice(0, 2)).toEqual([{ type: 'info', model: 'claude-opus-5-5' }, { type: 'ready' }]);
+  });
+
+  it('a chosen model, or a provider binding, is not overridden by the default', async () => {
+    const chosen = start({ model: 'claude-sonnet-5' });
+    await chosen.ctx.waitFor((e) => e.type === 'ready');
+    expect(chosen.facade.last.opts.model).toBe('claude-sonnet-5');
+    expect(chosen.ctx.events.some((e) => e.type === 'info')).toBe(false);
+
+    const bound = start({ provider: { id: 'p', baseUrl: 'https://x', authToken: 't', models: [] } });
+    await bound.ctx.waitFor((e) => e.type === 'ready');
+    expect(bound.facade.last.opts.model).toBeUndefined();
+  });
+
+  it('without discovery, only live sessions are asked', async () => {
+    const facade = new ScriptedFacade();
+    await new ClaudeDriver({ facade }).listModels();
+    expect(facade.discoveries).toEqual([undefined]);
+  });
+});
+
+describe('Claude model checks', () => {
+  const known = [
+    { id: 'default', label: 'Default', resolvedModel: 'claude-opus-5-5' },
+    { id: 'sonnet[1m]', label: 'Sonnet (1M)', resolvedModel: 'claude-sonnet-5' },
+    { id: 'Golem/local-model', label: 'local-model' },
+  ];
+
+  it('accepts listed ids, resolved ids, gateway model parts and plain claude ids', () => {
+    for (const model of ['sonnet[1m]', 'claude-sonnet-5', 'claude-opus-5-5[1m]', 'local-model', 'Golem/local-model', 'claude-haiku-4-5']) {
+      expect(unsupportedModelReason(model, known)).toBeUndefined();
+    }
+  });
+
+  it("refuses another agent's model, and lets anything through while no list is known", () => {
+    expect(unsupportedModelReason('opencode/nemotron-3.5-lightning-free', known)).toMatch(/does not offer the model 'opencode\/nemotron/);
+    expect(unsupportedModelReason('opencode/nemotron-3.5-lightning-free', [])).toBeUndefined();
+  });
+
+  it('holds a provider-bound session to its profile', () => {
+    const provider = { id: 'kimi', baseUrl: 'https://x', authToken: 't', models: [{ id: 'kimi-k3' }] };
+    expect(unsupportedModelReason('kimi-k3', [], provider)).toBeUndefined();
+    expect(unsupportedModelReason('claude-opus-5-5', known, provider)).toMatch(/profile 'kimi' does not offer/);
+  });
+
+  it('refuses a new session, and a switch, to a model the list does not offer', async () => {
+    const facade = new ScriptedFacade();
+    const driver = new ClaudeDriver({ facade });
+    await driver.listModels();
+    const params = { sessionId: 's1', agent: 'claude-code', cwd: '/w' };
+    expect(() => driver.startSession({ ...params, model: 'opencode/big-pickle' }, recordingContext())).toThrow(/does not offer/);
+    // A resumed conversation is not second-guessed.
+    expect(() => driver.startSession({ ...params, model: 'opencode/big-pickle', resume: 'n1' }, recordingContext())).not.toThrow();
+
+    const ctx = recordingContext();
+    const session = driver.startSession(params, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await expect(session.setOption('model', 'opencode/big-pickle')).rejects.toThrow(/does not offer/);
+    await session.setOption('model', 'claude-sonnet-5');
   });
 });

@@ -245,7 +245,7 @@ fn set_option_is_checked_against_the_catalog_then_confirmed() {
 
     let id = set_option(&mut rig, &s, "effort", "high").unwrap();
     rig.host_reply(&id, HostMessage::Error { message: "no".into() });
-    assert!(confirmed(&mut rig).is_empty(), "no effort was ever in force");
+    assert_eq!(confirmed(&mut rig), ["high"], "the agent's default effort stays in force");
     let id = set_option(&mut rig, &s, "effort", "low").unwrap();
     rig.host_reply(&id, HostMessage::Ack);
     assert_eq!(confirmed(&mut rig), ["low"]);

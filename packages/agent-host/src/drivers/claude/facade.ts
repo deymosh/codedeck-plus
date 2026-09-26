@@ -14,6 +14,7 @@
  * package directly.
  */
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -58,22 +59,21 @@ export type {
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 /**
- * NOT sent to the SDK by default. Earlier this was passed as every plain
- * Anthropic session's `Options.fallbackModel`, so the SDK silently resolved a
- * turn on this model whenever it decided the primary one was "overloaded or
- * unavailable" — the session only ever saw that as an ordinary `init.model`
- * change and overwrote the recorded model with no warning, while the actual
- * failure that triggered the swap never surfaced. A model failure should surface as a
- * real, visible error instead of a quiet downgrade the phone can't tell apart
- * from an intentional model choice — so `buildQueryOptions` now omits
- * `fallbackModel` unless a caller explicitly opts in with a string.
+ * The model a plain (not provider-bound) session runs when the phone names
+ * none — sent as `Options.model`, and reported as the agent's default model.
+ * A full model id rather than an alias: Anthropic's API takes it directly,
+ * and an LLM gateway routes it like any other id, where an alias would only
+ * mean something to the CLI's own built-in table.
  *
- * Still used as the ASSUMED model for 1M-context beta gating when a session
- * has no explicit `model` (see `buildQueryOptions`'s `requestedModel`) — that
- * is a request-shaping decision, independent of whether the SDK is allowed to
- * silently substitute a different model on failure.
+ * Never sent as `Options.fallbackModel`: that makes the SDK silently resolve
+ * a turn on another model whenever it decides the primary one is
+ * "overloaded or unavailable", which the session only sees as an ordinary
+ * `init.model` change — the failure that triggered the swap never surfaces,
+ * and the phone cannot tell it from an intentional model choice. So
+ * `buildQueryOptions` omits `fallbackModel` unless a caller explicitly opts
+ * in with a string.
  */
-export const DEFAULT_MODEL_ASSUMPTION = 'claude-sonnet-4-6';
+export const DEFAULT_MODEL = 'claude-opus-5-5';
 
 export interface SdkSessionOptions {
   /** Our session id — becomes the SDK sessionId (create) or is ignored when `resume` is set. */
@@ -101,7 +101,7 @@ export interface SdkSessionOptions {
   /**
    * CDX-062 fallback model for Options.fallbackModel — undefined AND null both
    * OMIT the option (no automatic silent degrade; see
-   * `DEFAULT_MODEL_ASSUMPTION`'s doc comment for why). A caller that wants the
+   * `DEFAULT_MODEL`'s doc comment for why). A caller that wants the
    * SDK's automatic-degrade-on-failure behavior can still opt in with an
    * explicit string; nothing does today.
    */
@@ -181,12 +181,23 @@ export interface SdkSessionHandle {
 export interface SdkModelDescriptor {
   id: string;
   label?: string;
+  /** The canonical model id an alias row resolves to (`opus` →
+   *  `claude-opus-5-5`), when the CLI says. */
+  resolvedModel?: string;
+}
+
+/** How to spawn a discovery session when no live session can answer the
+ *  model list. */
+export interface ModelDiscoveryOptions {
+  pathToClaudeCodeExecutable?: string;
 }
 
 export interface SdkFacade {
   createSession(opts: SdkSessionOptions): SdkSessionHandle;
-  /** Available models, via `query.supportedModels()` when the SDK offers it. */
-  supportedModels(): Promise<SdkModelDescriptor[]>;
+  /** Available models, via `query.supportedModels()` when the SDK offers it.
+   *  With `discovery` set and no live session to ask, a throwaway session is
+   *  spawned to answer (never given a prompt) and closed again. */
+  supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]>;
 }
 
 // --- Model-list aggregation (CDX-022) ---
@@ -204,6 +215,15 @@ export interface ModelsQueryHandle {
 /** Per-handle budget for a supportedModels control request. A live CLI answers
  *  in ~1s (measured); anything slower is treated as dead and skipped. */
 export const SUPPORTED_MODELS_TIMEOUT_MS = 3_000;
+
+/** Budget for a discovery session: a cold spawn of the CLI (first run after
+ *  an install, a slow disk) takes far longer than a live one answering. */
+export const DISCOVERY_TIMEOUT_MS = 30_000;
+
+/** How long a discovery session's answer stands in for a new one. The list
+ *  only changes with a CLI upgrade or a login, and every phone asking would
+ *  otherwise spawn a CLI of its own. */
+export const DISCOVERY_CACHE_MS = 10 * 60_000;
 
 /**
  * Bypass `query.supportedModels()` and ask a gateway directly for its model
@@ -590,7 +610,7 @@ export function buildQueryOptions(
 ): Options {
   const optionsEffort = toOptionsEffort(opts.effortLevel);
   // CDX-062: undefined and null both omit Options.fallbackModel (no automatic
-  // silent degrade — see DEFAULT_MODEL_ASSUMPTION's doc comment); a caller can
+  // silent degrade — see DEFAULT_MODEL's doc comment); a caller can
   // still opt in with an explicit string.
   const fallbackModel = opts.fallbackModel ?? null;
   // CDX-076: the SDK maps `sessionId` → `--session-id=` and `resume` →
@@ -608,7 +628,7 @@ export function buildQueryOptions(
   // resumes, exactly as it already does for a CLI-chosen id.
   const claimOwnId = !opts.resume && !conversationExists(opts.sessionId, opts.cwd, opts.env);
   // The model actually being requested for THIS session — an explicit pick,
-  // or DEFAULT_MODEL_ASSUMPTION when the phone left it unset AND this is a
+  // or DEFAULT_MODEL when the phone left it unset AND this is a
   // plain Anthropic session (a provider-bound session with no explicit model
   // has no Anthropic model to assume at all — see isProviderBoundSession).
   // Deliberately independent of `fallbackModel` (Options.fallbackModel
@@ -618,7 +638,7 @@ export function buildQueryOptions(
   // eligible for the beta as one that named Sonnet explicitly, regardless of
   // whether automatic fallback is enabled for that session.
   const requestedModel = opts.model
-    ?? (isProviderBoundSession(opts) ? undefined : DEFAULT_MODEL_ASSUMPTION);
+    ?? (isProviderBoundSession(opts) ? undefined : DEFAULT_MODEL);
   const wants1m = modelSupports1mContext(requestedModel);
   const betas = wants1m ? (['context-1m-2025-08-07'] as const) : undefined;
   // The model actually sent as Options.model: suffixed with `[1m]` when
@@ -626,9 +646,7 @@ export function buildQueryOptions(
   // modelSupports1mContext's doc comment), otherwise exactly `requestedModel`.
   // Forwarded whenever `requestedModel` is defined, not just when the caller
   // supplied `opts.model` — a "Default model" session is exactly as eligible
-  // for the 1M window as one that named Sonnet explicitly (DEFAULT_MODEL_
-  // ASSUMPTION's doc comment already says as much for `betas`; this is the
-  // same reasoning for the mechanism that actually works).
+  // for the 1M window as one that named Sonnet explicitly.
   const modelToSend = requestedModel === undefined
     ? undefined
     : wants1m ? with1mSuffix(requestedModel) : requestedModel;
@@ -712,7 +730,11 @@ class RealSdkSessionHandle implements SdkSessionHandle {
     const fn = (this.q as Partial<Pick<Query, 'supportedModels'>>).supportedModels;
     if (typeof fn !== 'function') return [];
     const models = await fn.call(this.q);
-    return models.map((m) => ({ id: m.value, label: m.displayName }));
+    return models.map((m) => ({
+      id: m.value,
+      label: m.displayName,
+      ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
+    }));
   }
 
   messages(): AsyncIterable<SDKMessage> {
@@ -796,8 +818,41 @@ class RealSdkSessionHandle implements SdkSessionHandle {
   }
 }
 
+/**
+ * Ask a throwaway session for the model list. The CLI answers the
+ * supportedModels control request right after it spawns, with no user
+ * message sent — so the session never runs a turn, writes no conversation
+ * file, and costs no tokens. It runs in the temp directory so no project's
+ * settings shape the answer, and is ended as soon as it has answered (or
+ * failed to).
+ */
+async function discoverModels(discovery: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]> {
+  const handle = new RealSdkSessionHandle({
+    sessionId: randomUUID(),
+    cwd: os.tmpdir(),
+    permissionMode: 'plan',
+    canUseTool: async () => ({ behavior: 'deny', message: 'This session only lists models.' }),
+    ...(discovery.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: discovery.pathToClaudeCodeExecutable } : {}),
+  });
+  // Nothing else reads this query's stream; drained so it never backs up,
+  // and so the abort at the end does not surface as an unhandled rejection.
+  void (async () => {
+    for await (const _ of handle.messages()) {
+      // discarded
+    }
+  })().catch(() => {});
+  try {
+    return await firstSupportedModels([handle], DISCOVERY_TIMEOUT_MS, (m) => console.error(m));
+  } finally {
+    await handle.end();
+  }
+}
+
 export class RealSdkFacade implements SdkFacade {
   private handles = new Set<RealSdkSessionHandle>();
+  /** The discovery session in flight — concurrent askers share it. */
+  private discovering: Promise<SdkModelDescriptor[]> | null = null;
+  private discovered: { models: SdkModelDescriptor[]; at: number } | null = null;
 
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
     const handle = new RealSdkSessionHandle(opts);
@@ -805,17 +860,33 @@ export class RealSdkFacade implements SdkFacade {
     return handle;
   }
 
-  async supportedModels(): Promise<SdkModelDescriptor[]> {
+  async supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]> {
     // See ENABLE_GATEWAY_MODEL_DISCOVERY's doc comment for why this bypasses
-    // query.supportedModels() entirely rather than trying to use it.
+    // query.supportedModels() entirely rather than trying to use it — a
+    // discovery session would answer with the same stale built-in aliases.
     if (ENABLE_GATEWAY_MODEL_DISCOVERY) {
       return fetchGatewayModels();
     }
+    const live = await this.liveSupportedModels();
+    if (live.length > 0 || !discovery) return live;
+    if (this.discovered && Date.now() - this.discovered.at < DISCOVERY_CACHE_MS) return this.discovered.models;
+    if (!this.discovering) {
+      const attempt = discoverModels(discovery).then((models) => {
+        if (models.length > 0) this.discovered = { models, at: Date.now() };
+        return models;
+      });
+      this.discovering = attempt;
+      void attempt.finally(() => {
+        if (this.discovering === attempt) this.discovering = null;
+      }).catch(() => {});
+    }
+    return this.discovering;
+  }
 
+  private async liveSupportedModels(): Promise<SdkModelDescriptor[]> {
     // supportedModels() is a control request on a live Query — try EVERY live
     // session's query, first non-empty answer wins (CDX-022: a dead handle
-    // must not poison the list). With no live session there is nothing to ask;
-    // callers treat [] as "unknown, use defaults".
+    // must not poison the list).
     for (const handle of [...this.handles]) {
       if (handle.isEnded) this.handles.delete(handle);
     }

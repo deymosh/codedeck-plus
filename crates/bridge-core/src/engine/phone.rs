@@ -309,7 +309,9 @@ impl Engine {
             previous_native_session_id: None,
             model,
             provider_id: m.provider_id,
-            effort,
+            // Recorded as the agent's defaults, so the session is never listed
+            // with no mode or effort at all.
+            effort: effort.or_else(|| agent.default_effort.clone()),
             mode: mode.or_else(|| agent.default_mode.clone()),
             title: None,
             created_at: now.clone(),

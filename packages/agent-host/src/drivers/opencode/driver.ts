@@ -21,6 +21,7 @@ import type {
   EventQuestionAsked,
   OpencodeClient,
   Part,
+  Provider,
   QuestionAnswer,
   QuestionInfo,
   Session,
@@ -93,6 +94,48 @@ function splitModelId(model: string | undefined): { providerID: string; modelID:
   const i = model.indexOf('/');
   if (i <= 0 || i === model.length - 1) return undefined;
   return { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
+}
+
+/** OpenCode's models and the one a session defaults to. */
+export interface OpenCodeCatalog {
+  models: ModelEntry[];
+  defaultModel?: string;
+}
+
+/** The provider OpenCode Zen serves under — the one provider every OpenCode
+ *  install has, whose free models need no API key at all. */
+const ZEN_PROVIDER = 'opencode';
+
+/**
+ * The model a session runs when the phone names none, as a
+ * `<providerID>/<modelID>` id from `providers`: the model OpenCode's own
+ * config names, when it is one of them; else a free OpenCode Zen model, which
+ * works with no credential set up; else the first provider's own default
+ * (`serverDefaults`, providerID → modelID). Deprecated models are skipped.
+ */
+export function pickDefaultModel(
+  configured: string | undefined,
+  providers: Provider[],
+  serverDefaults: Record<string, string>,
+): string | undefined {
+  const usable = (p: Provider) => Object.values(p.models).filter((m) => m.status !== 'deprecated');
+  const ids = new Set(providers.flatMap((p) => usable(p).map((m) => `${p.id}/${m.id}`)));
+  if (configured && ids.has(configured)) return configured;
+  const zen = providers.find((p) => p.id === ZEN_PROVIDER);
+  const free = zen && usable(zen).find((m) => m.cost.input === 0 && m.cost.output === 0);
+  if (free) return `${ZEN_PROVIDER}/${free.id}`;
+  for (const p of providers) {
+    const id = `${p.id}/${serverDefaults[p.id] ?? ''}`;
+    if (ids.has(id)) return id;
+  }
+  return undefined;
+}
+
+/** Why OpenCode cannot run `model`: none of its providers offers it. When
+ *  the model list could not be fetched, nothing is refused. */
+export function unsupportedModelReason(model: string, models: ModelEntry[]): string | undefined {
+  if (models.length === 0 || models.some((m) => m.id === model)) return undefined;
+  return `OpenCode does not offer the model '${model}' — none of its configured providers serves it; choose one from its model list.`;
 }
 
 /** Best-effort human-readable text out of OpenCode's error-union shapes
@@ -215,6 +258,7 @@ export class OpenCodeSession implements DriverSession {
     params: StartSession,
     private readonly ctx: SessionContext,
     clientPromise: Promise<OpencodeClient>,
+    private readonly catalog: () => Promise<OpenCodeCatalog> = async () => ({ models: [] }),
   ) {
     this.cwd = params.cwd;
     this.mode = params.mode ?? DEFAULT_MODE;
@@ -245,6 +289,18 @@ export class OpenCodeSession implements DriverSession {
   ): Promise<{ client: OpencodeClient; session: Session }> {
     try {
       const client = await clientPromise;
+      // With no model named, the session runs the default the phone was
+      // shown, sent with every prompt — never whatever OpenCode would pick on
+      // its own (the last model used, possibly one with no credential).
+      // A resumed conversation already ran on its model; only a new start is
+      // checked against what the providers offer.
+      const catalog = !params.model || !params.resume ? await this.catalog() : { models: [] };
+      if (params.model && !params.resume) {
+        const refused = unsupportedModelReason(params.model, catalog.models);
+        if (refused) throw new Error(refused);
+      }
+      const model = params.model ?? catalog.defaultModel;
+      if (!params.model) this.model = splitModelId(model);
       // Subscribe BEFORE resolving/creating the session so no event in the gap
       // between "session exists" and "we started listening" is missed. The
       // stream is directory-scoped (a server can host multiple projects); this
@@ -257,8 +313,8 @@ export class OpenCodeSession implements DriverSession {
       // The "memory was lost" notice goes ahead of "session started".
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
-        this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(params.model ? { model: params.model } : {}), mode: this.mode });
-        this.deliver({ type: 'started', ...(params.model ? { model: params.model } : {}) });
+        this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode });
+        this.deliver({ type: 'started', ...(model ? { model } : {}) });
         this.ctx.emit({ type: 'ready' });
       }
       // Consume the event stream for the rest of this session's life. A clean
@@ -620,6 +676,8 @@ export class OpenCodeSession implements DriverSession {
         // Model selection is per prompt in OpenCode; the next prompt uses it.
         const split = splitModelId(value);
         if (!split) throw new Error(`'${value}' is not an OpenCode provider/model id`);
+        const refused = unsupportedModelReason(value, (await this.catalog()).models);
+        if (refused) throw new Error(refused);
         this.model = split;
         return;
       }
@@ -778,17 +836,21 @@ export class OpenCodeDriver implements Driver {
     if (params.mode !== undefined && !OPENCODE_MODES.some((m) => m.id === params.mode)) {
       throw new Error(`OpenCode has no mode '${params.mode}'`);
     }
-    return new OpenCodeSession(params, ctx, this.clientPromise);
+    if (params.model && !splitModelId(params.model)) {
+      throw new Error(`'${params.model}' is not an OpenCode provider/model id — choose one from its model list.`);
+    }
+    return new OpenCodeSession(params, ctx, this.clientPromise, () => this.listModels());
   }
 
-  /** Best-effort model list from OpenCode's configured providers — empty on
-   *  any failure. Ids are `<providerID>/<modelID>`, the shape a prompt
-   *  expects back. */
-  async listModels(): Promise<{ models: ModelEntry[] }> {
+  /** Best-effort model list from OpenCode's configured providers, and the
+   *  default among them (see pickDefaultModel) — empty on any failure. Ids
+   *  are `<providerID>/<modelID>`, the shape a prompt expects back. */
+  async listModels(): Promise<OpenCodeCatalog> {
     if (!this.clientPromise) return { models: [] };
     try {
       const client = await this.clientPromise;
-      const { data, error } = await client.config.providers();
+      const [providers, config] = await Promise.all([client.config.providers(), client.config.get().catch(() => null)]);
+      const { data, error } = providers;
       if (error || !data) return { models: [] };
       const models: ModelEntry[] = [];
       for (const provider of data.providers) {
@@ -796,7 +858,8 @@ export class OpenCodeDriver implements Driver {
           models.push({ id: `${provider.id}/${model.id}`, label: model.name });
         }
       }
-      return { models };
+      const defaultModel = pickDefaultModel(config?.data?.model, data.providers, data.default);
+      return { models, ...(defaultModel ? { defaultModel } : {}) };
     } catch {
       return { models: [] };
     }

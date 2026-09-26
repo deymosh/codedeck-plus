@@ -75,7 +75,7 @@ describe('firstSupportedModels (CDX-022)', () => {
 
 import {
   buildQueryOptions,
-  DEFAULT_MODEL_ASSUMPTION,
+  DEFAULT_MODEL,
   fetchGatewayModels,
   isProviderBoundSession,
   modelSupports1mContext,
@@ -393,14 +393,14 @@ describe('buildQueryOptions (1M-context beta)', () => {
     expect(options.model).toBe('claude-haiku-4-5-20251001');
   });
 
-  it('gates on DEFAULT_MODEL_ASSUMPTION when the phone left model unset, independent of fallbackModel', () => {
+  it('gates on DEFAULT_MODEL when the phone left model unset, independent of fallbackModel', () => {
     const options = buildQueryOptions(baseOpts());
-    expect(modelSupports1mContext(DEFAULT_MODEL_ASSUMPTION)).toBe(true);
+    expect(modelSupports1mContext(DEFAULT_MODEL)).toBe(true);
     expect(options.betas).toEqual(['context-1m-2025-08-07']);
     // The assumed model is now sent explicitly (suffixed) too — before this
     // fix Options.model was omitted entirely for a "Default model" session,
     // leaving the CLI to pick its own default with no 1M signal at all.
-    expect(options.model).toBe(`${DEFAULT_MODEL_ASSUMPTION}[1m]`);
+    expect(options.model).toBe(`${DEFAULT_MODEL}[1m]`);
     // Confirms the two concerns are decoupled: no fallbackModel is sent...
     expect('fallbackModel' in options).toBe(false);
     // ...yet the beta is still requested for this "Default model" session.

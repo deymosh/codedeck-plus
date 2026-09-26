@@ -178,7 +178,9 @@ private fun NewSessionBody(
     var newFolder by remember(machine.pubkeyHex) { mutableStateOf("") }
     var mode by remember(machine.pubkeyHex) { mutableStateOf(preferredMode(agent)) }
     var effort by remember(machine.pubkeyHex) { mutableStateOf(preferredEffort(agent)) }
-    var model by remember(machine.pubkeyHex) { mutableStateOf(defaultModel) }
+    // The model the user picked here (a profile's default counts); null
+    // until then, when the preferred default model applies instead.
+    var modelPick by remember(machine.pubkeyHex) { mutableStateOf<String?>(null) }
     var providerId by remember(machine.pubkeyHex) { mutableStateOf("") }
     // Create-flow feedback — mobile's `creating`/`error` pair: the button
     // disables with a "Creating…" label, and failures surface as a banner
@@ -211,11 +213,17 @@ private fun NewSessionBody(
     val agentModels = machine.models.firstOrNull { it.agent == agentId }
     val modelsList: List<UniffiModelEntry> = agentModels?.models.orEmpty()
     val modelsErr = agentModels?.error
+    val modelOptions: List<UniffiModelEntry> = activeProfile?.models ?: modelsList
+    // The preferred default model is one id shared by every agent, so it
+    // pre-selects only when this agent (or profile) actually offers it —
+    // never another agent's model the bridge would have to refuse.
+    val preferredModel = defaultModel.takeIf { pref -> pref.isNotEmpty() && modelOptions.any { it.id == pref } }.orEmpty()
+    val model = modelPick ?: preferredModel
 
     fun changeProvider(id: String) {
         providerId = id
         val profile = if (id == "") null else providerProfiles.find { it.id == id }
-        model = profile?.defaultModel ?: defaultModel
+        modelPick = profile?.defaultModel
     }
 
     fun changeAgent(id: String) {
@@ -226,8 +234,22 @@ private fun NewSessionBody(
         effort = preferredEffort(next)
         // Model ids are per agent — start from its default rather than carry
         // over one it may not know.
-        model = ""
+        modelPick = null
     }
+
+    // What each "Default …" option resolves to on this agent, named in the
+    // option itself: the bridge reports every default, so none is a guess.
+    fun defaultLabel(kind: String, id: String?, choices: List<Pair<String, String>>): String {
+        if (id.isNullOrEmpty()) return "Default $kind"
+        val name = choices.firstOrNull { it.first == id }?.second ?: id
+        return "Default $kind ($name)"
+    }
+    val defaultModelLabel = defaultLabel(
+        "model",
+        // A profile with no default of its own runs its first model.
+        if (activeProfile != null) activeProfile.defaultModel ?: activeProfile.models.firstOrNull()?.id else agentModels?.defaultModel,
+        modelOptions.map { it.id to (it.label ?: it.id) },
+    )
 
     fun create() {
         if (creating || agent == null) return
@@ -308,10 +330,9 @@ private fun NewSessionBody(
             // --- Model ---
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                 SelectRow("Model") {
-                    val modelOptions = activeProfile?.models ?: modelsList
                     SelectField(
                         options = buildList {
-                            add(PickerOption("", "Default model"))
+                            add(PickerOption("", defaultModelLabel))
                             modelOptions.forEach { m ->
                                 add(PickerOption(m.id, m.label ?: m.id))
                             }
@@ -326,7 +347,7 @@ private fun NewSessionBody(
                             }
                         },
                         selected = model,
-                        onSelect = { model = it },
+                        onSelect = { modelPick = it },
                     )
                 }
                 // CDX-035: the bridge's own reason for an empty answer, so
@@ -343,7 +364,8 @@ private fun NewSessionBody(
             if (modes.isNotEmpty()) {
                 SelectRow("Mode") {
                     SelectField(
-                        options = listOf(PickerOption("", "Default mode")) + modes.map { PickerOption(it.id, it.label) },
+                        options = listOf(PickerOption("", defaultLabel("mode", agent?.defaultMode, modes.map { it.id to it.label }))) +
+                            modes.map { PickerOption(it.id, it.label) },
                         selected = mode,
                         onSelect = { mode = it },
                     )
@@ -355,7 +377,8 @@ private fun NewSessionBody(
             if (efforts.isNotEmpty()) {
                 SelectRow("Effort") {
                     SelectField(
-                        options = listOf(PickerOption("", "Default effort")) + efforts.map { PickerOption(it.id, it.label) },
+                        options = listOf(PickerOption("", defaultLabel("effort", agent?.defaultEffort, efforts.map { it.id to it.label }))) +
+                            efforts.map { PickerOption(it.id, it.label) },
                         selected = effort,
                         onSelect = { effort = it },
                     )

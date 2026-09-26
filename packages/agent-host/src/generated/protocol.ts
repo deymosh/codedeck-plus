@@ -18,6 +18,8 @@ export type AgentInfo_Deserialize = {
 	modes?: OptionChoice_Deserialize[],
 	efforts?: OptionChoice_Deserialize[],
 	defaultMode?: string | null,
+	/**  The effort a session runs at when none is chosen; one of `efforts`. */
+	defaultEffort?: string | null,
 	supports?: AgentSupports,
 	credentials?: CredentialSpec_Deserialize[],
 	/**
@@ -37,6 +39,8 @@ export type AgentInfo_Serialize = {
 	modes: OptionChoice_Serialize[],
 	efforts: OptionChoice_Serialize[],
 	defaultMode?: string | null,
+	/**  The effort a session runs at when none is chosen; one of `efforts`. */
+	defaultEffort?: string | null,
 	supports: AgentSupports,
 	credentials: CredentialSpec_Serialize[],
 	/**

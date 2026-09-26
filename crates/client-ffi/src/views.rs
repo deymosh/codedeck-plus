@@ -306,6 +306,8 @@ pub struct UniffiAgent {
     pub modes: Vec<UniffiOptionChoice>,
     pub efforts: Vec<UniffiOptionChoice>,
     pub default_mode: Option<String>,
+    /// The effort a session runs at when none is chosen.
+    pub default_effort: Option<String>,
     pub supports_models: bool,
     pub supports_usage: bool,
     pub supports_providers: bool,
@@ -349,6 +351,7 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         modes: a.modes.iter().map(to_uniffi_option_choice).collect(),
         efforts: a.efforts.iter().map(to_uniffi_option_choice).collect(),
         default_mode: a.default_mode.clone(),
+        default_effort: a.default_effort.clone(),
         supports_models: a.supports.models,
         supports_usage: a.supports.usage,
         supports_providers: a.supports.providers,

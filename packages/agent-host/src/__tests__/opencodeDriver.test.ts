@@ -4,8 +4,8 @@
  * its permission asks and questions reach the bridge.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { Event, OpencodeClient, Session } from '@opencode-ai/sdk/v2/client';
-import { OpenCodeDriver, toQuestionAnswers } from '../drivers/opencode/driver';
+import type { Event, OpencodeClient, Provider, Session } from '@opencode-ai/sdk/v2/client';
+import { OpenCodeDriver, pickDefaultModel, toQuestionAnswers } from '../drivers/opencode/driver';
 import type { StartSession } from '../types';
 import { recordingContext, type Handlers } from './context';
 
@@ -310,6 +310,89 @@ describe('OpenCode options', () => {
     await expect(session.setOption('mode', 'plan')).rejects.toThrow(/no mode/);
     await expect(session.setOption('model', 'sonnet')).rejects.toThrow(/provider\/model/);
     await expect(session.setOption('effort', 'high')).rejects.toThrow(/no effort/);
+    await session.end();
+  });
+});
+
+describe('OpenCode default model', () => {
+  const model = (id: string, cost: number, status = 'active') => ({ id, name: id.toUpperCase(), cost: { input: cost, output: cost }, status });
+  const provider = (id: string, ...models: ReturnType<typeof model>[]) =>
+    ({ id, models: Object.fromEntries(models.map((m) => [m.id, m])) }) as unknown as Provider;
+  const zen = provider('opencode', model('big-pickle', 1), model('old-free', 0, 'deprecated'), model('nemotron-free', 0));
+  const anthropic = provider('anthropic', model('claude-sonnet-5', 3));
+
+  it('is the model OpenCode is configured with, when it is offered', () => {
+    expect(pickDefaultModel('anthropic/claude-sonnet-5', [zen, anthropic], {})).toBe('anthropic/claude-sonnet-5');
+  });
+
+  it('else a free OpenCode Zen model that is not deprecated', () => {
+    expect(pickDefaultModel(undefined, [anthropic, zen], {})).toBe('opencode/nemotron-free');
+    expect(pickDefaultModel('gone/model', [anthropic, zen], {})).toBe('opencode/nemotron-free');
+  });
+
+  it("else the first provider's own default, else none", () => {
+    expect(pickDefaultModel(undefined, [anthropic], { anthropic: 'claude-sonnet-5' })).toBe('anthropic/claude-sonnet-5');
+    expect(pickDefaultModel(undefined, [anthropic], {})).toBeUndefined();
+  });
+
+  function withCatalog(client: FakeClient, configured?: string): FakeClient {
+    (client as unknown as { config: unknown }).config = {
+      providers: vi.fn().mockResolvedValue({ data: { providers: [zen, anthropic], default: {} }, error: undefined }),
+      get: vi.fn().mockResolvedValue({ data: configured ? { model: configured } : {}, error: undefined }),
+    };
+    return client;
+  }
+
+  it('is listed with the models', async () => {
+    const catalog = await OpenCodeDriver.withClient(withCatalog(clientWith([]))).listModels();
+    expect(catalog.defaultModel).toBe('opencode/nemotron-free');
+    expect(catalog.models).toContainEqual({ id: 'anthropic/claude-sonnet-5', label: 'CLAUDE-SONNET-5' });
+  });
+
+  it('a session started with no model runs, and reports, the default', async () => {
+    const client = withCatalog(clientWith([]));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'ses_1', model: 'opencode/nemotron-free', mode: 'ask' });
+    (client.session as unknown as { promptAsync: unknown }).promptAsync = vi.fn().mockResolvedValue({ data: undefined, error: undefined });
+    session.prompt('hi');
+    await expect.poll(() => (client.session as unknown as { promptAsync: ReturnType<typeof vi.fn> }).promptAsync.mock.calls.length).toBe(1);
+    expect((client.session as unknown as { promptAsync: ReturnType<typeof vi.fn> }).promptAsync.mock.calls[0]![0].model).toEqual({
+      providerID: 'opencode',
+      modelID: 'nemotron-free',
+    });
+    await session.end();
+  });
+});
+
+describe('OpenCode model checks', () => {
+  const catalog = {
+    providers: vi.fn().mockResolvedValue({
+      data: { providers: [{ id: 'opencode', models: { 'big-pickle': { id: 'big-pickle', name: 'Big Pickle', cost: { input: 0, output: 0 }, status: 'active' } } }], default: {} },
+      error: undefined,
+    }),
+    get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  };
+  const withCatalog = (client: FakeClient) => Object.assign(client, { config: catalog });
+
+  it('refuses an id that is not provider/model at once', () => {
+    expect(() => start(clientWith([]), { model: 'claude-opus-5-5' })).toThrow(/not an OpenCode provider\/model id/);
+  });
+
+  it('fails a new session on a model no provider offers, before creating anything', async () => {
+    const client = withCatalog(clientWith([]));
+    const ctx = start(client, { model: 'anthropic/claude-opus-5-5' });
+    expect((await ctx.ended()).error).toMatch(/OpenCode does not offer the model 'anthropic\/claude-opus-5-5'/);
+    expect(ctx.events.some((e) => e.type === 'ready')).toBe(false);
+    expect(client.session.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a switch to a model no provider offers', async () => {
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(withCatalog(clientWith([]))).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await expect(session.setOption('model', 'anthropic/claude-opus-5-5')).rejects.toThrow(/does not offer/);
+    await session.setOption('model', 'opencode/big-pickle');
     await session.end();
   });
 });
