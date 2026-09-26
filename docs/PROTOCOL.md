@@ -109,7 +109,7 @@ tagged by `entryType`:
 | `question` | one question of an ask: `requestId`, `index`/`count`, `options`, `multiSelect` |
 | `plan_approval` | a card: `requestId`, `options[]` |
 | `resolved` | a card was answered or cancelled: `requestId`, `summary` |
-| `notice` | `session_restart`, `session_died`, `session_failed`, `auth_error`, `screenshot` |
+| `notice` | `session_restart`, `session_died`, `session_failed`, `auth_error` |
 | `status`, `error`, `turn_complete` | one-line status, an error, the end of a turn |
 
 Clients branch on `entryType` and `kind`, never on tool names.
@@ -197,7 +197,7 @@ sent them (the event author), never by a payload field.
 
 A pairing window is a time-boxed subscription with **no author filter** — the
 only way an unpaired phone reaches the bridge — plus a QR:
-`codedeck://pair?npub=…&relays=…&machine=…&token=…[&netid=…&meshadmin=…]`.
+`codedeck://pair?npub=…&relays=…&machine=…&token=…`.
 Only a `pair-request` echoing the window's one-time token pairs. A successful
 `pair-ack` carries `relays` and `host`, so a phone that paired from a bare
 npub learns where the bridge lives. Rejections (`bad-token`,
@@ -210,8 +210,8 @@ commands with `v` (+ optional `caps`). What an AGENT can do is catalog data
 (`supports`), not a capability. The bridge's capabilities:
 
 - **hard gate** — `images`: the phone shows image attach only when present;
-- **presence markers** — `sync/1`, `folders`, `device-actions`: the feature is
-  detected from payload data;
+- **presence markers** — `sync/1`, `folders`: the feature is detected from
+  payload data;
 - **transport beacon** — `chunked`: advertised on both sides, gated by neither.
 
 ### Oversize-event fragmentation (`chunk`)
@@ -258,7 +258,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | Request | Reply |
 |---|---|
 | `initialize {bridgeVersion}` | `initialized {hostVersion, agents: AgentInfo[]}` |
-| `start-session {sessionId, agent, cwd, mode?, effort?, model?, resume?, credentials, env, provider?, hostTools, denySecretPaths}` | `ack` once starting (progress follows as events), or `error` |
+| `start-session {sessionId, agent, cwd, mode?, effort?, model?, resume?, credentials, env, provider?}` | `ack` once starting (progress follows as events), or `error` |
 | `end-session {sessionId}` | `ack`; no `ended` follows |
 | `prompt {sessionId, text}` | `ack` |
 | `interrupt {sessionId}` | `ack` |
@@ -290,12 +290,9 @@ Requests the host makes (the bridge answers each exactly once):
 | `request-permission {sessionId, requestId, toolName, kind, title, …, options}` | `permission-outcome {outcome: selected {optionId} \| cancelled {reason}}` |
 | `ask-question {sessionId, requestId, questions}` | `question-outcome {outcome: answered {answers} \| cancelled {reason}}` |
 | `request-plan-approval {sessionId, requestId, options}` | `plan-outcome` (as permission) |
-| `call-host-tool {sessionId, tool, args}` | `host-tool-result {text, isError}` |
 
 A `cancelled` outcome means nobody chose: the card timed out, the user
-interrupted, or the session is ending. Host tools are tools the bridge
-implements and offers to a session (the device-test tools); the host exposes
-them to its agent under an MCP server named `codedeck`.
+interrupted, or the session is ending.
 
 ### Supervision
 
@@ -312,7 +309,7 @@ restart.
    `supports`, credentials); `startSession()` returns a `DriverSession` and
    reports through the `SessionContext` it is handed — `emit()` session
    events, `requestPermission()` / `askQuestion()` / `requestPlanApproval()`
-   when the user must decide, `callHostTool()` for bridge tools.
+   when the user must decide.
 2. Translate the agent's own events into typed `OutputEntry` values in the
    driver — nothing agent-specific may reach the bridge.
 3. Register it in `src/main.ts` (it is enabled through

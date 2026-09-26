@@ -18,10 +18,10 @@ use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
     BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, ModelsRequestMsg, PermissionResponseMsg,
     PhoneToBridge, PlanResponseMsg, ProviderProfileWrite, QuestionAnswer, QuestionResponseMsg,
-    SessionIdMsg, SetCredentialsMsg, SetDeviceConfigMsg, SetOptionMsg, SetProviderProfileMsg,
+    SessionIdMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     VersionFields,
 };
-use protocol::common::{CredentialValues, DeviceConfig, SessionOption};
+use protocol::common::{CredentialValues, SessionOption};
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
@@ -89,8 +89,6 @@ pub struct IntentResult {
     pub pair_deadline: Option<PairDeadline>,
     /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
     pub pairing_settled: Option<bool>,
-    /// CDX-028 one-QR mesh join.
-    pub mesh_join: Option<(String, String)>,
     /// Arm / clear the delete-controller undo timer.
     pub undo_timer: Option<UndoTimer>,
     /// The loop uploads a session image (Blossom-first, chunk fallback) then
@@ -239,7 +237,6 @@ pub enum Intent {
         effort: Option<String>,
         model: Option<String>,
         provider_id: Option<String>,
-        test_session: Option<bool>,
     },
     RefreshSessions {
         machine: String,
@@ -274,11 +271,6 @@ pub enum Intent {
     RequestProviderProfiles {
         machine: String,
     },
-    /// Test-device config (Phase 5d, mesh autonomous test loop).
-    SetDeviceConfig {
-        machine: String,
-        config: DeviceConfig,
-    },
     /// Create a new project folder under a workspace root (and `git init` it,
     /// bridge-side). Answered with `CoreEvent::FolderAck`, matched by
     /// `request_id` — the caller mints it (a UUID is fine; the bridge only
@@ -309,7 +301,6 @@ pub enum Intent {
     },
     SetTorEnabled(bool),
     SetStayConnected(bool),
-    SetMeshTestTarget(bool),
     SetBlossomServer(String),
     SetNotificationsEnabled(bool),
     /// Preferred mode / effort / model for new sessions (agent ids; empty =
@@ -579,7 +570,6 @@ pub fn apply(
             effort,
             model,
             provider_id,
-            test_session,
         } => r.send(
             &machine,
             PhoneToBridge::CreateSession(CreateSessionMsg {
@@ -588,7 +578,6 @@ pub fn apply(
                 mode,
                 effort,
                 model,
-                test_session,
                 cwd,
                 create_cwd,
                 provider_id,
@@ -658,13 +647,6 @@ pub fn apply(
             &machine,
             PhoneToBridge::ProviderProfilesRequest(BareMsg { version: v() }),
         ),
-        Intent::SetDeviceConfig { machine, config } => r.send(
-            &machine,
-            PhoneToBridge::SetDeviceConfig(SetDeviceConfigMsg {
-                version: v(),
-                config,
-            }),
-        ),
         Intent::CreateFolder {
             machine,
             path,
@@ -703,10 +685,6 @@ pub fn apply(
         }
         Intent::SetStayConnected(on) => {
             stores.settings.set_stay_connected(on);
-            r.persist(StoreId::Settings);
-        }
-        Intent::SetMeshTestTarget(on) => {
-            stores.settings.set_mesh_test_target(on);
             r.persist(StoreId::Settings);
         }
         Intent::SetBlossomServer(url) => {
@@ -802,9 +780,6 @@ fn begin_pairing(
     }
     if out.pair_deadline.is_some() {
         r.pair_deadline = out.pair_deadline;
-    }
-    if out.mesh_join.is_some() {
-        r.mesh_join = out.mesh_join;
     }
     if out.pairing_settled.is_some() {
         r.pairing_settled = out.pairing_settled;
@@ -1294,33 +1269,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_device_config_sends_the_config_verbatim() {
-        let (mut s, kp) = stores().await;
-        let config = protocol::common::DeviceConfig {
-            label: "phone-1".into(),
-            role: Some(protocol::common::DeviceRole::TestTarget),
-            serial: None,
-            mesh_ip: Some("10.0.0.1".into()),
-            mesh_pubkey: Some("abc".into()),
-            app_under_test: protocol::common::AppUnderTest::Veil,
-            custom_package: None,
-            custom_build_cmd: None,
-            project_dir: None,
-        };
-        let out = apply(
-            &mut s,
-            Intent::SetDeviceConfig { machine: "m".into(), config: config.clone() },
-            &kp,
-            ctx(),
-        );
-        assert!(matches!(
-            out.sends.as_slice(),
-            [Send { machine, msg: PhoneToBridge::SetDeviceConfig(m) }]
-                if machine == "m" && m.config == config
-        ));
-    }
-
-    #[tokio::test]
     async fn create_folder_sends_the_request_with_its_id() {
         let (mut s, kp) = stores().await;
         let out = apply(
@@ -1401,11 +1349,8 @@ mod tests {
     async fn every_settings_intent_mutates_the_store_and_persists() {
         let (mut s, kp) = stores().await;
 
-        let out = apply(&mut s, Intent::SetMeshTestTarget(true), &kp, ctx());
-        assert!(s.settings.data.mesh_test_target);
+        let out = apply(&mut s, Intent::SetBlossomServer("https://blossom.example".into()), &kp, ctx());
         assert_eq!(out.persist, vec![StoreId::Settings]);
-
-        apply(&mut s, Intent::SetBlossomServer("https://blossom.example".into()), &kp, ctx());
         assert_eq!(s.settings.data.blossom_server, "https://blossom.example");
 
         apply(&mut s, Intent::SetDefaultEffort("high".into()), &kp, ctx());

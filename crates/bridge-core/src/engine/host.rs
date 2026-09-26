@@ -102,7 +102,6 @@ impl Engine {
         log::warn!("[Engine] Agent host down: {reason}");
         self.host.up = false;
         self.host.initialized = false;
-        self.host.tool_calls.clear();
         for call in std::mem::take(&mut self.host.calls).into_values() {
             // Session-bound requests die with the sessions, handled below.
             if !matches!(
@@ -321,8 +320,6 @@ impl Engine {
             credentials: self.credentials.agents.get(&rec.agent).cloned().unwrap_or_default(),
             env,
             provider,
-            host_tools: if rec.test_session { self.config.device_tools.clone() } else { Vec::new() },
-            deny_secret_paths: rec.test_session,
         })
     }
 
@@ -720,21 +717,6 @@ impl Engine {
                 let kind = CardKind::Plan { options: req.options };
                 self.open_card(&req.session_id, &req.request_id, host_id, kind, vec![entry]);
             }
-            HostMessage::CallHostTool(call) => {
-                if !self.is_running(&call.session_id) {
-                    return self.reply(
-                        host_id,
-                        BridgeMessage::HostToolResult { text: "the session is not running".into(), is_error: true },
-                    );
-                }
-                self.host.tool_calls.insert(host_id.clone(), call.session_id.clone());
-                self.out.push(Effect::RunHostTool {
-                    call_id: host_id,
-                    session_id: call.session_id,
-                    tool: call.tool,
-                    args: call.args,
-                });
-            }
             _ => log::warn!("[Engine] The agent host sent a reply kind as a request — dropped"),
         }
     }
@@ -823,14 +805,6 @@ impl Engine {
             })
             .unwrap_or(0);
         self.answer_question(session_id, request_id, index, text)
-    }
-
-    pub(super) fn on_host_tool_done(&mut self, call_id: String, text: String, is_error: bool) {
-        if self.host.tool_calls.remove(&call_id).is_some() {
-            self.reply(call_id, BridgeMessage::HostToolResult { text, is_error });
-        } else {
-            log::info!("[Engine] Result for host tool call {call_id}, which is no longer waited on — dropped");
-        }
     }
 }
 

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use bridge_core::ports::{Ports, System};
-use bridge_core::{Config as EngineConfig, Effect, Engine, Input, MeshJoin, NotifyLevel, PairingCloseReason, PairingWindowInfo, TimerId};
+use bridge_core::{Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TimerId};
 use protocol::commands::UploadImageMsg;
 use protocol::crypto::Keypair;
 use tokio::sync::mpsc;
@@ -24,10 +24,8 @@ use crate::relay::Relays;
 use crate::state::StateFile;
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
-use crate::devices::{self, Devices};
 use crate::gsd::Gsd;
 use crate::images::{self, Images};
-use crate::mesh::Mesh;
 use crate::{qr, work};
 
 /// The real clock, ids and environment.
@@ -96,14 +94,8 @@ struct Runtime {
     timers: HashMap<TimerId, JoinHandle<()>>,
     http: reqwest::Client,
     outcome: Outcome,
-    state: StateFile,
     images: Rc<RefCell<Images>>,
     gsd: Rc<Gsd>,
-    // One device call at a time: adb connection recovery is stateful.
-    devices: Rc<tokio::sync::Mutex<Devices>>,
-    mesh: Rc<Mesh>,
-    /// Mesh join info for the pairing QR (`pair` only).
-    mesh_join: Option<MeshJoin>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
 }
 
@@ -121,10 +113,8 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     engine_config.host_kind = Some(config.host_kind);
     engine_config.relays = config.relays.clone();
     engine_config.bridge_version = crate::version().to_string();
-    engine_config.device_tools = devices::tool_specs();
     let user_home = crate::config::user_home();
     let first_root = config.workspace_roots[0].clone();
-    let kept_state = state.clone();
     if let Some(keep) = config.transcript_keep_last {
         engine_config.transcript_keep_last = keep;
     }
@@ -153,8 +143,6 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     }
 
     let gsd = Gsd::new(config.node_path.clone(), &user_home);
-    let devices = Devices::new(config.adb_path.clone(), &user_home);
-    let mesh = Mesh::new(config.nvpn_path.clone(), config.mesh_admin_enabled, &user_home);
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
         config,
@@ -166,23 +154,12 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         timers: HashMap::new(),
         http: work::http_client(),
         outcome: Outcome::Stopped,
-        state: kept_state,
         images: Rc::new(RefCell::new(Images::new(&first_root))),
         gsd: Rc::new(gsd),
-        devices: Rc::new(tokio::sync::Mutex::new(devices)),
-        mesh: Rc::new(mesh),
-        mesh_join: None,
         pairing_urls: options.pairing_urls,
     };
 
     rt.step(Input::Start).await;
-    if rt.mode == Mode::Pair {
-        // The pairing QR can also let the phone join the mesh.
-        rt.mesh_join = rt.mesh.onboarding().await.map(|o| {
-            say(&format!("The pairing QR includes mesh join info for network {}.", o.network_id));
-            MeshJoin { admin_device_id: o.admin_device_id, netid: o.network_id }
-        });
-    }
     if rt.mode == Mode::Pair || rt.engine.paired_phones().is_empty() {
         if rt.mode == Mode::Run {
             say("No phones paired yet — opening a pairing window. Scan the QR with the CodeDeck app.\nThe bridge keeps running; a new window opens until a phone pairs.");
@@ -219,7 +196,7 @@ fn watch_signals(inputs: mpsc::UnboundedSender<Input>) {
 
 impl Runtime {
     fn open_pairing(&mut self) {
-        let _ = self.inputs.send(Input::OpenPairing { duration_ms: self.pairing_window_ms, mesh: self.mesh_join.clone() });
+        let _ = self.inputs.send(Input::OpenPairing { duration_ms: self.pairing_window_ms });
     }
 
     /// Handle one input; true once the engine has stopped and everything is
@@ -298,28 +275,6 @@ impl Runtime {
                 tokio::task::spawn_local(async move {
                     let gsd = gsd.state(&cwd).await;
                     let _ = inputs.send(Input::Gsd { session_id, gsd });
-                });
-            }
-            Effect::RunHostTool { call_id, session_id, tool, args } => {
-                let (inputs, devices) = (self.inputs.clone(), Rc::clone(&self.devices));
-                tokio::task::spawn_local(async move {
-                    let result = devices.lock().await.run(&tool, &args).await;
-                    if let Some(entry) = result.entry {
-                        let _ = inputs.send(Input::SessionEntry { session_id, entry });
-                    }
-                    let _ = inputs.send(Input::HostToolDone { call_id, text: result.text, is_error: result.is_error });
-                });
-            }
-            Effect::ApplyDeviceConfig { phone, config } => {
-                let (inputs, mesh, state) = (self.inputs.clone(), Rc::clone(&self.mesh), self.state.clone());
-                let first_root = self.config.workspace_roots[0].clone();
-                tokio::task::spawn_local(async move {
-                    let result = mesh.apply(&state, &first_root, &phone, config).await.map(|notice| {
-                        if let Some(notice) = notice {
-                            say(&notice);
-                        }
-                    });
-                    let _ = inputs.send(Input::DeviceConfigApplied { phone, result });
                 });
             }
             Effect::HandleImageUpload(UploadImageMsg::Chunk(chunk)) => {

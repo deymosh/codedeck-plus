@@ -7,7 +7,7 @@ use protocol::crypto::npub_from_hex;
 use protocol::events::{BridgeToPhone, PairAckMsg, PairAckReason};
 
 use super::{Engine, PairingWindow};
-use crate::io::{store_keys, Effect, MeshJoin, NotifyLevel, PairedPhone, PairingCloseReason, PairingWindowInfo};
+use crate::io::{store_keys, Effect, NotifyLevel, PairedPhone, PairingCloseReason, PairingWindowInfo};
 use crate::out::TimerKind;
 use crate::pairing::{pairing_url, PairingUrlParts};
 use crate::time::iso;
@@ -22,7 +22,7 @@ fn same_token(expected: &str, given: &str) -> bool {
 
 impl Engine {
     /// Open a window (replacing any open one).
-    pub(super) fn open_pairing(&mut self, duration_ms: Option<u64>, mesh: Option<MeshJoin>) {
+    pub(super) fn open_pairing(&mut self, duration_ms: Option<u64>) {
         self.close_pairing(PairingCloseReason::Closed, None);
         let token = self.system.new_token();
         let duration = duration_ms.unwrap_or(self.config.pairing_window_ms);
@@ -31,7 +31,6 @@ impl Engine {
             relays: &self.config.relays,
             machine: &self.config.machine,
             token: &token,
-            mesh: mesh.as_ref().map(|m| (m.admin_device_id.as_str(), m.netid.as_str())),
         });
         let now = self.now();
         self.pairing_epoch += 1;

@@ -17,7 +17,6 @@ export interface Handlers {
   permission?: (request: Omit<PermissionRequest, 'sessionId'>) => SelectOutcome | Promise<SelectOutcome>;
   question?: (requestId: string, questions: QuestionSpec[]) => QuestionOutcome | Promise<QuestionOutcome>;
   plan?: (requestId: string, options: OptionChoice[]) => SelectOutcome | Promise<SelectOutcome>;
-  tool?: (tool: string, args: Record<string, unknown>) => { text: string; isError: boolean };
 }
 
 export interface RecordingContext extends SessionContext {
@@ -65,9 +64,6 @@ export function recordingContext(handlers: Handlers = {}, sessionId = 's1'): Rec
     async requestPlanApproval(requestId, options) {
       ctx.plans.push({ requestId, options });
       return handlers.plan ? handlers.plan(requestId, options) : { outcome: 'cancelled', reason: 'no handler' };
-    },
-    async callHostTool(tool, args) {
-      return handlers.tool ? handlers.tool(tool, args) : { text: 'no tool', isError: true };
     },
     log(message) {
       ctx.logs.push(message);

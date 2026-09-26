@@ -75,10 +75,7 @@ impl BridgeMessage {
     pub fn is_reply(&self) -> bool {
         matches!(
             self,
-            Self::PermissionOutcome(_)
-                | Self::PlanOutcome(_)
-                | Self::QuestionOutcome(_)
-                | Self::HostToolResult { .. }
+            Self::PermissionOutcome(_) | Self::PlanOutcome(_) | Self::QuestionOutcome(_)
         )
     }
 }

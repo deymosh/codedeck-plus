@@ -60,11 +60,6 @@ pub struct SessionRecord {
     pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_percentage: Option<f64>,
-    /// A device-test session: its agent gets the device tools and may never
-    /// touch signing keys or secret files. Persisted so a resumed session
-    /// keeps that boundary.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub test_session: bool,
 }
 
 impl SessionRecord {
@@ -208,7 +203,6 @@ mod tests {
             committed: false,
             context_window: None,
             context_percentage: None,
-            test_session: false,
         }
     }
 

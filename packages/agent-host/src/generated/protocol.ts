@@ -119,12 +119,7 @@ export type BridgeMessage_Deserialize =
 /**  Reply to `request-plan-approval`. */
 { kind: "plan-outcome"; payload: SelectOutcome } | 
 /**  Reply to `ask-question`. */
-{ kind: "question-outcome"; payload: QuestionOutcome } | 
-/**  Reply to `call-host-tool`. */
-{ kind: "host-tool-result"; payload: {
-	text: string,
-	isError?: boolean,
-} };
+{ kind: "question-outcome"; payload: QuestionOutcome };
 
 /**  Bridge → host. */
 export type BridgeMessage_Serialize = 
@@ -175,12 +170,7 @@ export type BridgeMessage_Serialize =
 /**  Reply to `request-plan-approval`. */
 { kind: "plan-outcome"; payload: SelectOutcome } | 
 /**  Reply to `ask-question`. */
-{ kind: "question-outcome"; payload: QuestionOutcome } | 
-/**  Reply to `call-host-tool`. */
-{ kind: "host-tool-result"; payload: {
-	text: string,
-	isError?: boolean,
-} };
+{ kind: "question-outcome"; payload: QuestionOutcome };
 
 /**
  *  A credential an agent can use. The bridge stores the value and reports
@@ -381,9 +371,7 @@ export type HostMessage_Deserialize =
 /**  Reply: `question-outcome`. */
 { kind: "ask-question"; payload: QuestionRequest_Deserialize } | 
 /**  Reply: `plan-outcome`. */
-{ kind: "request-plan-approval"; payload: PlanApprovalRequest_Deserialize } | 
-/**  Reply: `host-tool-result`. */
-{ kind: "call-host-tool"; payload: HostToolCall };
+{ kind: "request-plan-approval"; payload: PlanApprovalRequest_Deserialize };
 
 /**  Host → bridge. */
 export type HostMessage_Serialize = 
@@ -419,30 +407,7 @@ export type HostMessage_Serialize =
 /**  Reply: `question-outcome`. */
 { kind: "ask-question"; payload: QuestionRequest_Serialize } | 
 /**  Reply: `plan-outcome`. */
-{ kind: "request-plan-approval"; payload: PlanApprovalRequest_Serialize } | 
-/**  Reply: `host-tool-result`. */
-{ kind: "call-host-tool"; payload: HostToolCall };
-
-export type HostToolCall = {
-	sessionId: string,
-	tool: string,
-	args: unknown,
-};
-
-/**
- *  A tool the bridge implements and offers to a session's agent (the
- *  device-test tools). The driver exposes it to its agent under `name`;
- *  every call comes back to the bridge as `call-host-tool`.
- */
-export type HostToolSpec = {
-	name: string,
-	description: string,
-	/**
-	 *  JSON Schema of the arguments: an object schema whose properties are
-	 *  `string`, `number`, `integer` or `boolean`.
-	 */
-	inputSchema: unknown,
-};
+{ kind: "request-plan-approval"; payload: PlanApprovalRequest_Serialize };
 
 export type ModelEntry = ModelEntry_Serialize | ModelEntry_Deserialize;
 
@@ -465,9 +430,7 @@ export type NoticeKind =
 /**  The session could not start or continue. */
 "session_failed" | 
 /**  The agent rejected its credentials. */
-"auth_error" | 
-/**  A device screenshot was delivered (test sessions). */
-"screenshot";
+"auth_error";
 
 /**
  *  One selectable value of a per-agent option (a mode, an effort level, a
@@ -784,12 +747,6 @@ export type StartSession_Deserialize = {
 	 */
 	env?: { [key in string]: Secret },
 	provider?: ProviderBinding_Deserialize | null,
-	hostTools?: HostToolSpec[],
-	/**
-	 *  Refuse every tool call that touches signing keystores or secret files,
-	 *  whatever the mode (device-test sessions).
-	 */
-	denySecretPaths?: boolean,
 };
 
 export type StartSession_Serialize = {
@@ -816,12 +773,6 @@ export type StartSession_Serialize = {
 	 */
 	env?: { [key in string]: Secret },
 	provider?: ProviderBinding_Serialize | null,
-	hostTools?: HostToolSpec[],
-	/**
-	 *  Refuse every tool call that touches signing keystores or secret files,
-	 *  whatever the mode (device-test sessions).
-	 */
-	denySecretPaths?: boolean,
 };
 
 /**  Identifies the sub-agent that produced an entry. */

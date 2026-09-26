@@ -36,8 +36,6 @@ export interface SessionContext {
   askQuestion(requestId: string, questions: QuestionSpec[]): Promise<QuestionOutcome>;
   /** Ask the user how to proceed with a finished plan. */
   requestPlanApproval(requestId: string, options: OptionChoice[]): Promise<SelectOutcome>;
-  /** Run one of the session's host tools (implemented by the bridge). */
-  callHostTool(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
   /** A diagnostic line for the bridge log (stderr). Never pass secrets. */
   log(message: string): void;
 }

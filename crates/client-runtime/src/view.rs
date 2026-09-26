@@ -22,7 +22,7 @@ use client_core::stores::pending_sessions::PendingSessionView;
 use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
-use client_core::stores::ui::{CredentialsAck, DeviceConfigAck, ProviderProfileAck, UndoToast};
+use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast};
 use serde::Serialize;
 
 use crate::ports::TranscriptStore;
@@ -166,7 +166,6 @@ pub struct UiView {
     pub responded_cards: BTreeMap<String, BTreeSet<String>>,
     pub plan_approval_choices: BTreeMap<String, String>,
     pub credentials_status: BTreeMap<String, CredentialsAck>,
-    pub device_config_status: BTreeMap<String, DeviceConfigAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
     pub undo_toast: Option<UndoToast>,
 }
@@ -181,7 +180,6 @@ impl UiView {
             responded_cards: ui.responded_cards.clone(),
             plan_approval_choices: ui.plan_approval_choices.clone(),
             credentials_status: ui.credentials_status.clone(),
-            device_config_status: ui.device_config_status.clone(),
             provider_profile_status: ui.provider_profile_status.clone(),
             undo_toast: ui.undo_toast.clone(),
         }
@@ -201,8 +199,7 @@ pub struct PairingView {
     /// A deep-link URL awaiting explicit user confirmation (CDX-013), with
     /// enough of its parsed content to show what it wants to pair with
     /// before the user confirms — the same narrow shape `candidate` uses,
-    /// dropping the one-time token and mesh-join fields `ParsedPairingUrl`
-    /// itself still carries (no client offers a mesh join).
+    /// dropping the one-time token `ParsedPairingUrl` itself still carries.
     pub staged: Option<PairingCandidateView>,
     /// The candidate under negotiation, if any.
     pub candidate: Option<PairingCandidateView>,
@@ -416,8 +413,6 @@ mod tests {
                 machine: "(manual)".into(),
                 relays: vec!["wss://r".into()],
                 token: "t".into(),
-                netid: None,
-                mesh_admin: None,
             }),
             error: None,
             timed_out: false,

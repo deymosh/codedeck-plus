@@ -155,7 +155,7 @@ sealed class DisplayEntry {
     data class Status(override val seq: Long, val text: String) : DisplayEntry()
 
     /** A lifecycle notice; `notice` is `session_restart` / `session_died` /
-     *  `session_failed` / `auth_error` / `screenshot`. */
+     *  `session_failed` / `auth_error`. */
     @Serializable
     @SerialName("notice")
     data class Notice(override val seq: Long, val notice: String, val text: String) : DisplayEntry()

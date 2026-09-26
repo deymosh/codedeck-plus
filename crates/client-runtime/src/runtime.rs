@@ -503,7 +503,6 @@ impl Core {
             responded_cards: Default::default(),
             plan_approval_choices: Default::default(),
             credentials_status: Default::default(),
-            device_config_status: Default::default(),
             provider_profile_status: Default::default(),
             undo_toast: None,
         })
@@ -976,7 +975,6 @@ impl Loop {
             None => {}
         }
         // `r.heartbeat` is already covered by the pre-decode path above;
-        // `r.mesh_join` has no platform seam yet: one-QR mesh join is not wired.
     }
 
     async fn persist_store(&self, id: StoreId) {
@@ -1128,7 +1126,6 @@ impl Loop {
             self.nostr.set_proxy(proxy.clone());
             self.http.set_proxy(proxy.as_deref());
         }
-        // `r.mesh_join` has no platform seam yet: one-QR mesh join is not wired.
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s

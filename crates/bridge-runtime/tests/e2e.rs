@@ -175,7 +175,6 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
                 effort: None,
                 model: None,
                 provider_id: None,
-                test_session: None,
             })
             .await;
             let session = until("the session to appear", || async {

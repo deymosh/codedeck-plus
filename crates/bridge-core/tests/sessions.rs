@@ -66,7 +66,6 @@ fn create_session_is_pending_then_ready_then_listed() {
     assert_eq!((p.agent.as_str(), p.cwd.as_str()), ("alpha", "/w/app"));
     assert_eq!((p.mode.as_deref(), p.effort.as_deref(), p.model.as_deref()), (Some("ask"), Some("high"), Some("m1")));
     assert_eq!(p.resume, None);
-    assert!(!p.deny_secret_paths && p.host_tools.is_empty());
 
     rig.host_reply(&id, HostMessage::Ack);
     assert!(heartbeats(&rig.messages()).iter().all(|h| h.sessions.is_empty()), "not listed while pending");
@@ -374,9 +373,8 @@ fn requests_in_flight_when_the_host_dies_are_answered() {
 fn a_restarted_bridge_resumes_every_session_and_seqs_continue() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha","testSession":true}));
+    rig.send(json!({"type":"create-session","agent":"alpha"}));
     let (id, p) = rig.start_request();
-    assert!(p.deny_secret_paths);
     rig.host_reply(&id, HostMessage::Ack);
     rig.host_event(&p.session_id, SessionEvent::Ready {});
     info_native(&mut rig, &p.session_id, "n1");
@@ -389,7 +387,6 @@ fn a_restarted_bridge_resumes_every_session_and_seqs_continue() {
     rig.host_up();
     let (_, resumed) = rig.start_request();
     assert_eq!(resumed.resume.as_deref(), Some("n1"));
-    assert!(resumed.deny_secret_paths, "a test session keeps its boundary across restarts");
     rig.say(&p.session_id, "y");
     assert_eq!(outputs(&rig.messages())[0].0, 2);
 }

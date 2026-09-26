@@ -26,7 +26,6 @@ mod settings;
 
 use std::collections::BTreeMap;
 
-use agent_protocol::HostToolSpec;
 use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES, PROTOCOL_VERSION};
 use protocol::common::{OutputEntry, RemoteSessionInfo};
 use protocol::crypto::Keypair;
@@ -66,8 +65,6 @@ pub struct Config {
     pub relays: Vec<String>,
     /// Reported to the agent host at `initialize`.
     pub bridge_version: String,
-    /// The tools a device-test session's agent gets (run by the runtime).
-    pub device_tools: Vec<HostToolSpec>,
     /// 0 disables the periodic heartbeat (tests).
     pub heartbeat_interval_ms: u64,
     /// 0 disables the git poll.
@@ -89,7 +86,6 @@ impl Config {
             host_kind: None,
             relays: Vec::new(),
             bridge_version: String::new(),
-            device_tools: Vec::new(),
             heartbeat_interval_ms: DEFAULT_HEARTBEAT_INTERVAL_MS,
             git_poll_interval_ms: DEFAULT_GIT_POLL_INTERVAL_MS,
             retention_interval_ms: DEFAULT_RETENTION_INTERVAL_MS,
@@ -109,8 +105,6 @@ struct HostLink {
     initialized: bool,
     next_id: u64,
     calls: BTreeMap<String, HostCall>,
-    /// `call-host-tool` requests being run, by host frame id → session id.
-    tool_calls: BTreeMap<String, String>,
 }
 
 struct PairingWindow {
@@ -218,22 +212,13 @@ impl Engine {
             Input::Gsd { session_id, gsd } => {
                 self.publish_all(BridgeToPhone::GsdState(protocol::events::GsdStateMsg { session_id, gsd }));
             }
-            Input::HostToolDone { call_id, text, is_error } => self.on_host_tool_done(call_id, text, is_error),
             Input::ProviderTokenChecked { ticket, valid } => self.on_provider_token_checked(ticket, valid),
-            Input::DeviceConfigApplied { phone, result } => self.on_device_config_applied(&phone, result),
             Input::ImageReady { session_id, text } => {
                 if !self.send_input(&session_id, text) {
                     log::warn!("[Engine] Uploaded image for {session_id} could not be delivered: no live session");
                 }
             }
-            Input::SessionEntry { session_id, entry } => {
-                if self.sessions.contains_key(&session_id) {
-                    self.append(&session_id, vec![entry]);
-                } else {
-                    log::warn!("[Engine] Entry for unknown session {session_id} dropped");
-                }
-            }
-            Input::OpenPairing { duration_ms, mesh } => self.open_pairing(duration_ms, mesh),
+            Input::OpenPairing { duration_ms } => self.open_pairing(duration_ms),
             Input::ClosePairing => self.close_pairing(crate::io::PairingCloseReason::Closed, None),
             Input::WorkspaceChanged => self.list_dirty = true,
             Input::Shutdown => self.shutdown(),

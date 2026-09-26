@@ -72,8 +72,6 @@ pub struct SettingsData {
     pub stay_connected: bool,
     /// Route relay traffic through Orbot's SOCKS5 proxy.
     pub tor_proxy_enabled: bool,
-    /// Only a designated TEST TARGET device auto-enables Wireless Debugging.
-    pub mesh_test_target: bool,
     /// Blossom server for session image attachments (`""` = built-in default).
     pub blossom_server: String,
     /// Preferred mode / effort / model for NEW sessions, as agent-defined ids
@@ -98,7 +96,6 @@ pub fn default_settings() -> SettingsData {
         // service this setting holds.
         stay_connected: true,
         tor_proxy_enabled: false,
-        mesh_test_target: false,
         blossom_server: String::new(),
         default_mode: String::new(),
         default_effort: String::new(),
@@ -158,7 +155,6 @@ pub fn hydrate_settings(raw: Option<&str>) -> SettingsData {
         ui_scale,
         stay_connected: b("stayConnected", defaults.stay_connected),
         tor_proxy_enabled: b("torProxyEnabled", defaults.tor_proxy_enabled),
-        mesh_test_target: b("meshTestTarget", defaults.mesh_test_target),
         blossom_server: s("blossomServer", &defaults.blossom_server),
         default_mode: s("defaultMode", &defaults.default_mode),
         default_effort: s("defaultEffort", &defaults.default_effort),
@@ -245,9 +241,6 @@ impl SettingsState {
     }
     pub fn set_tor_proxy_enabled(&mut self, on: bool) {
         self.data.tor_proxy_enabled = on;
-    }
-    pub fn set_mesh_test_target(&mut self, on: bool) {
-        self.data.mesh_test_target = on;
     }
     pub fn set_blossom_server(&mut self, url: &str) {
         self.data.blossom_server = url.trim().to_string();

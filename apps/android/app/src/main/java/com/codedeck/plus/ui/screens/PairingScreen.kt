@@ -82,8 +82,7 @@ private const val PHONE_LABEL = "Android"
  * "This phone's npub" asks the live core for its own identity
  * ([CoreHost.identityNpub] — the core derived it at construction from the
  * same secret it holds) so the secret never leaves the FFI layer for a mere
- * display string. Still omitted: the CDX-028 mesh-join banner (the app
- * has no mesh support).
+ * display string.
  */
 @Composable
 fun PairingScreen(core: CoreHost, onClose: () -> Unit) {

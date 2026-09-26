@@ -21,7 +21,7 @@ function harness() {
   let next = 0;
   const send = (kind: string, payload: Record<string, unknown>, id: string | undefined = `b${++next}`) =>
     host.handleLine(JSON.stringify({ v: 1, ...(id ? { id } : {}), kind, payload }));
-  const reply = (id: string) => out.find((f) => f.id === id && !['request-permission', 'ask-question', 'request-plan-approval', 'call-host-tool'].includes(f.kind));
+  const reply = (id: string) => out.find((f) => f.id === id && !['request-permission', 'ask-question', 'request-plan-approval'].includes(f.kind));
   const events = (sessionId = 's1') =>
     out.filter((f) => f.kind === 'session-event' && f.payload?.sessionId === sessionId).map((f) => f.payload!.event!);
   const until = async (pred: () => boolean, timeoutMs = 2000) => {
@@ -88,7 +88,7 @@ describe('AgentHost', () => {
     expect(h.texts()).toEqual(['permission: allow']);
   });
 
-  it('questions, plan approval and host tools round-trip the same way', async () => {
+  it('questions and plan approval round-trip the same way', async () => {
     const h = harness();
     await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });
     await h.send('prompt', { sessionId: 's1', text: 'question' });
@@ -101,14 +101,7 @@ describe('AgentHost', () => {
     await h.send('plan-outcome', { outcome: 'selected', optionId: 'auto' }, h.out.find((f) => f.kind === 'request-plan-approval')!.id);
     await h.until(() => h.texts().length === 2);
 
-    await h.send('prompt', { sessionId: 's1', text: 'tool list {"serial":"x"}' });
-    await h.until(() => h.out.some((f) => f.kind === 'call-host-tool'));
-    const call = h.out.find((f) => f.kind === 'call-host-tool')!;
-    expect(call.payload).toEqual({ sessionId: 's1', tool: 'list', args: { serial: 'x' } });
-    await h.send('host-tool-result', { text: 'no devices', isError: true }, call.id);
-    await h.until(() => h.texts().length === 3);
-
-    expect(h.texts()).toEqual(['answer: Blue', 'plan: auto', 'tool list: error: no devices']);
+    expect(h.texts()).toEqual(['answer: Blue', 'plan: auto']);
     expect(h.events()).toContainEqual({ type: 'info', mode: 'auto' });
   });
 

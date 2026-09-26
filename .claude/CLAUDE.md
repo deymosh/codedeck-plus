@@ -188,7 +188,7 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   Neither core depends on the other.
 - **Capability negotiation** — see the note at the top of
   `crates/protocol/src/capabilities.rs`. `images` is a HARD GATE; `sync/1`,
-  `folders`, `device-actions` are PRESENCE MARKERS; `chunked` is a TRANSPORT
+  `folders` are PRESENCE MARKERS; `chunked` is a TRANSPORT
   BEACON. What an agent can do is catalog data (`supports`), not a capability.
   Do not add a new string as a "gate" unless a peer that has not seen it would
   otherwise hard-fail.

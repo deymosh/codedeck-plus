@@ -79,8 +79,6 @@ pub struct RouteResult {
     pub relays_changed: Option<Vec<String>>,
     /// Arm / clear the pair-ack deadline timer.
     pub pair_deadline: Option<PairDeadline>,
-    /// CDX-028 one-QR mesh join: `(admin_npub, network_id)`.
-    pub mesh_join: Option<(String, String)>,
     /// Outbox items settled this route: `(id, delivered)`.
     pub outbox_settled: Vec<(String, bool)>,
     /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
@@ -388,12 +386,6 @@ impl<'a> Router<'a> {
                     r.persist(StoreId::Machines);
                 }
             }
-            BridgeToPhone::DeviceConfigAck(m) => {
-                self.stores
-                    .ui
-                    .apply_device_config_ack(machine, m.success, m.error.clone(), self.now);
-                r.ui_changed = true;
-            }
             BridgeToPhone::ProviderProfileAck(m) => {
                 self.stores.ui.apply_provider_profile_ack(
                     machine,
@@ -596,7 +588,7 @@ impl<'a> Router<'a> {
 
     /// The `pair-ack`. Runs the pairing reducer and interprets its effects:
     /// register the machine, learn its relays, disarm the CDX-040 deadline,
-    /// refresh the subscription authors, and hand off a bundled mesh join.
+    /// and refresh the subscription authors.
     fn on_pair_ack(
         &mut self,
         machine: &str,
@@ -644,7 +636,6 @@ pub struct PairingEffectsOut {
     /// already have never sees the request.
     pub relays_changed: Option<Vec<String>>,
     pub pair_deadline: Option<PairDeadline>,
-    pub mesh_join: Option<(String, String)>,
     /// `Some(true)` paired, `Some(false)` nack / timeout, `None` still pending.
     pub pairing_settled: Option<bool>,
 }
@@ -661,9 +652,6 @@ impl PairingEffectsOut {
         }
         if self.pair_deadline.is_some() {
             r.pair_deadline = self.pair_deadline;
-        }
-        if self.mesh_join.is_some() {
-            r.mesh_join = self.mesh_join;
         }
         if self.pairing_settled.is_some() {
             r.pairing_settled = self.pairing_settled;
@@ -745,11 +733,6 @@ pub fn apply_pairing_effects(
                         }
                     }
                     out.persist.push(StoreId::Settings);
-                }
-                if let (Some(admin), Some(netid)) =
-                    (candidate.mesh_admin.clone(), candidate.netid.clone())
-                {
-                    out.mesh_join = Some((admin, netid));
                 }
                 out.persist.push(StoreId::Machines);
                 out.resubscribe = true;

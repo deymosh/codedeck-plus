@@ -16,7 +16,7 @@ use serde::Serialize;
 pub use crate::notifications::session_key_of;
 
 /// Fire-and-answer round-trip state for the `set-credentials` /
-/// `set-device-config` / `set-provider-profile` acks (CDX-011 / CDX-062).
+/// `set-provider-profile` acks (CDX-011 / CDX-062).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum AckState {
@@ -36,16 +36,6 @@ pub struct CredentialsAck {
     /// the machines store (`MachineView::credentials` / the agent catalog).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceConfigAck {
-    pub state: AckState,
-    #[specta(type = specta_typescript::Number)]
-    pub at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -84,7 +74,7 @@ pub enum UiEffect {
     SessionViewed { machine: String, session_id: String },
 }
 
-/// Inputs for `set-credentials` / `set-device-config` / `set-provider-profile`
+/// Inputs for `set-credentials` / `set-provider-profile`
 /// acks — the decoded message fields the runtime hands in.
 #[derive(Debug, Clone, Default)]
 pub struct CredentialsAckInput {
@@ -121,7 +111,6 @@ pub struct UiState {
     /// card id → plan-approval key (`"1"`/`"2"`/`"3"`) the user tapped.
     pub plan_approval_choices: BTreeMap<String, String>,
     pub credentials_status: BTreeMap<String, CredentialsAck>,
-    pub device_config_status: BTreeMap<String, DeviceConfigAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
     pub undo_toast: Option<UndoToast>,
 }
@@ -215,34 +204,6 @@ impl UiState {
                 at: now,
                 agent: ack.agent,
                 error: ack.error,
-            },
-        );
-    }
-
-    pub fn note_device_config_sent(&mut self, machine_pubkey: &str, now: u64) {
-        self.device_config_status.insert(
-            machine_pubkey.to_string(),
-            DeviceConfigAck {
-                state: AckState::Saving,
-                at: now,
-                error: None,
-            },
-        );
-    }
-
-    pub fn apply_device_config_ack(
-        &mut self,
-        machine_pubkey: &str,
-        success: bool,
-        error: Option<String>,
-        now: u64,
-    ) {
-        self.device_config_status.insert(
-            machine_pubkey.to_string(),
-            DeviceConfigAck {
-                state: ack_state(success),
-                at: now,
-                error,
             },
         );
     }

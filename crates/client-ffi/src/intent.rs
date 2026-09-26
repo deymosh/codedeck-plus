@@ -380,7 +380,6 @@ impl TryFrom<UniffiIntent> for Intent {
                 effort,
                 model,
                 provider_id,
-                test_session: None,
             },
             UniffiIntent::RequestModels { machine, agent } => Intent::RequestModels { machine, agent },
             UniffiIntent::RequestUsage { machine, session_id } => {

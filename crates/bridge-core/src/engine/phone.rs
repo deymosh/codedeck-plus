@@ -7,7 +7,7 @@ use protocol::commands::{
 };
 use protocol::common::{is_valid_provider_base_url, SessionOption, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{
-    BridgeToPhone, CloseSessionAckMsg, DeviceConfigAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
+    BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
     InputFailedReason, ModelsMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
@@ -38,7 +38,6 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
         PhoneToBridge::SetCredentials(_) => "set-credentials",
-        PhoneToBridge::SetDeviceConfig(_) => "set-device-config",
         PhoneToBridge::PairRequest(_) => "pair-request",
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
@@ -107,9 +106,6 @@ impl Engine {
             }
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
-            PhoneToBridge::SetDeviceConfig(m) => {
-                self.out.push(Effect::ApplyDeviceConfig { phone: phone.to_string(), config: m.config });
-            }
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
             PhoneToBridge::SetProviderProfile(m) => self.on_set_provider_profile(m, phone),
             PhoneToBridge::ProviderProfilesRequest(_) => {
@@ -299,7 +295,6 @@ impl Engine {
             }
             known
         });
-        let test_session = m.test_session == Some(true);
         let rec = SessionRecord {
             session_id: session_id.clone(),
             agent: agent.id.clone(),
@@ -319,7 +314,6 @@ impl Engine {
             committed: false,
             context_window: None,
             context_percentage: None,
-            test_session,
         };
         let run = Runner::new(Phase::Pending, StartKind::Create, false);
         self.sessions.insert(session_id.clone(), Session { rec, listed: false, run: Some(run) });
@@ -408,13 +402,5 @@ impl Engine {
             log::info!("[Engine] models-request: {error}");
             self.publish_all(BridgeToPhone::Models(ModelsMsg { agent, models: vec![], default_model: None, error: Some(error) }));
         }
-    }
-
-    pub(super) fn on_device_config_applied(&mut self, phone: &str, result: Result<(), String>) {
-        let error = result.err();
-        if let Some(err) = &error {
-            log::warn!("[Engine] Device config for {}... failed: {err}", short(phone));
-        }
-        self.publish_to(phone, BridgeToPhone::DeviceConfigAck(DeviceConfigAckMsg { success: error.is_none(), reachable: None, error }));
     }
 }

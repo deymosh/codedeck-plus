@@ -12,7 +12,6 @@ export type BridgeFrame = G.Frame_Serialize<G.BridgeMessage_Serialize>;
 export type BridgeMessage = G.BridgeMessage_Serialize;
 export type StartSession = G.StartSession_Serialize;
 export type ProviderBinding = G.ProviderBinding_Serialize;
-export type HostToolSpec = G.HostToolSpec;
 export type SelectOutcome = G.SelectOutcome;
 export type QuestionOutcome = G.QuestionOutcome;
 export type SessionOption = G.SessionOption;
