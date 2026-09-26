@@ -59,22 +59,21 @@ export type {
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 /**
- * NOT sent to the SDK by default. Earlier this was passed as every plain
- * Anthropic session's `Options.fallbackModel`, so the SDK silently resolved a
- * turn on this model whenever it decided the primary one was "overloaded or
- * unavailable" — the session only ever saw that as an ordinary `init.model`
- * change and overwrote the recorded model with no warning, while the actual
- * failure that triggered the swap never surfaced. A model failure should surface as a
- * real, visible error instead of a quiet downgrade the phone can't tell apart
- * from an intentional model choice — so `buildQueryOptions` now omits
- * `fallbackModel` unless a caller explicitly opts in with a string.
+ * The model a plain (not provider-bound) session runs when the phone names
+ * none — sent as `Options.model`, and reported as the agent's default model.
+ * A full model id rather than an alias: Anthropic's API takes it directly,
+ * and an LLM gateway routes it like any other id, where an alias would only
+ * mean something to the CLI's own built-in table.
  *
- * Still used as the ASSUMED model for 1M-context beta gating when a session
- * has no explicit `model` (see `buildQueryOptions`'s `requestedModel`) — that
- * is a request-shaping decision, independent of whether the SDK is allowed to
- * silently substitute a different model on failure.
+ * Never sent as `Options.fallbackModel`: that makes the SDK silently resolve
+ * a turn on another model whenever it decides the primary one is
+ * "overloaded or unavailable", which the session only sees as an ordinary
+ * `init.model` change — the failure that triggered the swap never surfaces,
+ * and the phone cannot tell it from an intentional model choice. So
+ * `buildQueryOptions` omits `fallbackModel` unless a caller explicitly opts
+ * in with a string.
  */
-export const DEFAULT_MODEL_ASSUMPTION = 'claude-sonnet-4-6';
+export const DEFAULT_MODEL = 'claude-opus-5-5';
 
 export interface SdkSessionOptions {
   /** Our session id — becomes the SDK sessionId (create) or is ignored when `resume` is set. */
@@ -102,7 +101,7 @@ export interface SdkSessionOptions {
   /**
    * CDX-062 fallback model for Options.fallbackModel — undefined AND null both
    * OMIT the option (no automatic silent degrade; see
-   * `DEFAULT_MODEL_ASSUMPTION`'s doc comment for why). A caller that wants the
+   * `DEFAULT_MODEL`'s doc comment for why). A caller that wants the
    * SDK's automatic-degrade-on-failure behavior can still opt in with an
    * explicit string; nothing does today.
    */
@@ -611,7 +610,7 @@ export function buildQueryOptions(
 ): Options {
   const optionsEffort = toOptionsEffort(opts.effortLevel);
   // CDX-062: undefined and null both omit Options.fallbackModel (no automatic
-  // silent degrade — see DEFAULT_MODEL_ASSUMPTION's doc comment); a caller can
+  // silent degrade — see DEFAULT_MODEL's doc comment); a caller can
   // still opt in with an explicit string.
   const fallbackModel = opts.fallbackModel ?? null;
   // CDX-076: the SDK maps `sessionId` → `--session-id=` and `resume` →
@@ -629,7 +628,7 @@ export function buildQueryOptions(
   // resumes, exactly as it already does for a CLI-chosen id.
   const claimOwnId = !opts.resume && !conversationExists(opts.sessionId, opts.cwd, opts.env);
   // The model actually being requested for THIS session — an explicit pick,
-  // or DEFAULT_MODEL_ASSUMPTION when the phone left it unset AND this is a
+  // or DEFAULT_MODEL when the phone left it unset AND this is a
   // plain Anthropic session (a provider-bound session with no explicit model
   // has no Anthropic model to assume at all — see isProviderBoundSession).
   // Deliberately independent of `fallbackModel` (Options.fallbackModel
@@ -639,7 +638,7 @@ export function buildQueryOptions(
   // eligible for the beta as one that named Sonnet explicitly, regardless of
   // whether automatic fallback is enabled for that session.
   const requestedModel = opts.model
-    ?? (isProviderBoundSession(opts) ? undefined : DEFAULT_MODEL_ASSUMPTION);
+    ?? (isProviderBoundSession(opts) ? undefined : DEFAULT_MODEL);
   const wants1m = modelSupports1mContext(requestedModel);
   const betas = wants1m ? (['context-1m-2025-08-07'] as const) : undefined;
   // The model actually sent as Options.model: suffixed with `[1m]` when
@@ -647,9 +646,7 @@ export function buildQueryOptions(
   // modelSupports1mContext's doc comment), otherwise exactly `requestedModel`.
   // Forwarded whenever `requestedModel` is defined, not just when the caller
   // supplied `opts.model` — a "Default model" session is exactly as eligible
-  // for the 1M window as one that named Sonnet explicitly (DEFAULT_MODEL_
-  // ASSUMPTION's doc comment already says as much for `betas`; this is the
-  // same reasoning for the mechanism that actually works).
+  // for the 1M window as one that named Sonnet explicitly.
   const modelToSend = requestedModel === undefined
     ? undefined
     : wants1m ? with1mSuffix(requestedModel) : requestedModel;

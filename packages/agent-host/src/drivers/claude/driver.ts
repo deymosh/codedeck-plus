@@ -19,6 +19,7 @@ import type { AgentInfo, ModelEntry, OptionChoice, OutputEntry, SessionOption, S
 import { sdkMessageToEntries } from './adapter';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
 import {
+  DEFAULT_MODEL,
   modelSupports1mContext,
   type ModelDiscoveryOptions,
   type SdkAuthStatusMessage,
@@ -132,7 +133,9 @@ export class ClaudeSession implements DriverSession {
   ) {
     this.resumeTarget = params.resume ?? null;
     this.mode = params.mode ?? DEFAULT_MODE;
-    this.model = params.model ?? undefined;
+    // A provider-bound session has no Anthropic model to fall back on; the
+    // bridge hands it the profile's own default.
+    this.model = params.model ?? (params.provider ? undefined : DEFAULT_MODEL);
     this.effort = params.effort ?? undefined;
   }
 
@@ -197,6 +200,9 @@ export class ClaudeSession implements DriverSession {
   private markReady(): void {
     if (this.ready || this.ended) return;
     this.ready = true;
+    // A session started on the default model says which one it is, so it is
+    // never listed with no model at all.
+    if (!this.params.model && this.model) this.ctx.emit({ type: 'info', model: this.model });
     this.ctx.emit({ type: 'ready' });
   }
 
@@ -576,9 +582,12 @@ export class ClaudeDriver implements Driver {
     return session;
   }
 
-  async listModels(): Promise<{ models: ModelEntry[] }> {
+  async listModels(): Promise<{ models: ModelEntry[]; defaultModel: string }> {
     const models = await this.options.facade.supportedModels(this.options.discoverModels ? await this.discovery() : undefined);
-    return { models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })) };
+    return {
+      models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })),
+      defaultModel: DEFAULT_MODEL,
+    };
   }
 
   /** A discovery session needs the binary: it waits for an install in

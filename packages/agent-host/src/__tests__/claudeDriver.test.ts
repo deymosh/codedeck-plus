@@ -442,6 +442,25 @@ describe('Claude model discovery', () => {
     expect((await driver.listModels()).models).toEqual([{ id: 'claude-sonnet-5', label: 'Sonnet 5' }]);
   });
 
+  it('reports Opus 5.5 as the default model, and runs a session with no model on it', async () => {
+    expect((await new ClaudeDriver({ facade: new ScriptedFacade() }).listModels()).defaultModel).toBe('claude-opus-5-5');
+    const { ctx, facade } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(facade.last.opts.model).toBe('claude-opus-5-5');
+    expect(ctx.events.slice(0, 2)).toEqual([{ type: 'info', model: 'claude-opus-5-5' }, { type: 'ready' }]);
+  });
+
+  it('a chosen model, or a provider binding, is not overridden by the default', async () => {
+    const chosen = start({ model: 'claude-sonnet-5' });
+    await chosen.ctx.waitFor((e) => e.type === 'ready');
+    expect(chosen.facade.last.opts.model).toBe('claude-sonnet-5');
+    expect(chosen.ctx.events.some((e) => e.type === 'info')).toBe(false);
+
+    const bound = start({ provider: { id: 'p', baseUrl: 'https://x', authToken: 't', models: [] } });
+    await bound.ctx.waitFor((e) => e.type === 'ready');
+    expect(bound.facade.last.opts.model).toBeUndefined();
+  });
+
   it('without discovery, only live sessions are asked', async () => {
     const facade = new ScriptedFacade();
     await new ClaudeDriver({ facade }).listModels();
