@@ -98,6 +98,10 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
   a stalled reconnect forward (the core's timers count awake time only). If every
   paired machine's heartbeat is older than 150 s (240 s over Tor) while
   "connected", the subscriptions are torn down and reopened.
+- The machines store and the stored-event cursor are written at most every
+  2 s (heartbeats, usage and every stored event change them) and at once
+  when the app is backgrounded or stopped; the other stores are written as
+  they change.
 - A publish settles as `accepted`, `unconfirmed` (written, no `OK` in time —
   not a failure), `rejected` or `unreachable`; only `unreachable` retries, and
   it retries the same signed event.
