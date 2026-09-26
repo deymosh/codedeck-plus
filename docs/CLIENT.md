@@ -89,7 +89,13 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
   rejected there.
 - Each event is verified once per subscription: the copies other relays send
   are dropped before their signature is checked.
-- Liveness: a ping every 30 s; a socket silent for 75 s is dropped. If every
+- Liveness: every relay is pinged together, every 30 s in the foreground
+  and 150 s in the background; a socket silent for two missed pings (75 s /
+  315 s) is dropped. "Stay connected" holds no permanent wake lock: the
+  device sleeps, incoming relay traffic wakes it, and an inexact alarm every
+  60 s (stretched by deep Doze) runs `Core::keepalive` under a wake lock of
+  at most 15 s — it pings every relay, drops those silent for 10 s, and brings
+  a stalled reconnect forward (the core's timers count awake time only). If every
   paired machine's heartbeat is older than 150 s (240 s over Tor) while
   "connected", the subscriptions are torn down and reopened.
 - A publish settles as `accepted`, `unconfirmed` (written, no `OK` in time —

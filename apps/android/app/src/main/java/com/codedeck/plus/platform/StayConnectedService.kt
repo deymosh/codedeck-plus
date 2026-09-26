@@ -1,18 +1,20 @@
 package com.codedeck.plus.platform
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -32,6 +34,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_ffi.persistedRelays
 import uniffi.client_ffi.persistedTorProxyEnabled
 
@@ -39,14 +42,30 @@ private const val CHANNEL_ID = "codedeck_stay_connected"
 private const val NOTIFICATION_ID = 1
 private const val ACTION_REPOST = "com.codedeck.plus.action.REPOST_STAY_CONNECTED"
 
+/** How often the keep-alive alarm checks the connection: the longest a
+ *  silently dropped socket can pass for live while the device is awake or
+ *  lightly idle (live updates themselves are pushed, not polled). Inexact:
+ *  deep Doze stretches it to its own maintenance windows (typically
+ *  9-15 min). A healthy check is one short wake: every relay is pinged at
+ *  once and the check ends as soon as they all answer. */
+private const val KEEPALIVE_EVERY_MS = 60_000L
+/** Longest the device is held awake for one check. The core's own probe
+ *  waits 10 s for the relays; the rest is margin to act on the result. */
+private const val KEEPALIVE_WAKE_MS = 15_000L
+
 /**
  * Owns the one long-lived [CoreHost] for the app's process lifetime — the
  * literal fix for the gap `MainActivity.kt`'s own previous doc comment
  * flagged: a plain `AndroidViewModel` survives configuration changes but not
  * process death, and process death is exactly what backgrounding without a
  * foreground service invites. `startForeground` raises this process's OOM
- * priority; the `WakeLock`/`WifiLock` pair keeps the CPU and Wi-Fi radio from
- * sleeping out from under an open WebSocket. `ProcessLifecycleOwner` (app-level
+ * priority, which keeps the WebSockets open; the device itself is left to
+ * sleep. Incoming relay traffic wakes it, and a keep-alive alarm
+ * ([KeepAliveReceiver]) wakes it about every minute under a short wake lock
+ * for [CoreHost.keepalive], which pings the relays, drops the ones a NAT or
+ * the relay silently dropped, and brings a stalled reconnect forward.
+ * Holding a wake lock for as long as the setting is on instead kept the CPU
+ * running around the clock. `ProcessLifecycleOwner` (app-level
  * — "is ANY activity visible", not per-Activity `onStart`/`onStop`) drives
  * [CoreHost.pause]/[CoreHost.resume], the same "app went to background/
  * foreground" signal `apps/mobile`'s `document.visibilitychange` drove on the
@@ -58,8 +77,8 @@ private const val ACTION_REPOST = "com.codedeck.plus.action.REPOST_STAY_CONNECTE
  * the process's one [CoreHost], so stopping it would kill the core while
  * the app is open. Instead — mobile's `attachStayConnectedService`
  * reconciliation, ported — the service collects the setting itself and
- * promotes (foreground notification + locks) or demotes (locks released +
- * foreground notification removed) on every emission, the first of which
+ * promotes (foreground notification + keep-alive alarm) or demotes (alarm
+ * cancelled + foreground notification removed) on every emission, the first of which
  * reconciles the persisted value at startup. The service still must exist
  * whenever the app does, foreground or not.
  */
@@ -87,8 +106,6 @@ class StayConnectedService : Service() {
     private var destroyed = false
 
     private var connectivity: Connectivity? = null
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
 
     /** Latest summary for the notification; written by the collector in
      *  [observe], read whenever the notification is (re)built. */
@@ -112,6 +129,7 @@ class StayConnectedService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         connectivity = Connectivity(applicationContext)
         scope.launch(Dispatchers.IO) {
             val core = openCore()
@@ -240,10 +258,11 @@ class StayConnectedService : Service() {
     }
 
     override fun onDestroy() {
+        instance = null
         scope.cancel()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         connectivity?.close()
-        releaseLocks()
+        cancelKeepAlive()
         // A core still opening is stopped by the opener once it sees this.
         synchronized(coreLock) {
             destroyed = true
@@ -253,31 +272,30 @@ class StayConnectedService : Service() {
         super.onDestroy()
     }
 
-    /** Foreground notification + wakelock/wifilock — the "stay connected on"
+    /** Foreground notification + keep-alive alarm — the "stay connected on"
      *  state. Re-runnable: StateFlow's distinct emissions mean promote and
      *  demote strictly alternate, but the startForeground reconcile in
      *  [onStartCommand] can interleave, so neither helper assumes ordering. */
     private fun promote() {
-        // The locks are the actual keep-alive — take them first, so even a
-        // platform refusal of the notification leaves the connection as
-        // protected as the OS allows (stopping the service instead would kill
+        // Armed first, so even a platform refusal of the notification leaves
+        // the connection checked (stopping the service instead would kill
         // the open app's core).
-        acquireLocks()
+        scheduleKeepAlive()
         try {
             startForegroundNotification()
             foreground.value = true
         } catch (e: Exception) {
             // Same dataSync-budget refusal onStartCommand degrades on —
-            // keep the locks, report the service honestly as not foreground.
+            // keep the alarm, report the service honestly as not foreground.
             foreground.value = false
         }
     }
 
-    /** Releases the locks and removes the foreground notification — the
-     *  "stay connected off" state. The core keeps running either way; this
-     *  only stops promising the OS that the process must stay awake. */
+    /** Cancels the keep-alive alarm and removes the foreground notification —
+     *  the "stay connected off" state. The core keeps running either way;
+     *  this only stops promising the OS that the process must stay alive. */
     private fun demote() {
-        releaseLocks()
+        cancelKeepAlive()
         // A no-op when not in foreground (safe against demote-before-foreground
         // interleavings).
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -325,43 +343,51 @@ class StayConnectedService : Service() {
         }
     }
 
-    private fun acquireLocks() {
-        // Held already (promote without an intervening demote) — re-acquiring
-        // would orphan the still-held locks.
-        if (wakeLock != null || wifiLock != null) return
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "CodeDeck:StayConnected",
-        ).apply { setReferenceCounted(false); acquire() }
-
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = (
-            // LOW_LATENCY is the only non-deprecated radio mode (API 29+;
-            // from 34 the platform maps a legacy HIGH_PERF onto it anyway).
-            // Its screen-off pause costs nothing here — the PARTIAL_WAKE_LOCK
-            // above is the actual keep-alive.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                wifiManager.createWifiLock(
-                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY,
-                    "CodeDeck:StayConnected",
-                )
-            } else {
-                // Pre-Q has no LOW_LATENCY; HIGH_PERF is the only valid mode.
-                @Suppress("DEPRECATION")
-                wifiManager.createWifiLock(
-                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                    "CodeDeck:StayConnected",
-                )
-            }
-            ).apply { setReferenceCounted(false); acquire() }
+    /** Arms (or re-arms, replacing) the next keep-alive check. Inexact and
+     *  allowed while idle: no exact-alarm permission, and the platform
+     *  batches it with other wake-ups. */
+    private fun scheduleKeepAlive() {
+        getSystemService(AlarmManager::class.java).setAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + KEEPALIVE_EVERY_MS,
+            keepAliveIntent(),
+        )
     }
 
-    private fun releaseLocks() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wifiLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-        wifiLock = null
+    private fun cancelKeepAlive() {
+        getSystemService(AlarmManager::class.java).cancel(keepAliveIntent())
+    }
+
+    private fun keepAliveIntent(): PendingIntent = PendingIntent.getBroadcast(
+        this,
+        2,
+        Intent(this, KeepAliveReceiver::class.java),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    /**
+     * One keep-alive check, from [KeepAliveReceiver]: hold the device awake
+     * (bounded by [KEEPALIVE_WAKE_MS] even if the check hangs) while the core
+     * probes the relays, then arm the next check and let the device sleep.
+     */
+    fun keepAlive(broadcast: BroadcastReceiver.PendingResult) {
+        val core = _core.value
+        if (core == null || core.settings.value?.stayConnected == false) {
+            broadcast.finish()
+            return
+        }
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CodeDeck:KeepAlive")
+            .apply { setReferenceCounted(false); acquire(KEEPALIVE_WAKE_MS) }
+        scope.launch {
+            try {
+                withTimeoutOrNull(KEEPALIVE_WAKE_MS - 2_000) { core.keepalive() }
+            } finally {
+                if (core.settings.value?.stayConnected != false) scheduleKeepAlive()
+                if (wakeLock.isHeld) wakeLock.release()
+                broadcast.finish()
+            }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -420,5 +446,12 @@ class StayConnectedService : Service() {
          * has exactly one honest home.
          */
         val foreground = MutableStateFlow<Boolean?>(null)
+
+        /** The running service, for [KeepAliveReceiver]; `null` when there
+         *  is none. The service is a process singleton, set in onCreate and
+         *  cleared in onDestroy, both on the main thread. */
+        @Volatile
+        var instance: StayConnectedService? = null
+            private set
     }
 }

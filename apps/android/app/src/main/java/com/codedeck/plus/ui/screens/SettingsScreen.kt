@@ -351,8 +351,9 @@ private fun SettingsBody(
                         )
                     }
                     Text(
-                        "Android only: a foreground service holds the process and radio " +
-                            "awake (persistent notification shows the live connection state). " +
+                        "Android only: a foreground service keeps the connection open and " +
+                            "checks it about every minute, letting the phone sleep in between " +
+                            "(persistent notification shows the live connection state). " +
                             "It asks for notification permission on first start. Off = the OS " +
                             "may pause CodeDeck+ in the background; it resyncs when you return.",
                         color = Tokens.TextDim,

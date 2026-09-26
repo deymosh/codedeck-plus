@@ -39,7 +39,7 @@ use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, Sess
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
-use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
+use crate::transport::ws::{WsConfig, WsTransport, PING_EVERY, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
     ConnectionView, MachinesView, OutboxView, PairingView,
     PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView,
@@ -47,6 +47,12 @@ use crate::view::{
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
+/// Relay ping interval while the app is in the background. Every ping is a
+/// radio wake-up per relay round; in the background the host's periodic
+/// [`Core::keepalive`] is what checks the sockets.
+const BACKGROUND_PING_EVERY: Duration = Duration::from_secs(150);
+/// How long [`Core::keepalive`] waits for the relays to answer its ping.
+const KEEPALIVE_PROBE: Duration = Duration::from_secs(10);
 
 // --- clock and entropy ports -----------------------------------------------
 
@@ -374,6 +380,19 @@ impl Core {
     pub fn resume(&self) {
         let _ = self.tx.send(Msg::Resume);
     }
+
+    /// Check the connection now and repair what is broken: ping every relay
+    /// and drop those that stay silent, bring a pending reconnect forward,
+    /// and run the dead-subscription check. Resolves when done (at most a
+    /// few seconds). For a host that lets the device sleep and wakes it
+    /// periodically instead: timers here count awake time only, so without
+    /// this a dead socket or a due retry could wait for the next wake-up.
+    pub async fn keepalive(&self) {
+        let (reply, done) = oneshot::channel();
+        if self.tx.send(Msg::Keepalive(reply)).is_ok() {
+            let _ = done.await;
+        }
+    }
     /// `ConnectivityManager` says the network came / went.
     pub fn set_online(&self, online: bool) {
         let _ = self.tx.send(Msg::SetOnline(online));
@@ -532,6 +551,10 @@ enum Msg {
     RetryDue,
     VisibilitySettled,
     StaleWatchdog,
+    /// The host woke the device to check the connection.
+    Keepalive(oneshot::Sender<()>),
+    /// That check's relay probe finished.
+    KeepaliveProbed(oneshot::Sender<()>),
     PairDeadline,
     Send {
         machine: String,
@@ -673,10 +696,30 @@ impl Loop {
                     self.dispatch(ConnectionEvent::DisconnectRequested);
                     abort(&mut self.stale_timer);
                 }
-                Msg::Pause => self.dispatch(ConnectionEvent::Visibility { visible: false }),
+                Msg::Pause => {
+                    self.ws.set_ping_interval(BACKGROUND_PING_EVERY);
+                    self.dispatch(ConnectionEvent::Visibility { visible: false });
+                }
                 Msg::Resume => {
+                    self.ws.set_ping_interval(PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: true });
                     self.dispatch(ConnectionEvent::Resume);
+                }
+                Msg::Keepalive(reply) => {
+                    let (ws, tx) = (self.ws.clone(), self.self_tx.clone());
+                    tokio::task::spawn_local(async move {
+                        let alive = ws.check_liveness(KEEPALIVE_PROBE).await;
+                        log::debug!("keepalive: {alive} relay(s) answered");
+                        let _ = tx.send(Msg::KeepaliveProbed(reply));
+                    });
+                }
+                Msg::KeepaliveProbed(reply) => {
+                    // A retry timer that stalled while the device slept is
+                    // due by now; outside WaitingRetry this is a no-op.
+                    self.dispatch(ConnectionEvent::RetryDue);
+                    self.check_stale_heartbeats();
+                    self.check_connected_relays_changed();
+                    let _ = reply.send(());
                 }
                 Msg::SetOnline(true) => self.dispatch(ConnectionEvent::Online),
                 Msg::SetOnline(false) => self.dispatch(ConnectionEvent::Offline),
@@ -706,14 +749,7 @@ impl Loop {
                     self.dispatch(ConnectionEvent::SocketClose { random });
                 }
                 Msg::StaleWatchdog => {
-                    let now = self.clock.now_ms();
-                    if heartbeats_all_stale(&self.conn, now, self.reconnect.heartbeat_stale_after_ms)
-                    {
-                        // CDX-020: subscriptions died without a socket close —
-                        // force the normal backoff/reconnect path.
-                        let random = Some(self.entropy.unit());
-                        self.dispatch(ConnectionEvent::SocketClose { random });
-                    }
+                    self.check_stale_heartbeats();
                     self.check_connected_relays_changed();
                     if self.conn.status != ConnectionStatus::Stopped {
                         self.arm_stale_watchdog();
@@ -754,6 +790,17 @@ impl Loop {
             self.observer
                 .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
             self.state_changed(SliceId::Connection);
+        }
+    }
+
+    /// CDX-020: every paired machine's heartbeat went stale while
+    /// "connected" — the subscriptions died without a socket close. Force
+    /// the normal backoff/reconnect path.
+    fn check_stale_heartbeats(&mut self) {
+        let now = self.clock.now_ms();
+        if heartbeats_all_stale(&self.conn, now, self.reconnect.heartbeat_stale_after_ms) {
+            let random = Some(self.entropy.unit());
+            self.dispatch(ConnectionEvent::SocketClose { random });
         }
     }
 
@@ -2320,6 +2367,30 @@ mod tests {
                     let req = second.next_frame().await;
                     assert!(req.starts_with(r#"["REQ""#), "got {req}");
                 }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn keepalive_probes_the_relays_and_keeps_a_healthy_connection() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                // The mock answers the probe's ping, so the check is quick
+                // and leaves the connection as it was.
+                tokio::time::timeout(Duration::from_secs(2), core.keepalive())
+                    .await
+                    .expect("keepalive resolves once the relay answers");
+                let (status, _, connected) = core.connection_status().await;
+                assert_eq!(status, ConnectionStatus::Connected);
+                assert_eq!(connected, vec![mock.url.clone()]);
             })
             .await;
     }

@@ -168,6 +168,10 @@ class CoreHost(
     /** The OS foregrounded the app. */
     fun resume() = core.resume()
 
+    /** Check the relay connections and repair what is broken; returns within
+     *  a few seconds. Called from the stay-connected keep-alive alarm. */
+    suspend fun keepalive() = core.keepalive()
+
     /** Whether the device has a usable network — see `Connectivity`. */
     fun setOnline(online: Boolean) = core.setOnline(online)
 
