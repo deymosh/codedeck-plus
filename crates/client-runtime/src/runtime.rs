@@ -53,6 +53,14 @@ const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
 const BACKGROUND_PING_EVERY: Duration = Duration::from_secs(150);
 /// How long [`Core::keepalive`] waits for the relays to answer its ping.
 const KEEPALIVE_PROBE: Duration = Duration::from_secs(10);
+/// How long the machines store and the stored-event cursor may stay dirty in
+/// memory. Heartbeats, usage and GSD updates each change the machines store,
+/// and every stored event moves the cursor; writing each one through
+/// (serialize the whole store, then a database write) cost more than the
+/// event itself. Both are flushed at once when the app is backgrounded or
+/// stopped, and losing the last few seconds to a crash only means the next
+/// heartbeat or a slightly wider stored-event replay restores them.
+const WRITE_DEBOUNCE: Duration = Duration::from_secs(2);
 
 // --- clock and entropy ports -----------------------------------------------
 
@@ -347,6 +355,9 @@ impl Core {
             last_connected_relays: Vec::new(),
             pair_timer: None,
             undo_timer: None,
+            machines_dirty: false,
+            stored_seen_dirty: None,
+            flush_timer: None,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -582,6 +593,8 @@ enum Msg {
     /// trait method with no `Kv` access, called from inside the transport's
     /// own task.
     NoteStoredSeen(i64),
+    /// The write-debounce window elapsed: flush what is dirty.
+    FlushWrites,
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -673,6 +686,12 @@ struct Loop {
     pair_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
+    /// The machines store changed since it was last written.
+    machines_dirty: bool,
+    /// A stored-event cursor not written yet.
+    stored_seen_dirty: Option<i64>,
+    /// Pending [`Msg::FlushWrites`] (see [`WRITE_DEBOUNCE`]).
+    flush_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- the composed store layer ---
     stores: CoreStores,
@@ -695,8 +714,11 @@ impl Loop {
                     log::info!("core: Stop (status was {:?})", self.conn.status);
                     self.dispatch(ConnectionEvent::DisconnectRequested);
                     abort(&mut self.stale_timer);
+                    self.flush_writes().await;
                 }
                 Msg::Pause => {
+                    // Backgrounded: the OS may kill the process from here on.
+                    self.flush_writes().await;
                     self.ws.set_ping_interval(BACKGROUND_PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: false });
                 }
@@ -757,8 +779,10 @@ impl Loop {
                 }
                 Msg::RelayEvent(event) => self.on_relay_event(event).await,
                 Msg::NoteStoredSeen(ts) => {
-                    Persister::new(self.kv.as_ref()).save_last_stored_seen(ts).await;
+                    self.stored_seen_dirty = Some(ts);
+                    self.schedule_flush();
                 }
+                Msg::FlushWrites => self.flush_writes().await,
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
                 Msg::PairDeadline => self.on_pair_deadline(),
                 Msg::Intent { intent, reply } => {
@@ -1024,13 +1048,35 @@ impl Loop {
         // `r.heartbeat` is already covered by the pre-decode path above;
     }
 
-    async fn persist_store(&self, id: StoreId) {
+    async fn persist_store(&mut self, id: StoreId) {
         let p = Persister::new(self.kv.as_ref());
         match id {
-            StoreId::Machines => p.save_machines(&self.stores.machines).await,
+            StoreId::Machines => {
+                self.machines_dirty = true;
+                self.schedule_flush();
+            }
             StoreId::Outbox => p.save_outbox(&self.stores.outbox).await,
             StoreId::Settings => p.save_settings(&self.stores.settings).await,
             StoreId::QuickPrompts => p.save_quick_prompts(&self.stores.quick_prompts).await,
+        }
+    }
+
+    /// Arm the debounced flush unless one is already pending.
+    fn schedule_flush(&mut self) {
+        if self.flush_timer.is_none() {
+            self.flush_timer = Some(self.arm(WRITE_DEBOUNCE.as_millis() as u64, Msg::FlushWrites));
+        }
+    }
+
+    /// Write whatever [`WRITE_DEBOUNCE`] is holding back, now.
+    async fn flush_writes(&mut self) {
+        abort(&mut self.flush_timer);
+        let p = Persister::new(self.kv.as_ref());
+        if std::mem::take(&mut self.machines_dirty) {
+            p.save_machines(&self.stores.machines).await;
+        }
+        if let Some(ts) = self.stored_seen_dirty.take() {
+            p.save_last_stored_seen(ts).await;
         }
     }
 
@@ -2190,10 +2236,30 @@ mod tests {
                     <nostr::Event as nostr::JsonUtil>::as_json(&event)
                 ));
                 settle().await;
-
+                // Held back by the write debounce...
+                assert_eq!(kv.get(LAST_STORED_SEEN_KEY).await, None);
+                // ...until it elapses.
+                tokio::time::sleep(WRITE_DEBOUNCE + Duration::from_millis(200)).await;
                 assert_eq!(
                     kv.get(LAST_STORED_SEEN_KEY).await,
                     Some(created_at.to_string()),
+                );
+
+                // A later event is written the moment the app is backgrounded.
+                let newer = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), "x")
+                    .custom_created_at(nostr::Timestamp::from(created_at + 10))
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(
+                    r#"["EVENT","cd-1",{}]"#,
+                    <nostr::Event as nostr::JsonUtil>::as_json(&newer)
+                ));
+                settle().await;
+                core.pause();
+                settle().await;
+                assert_eq!(
+                    kv.get(LAST_STORED_SEEN_KEY).await,
+                    Some((created_at + 10).to_string()),
                 );
             })
             .await;
