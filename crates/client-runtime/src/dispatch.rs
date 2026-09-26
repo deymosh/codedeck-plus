@@ -710,6 +710,7 @@ pub fn apply_pairing_effects(
                         pubkey_hex: identity.pubkey_hex.clone(),
                         label,
                         token,
+                        session_key: None,
                     }),
                 });
             }

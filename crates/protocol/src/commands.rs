@@ -237,6 +237,45 @@ pub struct PairRequestMsg {
     pub pubkey_hex: String,
     pub label: String,
     pub token: String,
+    /// A session key granted with the pairing, so a phone whose identity
+    /// key lives in an external signer needs one signer round, not two.
+    /// Only sent to a bridge advertising
+    /// [`SESSION_KEYS`](crate::capabilities::SESSION_KEYS); the pairing QR
+    /// does not say, so a phone may send it to any bridge, and one without
+    /// session keys ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_key: Option<SessionKeyGrant>,
+}
+
+/// A key the phone's identity lets act for it towards one bridge: the
+/// bridge accepts commands authored by `pubkey_hex` as the identity's and
+/// encrypts its messages to it. The phone keeps the secret half locally, so
+/// signing and NIP-44 per message never reach an external signer. Only the
+/// identity itself can grant one (the grant arrives in an event the identity
+/// signed); a session key cannot extend itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionKeyGrant {
+    /// The session key's public half, lowercase hex.
+    pub pubkey_hex: String,
+    /// When the grant lapses, seconds since the Unix epoch. At most
+    /// [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead; the phone grants a new key
+    /// before this one lapses.
+    #[specta(type = specta_typescript::Number)]
+    pub expires_at: u64,
+}
+
+/// The longest a [`SessionKeyGrant`] may run.
+pub const SESSION_KEY_MAX_LIFETIME_SECS: u64 = 90 * 24 * 3600;
+
+/// `session-key`: grant (or rotate to) a session key. Must be authored by
+/// the paired identity itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionKeyMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub session_key: SessionKeyGrant,
 }
 
 /// Write shape of a provider profile (CDX-062/071). `auth_token` is tri-state
@@ -289,6 +328,7 @@ pub enum PhoneToBridge {
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
     ProviderProfilesRequest(BareMsg),
+    SessionKey(SessionKeyMsg),
 }
 
 #[cfg(test)]
@@ -340,7 +380,9 @@ mod tests {
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
+        rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","expiresAt":1800000000}}));
         rt(&json!({"type":"provider-profiles-request"}));
+        rt(&json!({"type":"session-key","sessionKey":{"pubkeyHex":"bb","expiresAt":1800000000}}));
     }
 
     #[test]

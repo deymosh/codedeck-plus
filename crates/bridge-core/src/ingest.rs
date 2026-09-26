@@ -3,9 +3,11 @@
 //!
 //! - Events older than [`MAX_EVENT_AGE_SECS`] are dropped: a relay that does
 //!   not honour `since` must not replay old commands.
-//! - On the standing subscription, only paired phones are heard, and the
-//!   check comes before dedup bookkeeping so a flood from strangers cannot
-//!   evict real ids from the dedup set and reopen a replay window.
+//! - On the standing subscription, only paired phones (and their session
+//!   keys) are heard. The engine checks the author before calling
+//!   [`Ingest::accept`], so a flood from strangers never reaches the dedup
+//!   bookkeeping, cannot evict real ids from the set, and cannot reopen a
+//!   replay window.
 //! - Event ids are remembered (the last [`MAX_PROCESSED_IDS`]) and persisted:
 //!   a reconnect subscribes with `since` = last seen − 5 s, so the relay
 //!   replays recent commands, and without the ids they would run twice
@@ -73,20 +75,11 @@ impl Ingest {
         self.order.iter().cloned().collect()
     }
 
-    /// An event from the standing subscription.
-    pub fn accept(
-        &mut self,
-        event: &InboundEvent,
-        keys: &Keypair,
-        now_secs: u64,
-        is_paired: impl Fn(&str) -> bool,
-    ) -> Option<PhoneToBridge> {
+    /// An event from the standing subscription, whose author the caller has
+    /// already found paired.
+    pub fn accept(&mut self, event: &InboundEvent, keys: &Keypair, now_secs: u64) -> Option<PhoneToBridge> {
         if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
             log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
-            return None;
-        }
-        if !is_paired(&event.pubkey) {
-            log::info!("[Ingest] Ignoring event from unknown pubkey: {}...", short(&event.pubkey));
             return None;
         }
         if !self.mark(&event.id) {
@@ -177,8 +170,7 @@ mod tests {
             self.event_from(&phone, json, NOW)
         }
         fn accept(&mut self, event: &InboundEvent) -> Option<PhoneToBridge> {
-            let phone = self.phone.pubkey_hex.clone();
-            self.ingest.accept(event, &self.bridge, NOW, |pk| pk == phone)
+            self.ingest.accept(event, &self.bridge, NOW)
         }
     }
 
@@ -242,15 +234,6 @@ mod tests {
         assert!(f.accept(&ev).is_some());
         f.ingest = Ingest::new(f.ingest.last_seen(), f.ingest.processed_ids());
         assert!(f.accept(&ev).is_none(), "the relay's grace-window replay is a no-op");
-    }
-
-    #[test]
-    fn strangers_are_dropped_before_they_take_a_dedup_slot() {
-        let mut f = Fixture::new();
-        let stranger = generate_keypair();
-        let ev = f.event_from(&stranger, INPUT, NOW);
-        assert!(f.accept(&ev).is_none());
-        assert!(f.ingest.processed_ids().is_empty());
     }
 
     #[test]

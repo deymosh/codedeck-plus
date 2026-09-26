@@ -11,6 +11,7 @@ use protocol::events::{
     InputFailedReason, ModelsMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
+use super::session_keys::resolve_author;
 use super::{Engine, HostCall};
 use crate::catalog::{is_effort, is_mode};
 use crate::io::{Effect, InboundEvent, Via};
@@ -41,6 +42,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::PairRequest(_) => "pair-request",
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
+        PhoneToBridge::SessionKey(_) => "session-key",
     }
 }
 
@@ -58,11 +60,20 @@ impl Engine {
                 }
             }
             Via::Commands => {
-                let paired = &self.paired;
-                let msg = self.ingest.accept(event, &self.config.keys, now_secs, |pk| paired.iter().any(|p| p.pubkey_hex == pk));
-                if let Some(msg) = msg {
-                    log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
-                    self.dispatch(msg, &event.pubkey);
+                let Some(author) = resolve_author(&self.paired, &event.pubkey, now_secs) else {
+                    log::info!("[Engine] Ignoring event from unknown pubkey: {}...", short(&event.pubkey));
+                    return;
+                };
+                let Some(msg) = self.ingest.accept(event, &self.config.keys, now_secs) else { return };
+                log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&author.identity));
+                match msg {
+                    PhoneToBridge::SessionKey(_) if author.by_session_key => {
+                        log::warn!("[Engine] A session key tried to grant a session key — refused");
+                    }
+                    PhoneToBridge::SessionKey(m) => {
+                        self.grant_session_key(&author.identity, m.session_key);
+                    }
+                    msg => self.dispatch(msg, &author.identity),
                 }
             }
         }
@@ -107,6 +118,8 @@ impl Engine {
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
+            // Handled on arrival, where it is known who wrote it.
+            PhoneToBridge::SessionKey(_) => {}
             PhoneToBridge::SetProviderProfile(m) => self.on_set_provider_profile(m, phone),
             PhoneToBridge::ProviderProfilesRequest(_) => {
                 let msg = self.provider_profiles_msg();

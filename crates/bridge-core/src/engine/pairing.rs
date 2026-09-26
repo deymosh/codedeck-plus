@@ -7,7 +7,7 @@ use protocol::crypto::npub_from_hex;
 use protocol::events::{BridgeToPhone, PairAckMsg, PairAckReason};
 
 use super::{Engine, PairingWindow};
-use crate::io::{store_keys, Effect, NotifyLevel, PairedPhone, PairingCloseReason, PairingWindowInfo};
+use crate::io::{Effect, NotifyLevel, PairedPhone, PairingCloseReason, PairingWindowInfo};
 use crate::out::TimerKind;
 use crate::pairing::{pairing_url, PairingUrlParts};
 use crate::time::iso;
@@ -88,15 +88,23 @@ impl Engine {
             return;
         };
         let label = if m.label.is_empty() { "Phone".to_string() } else { m.label };
-        let phone = PairedPhone { npub, pubkey_hex: from.to_string(), label: label.clone(), paired_at: iso(self.now()) };
+        let phone = PairedPhone {
+            npub,
+            pubkey_hex: from.to_string(),
+            label: label.clone(),
+            paired_at: iso(self.now()),
+            session_keys: Vec::new(),
+        };
         log::info!("[Engine] Pairing phone \"{label}\" ({short}...)");
         self.close_pairing(PairingCloseReason::Paired, Some(phone.clone()));
         if !self.paired.iter().any(|p| p.pubkey_hex == phone.pubkey_hex) {
             self.paired.push(phone);
-            let json = serde_json::to_string(&self.paired).expect("phones serialize");
-            if let Err(err) = self.store.set(store_keys::PAIRED_PHONES, &json) {
-                log::error!("[Engine] Could not store the paired phones: {err}");
-            }
+            self.store_paired();
+        }
+        // Granted before the pair-ack goes out, so the ack already travels
+        // to the session key the phone will be listening with.
+        if let Some(grant) = m.session_key {
+            self.grant_session_key(from, grant);
         }
         self.out.push(Effect::Resubscribe);
         self.list_dirty = true;
