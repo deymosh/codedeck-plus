@@ -41,6 +41,9 @@ export const CLAUDE_CODE_AGENT_ID = 'claude-code';
 /** The mode in which every tool call runs without asking. */
 export const AUTO_APPROVE_MODE = 'default';
 const DEFAULT_MODE = 'plan';
+/** Opus 5.5's own default, set explicitly so every session's effort is
+ *  known rather than left to whatever the model or CLI picks. */
+const DEFAULT_EFFORT = 'medium';
 
 export const CLAUDE_MODES: OptionChoice[] = [
   { id: 'plan', label: 'Plan', description: 'Plan first; nothing runs until you approve the plan' },
@@ -49,7 +52,7 @@ export const CLAUDE_MODES: OptionChoice[] = [
 ];
 
 export const CLAUDE_EFFORTS: OptionChoice[] = [
-  { id: 'auto', label: 'Auto' },
+  { id: 'auto', label: 'Auto', description: "The model's own default" },
   { id: 'low', label: 'Low' },
   { id: 'medium', label: 'Medium' },
   { id: 'high', label: 'High' },
@@ -174,7 +177,7 @@ export class ClaudeSession implements DriverSession {
     // A provider-bound session has no Anthropic model to fall back on; the
     // bridge hands it the profile's own default.
     this.model = params.model ?? (params.provider ? undefined : DEFAULT_MODEL);
-    this.effort = params.effort ?? undefined;
+    this.effort = params.effort ?? DEFAULT_EFFORT;
   }
 
   /** Spawn the query. Throws synchronously for an unusable session (a
@@ -607,6 +610,7 @@ export class ClaudeDriver implements Driver {
       modes: CLAUDE_MODES,
       efforts: CLAUDE_EFFORTS,
       defaultMode: DEFAULT_MODE,
+      defaultEffort: DEFAULT_EFFORT,
       supports: { models: true, usage: true, providers: true, gsd: true, interrupt: true },
       credentials: [{ id: ANTHROPIC_API_KEY_CREDENTIAL, label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY' }],
     };

@@ -321,7 +321,7 @@ mod tests {
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"default","label":"Default"},{"id":"plan","label":"Plan"}],
             "efforts":[{"id":"high","label":"High"}],
-            "defaultMode":"default",
+            "defaultMode":"default","defaultEffort":"high",
             "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"fromEnv":true}]
         })

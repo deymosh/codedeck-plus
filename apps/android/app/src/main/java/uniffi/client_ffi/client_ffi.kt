@@ -3338,6 +3338,10 @@ data class UniffiAgent (
     var `modes`: List<UniffiOptionChoice>, 
     var `efforts`: List<UniffiOptionChoice>, 
     var `defaultMode`: kotlin.String?, 
+    /**
+     * The effort a session runs at when none is chosen.
+     */
+    var `defaultEffort`: kotlin.String?, 
     var `supportsModels`: kotlin.Boolean, 
     var `supportsUsage`: kotlin.Boolean, 
     var `supportsProviders`: kotlin.Boolean, 
@@ -3360,6 +3364,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterSequenceTypeUniffiOptionChoice.read(buf),
             FfiConverterSequenceTypeUniffiOptionChoice.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -3375,6 +3380,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterSequenceTypeUniffiOptionChoice.allocationSize(value.`modes`) +
             FfiConverterSequenceTypeUniffiOptionChoice.allocationSize(value.`efforts`) +
             FfiConverterOptionalString.allocationSize(value.`defaultMode`) +
+            FfiConverterOptionalString.allocationSize(value.`defaultEffort`) +
             FfiConverterBoolean.allocationSize(value.`supportsModels`) +
             FfiConverterBoolean.allocationSize(value.`supportsUsage`) +
             FfiConverterBoolean.allocationSize(value.`supportsProviders`) +
@@ -3389,6 +3395,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterSequenceTypeUniffiOptionChoice.write(value.`modes`, buf)
             FfiConverterSequenceTypeUniffiOptionChoice.write(value.`efforts`, buf)
             FfiConverterOptionalString.write(value.`defaultMode`, buf)
+            FfiConverterOptionalString.write(value.`defaultEffort`, buf)
             FfiConverterBoolean.write(value.`supportsModels`, buf)
             FfiConverterBoolean.write(value.`supportsUsage`, buf)
             FfiConverterBoolean.write(value.`supportsProviders`, buf)

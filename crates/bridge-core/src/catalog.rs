@@ -47,6 +47,7 @@ impl Catalog {
                 modes: a.modes.clone(),
                 efforts: a.efforts.clone(),
                 default_mode: a.default_mode.clone(),
+                default_effort: a.default_effort.clone(),
                 supports: a.supports.clone(),
                 credentials: credentials(a),
             })

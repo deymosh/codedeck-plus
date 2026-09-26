@@ -443,6 +443,7 @@ describe('Claude model discovery', () => {
   });
 
   it('reports Opus 5.5 as the default model, and runs a session with no model on it', async () => {
+    expect(new ClaudeDriver({ facade: new ScriptedFacade() }).info()).toMatchObject({ defaultMode: 'plan', defaultEffort: 'medium' });
     expect((await new ClaudeDriver({ facade: new ScriptedFacade() }).listModels()).defaultModel).toBe('claude-opus-5-5');
     const { ctx, facade } = start();
     await ctx.waitFor((e) => e.type === 'ready');
