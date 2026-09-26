@@ -3,11 +3,10 @@
 //! app drives.
 //!
 //! This is a disclosed narrowing, not an oversight: `uniffi::Enum` is
-//! all-or-nothing for the whole enum it's derived on, and the real `Intent`
-//! has 49 variants — the ones still excluded here (the DM/Marmot intents,
-//! the DM-image path, a few settings intents) carry payloads that would need
-//! their own UniFFI derive rollout, disproportionate while no Android screen
-//! uses them. Every other boundary type this crate touches
+//! all-or-nothing for the whole enum it's derived on, and the variants of the
+//! real `Intent` still excluded here (a few settings intents) carry payloads
+//! that would need their own UniFFI derive rollout, disproportionate while no
+//! Android screen uses them. Every other boundary type this crate touches
 //! (`CoreEvent`, `ConnectionView`) is the REAL `client_runtime` type — see
 //! that crate's `uniffi` feature — so this file is the one place with
 //! parallel DTOs, and it grows (never shrinks) as the app wires more of the

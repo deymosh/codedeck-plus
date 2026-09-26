@@ -76,7 +76,7 @@ pub struct IntentResult {
     pub persist: Vec<StoreId>,
     /// The relay subscription authors filter changed — resubscribe.
     pub resubscribe: bool,
-    /// A new relay list — the loop reconfigures the transport + DM/Marmot subs.
+    /// A new relay list — the loop reconfigures the transport.
     pub relays_changed: Option<Vec<String>>,
     /// Tor toggled — the loop re-inits the transport proxy.
     pub tor_changed: Option<bool>,
@@ -93,19 +93,9 @@ pub struct IntentResult {
     pub mesh_join: Option<(String, String)>,
     /// Arm / clear the delete-controller undo timer.
     pub undo_timer: Option<UndoTimer>,
-    /// `(peer, text)` — the loop wraps + publishes this NIP-17 DM (async).
-    pub dm_send: Option<(String, String)>,
-    /// `(peer, text, image)` — the loop uploads the image then sends the DM.
-    pub dm_image_send: Option<(String, String, Vec<u8>)>,
     /// The loop uploads a session image (Blossom-first, chunk fallback) then
     /// publishes the `upload-image` command.
     pub session_image_send: Option<SessionImageSend>,
-    /// `welcome_id` — the loop joins the MLS group engine-side.
-    pub marmot_accept: Option<String>,
-    /// `(group_id, text)` — the loop encrypts + publishes this Marmot message.
-    pub marmot_send: Option<(String, String)>,
-    /// `peer_pubkey` — the loop fetches their KeyPackage and creates the group.
-    pub marmot_start_chat: Option<String>,
     /// `pending_sessions` changed — not persisted, so this is the only signal
     /// a `PendingSessionsView` consumer gets that a re-fetch is worth doing.
     pub pending_sessions_changed: bool,
@@ -304,49 +294,6 @@ pub enum Intent {
     SelectSession {
         machine: String,
         session_id: Option<String>,
-    },
-    SelectDmPeer {
-        peer: Option<String>,
-    },
-    MarkDmRead {
-        peer: String,
-    },
-    /// Open (or create) a NIP-17 conversation for an npub / hex peer.
-    StartDmConversation {
-        peer_input: String,
-    },
-    /// Send a NIP-17 DM (the loop wraps + publishes).
-    SendDm {
-        peer: String,
-        text: String,
-    },
-    /// Encrypt + upload an image to Blossom, then send it as a DM (the ref line
-    /// `<url> key=… iv=…` appended to `text`). The loop does the async work.
-    SendDmImage {
-        peer: String,
-        text: String,
-        image: Vec<u8>,
-    },
-    SelectMarmotGroup {
-        group_id: Option<String>,
-    },
-    MarkMarmotRead {
-        group_id: String,
-    },
-    /// Join an MLS group from a pending welcome (the loop calls the engine).
-    AcceptMarmotWelcome {
-        welcome_id: String,
-    },
-    /// Send a Marmot (MLS) group message; the loop encrypts + publishes.
-    SendMarmotMessage {
-        group_id: String,
-        text: String,
-    },
-    /// Open a 1:1 Marmot chat with a peer: an existing conversation is reused,
-    /// never duplicated; otherwise the loop fetches their KeyPackage and asks
-    /// the engine to create the group and publish the welcome.
-    StartMarmotChat {
-        peer_pubkey: String,
     },
     AddRelay {
         url: String,
@@ -743,50 +690,6 @@ pub fn apply(
                     .ui
                     .select_session(&machine, session_id.as_deref(), ctx.visible);
             r.ui_changed = true;
-        }
-        Intent::SelectDmPeer { peer } => {
-            r.ui_effects = stores.ui.select_dm_peer(peer.as_deref());
-            stores.dm.set_active_peer(peer.as_deref());
-            r.persist(StoreId::Dm);
-            r.ui_changed = true;
-        }
-        Intent::MarkDmRead { peer } => {
-            if stores.dm.mark_read(&peer) {
-                r.persist(StoreId::Dm);
-            }
-        }
-        Intent::StartDmConversation { peer_input } => {
-            if let Some(sc) = stores.dm.start_conversation(&peer_input, ctx.now) {
-                if sc.created {
-                    r.persist(StoreId::Dm);
-                }
-            }
-        }
-        Intent::SendDm { peer, text } => {
-            r.dm_send = Some((peer, text));
-        }
-        Intent::SendDmImage { peer, text, image } => {
-            r.dm_image_send = Some((peer, text, image));
-        }
-        Intent::SelectMarmotGroup { group_id } => {
-            stores.ui.select_marmot_group(group_id.as_deref());
-            stores.marmot.set_active_group(group_id.as_deref());
-            r.persist(StoreId::Marmot);
-            r.ui_changed = true;
-        }
-        Intent::MarkMarmotRead { group_id } => {
-            if stores.marmot.mark_read(&group_id) {
-                r.persist(StoreId::Marmot);
-            }
-        }
-        Intent::AcceptMarmotWelcome { welcome_id } => {
-            r.marmot_accept = Some(welcome_id);
-        }
-        Intent::SendMarmotMessage { group_id, text } => {
-            r.marmot_send = Some((group_id, text));
-        }
-        Intent::StartMarmotChat { peer_pubkey } => {
-            r.marmot_start_chat = Some(peer_pubkey);
         }
         Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
         Intent::RemoveRelay { url } => {

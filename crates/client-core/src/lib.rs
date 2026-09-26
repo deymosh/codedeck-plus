@@ -15,10 +15,7 @@
 pub mod bridge_api;
 pub mod connection;
 pub mod delete_controller;
-pub mod dm_attachments;
 pub mod image_chunks;
-#[cfg(feature = "marmot")]
-pub mod marmot_engine;
 pub mod notifications;
 pub mod presentation;
 pub mod selection_persistence;

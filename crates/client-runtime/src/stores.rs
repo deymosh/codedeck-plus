@@ -9,12 +9,10 @@
 use protocol::crypto::Keypair;
 use client_core::delete_controller::DeleteController;
 use client_core::notifications::{NotificationContext, NotificationCoordinator};
-use client_core::stores::dm::{hydrate_dm, serialize_dm, DmState, DM_STORAGE_KEY};
 use client_core::stores::identity::{load_or_create_identity, IDENTITY_STORAGE_KEY};
 use client_core::stores::machines::{
     hydrate_machines, serialize_machines, MachinesState, MergeOptions,
 };
-use client_core::stores::marmot::{hydrate_marmot, serialize_marmot, MarmotState, MARMOT_STORAGE_KEY};
 use client_core::stores::outbox::{hydrate_outbox, serialize_outbox, OutboxState};
 use client_core::stores::pairing::PairingState;
 use client_core::stores::pending_sessions::PendingSessionsState;
@@ -32,12 +30,13 @@ pub const MACHINES_KEY: &str = "machines";
 pub const OUTBOX_KEY: &str = "outbox";
 pub const SETTINGS_KEY: &str = "settings";
 pub const QUICK_PROMPTS_KEY: &str = QUICK_PROMPTS_STORAGE_KEY;
-pub const DM_KEY: &str = DM_STORAGE_KEY;
-pub const MARMOT_KEY: &str = MARMOT_STORAGE_KEY;
 pub const IDENTITY_KEY: &str = IDENTITY_STORAGE_KEY;
 /// `nostr_client`'s `last_stored_seen` cursor (seconds), persisted so a reboot
 /// resumes its since-window.
 pub const LAST_STORED_SEEN_KEY: &str = "client.lastStoredSeen";
+/// Keys of stores the app no longer has (NIP-17 DMs, Marmot group chat).
+/// Deleted on boot so an upgraded install does not keep their data around.
+pub const RETIRED_KEYS: [&str; 2] = ["dm", "marmot"];
 
 /// Boot options for the store bundle.
 #[derive(Debug, Clone, Default)]
@@ -57,8 +56,6 @@ pub struct CoreStores {
     pub settings: SettingsState,
     pub quick_prompts: QuickPromptsState,
     pub ui: UiState,
-    pub dm: DmState,
-    pub marmot: MarmotState,
     pub notifications: NotificationCoordinator,
     pub delete_controller: DeleteController,
 }
@@ -141,8 +138,9 @@ pub async fn hydrate(
         config.merge_options,
     );
     let outbox = OutboxState::new(hydrate_outbox(kv.get(OUTBOX_KEY).await.as_deref()));
-    let dm = DmState::from_persisted(hydrate_dm(kv.get(DM_KEY).await.as_deref()));
-    let marmot = MarmotState::from_persisted(hydrate_marmot(kv.get(MARMOT_KEY).await.as_deref()));
+    for key in RETIRED_KEYS {
+        kv.delete(key).await;
+    }
 
     let last_stored_seen = kv
         .get(LAST_STORED_SEEN_KEY)
@@ -171,8 +169,6 @@ pub async fn hydrate(
             settings,
             quick_prompts,
             ui: UiState::default(),
-            dm,
-            marmot,
             notifications: NotificationCoordinator::default(),
             delete_controller: DeleteController::default(),
         },
@@ -212,16 +208,6 @@ impl<'a> Persister<'a> {
             .await;
     }
 
-    pub async fn save_dm(&self, s: &DmState) {
-        self.kv.set(DM_KEY, &serialize_dm(&s.to_persisted())).await;
-    }
-
-    pub async fn save_marmot(&self, s: &MarmotState) {
-        self.kv
-            .set(MARMOT_KEY, &serialize_marmot(&s.to_persisted()))
-            .await;
-    }
-
     pub async fn save_identity_secret(&self, keypair: &Keypair) {
         self.kv.set(IDENTITY_KEY, &keypair.secret_hex()).await;
     }
@@ -248,10 +234,9 @@ mod tests {
         assert_eq!(h.last_stored_seen, 0);
         assert!(h.stores.machines.machines.is_empty());
         assert!(h.stores.outbox.items.is_empty());
-        assert!(h.stores.dm.conversations.is_empty());
         assert!(h.stores.quick_prompts.prompts.is_empty());
-        // settings come up at their built-in defaults (5 relays)
-        assert_eq!(h.stores.settings.data.relays.len(), 5);
+        // settings come up at their built-in defaults
+        assert_eq!(h.stores.settings.data, client_core::stores::settings::default_settings());
     }
 
     #[tokio::test]
@@ -267,23 +252,9 @@ mod tests {
         h.stores.quick_prompts.add_prompt("qp-1", "Go", "continue");
         p.save_quick_prompts(&h.stores.quick_prompts).await;
 
-        let peer = "2".repeat(64);
         let item = OutboxState::new_input("in-1", "machine", "sess", "hello", 1_000);
         h.stores.outbox.begin_publish(item);
         p.save_outbox(&h.stores.outbox).await;
-
-        h.stores.dm.add_message(
-            client_core::stores::dm::DmMessage {
-                id: "r1".into(),
-                peer_pubkey: peer.clone(),
-                sender_pubkey: peer.clone(),
-                content: "hi".into(),
-                at: 5_000,
-                status: client_core::stores::dm::DmMessageStatus::Delivered,
-            },
-            &h.keypair.pubkey_hex,
-        );
-        p.save_dm(&h.stores.dm).await;
 
         p.save_last_stored_seen(1_234).await;
 
@@ -294,7 +265,16 @@ mod tests {
         assert_eq!(h2.last_stored_seen, 1_234);
         assert_eq!(h2.stores.quick_prompts.prompts[0].label, "Go");
         assert_eq!(h2.stores.outbox.items["in-1"].state, OutboxItemState::Pending);
-        assert_eq!(h2.stores.dm.conversations[&peer].last_preview, "hi");
+    }
+
+    #[tokio::test]
+    async fn hydrate_deletes_the_retired_store_keys() {
+        let kv = MemoryKv::seeded([("dm", "{}"), ("marmot", "{}"), (SETTINGS_KEY, "garbage")]);
+        let ts = MemoryTranscriptStore::new();
+        hydrate(&kv, &ts, &StoresConfig::default()).await;
+        assert_eq!(kv.get("dm").await, None);
+        assert_eq!(kv.get("marmot").await, None);
+        assert!(kv.get(SETTINGS_KEY).await.is_some());
     }
 
     #[tokio::test]

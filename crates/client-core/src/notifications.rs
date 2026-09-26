@@ -36,22 +36,17 @@ pub enum NotifyEvent {
         session_id: String,
         reason: Option<String>,
     },
-    DmReceived {
-        peer: String,
-        peer_label: Option<String>,
-        preview: Option<String>,
-    },
 }
 
 impl NotifyEvent {
-    pub fn session(&self) -> Option<(&str, &str)> {
+    /// The `(machine, session_id)` the event is about.
+    pub fn session(&self) -> (&str, &str) {
         match self {
             Self::PermissionRequest { machine, session_id, .. }
             | Self::Question { machine, session_id }
             | Self::PlanApproval { machine, session_id }
             | Self::SessionFinished { machine, session_id }
-            | Self::SessionFailed { machine, session_id, .. } => Some((machine, session_id)),
-            Self::DmReceived { .. } => None,
+            | Self::SessionFailed { machine, session_id, .. } => (machine, session_id),
         }
     }
 
@@ -64,7 +59,6 @@ impl NotifyEvent {
             Self::PlanApproval { .. } => "plan-approval",
             Self::SessionFinished { .. } => "session-finished",
             Self::SessionFailed { .. } => "session-failed",
-            Self::DmReceived { .. } => "dm-received",
         }
     }
 }
@@ -97,13 +91,8 @@ pub fn session_key_of(machine: &str, session_id: &str) -> String {
 
 /// Cooldown / dedup scope: same key + type within the window → one delivery.
 pub fn notify_key(event: &NotifyEvent) -> String {
-    match event {
-        NotifyEvent::DmReceived { peer, .. } => format!("dm {peer}"),
-        _ => {
-            let (m, s) = event.session().unwrap();
-            format!("{} {m} {s}", event.kind_str())
-        }
-    }
+    let (m, s) = event.session();
+    format!("{} {m} {s}", event.kind_str())
 }
 
 /// Parsed back by platform ports (Android turns it into a notification-tap
@@ -112,20 +101,12 @@ pub fn notify_key(event: &NotifyEvent) -> String {
 pub fn session_notify_tag(machine: &str, session_id: &str) -> String {
     format!("session:{machine}:{session_id}")
 }
-pub fn dm_notify_tag(peer: &str) -> String {
-    format!("dm:{peer}")
-}
 
 /// Cancellation scope (CDX-026c) — coarser than [`notify_key`]: opening a
 /// session clears EVERY delivered notification for it.
 pub fn notify_tag(event: &NotifyEvent) -> String {
-    match event {
-        NotifyEvent::DmReceived { peer, .. } => dm_notify_tag(peer),
-        _ => {
-            let (m, s) = event.session().unwrap();
-            session_notify_tag(m, s)
-        }
-    }
+    let (m, s) = event.session();
+    session_notify_tag(m, s)
 }
 
 // --- pure decisions ---
@@ -135,28 +116,20 @@ pub fn notify_tag(event: &NotifyEvent) -> String {
 /// already passed its store-level gate); a visible one still notifies for a
 /// session event unless that exact session is on screen — someone reading
 /// session A, or the session list, must still hear that session B finished
-/// or wants an answer. A DM never notifies over a visible app.
+/// or wants an answer.
 pub fn decide_notify(event: &NotifyEvent, visible: bool, active_session_key: Option<&str>) -> bool {
-    if !visible {
-        return true;
-    }
-    match event.session() {
-        None => false,
-        Some((m, s)) => Some(session_key_of(m, s).as_str()) != active_session_key,
-    }
+    !visible || !is_on_screen(event, active_session_key)
 }
 
 /// The in-app chime: ping when hidden, OR when the user is viewing a DIFFERENT
-/// session than the event's. A DM event always pings (it already passed the
-/// per-conversation unread gate upstream).
+/// session than the event's.
 pub fn decide_ping(event: &NotifyEvent, visible: bool, active_session_key: Option<&str>) -> bool {
-    if !visible {
-        return true;
-    }
-    match event.session() {
-        None => true, // dm-received
-        Some((m, s)) => Some(session_key_of(m, s).as_str()) != active_session_key,
-    }
+    !visible || !is_on_screen(event, active_session_key)
+}
+
+fn is_on_screen(event: &NotifyEvent, active_session_key: Option<&str>) -> bool {
+    let (m, s) = event.session();
+    Some(session_key_of(m, s).as_str()) == active_session_key
 }
 
 // --- formatting ---
@@ -170,7 +143,7 @@ pub struct NotificationContent {
 pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> NotificationContent {
     // Session-scoped kinds title "{kind} — {session}" so a multi-session
     // phone can tell cards apart at a glance, and name the machine in the
-    // body where it reads naturally. DMs already carry their own labels.
+    // body where it reads naturally.
     let titled = |kind: &str| match ctx.session_label {
         Some(s) => format!("{kind} — {s}"),
         None => kind.to_string(),
@@ -215,12 +188,6 @@ pub fn format_notify_event(event: &NotifyEvent, ctx: &NotificationContext) -> No
             reason
                 .clone()
                 .unwrap_or_else(|| "The session ended with an error".to_string()),
-        ),
-        NotifyEvent::DmReceived { peer_label, preview, .. } => (
-            peer_label.clone().unwrap_or_else(|| "New message".to_string()),
-            preview
-                .clone()
-                .unwrap_or_else(|| "You received a direct message".to_string()),
         ),
     };
     NotificationContent { title, body }
@@ -408,13 +375,6 @@ mod tests {
             tool_name: None,
         }
     }
-    fn dm(peer: &str) -> NotifyEvent {
-        NotifyEvent::DmReceived {
-            peer: peer.into(),
-            peer_label: None,
-            preview: None,
-        }
-    }
     fn entry(body: EntryBody) -> OutputEntry {
         OutputEntry::new("1970-01-01T00:00:00.000Z", body)
     }
@@ -423,15 +383,12 @@ mod tests {
     fn decide_notify_matrix() {
         // hidden -> always
         assert!(decide_notify(&perm("m", "s"), false, Some("m s")));
-        assert!(decide_notify(&dm("p"), false, None));
         // visible + viewing this session -> no
         assert!(!decide_notify(&perm("m", "s"), true, Some("m s")));
         // visible + viewing a different session -> yes
         assert!(decide_notify(&perm("m", "s"), true, Some("m other")));
         // visible + no session panel (e.g. the session list) -> yes
         assert!(decide_notify(&perm("m", "s"), true, None));
-        // visible dm -> no
-        assert!(!decide_notify(&dm("p"), true, None));
     }
 
     #[test]
@@ -444,16 +401,12 @@ mod tests {
         assert!(decide_ping(&perm("m", "s"), true, Some("m other")));
         // visible + no session panel -> yes
         assert!(decide_ping(&perm("m", "s"), true, None));
-        // dm -> always pings when it reaches here
-        assert!(decide_ping(&dm("p"), true, Some("m s")));
     }
 
     #[test]
     fn keys_and_tags() {
         assert_eq!(notify_key(&perm("m", "s")), "permission-request m s");
-        assert_eq!(notify_key(&dm("p")), "dm p");
         assert_eq!(notify_tag(&perm("m", "s")), "session:m:s");
-        assert_eq!(notify_tag(&dm("p")), "dm:p");
     }
 
     #[test]
@@ -476,14 +429,6 @@ mod tests {
             }, &NotificationContext::none())
             .body,
             "boom"
-        );
-        assert_eq!(
-            format_notify_event(&NotifyEvent::DmReceived {
-                peer: "p".into(),
-                peer_label: Some("Alice".into()),
-                preview: Some("hi".into())
-            }, &NotificationContext::none()),
-            NotificationContent { title: "Alice".into(), body: "hi".into() }
         );
     }
 
@@ -641,13 +586,6 @@ mod tests {
         assert_eq!(eff.len(), 2);
         assert_eq!(eff[0], NotifyEffect::Ping);
         assert!(matches!(eff[1], NotifyEffect::Notify { .. }));
-    }
-
-    #[test]
-    fn ping_only_for_a_visible_dm() {
-        let mut co = NotificationCoordinator::default();
-        let eff = co.emit(&dm("p"), EmitInputs { active_session_key: Some("m s"), ..inputs(true, true, true) });
-        assert_eq!(eff, vec![NotifyEffect::Ping]);
     }
 
     #[test]

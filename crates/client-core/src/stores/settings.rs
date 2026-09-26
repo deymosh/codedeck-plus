@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use protocol::relays::{DEFAULT_RELAYS, MARMOT_RELAYS};
+use protocol::relays::DEFAULT_RELAYS;
 
 /// UI-scale slider range.
 pub const UI_SCALE_MIN: f64 = 0.85;
@@ -19,10 +19,18 @@ pub fn clamp_ui_scale(value: f64) -> f64 {
     }
 }
 
-/// CDX-021 → CDX-036: retired (kept empty as the mechanism for a future dead
-/// default — `default_settings`, `hydrate_settings` and `add_relays` all filter
-/// through it).
-pub const DEAD_DEFAULT_RELAYS: &[&str] = &[];
+/// Relays that were once a shipped default and now serve nothing this app
+/// reads — `default_settings`, `hydrate_settings` and `add_relays` all filter
+/// through it, so an install drops them even from a customised list instead
+/// of dialling them forever. Removing a default this way needs no
+/// `LEGACY_DEFAULT_RELAY_SETS` entry: the filtered list IS the new default.
+///
+/// The two Marmot (MLS group chat) relays were default-on for the phone while
+/// it carried Marmot; the app no longer has it, and the bridge never used them.
+pub const DEAD_DEFAULT_RELAYS: &[&str] = &[
+    "wss://relay.us.whitenoise.chat",
+    "wss://relay.eu.whitenoise.chat",
+];
 
 fn without_dead_relays<S: AsRef<str>>(relays: &[S]) -> Vec<String> {
     relays
@@ -66,7 +74,7 @@ pub struct SettingsData {
     pub tor_proxy_enabled: bool,
     /// Only a designated TEST TARGET device auto-enables Wireless Debugging.
     pub mesh_test_target: bool,
-    /// Blossom server for DM attachments (`""` = built-in default).
+    /// Blossom server for session image attachments (`""` = built-in default).
     pub blossom_server: String,
     /// Preferred mode / effort / model for NEW sessions, as agent-defined ids
     /// (`""` = the agent's own default). Applied to a new session only when
@@ -81,12 +89,7 @@ pub struct SettingsData {
 }
 
 pub fn default_settings() -> SettingsData {
-    let relays = without_dead_relays(
-        &DEFAULT_RELAYS
-            .iter()
-            .chain(MARMOT_RELAYS.iter())
-            .collect::<Vec<_>>(),
-    );
+    let relays = without_dead_relays(&DEFAULT_RELAYS);
     SettingsData {
         relays,
         ui_scale: UI_SCALE_DEFAULT,
@@ -276,11 +279,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_carry_the_transport_relays_plus_the_marmot_island() {
+    fn defaults_are_the_transport_relays() {
         let d = default_settings();
-        assert!(d.relays.contains(&"wss://relay2.descendant.io".to_string()));
-        assert!(d.relays.contains(&"wss://relay.us.whitenoise.chat".to_string()));
-        assert_eq!(d.relays.len(), 5);
+        assert_eq!(d.relays, DEFAULT_RELAYS.map(str::to_string));
         assert_eq!(d.default_mode, ""); // the agent's own default
     }
 
@@ -338,6 +339,20 @@ mod tests {
                 "legacy {legacy:?} should upgrade"
             );
         }
+    }
+
+    #[test]
+    fn hydrate_drops_the_dead_marmot_relays_from_any_list() {
+        // The shipped default of the Marmot era lifts to today's default.
+        let old_default: Vec<&str> = DEFAULT_RELAYS.iter().chain(DEAD_DEFAULT_RELAYS).copied().collect();
+        let raw = serde_json::json!({ "relays": old_default }).to_string();
+        assert_eq!(hydrate_settings(Some(&raw)).relays, default_settings().relays);
+        // A customised list keeps everything else, in order.
+        let raw = serde_json::json!({
+            "relays": ["wss://my.relay", "wss://relay.us.whitenoise.chat", "wss://relay.primal.net"]
+        })
+        .to_string();
+        assert_eq!(hydrate_settings(Some(&raw)).relays, vec!["wss://my.relay", "wss://relay.primal.net"]);
     }
 
     #[test]

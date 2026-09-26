@@ -25,8 +25,7 @@ class NotificationChannelRoutingTest {
     }
 
     @Test
-    fun dms_and_unknown_kinds_fall_back_to_messages() {
-        assertEquals("codedeck_messages", channelFor("dm-received").id)
+    fun unknown_kinds_fall_back_to_messages() {
         assertEquals("codedeck_messages", channelFor("something-new").id)
     }
 }

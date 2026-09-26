@@ -32,8 +32,8 @@ its event loop.
   `OutboxSettled`, `PairingSettled`, `ActionFailed`, `FolderAck`, `Ping`. No
   UI strings: the app writes the copy.
 - **Ports** the host supplies: `Kv` and `TranscriptStore` (SQLite on Android),
-  `Notifier`, `HttpFetch` (Blossom image uploads), the Marmot engine, a clock
-  and an entropy source.
+  `Notifier`, `HttpFetch` (Blossom image uploads), a clock and an entropy
+  source.
 
 `client-ffi` re-exposes this to Kotlin. `CoreEvent` and the view types cross
 as the real Rust types; `Intent` crosses as a hand-mapped `UniffiIntent` (a
@@ -67,10 +67,6 @@ new connections only). Cleartext `ws://` is refused except to `.onion` hosts
 
 The release APK is signed and built for aarch64; `minSdk` is 26 (the JNA
 runtime the UniFFI bindings use needs it).
-
-**Not in the app yet:** NIP-17 direct messages and Marmot (MLS) group chat are
-implemented in the core (`client-runtime`, Marmot behind its `marmot`
-feature) but not exposed through `client-ffi` or the UI.
 
 ## Transport behaviour
 

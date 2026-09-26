@@ -748,7 +748,6 @@ fn project_event(raw: &Value) -> Option<NostrEvent> {
         created_at: ev.created_at.as_secs() as i64,
         pubkey: ev.pubkey.to_hex(),
         content: ev.content.clone(),
-        raw: raw.clone(),
     })
 }
 
@@ -759,7 +758,7 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
         .port_or_known_default()
         .ok_or("relay url has no port and unknown scheme")?;
     let tls = matches!(url.scheme(), "wss");
-    // Cleartext ws:// leaks every relay message (session output, DMs, pairing)
+    // Cleartext ws:// leaks every relay message (session output, pairing)
     // to anyone on the path — allowed only for .onion (Tor's own onion routing
     // + the hidden service's authentication already provide the transport
     // security wss:// would otherwise supply) and loopback (traffic that never
@@ -1080,7 +1079,6 @@ mod tests {
             kinds: vec![24515],
             authors: vec!["a".repeat(64)],
             p_tags: vec![phone.pubkey_hex.clone()],
-            h_tags: Vec::new(),
             since: None,
         }
     }

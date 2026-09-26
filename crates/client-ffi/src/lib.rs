@@ -155,7 +155,6 @@ pub trait UniffiHttpFetch: Send + Sync {
         headers: Vec<UniffiHttpHeader>,
         body: Vec<u8>,
     ) -> Result<UniffiHttpResponse, UniffiHttpError>;
-    fn get(&self, url: String) -> Result<UniffiHttpResponse, UniffiHttpError>;
     /// Rebuild the underlying client through the (possibly new) SOCKS5 proxy,
     /// or `None` to go direct — the HTTP twin of the WS transport's own
     /// proxy switch. The string is the SAME bare `host:port` form every
@@ -170,7 +169,7 @@ pub trait UniffiHttpFetch: Send + Sync {
 
 /// The `Rc`-local adapter `Core::new` hands to `CorePorts`: holds the foreign
 /// `Arc<dyn UniffiHttpFetch>` and implements the real `HttpFetch` around it.
-/// `put`/`get` run the (blocking) callback on tokio's blocking pool and wrap
+/// `put` runs the (blocking) callback on tokio's blocking pool and wrap
 /// the joined result in a ready future — the core's loop shares one
 /// current-thread runtime, so a multi-megabyte upload executed inline would
 /// stall every relay socket, timer, and sync tick behind it.
@@ -201,13 +200,6 @@ impl HttpFetch for HttpFetchAdapter {
             .map(|(name, value)| UniffiHttpHeader { name, value })
             .collect();
         let join = tokio::task::spawn_blocking(move || cb.put(url, headers, body));
-        Box::pin(async move { flatten_http_error(join.await) })
-    }
-
-    fn get(&self, url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
-        let cb = Arc::clone(&self.0);
-        let url = url.to_string();
-        let join = tokio::task::spawn_blocking(move || cb.get(url));
         Box::pin(async move { flatten_http_error(join.await) })
     }
 
@@ -319,7 +311,6 @@ impl Core {
                             Some(cb) => Rc::new(HttpFetchAdapter(cb)),
                             None => Rc::new(client_runtime::attachments::NoHttpFetch),
                         },
-                        ..CorePorts::default()
                     };
                     let core = RealCore::spawn(config, ports, observer, clock, entropy).await;
                     log::info!("core thread: RealCore::spawn ready");

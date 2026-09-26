@@ -34,17 +34,6 @@ All content is NIP-44 encrypted between the bridge keypair and the phone
 keypair. Identity is ALWAYS the event author's pubkey — payload claims (e.g.
 `pair-request.pubkeyHex`) are display-only.
 
-#### DM kinds (not bridge protocol, but relay-policy relevant)
-
-| Purpose | Kind | Storage |
-|---|---|---|
-| NIP-17 gift wrap (DMs + Marmot welcomes ride inside) | **1059** | stored; accepted when a `p`-tag recipient is registered (wrap sigs are ephemeral keys) |
-| NIP-17 DM relay list | **10050** | replaceable |
-| Marmot/MLS KeyPackage (MDK 0.8 / MIP-00) | **30443** | addressable (`d` tag required) |
-| Marmot welcome rumor (only ever travels inside a 1059) | **444** | stored |
-| Marmot group message, routed by `h` tag | **445** | stored; signed by MLS-exporter-derived ephemeral keys — accepted without registration (rate-limited per IP) |
-| Marmot KeyPackage relay list | **10051** | replaceable |
-
 ### Traffic-class subscription rules
 
 The phone opens **three separate subscriptions**, one per storage class, with

@@ -408,7 +408,7 @@ private fun SettingsBody(
                         )
                     }
                     Text(
-                        "Blossom server for image attachments in DMs and session messages " +
+                        "Blossom server for session image attachments " +
                             "(images are encrypted before upload; the key travels only inside " +
                             "the encrypted message). Empty = the built-in default.",
                         color = Tokens.TextDim,
