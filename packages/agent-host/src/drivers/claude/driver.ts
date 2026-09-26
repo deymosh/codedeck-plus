@@ -20,6 +20,7 @@ import { sdkMessageToEntries } from './adapter';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
 import {
   modelSupports1mContext,
+  type ModelDiscoveryOptions,
   type SdkAuthStatusMessage,
   type SdkCanUseTool,
   type SdkFacade,
@@ -90,6 +91,10 @@ export interface ClaudeDriverDeps {
   installClaude?: () => Promise<string>;
   /** Outbound HTTP for the API-key check. */
   httpPost?: HttpPost;
+  /** Spawn a throwaway session for the model list when no live session can
+   *  answer it — and once at start, so the list is ready before any session
+   *  exists. */
+  discoverModels?: boolean;
 }
 
 export class ClaudeSession implements DriverSession {
@@ -527,6 +532,7 @@ export class ClaudeDriver implements Driver {
   constructor(private readonly options: ClaudeDriverDeps) {
     // Start at once, so the binary is usually in place by the first session.
     if (options.installClaude) void this.claudePath();
+    if (options.discoverModels) void this.listModels().catch(() => {});
   }
 
   private claudePath(): string | Promise<string> | undefined {
@@ -571,8 +577,15 @@ export class ClaudeDriver implements Driver {
   }
 
   async listModels(): Promise<{ models: ModelEntry[] }> {
-    const models = await this.options.facade.supportedModels();
+    const models = await this.options.facade.supportedModels(this.options.discoverModels ? await this.discovery() : undefined);
     return { models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })) };
+  }
+
+  /** A discovery session needs the binary: it waits for an install in
+   *  progress, and after a failed one leaves the SDK to find its own. */
+  private async discovery(): Promise<ModelDiscoveryOptions> {
+    const path = await Promise.resolve(this.claudePath()).catch(() => undefined);
+    return path ? { pathToClaudeCodeExecutable: path } : {};
   }
 
   /** Check an API key with the smallest possible request. A network error

@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { ClaudeDriver, PLAN_APPROVAL_OPTIONS } from '../drivers/claude/driver';
 import type {
+  ModelDiscoveryOptions,
   SdkCanUseTool,
   SdkContextUsage,
   SdkFacade,
@@ -83,6 +84,7 @@ class ScriptedHandle implements SdkSessionHandle {
 
 class ScriptedFacade implements SdkFacade {
   readonly sessions: Array<{ opts: SdkSessionOptions; handle: ScriptedHandle }> = [];
+  readonly discoveries: Array<ModelDiscoveryOptions | undefined> = [];
   nextProbe: Promise<void> = Promise.resolve();
 
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
@@ -92,7 +94,8 @@ class ScriptedFacade implements SdkFacade {
     return handle;
   }
 
-  async supportedModels(): Promise<SdkModelDescriptor[]> {
+  async supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]> {
+    this.discoveries.push(discovery);
     return [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }];
   }
 
@@ -419,5 +422,29 @@ describe('Claude Code installed on demand', () => {
     await ctx.waitFor((e) => e.type === 'ready');
     expect(facade.last.opts.pathToClaudeCodeExecutable).toBe('/usr/bin/claude');
     expect(installs).toBe(0);
+  });
+});
+
+describe('Claude model discovery', () => {
+  it('lists models at start, through a discovery session on the installed binary', async () => {
+    const facade = new ScriptedFacade();
+    let finishInstall: (path: string) => void = () => {};
+    const driver = new ClaudeDriver({
+      facade,
+      discoverModels: true,
+      installClaude: () => new Promise((resolve) => (finishInstall = resolve)),
+    });
+    // The start-up listing waits for the binary it needs.
+    await Promise.resolve();
+    expect(facade.discoveries).toEqual([]);
+    finishInstall('/cache/claude');
+    await expect.poll(() => facade.discoveries).toEqual([{ pathToClaudeCodeExecutable: '/cache/claude' }]);
+    expect((await driver.listModels()).models).toEqual([{ id: 'claude-sonnet-5', label: 'Sonnet 5' }]);
+  });
+
+  it('without discovery, only live sessions are asked', async () => {
+    const facade = new ScriptedFacade();
+    await new ClaudeDriver({ facade }).listModels();
+    expect(facade.discoveries).toEqual([undefined]);
   });
 });

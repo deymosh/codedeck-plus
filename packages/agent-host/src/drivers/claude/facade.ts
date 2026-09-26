@@ -14,6 +14,7 @@
  * package directly.
  */
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -181,12 +182,23 @@ export interface SdkSessionHandle {
 export interface SdkModelDescriptor {
   id: string;
   label?: string;
+  /** The canonical model id an alias row resolves to (`opus` →
+   *  `claude-opus-5-5`), when the CLI says. */
+  resolvedModel?: string;
+}
+
+/** How to spawn a discovery session when no live session can answer the
+ *  model list. */
+export interface ModelDiscoveryOptions {
+  pathToClaudeCodeExecutable?: string;
 }
 
 export interface SdkFacade {
   createSession(opts: SdkSessionOptions): SdkSessionHandle;
-  /** Available models, via `query.supportedModels()` when the SDK offers it. */
-  supportedModels(): Promise<SdkModelDescriptor[]>;
+  /** Available models, via `query.supportedModels()` when the SDK offers it.
+   *  With `discovery` set and no live session to ask, a throwaway session is
+   *  spawned to answer (never given a prompt) and closed again. */
+  supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]>;
 }
 
 // --- Model-list aggregation (CDX-022) ---
@@ -204,6 +216,15 @@ export interface ModelsQueryHandle {
 /** Per-handle budget for a supportedModels control request. A live CLI answers
  *  in ~1s (measured); anything slower is treated as dead and skipped. */
 export const SUPPORTED_MODELS_TIMEOUT_MS = 3_000;
+
+/** Budget for a discovery session: a cold spawn of the CLI (first run after
+ *  an install, a slow disk) takes far longer than a live one answering. */
+export const DISCOVERY_TIMEOUT_MS = 30_000;
+
+/** How long a discovery session's answer stands in for a new one. The list
+ *  only changes with a CLI upgrade or a login, and every phone asking would
+ *  otherwise spawn a CLI of its own. */
+export const DISCOVERY_CACHE_MS = 10 * 60_000;
 
 /**
  * Bypass `query.supportedModels()` and ask a gateway directly for its model
@@ -712,7 +733,11 @@ class RealSdkSessionHandle implements SdkSessionHandle {
     const fn = (this.q as Partial<Pick<Query, 'supportedModels'>>).supportedModels;
     if (typeof fn !== 'function') return [];
     const models = await fn.call(this.q);
-    return models.map((m) => ({ id: m.value, label: m.displayName }));
+    return models.map((m) => ({
+      id: m.value,
+      label: m.displayName,
+      ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
+    }));
   }
 
   messages(): AsyncIterable<SDKMessage> {
@@ -796,8 +821,41 @@ class RealSdkSessionHandle implements SdkSessionHandle {
   }
 }
 
+/**
+ * Ask a throwaway session for the model list. The CLI answers the
+ * supportedModels control request right after it spawns, with no user
+ * message sent — so the session never runs a turn, writes no conversation
+ * file, and costs no tokens. It runs in the temp directory so no project's
+ * settings shape the answer, and is ended as soon as it has answered (or
+ * failed to).
+ */
+async function discoverModels(discovery: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]> {
+  const handle = new RealSdkSessionHandle({
+    sessionId: randomUUID(),
+    cwd: os.tmpdir(),
+    permissionMode: 'plan',
+    canUseTool: async () => ({ behavior: 'deny', message: 'This session only lists models.' }),
+    ...(discovery.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: discovery.pathToClaudeCodeExecutable } : {}),
+  });
+  // Nothing else reads this query's stream; drained so it never backs up,
+  // and so the abort at the end does not surface as an unhandled rejection.
+  void (async () => {
+    for await (const _ of handle.messages()) {
+      // discarded
+    }
+  })().catch(() => {});
+  try {
+    return await firstSupportedModels([handle], DISCOVERY_TIMEOUT_MS, (m) => console.error(m));
+  } finally {
+    await handle.end();
+  }
+}
+
 export class RealSdkFacade implements SdkFacade {
   private handles = new Set<RealSdkSessionHandle>();
+  /** The discovery session in flight — concurrent askers share it. */
+  private discovering: Promise<SdkModelDescriptor[]> | null = null;
+  private discovered: { models: SdkModelDescriptor[]; at: number } | null = null;
 
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
     const handle = new RealSdkSessionHandle(opts);
@@ -805,17 +863,33 @@ export class RealSdkFacade implements SdkFacade {
     return handle;
   }
 
-  async supportedModels(): Promise<SdkModelDescriptor[]> {
+  async supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]> {
     // See ENABLE_GATEWAY_MODEL_DISCOVERY's doc comment for why this bypasses
-    // query.supportedModels() entirely rather than trying to use it.
+    // query.supportedModels() entirely rather than trying to use it — a
+    // discovery session would answer with the same stale built-in aliases.
     if (ENABLE_GATEWAY_MODEL_DISCOVERY) {
       return fetchGatewayModels();
     }
+    const live = await this.liveSupportedModels();
+    if (live.length > 0 || !discovery) return live;
+    if (this.discovered && Date.now() - this.discovered.at < DISCOVERY_CACHE_MS) return this.discovered.models;
+    if (!this.discovering) {
+      const attempt = discoverModels(discovery).then((models) => {
+        if (models.length > 0) this.discovered = { models, at: Date.now() };
+        return models;
+      });
+      this.discovering = attempt;
+      void attempt.finally(() => {
+        if (this.discovering === attempt) this.discovering = null;
+      }).catch(() => {});
+    }
+    return this.discovering;
+  }
 
+  private async liveSupportedModels(): Promise<SdkModelDescriptor[]> {
     // supportedModels() is a control request on a live Query — try EVERY live
     // session's query, first non-empty answer wins (CDX-022: a dead handle
-    // must not poison the list). With no live session there is nothing to ask;
-    // callers treat [] as "unknown, use defaults".
+    // must not poison the list).
     for (const handle of [...this.handles]) {
       if (handle.isEnded) this.handles.delete(handle);
     }

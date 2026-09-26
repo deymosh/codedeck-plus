@@ -245,7 +245,7 @@ impl Engine {
             Ok(HostMessage::Models { .. }) => (
                 Vec::new(),
                 None,
-                Some(format!("{name} reported no models yet — start or open a session and try again.")),
+                Some(format!("{name} reported no models — check its sign-in or configuration on the bridge, then try again.")),
             ),
             Ok(_) => (Vec::new(), None, Some(format!("{name} gave no model list."))),
             Err(err) => (Vec::new(), None, Some(format!("Could not list {name}'s models: {err}"))),
