@@ -47,5 +47,10 @@
             android:name=".platform.StayConnectedService"
             android:exported="false"
             android:foregroundServiceType="dataSync|remoteMessaging" />
+        <!-- The stay-connected keep-alive alarm; only our own PendingIntent
+             targets it. -->
+        <receiver
+            android:name=".platform.KeepAliveReceiver"
+            android:exported="false" />
     </application>
 </manifest>

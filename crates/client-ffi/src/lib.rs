@@ -385,6 +385,13 @@ impl Core {
         self.handle.resume();
     }
 
+    /// Check the relay connections now and repair what is broken; resolves
+    /// within a few seconds. Android calls it from a periodic alarm, holding
+    /// a wake lock only for the call, instead of keeping the CPU awake.
+    pub async fn keepalive(&self) {
+        self.handle.keepalive().await;
+    }
+
     /// Whether the device has a usable network. Offline parks the connection
     /// (no retries against a dead radio); coming back online reconnects at
     /// once with a fresh backoff instead of waiting out the current delay.

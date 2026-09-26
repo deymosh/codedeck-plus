@@ -878,6 +878,8 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -912,6 +914,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_client_ffi_fn_method_core_identity_npub(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_client_ffi_fn_method_core_keepalive(`ptr`: Pointer,
+    ): Long
     fun uniffi_client_ffi_fn_method_core_machines_view(`ptr`: Pointer,
     ): Long
     fun uniffi_client_ffi_fn_method_core_outbox_view(`ptr`: Pointer,
@@ -1106,6 +1110,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_ffi_checksum_method_core_identity_npub(
     ): Short
+    fun uniffi_client_ffi_checksum_method_core_keepalive(
+    ): Short
     fun uniffi_client_ffi_checksum_method_core_machines_view(
     ): Short
     fun uniffi_client_ffi_checksum_method_core_outbox_view(
@@ -1186,6 +1192,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_core_identity_npub() != 690.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_core_keepalive() != 38688.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_core_machines_view() != 7292.toShort()) {
@@ -1734,6 +1743,13 @@ public interface CoreInterface {
      */
     fun `identityNpub`(): kotlin.String
     
+    /**
+     * Check the relay connections now and repair what is broken; resolves
+     * within a few seconds. Android calls it from a periodic alarm, holding
+     * a wake lock only for the call, instead of keeping the CPU awake.
+     */
+    suspend fun `keepalive`()
+    
     suspend fun `machinesView`(): UniffiMachinesView
     
     suspend fun `outboxView`(): UniffiOutboxView
@@ -1952,6 +1968,32 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
     )
     }
     
+
+    
+    /**
+     * Check the relay connections now and repair what is broken; resolves
+     * within a few seconds. Android calls it from a periodic alarm, holding
+     * a wake lock only for the call, instead of keeping the CPU awake.
+     */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `keepalive`() {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_keepalive(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
 
     
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")

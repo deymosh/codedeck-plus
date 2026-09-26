@@ -16,8 +16,12 @@
 //!   still fires only when it is dead on every relay; the caller's own
 //!   backoff then calls `ensure_connected`, which dials every relay without
 //!   a socket at once. [`WsTransport::shutdown`] stops all of it.
-//! * **ping liveness** — a socket with no traffic for [`DEAD_AFTER`] is dropped
-//!   so a silently-rotted relay is detected, not trusted. Reading and writing
+//! * **ping liveness** — one pinger pings every relay together each
+//!   [`PING_EVERY`] (a host slows it while in the background, see
+//!   [`WsTransport::set_ping_interval`]), and a socket with no traffic for
+//!   two missed pings ([`DEAD_AFTER`]) is dropped so a silently-rotted relay
+//!   is detected, not trusted. [`WsTransport::check_liveness`] runs the same
+//!   test on demand, for a host that wakes the device just to check. Reading and writing
 //!   run concurrently, so a write stuck on a full socket buffer can neither
 //!   stall inbound frames nor postpone that check; a write that stays stuck
 //!   for [`WRITE_TIMEOUT`] drops the socket too.
@@ -60,11 +64,18 @@ use super::frames::{self, RelayMessage};
 use super::router::{Router, RouterAction};
 use crate::port::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
 
-/// Send a WS Ping this often.
-const PING_EVERY: Duration = Duration::from_secs(30);
+/// Ping every relay this often (all at once, so the radio wakes once per
+/// round rather than once per relay).
+pub const PING_EVERY: Duration = Duration::from_secs(30);
 /// Drop a connection with no inbound traffic (frame or Pong) for this long —
-/// the `enablePing` intent: a rotted socket is detected, not trusted.
-const DEAD_AFTER: Duration = Duration::from_secs(75);
+/// the `enablePing` intent: a rotted socket is detected, not trusted. Always
+/// [`dead_after`] of the ping interval.
+const DEAD_AFTER: Duration = dead_after(PING_EVERY);
+
+/// Two missed pings plus a margin for a slow round trip.
+const fn dead_after(ping_every: Duration) -> Duration {
+    Duration::from_secs(ping_every.as_secs() * 2 + 15)
+}
 /// Default wall-clock budget for one `publish_confirmed` (under the outbox
 /// sweep's confirm timeout, CDX-086).
 pub const PUBLISH_CONFIRM_BUDGET: Duration = Duration::from_secs(12);
@@ -84,6 +95,8 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 const OUTBOUND_QUEUE: usize = 1024;
 /// How long a deliberate close waits to say goodbye before just dropping.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
+/// How often [`WsTransport::check_liveness`] looks for the answers.
+const LIVENESS_POLL: Duration = Duration::from_millis(50);
 /// First redial delay after a relay's socket fails; it doubles per failure.
 pub const RETRY_BASE: Duration = Duration::from_secs(2);
 /// Ceiling on the redial delay: a relay that stays down costs one dial every
@@ -144,6 +157,8 @@ enum StopReason {
     Deliberate,
     /// The outbound queue filled up: a failure, reported like a dead socket.
     Overflow,
+    /// No answer to a [`WsTransport::check_liveness`] ping: a failure too.
+    Unresponsive,
 }
 
 /// A one-way stop request from the transport to a relay's task.
@@ -154,11 +169,11 @@ struct Stop {
 }
 
 impl Stop {
-    /// A deliberate stop overrides an overflow still pending; otherwise the
+    /// A deliberate stop overrides a failure still pending; otherwise the
     /// first request wins.
     fn request(&self, reason: StopReason) {
         match (self.reason.get(), reason) {
-            (None, _) | (Some(StopReason::Overflow), StopReason::Deliberate) => {
+            (None, _) | (Some(StopReason::Overflow | StopReason::Unresponsive), StopReason::Deliberate) => {
                 self.reason.set(Some(reason));
                 // `notify_one` keeps a permit when nobody waits yet, so a stop
                 // requested before the task first polls `wait` is not lost.
@@ -186,8 +201,11 @@ struct SubEntry {
 }
 
 struct Conn {
-    tx: mpsc::Sender<String>,
+    tx: mpsc::Sender<Message>,
     stop: Rc<Stop>,
+    /// Inbound frames (text, Pong, Ping) read on this socket so far — a
+    /// liveness probe compares it before and after its ping.
+    heard: Rc<Cell<u64>>,
     /// `false` until the WS handshake completes. A REQ / EVENT is sent from
     /// `subscribe` / `publish_confirmed` only to `up` relays; a relay that
     /// connects later gets every stored sub's REQ replayed by `on_relay_up`, so
@@ -208,7 +226,15 @@ impl Conn {
     /// failure instead (the connection FSM then redials, and the REQs are
     /// replayed on connect), so a stalled relay cannot grow memory unbounded.
     fn send(&self, frame: String) {
-        match self.tx.try_send(frame) {
+        self.queue(Message::Text(frame));
+    }
+
+    fn ping(&self) {
+        self.queue(Message::Ping(Vec::new()));
+    }
+
+    fn queue(&self, message: Message) {
+        match self.tx.try_send(message) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 if self.stop.reason.get().is_none() {
@@ -248,6 +274,8 @@ struct State {
     /// Set by `ensure_connected`, cleared by `shutdown`: only an active
     /// transport redials on its own or dials on a relay / proxy change.
     active: bool,
+    /// The one task pinging every relay; runs while `active`.
+    pinger: Option<AbortHandle>,
     sub_seq: u64,
     next_generation: u64,
     timing: Timing,
@@ -349,6 +377,7 @@ impl WsTransport {
                 publishes: HashMap::new(),
                 retries: HashMap::new(),
                 active: false,
+                pinger: None,
                 sub_seq: 0,
                 next_generation: 0,
                 timing: TIMING,
@@ -381,6 +410,80 @@ impl WsTransport {
         for relay in relays {
             self.spawn_relay(relay);
         }
+        if self.state.borrow().pinger.is_none() {
+            self.start_pinger();
+        }
+    }
+
+    /// Ping every relay each `interval` from now on, and give a silent socket
+    /// [`dead_after`] that interval before dropping it. A phone slows this
+    /// down while its app is in the background: every ping is a radio
+    /// wake-up, and a background check is driven by
+    /// [`Self::check_liveness`] instead.
+    pub fn set_ping_interval(&self, interval: Duration) {
+        let restart = {
+            let mut st = self.state.borrow_mut();
+            if st.timing.ping_every == interval {
+                return;
+            }
+            st.timing.ping_every = interval;
+            st.timing.dead_after = dead_after(interval);
+            if let Some(pinger) = st.pinger.take() {
+                pinger.abort();
+            }
+            st.active
+        };
+        if restart {
+            self.start_pinger();
+        }
+    }
+
+    fn start_pinger(&self) {
+        let this = self.clone();
+        let task = tokio::task::spawn_local(async move {
+            loop {
+                let every = this.state.borrow().timing.ping_every;
+                tokio::time::sleep(every).await;
+                for c in this.state.borrow().conns.values().filter(|c| c.up) {
+                    c.ping();
+                }
+            }
+        });
+        self.state.borrow_mut().pinger = Some(task.abort_handle());
+    }
+
+    /// Ping every connected relay now and wait up to `within` for each to
+    /// answer (with anything). A relay that stays silent is dropped as failed
+    /// — reported and redialled like any dead socket. Returns how many
+    /// answered. For a host that wakes the device briefly to check the
+    /// connection instead of holding it awake: a socket a NAT or the relay
+    /// silently dropped is found at once, not after [`DEAD_AFTER`] of awake
+    /// time.
+    pub async fn check_liveness(&self, within: Duration) -> usize {
+        let probes: Vec<(String, u64, Rc<Cell<u64>>, u64)> = {
+            let st = self.state.borrow();
+            st.conns
+                .iter()
+                .filter(|(_, c)| c.up)
+                .map(|(relay, c)| {
+                    c.ping();
+                    (relay.clone(), c.generation, Rc::clone(&c.heard), c.heard.get())
+                })
+                .collect()
+        };
+        let answered = |p: &(String, u64, Rc<Cell<u64>>, u64)| p.2.get() > p.3;
+        let deadline = Instant::now() + within;
+        while !probes.iter().all(answered) && Instant::now() < deadline {
+            tokio::time::sleep(LIVENESS_POLL.min(within)).await;
+        }
+        let st = self.state.borrow();
+        for (relay, generation, _, _) in probes.iter().filter(|p| !answered(p)) {
+            if let Some(c) = st.conns.get(relay).filter(|c| c.generation == *generation) {
+                log::info!("ws: {relay} did not answer a liveness ping within {within:?}");
+                c.stop.request(StopReason::Unresponsive);
+            }
+        }
+        probes.iter().filter(|p| answered(p)).count()
     }
 
     /// How many relays this transport was configured with — a boot-time
@@ -409,6 +512,9 @@ impl WsTransport {
         let conns: Vec<Conn> = {
             let mut st = self.state.borrow_mut();
             st.active = false;
+            if let Some(pinger) = st.pinger.take() {
+                pinger.abort();
+            }
             for (_, mut retry) in st.retries.drain() {
                 retry.cancel_timer();
             }
@@ -502,21 +608,29 @@ impl WsTransport {
     // --- internals ---------------------------------------------------
 
     fn spawn_relay(&self, relay: String) {
-        let (tx, rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
+        let (tx, rx) = mpsc::channel::<Message>(OUTBOUND_QUEUE);
         let stop = Rc::new(Stop::default());
+        let heard = Rc::new(Cell::new(0));
         let generation = {
             let mut st = self.state.borrow_mut();
             st.next_generation += 1;
             let generation = st.next_generation;
             st.conns.insert(
                 relay.clone(),
-                Conn { tx, stop: Rc::clone(&stop), up: false, up_since: None, generation },
+                Conn {
+                    tx,
+                    stop: Rc::clone(&stop),
+                    heard: Rc::clone(&heard),
+                    up: false,
+                    up_since: None,
+                    generation,
+                },
             );
             generation
         };
         let this = self.clone();
         tokio::task::spawn_local(async move {
-            this.run_relay(relay, generation, rx, stop).await;
+            this.run_relay(relay, generation, rx, stop, heard).await;
         });
     }
 
@@ -524,8 +638,9 @@ impl WsTransport {
         self,
         relay: String,
         generation: u64,
-        mut rx: mpsc::Receiver<String>,
+        mut rx: mpsc::Receiver<Message>,
         stop: Rc<Stop>,
+        heard: Rc<Cell<u64>>,
     ) {
         let (proxy, timing) = {
             let st = self.state.borrow();
@@ -563,16 +678,11 @@ impl WsTransport {
         // fires.
         let ended = {
             let writer = async {
-                let mut ping = tokio::time::interval(timing.ping_every);
-                ping.tick().await; // consume the immediate first tick
                 loop {
-                    let message = tokio::select! {
-                        frame = rx.recv() => match frame {
-                            Some(text) => Message::Text(text),
-                            // Every sender gone: the entry was detached.
-                            None => return Ended::Deliberate,
-                        },
-                        _ = ping.tick() => Message::Ping(Vec::new()),
+                    // Frames and the pinger's pings, in queue order.
+                    let Some(message) = rx.recv().await else {
+                        // Every sender gone: the entry was detached.
+                        return Ended::Deliberate;
                     };
                     match tokio::time::timeout(timing.write, sink.send(message)).await {
                         Ok(Ok(())) => {}
@@ -584,11 +694,15 @@ impl WsTransport {
             let reader = async {
                 loop {
                     // Any inbound frame — text, Pong, Ping — restarts the
-                    // deadline; the writer's pings make a live relay answer.
-                    match tokio::time::timeout(timing.dead_after, stream.next()).await {
-                        Err(_) => {
-                            return Ended::Failed(format!("no traffic for {:?}", timing.dead_after))
-                        }
+                    // deadline; the pinger's pings make a live relay answer.
+                    // Read afresh each time: the ping interval can change.
+                    let dead_after = self.state.borrow().timing.dead_after;
+                    let next = tokio::time::timeout(dead_after, stream.next()).await;
+                    if matches!(next, Ok(Some(Ok(_)))) {
+                        heard.set(heard.get() + 1);
+                    }
+                    match next {
+                        Err(_) => return Ended::Failed(format!("no traffic for {dead_after:?}")),
                         Ok(Some(Ok(Message::Text(text)))) => self.on_frame(&relay, &text),
                         Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
                             return Ended::Failed("socket closed".to_string())
@@ -606,6 +720,7 @@ impl WsTransport {
                     StopReason::Overflow => {
                         Ended::Failed(format!("outbound queue full ({OUTBOUND_QUEUE} frames)"))
                     }
+                    StopReason::Unresponsive => Ended::Failed("no answer to a liveness ping".to_string()),
                 },
             }
         };
@@ -1097,12 +1212,12 @@ mod tests {
         let t = transport(&mock, &phone);
         let url = mock.url.clone();
         // The live replacement (generation 7), already up.
-        let (tx, mut rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
+        let (tx, mut rx) = mpsc::channel::<Message>(OUTBOUND_QUEUE);
         {
             let mut st = t.state.borrow_mut();
             st.conns.insert(
                 url.clone(),
-                Conn { tx, stop: Rc::new(Stop::default()), up: true, up_since: None, generation: 7 },
+                Conn { tx, stop: Rc::new(Stop::default()), heard: Rc::default(), up: true, up_since: None, generation: 7 },
             );
             st.router.relay_connected(&url);
         }
@@ -1208,8 +1323,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_full_outbound_queue_stops_the_connection_as_a_failure() {
-        let (tx, _rx) = mpsc::channel::<String>(1);
-        let conn = Conn { tx, stop: Rc::new(Stop::default()), up: true, up_since: None, generation: 1 };
+        let (tx, _rx) = mpsc::channel::<Message>(1);
+        let conn = Conn { tx, stop: Rc::new(Stop::default()), heard: Rc::default(), up: true, up_since: None, generation: 1 };
         conn.send("first".into());
         assert_eq!(conn.stop.reason.get(), None);
         conn.send("second".into());
@@ -1467,6 +1582,60 @@ mod tests {
             },
         );
         (sub, seen)
+    }
+
+    #[tokio::test]
+    async fn check_liveness_keeps_relays_that_answer_and_drops_silent_ones() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                // Completes the handshake, then never reads: no Pong.
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let silent = format!("ws://{}", listener.local_addr().unwrap());
+                let held = tokio::spawn(async move {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    drop(ws);
+                });
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![mock.url.clone(), silent.clone()],
+                    identity: phone.clone(),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                let (_sub, seen) = recording_sub(&t, &phone);
+                let _req = mock.next_frame().await;
+                wait_until(|| t.connected_relays().len() == 2).await;
+
+                assert_eq!(t.check_liveness(Duration::from_millis(300)).await, 1);
+                wait_until(|| t.connected_relays().len() == 1).await;
+                assert!(t.connected_relays().contains(&mock.url));
+                assert_eq!(seen.closes.get(), 0, "the answering relay still carries the sub");
+                t.shutdown();
+                held.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_ping_interval_sets_the_silence_deadline() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.ensure_connected();
+                t.set_ping_interval(Duration::from_secs(150));
+                let timing = t.state.borrow().timing;
+                assert_eq!((timing.ping_every, timing.dead_after), (Duration::from_secs(150), Duration::from_secs(315)));
+                assert!(t.state.borrow().pinger.is_some());
+                t.shutdown();
+                assert!(t.state.borrow().pinger.is_none());
+                assert_eq!(DEAD_AFTER, Duration::from_secs(75));
+            })
+            .await;
     }
 
     #[test]
