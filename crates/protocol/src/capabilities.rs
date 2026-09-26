@@ -12,7 +12,8 @@
 //! otherwise hard-fail):
 //!
 //! * **HARD GATE** — absence changes behaviour: [`IMAGES`] (the client shows
-//!   image attach only when the bridge advertises it).
+//!   image attach only when the bridge advertises it), [`SESSION_KEYS`] (the
+//!   client acts through a session key only when the bridge honours one).
 //! * **PRESENCE MARKER** — detection is on payload data: [`SYNC_1`],
 //!   [`FOLDERS`]. Kept so a session list is self-describing.
 //! * **TRANSPORT BEACON** — [`CHUNKED`]: advertised on both sides, gated by
@@ -33,9 +34,14 @@ pub const IMAGES: &str = "images";
 // TRANSPORT BEACON — oversize-event `chunk` fragmentation. Advertised on both
 // sides, gated by neither.
 pub const CHUNKED: &str = "chunked";
+// HARD GATE (client-side) — the bridge honours `session-key` grants: it
+// accepts commands authored by a granted key and encrypts to it. A client
+// sends commands from a session key only when this is advertised; to a
+// bridge without it, those commands would go unheard.
+pub const SESSION_KEYS: &str = "session-keys";
 
 /// Every capability the reference bridge ships with.
-pub const ALL_BRIDGE_CAPABILITIES: [&str; 4] = [SYNC_1, FOLDERS, IMAGES, CHUNKED];
+pub const ALL_BRIDGE_CAPABILITIES: [&str; 5] = [SYNC_1, FOLDERS, IMAGES, CHUNKED, SESSION_KEYS];
 
 /// Capabilities the reference client stamps on outgoing command `caps`.
 pub const ALL_PHONE_CAPABILITIES: [&str; 1] = [CHUNKED];
@@ -79,7 +85,7 @@ mod tests {
 
     #[test]
     fn capability_lists() {
-        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "images", "chunked"]);
+        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "images", "chunked", "session-keys"]);
         assert_eq!(ALL_PHONE_CAPABILITIES, ["chunked"]);
     }
 

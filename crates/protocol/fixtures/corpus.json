@@ -35,13 +35,17 @@
       { "type": "set-credentials", "agent": "claude-code", "values": { "anthropic_api_key": "sk-ant-x" } },
       { "type": "set-credentials", "values": { "github_pat": "ghp_x" } },
       { "type": "pair-request", "npub": "npub1x", "pubkeyHex": "aa", "label": "phone", "token": "t" },
+      { "type": "pair-request", "npub": "npub1x", "pubkeyHex": "aa", "label": "phone", "token": "t", "sessionKey": { "pubkeyHex": "bb", "expiresAt": 1800000000 } },
       { "type": "set-provider-profile", "profileId": "p", "profile": null },
       { "type": "set-provider-profile", "profileId": "p", "profile": { "label": "L", "baseUrl": "https://api.example.com/v1", "authToken": "tok", "models": [{ "id": "m1", "label": "M1" }], "defaultModel": "m1" } },
       { "type": "set-provider-profile", "profileId": "p", "profile": { "label": "L", "baseUrl": "http://localhost:11434/v1", "models": [{ "id": "m1" }] } },
-      { "type": "provider-profiles-request" }
+      { "type": "provider-profiles-request" },
+      { "type": "session-key", "sessionKey": { "pubkeyHex": "bb", "expiresAt": 1800000000 } }
     ],
     "rejected": [
       { "type": "input", "text": "no session id" },
+      { "type": "session-key", "sessionKey": { "pubkeyHex": "bb" } },
+      { "type": "session-key" },
       { "type": "input", "sessionId": "s" },
       { "type": "set-option", "sessionId": "s", "option": "temperature", "value": "1" },
       { "type": "question-response", "sessionId": "s", "requestId": "q", "index": 0, "answer": { "kind": "telepathy" } },

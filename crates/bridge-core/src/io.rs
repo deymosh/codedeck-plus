@@ -44,6 +44,10 @@ pub struct PairedPhone {
     pub pubkey_hex: String,
     pub label: String,
     pub paired_at: String,
+    /// Keys this identity granted to act for it, oldest first (see the
+    /// engine's `session_keys` module).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_keys: Vec<protocol::commands::SessionKeyGrant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,8 +109,9 @@ pub enum Input {
 
 #[derive(Debug)]
 pub enum Effect {
-    /// Encrypt `message` to each phone in `to` (hex pubkeys) and publish it
-    /// with the event kind its type calls for.
+    /// Encrypt `message` to each phone in `to` (hex pubkeys: a phone's
+    /// current session key, else its identity) and publish it with the event
+    /// kind its type calls for.
     Publish { to: Vec<String>, message: BridgeToPhone },
     /// Write one frame to the agent host's stdin.
     Host(BridgeFrame),
