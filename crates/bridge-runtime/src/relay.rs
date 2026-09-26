@@ -13,7 +13,6 @@
 //! produced them.
 
 use std::rc::Rc;
-use std::time::Duration;
 
 use bridge_core::{InboundEvent, Input, Via};
 use nostr::{EventBuilder, Keys, Kind, PublicKey, Tag, TagKind, Timestamp};
@@ -121,9 +120,8 @@ pub struct Relays {
 }
 
 impl Relays {
-    /// Connect, and keep reconnecting every `retry` for as long as the
-    /// runtime runs (the transport itself never redials; it replays every
-    /// open subscription when a relay comes back).
+    /// Connect. From then on the transport redials each relay that fails on
+    /// its own backoff, and replays every open subscription when it is back.
     pub fn start(
         relays: Vec<String>,
         keys: Keypair,
@@ -131,17 +129,9 @@ impl Relays {
         proxy: Option<String>,
         inputs: mpsc::UnboundedSender<Input>,
     ) -> Self {
-        let retry = if proxy.is_some() { Duration::from_secs(10) } else { Duration::from_secs(3) };
         let bridge_pubkey = keys.pubkey_hex.clone();
         let transport = WsTransport::new(WsConfig { relays, identity: keys.clone(), proxy });
         transport.ensure_connected();
-        let redial = transport.clone();
-        tokio::task::spawn_local(async move {
-            loop {
-                tokio::time::sleep(retry).await;
-                redial.ensure_connected();
-            }
-        });
 
         let (jobs, mut queue) = mpsc::unbounded_channel::<Job>();
         let publisher = transport.clone();

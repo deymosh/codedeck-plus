@@ -76,9 +76,19 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
 - The transport is hand-rolled on `tokio-tungstenite` + `tokio-socks`, not a
   relay-pool library: a pool brings its own idle timeouts and reconnects, and
   collapses the publish outcomes below.
-- The transport never reconnects on its own: a dead socket is one close
-  event, and the connection FSM owns the backoff — 2 s → 30 s with up to 25%
-  jitter, 8 s → 60 s over Tor. Going back online reconnects at once.
+- Each relay is redialled on its own when its socket fails: 2 s doubling to
+  5 min, jittered, restarting from 2 s after a connection that lasted a
+  minute. A subscription reports one close only when it is dead on every
+  relay; the connection FSM then owns the backoff — 2 s → 30 s with up to
+  25% jitter, 8 s → 60 s over Tor — and dials every relay at once. Going
+  back online reconnects at once. A relay that comes back gets every open
+  subscription's REQ again.
+- A REQ or event a relay refuses with `auth-required:` is re-sent once that
+  relay has accepted the NIP-42 AUTH; if it refuses the AUTH, or asks again
+  after accepting it, the subscription is dead there and the publish
+  rejected there.
+- Each event is verified once per subscription: the copies other relays send
+  are dropped before their signature is checked.
 - Liveness: a ping every 30 s; a socket silent for 75 s is dropped. If every
   paired machine's heartbeat is older than 150 s (240 s over Tor) while
   "connected", the subscriptions are torn down and reopened.
