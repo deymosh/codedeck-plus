@@ -34,9 +34,6 @@ pub const IDENTITY_KEY: &str = IDENTITY_STORAGE_KEY;
 /// `nostr_client`'s `last_stored_seen` cursor (seconds), persisted so a reboot
 /// resumes its since-window.
 pub const LAST_STORED_SEEN_KEY: &str = "client.lastStoredSeen";
-/// Keys of stores the app no longer has (NIP-17 DMs, Marmot group chat).
-/// Deleted on boot so an upgraded install does not keep their data around.
-pub const RETIRED_KEYS: [&str; 2] = ["dm", "marmot"];
 
 /// Boot options for the store bundle.
 #[derive(Debug, Clone, Default)]
@@ -138,9 +135,6 @@ pub async fn hydrate(
         config.merge_options,
     );
     let outbox = OutboxState::new(hydrate_outbox(kv.get(OUTBOX_KEY).await.as_deref()));
-    for key in RETIRED_KEYS {
-        kv.delete(key).await;
-    }
 
     let last_stored_seen = kv
         .get(LAST_STORED_SEEN_KEY)
@@ -265,16 +259,6 @@ mod tests {
         assert_eq!(h2.last_stored_seen, 1_234);
         assert_eq!(h2.stores.quick_prompts.prompts[0].label, "Go");
         assert_eq!(h2.stores.outbox.items["in-1"].state, OutboxItemState::Pending);
-    }
-
-    #[tokio::test]
-    async fn hydrate_deletes_the_retired_store_keys() {
-        let kv = MemoryKv::seeded([("dm", "{}"), ("marmot", "{}"), (SETTINGS_KEY, "garbage")]);
-        let ts = MemoryTranscriptStore::new();
-        hydrate(&kv, &ts, &StoresConfig::default()).await;
-        assert_eq!(kv.get("dm").await, None);
-        assert_eq!(kv.get("marmot").await, None);
-        assert!(kv.get(SETTINGS_KEY).await.is_some());
     }
 
     #[tokio::test]
