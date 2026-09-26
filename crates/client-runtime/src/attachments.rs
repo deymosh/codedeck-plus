@@ -1,22 +1,34 @@
-//! DM image attachments (CDX-011) — the AES-256-GCM blob crypto and the
-//! BUD-01/02 Blossom upload/download. Port of the deferred half of
-//! `apps/mobile/src/core/dmAttachments.ts`; the wire-format parse/build lives
-//! in `client_core::dm_attachments`.
+//! Session image attachments — the AES-256-GCM blob crypto and the BUD-01/02
+//! Blossom upload.
 //!
 //! The blob on the server is the ciphertext; the key + iv travel only inside
-//! the NIP-44/NIP-59 encrypted DM (as the `key=… iv=…` line
-//! `client_core::dm_attachments::build_image_ref` emits). HTTP is a port
+//! the NIP-44 encrypted session command that references it. HTTP is a port
 //! (`HttpFetch`) so the platform binds real networking; tests fake it.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
-use protocol::crypto::{bytes_to_hex, hex_to_bytes, Keypair};
-use client_core::dm_attachments::{EncryptedImageRef, BLOSSOM_AUTH_KIND, DEFAULT_BLOSSOM_SERVER};
+use aes_gcm::{AeadCore, Aes256Gcm};
+use protocol::crypto::{bytes_to_hex, Keypair};
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
 use sha2::{Digest, Sha256};
 
 use crate::deadline::{remaining_budget, with_deadline, StageError};
 use crate::ports::LocalBoxFuture;
+
+/// Blossom server used when the user has not set one.
+pub const DEFAULT_BLOSSOM_SERVER: &str = "https://blossom.descendant.io";
+
+/// BUD-02 authorization event kind.
+pub const BLOSSOM_AUTH_KIND: u16 = 24242;
+
+/// Where an uploaded image lives and how to decrypt it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedImageRef {
+    pub url: String,
+    /// AES-256 key, 64 hex chars (lower-case).
+    pub key: String,
+    /// AES-GCM IV, 24 hex chars (lower-case).
+    pub iv: String,
+}
 
 // --- crypto -------------------------------------------------------------------
 
@@ -52,19 +64,6 @@ pub fn encrypt_image(raw: &[u8]) -> EncryptedImage {
     }
 }
 
-/// Decrypt a downloaded blob with the key + iv from the message ref.
-pub fn decrypt_image(encrypted: &[u8], key_hex: &str, iv_hex: &str) -> Result<Vec<u8>, StageError> {
-    let key_bytes = hex_to_bytes(key_hex).map_err(|_| StageError::Failed("bad key hex".into()))?;
-    let iv_bytes = hex_to_bytes(iv_hex).map_err(|_| StageError::Failed("bad iv hex".into()))?;
-    if key_bytes.len() != 32 || iv_bytes.len() != 12 {
-        return Err(StageError::Failed("wrong key/iv length".into()));
-    }
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-    cipher
-        .decrypt(Nonce::from_slice(&iv_bytes), encrypted)
-        .map_err(|_| StageError::Failed("attachment decrypt failed".into()))
-}
-
 // --- HTTP port --------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +82,6 @@ pub trait HttpFetch {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     ) -> LocalBoxFuture<'_, Result<HttpResponse, String>>;
-    fn get(&self, url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>>;
     /// Rebuild the underlying client through the (possibly new) SOCKS5 proxy
     /// — `None` when Tor turns off. Default: no-op (`NoHttpFetch`, test
     /// doubles with nothing to reconfigure).
@@ -102,12 +100,9 @@ impl HttpFetch for NoHttpFetch {
     ) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
         Box::pin(async { Err("no HTTP transport configured".to_string()) })
     }
-    fn get(&self, _url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
-        Box::pin(async { Err("no HTTP transport configured".to_string()) })
-    }
 }
 
-// --- upload / download ----------------------------------------------------
+// --- upload ----------------------------------------------------
 
 /// Generous per attempt (a multi-MB body on mobile data); a false trip costs a
 /// retry. The total budget bounds all attempts + backoff together.
@@ -134,8 +129,8 @@ impl UploadOptions<'_> {
     }
 }
 
-/// Encrypt + upload one image; returns the ref for
-/// `client_core::dm_attachments::build_image_ref`. `Err(StageError)` on
+/// Encrypt + upload one image; returns where it lives and its key + iv.
+/// `Err(StageError)` on
 /// definitive failure (the UI shows it and keeps the pending attachment for a
 /// retry). The BUD-02 auth event is signed with the phone's own key.
 pub async fn upload_encrypted_image(
@@ -221,21 +216,6 @@ pub async fn upload_encrypted_image(
     Err(last_error)
 }
 
-/// Download + decrypt an encrypted attachment.
-pub async fn download_encrypted_image(
-    reference: &EncryptedImageRef,
-    fetch: &dyn HttpFetch,
-) -> Result<Vec<u8>, StageError> {
-    let resp = fetch
-        .get(&reference.url)
-        .await
-        .map_err(StageError::Failed)?;
-    if !(200..300).contains(&resp.status) {
-        return Err(StageError::Failed(format!("download failed: {}", resp.status)));
-    }
-    decrypt_image(&resp.body, &reference.key, &reference.iv)
-}
-
 /// Standard-alphabet base64 (matches JS `btoa`), no external base64 dep here —
 /// `client-core` already carries `base64`, re-export via a tiny shim.
 fn base64_std(bytes: &[u8]) -> String {
@@ -246,9 +226,23 @@ fn base64_std(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::crypto::generate_keypair;
+    use aes_gcm::{Key, Nonce};
+    use protocol::crypto::{generate_keypair, hex_to_bytes};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// What the bridge does with a downloaded blob: decrypt it with the key +
+    /// iv the session command carried.
+    fn decrypt_image(encrypted: &[u8], key_hex: &str, iv_hex: &str) -> Result<Vec<u8>, String> {
+        let key_bytes = hex_to_bytes(key_hex).map_err(|_| "bad key hex".to_string())?;
+        let iv_bytes = hex_to_bytes(iv_hex).map_err(|_| "bad iv hex".to_string())?;
+        if key_bytes.len() != 32 || iv_bytes.len() != 12 {
+            return Err("wrong key/iv length".into());
+        }
+        Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes))
+            .decrypt(Nonce::from_slice(&iv_bytes), encrypted)
+            .map_err(|_| "attachment decrypt failed".to_string())
+    }
 
     #[test]
     fn aes_gcm_round_trips_and_the_blob_id_hashes_the_ciphertext() {
@@ -272,7 +266,6 @@ mod tests {
     struct FakeFetch {
         calls: Rc<RefCell<Vec<PutCall>>>,
         statuses: RefCell<Vec<u16>>,
-        get_body: Vec<u8>,
     }
 
     impl HttpFetch for FakeFetch {
@@ -297,10 +290,6 @@ mod tests {
                 })
             })
         }
-        fn get(&self, _url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
-            let body = self.get_body.clone();
-            Box::pin(async move { Ok(HttpResponse { status: 200, body }) })
-        }
     }
 
     #[tokio::test]
@@ -311,7 +300,6 @@ mod tests {
         let fetch = FakeFetch {
             calls: Rc::clone(&calls),
             statuses: RefCell::new(vec![200]),
-            get_body: vec![],
         };
 
         let mut opts = UploadOptions::at(1_700_000_000_000);
@@ -332,25 +320,7 @@ mod tests {
         // the ref points at server/<blobhash> and carries usable key+iv
         assert!(reference.url.starts_with("https://blossom.example/"));
         assert_eq!(reference.key.len(), 64);
-
-        // download round-trips: feed the ciphertext back
-        let enc = encrypt_image(raw);
-        let dl = FakeFetch {
-            calls: Rc::new(RefCell::new(Vec::new())),
-            statuses: RefCell::new(vec![]),
-            get_body: enc.encrypted.clone(),
-        };
-        let got = download_encrypted_image(
-            &EncryptedImageRef {
-                url: "https://blossom.example/x".into(),
-                key: enc.key_hex,
-                iv: enc.iv_hex,
-            },
-            &dl,
-        )
-        .await
-        .unwrap();
-        assert_eq!(got, raw);
+        assert_eq!(reference.iv.len(), 24);
     }
 
     /// A server that accepts the connection and never answers.
@@ -366,9 +336,6 @@ mod tests {
             _body: Vec<u8>,
         ) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
             *self.calls.borrow_mut() += 1;
-            Box::pin(std::future::pending())
-        }
-        fn get(&self, _url: &str) -> LocalBoxFuture<'_, Result<HttpResponse, String>> {
             Box::pin(std::future::pending())
         }
     }
@@ -398,7 +365,6 @@ mod tests {
         let fetch = FakeFetch {
             calls: Rc::clone(&calls),
             statuses: RefCell::new(vec![200, 502]),
-            get_body: vec![],
         };
         let r = upload_encrypted_image(b"x", &phone, &fetch, UploadOptions::at(0)).await;
         assert!(r.is_ok());
@@ -407,7 +373,6 @@ mod tests {
         let fetch = FakeFetch {
             calls: Rc::new(RefCell::new(Vec::new())),
             statuses: RefCell::new(vec![403]),
-            get_body: vec![],
         };
         let r = upload_encrypted_image(b"x", &phone, &fetch, UploadOptions::at(0)).await;
         assert!(matches!(r, Err(StageError::Failed(m)) if m.contains("403")));

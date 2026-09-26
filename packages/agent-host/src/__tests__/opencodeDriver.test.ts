@@ -183,18 +183,6 @@ describe('OpenCode permission asks', () => {
     expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'once' });
   });
 
-  it('a test session refuses secret paths even in the auto-approve mode', async () => {
-    const secretRead = {
-      ...pendingRead,
-      properties: { part: { ...pendingRead.properties.part, state: { status: 'pending', input: { filePath: '/w/release.jks' }, raw: '' } } },
-    };
-    const client = clientWith([secretRead, ask]);
-    const ctx = start(client, { mode: 'default', denySecretPaths: true });
-    await ctx.ended();
-    expect(ctx.permissions).toEqual([]);
-    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'reject' });
-  });
-
   it('the real running update after the card is not a second tool row', async () => {
     const running = {
       type: 'message.part.updated',

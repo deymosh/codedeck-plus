@@ -16,8 +16,7 @@
 //! The shape follows the Agent Client Protocol: the bridge sends requests
 //! (`start-session`, `prompt`, …), the host streams [`SessionEvent`]s and
 //! asks the bridge when it needs the user (`request-permission`,
-//! `ask-question`, `request-plan-approval`) or a bridge-implemented tool
-//! (`call-host-tool`).
+//! `ask-question`, `request-plan-approval`).
 //!
 //! These types are the source of truth; the host's TypeScript types are
 //! generated from them by `tests/gen_ts_bindings.rs`.
@@ -57,9 +56,7 @@ mod tests {
         let start = bridge_rt(json!({"v":1,"id":"2","kind":"start-session","payload":{
             "sessionId":"s1","agent":"claude-code","cwd":"/w","mode":"plan","effort":"high","model":"m",
             "resume":"native-1","credentials":{"anthropic_api_key":"sk"},"env":{"GITHUB_TOKEN":"gh"},
-            "provider":{"id":"p","baseUrl":"https://x","authToken":"t","models":[{"id":"k"}],"defaultModel":"k"},
-            "hostTools":[{"name":"list","description":"List devices","inputSchema":{"type":"object"}}],
-            "denySecretPaths":true
+            "provider":{"id":"p","baseUrl":"https://x","authToken":"t","models":[{"id":"k"}],"defaultModel":"k"}
         }}));
         let BridgeMessage::StartSession(s) = start.message else { panic!("start-session") };
         assert_eq!(s.credentials["anthropic_api_key"].expose(), "sk");
@@ -75,7 +72,6 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"h1","kind":"permission-outcome","payload":{"outcome":"selected","optionId":"allow"}}));
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
         bridge_rt(json!({"v":1,"id":"h3","kind":"question-outcome","payload":{"outcome":"answered","answers":["Red","a, b"]}}));
-        bridge_rt(json!({"v":1,"id":"h4","kind":"host-tool-result","payload":{"text":"no device","isError":true}}));
     }
 
     #[test]
@@ -129,14 +125,13 @@ mod tests {
             {"question":"Why?","options":[]}
         ]}}));
         host_rt(json!({"v":1,"id":"h3","kind":"request-plan-approval","payload":{"sessionId":"s","requestId":"p","options":[{"id":"default","label":"Approve"}]}}));
-        host_rt(json!({"v":1,"id":"h4","kind":"call-host-tool","payload":{"sessionId":"s","tool":"logcat","args":{"serial":"x","lines":20}}}));
     }
 
     #[test]
     fn replies_are_told_apart_from_requests() {
         assert!(HostMessage::Ack.is_reply());
         assert!(!HostMessage::SessionEvent { session_id: "s".into(), event: SessionEvent::Ready {} }.is_reply());
-        assert!(BridgeMessage::HostToolResult { text: String::new(), is_error: false }.is_reply());
+        assert!(BridgeMessage::PlanOutcome(SelectOutcome::Cancelled { reason: "x".into() }).is_reply());
         assert!(!BridgeMessage::Interrupt { session_id: "s".into() }.is_reply());
     }
 

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{CredentialValues, DeviceConfig, ProviderModel, SessionOption};
+use super::common::{CredentialValues, ProviderModel, SessionOption};
 use super::tristate::Tristate;
 use crate::ranges::SeqRange;
 
@@ -129,8 +129,6 @@ pub struct CreateSessionMsg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub test_session: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub create_cwd: Option<bool>,
@@ -232,14 +230,6 @@ pub struct SetCredentialsMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SetDeviceConfigMsg {
-    #[serde(flatten)]
-    pub version: VersionFields,
-    pub config: DeviceConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
 pub struct PairRequestMsg {
     #[serde(flatten)]
     pub version: VersionFields,
@@ -296,7 +286,6 @@ pub enum PhoneToBridge {
     GsdRequest(SessionIdMsg),
     ModelsRequest(ModelsRequestMsg),
     SetCredentials(SetCredentialsMsg),
-    SetDeviceConfig(SetDeviceConfigMsg),
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
     ProviderProfilesRequest(BareMsg),
@@ -350,7 +339,6 @@ mod tests {
         rt(&json!({"type":"usage-request","sessionId":"s"}));
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
-        rt(&json!({"type":"set-device-config","config":{"label":"dev","appUnderTest":"kubo"}}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"type":"provider-profiles-request"}));
     }

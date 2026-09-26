@@ -6,7 +6,6 @@
  *   question             ask one multiple-choice question, report the answer
  *   plan                 propose a plan and ask for approval; an approving
  *                        option switches the session to that mode
- *   tool <name> <json>   call a host tool and report its result
  *   crash                end with an error
  *   exit                 end normally
  *   anything else        echoed back
@@ -88,13 +87,6 @@ class FakeSession implements DriverSession {
           this.ctx.emit({ type: 'info', mode: this.mode });
         }
         this.say(outcome.outcome === 'selected' ? `plan: ${outcome.optionId}` : `plan cancelled: ${outcome.reason}`);
-        break;
-      }
-      case 'tool': {
-        const [name, ...json] = rest;
-        const args = json.length > 0 ? (JSON.parse(json.join(' ')) as Record<string, unknown>) : {};
-        const result = await this.ctx.callHostTool(name ?? '', args);
-        this.say(`tool ${name}: ${result.isError ? 'error: ' : ''}${result.text}`);
         break;
       }
       case 'crash':

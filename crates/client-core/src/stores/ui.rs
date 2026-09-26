@@ -5,9 +5,8 @@
 //! Transient by design — none of this is persisted. A fresh boot starts with no
 //! stale unread dots, no stale "saved" credential claims, no undo toast.
 //!
-//! The two runtime seams (`onSessionViewed` / `onDmOpened`, CDX-026c: cancel a
-//! surface's delivered OS notifications when the user opens it) are
-//! [`UiEffect`]s here; `visible` (the debounced app-visibility the connection
+//! The runtime seam `onSessionViewed` (CDX-026c: cancel a session's delivered
+//! OS notifications when the user opens it) is a [`UiEffect`] here; `visible` (the debounced app-visibility the connection
 //! FSM tracks) is passed in per call, like the notification engine.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,18 +15,8 @@ use serde::Serialize;
 
 pub use crate::notifications::session_key_of;
 
-/// Which conversation surface the main panel shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, specta::Type)]
-#[serde(rename_all = "lowercase")]
-pub enum PanelMode {
-    #[default]
-    Session,
-    Dm,
-    Marmot,
-}
-
 /// Fire-and-answer round-trip state for the `set-credentials` /
-/// `set-device-config` / `set-provider-profile` acks (CDX-011 / CDX-062).
+/// `set-provider-profile` acks (CDX-011 / CDX-062).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum AckState {
@@ -47,16 +36,6 @@ pub struct CredentialsAck {
     /// the machines store (`MachineView::credentials` / the agent catalog).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceConfigAck {
-    pub state: AckState,
-    #[specta(type = specta_typescript::Number)]
-    pub at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -88,15 +67,14 @@ pub struct UndoToast {
     pub label: String,
 }
 
-/// CDX-026c seam: the user opened a surface in view (same visible-app gate as
+/// CDX-026c seam: the user opened a session in view (same visible-app gate as
 /// the unread clear) — cancel its delivered OS notifications.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
     SessionViewed { machine: String, session_id: String },
-    DmOpened { peer: String },
 }
 
-/// Inputs for `set-credentials` / `set-device-config` / `set-provider-profile`
+/// Inputs for `set-credentials` / `set-provider-profile`
 /// acks — the decoded message fields the runtime hands in.
 #[derive(Debug, Clone, Default)]
 pub struct CredentialsAckInput {
@@ -125,9 +103,6 @@ fn ack_state(success: bool) -> AckState {
 pub struct UiState {
     pub selected_machine: Option<String>,
     pub selected_session: Option<String>,
-    pub panel_mode: PanelMode,
-    pub active_dm_peer: Option<String>,
-    pub active_marmot_group: Option<String>,
     /// `session_key_of(machine, session)` → has unread activity (the attention
     /// dot's `is_unread` input — see [`crate::session_needs_attention`]).
     pub unread_sessions: BTreeSet<String>,
@@ -136,7 +111,6 @@ pub struct UiState {
     /// card id → plan-approval key (`"1"`/`"2"`/`"3"`) the user tapped.
     pub plan_approval_choices: BTreeMap<String, String>,
     pub credentials_status: BTreeMap<String, CredentialsAck>,
-    pub device_config_status: BTreeMap<String, DeviceConfigAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
     pub undo_toast: Option<UndoToast>,
 }
@@ -149,7 +123,6 @@ impl UiState {
     pub fn select_machine(&mut self, pubkey_hex: Option<&str>) {
         self.selected_machine = pubkey_hex.map(str::to_string);
         self.selected_session = None;
-        self.panel_mode = PanelMode::Session;
     }
 
     /// Opening/viewing a session clears its unread dot — but only when the app
@@ -163,7 +136,6 @@ impl UiState {
     ) -> Vec<UiEffect> {
         self.selected_machine = Some(machine_pubkey.to_string());
         self.selected_session = session_id.map(str::to_string);
-        self.panel_mode = PanelMode::Session;
 
         let (Some(session_id), true) = (session_id, visible) else {
             return vec![];
@@ -173,25 +145,6 @@ impl UiState {
             machine: machine_pubkey.to_string(),
             session_id: session_id.to_string(),
         }]
-    }
-
-    /// Open a DM conversation (or `None` = the DM list) — `panel_mode` follows.
-    /// Opening a conversation reads it: [`UiEffect::DmOpened`] (CDX-026c).
-    pub fn select_dm_peer(&mut self, peer_pubkey: Option<&str>) -> Vec<UiEffect> {
-        self.active_dm_peer = peer_pubkey.map(str::to_string);
-        self.panel_mode = PanelMode::Dm;
-        match peer_pubkey {
-            Some(peer) => vec![UiEffect::DmOpened {
-                peer: peer.to_string(),
-            }],
-            None => vec![],
-        }
-    }
-
-    /// Open a Marmot group (or `None` = the list) — `panel_mode` follows.
-    pub fn select_marmot_group(&mut self, group_id: Option<&str>) {
-        self.active_marmot_group = group_id.map(str::to_string);
-        self.panel_mode = PanelMode::Marmot;
     }
 
     pub fn mark_session_unread(&mut self, machine: &str, session_id: &str) {
@@ -251,34 +204,6 @@ impl UiState {
                 at: now,
                 agent: ack.agent,
                 error: ack.error,
-            },
-        );
-    }
-
-    pub fn note_device_config_sent(&mut self, machine_pubkey: &str, now: u64) {
-        self.device_config_status.insert(
-            machine_pubkey.to_string(),
-            DeviceConfigAck {
-                state: AckState::Saving,
-                at: now,
-                error: None,
-            },
-        );
-    }
-
-    pub fn apply_device_config_ack(
-        &mut self,
-        machine_pubkey: &str,
-        success: bool,
-        error: Option<String>,
-        now: u64,
-    ) {
-        self.device_config_status.insert(
-            machine_pubkey.to_string(),
-            DeviceConfigAck {
-                state: ack_state(success),
-                at: now,
-                error,
             },
         );
     }
@@ -367,34 +292,12 @@ mod tests {
     }
 
     #[test]
-    fn panel_mode_follows_selection_session_dm_marmot() {
+    fn select_machine_clears_the_session() {
         let mut ui = UiState::default();
-        assert_eq!(ui.panel_mode, PanelMode::Session);
-
-        assert_eq!(
-            ui.select_dm_peer(Some("peer1")),
-            vec![UiEffect::DmOpened { peer: "peer1".into() }]
-        );
-        assert_eq!(ui.panel_mode, PanelMode::Dm);
-        assert_eq!(ui.active_dm_peer.as_deref(), Some("peer1"));
-
-        ui.select_marmot_group(Some("group1"));
-        assert_eq!(ui.panel_mode, PanelMode::Marmot);
-        assert_eq!(ui.active_marmot_group.as_deref(), Some("group1"));
-
         ui.select_session("m1", Some("s1"), true);
-        assert_eq!(ui.panel_mode, PanelMode::Session);
         ui.select_machine(Some("m1"));
-        assert_eq!(ui.panel_mode, PanelMode::Session);
-        assert_eq!(ui.selected_session, None); // select_machine clears the session
-    }
-
-    #[test]
-    fn select_dm_peer_none_opens_the_list_without_a_cancel_effect() {
-        let mut ui = UiState::default();
-        assert!(ui.select_dm_peer(None).is_empty());
-        assert_eq!(ui.panel_mode, PanelMode::Dm);
-        assert_eq!(ui.active_dm_peer, None);
+        assert_eq!(ui.selected_machine.as_deref(), Some("m1"));
+        assert_eq!(ui.selected_session, None);
     }
 
     #[test]

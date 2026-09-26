@@ -15,7 +15,7 @@ import uniffi.client_ffi.UniffiHttpFetch
 /**
  * The Kotlin side of the `HttpFetch` port (see `UniffiHttpFetch` in
  * `crates/client-ffi/src/lib.rs`): the real transport the core uses for
- * Blossom image upload/download. Plain `HttpURLConnection` — deliberately
+ * Blossom image uploads. Plain `HttpURLConnection` — deliberately
  * no extra HTTP dependency.
  *
  * SOCKS support is not optional here: when Tor is on, these calls are the
@@ -40,9 +40,6 @@ class CoreHttpFetch : UniffiHttpFetch {
 
     override fun put(url: String, headers: List<UniffiHttpHeader>, body: ByteArray): UniffiHttpResponse =
         exchange(url, "PUT", headers, body)
-
-    override fun get(url: String): UniffiHttpResponse =
-        exchange(url, "GET", emptyList(), null)
 
     override fun setProxy(proxy: String?) {
         if (proxy == null) {
@@ -90,7 +87,7 @@ class CoreHttpFetch : UniffiHttpFetch {
      * inspects `status` and wants the error text; only a failure to reach
      * the server at all throws [UniffiHttpException.Failed].
      */
-    private fun exchange(url: String, method: String, headers: List<UniffiHttpHeader>, body: ByteArray?): UniffiHttpResponse {
+    private fun exchange(url: String, method: String, headers: List<UniffiHttpHeader>, body: ByteArray): UniffiHttpResponse {
         val conn = URL(url).openConnection(proxy ?: Proxy.NO_PROXY) as HttpURLConnection
         try {
             conn.requestMethod = method
@@ -99,14 +96,12 @@ class CoreHttpFetch : UniffiHttpFetch {
             for (header in headers) {
                 conn.setRequestProperty(header.name, header.value)
             }
-            if (body != null) {
-                conn.doOutput = true
-                // Streaming mode writes the body straight through instead of
-                // buffering a second copy — multi-MB images on a phone are
-                // not a rounding error.
-                conn.setFixedLengthStreamingMode(body.size)
-                conn.outputStream.use { it.write(body) }
-            }
+            conn.doOutput = true
+            // Streaming mode writes the body straight through instead of
+            // buffering a second copy — multi-MB images on a phone are not a
+            // rounding error.
+            conn.setFixedLengthStreamingMode(body.size)
+            conn.outputStream.use { it.write(body) }
             val status = conn.responseCode
             val stream = if (status in 200..299) conn.inputStream else conn.errorStream
             val bytes = stream?.let { readAll(it) } ?: ByteArray(0)

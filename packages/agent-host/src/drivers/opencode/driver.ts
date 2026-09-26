@@ -28,7 +28,6 @@ import type {
   SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
 import type { Driver, DriverSession, SessionContext } from '../../driver';
-import { touchesSecretPath } from '../../policy';
 import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
 import type { AgentInfo, ModelEntry, QuestionSpec, SessionOption, StartSession, UsageData } from '../../types';
@@ -211,7 +210,6 @@ export class OpenCodeSession implements DriverSession {
   private readonly cwd: string;
   private readonly abortController = new AbortController();
   private readonly translate = newTranslateContext();
-  private readonly denySecretPaths: boolean;
   private ended = false;
   private mode: string;
   private model?: { providerID: string; modelID: string };
@@ -263,7 +261,6 @@ export class OpenCodeSession implements DriverSession {
     this.cwd = params.cwd;
     this.mode = params.mode ?? DEFAULT_MODE;
     this.model = splitModelId(params.model ?? undefined);
-    this.denySecretPaths = params.denySecretPaths ?? false;
     this.ready = this.init(clientPromise, params);
     // init() reports its own failure as `ended`; nothing else awaits this
     // rejection except prompt/interrupt, which catch it themselves.
@@ -544,11 +541,6 @@ export class OpenCodeSession implements DriverSession {
       permission.reply(response).catch(() => {});
     };
 
-    if (this.denySecretPaths && touchesSecretPath(permission.toolName, permission.input)) {
-      this.ctx.log(`[opencode] DENIED secret-path access by test session ${this.ctx.sessionId}: ${permission.toolName}`);
-      reply('reject');
-      return;
-    }
     if (this.mode === AUTO_APPROVE_MODE) {
       reply('once');
       return;

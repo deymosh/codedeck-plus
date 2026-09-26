@@ -1,10 +1,10 @@
-//! Cards (permission, question, plan approval), host tools, session options
+//! Cards (permission, question, plan approval), session options
 //! and the smaller phone requests, through the engine.
 
 mod support;
 
 use agent_protocol::{
-    BridgeMessage, HostMessage, HostToolCall, PermissionRequest, PlanApprovalRequest, QuestionOutcome, QuestionRequest,
+    BridgeMessage, HostMessage, PermissionRequest, PlanApprovalRequest, QuestionOutcome, QuestionRequest,
     QuestionSpec, SelectOutcome, SessionEvent,
 };
 use bridge_core::{Effect, Input};
@@ -201,20 +201,6 @@ fn a_card_for_a_session_that_is_not_running_is_cancelled_at_once() {
     rig.host_up();
     let h = rig.host_ask(permission("ghost", "r1"));
     assert!(matches!(reply_to(&mut rig, &h), BridgeMessage::PermissionOutcome(SelectOutcome::Cancelled { .. })));
-}
-
-#[test]
-fn a_host_tool_call_runs_in_the_runtime_and_its_result_goes_back() {
-    let mut rig = Rig::new();
-    let s = ready(&mut rig);
-    let h = rig.host_ask(HostMessage::CallHostTool(HostToolCall { session_id: s.clone(), tool: "list_devices".into(), args: json!({}) }));
-    let run = rig.take().into_iter().find_map(|e| match e {
-        Effect::RunHostTool { call_id, tool, .. } => Some((call_id, tool)),
-        _ => None,
-    });
-    assert_eq!(run, Some((h.clone(), "list_devices".to_string())));
-    rig.input(Input::HostToolDone { call_id: h.clone(), text: "none".into(), is_error: false });
-    assert_eq!(reply_to(&mut rig, &h), BridgeMessage::HostToolResult { text: "none".into(), is_error: false });
 }
 
 fn set_option(rig: &mut Rig, s: &str, option: &str, value: &str) -> Option<String> {

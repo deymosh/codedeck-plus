@@ -53,7 +53,6 @@ pub fn build_phone_filters(phone_pubkey: &str, authors: &[String], last_stored_s
         kinds,
         authors: authors.to_vec(),
         p_tags: vec![phone_pubkey.to_string()],
-        h_tags: Vec::new(),
         since,
     };
     vec![
@@ -369,7 +368,6 @@ mod tests {
             created_at,
             pubkey: "b1".into(),
             content: String::new(),
-            raw: serde_json::Value::Null,
         }
     }
 

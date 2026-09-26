@@ -57,8 +57,8 @@ internal fun channelFor(kind: String): ChannelSpec = when (kind) {
  * — the real core decides WHEN to notify (`notifications`/
  * `notificationsCoordinator`, already ported); this class only posts/cancels
  * the actual Android notification when told to. `tag` is the same
- * per-session/per-peer key the core's own coordinator already computes
- * (`session_notify_tag`/`dm_notify_tag`) — reused directly as
+ * per-session key the core's own coordinator already computes
+ * (`session_notify_tag`) — reused directly as
  * [NotificationManagerCompat]'s own tag parameter, with a stable per-tag
  * integer id derived from it so a later `cancel(tag)` targets the exact
  * notification `notify(tag, ...)` posted, the same pairing
@@ -100,8 +100,8 @@ class Notifier(private val context: Context) : UniffiNotifier {
 
     private fun idFor(tag: String): Int = tag.hashCode()
 
-    /** The notification's tap target, or null for tags that aren't
-     *  session-scoped (e.g. `dm:`) — those post without a tap action. */
+    /** The notification's tap target, or null for a tag that isn't
+     *  session-scoped — that posts without a tap action. */
     private fun sessionFromTag(tag: String): Pair<String, String>? {
         if (!tag.startsWith(TAG_SESSION_PREFIX)) return null
         val rest = tag.removePrefix(TAG_SESSION_PREFIX)

@@ -5,48 +5,6 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-/**
- * Secret-bearing paths a device-test session must never read (signing
- * keystores + their cleartext password files + env files, SSH keys, cloud
- * and registry credentials, PEM material, git credential stores). Matched
- * case-insensitively anywhere in a tool's string arguments. This is the
- * enforced half of the "dev builds only, never touch release keystores"
- * rule for test sessions.
- */
-const SECRET_PATH_PATTERNS = [
-  String.raw`\.keystore`,
-  String.raw`\.jks`,
-  String.raw`\.p12`,
-  String.raw`\.pfx`,
-  String.raw`key\.properties`,
-  String.raw`keystore\.properties`,
-  String.raw`(?<![A-Za-z0-9])\.env`,
-  String.raw`\.ssh`,
-  String.raw`id_(?:rsa|ed25519|ecdsa|dsa)`,
-  String.raw`\.pem`,
-  String.raw`\.netrc`,
-  String.raw`\.npmrc`,
-  String.raw`\.aws/credentials`,
-  String.raw`\.git-credentials`,
-  String.raw`\.credentials\.json`,
-];
-
-const SECRET_PATH_RE = new RegExp(`(${SECRET_PATH_PATTERNS.join('|')})(?![A-Za-z0-9])`, 'i');
-
-/** Tools whose arguments can name a filesystem path or a shell command.
- *  Lower-case: agents differ in capitalization (`Read` vs `read`). */
-const PATH_BEARING_TOOLS = new Set(['read', 'bash', 'grep', 'glob', 'edit', 'write', 'notebookedit', 'multiedit', 'list', 'patch', 'apply_patch']);
-
-/** True if a tool call references a secret-bearing path in any of its string args. */
-export function touchesSecretPath(toolName: string, toolInput: Record<string, unknown>): boolean {
-  if (!PATH_BEARING_TOOLS.has(toolName.toLowerCase())) return false;
-  return SECRET_PATH_RE.test(JSON.stringify(toolInput ?? {}));
-}
-
-/** The refusal an agent sees for a secret-path call. */
-export const SECRET_PATH_DENIAL =
-  'Blocked: device-test sessions may not read signing keystores or secret files (keystore/.jks/.p12/key.properties/keystore.properties/.env). This is a hard security boundary.';
-
 /** Absolute path of Claude Code's plan-authoring directory (`~/.claude/plans`, honoring CLAUDE_CONFIG_DIR). */
 function plansDirPath(): string {
   const env = process.env.CLAUDE_CONFIG_DIR;

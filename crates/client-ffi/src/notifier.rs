@@ -25,9 +25,9 @@ use client_runtime::Notifier;
 use crate::observer::foreign_call;
 
 /// Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
-/// `tag` is the same per-session/per-peer key `client-core`'s own notification
-/// coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
-/// for `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
+/// `tag` is the same per-session key `client-core`'s own notification
+/// coordinator already computes (`session_notify_tag`) — used for
+/// `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
 /// (`NotifyEvent::kind_str`) routes Android notification channels.
 #[uniffi::export(with_foreign)]
 pub trait UniffiNotifier: Send + Sync {

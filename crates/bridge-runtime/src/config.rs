@@ -39,9 +39,6 @@ struct FileConfig {
     blossom_register_endpoint: Option<String>,
     blossom_register_token: Option<String>,
     claude_path: Option<String>,
-    nvpn_path: Option<String>,
-    mesh_admin_enabled: Option<bool>,
-    adb_path: Option<String>,
     transcript_keep_last: Option<u64>,
     tor_proxy_url: Option<String>,
     open_code_server_url: Option<String>,
@@ -86,9 +83,6 @@ pub struct Config {
     pub test_mode: bool,
     /// Environment handed to the agent host (driver settings).
     pub host_env: BTreeMap<String, String>,
-    pub adb_path: Option<String>,
-    pub nvpn_path: Option<String>,
-    pub mesh_admin_enabled: bool,
 }
 
 /// Read an env var; empty counts as unset (Compose's `${VAR:-}` defines every
@@ -296,9 +290,6 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         agent_host_path: absolute(&agent_host_path),
         test_mode,
         host_env,
-        adb_path: env("CODEDECK_ADB_PATH").or(file.adb_path),
-        nvpn_path: env("CODEDECK_NVPN_PATH").or(file.nvpn_path),
-        mesh_admin_enabled: env_bool("CODEDECK_MESH_ADMIN").or(file.mesh_admin_enabled).unwrap_or(true),
         home,
     })
 }

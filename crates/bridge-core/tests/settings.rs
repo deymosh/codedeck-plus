@@ -16,7 +16,7 @@ use support::*;
 // --- pairing ---
 
 fn open_pairing(rig: &mut Rig) -> String {
-    rig.input(Input::OpenPairing { duration_ms: None, mesh: None });
+    rig.input(Input::OpenPairing { duration_ms: None });
     let effects = rig.take();
     assert!(effects.iter().any(|e| matches!(e, Effect::OpenPairingSubscription { .. })));
     effects

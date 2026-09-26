@@ -22,7 +22,7 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
-use client_core::stores::ui::{CredentialsAckInput, PanelMode, ProviderProfileAckInput};
+use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
     BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
@@ -30,7 +30,7 @@ use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
-use crate::stores::{CoreStores, NotificationLabels};
+use crate::stores::CoreStores;
 
 /// A `client_core` store the runtime must re-serialize to the `Kv` after a
 /// route mutated it.
@@ -38,8 +38,6 @@ use crate::stores::{CoreStores, NotificationLabels};
 pub enum StoreId {
     Machines,
     Outbox,
-    Dm,
-    Marmot,
     Settings,
     QuickPrompts,
 }
@@ -81,8 +79,6 @@ pub struct RouteResult {
     pub relays_changed: Option<Vec<String>>,
     /// Arm / clear the pair-ack deadline timer.
     pub pair_deadline: Option<PairDeadline>,
-    /// CDX-028 one-QR mesh join: `(admin_npub, network_id)`.
-    pub mesh_join: Option<(String, String)>,
     /// Outbox items settled this route: `(id, delivered)`.
     pub outbox_settled: Vec<(String, bool)>,
     /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
@@ -160,33 +156,27 @@ impl<'a> Router<'a> {
     }
 
     /// The user is looking at exactly this session right now (visible app,
-    /// session panel, this machine+session selected) — such a session never
-    /// gets an unread mark or a notification.
+    /// this machine+session selected) — such a session never gets an unread
+    /// mark or a notification.
     fn viewing_session(&self, machine: &str, session_id: &str) -> bool {
         self.visible
-            && self.stores.ui.panel_mode == PanelMode::Session
             && self.stores.ui.selected_machine.as_deref() == Some(machine)
             && self.stores.ui.selected_session.as_deref() == Some(session_id)
     }
 
-    /// `session_key_of(selected)` when a session panel is in view, else `None`.
+    /// `session_key_of(selected)` when a session is selected, else `None`.
     fn active_session_key(&self) -> Option<String> {
         let ui = &self.stores.ui;
-        if ui.panel_mode == PanelMode::Session {
-            if let (Some(m), Some(s)) = (&ui.selected_machine, &ui.selected_session) {
-                return Some(client_core::notifications::session_key_of(m, s));
-            }
+        match (&ui.selected_machine, &ui.selected_session) {
+            (Some(m), Some(s)) => Some(client_core::notifications::session_key_of(m, s)),
+            _ => None,
         }
-        None
     }
 
     fn emit_notify(&mut self, event: &NotifyEvent) -> Vec<NotifyEffect> {
         let key = self.active_session_key();
-        // DMs carry no session keys — bare context, their own labels suffice.
-        let labels = match event.session() {
-            Some((m, s)) => self.stores.notification_labels(m, s),
-            None => NotificationLabels::default(),
-        };
+        let (m, s) = event.session();
+        let labels = self.stores.notification_labels(m, s);
         let context = labels.context();
         self.stores.notifications.emit(
             event,
@@ -396,12 +386,6 @@ impl<'a> Router<'a> {
                     r.persist(StoreId::Machines);
                 }
             }
-            BridgeToPhone::DeviceConfigAck(m) => {
-                self.stores
-                    .ui
-                    .apply_device_config_ack(machine, m.success, m.error.clone(), self.now);
-                r.ui_changed = true;
-            }
             BridgeToPhone::ProviderProfileAck(m) => {
                 self.stores.ui.apply_provider_profile_ack(
                     machine,
@@ -604,7 +588,7 @@ impl<'a> Router<'a> {
 
     /// The `pair-ack`. Runs the pairing reducer and interprets its effects:
     /// register the machine, learn its relays, disarm the CDX-040 deadline,
-    /// refresh the subscription authors, and hand off a bundled mesh join.
+    /// and refresh the subscription authors.
     fn on_pair_ack(
         &mut self,
         machine: &str,
@@ -652,7 +636,6 @@ pub struct PairingEffectsOut {
     /// already have never sees the request.
     pub relays_changed: Option<Vec<String>>,
     pub pair_deadline: Option<PairDeadline>,
-    pub mesh_join: Option<(String, String)>,
     /// `Some(true)` paired, `Some(false)` nack / timeout, `None` still pending.
     pub pairing_settled: Option<bool>,
 }
@@ -669,9 +652,6 @@ impl PairingEffectsOut {
         }
         if self.pair_deadline.is_some() {
             r.pair_deadline = self.pair_deadline;
-        }
-        if self.mesh_join.is_some() {
-            r.mesh_join = self.mesh_join;
         }
         if self.pairing_settled.is_some() {
             r.pairing_settled = self.pairing_settled;
@@ -753,11 +733,6 @@ pub fn apply_pairing_effects(
                         }
                     }
                     out.persist.push(StoreId::Settings);
-                }
-                if let (Some(admin), Some(netid)) =
-                    (candidate.mesh_admin.clone(), candidate.netid.clone())
-                {
-                    out.mesh_join = Some((admin, netid));
                 }
                 out.persist.push(StoreId::Machines);
                 out.resubscribe = true;

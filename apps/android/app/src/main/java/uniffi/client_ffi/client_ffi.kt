@@ -683,9 +683,6 @@ internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod0 : com.sun.jna.C
     fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod1 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
-}
-internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod2 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`proxy`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceUniffiNotifierMethod0 : com.sun.jna.Callback {
@@ -716,23 +713,20 @@ internal open class UniffiVTableCallbackInterfaceCoreListener(
     }
 
 }
-@Structure.FieldOrder("put", "get", "setProxy", "uniffiFree")
+@Structure.FieldOrder("put", "setProxy", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceUniffiHttpFetch(
     @JvmField internal var `put`: UniffiCallbackInterfaceUniffiHttpFetchMethod0? = null,
-    @JvmField internal var `get`: UniffiCallbackInterfaceUniffiHttpFetchMethod1? = null,
-    @JvmField internal var `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod2? = null,
+    @JvmField internal var `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod1? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
         `put`: UniffiCallbackInterfaceUniffiHttpFetchMethod0? = null,
-        `get`: UniffiCallbackInterfaceUniffiHttpFetchMethod1? = null,
-        `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod2? = null,
+        `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod1? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceUniffiHttpFetch(`put`,`get`,`setProxy`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceUniffiHttpFetch(`put`,`setProxy`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceUniffiHttpFetch) {
         `put` = other.`put`
-        `get` = other.`get`
         `setProxy` = other.`setProxy`
         `uniffiFree` = other.`uniffiFree`
     }
@@ -757,8 +751,6 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
     }
 
 }
-
-
 
 
 
@@ -968,8 +960,6 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_ffi_fn_method_uniffihttpfetch_put(`ptr`: Pointer,`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_client_ffi_fn_method_uniffihttpfetch_get(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_method_uniffihttpfetch_set_proxy(`ptr`: Pointer,`proxy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_client_ffi_fn_clone_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1152,8 +1142,6 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_ffi_checksum_method_uniffihttpfetch_put(
     ): Short
-    fun uniffi_client_ffi_checksum_method_uniffihttpfetch_get(
-    ): Short
     fun uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy(
     ): Short
     fun uniffi_client_ffi_checksum_method_uniffinotifier_notify(
@@ -1254,10 +1242,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_put() != 23571.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_get() != 61940.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy() != 42549.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy() != 33556.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_uniffinotifier_notify() != 16604.toShort()) {
@@ -2745,8 +2730,6 @@ public interface UniffiHttpFetch {
     
     fun `put`(`url`: kotlin.String, `headers`: List<UniffiHttpHeader>, `body`: kotlin.ByteArray): UniffiHttpResponse
     
-    fun `get`(`url`: kotlin.String): UniffiHttpResponse
-    
     /**
      * Rebuild the underlying client through the (possibly new) SOCKS5 proxy,
      * or `None` to go direct — the HTTP twin of the WS transport's own
@@ -2872,19 +2855,6 @@ open class UniffiHttpFetchImpl: Disposable, AutoCloseable, UniffiHttpFetch {
     
 
     
-    @Throws(UniffiHttpException::class)override fun `get`(`url`: kotlin.String): UniffiHttpResponse {
-            return FfiConverterTypeUniffiHttpResponse.lift(
-    callWithPointer {
-    uniffiRustCallWithError(UniffiHttpException) { _status ->
-    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffihttpfetch_get(
-        it, FfiConverterString.lower(`url`),_status)
-}
-    }
-    )
-    }
-    
-
-    
     /**
      * Rebuild the underlying client through the (possibly new) SOCKS5 proxy,
      * or `None` to go direct — the HTTP twin of the WS transport's own
@@ -2936,24 +2906,7 @@ internal object uniffiCallbackInterfaceUniffiHttpFetch {
             )
         }
     }
-    internal object `get`: UniffiCallbackInterfaceUniffiHttpFetchMethod1 {
-        override fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeUniffiHttpFetch.handleMap.get(uniffiHandle)
-            val makeCall = { ->
-                uniffiObj.`get`(
-                    FfiConverterString.lift(`url`),
-                )
-            }
-            val writeReturn = { value: UniffiHttpResponse -> uniffiOutReturn.setValue(FfiConverterTypeUniffiHttpResponse.lower(value)) }
-            uniffiTraitInterfaceCallWithError(
-                uniffiCallStatus,
-                makeCall,
-                writeReturn,
-                { e: UniffiHttpException -> FfiConverterTypeUniffiHttpError.lower(e) }
-            )
-        }
-    }
-    internal object `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod2 {
+    internal object `setProxy`: UniffiCallbackInterfaceUniffiHttpFetchMethod1 {
         override fun callback(`uniffiHandle`: Long,`proxy`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeUniffiHttpFetch.handleMap.get(uniffiHandle)
             val makeCall = { ->
@@ -2974,7 +2927,6 @@ internal object uniffiCallbackInterfaceUniffiHttpFetch {
 
     internal var vtable = UniffiVTableCallbackInterfaceUniffiHttpFetch.UniffiByValue(
         `put`,
-        `get`,
         `setProxy`,
         uniffiFree,
     )
@@ -3116,9 +3068,9 @@ public object FfiConverterTypeUniffiHttpFetch: FfiConverter<UniffiHttpFetch, Poi
 
 /**
  * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
- * `tag` is the same per-session/per-peer key `client-core`'s own notification
- * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
- * for `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
+ * `tag` is the same per-session key `client-core`'s own notification
+ * coordinator already computes (`session_notify_tag`) — used for
+ * `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
  * (`NotifyEvent::kind_str`) routes Android notification channels.
  */
 public interface UniffiNotifier {
@@ -3132,9 +3084,9 @@ public interface UniffiNotifier {
 
 /**
  * Implemented in Kotlin (`platform/Notifier.kt`) via `NotificationManagerCompat`.
- * `tag` is the same per-session/per-peer key `client-core`'s own notification
- * coordinator already computes (`session_notify_tag`/`dm_notify_tag`) — used
- * for `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
+ * `tag` is the same per-session key `client-core`'s own notification
+ * coordinator already computes (`session_notify_tag`) — used for
+ * `cancel`-by-tag, not for anything UniFFI needs to interpret. `kind`
  * (`NotifyEvent::kind_str`) routes Android notification channels.
  */
 open class UniffiNotifierImpl: Disposable, AutoCloseable, UniffiNotifier {

@@ -80,7 +80,6 @@ private fun preferenceOptions(choices: List<UniffiOptionChoice>, stored: String)
  * new sessions, notifications/badges, stay-connected, Orbot routing, the
  * blossom server, the quick-prompt editor, relay management with per-relay
  * connection dots, and per-machine credentials/AI-provider blocks.
- * Deliberately absent: mesh (off by default upstream, not supported here).
  */
 @Composable
 fun SettingsScreen(core: CoreHost, onClose: () -> Unit) {
@@ -408,7 +407,7 @@ private fun SettingsBody(
                         )
                     }
                     Text(
-                        "Blossom server for image attachments in DMs and session messages " +
+                        "Blossom server for session image attachments " +
                             "(images are encrypted before upload; the key travels only inside " +
                             "the encrypted message). Empty = the built-in default.",
                         color = Tokens.TextDim,

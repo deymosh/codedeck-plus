@@ -8,7 +8,7 @@
 //! behind a `Transport` port; `transport::ws` is the real WebSocket + SOCKS5
 //! driver; `runtime::Core` composes the connection FSM, `bridge_api`, the
 //! `dispatch::Router` over every store, the `intent` surface, the `view`
-//! projections, the `CoreEvent` stream and the DM runtime behind one tokio
+//! projections, and the `CoreEvent` stream behind one tokio
 //! event loop — the handle the bindings attach to.
 
 // UniFFI's `#[derive(uniffi::Record)]`/`uniffi::Enum` need a `UniFfiTag` in
@@ -22,9 +22,7 @@ uniffi::setup_scaffolding!();
 pub mod attachments;
 pub mod deadline;
 pub mod dispatch;
-pub mod giftwrap;
 pub mod intent;
-pub mod marmot;
 pub mod nostr_client;
 pub mod ports;
 pub mod runtime;
@@ -44,7 +42,7 @@ pub use intent::{Intent, IntentCtx, SessionImageSend};
 pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
-    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
+    ConnectionView, MachinesView, OutboxView, PairingView,
     PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, TranscriptRowView,
     TranscriptSyncView, UiView,
 };

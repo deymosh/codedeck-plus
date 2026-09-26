@@ -218,16 +218,6 @@ pub struct CredentialsAckMsg {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceConfigAckMsg {
-    pub success: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reachable: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum PairAckReason {
@@ -291,7 +281,6 @@ pub enum BridgeToPhone {
     GsdState(GsdStateMsg),
     Models(ModelsMsg),
     CredentialsAck(CredentialsAckMsg),
-    DeviceConfigAck(DeviceConfigAckMsg),
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
     ProviderProfileAck(ProviderProfileAckMsg),
@@ -388,7 +377,6 @@ mod tests {
         rt(&json!({"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
         rt(&json!({"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
-        rt(&json!({"type":"device-config-ack","success":false,"error":"unreachable"}));
         rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
         rt(&json!({"type":"provider-profiles","machine":"m","profiles":[{"id":"p","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
         rt(&json!({"type":"provider-profile-ack","machine":"m","profileId":"p","success":true,"tokenValid":false}));

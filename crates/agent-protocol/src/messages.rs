@@ -76,20 +76,6 @@ pub struct ProviderBinding {
     pub default_model: Option<String>,
 }
 
-/// A tool the bridge implements and offers to a session's agent (the
-/// device-test tools). The driver exposes it to its agent under `name`;
-/// every call comes back to the bridge as `call-host-tool`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct HostToolSpec {
-    pub name: String,
-    pub description: String,
-    /// JSON Schema of the arguments: an object schema whose properties are
-    /// `string`, `number`, `integer` or `boolean`.
-    #[specta(type = specta_typescript::Unknown)]
-    pub input_schema: serde_json::Value,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StartSession {
@@ -117,12 +103,6 @@ pub struct StartSession {
     pub env: BTreeMap<String, Secret>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderBinding>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub host_tools: Vec<HostToolSpec>,
-    /// Refuse every tool call that touches signing keystores or secret files,
-    /// whatever the mode (device-test sessions).
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub deny_secret_paths: bool,
 }
 
 // --- what a session reports ---
@@ -226,15 +206,6 @@ pub struct PlanApprovalRequest {
     pub options: Vec<OptionChoice>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct HostToolCall {
-    pub session_id: String,
-    pub tool: String,
-    #[specta(type = specta_typescript::Unknown)]
-    pub args: serde_json::Value,
-}
-
 /// The answer to a permission request or a plan approval.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "outcome", rename_all = "snake_case", rename_all_fields = "camelCase")]
@@ -293,12 +264,6 @@ pub enum BridgeMessage {
     PlanOutcome(SelectOutcome),
     /// Reply to `ask-question`.
     QuestionOutcome(QuestionOutcome),
-    /// Reply to `call-host-tool`.
-    HostToolResult {
-        text: String,
-        #[serde(default, skip_serializing_if = "is_false")]
-        is_error: bool,
-    },
 }
 
 /// Host → bridge.
@@ -340,8 +305,6 @@ pub enum HostMessage {
     AskQuestion(QuestionRequest),
     /// Reply: `plan-outcome`.
     RequestPlanApproval(PlanApprovalRequest),
-    /// Reply: `host-tool-result`.
-    CallHostTool(HostToolCall),
 }
 
 /// One line on the pipe: `{ "v": 1, "id"?: string, "kind": …, "payload": … }`.

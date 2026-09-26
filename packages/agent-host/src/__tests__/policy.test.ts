@@ -1,51 +1,16 @@
 /**
  * Tool-call safety rules — cases ported from the TS bridge's security.test.ts
- * (touchesSecretPath, isBenignPlanDirWrite).
+ * (isBenignPlanDirWrite).
  */
 import { describe, it, expect } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { isBenignPlanDirWrite, touchesSecretPath } from '../policy';
+import { isBenignPlanDirWrite } from '../policy';
 
 const PLANS_DIR = path.join(
   process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'),
   'plans',
 );
-
-describe('touchesSecretPath — test-session secret deny-list', () => {
-  const cases: Array<[string, Record<string, unknown>, boolean]> = [
-    ['Read', { file_path: '/home/jeroen/VScode workspace for building nostr apps/kubo/android/key.properties' }, true],
-    ['Read', { file_path: 'codedeck/src-tauri/gen/android/keystore.properties' }, true],
-    ['Read', { file_path: 'kubo/android/app/kubo-release.keystore' }, true],
-    ['Bash', { command: 'cat codedeck/src-tauri/gen/android/codedeck-release.p12 | base64' }, true],
-    ['Grep', { pattern: 'storePassword', path: 'kubo/android/key.properties' }, true],
-    ['Read', { file_path: '.env.zapstore' }, true],
-    ['Read', { file_path: 'codedeck/.env.local' }, true],
-    ['Bash', { command: 'keytool -list -keystore foo.jks' }, true],
-    // CDX-013 widened patterns: classic credential files
-    ['Read', { file_path: '/home/jeroen/.ssh/id_rsa' }, true],
-    ['Bash', { command: 'cat ~/.ssh/id_ed25519.pub' }, true],
-    ['Read', { file_path: '/home/jeroen/.netrc' }, true],
-    ['Read', { file_path: '/home/jeroen/.npmrc' }, true],
-    ['Read', { file_path: '/home/jeroen/.aws/credentials' }, true],
-    ['Bash', { command: 'git config credential.helper store && cat ~/.git-credentials' }, true],
-    ['Read', { file_path: '/home/jeroen/.claude/.credentials.json' }, true],
-    ['Read', { file_path: 'certs/server.pem' }, true],
-    // benign — must NOT be blocked
-    ['Read', { file_path: 'kubo/src/components/App.tsx' }, false],
-    ['Bash', { command: 'npm run build' }, false],
-    ['Read', { file_path: 'codedeck/package.json' }, false],
-    ['Bash', { command: 'ssh-keygen -l -f /tmp/scratch/testkey.pub' }, false],
-    ['Read', { file_path: 'src/pemUtils.ts' }, false],
-    // a tool that doesn't bear paths is never blocked even if text mentions a keystore
-    ['AskUserQuestion', { questions: [{ question: 'open the keystore?' }] }, false],
-  ];
-  for (const [tool, input, expected] of cases) {
-    it(`${tool} ${JSON.stringify(input).slice(0, 50)} -> ${expected ? 'BLOCKED' : 'allowed'}`, () => {
-      expect(touchesSecretPath(tool, input)).toBe(expected);
-    });
-  }
-});
 
 describe('isBenignPlanDirWrite — narrow plan-dir auto-allow', () => {
   const allow: Array<[string, Record<string, unknown>]> = [
@@ -97,13 +62,4 @@ describe('isBenignPlanDirWrite — narrow plan-dir auto-allow', () => {
       expect(isBenignPlanDirWrite(tool, input)).toBe(false);
     });
   }
-});
-
-describe('touchesSecretPath — any agent’s capitalization', () => {
-  it('OpenCode’s lower-case tool names are screened too', () => {
-    expect(touchesSecretPath('read', { filePath: '/w/release.jks' })).toBe(true);
-    expect(touchesSecretPath('bash', { command: 'cat ~/.ssh/id_rsa' })).toBe(true);
-    expect(touchesSecretPath('apply_patch', { patchText: '*** Update File: .env' })).toBe(true);
-    expect(touchesSecretPath('question', { questions: ['open .env?'] })).toBe(false);
-  });
 });

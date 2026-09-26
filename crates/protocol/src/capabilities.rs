@@ -14,8 +14,7 @@
 //! * **HARD GATE** — absence changes behaviour: [`IMAGES`] (the client shows
 //!   image attach only when the bridge advertises it).
 //! * **PRESENCE MARKER** — detection is on payload data: [`SYNC_1`],
-//!   [`FOLDERS`], [`DEVICE_ACTIONS`]. Kept so a session list is
-//!   self-describing.
+//!   [`FOLDERS`]. Kept so a session list is self-describing.
 //! * **TRANSPORT BEACON** — [`CHUNKED`]: advertised on both sides, gated by
 //!   neither. Fragmentation lives below the semantic layer.
 
@@ -31,14 +30,12 @@ pub const FOLDERS: &str = "folders";
 // HARD GATE (client-side) — image upload; the attach control shows only when
 // this is in the machine's heartbeat capabilities.
 pub const IMAGES: &str = "images";
-// PRESENCE MARKER — on-device test sessions; no client UI sends them.
-pub const DEVICE_ACTIONS: &str = "device-actions";
 // TRANSPORT BEACON — oversize-event `chunk` fragmentation. Advertised on both
 // sides, gated by neither.
 pub const CHUNKED: &str = "chunked";
 
 /// Every capability the reference bridge ships with.
-pub const ALL_BRIDGE_CAPABILITIES: [&str; 5] = [SYNC_1, FOLDERS, IMAGES, DEVICE_ACTIONS, CHUNKED];
+pub const ALL_BRIDGE_CAPABILITIES: [&str; 4] = [SYNC_1, FOLDERS, IMAGES, CHUNKED];
 
 /// Capabilities the reference client stamps on outgoing command `caps`.
 pub const ALL_PHONE_CAPABILITIES: [&str; 1] = [CHUNKED];
@@ -82,7 +79,7 @@ mod tests {
 
     #[test]
     fn capability_lists() {
-        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "images", "device-actions", "chunked"]);
+        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "images", "chunked"]);
         assert_eq!(ALL_PHONE_CAPABILITIES, ["chunked"]);
     }
 

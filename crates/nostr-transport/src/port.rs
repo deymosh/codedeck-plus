@@ -11,8 +11,6 @@ pub struct Filter {
     pub authors: Vec<String>,
     /// the `#p` tag filter.
     pub p_tags: Vec<String>,
-    /// the `#h` tag filter (Marmot kind-445 group routing).
-    pub h_tags: Vec<String>,
     pub since: Option<i64>,
 }
 
@@ -27,9 +25,6 @@ pub struct NostrEvent {
     pub pubkey: String,
     /// `event.content`: `base64(NIP-44(json))`, or a `chunk` fragment.
     pub content: String,
-    /// The full relay event object — gift-wrap paths re-parse it (they need
-    /// `tags` + `sig`, not just what subscriptions route on).
-    pub raw: serde_json::Value,
 }
 
 /// Callbacks a `Transport` invokes for one subscription. `Rc` (not `Box`) so

@@ -144,8 +144,6 @@ impl Host {
             credentials: Default::default(),
             env: Default::default(),
             provider: None,
-            host_tools: vec![],
-            deny_secret_paths: false,
         })));
         assert_eq!(self.reply_to(&id), HostMessage::Ack);
         self.event("ready", session, |e| matches!(e, SessionEvent::Ready {}));

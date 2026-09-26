@@ -311,8 +311,6 @@ pub enum NoticeKind {
     SessionFailed,
     /// The agent rejected its credentials.
     AuthError,
-    /// A device screenshot was delivered (test sessions).
-    Screenshot,
 }
 
 /// What a transcript entry is. Tagged by `entryType`.
@@ -550,44 +548,6 @@ pub struct GsdState {
     pub execution: Option<GsdExecution>,
 }
 
-// --- Device / mesh config ---
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "kebab-case")]
-pub enum DeviceRole {
-    Controller,
-    TestTarget,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "lowercase")]
-pub enum AppUnderTest {
-    Kubo,
-    Veil,
-    Custom,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceConfig {
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<DeviceRole>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub serial: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mesh_ip: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mesh_pubkey: Option<String>,
-    pub app_under_test: AppUnderTest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_package: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_build_cmd: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_dir: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,7 +564,6 @@ mod tests {
     fn enum_wire_values() {
         assert_eq!(serde_json::to_string(&SessionState::WaitingPermission).unwrap(), r#""waiting_permission""#);
         assert_eq!(serde_json::to_string(&DiffLineType::Del).unwrap(), r#""del""#);
-        assert_eq!(serde_json::to_string(&DeviceRole::TestTarget).unwrap(), r#""test-target""#);
         assert_eq!(serde_json::to_string(&ToolKind::SwitchMode).unwrap(), r#""switch_mode""#);
         assert_eq!(serde_json::to_string(&PermissionOptionKind::AllowAlways).unwrap(), r#""allow_always""#);
         assert_eq!(serde_json::to_string(&SessionOption::Effort).unwrap(), r#""effort""#);

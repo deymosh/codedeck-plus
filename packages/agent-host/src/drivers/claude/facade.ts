@@ -21,7 +21,6 @@ import * as path from 'node:path';
 import { findInDirs, findOnPath, isFile } from '../../executable';
 import type {
   CanUseTool,
-  McpServerConfig,
   Options,
   Query,
   SDKUserMessage,
@@ -87,7 +86,6 @@ export interface SdkSessionOptions {
   /** SDK session id to resume instead of creating a fresh session. */
   resume?: string;
   canUseTool: CanUseTool;
-  mcpServers?: Record<string, McpServerConfig>;
   /** Explicit path to the `claude` executable (see resolveClaudeExecutable). */
   pathToClaudeCodeExecutable?: string;
   /**
@@ -662,7 +660,6 @@ export function buildQueryOptions(
     ...(fallbackModel !== null ? { fallbackModel } : {}),
     ...(modelToSend ? { model: modelToSend } : {}),
     ...(optionsEffort ? { effort: optionsEffort } : {}),
-    ...(opts.mcpServers ? { mcpServers: opts.mcpServers } : {}),
     ...(opts.pathToClaudeCodeExecutable
       ? { pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable }
       : {}),

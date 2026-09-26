@@ -15,16 +15,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use client_core::connection::ConnectionStatus;
-use client_core::stores::dm::{DmConversation, DmMessage};
 use client_core::stores::machines::MachineView;
-use client_core::stores::marmot::{MarmotConversation, MarmotMessage, MarmotWelcomeInfo};
 use client_core::stores::outbox::OutboxItem;
 use client_core::stores::pairing::{PairingPhase, PairingState};
 use client_core::stores::pending_sessions::PendingSessionView;
 use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
-use client_core::stores::ui::{CredentialsAck, DeviceConfigAck, PanelMode, ProviderProfileAck, UndoToast};
+use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast};
 use serde::Serialize;
 
 use crate::ports::TranscriptStore;
@@ -164,14 +162,10 @@ impl QuickPromptsView {
 pub struct UiView {
     pub selected_machine: Option<String>,
     pub selected_session: Option<String>,
-    pub panel_mode: PanelMode,
-    pub active_dm_peer: Option<String>,
-    pub active_marmot_group: Option<String>,
     pub unread_sessions: BTreeSet<String>,
     pub responded_cards: BTreeMap<String, BTreeSet<String>>,
     pub plan_approval_choices: BTreeMap<String, String>,
     pub credentials_status: BTreeMap<String, CredentialsAck>,
-    pub device_config_status: BTreeMap<String, DeviceConfigAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
     pub undo_toast: Option<UndoToast>,
 }
@@ -182,14 +176,10 @@ impl UiView {
         Self {
             selected_machine: ui.selected_machine.clone(),
             selected_session: ui.selected_session.clone(),
-            panel_mode: ui.panel_mode,
-            active_dm_peer: ui.active_dm_peer.clone(),
-            active_marmot_group: ui.active_marmot_group.clone(),
             unread_sessions: ui.unread_sessions.clone(),
             responded_cards: ui.responded_cards.clone(),
             plan_approval_choices: ui.plan_approval_choices.clone(),
             credentials_status: ui.credentials_status.clone(),
-            device_config_status: ui.device_config_status.clone(),
             provider_profile_status: ui.provider_profile_status.clone(),
             undo_toast: ui.undo_toast.clone(),
         }
@@ -209,8 +199,7 @@ pub struct PairingView {
     /// A deep-link URL awaiting explicit user confirmation (CDX-013), with
     /// enough of its parsed content to show what it wants to pair with
     /// before the user confirms — the same narrow shape `candidate` uses,
-    /// dropping the one-time token and mesh-join fields `ParsedPairingUrl`
-    /// itself still carries (no client offers a mesh join).
+    /// dropping the one-time token `ParsedPairingUrl` itself still carries.
     pub staged: Option<PairingCandidateView>,
     /// The candidate under negotiation, if any.
     pub candidate: Option<PairingCandidateView>,
@@ -253,87 +242,6 @@ impl PairingView {
 
     pub fn from_stores(s: &CoreStores) -> Self {
         Self::from_state(&s.pairing)
-    }
-}
-
-// --- dm ------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DmView {
-    /// Conversations newest-first (by `last_message_at`).
-    pub conversations: Vec<DmConversation>,
-    /// `peer` → messages ascending by `at`.
-    pub messages: BTreeMap<String, Vec<DmMessage>>,
-    pub active_peer: Option<String>,
-    /// 1059 events seen / unwrap failures / non-DM rumors (CD-001 diagnostics).
-    #[specta(type = specta_typescript::Number)]
-    pub events_received: u64,
-    #[specta(type = specta_typescript::Number)]
-    pub unwrap_failures: u64,
-    #[specta(type = specta_typescript::Number)]
-    pub invalid_rumors: u64,
-}
-
-impl DmView {
-    pub fn from_stores(s: &CoreStores) -> Self {
-        let mut conversations: Vec<DmConversation> = s.dm.conversations.values().cloned().collect();
-        conversations.sort_by_key(|c| std::cmp::Reverse(c.last_message_at));
-        Self {
-            conversations,
-            messages: s.dm.messages.clone(),
-            active_peer: s.dm.active_peer.clone(),
-            events_received: s.dm.diagnostics.events_received,
-            unwrap_failures: s.dm.diagnostics.unwrap_failures,
-            invalid_rumors: s.dm.diagnostics.invalid_rumors,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct MarmotView {
-    /// The MDK engine seam exists AND init succeeded — gates whether the UI
-    /// offers starting a Marmot chat at all.
-    pub available: bool,
-    /// Conversations newest-first (by `last_message_at`).
-    pub conversations: Vec<MarmotConversation>,
-    /// `group_id` → messages ascending by `at`.
-    pub messages: BTreeMap<String, Vec<MarmotMessage>>,
-    pub active_group: Option<String>,
-    /// kind-445 events seen / `Ignored` verdicts / engine-call failures
-    /// (CD-001 diagnostics — never silent).
-    #[specta(type = specta_typescript::Number)]
-    pub events_received: u64,
-    #[specta(type = specta_typescript::Number)]
-    pub ignored: u64,
-    #[specta(type = specta_typescript::Number)]
-    pub errors: u64,
-    /// 445s held for not-yet-joined groups (VEIL-029 buffer).
-    #[specta(type = specta_typescript::Number)]
-    pub buffered: usize,
-    /// Welcomes awaiting `Intent::AcceptMarmotWelcome`, keyed by `welcomeId`.
-    /// Without this the accept-welcome UI has nothing to render — a chat
-    /// invite would sit accepted engine-side-only and invisible forever.
-    pub pending_welcomes: BTreeMap<String, MarmotWelcomeInfo>,
-}
-
-impl MarmotView {
-    pub fn from_stores(s: &CoreStores) -> Self {
-        let mut conversations: Vec<MarmotConversation> =
-            s.marmot.conversations.values().cloned().collect();
-        conversations.sort_by_key(|c| std::cmp::Reverse(c.last_message_at));
-        Self {
-            available: s.marmot.available,
-            conversations,
-            messages: s.marmot.messages.clone(),
-            active_group: s.marmot.active_group.clone(),
-            events_received: s.marmot.diagnostics.events_received,
-            ignored: s.marmot.diagnostics.ignored,
-            errors: s.marmot.diagnostics.errors,
-            buffered: s.marmot.buffered_len(),
-            pending_welcomes: s.marmot.pending_welcomes.clone(),
-        }
     }
 }
 
@@ -505,8 +413,6 @@ mod tests {
                 machine: "(manual)".into(),
                 relays: vec!["wss://r".into()],
                 token: "t".into(),
-                netid: None,
-                mesh_admin: None,
             }),
             error: None,
             timed_out: false,
@@ -515,30 +421,6 @@ mod tests {
         let pv = PairingView::from_stores(&s);
         assert_eq!(pv.phase, "awaiting-ack");
         assert_eq!(pv.candidate.unwrap().machine, "(manual)");
-    }
-
-    #[tokio::test]
-    async fn marmot_view_carries_pending_welcomes_camel_case() {
-        let mut s = stores().await;
-        s.marmot.pending_welcomes.insert(
-            "w1".into(),
-            MarmotWelcomeInfo {
-                welcome_id: "w1".into(),
-                wrapper_id: "wrap1".into(),
-                group_id: "g1".into(),
-                h_tag: "h1".into(),
-                name: "".into(),
-                welcomer: "peer-pubkey".into(),
-                member_count: 2,
-            },
-        );
-        let mv = MarmotView::from_stores(&s);
-        let welcome = mv.pending_welcomes.get("w1").expect("welcome present in the view");
-        assert_eq!(welcome.welcomer, "peer-pubkey");
-        assert!(!mv.available); // engine never initialized in this test
-        let json = serde_json::to_string(&mv).unwrap();
-        assert!(json.contains(r#""available":false"#));
-        assert!(json.contains(r#""pendingWelcomes":{"w1":{"welcomeId":"w1""#));
     }
 
     #[tokio::test]
@@ -565,7 +447,6 @@ mod tests {
         assert_eq!(uv.plan_approval_choices.get("card1").map(String::as_str), Some("2"));
         let json = serde_json::to_string(&uv).unwrap();
         assert!(json.contains(r#""selectedMachine":"m1""#));
-        assert!(json.contains(r#""panelMode":"session""#));
     }
 
     #[tokio::test]

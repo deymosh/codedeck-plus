@@ -12,7 +12,7 @@
  */
 import type { Driver, DriverSession, SessionContext } from '../../driver';
 import type { HttpPost } from '../../net';
-import { isBenignPlanDirWrite, SECRET_PATH_DENIAL, touchesSecretPath } from '../../policy';
+import { isBenignPlanDirWrite } from '../../policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
 import type { AgentInfo, ModelEntry, OptionChoice, OutputEntry, ProviderBinding, SessionOption, StartSession, UsageData } from '../../types';
@@ -33,7 +33,6 @@ import {
   type SdkSessionOptions,
   type SdkSystemMessage,
 } from './facade';
-import { HOST_MCP_SERVER, hostToolsServer } from './hostTools';
 import { normalizeUsage } from './usage';
 
 export const CLAUDE_CODE_AGENT_ID = 'claude-code';
@@ -200,7 +199,6 @@ export class ClaudeSession implements DriverSession {
   }
 
   private spawn(env: ReturnType<typeof buildClaudeEnv>, claudePath: string | undefined): void {
-    const hostTools = this.params.hostTools ?? [];
     const opts: SdkSessionOptions = {
       sessionId: this.params.sessionId,
       cwd: this.params.cwd,
@@ -212,9 +210,6 @@ export class ClaudeSession implements DriverSession {
       // and never answers the machine-wide model list.
       ...(this.params.provider ? { providerId: this.params.provider.id, fallbackModel: null } : {}),
       ...(this.resumeTarget ? { resume: this.resumeTarget } : {}),
-      ...(hostTools.length > 0
-        ? { mcpServers: { [HOST_MCP_SERVER]: hostToolsServer(hostTools, (tool, args) => this.ctx.callHostTool(tool, args)) } }
-        : {}),
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       ...(env ? { env } : {}),
     };
@@ -403,22 +398,16 @@ export class ClaudeSession implements DriverSession {
 
   /**
    * The SDK's permission callback. Order:
-   *  1. secret-path hard deny (mode-independent, when the session asks for it)
-   *  2. AskUserQuestion → the user's answers
-   *  3. EnterPlanMode → allowed; the session is now planning
-   *  4. auto-approve mode → allowed
-   *  5. a narrow benign write into Claude Code's plan directory → allowed
-   *  6. ExitPlanMode → plan approval
-   *  7. anything else → the user decides
+   *  1. AskUserQuestion → the user's answers
+   *  2. EnterPlanMode → allowed; the session is now planning
+   *  3. auto-approve mode → allowed
+   *  4. a narrow benign write into Claude Code's plan directory → allowed
+   *  5. ExitPlanMode → plan approval
+   *  6. anything else → the user decides
    */
   private readonly canUseTool: SdkCanUseTool = async (toolName, rawInput, options) => {
     const input = (rawInput ?? {}) as Record<string, unknown>;
     const requestId = options.toolUseID;
-
-    if (this.params.denySecretPaths && touchesSecretPath(toolName, input)) {
-      this.ctx.log(`[claude] DENIED secret-path access by test session ${this.ctx.sessionId}: ${toolName}`);
-      return { behavior: 'deny', message: SECRET_PATH_DENIAL };
-    }
 
     if (toolName === 'AskUserQuestion') return this.askQuestions(requestId, input);
 

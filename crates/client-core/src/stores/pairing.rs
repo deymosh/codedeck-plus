@@ -1,7 +1,7 @@
 //! `pairing` — `codedeck://pair` URL parsing + the pair-flow FSM. Port of the
 //! pure half of `apps/mobile/src/core/stores/pairing.ts`.
 //!
-//! URL: `codedeck://pair?npub=<npub>&relays=<enc>,<enc>&machine=<enc>&token=<enc>[&netid=<enc>&meshadmin=<enc>]`
+//! URL: `codedeck://pair?npub=<npub>&relays=<enc>,<enc>&machine=<enc>&token=<enc>`
 //!
 //! Flow: parse (QR / pasted link) → `BeginPair` sends the token-carrying
 //! `pair-request` and arms the CDX-040 deadline → `pair-ack` → `Paired`
@@ -44,10 +44,6 @@ pub struct ParsedPairingUrl {
     pub relays: Vec<String>,
     pub machine: String,
     pub token: String,
-    /// Active mesh network id (CDX-028 manual-join; pairs with `mesh_admin`).
-    pub netid: Option<String>,
-    /// Mesh admin device id (npub) for the engine's `manual_add_network`.
-    pub mesh_admin: Option<String>,
 }
 
 pub type ParsePairingResult = Result<ParsedPairingUrl, String>;
@@ -160,17 +156,12 @@ pub fn parse_pairing_url(url: &str) -> ParsePairingResult {
         return Err(format!("too many relays (max {MAX_PAIRING_RELAYS})"));
     }
 
-    let netid = get("netid").and_then(|r| decode_uri_component(r).ok());
-    let mesh_admin = get("meshadmin").and_then(|r| decode_uri_component(r).ok());
-
     Ok(ParsedPairingUrl {
         npub: npub.to_string(),
         pubkey_hex,
         relays,
         machine,
         token,
-        netid,
-        mesh_admin,
     })
 }
 
@@ -189,8 +180,6 @@ pub fn parse_manual_pair(npub: &str, token: &str) -> ParsePairingResult {
         relays: Vec::new(),
         machine: "(manual)".to_string(),
         token: token.to_string(),
-        netid: None,
-        mesh_admin: None,
     })
 }
 
@@ -215,8 +204,6 @@ pub struct PairingCandidate {
     pub machine: String,
     pub relays: Vec<String>,
     pub token: String,
-    pub netid: Option<String>,
-    pub mesh_admin: Option<String>,
 }
 
 impl PairingCandidate {
@@ -227,8 +214,6 @@ impl PairingCandidate {
             machine: p.machine.clone(),
             relays: p.relays.clone(),
             token: p.token.clone(),
-            netid: p.netid.clone(),
-            mesh_admin: p.mesh_admin.clone(),
         }
     }
 }
@@ -448,17 +433,13 @@ mod tests {
             .collect()
     }
 
-    fn build_url(npub: &str, relays: &[&str], machine: &str, token: &str, mesh: Option<(&str, &str)>) -> String {
+    fn build_url(npub: &str, relays: &[&str], machine: &str, token: &str) -> String {
         let relays_param = relays.iter().map(|r| enc(r)).collect::<Vec<_>>().join(",");
-        let mut url = format!(
+        format!(
             "codedeck://pair?npub={npub}&relays={relays_param}&machine={}&token={}",
             enc(machine),
             enc(token)
-        );
-        if let Some((netid, admin)) = mesh {
-            url.push_str(&format!("&netid={}&meshadmin={}", enc(netid), enc(admin)));
-        }
-        url
+        )
     }
 
     fn bridge_npub() -> String {
@@ -475,7 +456,6 @@ mod tests {
             &["wss://relay2.descendant.io", "wss://relay.primal.net"],
             "my laptop (cli)",
             "tok-123",
-            None,
         );
         let p = parse_pairing_url(&url).unwrap();
         assert_eq!(p.npub, kp.npub);
@@ -483,16 +463,13 @@ mod tests {
         assert_eq!(p.relays, vec!["wss://relay2.descendant.io", "wss://relay.primal.net"]);
         assert_eq!(p.machine, "my laptop (cli)");
         assert_eq!(p.token, "tok-123");
-        assert_eq!(p.netid, None);
-        assert_eq!(p.mesh_admin, None);
     }
 
     #[test]
-    fn parses_the_mesh_variant_and_tolerates_whitespace() {
-        let url = build_url(&bridge_npub(), &["wss://r.example"], "box", "t", Some(("a237c978", "npub1admindevice")));
+    fn tolerates_surrounding_whitespace() {
+        let url = build_url(&bridge_npub(), &["wss://r.example"], "box", "t");
         let p = parse_pairing_url(&format!("  {url}\n")).unwrap();
-        assert_eq!(p.netid.as_deref(), Some("a237c978"));
-        assert_eq!(p.mesh_admin.as_deref(), Some("npub1admindevice"));
+        assert_eq!(p.token, "t");
     }
 
     #[test]
@@ -528,10 +505,10 @@ mod tests {
         let n = bridge_npub();
         let six: Vec<String> = (0..6).map(|i| format!("wss://r{i}.example")).collect();
         let six_ref: Vec<&str> = six.iter().map(String::as_str).collect();
-        assert!(parse_pairing_url(&build_url(&n, &six_ref, "box", "t", None))
+        assert!(parse_pairing_url(&build_url(&n, &six_ref, "box", "t"))
             .unwrap_err()
             .contains("too many relays"));
-        assert!(parse_pairing_url(&build_url(&n, &six_ref[..5], "box", "t", None)).is_ok());
+        assert!(parse_pairing_url(&build_url(&n, &six_ref[..5], "box", "t")).is_ok());
     }
 
     #[test]
@@ -562,8 +539,8 @@ mod tests {
 
     const CFG: u64 = PAIR_ACK_TIMEOUT_MS;
 
-    fn parts(mesh: Option<(&str, &str)>) -> ParsedPairingUrl {
-        parse_pairing_url(&build_url(&bridge_npub(), &["wss://r.example"], "box", "tok", mesh)).unwrap()
+    fn parts() -> ParsedPairingUrl {
+        parse_pairing_url(&build_url(&bridge_npub(), &["wss://r.example"], "box", "tok")).unwrap()
     }
 
     fn ack(machine: &str, ok: bool, reason: Option<PairAckReason>, relays: Option<Vec<String>>, host: Option<BridgeHostKind>) -> PairAckMsg {
@@ -582,7 +559,7 @@ mod tests {
 
     #[test]
     fn begin_pair_registers_the_candidate_before_the_request() {
-        let p = parts(None);
+        let p = parts();
         let r = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "My Phone".into() }, CFG);
         assert_eq!(r.state.phase, PairingPhase::AwaitingAck);
         // NotifyCandidate must precede SendPairRequest.
@@ -602,7 +579,7 @@ mod tests {
 
     #[test]
     fn pair_ack_ok_pairs_and_carries_the_bridge_reported_name() {
-        let p = parts(None);
+        let p = parts();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::PairAck { machine_pubkey: p.pubkey_hex, msg: ack("real-name", true, None, None, None) }, CFG);
         assert_eq!(r.state.phase, PairingPhase::Paired);
@@ -616,25 +593,8 @@ mod tests {
     }
 
     #[test]
-    fn ack_ok_pairs_with_mesh_info_riding_the_candidate() {
-        let p = parts(Some(("a237c978", "npub1admindevice")));
-        let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "P".into() }, CFG);
-        assert!(begun.effects.iter().any(|e| matches!(e, PairingEffect::NotifyCandidate(c) if c.mesh_admin.as_deref() == Some("npub1admindevice") && c.netid.as_deref() == Some("a237c978"))));
-        let r = pairing_reducer(&begun.state, PairingEvent::PairAck { machine_pubkey: p.pubkey_hex.clone(), msg: ack("box", true, None, None, None) }, CFG);
-        assert_eq!(r.state.phase, PairingPhase::Paired);
-        match r.effects.iter().find(|e| matches!(e, PairingEffect::OnPaired { .. })).unwrap() {
-            PairingEffect::OnPaired { candidate, machine_name, .. } => {
-                assert_eq!(machine_name, "box");
-                assert_eq!(candidate.mesh_admin.as_deref(), Some("npub1admindevice"));
-                assert_eq!(candidate.netid.as_deref(), Some("a237c978"));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
     fn ack_not_ok_fails_with_the_reason_no_on_paired() {
-        let p = parts(None);
+        let p = parts();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::PairAck { machine_pubkey: p.pubkey_hex.clone(), msg: ack("box", false, Some(PairAckReason::BadToken), None, None) }, CFG);
         assert_eq!(r.state.phase, PairingPhase::Failed);
@@ -646,7 +606,7 @@ mod tests {
     fn an_ack_from_the_wrong_pubkey_or_outside_a_flow_is_ignored() {
         let idle = pairing_reducer(&PairingState::default(), PairingEvent::PairAck { machine_pubkey: "x".into(), msg: ack("box", true, None, None, None) }, CFG);
         assert_eq!(idle.state.phase, PairingPhase::Idle);
-        let p = parts(None);
+        let p = parts();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p, label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::PairAck { machine_pubkey: "someone-else".into(), msg: ack("box", true, None, None, None) }, CFG);
         assert_eq!(r.state.phase, PairingPhase::AwaitingAck);
@@ -685,7 +645,7 @@ mod tests {
 
     #[test]
     fn qr_pairing_merges_ack_relays_deduped_url_first() {
-        let p = parse_pairing_url(&build_url(&bridge_npub(), &["wss://a.example", "wss://b.example"], "box", "tok", None)).unwrap();
+        let p = parse_pairing_url(&build_url(&bridge_npub(), &["wss://a.example", "wss://b.example"], "box", "tok")).unwrap();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::PairAck { machine_pubkey: p.pubkey_hex, msg: ack("box", true, None, Some(vec!["wss://b.example".into(), "wss://c.example".into()]), None) }, CFG);
         match r.effects.iter().find(|e| matches!(e, PairingEffect::OnPaired { .. })).unwrap() {
@@ -760,7 +720,7 @@ mod tests {
 
     #[test]
     fn reset_returns_to_idle_and_disarms() {
-        let p = parts(None);
+        let p = parts();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p, label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::Reset, CFG);
         assert_eq!(r.state, PairingState::default());
@@ -771,7 +731,7 @@ mod tests {
 
     #[test]
     fn stage_pair_sends_nothing_and_registers_no_candidate() {
-        let r = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts(None)), CFG);
+        let r = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts()), CFG);
         assert!(r.state.staged.is_some());
         assert_eq!(r.state.phase, PairingPhase::Idle);
         assert!(r.effects.is_empty());
@@ -779,7 +739,7 @@ mod tests {
 
     #[test]
     fn confirm_staged_runs_begin_pair_and_clears_the_staged_link() {
-        let staged = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts(None)), CFG).state;
+        let staged = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts()), CFG).state;
         let r = pairing_reducer(&staged, PairingEvent::ConfirmStaged { label: "My Phone".into() }, CFG);
         assert!(r.state.staged.is_none());
         assert_eq!(r.state.phase, PairingPhase::AwaitingAck);
@@ -788,7 +748,7 @@ mod tests {
 
     #[test]
     fn dismiss_then_confirm_is_a_no_op() {
-        let staged = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts(None)), CFG).state;
+        let staged = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts()), CFG).state;
         let dismissed = pairing_reducer(&staged, PairingEvent::DismissStaged, CFG).state;
         assert!(dismissed.staged.is_none());
         let r = pairing_reducer(&dismissed, PairingEvent::ConfirmStaged { label: "P".into() }, CFG);
@@ -798,7 +758,7 @@ mod tests {
 
     #[test]
     fn reset_clears_a_staged_link_too() {
-        let staged = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts(None)), CFG).state;
+        let staged = pairing_reducer(&PairingState::default(), PairingEvent::StagePair(parts()), CFG).state;
         let r = pairing_reducer(&staged, PairingEvent::Reset, CFG);
         assert!(r.state.staged.is_none());
     }

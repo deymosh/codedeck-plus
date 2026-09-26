@@ -7,7 +7,7 @@
 //!   over the real [`WsTransport`];
 //! * [`client_core::bridge_api`] — egress `build_command`, total `ingest`;
 //! * the store layer ([`CoreStores`]) behind the `Intent` / view / `CoreEvent`
-//!   surface, the NIP-17 DM and Marmot subscriptions, and the timers.
+//!   surface, and the timers.
 //!
 //! Bindings (`crates/client-ffi` for Android) wrap the handle; nothing here
 //! knows which host it runs in.
@@ -31,38 +31,22 @@ use protocol::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
-use client_core::notifications::{dm_notify_tag, session_notify_tag, EmitInputs, NotifyEvent};
-use client_core::stores::dm::{
-    AddOutcome, DmRumor, DM_RELAY_LIST_KIND, DM_RUMOR_KIND, GIFT_WRAP_KIND,
-};
+use client_core::notifications::session_notify_tag;
 use client_core::stores::ui::UiEffect;
-use client_core::stores::marmot::{
-    should_mint_key_package, AddOutcome as MarmotAddOutcome, MarmotIngested, PublishedKeyPackage,
-    GROUP_MESSAGE_KIND, KEY_PACKAGE_ROTATION_MS, KP_RELAY_LIST_KIND, WELCOME_RUMOR_KIND,
-};
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
-use crate::giftwrap::{relay_list_event, unwrap_gift_parts, wrap_dm};
 use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionImageSend, UndoTimer};
-use crate::nostr_client::{
-    Filter, NostrClient, NostrClientHost, NostrEvent, SubCallbacks, Transport,
-};
+use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
-    ConnectionView, DmView, MachinesView, MarmotView, OutboxView, PairingView,
+    ConnectionView, MachinesView, OutboxView, PairingView,
     PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView,
 };
 
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
-/// How long after a relay closes the DM or Marmot subscription it is
-/// re-opened. Nothing else would: those subscriptions are otherwise only
-/// opened on (re)connect, and a relay can close one (`rate-limited:` …)
-/// while the socket stays up. The delay keeps a relay that re-closes it
-/// straight away from turning this into a hot loop.
-const SUB_REARM_DELAY_MS: u64 = 30_000;
 
 // --- clock and entropy ports -----------------------------------------------
 
@@ -149,8 +133,6 @@ pub enum SliceId {
     Cards,
     Settings,
     Pairing,
-    Dm,
-    Marmot,
     QuickPrompts,
     PendingSessions,
     Ui,
@@ -221,12 +203,9 @@ pub struct CorePorts {
     pub kv: Rc<dyn Kv>,
     pub transcript_store: Rc<dyn TranscriptStore>,
     pub notifier: Rc<dyn Notifier>,
-    /// Blossom image upload/download. `NoHttpFetch` when the host binds no
+    /// Blossom image upload. `NoHttpFetch` when the host binds no
     /// networking (image sends then fall back to relay chunks).
     pub http: Rc<dyn crate::attachments::HttpFetch>,
-    /// The MDK / MLS engine: `MarmotEngineImpl` (feature `marmot`), or
-    /// `NoMarmot` — then Marmot chats are unavailable and DMs are NIP-17 only.
-    pub marmot: Rc<dyn crate::marmot::MarmotEngine>,
 }
 
 impl Default for CorePorts {
@@ -236,7 +215,6 @@ impl Default for CorePorts {
             transcript_store: Rc::new(MemoryTranscriptStore::new()),
             notifier: Rc::new(NullNotifier),
             http: Rc::new(crate::attachments::NoHttpFetch),
-            marmot: Rc::new(crate::marmot::NoMarmot),
         }
     }
 }
@@ -363,19 +341,12 @@ impl Core {
             last_connected_relays: Vec::new(),
             pair_timer: None,
             undo_timer: None,
-            dm_sub: None,
-            dm_epoch: 0,
-            dm_rearm_timer: None,
-            marmot_sub: None,
-            marmot_epoch: 0,
-            marmot_rearm_timer: None,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
             transcript_store: ports.transcript_store,
             notifier: ports.notifier,
             http: ports.http,
-            marmot_engine: ports.marmot,
         };
         tokio::task::spawn_local(event_loop.run(rx));
         Self { tx }
@@ -504,12 +475,6 @@ impl Core {
     pub async fn connection_view(&self) -> Option<ConnectionView> {
         self.query(ViewQuery::Connection).await
     }
-    pub async fn dm_view(&self) -> Option<DmView> {
-        self.query(ViewQuery::Dm).await
-    }
-    pub async fn marmot_view(&self) -> Option<MarmotView> {
-        self.query(ViewQuery::Marmot).await
-    }
     pub async fn quick_prompts_view(&self) -> QuickPromptsView {
         self.query(ViewQuery::QuickPrompts)
             .await
@@ -534,14 +499,10 @@ impl Core {
         self.query(ViewQuery::Ui).await.unwrap_or(UiView {
             selected_machine: None,
             selected_session: None,
-            panel_mode: Default::default(),
-            active_dm_peer: None,
-            active_marmot_group: None,
             unread_sessions: Default::default(),
             responded_cards: Default::default(),
             plan_approval_choices: Default::default(),
             credentials_status: Default::default(),
-            device_config_status: Default::default(),
             provider_profile_status: Default::default(),
             undo_toast: None,
         })
@@ -581,13 +542,6 @@ enum Msg {
         intent: Box<Intent>,
         reply: oneshot::Sender<()>,
     },
-    /// A DM image finished uploading off the loop: send the DM carrying its
-    /// reference line, then answer the intent's `reply`.
-    DmImageReady {
-        peer: String,
-        body: String,
-        reply: Option<oneshot::Sender<()>>,
-    },
     View(ViewQuery),
     /// The off-loop publish of an outbox item settled.
     PublishSettled {
@@ -598,24 +552,6 @@ enum Msg {
     UndoTimerFired,
     /// The connection FSM asked for a post-(re)connect reconcile.
     RefreshReconcile,
-    /// A kind-1059 gift wrap arrived on the DM subscription.
-    DmEvent(NostrEvent),
-    /// The DM subscription of `epoch` died (not a deliberate teardown).
-    DmClosed(u64),
-    /// A kind-445 group message arrived on the Marmot subscription (the raw
-    /// relay event object — the MLS engine re-decrypts from that, same as a
-    /// buffered VEIL-029 re-feed).
-    MarmotEvent(serde_json::Value),
-    /// The Marmot subscription of `epoch` died.
-    MarmotClosed(u64),
-    /// Re-open the DM subscription that closed at `epoch`, if still current.
-    DmRearm(u64),
-    /// Re-open the Marmot subscription that closed at `epoch`, if still current.
-    MarmotRearm(u64),
-    /// A (re)connect: run the Marmot start sequence (engine init, group
-    /// reconcile, KeyPackage / 10051 publish, then the 445 sub). Deferred to a
-    /// message so the sync connection `apply` stays non-blocking.
-    MarmotStart,
     /// `LoopHost::note_stored_seen` advanced the cursor — persist it so a
     /// restart resumes the stored-response filter instead of replaying the
     /// relay's entire history for this identity. Deferred the same way every
@@ -632,8 +568,6 @@ enum ViewQuery {
     Outbox(oneshot::Sender<OutboxView>),
     Pairing(oneshot::Sender<PairingView>),
     Connection(oneshot::Sender<ConnectionView>),
-    Dm(oneshot::Sender<DmView>),
-    Marmot(oneshot::Sender<MarmotView>),
     QuickPrompts(oneshot::Sender<QuickPromptsView>),
     PendingSessions(oneshot::Sender<PendingSessionsView>),
     Ui(oneshot::Sender<UiView>),
@@ -716,16 +650,6 @@ struct Loop {
     pair_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
-    /// The kind-1059 DM subscription + its epoch guard.
-    dm_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
-    dm_epoch: u64,
-    /// Pending re-open after a relay closed the DM subscription.
-    dm_rearm_timer: Option<AbortHandle>,
-    /// The kind-445 Marmot group-message subscription (over joined `h` tags).
-    marmot_sub: Option<Box<dyn crate::nostr_client::TransportSub>>,
-    marmot_epoch: u64,
-    /// Pending re-open after a relay closed the Marmot subscription.
-    marmot_rearm_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- the composed store layer ---
     stores: CoreStores,
@@ -733,10 +657,6 @@ struct Loop {
     transcript_store: Rc<dyn TranscriptStore>,
     notifier: Rc<dyn Notifier>,
     http: Rc<dyn crate::attachments::HttpFetch>,
-    /// The MLS engine — `on_dm_event` routes kind-444 welcomes to it. Inert
-    /// (`NoMarmot`, every call errors → the welcome counts invalid) until the
-    /// MDK engine is relocated into this crate.
-    marmot_engine: Rc<dyn crate::marmot::MarmotEngine>,
 }
 
 impl Loop {
@@ -812,55 +732,10 @@ impl Loop {
                         let _ = reply.send(());
                     }
                 }
-                Msg::DmImageReady { peer, body, reply } => {
-                    self.send_dm(peer, body).await;
-                    if let Some(reply) = reply {
-                        let _ = reply.send(());
-                    }
-                }
                 Msg::View(query) => self.answer_view(query).await,
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
                 Msg::UndoTimerFired => self.on_undo_timer().await,
                 Msg::RefreshReconcile => self.on_refresh_reconcile().await,
-                Msg::DmEvent(event) => self.on_dm_event(event).await,
-                Msg::DmClosed(epoch) => {
-                    if epoch == self.dm_epoch {
-                        self.dm_sub = None;
-                        abort(&mut self.dm_rearm_timer);
-                        self.dm_rearm_timer = Some(self.arm(SUB_REARM_DELAY_MS, Msg::DmRearm(epoch)));
-                    }
-                }
-                Msg::MarmotEvent(event) => self.on_marmot_event(event).await,
-                Msg::MarmotClosed(epoch) => {
-                    if epoch == self.marmot_epoch {
-                        self.marmot_sub = None;
-                        abort(&mut self.marmot_rearm_timer);
-                        self.marmot_rearm_timer =
-                            Some(self.arm(SUB_REARM_DELAY_MS, Msg::MarmotRearm(epoch)));
-                    }
-                }
-                // Only while connected: after a socket loss the reconnect's
-                // OpenSocket re-opens both subscriptions itself (and bumps
-                // the epoch, which turns a pending re-arm into a no-op).
-                Msg::DmRearm(epoch) => {
-                    self.dm_rearm_timer = None;
-                    if epoch == self.dm_epoch
-                        && self.dm_sub.is_none()
-                        && self.conn.status == ConnectionStatus::Connected
-                    {
-                        self.start_dm_sub();
-                    }
-                }
-                Msg::MarmotRearm(epoch) => {
-                    self.marmot_rearm_timer = None;
-                    if epoch == self.marmot_epoch
-                        && self.marmot_sub.is_none()
-                        && self.conn.status == ConnectionStatus::Connected
-                    {
-                        self.start_marmot_sub();
-                    }
-                }
-                Msg::MarmotStart => self.on_marmot_start().await,
             }
         }
     }
@@ -908,14 +783,10 @@ impl Loop {
                 );
                 self.ws.ensure_connected();
                 self.nostr.connect();
-                self.start_dm_sub();
-                let _ = self.self_tx.send(Msg::MarmotStart);
             }
             ConnectionEffect::CloseSocket => {
                 log::info!("connection: CloseSocket");
                 self.nostr.disconnect();
-                self.stop_dm_sub();
-                self.stop_marmot_sub();
                 self.ws.shutdown();
             }
             ConnectionEffect::ScheduleRetry { delay_ms } => {
@@ -1104,7 +975,6 @@ impl Loop {
             None => {}
         }
         // `r.heartbeat` is already covered by the pre-decode path above;
-        // `r.mesh_join` has no platform seam yet: one-QR mesh join is not wired.
     }
 
     async fn persist_store(&self, id: StoreId) {
@@ -1114,8 +984,6 @@ impl Loop {
             StoreId::Outbox => p.save_outbox(&self.stores.outbox).await,
             StoreId::Settings => p.save_settings(&self.stores.settings).await,
             StoreId::QuickPrompts => p.save_quick_prompts(&self.stores.quick_prompts).await,
-            StoreId::Dm => p.save_dm(&self.stores.dm).await,
-            StoreId::Marmot => p.save_marmot(&self.stores.marmot).await,
         }
     }
 
@@ -1152,30 +1020,10 @@ impl Loop {
             visible: self.conn.visible,
         };
         let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
-        let dm_send = result.dm_send.clone();
-        let dm_image_send = result.dm_image_send.clone();
         let session_image_send = result.session_image_send.clone();
-        let marmot_accept = result.marmot_accept.clone();
-        let marmot_send = result.marmot_send.clone();
-        let marmot_start_chat = result.marmot_start_chat.clone();
         self.interpret_intent(result).await;
-        if let Some((peer, text)) = dm_send {
-            self.send_dm(peer, text).await;
-        }
-        if let Some((peer, text, image)) = dm_image_send {
-            self.spawn_dm_image(peer, text, image, reply.take());
-        }
         if let Some(send) = session_image_send {
             self.spawn_session_image(send, reply.take());
-        }
-        if let Some(welcome_id) = marmot_accept {
-            self.accept_marmot_welcome(welcome_id).await;
-        }
-        if let Some((group_id, text)) = marmot_send {
-            self.send_marmot_message(group_id, text).await;
-        }
-        if let Some(peer_pubkey) = marmot_start_chat {
-            self.start_marmot_chat(peer_pubkey).await;
         }
         reply
     }
@@ -1191,41 +1039,6 @@ impl Loop {
             entropy: Rc::clone(&self.entropy),
             observer: Rc::clone(&self.observer),
         }
-    }
-
-    /// Encrypt + upload an image off the loop, then send it as a DM (the ref
-    /// line appended to `text`) back on the loop, which owns the DM store.
-    fn spawn_dm_image(
-        &self,
-        peer: String,
-        text: String,
-        image: Vec<u8>,
-        reply: Option<oneshot::Sender<()>>,
-    ) {
-        let ctx = self.image_send_ctx();
-        let self_tx = self.self_tx.clone();
-        tokio::task::spawn_local(async move {
-            let opts = crate::attachments::UploadOptions::at(ctx.clock.now_ms());
-            match crate::attachments::upload_encrypted_image(&image, &ctx.identity, ctx.http.as_ref(), opts)
-                .await
-            {
-                Ok(reference) => {
-                    let line = client_core::dm_attachments::build_image_ref(&reference);
-                    let body = if text.is_empty() {
-                        line
-                    } else {
-                        format!("{text}\n{line}")
-                    };
-                    let _ = self_tx.send(Msg::DmImageReady { peer, body, reply });
-                }
-                Err(_) => {
-                    ctx.observer.action_failed(ActionFailedKind::PublishRejected);
-                    if let Some(reply) = reply {
-                        let _ = reply.send(());
-                    }
-                }
-            }
-        });
     }
 
     /// Runs [`ImageSendCtx::send_session_image`] as its own task and answers
@@ -1299,15 +1112,12 @@ impl Loop {
         for (machine, session) in r.transcript_removed {
             self.transcript_store.remove(&machine, &session).await;
         }
-        // CDX-026c: opening a session/DM the user was notified about clears
+        // CDX-026c: opening a session the user was notified about clears
         // every notification filed under its (coarser-than-delivery) tag.
         for effect in r.ui_effects {
             match effect {
                 UiEffect::SessionViewed { machine, session_id } => {
                     self.notifier.cancel(&session_notify_tag(&machine, &session_id));
-                }
-                UiEffect::DmOpened { peer } => {
-                    self.notifier.cancel(&dm_notify_tag(&peer));
                 }
             }
         }
@@ -1316,7 +1126,6 @@ impl Loop {
             self.nostr.set_proxy(proxy.clone());
             self.http.set_proxy(proxy.as_deref());
         }
-        // `r.mesh_join` has no platform seam yet: one-QR mesh join is not wired.
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
@@ -1434,12 +1243,6 @@ impl Loop {
                     connected,
                 ));
             }
-            ViewQuery::Dm(reply) => {
-                let _ = reply.send(DmView::from_stores(&self.stores));
-            }
-            ViewQuery::Marmot(reply) => {
-                let _ = reply.send(MarmotView::from_stores(&self.stores));
-            }
             ViewQuery::QuickPrompts(reply) => {
                 let _ = reply.send(QuickPromptsView::from_stores(&self.stores));
             }
@@ -1460,532 +1263,6 @@ impl Loop {
                 let _ = reply.send(view);
             }
         }
-    }
-
-    // --- NIP-17 DM runtime ---
-
-    /// (Re)open the kind-1059 subscription with a fresh epoch + catch-up cursor,
-    /// and publish the kind-10050 DM relay list.
-    fn start_dm_sub(&mut self) {
-        abort(&mut self.dm_rearm_timer);
-        self.dm_epoch += 1;
-        let epoch = self.dm_epoch;
-        if let Some(sub) = self.dm_sub.take() {
-            sub.close();
-        }
-        let filter = Filter {
-            kinds: vec![GIFT_WRAP_KIND],
-            authors: Vec::new(),
-            p_tags: vec![self.identity.pubkey_hex.clone()],
-            h_tags: Vec::new(),
-            since: self.stores.dm.since_cursor().map(|s| s as i64),
-        };
-        let ev_tx = self.self_tx.clone();
-        let close_tx = self.self_tx.clone();
-        let callbacks = SubCallbacks {
-            on_event: Rc::new(move |ev: &NostrEvent| {
-                let _ = ev_tx.send(Msg::DmEvent(ev.clone()));
-            }),
-            on_eose: Rc::new(|| {}),
-            on_close: Rc::new(move |_reason| {
-                let _ = close_tx.send(Msg::DmClosed(epoch));
-            }),
-        };
-        self.dm_sub = Some(self.ws.subscribe(filter, callbacks));
-
-        let relays = self.stores.settings.data.relays.clone();
-        if !relays.is_empty() {
-            if let Ok(event) =
-                relay_list_event(&self.identity, DM_RELAY_LIST_KIND, &relays, self.clock.now_ms() / 1000)
-            {
-                self.publish_raw(event);
-            }
-        }
-    }
-
-    fn stop_dm_sub(&mut self) {
-        abort(&mut self.dm_rearm_timer);
-        self.dm_epoch += 1; // orphan any in-flight callback
-        if let Some(sub) = self.dm_sub.take() {
-            sub.close();
-        }
-    }
-
-    /// A kind-1059 gift wrap: unwrap, and either fold a kind-14 rumor into the
-    /// DM store or count it (CD-001: never silent, never a throw).
-    async fn on_dm_event(&mut self, ev: NostrEvent) {
-        self.stores.dm.note_event_received();
-        let me = self.identity.pubkey_hex.clone();
-        match unwrap_gift_parts(&self.identity, &ev.pubkey, &ev.content) {
-            Err(_) => self.stores.dm.note_unwrap_failure(),
-            Ok(rumor) if rumor.kind == DM_RUMOR_KIND => {
-                let outcome = self.stores.dm.ingest_dm_rumor(&rumor, &me);
-                if let AddOutcome::Inserted {
-                    is_incoming,
-                    counts_unread,
-                    ..
-                } = outcome
-                {
-                    self.persist_store(StoreId::Dm).await;
-                    self.state_changed(SliceId::Dm);
-                    if is_incoming && counts_unread {
-                        let preview = truncate_preview(&rumor.content);
-                        self.run_notify(NotifyEvent::DmReceived {
-                            peer: rumor.pubkey.clone(),
-                            peer_label: None,
-                            preview: Some(preview),
-                        });
-                    }
-                }
-            }
-            // A Marmot welcome (kind-444) rides the SAME 1059 subscription:
-            // hand the ORIGINAL event to the MLS engine, which re-unwraps it
-            // with its own keys. `NoMarmot` errors — then it counts invalid,
-            // as it did before the engine existed.
-            Ok(rumor) if rumor.kind == WELCOME_RUMOR_KIND => {
-                match self.marmot_engine.ingest(&ev.raw).await {
-                    Ok(MarmotIngested::Welcome(welcome)) => {
-                        let kp_changed = self.stores.marmot.apply_welcome(welcome);
-                        if kp_changed {
-                            self.persist_store(StoreId::Marmot).await;
-                        }
-                        self.state_changed(SliceId::Marmot);
-                    }
-                    Ok(MarmotIngested::Ignored { .. }) => self.stores.marmot.note_ignored(),
-                    Ok(_) => {}
-                    Err(_) => self.stores.dm.note_invalid_rumor(),
-                }
-            }
-            Ok(_) => self.stores.dm.note_invalid_rumor(),
-        }
-    }
-
-    /// NIP-17 send: wrap the rumor once, publish the recipient + self copies,
-    /// and add it locally (optimistic, status `sent`).
-    async fn send_dm(&mut self, peer: String, text: String) {
-        let Ok(wrapped) = wrap_dm(&self.identity, &peer, &text).await else {
-            self.observer.action_failed(ActionFailedKind::PublishRejected);
-            return;
-        };
-        self.publish_raw(wrapped.for_recipient);
-        self.publish_raw(wrapped.for_self);
-        let me = self.identity.pubkey_hex.clone();
-        let rumor = DmRumor {
-            id: wrapped.rumor_id,
-            pubkey: me.clone(),
-            kind: DM_RUMOR_KIND,
-            content: text,
-            created_at: wrapped.created_at,
-            tags: vec![vec!["p".to_string(), peer]],
-        };
-        self.stores.dm.ingest_dm_rumor(&rumor, &me);
-        self.persist_store(StoreId::Dm).await;
-        self.state_changed(SliceId::Dm);
-    }
-
-    // --- Marmot (MLS group) runtime ---
-
-    /// (Re)open the kind-445 subscription over the joined groups' `h` tags with
-    /// a fresh epoch + catch-up cursor. A group with no joined `h` tags has
-    /// nothing to listen for, so the subscription is torn down until a welcome
-    /// is accepted (which calls this again).
-    fn start_marmot_sub(&mut self) {
-        abort(&mut self.marmot_rearm_timer);
-        self.marmot_epoch += 1;
-        let epoch = self.marmot_epoch;
-        if let Some(sub) = self.marmot_sub.take() {
-            sub.close();
-        }
-        let h_tags = self.stores.marmot.h_tags();
-        if h_tags.is_empty() {
-            return;
-        }
-        let filter = Filter {
-            kinds: vec![GROUP_MESSAGE_KIND],
-            authors: Vec::new(),
-            p_tags: Vec::new(),
-            h_tags,
-            since: self.stores.marmot.since_cursor().map(|s| s as i64),
-        };
-        let ev_tx = self.self_tx.clone();
-        let close_tx = self.self_tx.clone();
-        let callbacks = SubCallbacks {
-            on_event: Rc::new(move |ev: &NostrEvent| {
-                let _ = ev_tx.send(Msg::MarmotEvent(ev.raw.clone()));
-            }),
-            on_eose: Rc::new(|| {}),
-            on_close: Rc::new(move |_reason| {
-                let _ = close_tx.send(Msg::MarmotClosed(epoch));
-            }),
-        };
-        self.marmot_sub = Some(self.ws.subscribe(filter, callbacks));
-    }
-
-    fn stop_marmot_sub(&mut self) {
-        abort(&mut self.marmot_rearm_timer);
-        self.marmot_epoch += 1; // orphan any in-flight callback
-        if let Some(sub) = self.marmot_sub.take() {
-            sub.close();
-        }
-    }
-
-    /// A kind-445 group message: feed it to the MLS engine and fold the decrypted
-    /// result into the Marmot store. A 445 for a group we have not joined yet is
-    /// buffered (VEIL-029) and re-fed once the welcome is accepted; it is never
-    /// dropped and never a throw. `NoMarmot` errors — then it counts as an
-    /// engine error, as it did before the engine existed. Also the entry point
-    /// for a VEIL-029 re-feed, which passes the buffered event verbatim.
-    async fn on_marmot_event(&mut self, raw: serde_json::Value) {
-        self.stores.marmot.note_event_received();
-        let me = self.identity.pubkey_hex.clone();
-        match self.marmot_engine.ingest(&raw).await {
-            Ok(MarmotIngested::Message(result)) => {
-                if let Some(MarmotAddOutcome::Inserted {
-                    is_incoming,
-                    counts_unread,
-                }) = self.stores.marmot.apply_group_message(&result, &me)
-                {
-                    self.persist_store(StoreId::Marmot).await;
-                    self.state_changed(SliceId::Marmot);
-                    if is_incoming && counts_unread {
-                        let preview = truncate_preview(&result.content);
-                        self.run_notify(NotifyEvent::DmReceived {
-                            peer: result.sender.clone(),
-                            peer_label: None,
-                            preview: Some(preview),
-                        });
-                    }
-                }
-            }
-            // A 445 whose group is not joined yet: hold the ORIGINAL event so it
-            // can be re-fed verbatim after `accept_welcome` (VEIL-029 / -167).
-            Ok(MarmotIngested::NotJoined { h_tag }) => {
-                self.stores.marmot.buffer_not_joined(&h_tag, raw);
-                self.state_changed(SliceId::Marmot);
-            }
-            Ok(MarmotIngested::Welcome(welcome)) => {
-                let kp_changed = self.stores.marmot.apply_welcome(welcome);
-                if kp_changed {
-                    self.persist_store(StoreId::Marmot).await;
-                }
-                self.state_changed(SliceId::Marmot);
-            }
-            Ok(MarmotIngested::Ignored { .. }) => self.stores.marmot.note_ignored(),
-            Ok(MarmotIngested::None) => {}
-            Err(_) => self.stores.marmot.note_error(),
-        }
-    }
-
-    /// (Re)connect: engine init (idempotent) → reconcile joined groups from the
-    /// engine → apply any pending welcomes → mint + publish the KeyPackage once
-    /// (CDX-030) plus the kind-10051 KP relay list → open the 445 subscription.
-    /// `NoMarmot` fails `init`, so with the engine absent this is a no-op and
-    /// Marmot chats stay unavailable (NIP-17 only), same as before the engine
-    /// existed.
-    async fn on_marmot_start(&mut self) {
-        if self
-            .marmot_engine
-            .init(&self.identity.secret_hex())
-            .await
-            .is_err()
-        {
-            return;
-        }
-        self.stores.marmot.available = true;
-
-        // A restart or a peer's action may have changed the joined groups —
-        // reconcile from the engine's own book-keeping.
-        if let Ok(groups) = self.marmot_engine.list_groups().await {
-            if !groups.is_empty() {
-                let me = self.identity.pubkey_hex.clone();
-                let now = self.clock.now_ms();
-                for g in &groups {
-                    self.stores.marmot.upsert_conversation(g, &me, now);
-                }
-                self.persist_store(StoreId::Marmot).await;
-                self.state_changed(SliceId::Marmot);
-            }
-        }
-
-        if let Ok(welcomes) = self.marmot_engine.pending_welcomes().await {
-            if !welcomes.is_empty() {
-                for w in welcomes {
-                    self.stores.marmot.apply_welcome(w);
-                }
-                self.state_changed(SliceId::Marmot);
-            }
-        }
-
-        let relays = self.stores.settings.data.relays.clone();
-        if !relays.is_empty() {
-            let now = self.clock.now_ms();
-            let payload = serde_json::to_string(&relays).unwrap_or_default();
-            if should_mint_key_package(
-                self.stores.marmot.published_key_package.as_ref(),
-                &payload,
-                now,
-                KEY_PACKAGE_ROTATION_MS,
-            ) {
-                if let Ok(kp_event) = self.marmot_engine.publish_key_package(&relays).await {
-                    if let Some(record) = key_package_record(&kp_event, &payload, now) {
-                        self.publish_value(kp_event);
-                        self.stores.marmot.store_published_key_package(record);
-                        self.persist_store(StoreId::Marmot).await;
-                    }
-                }
-            }
-            if let Ok(event) =
-                relay_list_event(&self.identity, KP_RELAY_LIST_KIND, &relays, now / 1000)
-            {
-                self.publish_raw(event);
-            }
-        }
-
-        self.start_marmot_sub();
-    }
-
-    /// Publish an event the Marmot engine produced (kind 445 / 30443 JSON, same
-    /// field shape as [`protocol::nostr_event::SignedEvent`]).
-    fn publish_value(&self, event: serde_json::Value) {
-        match serde_json::from_value::<protocol::nostr_event::SignedEvent>(event) {
-            Ok(ev) => self.publish_raw(ev),
-            Err(_) => self.observer.action_failed(ActionFailedKind::PublishRejected),
-        }
-    }
-
-    /// The user accepted a pending Marmot welcome: join the group engine-side,
-    /// upsert the conversation, re-feed the 445s buffered for its `h` tag while
-    /// unjoined (VEIL-029, in order), then reopen the 445 sub to cover it.
-    /// VEIL-117: a welcome that can never be accepted (a stale KeyPackage after
-    /// reinstall) drops the card instead of retrying forever.
-    async fn accept_marmot_welcome(&mut self, welcome_id: String) {
-        let info = match self.marmot_engine.accept_welcome(&welcome_id).await {
-            Ok(info) => info,
-            Err(_) => {
-                self.stores.marmot.drop_pending_welcome(&welcome_id);
-                self.stores.marmot.note_error();
-                self.persist_store(StoreId::Marmot).await;
-                self.state_changed(SliceId::Marmot);
-                return;
-            }
-        };
-        let me = self.identity.pubkey_hex.clone();
-        let now = self.clock.now_ms();
-        let h_tag = self
-            .stores
-            .marmot
-            .on_welcome_accepted(&welcome_id, &info, &me, now);
-        self.persist_store(StoreId::Marmot).await;
-        self.state_changed(SliceId::Marmot);
-
-        for buffered in self.stores.marmot.take_buffered_for(&h_tag) {
-            self.on_marmot_event(buffered).await;
-        }
-        self.start_marmot_sub();
-    }
-
-    /// Send a Marmot group message: the engine encrypts it into a kind-445
-    /// event, which we publish; the plaintext is added locally (optimistic,
-    /// status `sent`) so the sender sees it immediately.
-    async fn send_marmot_message(&mut self, group_id: String, text: String) {
-        let out = match self.marmot_engine.send(&group_id, &text).await {
-            Ok(out) => out,
-            Err(_) => {
-                self.observer.action_failed(ActionFailedKind::PublishRejected);
-                return;
-            }
-        };
-        self.publish_value(out.event);
-        let me = self.identity.pubkey_hex.clone();
-        self.stores.marmot.add_message(
-            client_core::stores::marmot::MarmotMessage {
-                id: out.rumor_id,
-                group_id,
-                sender_pubkey: me.clone(),
-                content: text,
-                at: out.created_at.saturating_mul(1000),
-                status: client_core::stores::marmot::MarmotMessageStatus::Sent,
-            },
-            &me,
-        );
-        self.persist_store(StoreId::Marmot).await;
-        self.state_changed(SliceId::Marmot);
-    }
-
-    /// One-shot fetch of `peer_pubkey`'s newest kind-30443 KeyPackage.
-    /// `None` on timeout or if the peer never published one — never errors,
-    /// mirrors the TS `fetchKeyPackage` (a temporary sub, EOSE or the timeout
-    /// closes it, never left dangling).
-    async fn fetch_key_package(&self, peer_pubkey: &str, timeout_ms: u64) -> Option<serde_json::Value> {
-        use client_core::stores::marmot::KEY_PACKAGE_KIND;
-
-        let filter = Filter {
-            kinds: vec![KEY_PACKAGE_KIND],
-            authors: vec![peer_pubkey.to_string()],
-            p_tags: Vec::new(),
-            h_tags: Vec::new(),
-            since: None,
-        };
-        let newest: Rc<RefCell<Option<(i64, serde_json::Value)>>> = Rc::new(RefCell::new(None));
-        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
-
-        let newest_ev = Rc::clone(&newest);
-        let peer = peer_pubkey.to_string();
-        let eose_tx = done_tx.clone();
-        let close_tx = done_tx;
-        let callbacks = SubCallbacks {
-            on_event: Rc::new(move |ev: &NostrEvent| {
-                if ev.pubkey != peer {
-                    return;
-                }
-                let mut slot = newest_ev.borrow_mut();
-                let replace = match slot.as_ref() {
-                    Some((newest_at, _)) => ev.created_at > *newest_at,
-                    None => true,
-                };
-                if replace {
-                    *slot = Some((ev.created_at, ev.raw.clone()));
-                }
-            }),
-            on_eose: Rc::new(move || {
-                let _ = eose_tx.send(());
-            }),
-            on_close: Rc::new(move |_reason| {
-                let _ = close_tx.send(());
-            }),
-        };
-        let sub = self.ws.subscribe(filter, callbacks);
-        tokio::select! {
-            _ = done_rx.recv() => {}
-            _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {}
-        }
-        sub.close();
-        let taken = newest.borrow_mut().take();
-        taken.map(|(_, value)| value)
-    }
-
-    /// Open (or start) a 1:1 Marmot chat: an existing conversation with `peer`
-    /// is reused, never duplicated — opening it in the UI is a separate
-    /// `SelectMarmotGroup`. Otherwise fetch the peer's newest KeyPackage, ask
-    /// the engine to create the group, and publish the resulting welcome.
-    /// A missing KeyPackage or an engine/publish failure surfaces as
-    /// `ActionFailed` — no half-created group is left for the UI to trip over.
-    async fn start_marmot_chat(&mut self, peer_pubkey: String) {
-        use client_core::stores::marmot::{MarmotGroupInfo, KEY_PACKAGE_FETCH_TIMEOUT_MS};
-
-        let fail = |this: &Self| {
-            this.observer.action_failed(ActionFailedKind::PublishRejected);
-            this.observer
-                .on_event(CoreEvent::ActionFailed { kind: ActionFailedKind::PublishRejected });
-        };
-
-        if !self.stores.marmot.available {
-            fail(self);
-            return;
-        }
-        if self
-            .stores
-            .marmot
-            .conversations
-            .values()
-            .any(|c| c.peer_pubkey == peer_pubkey)
-        {
-            return;
-        }
-
-        let Some(kp_event) = self
-            .fetch_key_package(&peer_pubkey, KEY_PACKAGE_FETCH_TIMEOUT_MS)
-            .await
-        else {
-            fail(self);
-            return;
-        };
-
-        let relays = self.stores.settings.data.relays.clone();
-        let created = match self
-            .marmot_engine
-            .create_group(&peer_pubkey, &kp_event, &relays)
-            .await
-        {
-            Ok(created) => created,
-            Err(_) => {
-                fail(self);
-                return;
-            }
-        };
-
-        let Ok(welcome) =
-            serde_json::from_value::<protocol::nostr_event::SignedEvent>(created.welcome_event)
-        else {
-            fail(self);
-            return;
-        };
-        let result = self
-            .ws
-            .publish_confirmed(&welcome, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
-            .await;
-        if !matches!(result.verdict, PublishVerdict::Accepted | PublishVerdict::Unconfirmed) {
-            // The group exists engine-side but the peer can never join — a
-            // retry from the UI creates a fresh group rather than reusing this
-            // dead one.
-            fail(self);
-            return;
-        }
-
-        let me = self.identity.pubkey_hex.clone();
-        let now = self.clock.now_ms();
-        let info = MarmotGroupInfo {
-            group_id: created.group_id,
-            h_tag: created.h_tag,
-            name: String::new(),
-            members: vec![me.clone(), peer_pubkey],
-            admins: Vec::new(),
-            active: true,
-        };
-        self.stores.marmot.upsert_conversation(&info, &me, now);
-        self.persist_store(StoreId::Marmot).await;
-        self.state_changed(SliceId::Marmot);
-        self.start_marmot_sub();
-    }
-
-    /// Run the notification coordinator for one event and deliver its effects.
-    fn run_notify(&mut self, event: NotifyEvent) {
-        // DMs carry no session keys — bare context, their own labels suffice.
-        let labels = match event.session() {
-            Some((m, s)) => self.stores.notification_labels(m, s),
-            None => crate::stores::NotificationLabels::default(),
-        };
-        let effects = self.stores.notifications.emit(
-            &event,
-            EmitInputs {
-                visible: self.conn.visible,
-                enabled: self.stores.settings.data.notifications_enabled,
-                ping_available: false,
-                active_session_key: None,
-                context: labels.context(),
-                now: self.clock.now_ms(),
-            },
-        );
-        if !effects.is_empty() {
-            self.state_changed(SliceId::Cards);
-        }
-        for effect in effects {
-            if let client_core::notifications::NotifyEffect::Notify { content, tag, kind } = effect
-            {
-                self.notifier.notify(&content.title, &content.body, Some(&tag), &kind);
-            }
-        }
-    }
-
-    /// Publish a pre-built signed event (DM wraps, the 10050 relay list) off the
-    /// loop.
-    fn publish_raw(&self, event: protocol::nostr_event::SignedEvent) {
-        let ws = self.ws.clone();
-        tokio::task::spawn_local(async move {
-            let _ = ws
-                .publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
-                .await;
-        });
     }
 
     /// CDX-040: the pair-ack deadline elapsed.
@@ -2248,56 +1525,12 @@ fn abort(slot: &mut Option<AbortHandle>) {
     }
 }
 
-/// Notification / conversation-list preview cap (mirrors the TS 120/117 rule).
-fn truncate_preview(content: &str) -> String {
-    if content.chars().count() > 120 {
-        let head: String = content.chars().take(117).collect();
-        format!("{head}…")
-    } else {
-        content.to_string()
-    }
-}
-
-/// Extract the `PublishedKeyPackage` bookkeeping record (CDX-030) from the
-/// engine's KeyPackage event JSON: the event id and its `d` tag (the
-/// addressable identity a rotation/republish replaces).
-fn key_package_record(
-    event: &serde_json::Value,
-    relays_payload: &str,
-    now_ms: u64,
-) -> Option<PublishedKeyPackage> {
-    let id = event.get("id")?.as_str()?.to_string();
-    let d_tag = event
-        .get("tags")
-        .and_then(|t| t.as_array())
-        .and_then(|tags| {
-            tags.iter().find_map(|t| {
-                let t = t.as_array()?;
-                if t.first()?.as_str()? == "d" {
-                    Some(t.get(1)?.as_str()?.to_string())
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_default();
-    Some(PublishedKeyPackage {
-        id,
-        d_tag,
-        relays_payload: relays_payload.to_string(),
-        published_at: now_ms,
-        consumed: false,
-    })
-}
-
 fn slice_of(id: StoreId) -> SliceId {
     match id {
         StoreId::Machines => SliceId::Machines,
         StoreId::Outbox => SliceId::Outbox,
         StoreId::Settings => SliceId::Settings,
         StoreId::QuickPrompts => SliceId::QuickPrompts,
-        StoreId::Dm => SliceId::Dm,
-        StoreId::Marmot => SliceId::Marmot,
     }
 }
 
@@ -2418,13 +1651,6 @@ mod tests {
                 })
             })
         }
-        fn get(
-            &self,
-            _url: &str,
-        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
-        {
-            Box::pin(async { Err("not used".to_string()) })
-        }
     }
 
     /// Every call fails — forces the session-image chunk fallback.
@@ -2439,13 +1665,6 @@ mod tests {
         {
             Box::pin(async { Err("no server".to_string()) })
         }
-        fn get(
-            &self,
-            _url: &str,
-        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
-        {
-            Box::pin(async { Err("no server".to_string()) })
-        }
     }
 
     /// A Blossom server that accepts the upload and never answers.
@@ -2456,13 +1675,6 @@ mod tests {
             _url: &str,
             _headers: Vec<(String, String)>,
             _body: Vec<u8>,
-        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
-        {
-            Box::pin(std::future::pending())
-        }
-        fn get(
-            &self,
-            _url: &str,
         ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
         {
             Box::pin(std::future::pending())
@@ -2522,13 +1734,6 @@ mod tests {
             _url: &str,
             _headers: Vec<(String, String)>,
             _body: Vec<u8>,
-        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
-        {
-            Box::pin(async { Err("not used".to_string()) })
-        }
-        fn get(
-            &self,
-            _url: &str,
         ) -> crate::ports::LocalBoxFuture<'_, Result<crate::attachments::HttpResponse, String>>
         {
             Box::pin(async { Err("not used".to_string()) })
@@ -2637,49 +1842,19 @@ mod tests {
         protocol::codec::decode_phone_to_bridge(&plaintext).ok()
     }
 
-    /// EOSE the four subscriptions (3 bridge + 1 DM) and return the DM sub's id
-    /// (the REQ whose filter is `kinds:[1059]`). All are named `cd-N` and replay
-    /// in non-deterministic order; a kind-10050 EVENT is interleaved — skip it.
-    async fn eose_all(mock: &mut MockRelay) -> String {
+    /// EOSE the three bridge subscriptions. All are named `cd-N` and replay
+    /// in non-deterministic order.
+    async fn eose_all(mock: &mut MockRelay) {
         let mut seen = 0;
-        let mut dm_sub = String::new();
-        while seen < 4 {
+        while seen < 3 {
             let frame = mock.next_frame().await;
             let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
             if v[0] == "REQ" {
-                let sub_id = v[1].as_str().unwrap().to_string();
-                if v.get(2).and_then(|f| f["kinds"].as_array())
-                    == Some(&vec![serde_json::json!(1059)])
-                {
-                    dm_sub = sub_id.clone();
-                }
+                let sub_id = v[1].as_str().unwrap();
                 mock.push(format!(r#"["EOSE","{sub_id}"]"#));
                 seen += 1;
             }
         }
-        dm_sub
-    }
-
-    /// Like [`eose_all`] but for a phone with a joined Marmot group: five REQs
-    /// (3 bridge + DM + the kind-445 group sub). Returns the 445 sub's id.
-    async fn eose_all_with_marmot(mock: &mut MockRelay) -> String {
-        let mut seen = 0;
-        let mut marmot_sub = String::new();
-        while seen < 5 {
-            let frame = mock.next_frame().await;
-            let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
-            if v[0] == "REQ" {
-                let sub_id = v[1].as_str().unwrap().to_string();
-                if v.get(2).and_then(|f| f["kinds"].as_array())
-                    == Some(&vec![serde_json::json!(445)])
-                {
-                    marmot_sub = sub_id.clone();
-                }
-                mock.push(format!(r#"["EOSE","{sub_id}"]"#));
-                seen += 1;
-            }
-        }
-        marmot_sub
     }
 
     #[tokio::test]
@@ -3227,8 +2402,8 @@ mod tests {
                 .await;
                 settle().await;
 
-                // among the published EVENTs (the kind-10050 DM list, then the
-                // command) find the one wrapped for the machine.
+                // among the published EVENTs find the one wrapped for the
+                // machine.
                 let mut found = false;
                 for _ in 0..6 {
                     let frame = mock.next_frame().await;
@@ -3306,12 +2481,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selecting_a_session_or_dm_peer_cancels_its_notification_tag() {
-        // CDX-026c: opening a session/DM the user was notified about clears
-        // every notification filed under its tag — `IntentResult::ui_effects`
-        // was already populated correctly by `SelectSession`/`SelectDmPeer`
-        // (see the `intent` module's own tests), but nothing in the runtime
-        // ever acted on it.
+    async fn selecting_a_session_cancels_its_notification_tag() {
+        // CDX-026c: opening a session the user was notified about clears
+        // every notification filed under its tag.
         LocalSet::new()
             .run_until(async {
                 let mock = mock_relay().await;
@@ -3328,17 +2500,10 @@ mod tests {
                     session_id: Some("s1".into()),
                 })
                 .await;
-                core.dispatch(Intent::SelectDmPeer {
-                    peer: Some("peer1".into()),
-                })
-                .await;
 
                 assert_eq!(
                     notifier.cancelled(),
-                    vec![
-                        client_core::notifications::session_notify_tag("m1", "s1"),
-                        client_core::notifications::dm_notify_tag("peer1"),
-                    ]
+                    vec![client_core::notifications::session_notify_tag("m1", "s1")]
                 );
             })
             .await;
@@ -3360,133 +2525,6 @@ mod tests {
 
                 let uv = core.ui_view().await;
                 assert_eq!(uv.plan_approval_choices.get("card1").map(String::as_str), Some("2"));
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn a_nip17_dm_round_trips_through_the_1059_subscription() {
-        LocalSet::new()
-            .run_until(async {
-                let mut mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                let dm_sub = eose_all(&mut mock).await;
-                settle().await;
-
-                // --- send: optimistic local add + two 1059 wraps on the wire ---
-                core.dispatch(Intent::SendDm {
-                    peer: peer.pubkey_hex.clone(),
-                    text: "hi over nostr".into(),
-                })
-                .await;
-                settle().await;
-
-                // optimistic local add (status sent, our own message)
-                let dm = core.dm_view().await.unwrap();
-                assert_eq!(dm.messages[&peer.pubkey_hex].len(), 1);
-                assert_eq!(dm.messages[&peer.pubkey_hex][0].content, "hi over nostr");
-
-                // --- receive: a 1059 for us from another sender ---
-                let w = crate::giftwrap::wrap_dm(&peer, &phone.pubkey_hex, "hello back")
-                    .await
-                    .unwrap();
-                mock.push(format!(
-                    r#"["EVENT","{dm_sub}",{}]"#,
-                    serde_json::to_string(&w.for_recipient).unwrap()
-                ));
-                settle().await;
-
-                let dm = core.dm_view().await.unwrap();
-                assert_eq!(dm.events_received, 1);
-                let from_peer = &dm.messages[&peer.pubkey_hex];
-                assert!(from_peer.iter().any(|m| m.content == "hello back"));
-                assert_eq!(dm.conversations[0].unread_count, 1);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn send_dm_image_uploads_then_appends_the_ref_line_to_the_dm() {
-        LocalSet::new()
-            .run_until(async {
-                let mut mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-                let ports = CorePorts {
-                    http: Rc::new(OkHttp),
-                    ..CorePorts::default()
-                };
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                eose_all(&mut mock).await;
-                settle().await;
-
-                core.dispatch(Intent::SendDmImage {
-                    peer: peer.pubkey_hex.clone(),
-                    text: "look at this".into(),
-                    image: b"png bytes here".to_vec(),
-                })
-                .await;
-                for _ in 0..5 {
-                    settle().await;
-                }
-
-                let dm = core.dm_view().await.unwrap();
-                let msg = &dm.messages[&peer.pubkey_hex][0].content;
-                assert!(msg.starts_with("look at this\n"));
-                // the appended line is `<blossom-url> key=<64hex> iv=<24hex>`
-                let line = msg.lines().nth(1).unwrap();
-                assert!(line.contains(" key=") && line.contains(" iv="));
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn a_relay_closed_dm_subscription_is_reopened_after_the_rearm_delay() {
-        LocalSet::new()
-            .run_until(async {
-                let mut mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), CorePorts::default()).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                let dm_sub = eose_all(&mut mock).await;
-                settle().await;
-
-                // The relay drops the 1059 subscription while the socket stays up.
-                mock.push(format!(r#"["CLOSED","{dm_sub}","rate-limited: slow down"]"#));
-                settle().await;
-
-                // Paused only now, after the real-time handshake has settled.
-                tokio::time::pause();
-                tokio::time::advance(Duration::from_millis(SUB_REARM_DELAY_MS + 1_000)).await;
-                for _ in 0..20 {
-                    tokio::task::yield_now().await;
-                }
-                tokio::time::resume();
-
-                let reopened = tokio::time::timeout(Duration::from_secs(5), async {
-                    loop {
-                        let frame = mock.next_frame().await;
-                        let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
-                        if v[0] == "REQ"
-                            && v.get(2).and_then(|f| f["kinds"].as_array())
-                                == Some(&vec![serde_json::json!(1059)])
-                        {
-                            return v[1].as_str().unwrap().to_string();
-                        }
-                    }
-                })
-                .await
-                .expect("the DM subscription was never re-opened");
-                assert_ne!(reopened, dm_sub);
             })
             .await;
     }
@@ -3638,498 +2676,6 @@ mod tests {
                     }
                     other => panic!("blossom is unreachable in this test: {other:?}"),
                 }
-            })
-            .await;
-    }
-
-    /// A [`crate::marmot::MarmotEngine`] double, configurable per test:
-    /// `ingest_results` is consumed front-to-back, one verdict per call (the
-    /// last one repeats once exhausted — a scripted sequence for a
-    /// not-joined-then-joined re-feed); `send` / `accept_welcome` answer with
-    /// the canned `Ok` set, or error (unused on that test's path) when left
-    /// `None`; `pending_welcomes_result` seeds the welcomes `on_marmot_start`
-    /// picks up.
-    struct FakeMarmot {
-        ingest_results: RefCell<Vec<client_core::stores::marmot::MarmotIngested>>,
-        send_result: Option<crate::marmot::MarmotOutgoing>,
-        accept_result: Option<client_core::stores::marmot::MarmotGroupInfo>,
-        pending_welcomes_result: Vec<client_core::stores::marmot::MarmotWelcomeInfo>,
-        create_group_result: Option<crate::marmot::MarmotGroupCreated>,
-    }
-    impl Default for FakeMarmot {
-        fn default() -> Self {
-            Self {
-                ingest_results: RefCell::new(vec![MarmotIngested::None]),
-                send_result: None,
-                accept_result: None,
-                pending_welcomes_result: Vec::new(),
-                create_group_result: None,
-            }
-        }
-    }
-    impl crate::marmot::MarmotEngine for FakeMarmot {
-        fn init(&self, _s: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, String>> {
-            Box::pin(async { Ok(String::new()) })
-        }
-        fn publish_key_package(
-            &self,
-            _relays: &[String],
-        ) -> crate::ports::LocalBoxFuture<'_, Result<serde_json::Value, String>> {
-            Box::pin(async { Err("unused".to_string()) })
-        }
-        fn create_group(
-            &self,
-            _peer: &str,
-            _kp: &serde_json::Value,
-            _relays: &[String],
-        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::marmot::MarmotGroupCreated, String>>
-        {
-            let out = self.create_group_result.clone();
-            Box::pin(async move { out.ok_or_else(|| "unused".to_string()) })
-        }
-        fn send(
-            &self,
-            _group_id: &str,
-            _text: &str,
-        ) -> crate::ports::LocalBoxFuture<'_, Result<crate::marmot::MarmotOutgoing, String>> {
-            let out = self.send_result.clone();
-            Box::pin(async move { out.ok_or_else(|| "unused".to_string()) })
-        }
-        fn ingest(
-            &self,
-            _event: &serde_json::Value,
-        ) -> crate::ports::LocalBoxFuture<'_, Result<MarmotIngested, String>> {
-            let mut q = self.ingest_results.borrow_mut();
-            let r = if q.len() > 1 {
-                q.remove(0)
-            } else {
-                q.first().cloned().unwrap_or(MarmotIngested::None)
-            };
-            Box::pin(async move { Ok(r) })
-        }
-        fn pending_welcomes(
-            &self,
-        ) -> crate::ports::LocalBoxFuture<
-            '_,
-            Result<Vec<client_core::stores::marmot::MarmotWelcomeInfo>, String>,
-        > {
-            let v = self.pending_welcomes_result.clone();
-            Box::pin(async move { Ok(v) })
-        }
-        fn accept_welcome(
-            &self,
-            _id: &str,
-        ) -> crate::ports::LocalBoxFuture<
-            '_,
-            Result<client_core::stores::marmot::MarmotGroupInfo, String>,
-        > {
-            let out = self.accept_result.clone();
-            Box::pin(async move { out.ok_or_else(|| "unused".to_string()) })
-        }
-        fn list_groups(
-            &self,
-        ) -> crate::ports::LocalBoxFuture<
-            '_,
-            Result<Vec<client_core::stores::marmot::MarmotGroupInfo>, String>,
-        > {
-            Box::pin(async { Ok(Vec::new()) })
-        }
-    }
-
-    #[tokio::test]
-    async fn a_kind_445_group_message_folds_into_the_marmot_view() {
-        use client_core::stores::marmot::{
-            MarmotConversation, MarmotMessageResult, MarmotPersisted,
-        };
-        LocalSet::new()
-            .run_until(async {
-                let mut mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-
-                // A phone that has already joined one 1:1 Marmot group.
-                let mut persisted = MarmotPersisted::default();
-                persisted.conversations.insert(
-                    "group-abc".into(),
-                    MarmotConversation {
-                        group_id: "group-abc".into(),
-                        h_tag: "hhh111".into(),
-                        peer_pubkey: peer.pubkey_hex.clone(),
-                        name: "peer".into(),
-                        member_count: 2,
-                        last_message_at: 0,
-                        unread_count: 0,
-                        last_preview: String::new(),
-                    },
-                );
-                let kv = MemoryKv::seeded([(
-                    crate::stores::MARMOT_KEY,
-                    client_core::stores::marmot::serialize_marmot(&persisted),
-                )]);
-
-                let ports = CorePorts {
-                    kv: Rc::new(kv),
-                    marmot: Rc::new(FakeMarmot {
-                        ingest_results: RefCell::new(vec![MarmotIngested::Message(
-                            MarmotMessageResult {
-                                group_id: "group-abc".into(),
-                                id: "rumor-1".into(),
-                                sender: peer.pubkey_hex.clone(),
-                                kind: 9,
-                                content: "hello group".into(),
-                                created_at: 1_700_000,
-                            },
-                        )]),
-                        ..FakeMarmot::default()
-                    }),
-                    ..CorePorts::default()
-                };
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                let marmot_sub = eose_all_with_marmot(&mut mock).await;
-                assert!(!marmot_sub.is_empty(), "no kind-445 subscription opened");
-                settle().await;
-
-                // A real signed kind-445 for the joined group lands on that
-                // subscription (the read loop verifies sigs, so it must be
-                // genuine — the MLS ciphertext is opaque and the FakeMarmot
-                // returns the decrypted rumor regardless).
-                let ev = {
-                    use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
-                    let keys = Keys::new(peer.secret_key.clone());
-                    EventBuilder::new(Kind::Custom(445), "mls-ciphertext")
-                        .tags([Tag::parse(["h".to_string(), "hhh111".to_string()]).unwrap()])
-                        .sign_with_keys(&keys)
-                        .unwrap()
-                        .as_json()
-                };
-                mock.push(format!(r#"["EVENT","{marmot_sub}",{ev}]"#));
-                settle().await;
-
-                let m = core.marmot_view().await.unwrap();
-                assert_eq!(m.events_received, 1);
-                let msgs = &m.messages["group-abc"];
-                assert_eq!(msgs.len(), 1);
-                assert_eq!(msgs[0].content, "hello group");
-                assert_eq!(m.conversations[0].unread_count, 1);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn sending_a_marmot_message_publishes_and_adds_it_locally() {
-        use client_core::stores::marmot::{MarmotConversation, MarmotPersisted};
-        LocalSet::new()
-            .run_until(async {
-                let mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-
-                let mut persisted = MarmotPersisted::default();
-                persisted.conversations.insert(
-                    "group-abc".into(),
-                    MarmotConversation {
-                        group_id: "group-abc".into(),
-                        h_tag: "hhh111".into(),
-                        peer_pubkey: peer.pubkey_hex.clone(),
-                        name: "peer".into(),
-                        member_count: 2,
-                        last_message_at: 0,
-                        unread_count: 0,
-                        last_preview: String::new(),
-                    },
-                );
-                let kv = MemoryKv::seeded([(
-                    crate::stores::MARMOT_KEY,
-                    client_core::stores::marmot::serialize_marmot(&persisted),
-                )]);
-                let outgoing = serde_json::json!({
-                    "id": "evt-out", "pubkey": phone.pubkey_hex, "created_at": 1_700_100,
-                    "kind": 445, "tags": [["h", "hhh111"]], "content": "mls-ciphertext",
-                    "sig": "sig-out",
-                });
-                let ports = CorePorts {
-                    kv: Rc::new(kv),
-                    marmot: Rc::new(FakeMarmot {
-                        send_result: Some(crate::marmot::MarmotOutgoing {
-                            event: outgoing,
-                            rumor_id: "rumor-out".into(),
-                            created_at: 1_700_100,
-                        }),
-                        ..FakeMarmot::default()
-                    }),
-                    ..CorePorts::default()
-                };
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                settle().await;
-
-                core.dispatch(Intent::SendMarmotMessage {
-                    group_id: "group-abc".into(),
-                    text: "hi group".into(),
-                })
-                .await;
-                settle().await;
-
-                let m = core.marmot_view().await.unwrap();
-                let msgs = &m.messages["group-abc"];
-                assert_eq!(msgs.len(), 1);
-                assert_eq!(msgs[0].content, "hi group");
-                assert_eq!(msgs[0].sender_pubkey, phone.pubkey_hex);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn accepting_a_marmot_welcome_joins_and_refeeds_buffered_445s() {
-        use client_core::stores::marmot::{
-            MarmotConversation, MarmotGroupInfo, MarmotMessageResult, MarmotPersisted,
-            MarmotWelcomeInfo,
-        };
-        LocalSet::new()
-            .run_until(async {
-                let mut mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-
-                // One group already joined (so the 445 sub opens at all) plus a
-                // pending welcome into a SECOND group the engine has not joined.
-                let mut persisted = MarmotPersisted::default();
-                persisted.conversations.insert(
-                    "group-abc".into(),
-                    MarmotConversation {
-                        group_id: "group-abc".into(),
-                        h_tag: "hhh111".into(),
-                        peer_pubkey: peer.pubkey_hex.clone(),
-                        name: "peer".into(),
-                        member_count: 2,
-                        last_message_at: 0,
-                        unread_count: 0,
-                        last_preview: String::new(),
-                    },
-                );
-                let kv = MemoryKv::seeded([(
-                    crate::stores::MARMOT_KEY,
-                    client_core::stores::marmot::serialize_marmot(&persisted),
-                )]);
-
-                let ports = CorePorts {
-                    kv: Rc::new(kv),
-                    marmot: Rc::new(FakeMarmot {
-                        // First 445 fed (before accept) is not-joined and gets
-                        // buffered; the re-feed after accept decrypts for real.
-                        ingest_results: RefCell::new(vec![
-                            MarmotIngested::NotJoined {
-                                h_tag: "hhh222".into(),
-                            },
-                            MarmotIngested::Message(MarmotMessageResult {
-                                group_id: "group-xyz".into(),
-                                id: "rumor-2".into(),
-                                sender: peer.pubkey_hex.clone(),
-                                kind: 9,
-                                content: "welcome to the group".into(),
-                                created_at: 1_700_200,
-                            }),
-                        ]),
-                        accept_result: Some(MarmotGroupInfo {
-                            group_id: "group-xyz".into(),
-                            h_tag: "hhh222".into(),
-                            name: String::new(),
-                            members: vec![phone.pubkey_hex.clone(), peer.pubkey_hex.clone()],
-                            admins: Vec::new(),
-                            active: true,
-                        }),
-                        pending_welcomes_result: vec![MarmotWelcomeInfo {
-                            welcome_id: "w1".into(),
-                            wrapper_id: "wrap1".into(),
-                            group_id: "group-xyz".into(),
-                            h_tag: "hhh222".into(),
-                            name: String::new(),
-                            welcomer: peer.pubkey_hex.clone(),
-                            member_count: 2,
-                        }],
-                        ..FakeMarmot::default()
-                    }),
-                    ..CorePorts::default()
-                };
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                let marmot_sub = eose_all_with_marmot(&mut mock).await;
-                settle().await;
-
-                // A 445 for the not-yet-joined group arrives and is buffered
-                // (VEIL-029) instead of being dropped.
-                let ev = {
-                    use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
-                    let keys = Keys::new(peer.secret_key.clone());
-                    EventBuilder::new(Kind::Custom(445), "mls-ciphertext")
-                        .tags([Tag::parse(["h".to_string(), "hhh222".to_string()]).unwrap()])
-                        .sign_with_keys(&keys)
-                        .unwrap()
-                        .as_json()
-                };
-                mock.push(format!(r#"["EVENT","{marmot_sub}",{ev}]"#));
-                settle().await;
-                assert_eq!(core.marmot_view().await.unwrap().buffered, 1);
-
-                core.dispatch(Intent::AcceptMarmotWelcome {
-                    welcome_id: "w1".into(),
-                })
-                .await;
-                settle().await;
-
-                let m = core.marmot_view().await.unwrap();
-                assert_eq!(m.buffered, 0, "the buffered 445 was not re-fed");
-                assert!(m.conversations.iter().any(|c| c.group_id == "group-xyz"));
-                let msgs = &m.messages["group-xyz"];
-                assert_eq!(msgs.len(), 1);
-                assert_eq!(msgs[0].content, "welcome to the group");
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn starting_a_marmot_chat_fetches_the_key_package_and_creates_the_group() {
-        LocalSet::new()
-            .run_until(async {
-                let mut mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-
-                let welcome_event = serde_json::json!({
-                    "id": "welcome-evt", "pubkey": phone.pubkey_hex, "created_at": 1_700_300,
-                    "kind": 1059, "tags": [], "content": "gift-wrap", "sig": "sig-welcome",
-                });
-                let ports = CorePorts {
-                    marmot: Rc::new(FakeMarmot {
-                        create_group_result: Some(crate::marmot::MarmotGroupCreated {
-                            group_id: "group-new".into(),
-                            h_tag: "hnew".into(),
-                            welcome_event,
-                        }),
-                        ..FakeMarmot::default()
-                    }),
-                    ..CorePorts::default()
-                };
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                eose_all(&mut mock).await;
-                settle().await;
-
-                let core2 = core.clone();
-                let peer_pubkey = peer.pubkey_hex.clone();
-                let dispatched = tokio::task::spawn_local(async move {
-                    core2
-                        .dispatch(Intent::StartMarmotChat { peer_pubkey })
-                        .await;
-                });
-
-                // The KeyPackage fetch: a one-shot sub over the peer's kind-30443.
-                let kp_sub = loop {
-                    let frame = mock.next_frame().await;
-                    let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
-                    if v[0] == "REQ" && v[2]["kinds"] == serde_json::json!([30443]) {
-                        break v[1].as_str().unwrap().to_string();
-                    }
-                };
-                let kp_event = {
-                    use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
-                    let keys = Keys::new(peer.secret_key.clone());
-                    EventBuilder::new(Kind::Custom(30443), "keypackage-content")
-                        .tags([Tag::parse(["d".to_string(), "kp1".to_string()]).unwrap()])
-                        .sign_with_keys(&keys)
-                        .unwrap()
-                        .as_json()
-                };
-                mock.push(format!(r#"["EVENT","{kp_sub}",{kp_event}]"#));
-                mock.push(format!(r#"["EOSE","{kp_sub}"]"#));
-
-                // The resulting welcome, published to confirm.
-                let mut welcome_published = false;
-                for _ in 0..8 {
-                    let frame = mock.next_frame().await;
-                    let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
-                    if v[0] == "EVENT" {
-                        let id = v[1]["id"].as_str().unwrap();
-                        mock.push(format!(r#"["OK","{id}",true,""]"#));
-                        if id == "welcome-evt" {
-                            welcome_published = true;
-                            break;
-                        }
-                    }
-                }
-                assert!(welcome_published, "the welcome was never published");
-                dispatched.await.unwrap();
-
-                let m = core.marmot_view().await.unwrap();
-                let conv = m
-                    .conversations
-                    .iter()
-                    .find(|c| c.group_id == "group-new")
-                    .expect("the new group was not upserted");
-                assert_eq!(conv.h_tag, "hnew");
-                assert_eq!(conv.peer_pubkey, peer.pubkey_hex);
-            })
-            .await;
-    }
-
-    #[tokio::test]
-    async fn starting_a_marmot_chat_reuses_an_existing_conversation_with_the_peer() {
-        use client_core::stores::marmot::{MarmotConversation, MarmotPersisted};
-        LocalSet::new()
-            .run_until(async {
-                let mock = mock_relay().await;
-                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let peer = generate_keypair();
-
-                let mut persisted = MarmotPersisted::default();
-                persisted.conversations.insert(
-                    "group-existing".into(),
-                    MarmotConversation {
-                        group_id: "group-existing".into(),
-                        h_tag: "hexisting".into(),
-                        peer_pubkey: peer.pubkey_hex.clone(),
-                        name: String::new(),
-                        member_count: 2,
-                        last_message_at: 0,
-                        unread_count: 0,
-                        last_preview: String::new(),
-                    },
-                );
-                let kv = MemoryKv::seeded([(
-                    crate::stores::MARMOT_KEY,
-                    client_core::stores::marmot::serialize_marmot(&persisted),
-                )]);
-                // No `create_group_result` — a call to `create_group` errors,
-                // proving the existing conversation short-circuits the fetch.
-                let ports = CorePorts {
-                    kv: Rc::new(kv),
-                    marmot: Rc::new(FakeMarmot::default()),
-                    ..CorePorts::default()
-                };
-                let core =
-                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
-                core.set_machines(vec![generate_keypair().pubkey_hex]);
-                core.start();
-                settle().await;
-
-                core.dispatch(Intent::StartMarmotChat {
-                    peer_pubkey: peer.pubkey_hex.clone(),
-                })
-                .await;
-                settle().await;
-
-                let m = core.marmot_view().await.unwrap();
-                assert_eq!(m.conversations.len(), 1);
-                assert_eq!(m.conversations[0].group_id, "group-existing");
             })
             .await;
     }
@@ -4315,11 +2861,10 @@ mod tests {
     }
 
     /// A resubscribe triggered by an authors-filter change (a new pairing
-    /// candidate, a freshly paired machine) only re-does the phone's 3
-    /// traffic filters — the DM sub is managed separately and untouched — so
-    /// unlike [`eose_all`] this drains exactly 3 REQs (skipping the CLOSE
-    /// frames for the superseded subs along the way) and returns one sub_id
-    /// the router now has open.
+    /// candidate, a freshly paired machine) re-does the phone's 3 traffic
+    /// filters: this drains exactly 3 REQs (skipping the CLOSE frames for the
+    /// superseded subs along the way) and returns one sub_id the router now
+    /// has open.
     async fn drain_traffic_resubscribe(mock: &mut MockRelay) -> String {
         let mut seen = 0;
         let mut sub_id = String::new();

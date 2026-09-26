@@ -27,7 +27,7 @@ export interface HostIo {
   log(message: string): void;
 }
 
-type Reply = Extract<BridgeMessage, { kind: 'permission-outcome' | 'plan-outcome' | 'question-outcome' | 'host-tool-result' }>;
+type Reply = Extract<BridgeMessage, { kind: 'permission-outcome' | 'plan-outcome' | 'question-outcome' }>;
 
 interface SessionSlot {
   agent: string;
@@ -216,12 +216,6 @@ export class AgentHost {
           await this.request({ kind: 'request-plan-approval', payload: { sessionId, requestId, options } }),
           'plan-outcome',
         ),
-      callHostTool: async (tool, args) => {
-        const reply = await this.request({ kind: 'call-host-tool', payload: { sessionId, tool, args } });
-        return reply?.kind === 'host-tool-result'
-          ? { text: reply.payload.text, isError: reply.payload.isError ?? false }
-          : { text: 'The bridge did not answer the tool call.', isError: true };
-      },
       log: (line) => this.io.log(line),
     };
   }
@@ -283,7 +277,6 @@ function isReply(message: BridgeMessage): message is Reply {
   return (
     message.kind === 'permission-outcome' ||
     message.kind === 'plan-outcome' ||
-    message.kind === 'question-outcome' ||
-    message.kind === 'host-tool-result'
+    message.kind === 'question-outcome'
   );
 }

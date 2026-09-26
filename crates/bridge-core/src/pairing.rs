@@ -1,7 +1,6 @@
 //! Pairing: the QR a phone scans, and the limit on rejection replies.
 //!
-//! The QR carries `codedeck://pair?npub=…&relays=…&machine=…&token=…`, plus
-//! `&netid=…&meshadmin=…` when the phone should also join the mesh. The token
+//! The QR carries `codedeck://pair?npub=…&relays=…&machine=…&token=…`. The token
 //! is a one-time secret for this window; the phone echoes it in its
 //! `pair-request` and only a matching token pairs. Nothing else in the URL is
 //! secret, so the text shown to the operator is the URL itself.
@@ -21,8 +20,6 @@ pub struct PairingUrlParts<'a> {
     pub relays: &'a [String],
     pub machine: &'a str,
     pub token: &'a str,
-    /// Mesh admin device id and network id; both or neither.
-    pub mesh: Option<(&'a str, &'a str)>,
 }
 
 /// JavaScript's `encodeURIComponent`, which the phone's parser mirrors.
@@ -40,21 +37,13 @@ pub fn encode_uri_component(s: &str) -> String {
 
 pub fn pairing_url(parts: &PairingUrlParts<'_>) -> String {
     let relays: Vec<String> = parts.relays.iter().map(|r| encode_uri_component(r)).collect();
-    let mut url = format!(
+    format!(
         "codedeck://pair?npub={}&relays={}&machine={}&token={}",
         parts.npub,
         relays.join(","),
         encode_uri_component(parts.machine),
         encode_uri_component(parts.token),
-    );
-    if let Some((admin, netid)) = parts.mesh {
-        url.push_str(&format!(
-            "&netid={}&meshadmin={}",
-            encode_uri_component(netid),
-            encode_uri_component(admin)
-        ));
-    }
-    url
+    )
 }
 
 /// Counts negative pair-acks in fixed windows.
@@ -90,24 +79,11 @@ mod tests {
             relays: &relays,
             machine: "my laptop",
             token: "t0k",
-            mesh: None,
         });
         assert_eq!(
             url,
             "codedeck://pair?npub=npub1xyz&relays=wss%3A%2F%2Frelay.one,ws%3A%2F%2Fabc.onion%2Fx%3Fy%3D1&machine=my%20laptop&token=t0k"
         );
-    }
-
-    #[test]
-    fn carries_the_mesh_join_pair_when_given() {
-        let url = pairing_url(&PairingUrlParts {
-            npub: "npub1",
-            relays: &[],
-            machine: "m",
-            token: "t",
-            mesh: Some(("npub1admin", "net-1")),
-        });
-        assert!(url.ends_with("&token=t&netid=net-1&meshadmin=npub1admin"), "{url}");
     }
 
     #[test]

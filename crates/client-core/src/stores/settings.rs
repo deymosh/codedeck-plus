@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use protocol::relays::{DEFAULT_RELAYS, MARMOT_RELAYS};
+use protocol::relays::DEFAULT_RELAYS;
 
 /// UI-scale slider range.
 pub const UI_SCALE_MIN: f64 = 0.85;
@@ -19,42 +19,6 @@ pub fn clamp_ui_scale(value: f64) -> f64 {
     }
 }
 
-/// CDX-021 → CDX-036: retired (kept empty as the mechanism for a future dead
-/// default — `default_settings`, `hydrate_settings` and `add_relays` all filter
-/// through it).
-pub const DEAD_DEFAULT_RELAYS: &[&str] = &[];
-
-fn without_dead_relays<S: AsRef<str>>(relays: &[S]) -> Vec<String> {
-    relays
-        .iter()
-        .filter(|r| !DEAD_DEFAULT_RELAYS.contains(&r.as_ref()))
-        .map(|r| r.as_ref().to_string())
-        .collect()
-}
-
-/// Relay lists that were a SHIPPED DEFAULT at some point (no user intent). An
-/// install still holding one verbatim never chose it, so `hydrate_settings`
-/// lifts it to the current defaults. Any list differing by one entry is
-/// customised and passes through untouched. CDX-081: every default change
-/// appends the OUTGOING default here in the same commit.
-const LEGACY_DEFAULT_RELAY_SETS: &[&[&str]] = &[
-    &["wss://relay2.descendant.io", "wss://relay.primal.net"],
-    &["wss://relay.primal.net"],
-    &["wss://relay.primal.net", "wss://relay.damus.io"],
-    &["wss://relay.primal.net", "wss://nostr.oxtr.dev"],
-    &[
-        "wss://relay2.descendant.io",
-        "wss://relay.primal.net",
-        "wss://nostr.oxtr.dev",
-    ],
-];
-
-fn is_untouched_legacy_default(relays: &[String]) -> bool {
-    LEGACY_DEFAULT_RELAY_SETS
-        .iter()
-        .any(|legacy| legacy.len() == relays.len() && legacy.iter().zip(relays).all(|(a, b)| a == b))
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsData {
@@ -64,9 +28,7 @@ pub struct SettingsData {
     pub stay_connected: bool,
     /// Route relay traffic through Orbot's SOCKS5 proxy.
     pub tor_proxy_enabled: bool,
-    /// Only a designated TEST TARGET device auto-enables Wireless Debugging.
-    pub mesh_test_target: bool,
-    /// Blossom server for DM attachments (`""` = built-in default).
+    /// Blossom server for session image attachments (`""` = built-in default).
     pub blossom_server: String,
     /// Preferred mode / effort / model for NEW sessions, as agent-defined ids
     /// (`""` = the agent's own default). Applied to a new session only when
@@ -81,12 +43,7 @@ pub struct SettingsData {
 }
 
 pub fn default_settings() -> SettingsData {
-    let relays = without_dead_relays(
-        &DEFAULT_RELAYS
-            .iter()
-            .chain(MARMOT_RELAYS.iter())
-            .collect::<Vec<_>>(),
-    );
+    let relays = DEFAULT_RELAYS.map(str::to_string).to_vec();
     SettingsData {
         relays,
         ui_scale: UI_SCALE_DEFAULT,
@@ -95,7 +52,6 @@ pub fn default_settings() -> SettingsData {
         // service this setting holds.
         stay_connected: true,
         tor_proxy_enabled: false,
-        mesh_test_target: false,
         blossom_server: String::new(),
         default_mode: String::new(),
         default_effort: String::new(),
@@ -106,7 +62,7 @@ pub fn default_settings() -> SettingsData {
     }
 }
 
-/// Tolerant per-field hydrate + the CDX-021/042 legacy-relay migration.
+/// Tolerant per-field hydrate: a missing or ill-typed field takes its default.
 pub fn hydrate_settings(raw: Option<&str>) -> SettingsData {
     let defaults = default_settings();
     let Some(raw) = raw else {
@@ -130,19 +86,9 @@ pub fn hydrate_settings(raw: Option<&str>) -> SettingsData {
     let persisted_relays: Vec<String> = obj
         .get("relays")
         .and_then(serde_json::Value::as_array)
-        .map(|a| {
-            without_dead_relays(
-                &a.iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .collect::<Vec<_>>(),
-            )
-        })
+        .map(|a| a.iter().filter_map(serde_json::Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
-    let relays = if persisted_relays.is_empty() || is_untouched_legacy_default(&persisted_relays) {
-        defaults.relays.clone()
-    } else {
-        persisted_relays
-    };
+    let relays = if persisted_relays.is_empty() { defaults.relays.clone() } else { persisted_relays };
 
     let ui_scale = obj
         .get("uiScale")
@@ -155,7 +101,6 @@ pub fn hydrate_settings(raw: Option<&str>) -> SettingsData {
         ui_scale,
         stay_connected: b("stayConnected", defaults.stay_connected),
         tor_proxy_enabled: b("torProxyEnabled", defaults.tor_proxy_enabled),
-        mesh_test_target: b("meshTestTarget", defaults.mesh_test_target),
         blossom_server: s("blossomServer", &defaults.blossom_server),
         default_mode: s("defaultMode", &defaults.default_mode),
         default_effort: s("defaultEffort", &defaults.default_effort),
@@ -219,13 +164,13 @@ impl SettingsState {
         self.set_relays(next)
     }
 
-    /// Merge relays learned from a pairing URL (deduped, dead-relay-scrubbed).
+    /// Merge relays learned from a pairing URL (deduped).
     pub fn add_relays<S: AsRef<str>>(&mut self, urls: &[S]) -> Vec<SettingsEffect> {
-        let incoming = without_dead_relays(urls);
         let mut merged = self.data.relays.clone();
-        for u in incoming {
-            if !merged.contains(&u) {
-                merged.push(u);
+        for u in urls {
+            let u = u.as_ref();
+            if !merged.iter().any(|m| m == u) {
+                merged.push(u.to_string());
             }
         }
         if merged.len() == self.data.relays.len() {
@@ -242,9 +187,6 @@ impl SettingsState {
     }
     pub fn set_tor_proxy_enabled(&mut self, on: bool) {
         self.data.tor_proxy_enabled = on;
-    }
-    pub fn set_mesh_test_target(&mut self, on: bool) {
-        self.data.mesh_test_target = on;
     }
     pub fn set_blossom_server(&mut self, url: &str) {
         self.data.blossom_server = url.trim().to_string();
@@ -276,11 +218,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_carry_the_transport_relays_plus_the_marmot_island() {
+    fn defaults_are_the_transport_relays() {
         let d = default_settings();
-        assert!(d.relays.contains(&"wss://relay2.descendant.io".to_string()));
-        assert!(d.relays.contains(&"wss://relay.us.whitenoise.chat".to_string()));
-        assert_eq!(d.relays.len(), 5);
+        assert_eq!(d.relays, DEFAULT_RELAYS.map(str::to_string));
         assert_eq!(d.default_mode, ""); // the agent's own default
     }
 
@@ -325,19 +265,6 @@ mod tests {
         assert_eq!(st.data.relays, vec!["wss://a", "wss://b", "wss://c"]);
         assert_eq!(eff, vec![SettingsEffect::RelaysChanged(st.data.relays.clone())]);
         assert!(st.add_relays(&["wss://a"]).is_empty()); // no change
-    }
-
-    #[test]
-    fn hydrate_lifts_every_untouched_legacy_default_to_the_current_one() {
-        let current = default_settings().relays;
-        for legacy in LEGACY_DEFAULT_RELAY_SETS {
-            let raw = serde_json::json!({ "relays": legacy }).to_string();
-            assert_eq!(
-                hydrate_settings(Some(&raw)).relays,
-                current,
-                "legacy {legacy:?} should upgrade"
-            );
-        }
     }
 
     #[test]

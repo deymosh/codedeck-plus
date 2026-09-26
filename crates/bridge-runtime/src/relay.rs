@@ -230,7 +230,6 @@ impl Relays {
             kinds: vec![COMMAND_KIND],
             authors,
             p_tags: vec![self.bridge_pubkey.clone()],
-            h_tags: vec![],
             since: Some(since as i64),
         };
         self.commands = Some(self.subscribe(filter, Via::Commands));
@@ -243,7 +242,6 @@ impl Relays {
             kinds: vec![COMMAND_KIND],
             authors: vec![],
             p_tags: vec![self.bridge_pubkey.clone()],
-            h_tags: vec![],
             since: Some(since as i64),
         };
         self.pairing = Some(self.subscribe(filter, Via::Pairing));

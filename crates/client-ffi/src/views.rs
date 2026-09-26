@@ -4,14 +4,10 @@
 //! several real view types either carry arbitrary JSON
 //! (`TranscriptRowView.entry` is `serde_json::Value` — `OutputEntry.metadata`
 //! is genuinely untyped bridge-supplied JSON) or fields no Android screen has
-//! a use for yet (`UiView`'s device-config map is Mesh territory — the
-//! `SetDeviceConfig` test loop — deferred with the rest of it;
-//! `SettingsData`'s `mesh_test_target` likewise — Mesh is not implemented
-//! on Android). The rest of `UiView` this surface needs IS
-//! projected: the credentials/provider-profile status maps — see
+//! a use for yet. The part of `UiView` this surface needs IS projected: the
+//! credentials/provider-profile status maps — see
 //! `UniffiCredentialsAck`/`UniffiProviderProfileAck` below — and the undo
-//! toast + unread set — see `UniffiUndoToast`/`UniffiUiView.unread_sessions`
-//! (the undo toast is the delete-controller's, nothing to do with Mesh).
+//! toast + unread set — see `UniffiUndoToast`/`UniffiUiView.unread_sessions`.
 //! Rather
 //! than deriving `uniffi::Record` on those real types
 //! — which would drag every transitive field into the FFI surface whether a

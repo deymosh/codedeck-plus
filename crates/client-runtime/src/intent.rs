@@ -18,10 +18,10 @@ use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
     BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, ModelsRequestMsg, PermissionResponseMsg,
     PhoneToBridge, PlanResponseMsg, ProviderProfileWrite, QuestionAnswer, QuestionResponseMsg,
-    SessionIdMsg, SetCredentialsMsg, SetDeviceConfigMsg, SetOptionMsg, SetProviderProfileMsg,
+    SessionIdMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     VersionFields,
 };
-use protocol::common::{CredentialValues, DeviceConfig, SessionOption};
+use protocol::common::{CredentialValues, SessionOption};
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
@@ -76,7 +76,7 @@ pub struct IntentResult {
     pub persist: Vec<StoreId>,
     /// The relay subscription authors filter changed — resubscribe.
     pub resubscribe: bool,
-    /// A new relay list — the loop reconfigures the transport + DM/Marmot subs.
+    /// A new relay list — the loop reconfigures the transport.
     pub relays_changed: Option<Vec<String>>,
     /// Tor toggled — the loop re-inits the transport proxy.
     pub tor_changed: Option<bool>,
@@ -89,23 +89,11 @@ pub struct IntentResult {
     pub pair_deadline: Option<PairDeadline>,
     /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
     pub pairing_settled: Option<bool>,
-    /// CDX-028 one-QR mesh join.
-    pub mesh_join: Option<(String, String)>,
     /// Arm / clear the delete-controller undo timer.
     pub undo_timer: Option<UndoTimer>,
-    /// `(peer, text)` — the loop wraps + publishes this NIP-17 DM (async).
-    pub dm_send: Option<(String, String)>,
-    /// `(peer, text, image)` — the loop uploads the image then sends the DM.
-    pub dm_image_send: Option<(String, String, Vec<u8>)>,
     /// The loop uploads a session image (Blossom-first, chunk fallback) then
     /// publishes the `upload-image` command.
     pub session_image_send: Option<SessionImageSend>,
-    /// `welcome_id` — the loop joins the MLS group engine-side.
-    pub marmot_accept: Option<String>,
-    /// `(group_id, text)` — the loop encrypts + publishes this Marmot message.
-    pub marmot_send: Option<(String, String)>,
-    /// `peer_pubkey` — the loop fetches their KeyPackage and creates the group.
-    pub marmot_start_chat: Option<String>,
     /// `pending_sessions` changed — not persisted, so this is the only signal
     /// a `PendingSessionsView` consumer gets that a re-fetch is worth doing.
     pub pending_sessions_changed: bool,
@@ -249,7 +237,6 @@ pub enum Intent {
         effort: Option<String>,
         model: Option<String>,
         provider_id: Option<String>,
-        test_session: Option<bool>,
     },
     RefreshSessions {
         machine: String,
@@ -284,11 +271,6 @@ pub enum Intent {
     RequestProviderProfiles {
         machine: String,
     },
-    /// Test-device config (Phase 5d, mesh autonomous test loop).
-    SetDeviceConfig {
-        machine: String,
-        config: DeviceConfig,
-    },
     /// Create a new project folder under a workspace root (and `git init` it,
     /// bridge-side). Answered with `CoreEvent::FolderAck`, matched by
     /// `request_id` — the caller mints it (a UUID is fine; the bridge only
@@ -305,49 +287,6 @@ pub enum Intent {
         machine: String,
         session_id: Option<String>,
     },
-    SelectDmPeer {
-        peer: Option<String>,
-    },
-    MarkDmRead {
-        peer: String,
-    },
-    /// Open (or create) a NIP-17 conversation for an npub / hex peer.
-    StartDmConversation {
-        peer_input: String,
-    },
-    /// Send a NIP-17 DM (the loop wraps + publishes).
-    SendDm {
-        peer: String,
-        text: String,
-    },
-    /// Encrypt + upload an image to Blossom, then send it as a DM (the ref line
-    /// `<url> key=… iv=…` appended to `text`). The loop does the async work.
-    SendDmImage {
-        peer: String,
-        text: String,
-        image: Vec<u8>,
-    },
-    SelectMarmotGroup {
-        group_id: Option<String>,
-    },
-    MarkMarmotRead {
-        group_id: String,
-    },
-    /// Join an MLS group from a pending welcome (the loop calls the engine).
-    AcceptMarmotWelcome {
-        welcome_id: String,
-    },
-    /// Send a Marmot (MLS) group message; the loop encrypts + publishes.
-    SendMarmotMessage {
-        group_id: String,
-        text: String,
-    },
-    /// Open a 1:1 Marmot chat with a peer: an existing conversation is reused,
-    /// never duplicated; otherwise the loop fetches their KeyPackage and asks
-    /// the engine to create the group and publish the welcome.
-    StartMarmotChat {
-        peer_pubkey: String,
-    },
     AddRelay {
         url: String,
     },
@@ -362,7 +301,6 @@ pub enum Intent {
     },
     SetTorEnabled(bool),
     SetStayConnected(bool),
-    SetMeshTestTarget(bool),
     SetBlossomServer(String),
     SetNotificationsEnabled(bool),
     /// Preferred mode / effort / model for new sessions (agent ids; empty =
@@ -632,7 +570,6 @@ pub fn apply(
             effort,
             model,
             provider_id,
-            test_session,
         } => r.send(
             &machine,
             PhoneToBridge::CreateSession(CreateSessionMsg {
@@ -641,7 +578,6 @@ pub fn apply(
                 mode,
                 effort,
                 model,
-                test_session,
                 cwd,
                 create_cwd,
                 provider_id,
@@ -711,13 +647,6 @@ pub fn apply(
             &machine,
             PhoneToBridge::ProviderProfilesRequest(BareMsg { version: v() }),
         ),
-        Intent::SetDeviceConfig { machine, config } => r.send(
-            &machine,
-            PhoneToBridge::SetDeviceConfig(SetDeviceConfigMsg {
-                version: v(),
-                config,
-            }),
-        ),
         Intent::CreateFolder {
             machine,
             path,
@@ -744,50 +673,6 @@ pub fn apply(
                     .select_session(&machine, session_id.as_deref(), ctx.visible);
             r.ui_changed = true;
         }
-        Intent::SelectDmPeer { peer } => {
-            r.ui_effects = stores.ui.select_dm_peer(peer.as_deref());
-            stores.dm.set_active_peer(peer.as_deref());
-            r.persist(StoreId::Dm);
-            r.ui_changed = true;
-        }
-        Intent::MarkDmRead { peer } => {
-            if stores.dm.mark_read(&peer) {
-                r.persist(StoreId::Dm);
-            }
-        }
-        Intent::StartDmConversation { peer_input } => {
-            if let Some(sc) = stores.dm.start_conversation(&peer_input, ctx.now) {
-                if sc.created {
-                    r.persist(StoreId::Dm);
-                }
-            }
-        }
-        Intent::SendDm { peer, text } => {
-            r.dm_send = Some((peer, text));
-        }
-        Intent::SendDmImage { peer, text, image } => {
-            r.dm_image_send = Some((peer, text, image));
-        }
-        Intent::SelectMarmotGroup { group_id } => {
-            stores.ui.select_marmot_group(group_id.as_deref());
-            stores.marmot.set_active_group(group_id.as_deref());
-            r.persist(StoreId::Marmot);
-            r.ui_changed = true;
-        }
-        Intent::MarkMarmotRead { group_id } => {
-            if stores.marmot.mark_read(&group_id) {
-                r.persist(StoreId::Marmot);
-            }
-        }
-        Intent::AcceptMarmotWelcome { welcome_id } => {
-            r.marmot_accept = Some(welcome_id);
-        }
-        Intent::SendMarmotMessage { group_id, text } => {
-            r.marmot_send = Some((group_id, text));
-        }
-        Intent::StartMarmotChat { peer_pubkey } => {
-            r.marmot_start_chat = Some(peer_pubkey);
-        }
         Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
         Intent::RemoveRelay { url } => {
             apply_relay_effects(stores.settings.remove_relay(&url), &mut r)
@@ -800,10 +685,6 @@ pub fn apply(
         }
         Intent::SetStayConnected(on) => {
             stores.settings.set_stay_connected(on);
-            r.persist(StoreId::Settings);
-        }
-        Intent::SetMeshTestTarget(on) => {
-            stores.settings.set_mesh_test_target(on);
             r.persist(StoreId::Settings);
         }
         Intent::SetBlossomServer(url) => {
@@ -899,9 +780,6 @@ fn begin_pairing(
     }
     if out.pair_deadline.is_some() {
         r.pair_deadline = out.pair_deadline;
-    }
-    if out.mesh_join.is_some() {
-        r.mesh_join = out.mesh_join;
     }
     if out.pairing_settled.is_some() {
         r.pairing_settled = out.pairing_settled;
@@ -1391,33 +1269,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_device_config_sends_the_config_verbatim() {
-        let (mut s, kp) = stores().await;
-        let config = protocol::common::DeviceConfig {
-            label: "phone-1".into(),
-            role: Some(protocol::common::DeviceRole::TestTarget),
-            serial: None,
-            mesh_ip: Some("10.0.0.1".into()),
-            mesh_pubkey: Some("abc".into()),
-            app_under_test: protocol::common::AppUnderTest::Veil,
-            custom_package: None,
-            custom_build_cmd: None,
-            project_dir: None,
-        };
-        let out = apply(
-            &mut s,
-            Intent::SetDeviceConfig { machine: "m".into(), config: config.clone() },
-            &kp,
-            ctx(),
-        );
-        assert!(matches!(
-            out.sends.as_slice(),
-            [Send { machine, msg: PhoneToBridge::SetDeviceConfig(m) }]
-                if machine == "m" && m.config == config
-        ));
-    }
-
-    #[tokio::test]
     async fn create_folder_sends_the_request_with_its_id() {
         let (mut s, kp) = stores().await;
         let out = apply(
@@ -1498,11 +1349,8 @@ mod tests {
     async fn every_settings_intent_mutates_the_store_and_persists() {
         let (mut s, kp) = stores().await;
 
-        let out = apply(&mut s, Intent::SetMeshTestTarget(true), &kp, ctx());
-        assert!(s.settings.data.mesh_test_target);
+        let out = apply(&mut s, Intent::SetBlossomServer("https://blossom.example".into()), &kp, ctx());
         assert_eq!(out.persist, vec![StoreId::Settings]);
-
-        apply(&mut s, Intent::SetBlossomServer("https://blossom.example".into()), &kp, ctx());
         assert_eq!(s.settings.data.blossom_server, "https://blossom.example");
 
         apply(&mut s, Intent::SetDefaultEffort("high".into()), &kp, ctx());

@@ -1312,8 +1312,6 @@ enum class SliceId {
     CARDS,
     SETTINGS,
     PAIRING,
-    DM,
-    MARMOT,
     QUICK_PROMPTS,
     PENDING_SESSIONS,
     UI;

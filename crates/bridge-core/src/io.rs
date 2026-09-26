@@ -8,7 +8,7 @@
 
 use agent_protocol::{BridgeFrame, HostFrame, Secret};
 use protocol::commands::UploadImageMsg;
-use protocol::common::{DeviceConfig, GsdState, OutputEntry};
+use protocol::common::GsdState;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
 
@@ -36,14 +36,6 @@ pub enum Via {
 /// A timer the engine asked for; comes back as [`Input::Timer`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimerId(pub u64);
-
-/// The mesh network a pairing QR should also let the phone join.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MeshJoin {
-    /// This machine's mesh admin device id (an npub).
-    pub admin_device_id: String,
-    pub netid: String,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,20 +87,14 @@ pub enum Input {
     GitHead { session_id: String, head: Option<String> },
     /// Answer to [`Effect::ReadGsd`].
     Gsd { session_id: String, gsd: GsdState },
-    /// Answer to [`Effect::RunHostTool`].
-    HostToolDone { call_id: String, text: String, is_error: bool },
     /// Answer to [`Effect::CheckProviderToken`]; `None` when it could not be
     /// checked (network error).
     ProviderTokenChecked { ticket: u64, valid: Option<bool> },
-    /// Answer to [`Effect::ApplyDeviceConfig`].
-    DeviceConfigApplied { phone: String, result: Result<(), String> },
     /// An [`Effect::HandleImageUpload`] finished: the image is on disk and
     /// `text` (the user's words plus its path) is the session's next input.
     ImageReady { session_id: String, text: String },
-    /// An entry the runtime produced for a session (a device screenshot).
-    SessionEntry { session_id: String, entry: OutputEntry },
     /// Open a pairing window (replacing an open one).
-    OpenPairing { duration_ms: Option<u64>, mesh: Option<MeshJoin> },
+    OpenPairing { duration_ms: Option<u64> },
     ClosePairing,
     /// The workspace roots or folders changed on disk: republish them.
     WorkspaceChanged,
@@ -150,14 +136,6 @@ pub enum Effect {
     ReadGitHead { session_id: String, cwd: String },
     /// Read the GSD workflow state of `cwd`; answer with [`Input::Gsd`].
     ReadGsd { session_id: String, cwd: String },
-    /// Run one of the session's host tools; answer with
-    /// [`Input::HostToolDone`] carrying `call_id`.
-    RunHostTool {
-        call_id: String,
-        session_id: String,
-        tool: String,
-        args: serde_json::Value,
-    },
     /// Check a provider token with a one-token request to
     /// `{base_url}/v1/messages` for `model`; answer with
     /// [`Input::ProviderTokenChecked`]. `base_url` has passed the https rule.
@@ -167,9 +145,6 @@ pub enum Effect {
         token: Secret,
         model: String,
     },
-    /// Persist a phone's device config and do its mesh onboarding; answer
-    /// with [`Input::DeviceConfigApplied`].
-    ApplyDeviceConfig { phone: String, config: DeviceConfig },
     /// Fetch / reassemble an uploaded image into the workspace; answer with
     /// [`Input::ImageReady`] once it is on disk.
     HandleImageUpload(UploadImageMsg),

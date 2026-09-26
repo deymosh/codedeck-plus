@@ -282,13 +282,6 @@ describe('Claude permission policy', () => {
     expect(ctx.permissions[0]?.subagent).toEqual({ label: 'Explore' });
   });
 
-  it('a test session refuses secret paths even in the auto-approve mode', async () => {
-    const { ctx, canUseTool } = start({ mode: 'default', denySecretPaths: true });
-    const result = await ask(canUseTool, 'Read', { file_path: '/w/release.keystore' });
-    expect(result).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/hard security boundary/) });
-    expect(ctx.permissions).toEqual([]);
-  });
-
   it('EnterPlanMode is allowed and switches the session to planning', async () => {
     const { ctx, canUseTool } = start({ mode: 'default' });
     expect(await ask(canUseTool, 'EnterPlanMode', {})).toMatchObject({ behavior: 'allow' });
@@ -349,11 +342,6 @@ describe('Claude options and setup', () => {
     const { facade } = start({ provider: { id: 'kimi', baseUrl: 'https://api.moonshot.ai/anthropic', authToken: 't', models: [{ id: 'kimi-k3' }] } });
     expect(facade.last.opts).toMatchObject({ providerId: 'kimi', fallbackModel: null });
     expect(facade.last.opts.env?.ANTHROPIC_AUTH_TOKEN).toBe('t');
-  });
-
-  it('host tools become an MCP server whose calls go back to the bridge', () => {
-    const { facade } = start({ hostTools: [{ name: 'list', description: 'List devices', inputSchema: { type: 'object', properties: {} } }] });
-    expect(Object.keys(facade.last.opts.mcpServers ?? {})).toEqual(['codedeck']);
   });
 
   it('checks an API key with one request, answering undefined when it cannot', async () => {
