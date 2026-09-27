@@ -280,6 +280,22 @@ fn default_agent_host() -> PathBuf {
     }
 }
 
+/// The workspace root when none is configured: the working directory, so
+/// `cd project && codedeck-bridge` serves that project — unless that
+/// directory is the one the binary itself sits in. That is an unpacked
+/// release started in place (a double-click on Windows), and its folder
+/// holds the bridge's own files (`agent-host/`, `node`), not projects; the
+/// root is then `workspaces/` in the bridge home, the same place the
+/// container image starts from.
+fn default_workspace(cwd: &Path, exe_dir: Option<&Path>, home: &Path) -> PathBuf {
+    let cwd = absolute(cwd);
+    let same = |dir: &Path| fs::canonicalize(dir).map(strip_verbatim).ok() == fs::canonicalize(&cwd).map(strip_verbatim).ok();
+    match exe_dir {
+        Some(dir) if same(dir) => home.join("workspaces"),
+        _ => cwd,
+    }
+}
+
 pub fn load(flags: &Flags) -> Result<Config, String> {
     let home = absolute(&home_dir(flags));
     let config_file = home.join("config.json");
@@ -312,14 +328,20 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         .or_else(|| split_list(env("CODEDECK_RELAYS")))
         .or(file.relays.and_then(non_empty))
         .unwrap_or_else(|| DEFAULT_RELAYS.iter().map(|r| r.to_string()).collect());
-    let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
-    let workspace_roots = non_empty(flags.workspaces.clone())
+    let configured_roots = non_empty(flags.workspaces.clone())
         .or_else(|| split_list(env("CODEDECK_WORKSPACE_ROOTS")).map(|v| v.into_iter().map(PathBuf::from).collect()))
-        .or_else(|| file.workspace_roots.and_then(non_empty).map(|v| v.into_iter().map(PathBuf::from).collect()))
-        .unwrap_or_else(|| vec![cwd.clone()])
-        .iter()
-        .map(|p| absolute(p))
-        .collect();
+        .or_else(|| file.workspace_roots.and_then(non_empty).map(|v| v.into_iter().map(PathBuf::from).collect()));
+    let workspace_roots = match configured_roots {
+        Some(roots) => roots.iter().map(|p| absolute(p)).collect(),
+        None => {
+            let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
+            let root = default_workspace(&cwd, exe_dir().as_deref(), &home);
+            if root != cwd {
+                fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+            }
+            vec![root]
+        }
+    };
     let register = |url: Option<String>, token: Option<String>| match (url, token) {
         (Some(url), Some(token)) => Some(RegisterEndpoint { url, token }),
         _ => None,
@@ -432,6 +454,16 @@ mod tests {
         std::fs::write(dir.path().join(NODE_BIN), "#!/bin/sh").unwrap();
         let bundled = bundled_node(Some(dir.path())).unwrap();
         assert!(bundled.ends_with(NODE_BIN));
+    }
+
+    #[test]
+    fn the_default_workspace_is_the_working_directory_unless_that_is_the_install_folder() {
+        let install = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let home = PathBuf::from("/home/me/.codedeck");
+        assert_eq!(default_workspace(project.path(), Some(install.path()), &home), absolute(project.path()));
+        assert_eq!(default_workspace(install.path(), Some(install.path()), &home), home.join("workspaces"));
+        assert_eq!(default_workspace(project.path(), None, &home), absolute(project.path()));
     }
 
     #[test]
