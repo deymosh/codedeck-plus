@@ -6,13 +6,14 @@ import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.integration.android.AndroidKeysetManager
+import uniffi.client_ffi.UniffiSessionKeyStore
 import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
 
 /** The bare alias `withMasterKeyUri`'s `android-keystore://` URI names below
  *  — needed on its own to reach into the Android Keystore directly when the
- *  Tink wrapper's own key is unrecoverable (see [readOrCreateIdentitySecretHex]). */
+ *  Tink wrapper's own key is unrecoverable (see [keystoreAead]). */
 private const val KEYSTORE_MASTER_KEY_ALIAS = "codedeck_identity_master_key"
 
 /**
@@ -40,22 +41,52 @@ fun readOrCreateIdentitySecretHex(aead: Aead, file: File): String {
     return fresh
 }
 
+/** Where the identity secret is kept, encrypted with [keystoreAead]. */
+fun identityFile(context: Context): File = File(context.filesDir, "identity.bin")
+
+/** Where the session keys are kept, encrypted with [keystoreAead]. */
+fun sessionKeysFile(context: Context): File = File(context.filesDir, "session_keys.bin")
+
 /**
- * The production entry point for [readOrCreateIdentitySecretHex]: builds
- * the real Keystore-backed `Aead` — `AndroidKeysetManager` stores the
- * keyset as a `SharedPreferences` blob, itself encrypted by a master key
- * that never leaves the Android Keystore — and points it at
- * `filesDir/identity.bin`. Kept as a separate overload so the pure
- * generate-once / persist / re-read logic above stays unit-testable on a
- * plain JVM, where no Android Keystore exists. If the Keystore-backed
- * keyset itself is unusable (a stale/invalidated master key — see
- * `buildIdentityKeysetHandle`'s call site below), that is treated the same
- * as a corrupted `identity.bin`: wiped and rebuilt from scratch rather than
- * left to crash the caller.
+ * The phone's session keys (the core's opaque ring, which holds their
+ * secrets), encrypted with `aead` in `file` — never in the database. An
+ * unreadable file loads as nothing: the core then makes fresh keys and
+ * grants them to every bridge again.
  */
-fun readOrCreateIdentitySecretHex(context: Context): String {
+class KeystoreSessionKeyStore(private val aead: Aead, private val file: File) : UniffiSessionKeyStore {
+    private val associatedData = "session_keys".toByteArray()
+
+    override fun load(): String? = runCatching {
+        String(aead.decrypt(file.readBytes(), associatedData))
+    }.getOrNull()
+
+    override fun save(ring: String) {
+        runCatching {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.path + ".tmp")
+            tmp.writeBytes(aead.encrypt(ring.toByteArray(), associatedData))
+            if (!tmp.renameTo(file)) {
+                file.delete()
+                tmp.renameTo(file)
+            }
+        }
+    }
+}
+
+/**
+ * The real Keystore-backed `Aead` the identity and session-key files are
+ * encrypted with — `AndroidKeysetManager` stores the keyset as a
+ * `SharedPreferences` blob, itself encrypted by a master key that never
+ * leaves the Android Keystore. Kept apart from the file logic above so it
+ * stays unit-testable on a plain JVM, where no Android Keystore exists. If
+ * the Keystore-backed keyset itself is unusable (a stale/invalidated master
+ * key — see `buildIdentityKeysetHandle`'s call site below), that is treated
+ * the same as a corrupted `identity.bin`: everything it encrypted is wiped
+ * and it is rebuilt from scratch rather than left to crash the caller.
+ */
+fun keystoreAead(context: Context): Aead {
     AeadConfig.register()
-    val identityFile = File(context.filesDir, "identity.bin")
+    val identityFile = identityFile(context)
     val keysetHandle = runCatching { buildIdentityKeysetHandle(context) }.getOrElse {
         // The Keystore-backed master key this keyset references can go stale
         // independently of anything this app does — an emulator that has been
@@ -86,10 +117,10 @@ fun readOrCreateIdentitySecretHex(context: Context): String {
         context.getSharedPreferences("codedeck_identity_keyset_prefs", Context.MODE_PRIVATE)
             .edit().clear().apply()
         identityFile.delete()
+        sessionKeysFile(context).delete()
         buildIdentityKeysetHandle(context)
     }
-    val aead = keysetHandle.getPrimitive(RegistryConfiguration.get(), Aead::class.java)
-    return readOrCreateIdentitySecretHex(aead, identityFile)
+    return keysetHandle.getPrimitive(RegistryConfiguration.get(), Aead::class.java)
 }
 
 private fun buildIdentityKeysetHandle(context: Context) =

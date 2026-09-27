@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use client_runtime::ports::LocalBoxFuture;
 use client_runtime::signer::{signed_event_from_json, unsigned_event_json, IdentitySigner, SignerError};
+use client_runtime::SessionKeyStore;
 use client_runtime::nostr;
 use protocol::crypto::{decrypt_from, encrypt_to, keypair_from_secret_hex, Keypair};
 
@@ -144,5 +145,34 @@ mod tests {
         let ev = build_command(&adapter, &Cipher::Identity, &machine.pubkey_hex, &msg, 1_000).await.unwrap();
         assert_eq!(ev.pubkey, id.pubkey_hex);
         assert!(decrypt_from(&machine.secret_key, &id.pubkey_hex, &ev.content).is_ok());
+    }
+}
+
+/// Where the app keeps the phone's session keys: an opaque blob that holds
+/// their secrets, so the app stores it encrypted under the platform
+/// keystore and never logs it. Called on the core's own thread: keep it
+/// quick.
+#[uniffi::export(with_foreign)]
+pub trait UniffiSessionKeyStore: Send + Sync {
+    /// The blob last saved, or `None` (nothing saved, or unreadable: the
+    /// core then makes fresh keys).
+    fn load(&self) -> Option<String>;
+    fn save(&self, ring: String);
+}
+
+pub struct SessionKeyStoreAdapter(pub Arc<dyn UniffiSessionKeyStore>);
+
+impl SessionKeyStore for SessionKeyStoreAdapter {
+    fn load(&self) -> LocalBoxFuture<'_, Option<String>> {
+        let ring = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.0.load())).unwrap_or_else(|_| {
+            log::error!("foreign callback session-key load failed; starting with fresh keys");
+            None
+        });
+        Box::pin(async move { ring })
+    }
+
+    fn save(&self, ring: &str) -> LocalBoxFuture<'_, ()> {
+        crate::observer::foreign_call("session-key save", || self.0.save(ring.to_string()));
+        Box::pin(async {})
     }
 }

@@ -19,16 +19,15 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
-use client_core::stores::session_key::{grant_expiry, Recipient, REGRANT_EVERY_MS};
+use client_core::stores::session_key::{Recipient, SessionKeyRing, REGRANT_EVERY_MS};
 use nostr_transport::{PublishResult, PublishVerdict};
 use client_core::connection::{
     connection_reducer, heartbeats_all_stale, initial_connection_state, ConnectionEffect,
     ConnectionEvent, ConnectionState, ConnectionStatus, ReconnectConfig, DEFAULT_RECONNECT_CONFIG,
     TOR_RECONNECT_CONFIG,
 };
-use protocol::crypto::Keypair;
 use client_core::notifications::NotifyEffect;
-use protocol::commands::{PhoneToBridge, SessionKeyGrant, SessionKeyMsg, SyncAckMsg};
+use protocol::commands::{PhoneToBridge, SessionKeyMsg, SyncAckMsg};
 use protocol::ranges::SeqRange;
 use protocol::nostr_event::SignedEvent;
 use protocol::events::BridgeToPhone;
@@ -42,7 +41,9 @@ use client_core::stores::ui::UiEffect;
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionImageSend, UndoTimer};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
-use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
+use crate::ports::{
+    Kv, KvSessionKeyStore, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, SessionKeyStore, TranscriptStore,
+};
 use crate::signer::{Cipher, IdentityAuth, IdentitySigner, PhoneKeys, SignerError};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PING_EVERY, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
@@ -234,6 +235,10 @@ pub struct CorePorts {
     /// Blossom image upload. `NoHttpFetch` when the host binds no
     /// networking (image sends then fall back to relay chunks).
     pub http: Rc<dyn crate::attachments::HttpFetch>,
+    /// Where the session keys are kept. `None` keeps them in [`Self::kv`];
+    /// a host with a secret store should bind it, and then the KV holds no
+    /// session key at all.
+    pub session_keys: Option<Rc<dyn SessionKeyStore>>,
 }
 
 impl Default for CorePorts {
@@ -243,6 +248,7 @@ impl Default for CorePorts {
             transcript_store: Rc::new(MemoryTranscriptStore::new()),
             notifier: Rc::new(NullNotifier),
             http: Rc::new(crate::attachments::NoHttpFetch),
+            session_keys: None,
         }
     }
 }
@@ -301,13 +307,19 @@ impl Core {
             &StoresConfig::default(),
         )
         .await;
-        if hydrated.session_key_needs_persist {
-            Persister::new(ports.kv.as_ref())
-                .save_session_key(&hydrated.session_key)
-                .await;
+        ports.kv.delete(crate::stores::OLD_SESSION_KEY_KEY).await;
+        let key_store: Rc<dyn SessionKeyStore> = match ports.session_keys.clone() {
+            Some(store) => {
+                ports.kv.delete(crate::stores::SESSION_KEYS_KEY).await;
+                store
+            }
+            None => Rc::new(KvSessionKeyStore(Rc::clone(&ports.kv))),
+        };
+        let (session, changed) = SessionKeyRing::load(key_store.load().await.as_deref(), clock.now_ms());
+        if changed {
+            key_store.save(&session.encode()).await;
         }
-        let session = hydrated.session_key;
-        let keys = PhoneKeys::new(&config.identity.pubkey_hex(), &session);
+        let keys = PhoneKeys::new(&config.identity.pubkey_hex(), &session.current);
 
         // A machine paired in a PRIOR run is already in `hydrated.stores.machines`
         // — nothing about a plain (re)connect ever calls `refresh_authors()` for
@@ -358,6 +370,7 @@ impl Core {
             reconnect: config.reconnect,
             signer: config.identity,
             session,
+            key_store,
             keys,
             signer_jobs,
             grant_attempts: HashMap::new(),
@@ -733,9 +746,10 @@ impl NostrClientHost for LoopHost {
 struct Loop {
     reconnect: ReconnectConfig,
     signer: Rc<dyn IdentitySigner>,
-    /// The local session key: keys the payloads with bridges that hold it
-    /// (see [`crate::signer`]).
-    session: Keypair,
+    /// The local session keys: they key the payloads with bridges that hold
+    /// one (see [`crate::signer`]).
+    session: SessionKeyRing,
+    key_store: Rc<dyn SessionKeyStore>,
     keys: PhoneKeys,
     signer_jobs: mpsc::UnboundedSender<SignerJob>,
     /// When each machine was last granted the session key (ms), to space
@@ -897,7 +911,7 @@ impl Loop {
                         Ok(text) => self.api.ingest_plaintext(&incoming, text, now),
                         Err(err) => self.api.decrypt_failed(&incoming, err.0),
                     };
-                    self.on_ingested(&event, ingested, Recipient::Identity).await;
+                    self.on_ingested(&event, ingested, &Recipient::Identity).await;
                 }
                 Msg::CommandSigned { event, reply, outbox_id } => self.publish_built(event, reply, outbox_id),
             }
@@ -1023,15 +1037,21 @@ impl Loop {
         if !known {
             return;
         }
-        // A bridge that holds the session key encrypts to it; try that
-        // first, locally. Only what it cannot read goes to the identity's
+        // A bridge that holds a session key encrypts to it; try those
+        // first, locally. Only what they cannot read goes to the identity's
         // signer.
-        match protocol::crypto::decrypt_from(&self.session.secret_key, &event.pubkey, &event.content) {
-            Ok(plaintext) => {
-                let ingested = self.api.ingest_plaintext(&incoming_of(&event), plaintext, self.clock.now_ms());
-                self.on_ingested(&event, ingested, Recipient::SessionKey).await;
+        let now = self.clock.now_ms();
+        let opened = self.session.keys(now).find_map(|key| {
+            protocol::crypto::decrypt_from(&key.keypair.secret_key, &event.pubkey, &event.content)
+                .ok()
+                .map(|plaintext| (plaintext, Recipient::SessionKey(key.pubkey_hex().to_string())))
+        });
+        match opened {
+            Some((plaintext, via)) => {
+                let ingested = self.api.ingest_plaintext(&incoming_of(&event), plaintext, now);
+                self.on_ingested(&event, ingested, &via).await;
             }
-            Err(_) => {
+            None => {
                 let _ = self.signer_jobs.send(SignerJob::Decrypt(event));
             }
         }
@@ -1039,7 +1059,7 @@ impl Loop {
 
     /// Carry on with an event `ingest` has decided about; `via` is the key it
     /// was encrypted to.
-    async fn on_ingested(&mut self, event: &NostrEvent, ingested: Ingested, via: Recipient) {
+    async fn on_ingested(&mut self, event: &NostrEvent, ingested: Ingested, via: &Recipient) {
         match ingested {
             Ingested::Message(msg) => {
                 // Fold the decoded message into the store layer, then carry
@@ -1067,6 +1087,10 @@ impl Loop {
                 let created_at = u64::try_from(event.created_at).unwrap_or(0);
                 if self.stores.machines.note_heard_via(&machine, via, created_at) {
                     self.persist_store(StoreId::Machines).await;
+                    if self.session.drop_unused_previous(&self.stores.machines, now) {
+                        log::info!("session key: every bridge moved to the new key; the previous one is gone");
+                        self.key_store.save(&self.session.encode()).await;
+                    }
                 }
                 self.interpret_route(result).await;
                 self.grant_session_key_if_due(&machine).await;
@@ -1089,12 +1113,13 @@ impl Loop {
         }
     }
 
-    /// Grant `machine` the session key if it honours session keys and holds
-    /// no grant with long enough to run, at most once per
-    /// [`REGRANT_EVERY_MS`]: the grant goes through the identity's signer.
+    /// Grant `machine` the current session key if it honours session keys
+    /// and has not confirmed it, at most once per [`REGRANT_EVERY_MS`]: the
+    /// grant goes through the identity's signer.
     async fn grant_session_key_if_due(&mut self, machine: &str) {
+        self.rotate_session_key_if_due().await;
         let now = self.clock.now_ms();
-        if !self.stores.machines.wants_session_grant(machine, now)
+        if !self.stores.machines.wants_session_grant(machine, &self.session.current, now)
             || self
                 .grant_attempts
                 .get(machine)
@@ -1103,22 +1128,32 @@ impl Loop {
             return;
         }
         self.grant_attempts.insert(machine.to_string(), now);
-        let expires_at = grant_expiry(now);
-        self.stores.machines.note_session_grant_sent(machine, expires_at);
+        self.stores.machines.note_session_grant_sent(machine, self.keys.grant_sent(now));
         self.persist_store(StoreId::Machines).await;
         log::info!("session key: granting it to {}...", machine.get(..8).unwrap_or(machine));
         self.on_send(
             machine.to_string(),
             PhoneToBridge::SessionKey(SessionKeyMsg {
                 version: Default::default(),
-                session_key: SessionKeyGrant {
-                    pubkey_hex: self.keys.session_pubkey_hex.clone(),
-                    bridge_pubkey_hex: machine.to_string(),
-                    expires_at,
-                },
+                session_key: self.keys.grant_for(machine),
             }),
             None,
         );
+    }
+
+    /// Replace the session key with a fresh one when it is a month from
+    /// lapsing; every bridge is then granted the new one as it is heard from.
+    async fn rotate_session_key_if_due(&mut self) {
+        let now = self.clock.now_ms();
+        if !self.session.rotate_if_due(now) {
+            return;
+        }
+        log::info!("session key: replaced by a fresh one");
+        self.session.drop_unused_previous(&self.stores.machines, now);
+        self.key_store.save(&self.session.encode()).await;
+        self.keys = PhoneKeys::new(&self.keys.identity_pubkey_hex, &self.session.current);
+        // The old key's grant attempts say nothing about the new one.
+        self.grant_attempts.clear();
     }
 
     fn emit(&self, event: CoreEvent) {
@@ -1263,6 +1298,8 @@ impl Loop {
         reply: oneshot::Sender<()>,
     ) -> Option<oneshot::Sender<()>> {
         let mut reply = Some(reply);
+        // A pairing grants the current key: never one about to be replaced.
+        self.rotate_session_key_if_due().await;
         let ctx = IntentCtx {
             now: self.clock.now_ms(),
             visible: self.conn.visible,
@@ -1572,13 +1609,13 @@ impl Loop {
         self.publish_command(machine, msg, None, Some(id));
     }
 
-    /// What encrypts payloads for `machine`: the session key once it holds
-    /// a confirmed grant, else the identity.
+    /// What encrypts payloads for `machine`: the session key it confirmed,
+    /// while the phone still holds it, else the identity.
     fn cipher_for(&self, machine: &str) -> Cipher {
-        if self.stores.machines.uses_session_key(machine, self.clock.now_ms()) {
-            Cipher::SessionKey(self.session.clone())
-        } else {
-            Cipher::Identity
+        let now = self.clock.now_ms();
+        match self.stores.machines.session_key_of(machine, now).and_then(|k| self.session.key(k, now)) {
+            Some(key) => Cipher::SessionKey(key.keypair.clone()),
+            None => Cipher::Identity,
         }
     }
 
@@ -1858,7 +1895,7 @@ mod tests {
     use super::*;
     use crate::ports::RecordingNotifier;
     use crate::transport::mock::{mock_relay, MockRelay};
-    use protocol::crypto::{generate_keypair, keypair_from_secret_hex};
+    use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
     use protocol::codec::encode_bridge_to_phone;
     use protocol::commands::UploadImageMsg;
     use protocol::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
@@ -3562,6 +3599,117 @@ mod tests {
                 settle().await;
                 core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
                 let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+            })
+            .await;
+    }
+
+    /// A host's secret store for the session keys, in memory.
+    #[derive(Default, Clone)]
+    struct MemoryKeyStore(Rc<RefCell<Option<String>>>);
+    impl SessionKeyStore for MemoryKeyStore {
+        fn load(&self) -> crate::ports::LocalBoxFuture<'_, Option<String>> {
+            let ring = self.0.borrow().clone();
+            Box::pin(async move { ring })
+        }
+        fn save(&self, ring: &str) -> crate::ports::LocalBoxFuture<'_, ()> {
+            *self.0.borrow_mut() = Some(ring.to_string());
+            Box::pin(async {})
+        }
+    }
+    impl MemoryKeyStore {
+        fn ring(&self) -> SessionKeyRing {
+            SessionKeyRing::load(self.0.borrow().as_deref(), 1_000_000).0
+        }
+    }
+
+    #[tokio::test]
+    async fn with_a_host_key_store_the_kv_holds_no_session_key() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let kv = MemoryKv::seeded([
+                    (crate::stores::OLD_SESSION_KEY_KEY, generate_keypair().secret_hex()),
+                    (crate::stores::SESSION_KEYS_KEY, "{}".to_string()),
+                ]);
+                let store = MemoryKeyStore::default();
+                let ports = CorePorts {
+                    kv: Rc::new(kv.clone()),
+                    session_keys: Some(Rc::new(store.clone())),
+                    ..CorePorts::default()
+                };
+                let _core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                let dump = kv.dump();
+                assert!(!dump.contains_key(crate::stores::OLD_SESSION_KEY_KEY));
+                assert!(!dump.contains_key(crate::stores::SESSION_KEYS_KEY));
+                assert!(store.0.borrow().is_some(), "the key went to the host's store");
+                let secret = store.ring().current.keypair.secret_hex();
+                assert!(dump.values().all(|v| !v.contains(&secret)));
+            })
+            .await;
+    }
+
+    /// A key a month from lapsing is replaced at boot. The bridge on it keeps
+    /// using it until it confirms the new one, which it is granted under the
+    /// old one; then the old key is gone from the phone's store.
+    #[tokio::test]
+    async fn a_rotated_key_is_granted_and_the_old_one_dropped_once_confirmed() {
+        use client_core::stores::session_key::{SessionGrant, SessionKey};
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let now_secs = 1_000;
+                let old = SessionKey { keypair: generate_keypair(), expires_at: now_secs + 10 * 24 * 3600 };
+                let store = MemoryKeyStore::default();
+                *store.0.borrow_mut() = Some(SessionKeyRing { current: old.clone(), previous: None }.encode());
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.machines.get_mut(&machine.pubkey_hex).unwrap().session_grant = Some(SessionGrant {
+                    pubkey_hex: old.pubkey_hex().to_string(),
+                    expires_at: old.expires_at,
+                    sent_at: now_secs - 100,
+                });
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let ports = CorePorts {
+                    kv: Rc::new(kv),
+                    session_keys: Some(Rc::new(store.clone())),
+                    ..CorePorts::default()
+                };
+                let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                let ring = store.ring();
+                let new = ring.current.pubkey_hex().to_string();
+                assert_ne!(new, old.pubkey_hex(), "replaced at boot");
+                assert_eq!(ring.previous.as_ref().map(|k| k.pubkey_hex()), Some(old.pubkey_hex()), "and kept");
+
+                core.start();
+                eose_all(&mut mock).await;
+                // The bridge still holds only the old key: payloads use it.
+                let refresh = next_command_via(&mut mock, &phone, old.pubkey_hex(), &machine).await;
+                assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+
+                // Its heartbeat, under the old key, earns it the new one.
+                let heartbeat = heartbeat_with(&[protocol::capabilities::SESSION_KEYS]);
+                push_bridge_to_phone_event(&mock, &machine, old.pubkey_hex(), "cd-1", &heartbeat);
+                let grant = match next_command_via(&mut mock, &phone, old.pubkey_hex(), &machine).await {
+                    Some(PhoneToBridge::SessionKey(m)) => m.session_key,
+                    other => panic!("expected a grant, got {other:?}"),
+                };
+                assert_eq!(grant.pubkey_hex, new);
+                assert_eq!(grant.bridge_pubkey_hex, machine.pubkey_hex);
+                assert_eq!(grant.expires_at, ring.current.expires_at);
+
+                // A heartbeat under the new key confirms it: the old one goes.
+                push_bridge_to_phone_event(&mock, &machine, &new, "cd-1", &heartbeat);
+                settle().await;
+                assert!(store.ring().previous.is_none());
+                core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+                let cmd = next_command_via(&mut mock, &phone, &new, &machine).await;
                 assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
             })
             .await;

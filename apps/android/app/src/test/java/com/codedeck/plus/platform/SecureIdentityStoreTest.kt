@@ -111,4 +111,22 @@ class SecureIdentityStoreTest {
         assertTrue(fresh.matches(hex64))
         assertEquals(fresh, readOrCreateIdentitySecretHex(aead, file))
     }
+
+    // --- session keys -----------------------------------------------------
+
+    @Test
+    fun the_session_key_store_round_trips_the_ring_encrypted() {
+        val aead = newAead()
+        val file = File(tempFolder.newFolder(), "session_keys.bin")
+        val store = KeystoreSessionKeyStore(aead, file)
+        assertEquals(null, store.load())
+        val ring = """{"current":{"secretHex":"${"ab".repeat(32)}","expiresAt":1}}"""
+        store.save(ring)
+        assertEquals(ring, store.load())
+        assertFalse(String(file.readBytes(), Charsets.ISO_8859_1).contains("ab".repeat(32)))
+        // Another key cannot read it: the core starts with fresh keys.
+        assertEquals(null, KeystoreSessionKeyStore(newAead(), file).load())
+        file.writeBytes(byteArrayOf(1, 2, 3))
+        assertEquals(null, store.load())
+    }
 }

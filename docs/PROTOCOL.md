@@ -244,6 +244,14 @@ A phone grants a session key only to a bridge advertising `session-keys`. A
 phone that can decrypt a message from a bridge it granted a key only with
 its identity learns the bridge has no live key for it, and grants again.
 
+Renewal is rotation: a phone never extends a key's life by granting it
+again. Every grant of a key runs until the same `expiresAt`, the key's own;
+a month before it, the phone makes a fresh key and grants that to each
+bridge (under the key the bridge holds, so the grant itself stays
+readable). It keeps the previous key, and keeps encrypting to a bridge with
+it, until that bridge confirms the new one by encrypting to it; once every
+bridge has, or its grants lapsed, the previous key is deleted.
+
 ### Capabilities
 
 The heartbeat carries `protocolVersion` + `capabilities[]`; phones stamp

@@ -7,19 +7,21 @@
 //!   process (a NIP-55 signer app), so it is reached through the
 //!   [`IdentitySigner`] port.
 //! * The **session key** is a local keypair (see
-//!   `client_core::stores::session_key`) the identity grants to each bridge.
-//!   It never signs; it only keys the NIP-44 payloads between the phone and
-//!   a bridge that confirmed the grant, so the signer is not asked to
-//!   encrypt and decrypt every message.
+//!   `client_core::stores::session_key`) the identity grants to each bridge,
+//!   replaced by a fresh one a month before it lapses. It never signs; it
+//!   only keys the NIP-44 payloads between the phone and a bridge that
+//!   confirmed the grant, so the signer is not asked to encrypt and decrypt
+//!   every message.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use client_core::bridge_api::{command_event, command_plaintext, EgressError};
+use client_core::stores::session_key::{SessionGrant, SessionKey};
 use nostr::{Event, EventBuilder, JsonUtil, PublicKey, RelayUrl, Timestamp, UnsignedEvent};
 use nostr_transport::AuthSigner;
-use protocol::commands::PhoneToBridge;
+use protocol::commands::{PhoneToBridge, SessionKeyGrant};
 use protocol::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
 use protocol::nostr_event::SignedEvent;
 
@@ -82,15 +84,37 @@ impl IdentitySigner for LocalSigner {
 pub struct PhoneKeys {
     pub identity_pubkey_hex: String,
     pub identity_npub: String,
+    /// The current session key: the one granted.
     pub session_pubkey_hex: String,
+    /// When it, and every grant of it, lapses (seconds).
+    pub session_expires_at: u64,
 }
 
 impl PhoneKeys {
-    pub fn new(identity_pubkey_hex: &str, session: &Keypair) -> Self {
+    pub fn new(identity_pubkey_hex: &str, session: &SessionKey) -> Self {
         Self {
             identity_pubkey_hex: identity_pubkey_hex.to_string(),
             identity_npub: protocol::crypto::npub_from_hex(identity_pubkey_hex).unwrap_or_default(),
-            session_pubkey_hex: session.pubkey_hex.clone(),
+            session_pubkey_hex: session.pubkey_hex().to_string(),
+            session_expires_at: session.expires_at,
+        }
+    }
+
+    /// A grant of the current session key to `bridge`, for the wire.
+    pub fn grant_for(&self, bridge: &str) -> SessionKeyGrant {
+        SessionKeyGrant {
+            pubkey_hex: self.session_pubkey_hex.clone(),
+            bridge_pubkey_hex: bridge.to_string(),
+            expires_at: self.session_expires_at,
+        }
+    }
+
+    /// The record of a grant of the current session key sent at `now_ms`.
+    pub fn grant_sent(&self, now_ms: u64) -> SessionGrant {
+        SessionGrant {
+            pubkey_hex: self.session_pubkey_hex.clone(),
+            expires_at: self.session_expires_at,
+            sent_at: now_ms / 1000,
         }
     }
 }

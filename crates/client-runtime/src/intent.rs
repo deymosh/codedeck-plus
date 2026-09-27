@@ -856,7 +856,8 @@ mod tests {
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let identity = protocol::crypto::generate_keypair();
-        (h.stores, PhoneKeys::new(&identity.pubkey_hex, &h.session_key))
+        let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
+        (h.stores, PhoneKeys::new(&identity.pubkey_hex, &ring.current))
     }
 
     fn ctx() -> IntentCtx {

@@ -19,12 +19,11 @@ use client_core::notifications::{
 use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
-use client_core::stores::session_key::grant_expiry;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, PairRequestMsg, PhoneToBridge, SessionKeyGrant, SyncAckMsg, SyncRequestMsg, VersionFields,
+    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
 use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
@@ -717,11 +716,7 @@ pub fn apply_pairing_effects(
                         pubkey_hex: keys.identity_pubkey_hex.clone(),
                         label,
                         token,
-                        session_key: Some(SessionKeyGrant {
-                            pubkey_hex: keys.session_pubkey_hex.clone(),
-                            bridge_pubkey_hex: to,
-                            expires_at: grant_expiry(now),
-                        }),
+                        session_key: Some(keys.grant_for(&to)),
                     }),
                 });
             }
@@ -736,7 +731,7 @@ pub fn apply_pairing_effects(
                     Some(candidate.machine.clone()),
                     host,
                 );
-                stores.machines.note_session_grant_sent(&candidate.pubkey_hex, grant_expiry(now));
+                stores.machines.note_session_grant_sent(&candidate.pubkey_hex, keys.grant_sent(now));
                 if !candidate.relays.is_empty() {
                     for effect in stores.settings.add_relays(&candidate.relays) {
                         match effect {
@@ -837,7 +832,8 @@ mod tests {
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let identity = protocol::crypto::generate_keypair();
-        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &h.session_key))
+        let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
+        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current))
     }
 
     fn text_entry(content: &str) -> OutputEntry {

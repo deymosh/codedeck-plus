@@ -154,7 +154,9 @@ class StayConnectedService : Service() {
 
     /** Blocking: reads the persisted settings and opens the core. */
     private fun openCore(): CoreHost {
-        val identity = localIdentitySigner(readOrCreateIdentitySecretHex(applicationContext))
+        val aead = keystoreAead(applicationContext)
+        val identity = localIdentitySigner(readOrCreateIdentitySecretHex(aead, identityFile(applicationContext)))
+        val sessionKeys = KeystoreSessionKeyStore(aead, sessionKeysFile(applicationContext))
         val notifier = Notifier(applicationContext)
         // `Core::spawn` dials its WebSocket transport from the constructor's
         // `relays` argument alone -- it never falls back to whatever it
@@ -171,6 +173,7 @@ class StayConnectedService : Service() {
         return CoreHost(
             relays = relays,
             identity = identity,
+            sessionKeys = sessionKeys,
             notifier = notifier,
             dbPath = dbPath,
             // Orbot's SOCKS5 default -- sent unconditionally, same as
