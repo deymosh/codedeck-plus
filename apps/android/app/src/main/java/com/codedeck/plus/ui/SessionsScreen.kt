@@ -216,10 +216,13 @@ fun SessionsScreen(
                 if (machines.isEmpty()) {
                     item(key = "empty") {
                         Text(
-                            "No machines paired yet.",
+                            "No machines paired yet — tap to pair one.",
                             color = Tokens.TextMuted,
                             fontSize = Tokens.TextSm,
-                            modifier = Modifier.padding(vertical = Tokens.Space4),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(Tokens.RadiusSm))
+                                .clickable(onClick = onOpenPairing)
+                                .padding(vertical = Tokens.Space4),
                         )
                     }
                 }

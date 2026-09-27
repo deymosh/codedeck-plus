@@ -3,9 +3,7 @@ package com.codedeck.plus.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -126,18 +124,12 @@ fun Shell(
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
-    // First run (no machines paired) starts on pairing. Waits for the first
-    // real `MachinesView` fetch (`machinesView != null`) rather than deciding
-    // off the empty pre-hydration list, so a phone that DOES have paired
-    // machines never flashes the pairing screen while `CoreHost.start()`'s
-    // initial fetch is still in flight.
-    var pairingAutoOpenDecided by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(machinesView) {
-        if (!pairingAutoOpenDecided && machinesView != null) {
-            pairingAutoOpenDecided = true
-            if (machines.isEmpty()) screen = Screen.Pairing
-        }
-    }
+    // The app always starts on the sessions list, paired or not: pairing
+    // opens only when the user asks for it (the list's pair button, its empty
+    // state) or a pairing link is in progress. Guessing "first run" from an
+    // empty machine list misfired whenever the list read empty for a moment
+    // at startup, dropping a paired phone onto the pairing screen.
+    //
     // A deep link (`codedeck://pair…`) can stage or begin a pair from
     // anywhere in the app — surface it regardless of what's currently open.
     // Only a pair in progress counts: the core outlives this activity, so a
@@ -192,67 +184,64 @@ fun Shell(
         }
     }
 
-    // The failure banner floats over the top of the content, so its arrival
-    // never shifts the screen under the user's finger; a tap dismisses it
-    // early to uncover the header controls it sits on. The undo toast is
-    // stacked below the content instead — overlaid, it covered the
-    // composer's Send — and takes space only while it is showing.
-    Column(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            // System Back on any page returns to the sessions list, like each
-            // page's own close/back control; Back on the list leaves the app.
-            // The log is opened from Settings, so Back returns there.
-            if (screen != Screen.Sessions) {
-                BackHandler { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Sessions }
-            }
-            when (val current = screen) {
-                Screen.Settings -> SettingsScreen(
-                    core,
-                    login = login,
-                    onLogOut = onLogOut,
-                    onOpenLogs = { screen = Screen.Logs },
-                    onClose = { screen = Screen.Sessions },
-                )
-                Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
-                Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
-                is Screen.NewSession -> NewSessionScreen(
-                    core,
-                    machinePubkey = current.machine,
-                    onClose = { screen = Screen.Sessions },
-                    onCreated = { knownIds ->
-                        awaited = AwaitedSession(current.machine, knownIds)
-                        screen = Screen.Sessions
-                    },
-                )
-                is Screen.Session -> SessionScreen(
-                    core,
-                    current.machine,
-                    current.sessionId,
-                    onBack = { screen = Screen.Sessions },
-                    modifier = Modifier.fillMaxSize().background(Tokens.Bg),
-                )
-                Screen.Sessions -> SessionsScreen(
-                    core = core,
-                    machines = machines,
-                    pendingSessions = pendingSessions?.pending.orEmpty(),
-                    connectionStatus = connection?.status,
-                    needsPairingCheck = connection?.needsPairingCheck ?: false,
-                    showCommitBadge = settings?.showCommitBadge ?: false,
-                    unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
-                    selectedMachine = selectedMachine,
-                    selectedSession = selectedSession,
-                    onSelectSession = ::openSession,
-                    onNewSession = { screen = Screen.NewSession(it) },
-                    onOpenSettings = { screen = Screen.Settings },
-                    onOpenPairing = { screen = Screen.Pairing },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
+    // The failure banner and the undo toast both float over the content, so
+    // neither shifts the screen under the user's finger: the banner over the
+    // top (a tap dismisses it early to uncover the header controls it sits
+    // on), the toast over the bottom for its few seconds.
+    Box(Modifier.fillMaxSize()) {
+        // System Back on any page returns to the sessions list, like each
+        // page's own close/back control; Back on the list leaves the app.
+        // The log is opened from Settings, so Back returns there.
+        if (screen != Screen.Sessions) {
+            BackHandler { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Sessions }
         }
+        when (val current = screen) {
+            Screen.Settings -> SettingsScreen(
+                core,
+                login = login,
+                onLogOut = onLogOut,
+                onOpenLogs = { screen = Screen.Logs },
+                onClose = { screen = Screen.Sessions },
+            )
+            Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
+            Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
+            is Screen.NewSession -> NewSessionScreen(
+                core,
+                machinePubkey = current.machine,
+                onClose = { screen = Screen.Sessions },
+                onCreated = { knownIds ->
+                    awaited = AwaitedSession(current.machine, knownIds)
+                    screen = Screen.Sessions
+                },
+            )
+            is Screen.Session -> SessionScreen(
+                core,
+                current.machine,
+                current.sessionId,
+                onBack = { screen = Screen.Sessions },
+                modifier = Modifier.fillMaxSize().background(Tokens.Bg),
+            )
+            Screen.Sessions -> SessionsScreen(
+                core = core,
+                machines = machines,
+                pendingSessions = pendingSessions?.pending.orEmpty(),
+                connectionStatus = connection?.status,
+                needsPairingCheck = connection?.needsPairingCheck ?: false,
+                showCommitBadge = settings?.showCommitBadge ?: false,
+                unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
+                selectedMachine = selectedMachine,
+                selectedSession = selectedSession,
+                onSelectSession = ::openSession,
+                onNewSession = { screen = Screen.NewSession(it) },
+                onOpenSettings = { screen = Screen.Settings },
+                onOpenPairing = { screen = Screen.Pairing },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
         // Undo toast for an optimistic session delete — at the shell's root so it
         // is visible on whichever screen is showing. Emits nothing while no undo
         // window is open.
-        UndoToast(core, Modifier.align(Alignment.CenterHorizontally))
+        UndoToast(core, Modifier.align(Alignment.BottomCenter))
     }
 }
