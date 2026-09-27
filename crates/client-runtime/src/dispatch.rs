@@ -246,9 +246,18 @@ impl<'a> Router<'a> {
 
             BridgeToPhone::Output(m) => {
                 let entry = to_value(&m.entry);
-                self.apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
+                let inserted = self
+                    .apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
                     .await;
                 r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
+                // An entry already in the transcript is a replay, not news: a
+                // direct link resuming from an older cursor after the app was
+                // killed re-sends output the phone stored (and notified about)
+                // before, and a second copy over another path is the same
+                // entry. Neither may notify or mark the session again.
+                if !inserted.contains(&m.seq) {
+                    return r;
+                }
                 // Unread + notify on LIVE entries only (sync catch-up takes the
                 // SyncChunk path, so replayed history never marks dots or fires
                 // a notification storm). A card / stream_end / failure marks the
@@ -416,15 +425,16 @@ impl<'a> Router<'a> {
 
     /// Insert rows through the [`TranscriptStore`] port, then fold the inserted
     /// seqs (and any content conflicts on already-stored seqs) into the pure
-    /// [`client_core::stores::transcript::TranscriptState`].
+    /// [`client_core::stores::transcript::TranscriptState`]. Returns the seqs
+    /// that were new to the store.
     async fn apply_rows(
         &mut self,
         machine: &str,
         session: &str,
         rows: Vec<(u64, serde_json::Value)>,
-    ) {
+    ) -> Vec<u64> {
         if rows.is_empty() {
-            return;
+            return Vec::new();
         }
         let store_rows: Vec<TranscriptRow> = rows
             .iter()
@@ -472,6 +482,7 @@ impl<'a> Router<'a> {
         self.stores
             .transcript
             .integrate_rows(machine, session, &inserted, &conflicts);
+        inserted
     }
 
     /// The heartbeat. Port of `createPhoneCore`'s `onSessions` handler.
@@ -920,6 +931,32 @@ mod tests {
             }),
         )
         .await;
+        assert!(!s.ui.is_session_unread(MACHINE, "s1"));
+    }
+
+    #[tokio::test]
+    async fn a_replayed_turn_end_the_transcript_already_holds_does_not_notify_again() {
+        let (mut s, ts, kp) = stores().await;
+        let turn_end = || BridgeToPhone::Output(OutputMsg {
+            session_id: "s1".into(),
+            seq: 7,
+            entry: serde_json::from_value(json!({ "timestamp": "t", "entryType": "turn_complete" })).unwrap(),
+        });
+        {
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+            r.visible = false;
+            let out = r.route(MACHINE, &turn_end()).await;
+            assert!(matches!(out.notifies.as_slice(), [NotifyEffect::Notify { .. }]));
+        }
+        s.ui.clear_session_unread(MACHINE, "s1");
+
+        // The app was killed and restarted (a fresh notification cooldown), and
+        // a direct link resuming from an older cursor sends the same entry.
+        s.notifications = Default::default();
+        let mut r = Router::new(&mut s, &ts, &kp, 60_000);
+        r.visible = false;
+        let out = r.route(MACHINE, &turn_end()).await;
+        assert!(out.notifies.is_empty());
         assert!(!s.ui.is_session_unread(MACHINE, "s1"));
     }
 
