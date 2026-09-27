@@ -229,23 +229,39 @@ pub async fn start(
             accept_loop(listener, hub, |stream| async move { Some(stream) }).await
         }));
     }
-    let endpoints = advertised_endpoints(config, bound_wss);
+    let endpoints = advertised_endpoints(config, bound_wss, in_container());
     for endpoint in &endpoints {
         log::info!("[Direct] Advertising {endpoint}");
+    }
+    if endpoints.is_empty() {
+        log::info!(
+            "[Direct] Advertising no address: in a container the bridge sees only its own. \
+             Add the host's address to direct.endpoints, or on the phone (the machine's page)."
+        );
     }
     Ok(Some(Direct { hub, info: DirectInfo { endpoints, cert_sha256 }, tasks }))
 }
 
 /// The endpoints the heartbeat advertises: the configured ones, led by the
-/// `wss://` listener's LAN address when none of them is a `wss://` one.
-fn advertised_endpoints(config: &DirectConfig, wss_listener: Option<SocketAddr>) -> Vec<String> {
+/// `wss://` listener's LAN address when none of them is a `wss://` one —
+/// except in a container, whose "LAN address" is its own on the container
+/// network, which no phone can reach. The certificate pin rides the
+/// heartbeat either way, so an address added on the phone still works.
+fn advertised_endpoints(config: &DirectConfig, wss_listener: Option<SocketAddr>, in_container: bool) -> Vec<String> {
     let mut endpoints = config.endpoints.clone();
     if let Some(bound) = wss_listener {
-        if !endpoints.iter().any(|e| e.starts_with("wss://")) {
+        let explicit = !bound.ip().is_unspecified();
+        if !endpoints.iter().any(|e| e.starts_with("wss://")) && (explicit || !in_container) {
             endpoints.insert(0, format!("wss://{}", advertised(bound)));
         }
     }
     endpoints
+}
+
+/// Whether the bridge runs in a container (Docker leaves `/.dockerenv`,
+/// Podman `/run/.containerenv`).
+fn in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists() || std::path::Path::new("/run/.containerenv").exists()
 }
 
 /// One line for the start banner and `status`: what phones are told to
@@ -260,7 +276,9 @@ pub fn summary(config: &DirectConfig) -> String {
         .into_iter()
         .chain(config.onion_listen.map(|a| format!("onion service on {a}")))
         .collect();
-    format!("{} (listening: {})", advertised_endpoints(config, config.listen).join(", "), listening.join(", "))
+    let endpoints = advertised_endpoints(config, config.listen, in_container());
+    let advertised = if endpoints.is_empty() { "no address advertised".to_string() } else { endpoints.join(", ") };
+    format!("{advertised} (listening: {})", listening.join(", "))
 }
 
 /// The address phones on the LAN reach `bound` at: itself, or for a
@@ -447,6 +465,21 @@ mod tests {
     use super::*;
     use protocol::crypto::generate_keypair;
     use protocol::nip42::build_auth_event;
+
+    #[test]
+    fn a_container_does_not_advertise_its_own_address() {
+        let wildcard: SocketAddr = "0.0.0.0:7447".parse().unwrap();
+        let config = DirectConfig { listen: Some(wildcard), ..DirectConfig::default() };
+        // On a host: the LAN address (whatever this machine's is).
+        assert_eq!(advertised_endpoints(&config, Some(wildcard), false).len(), 1);
+        // In a container: nothing, unless configured.
+        assert!(advertised_endpoints(&config, Some(wildcard), true).is_empty());
+        let configured = DirectConfig { endpoints: vec!["wss://192.168.1.20:7447".into()], ..config.clone() };
+        assert_eq!(advertised_endpoints(&configured, Some(wildcard), true), vec!["wss://192.168.1.20:7447"]);
+        // A listener bound to one address advertises that address anywhere.
+        let bound: SocketAddr = "192.168.1.20:7447".parse().unwrap();
+        assert_eq!(advertised_endpoints(&DirectConfig { listen: Some(bound), ..DirectConfig::default() }, Some(bound), true), vec!["wss://192.168.1.20:7447"]);
+    }
 
     #[test]
     fn the_summary_names_what_phones_dial_and_what_is_listening() {

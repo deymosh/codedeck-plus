@@ -109,7 +109,10 @@ API key — for trying the phone flows.
 ## Configuration
 
 Precedence: flags > environment > `<home>/config.json` > defaults. Home:
-`--home` / `CODEDECK_HOME`, default `~/.codedeck`.
+`--home` / `CODEDECK_HOME`, default `~/.codedeck` (`/data` in the container
+image). [`config.example.json`](../config.example.json) at the repository
+root sets every `config.json` key (a test keeps it complete); copy the ones
+you need.
 
 | config.json key | env / flag | meaning |
 |---|---|---|
@@ -125,7 +128,7 @@ Precedence: flags > environment > `<home>/config.json` > defaults. Home:
 | `agentHostPath`, `nodePath` | `CODEDECK_AGENT_HOST` / `--agent-host`, `CODEDECK_NODE_PATH` | Where the agent host and Node are (defaults: `agent-host/` beside the binary; the `node` beside the binary, else `node` on `PATH`) |
 | `direct.listen` | `CODEDECK_DIRECT_LISTEN` / `--direct-listen` | Serve phones directly over `wss://` on this `ip:port` (e.g. `0.0.0.0:7447`); off by default |
 | `direct.onionListen` | `CODEDECK_DIRECT_ONION_LISTEN` / `--direct-onion-listen` | A plain `ws://` listener for an onion service to forward to; loopback only (e.g. `127.0.0.1:7448`) |
-| `direct.endpoints` | `CODEDECK_DIRECT_ENDPOINTS` / `--direct-endpoint` | The URLs phones dial, in order: `wss://host:port`, or `ws://<name>.onion:port` (default: the `wss://` listener's LAN address) |
+| `direct.endpoints` | `CODEDECK_DIRECT_ENDPOINTS` / `--direct-endpoint` | The URLs phones dial, in order: `wss://host:port`, or `ws://<name>.onion:port` (default: the `wss://` listener's LAN address; none in a container, which only sees its own) |
 
 The Tor proxy carries relay traffic only; the agents' own API calls and the
 bridge's HTTP checks go direct.
@@ -162,10 +165,13 @@ codedeck-bridge:7447`) and advertise `wss://<name>.onion:7447`; the phone
 pins the certificate through Tor all the same. See
 [`PROTOCOL.md`](PROTOCOL.md#direct-link).
 
-Under Docker Compose, set `CODEDECK_DIRECT_LISTEN=0.0.0.0:7447`, publish the
-port (the commented `ports:` in `docker-compose.yml`), and set
-`CODEDECK_DIRECT_ENDPOINTS` to the host's addresses: inside the container the
-bridge only sees its container address.
+Under Docker Compose the direct link is on by default: the first start
+writes `direct.listen` `0.0.0.0:7447` into `data/config.json`, and the
+compose file publishes the port. Inside a container the bridge sees only its
+own container address, so it advertises none (the certificate pin still rides
+the heartbeat): add the host's addresses to `direct.endpoints`, or on the
+phone, in the machine's settings. To turn the link off, remove `direct` from
+`config.json`.
 
 ## Files
 

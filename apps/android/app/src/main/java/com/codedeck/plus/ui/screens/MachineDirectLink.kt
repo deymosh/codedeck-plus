@@ -22,9 +22,13 @@ import uniffi.client_ffi.isDirectEndpoint
 /** How the phone reaches [machine] right now, as one line. */
 internal fun directLinkStatusText(machine: UniffiMachineSummary): String {
     val up = machine.directUp
+    val none = machine.directAdvertised.isEmpty() && machine.directEndpoints.isEmpty()
     return when {
         up != null -> "Connected directly ($up)"
-        machine.directAdvertised.isEmpty() && machine.directEndpoints.isEmpty() -> "Through the relays"
+        // Listening (it sent a certificate) but naming no address: a bridge
+        // in a container cannot see the host's.
+        none && machine.directPinned -> "Through the relays. The bridge accepts a direct link: add the address it can be reached at."
+        none -> "Through the relays"
         else -> "Through the relays (no direct endpoint reachable)"
     }
 }

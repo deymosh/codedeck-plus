@@ -33,6 +33,18 @@ export CLAUDE_CODE_OAUTH_TOKEN
 # written is fatal: the bridge keeps its identity there.
 mkdir -p "${XDG_CONFIG_HOME:-/data/.config}" "${XDG_DATA_HOME:-/data/.local/share}"
 
+# The bridge's settings live in /data/config.json (./data/config.json on the
+# host). A fresh volume gets a starter one with the direct link on — the
+# compose file publishes its port — and the bridge's defaults for the rest;
+# config.example.json in the repository shows every setting. An existing
+# file is never touched.
+CONFIG_FILE="${CODEDECK_HOME:-/data}/config.json"
+if [ ! -e "$CONFIG_FILE" ]; then
+  printf '{\n  "direct": { "listen": "0.0.0.0:7447" }\n}\n' > "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+  info "created $CONFIG_FILE with the direct link on; see config.example.json for every setting"
+fi
+
 # 1. Optionally install gsd-core globally for Claude integration. Off by
 #    default (this is a real network call to the npm registry on every
 #    container boot, and the bridge's GSD strip already degrades to a blank

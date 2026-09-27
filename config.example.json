@@ -1,0 +1,23 @@
+{
+  "machineName": "workstation",
+  "relays": ["wss://relay.primal.net", "wss://nostr.oxtr.dev"],
+  "workspaceRoots": ["/home/me/code"],
+  "torProxyUrl": "socks5h://127.0.0.1:9050",
+  "direct": {
+    "listen": "0.0.0.0:7447",
+    "onionListen": "127.0.0.1:7448",
+    "endpoints": ["wss://192.168.1.20:7447", "wss://workstation.tail1234.ts.net:7447", "ws://exampleonionaddress.onion:7448"]
+  },
+  "claudePath": "/usr/local/bin/claude",
+  "openCodeAutoStart": true,
+  "openCodePort": 4096,
+  "openCodeServerUrl": "http://127.0.0.1:4096",
+  "openCodePath": "/usr/local/bin/opencode",
+  "relayRegisterEndpoint": "https://relay.example.com/admin/allow",
+  "relayRegisterToken": "admin-token",
+  "blossomRegisterEndpoint": "https://blossom.example.com/admin/allow",
+  "blossomRegisterToken": "admin-token",
+  "transcriptKeepLast": 5000,
+  "agentHostPath": "/opt/codedeck/agent-host/dist/main.js",
+  "nodePath": "/usr/bin/node"
+}
