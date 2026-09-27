@@ -41,7 +41,7 @@ pub use runtime::{
 pub use dispatch::StoreId;
 pub use signer::{IdentitySigner, LocalSigner, SignerError};
 pub use intent::{Intent, IntentCtx, SessionImageSend};
-pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, TranscriptStore};
+pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, SessionKeyStore, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
     ConnectionView, MachinesView, OutboxView, PairingView,

@@ -84,6 +84,29 @@ impl Kv for MemoryKv {
     }
 }
 
+// --- SessionKeyStore ------------------------------------------------------
+
+/// Where the phone keeps its session keys: an opaque blob
+/// (`SessionKeyRing::encode`) that holds their secrets, so a host keeps it
+/// where it keeps secrets (the Android Keystore), never in a log.
+pub trait SessionKeyStore {
+    fn load(&self) -> LocalBoxFuture<'_, Option<String>>;
+    fn save(&self, ring: &str) -> LocalBoxFuture<'_, ()>;
+}
+
+/// A [`SessionKeyStore`] in the [`Kv`], for a host with no better place.
+pub struct KvSessionKeyStore(pub Rc<dyn Kv>);
+
+impl SessionKeyStore for KvSessionKeyStore {
+    fn load(&self) -> LocalBoxFuture<'_, Option<String>> {
+        self.0.get(crate::stores::SESSION_KEYS_KEY)
+    }
+
+    fn save(&self, ring: &str) -> LocalBoxFuture<'_, ()> {
+        self.0.set(crate::stores::SESSION_KEYS_KEY, ring)
+    }
+}
+
 // --- TranscriptStore ----------------------------------------------------
 
 /// One transcript row: a `seq` and its opaque `OutputEntry` JSON (kept opaque

@@ -19,12 +19,11 @@ use client_core::notifications::{
 use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
-use client_core::stores::session_key::grant_expiry;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, PairRequestMsg, PhoneToBridge, SessionKeyGrant, SyncAckMsg, SyncRequestMsg, VersionFields,
+    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
 use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
@@ -295,7 +294,7 @@ impl<'a> Router<'a> {
                     PhoneToBridge::SyncAck(SyncAckMsg {
                         version: VersionFields::default(),
                         sync_id: m.sync_id.clone(),
-                        range: m.range,
+                        ranges: vec![m.range],
                     }),
                 );
             }
@@ -710,17 +709,14 @@ pub fn apply_pairing_effects(
             }
             PairingEffect::SendPairRequest { to, label, token } => {
                 out.sends.push(Send {
-                    machine: to,
+                    machine: to.clone(),
                     msg: PhoneToBridge::PairRequest(PairRequestMsg {
                         version: VersionFields::default(),
                         npub: keys.identity_npub.clone(),
                         pubkey_hex: keys.identity_pubkey_hex.clone(),
                         label,
                         token,
-                        session_key: Some(SessionKeyGrant {
-                            pubkey_hex: keys.session_pubkey_hex.clone(),
-                            expires_at: grant_expiry(now),
-                        }),
+                        session_key: Some(keys.grant_for(&to)),
                     }),
                 });
             }
@@ -735,7 +731,7 @@ pub fn apply_pairing_effects(
                     Some(candidate.machine.clone()),
                     host,
                 );
-                stores.machines.note_session_grant_sent(&candidate.pubkey_hex, grant_expiry(now));
+                stores.machines.note_session_grant_sent(&candidate.pubkey_hex, keys.grant_sent(now));
                 if !candidate.relays.is_empty() {
                     for effect in stores.settings.add_relays(&candidate.relays) {
                         match effect {
@@ -771,7 +767,7 @@ pub(crate) fn sync_effect_to_cmd(effect: SyncEffect) -> PhoneToBridge {
         SyncEffect::SendSyncAck { sync_id, range } => PhoneToBridge::SyncAck(SyncAckMsg {
             version: VersionFields::default(),
             sync_id,
-            range,
+            ranges: vec![range],
         }),
     }
 }
@@ -836,7 +832,8 @@ mod tests {
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let identity = protocol::crypto::generate_keypair();
-        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &h.session_key))
+        let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
+        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current))
     }
 
     fn text_entry(content: &str) -> OutputEntry {
@@ -974,7 +971,7 @@ mod tests {
                 msg: PhoneToBridge::SyncAck(SyncAckMsg {
                     version: VersionFields::default(),
                     sync_id: "sy1".into(),
-                    range: (1, 2),
+                    ranges: vec![(1, 2)],
                 }),
             }]
         );

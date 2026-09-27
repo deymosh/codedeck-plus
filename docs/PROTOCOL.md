@@ -129,8 +129,15 @@ question.
 ### Transcript sync
 
 `sync-request {sessionId, haveRanges}` → `sync-begin {syncId, seqHigh, ranges}`
-→ `sync-chunk {range, entries}` (each acked with `sync-ack {syncId, range}`)
+→ `sync-chunk {range, entries}` (acked with `sync-ack {syncId, ranges}`)
 → `sync-end {deliveredRanges}`.
+
+- Each range in a `sync-ack` is exactly one chunk's `range`. One ack may
+  cover several chunks: every command is signed by the phone's identity,
+  possibly in an external signer, so a phone batches the acks for chunks
+  that arrive together instead of signing one per chunk. The bridge waits
+  10 s for acks before resending a pass, so a batch must go out well
+  within that.
 
 - Seqs are assigned once by the bridge and are **never renumbered**; they
   continue across bridge restarts. A seq that arrives twice with different
@@ -212,8 +219,10 @@ the pairing; the `pair-ack` is then already encrypted to that key.
 
 A phone whose identity key lives in an external signer (NIP-55) should not
 ask it to decrypt every message. It grants a local key, once:
-`session-key {sessionKey: {pubkeyHex, expiresAt}}` (or `sessionKey` on its
-`pair-request`). A session key only ever keys NIP-44 payloads; it never
+`session-key {sessionKey: {pubkeyHex, bridgePubkeyHex, expiresAt}}` (or
+`sessionKey` on its `pair-request`). `bridgePubkeyHex` names the one bridge
+the grant is for; a bridge refuses a grant naming another, so a grant one
+bridge saw cannot be replayed to a second. A session key only ever keys NIP-44 payloads; it never
 signs. Every event keeps the same parties — the phone signs everything it
 publishes (commands, grants, relay AUTH, image-server auth) with its
 identity, and the bridge `p`-tags everything to the identity — so allowlists
@@ -234,6 +243,14 @@ on relays and image servers only ever see the identity. From the grant on:
 A phone grants a session key only to a bridge advertising `session-keys`. A
 phone that can decrypt a message from a bridge it granted a key only with
 its identity learns the bridge has no live key for it, and grants again.
+
+Renewal is rotation: a phone never extends a key's life by granting it
+again. Every grant of a key runs until the same `expiresAt`, the key's own;
+a month before it, the phone makes a fresh key and grants that to each
+bridge (under the key the bridge holds, so the grant itself stays
+readable). It keeps the previous key, and keeps encrypting to a bridge with
+it, until that bridge confirms the new one by encrypting to it; once every
+bridge has, or its grants lapsed, the previous key is deleted.
 
 ### Capabilities
 

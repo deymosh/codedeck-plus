@@ -110,8 +110,10 @@ pub struct SyncAckMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub sync_id: String,
-    #[specta(type = (specta_typescript::Number, specta_typescript::Number))]
-    pub range: SeqRange,
+    /// The chunks this ack covers, each exactly a `sync-chunk`'s `range`.
+    /// One ack may cover several chunks, so a phone can batch them.
+    #[specta(type = Vec<(specta_typescript::Number, specta_typescript::Number)>)]
+    pub ranges: Vec<SeqRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -259,6 +261,10 @@ pub struct PairRequestMsg {
 pub struct SessionKeyGrant {
     /// The session key's public half, lowercase hex.
     pub pubkey_hex: String,
+    /// The one bridge this grant is for (its pubkey, lowercase hex). A
+    /// bridge refuses a grant naming another, so a grant cannot be replayed
+    /// to a different bridge.
+    pub bridge_pubkey_hex: String,
     /// When the grant lapses, seconds since the Unix epoch. At most
     /// [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead; the phone grants a new key
     /// before this one lapses.
@@ -369,7 +375,7 @@ mod tests {
         rt(&json!({"type":"set-option","sessionId":"s","option":"mode","value":"plan"}));
         rt(&json!({"type":"set-option","sessionId":"s","option":"model","value":"anthropic/claude-x"}));
         rt(&json!({"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]}));
-        rt(&json!({"type":"sync-ack","syncId":"y","range":[1,50]}));
+        rt(&json!({"type":"sync-ack","syncId":"y","ranges":[[1,50],[51,100]]}));
         rt(&json!({"type":"create-session","agent":"opencode","effort":"high","cwd":"proj","createCwd":true,"providerId":"p"}));
         rt(&json!({"type":"refresh-sessions"}));
         rt(&json!({"type":"close-session","sessionId":"s"}));
@@ -381,9 +387,9 @@ mod tests {
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
-        rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","expiresAt":1800000000}}));
+        rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"type":"provider-profiles-request"}));
-        rt(&json!({"type":"session-key","sessionKey":{"pubkeyHex":"bb","expiresAt":1800000000}}));
+        rt(&json!({"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
     }
 
     #[test]

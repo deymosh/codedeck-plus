@@ -21,6 +21,8 @@ use protocol::common::{
 };
 use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
+use super::session_key::SessionGrant;
+
 /// A user-dismissed session id keeps suppressing incoming lists for this long
 /// (then the bridge is trusted again — it has had ample time to process the
 /// close-session).
@@ -222,16 +224,13 @@ pub struct MachineView {
     /// serializes normally into the live `MachinesView` an IPC boundary reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profiles: Option<Vec<ProviderProfileInfo>>,
-    /// Until when (seconds) this bridge holds the phone's session key, as
-    /// last confirmed. See `stores::session_key`.
+    /// The session-key grant this bridge last confirmed. See
+    /// `stores::session_key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[specta(type = Option<specta_typescript::Number>)]
-    pub session_granted_until: Option<u64>,
-    /// The expiry (seconds) of a grant sent to this bridge and not confirmed
-    /// yet.
+    pub session_grant: Option<SessionGrant>,
+    /// A grant sent to this bridge and not confirmed yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[specta(type = Option<specta_typescript::Number>)]
-    pub session_grant_pending: Option<u64>,
+    pub session_grant_sent: Option<SessionGrant>,
 }
 
 /// One agent's live model list on one machine. `models` stays `None` until
@@ -271,8 +270,8 @@ impl MachineView {
             credentials: Vec::new(),
             models: BTreeMap::new(),
             provider_profiles: None,
-            session_granted_until: None,
-            session_grant_pending: None,
+            session_grant: None,
+            session_grant_sent: None,
         }
     }
 }

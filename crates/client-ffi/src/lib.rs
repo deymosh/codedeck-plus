@@ -45,7 +45,7 @@ pub use intent::{UniffiIntent, UniffiIntentError};
 pub use notifier::UniffiNotifier;
 use notifier::NotifierAdapter;
 pub use observer::CoreListener;
-pub use signer::{local_identity_signer, UniffiIdentitySigner, UniffiSignerError};
+pub use signer::{local_identity_signer, UniffiIdentitySigner, UniffiSessionKeyStore, UniffiSignerError};
 use observer::UniffiObserver;
 pub use views::{
     UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,
@@ -255,6 +255,8 @@ impl Core {
         relays: Vec<String>,
         // The phone's identity: signs every event; see `signer.rs`.
         identity: Arc<dyn UniffiIdentitySigner>,
+        // Where the session keys are kept; `None` keeps them in the database.
+        session_keys: Option<Arc<dyn UniffiSessionKeyStore>>,
         listener: Arc<dyn CoreListener>,
         notifier: Arc<dyn UniffiNotifier>,
         http: Option<Arc<dyn UniffiHttpFetch>>,
@@ -315,6 +317,8 @@ impl Core {
                             Some(cb) => Rc::new(HttpFetchAdapter(cb)),
                             None => Rc::new(client_runtime::attachments::NoHttpFetch),
                         },
+                        session_keys: session_keys
+                            .map(|store| Rc::new(signer::SessionKeyStoreAdapter(store)) as Rc<dyn client_runtime::SessionKeyStore>),
                     };
                     let core = RealCore::spawn(config, ports, observer, clock, entropy).await;
                     log::info!("core thread: RealCore::spawn ready");
@@ -508,6 +512,7 @@ mod tests {
         let core = Core::new(
             vec![],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
+            None,
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -534,6 +539,7 @@ mod tests {
         let core = Core::new(
             vec!["wss://relay-a.example".to_string()],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
+            None,
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -559,6 +565,7 @@ mod tests {
             // the constructor argument says once a db file already exists.
             vec!["wss://relay-a.example".to_string()],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
+            None,
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -591,6 +598,7 @@ mod tests {
         let core = Core::new(
             vec!["wss://relay-a.example".to_string()],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
+            None,
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -615,6 +623,7 @@ mod tests {
         let core = Core::new(
             vec![],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
+            None,
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,

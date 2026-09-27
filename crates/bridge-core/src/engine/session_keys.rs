@@ -11,6 +11,8 @@
 //!
 //! Rules:
 //! - a grant arrives in a command, which only the paired identity can sign;
+//! - a grant names the one bridge it is for; one naming another is refused,
+//!   so a grant seen by one bridge cannot be replayed to another;
 //! - a grant lapses at its `expiresAt`, at most
 //!   [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead;
 //! - each identity keeps its [`KEY_RING`] newest keys; commands encrypted
@@ -43,6 +45,8 @@ impl Engine {
         let now = self.now_secs();
         let refusal = if npub_from_hex(&grant.pubkey_hex).is_err() {
             Some("not a valid public key")
+        } else if grant.bridge_pubkey_hex != self.config.keys.pubkey_hex {
+            Some("granted to another bridge")
         } else if grant.expires_at <= now {
             Some("already expired")
         } else if grant.expires_at > now + SESSION_KEY_MAX_LIFETIME_SECS + SKEW_SECS {

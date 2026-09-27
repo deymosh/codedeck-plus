@@ -64,6 +64,7 @@ fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
     let core = Core::new(
         vec![],
         client_ffi::local_identity_signer(fresh_identity_hex()).unwrap(),
+        None,
         listener.clone(),
         Arc::new(NoopNotifier),
         None,
@@ -120,6 +121,7 @@ fn dropping_an_in_flight_dispatch_future_does_not_lose_the_intent() {
         Core::new(
             vec![],
             client_ffi::local_identity_signer(fresh_identity_hex()).unwrap(),
+            None,
             listener.clone(),
             Arc::new(NoopNotifier),
             None,

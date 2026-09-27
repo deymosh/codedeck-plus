@@ -56,21 +56,32 @@ regenerates them and CI fails on drift.
 
 Pairing is a QR scan of the bridge's `codedeck://pair?…` URL (see
 [`PROTOCOL.md`](PROTOCOL.md#pairing)). The identity key is generated on the
-phone and stored encrypted with an Android Keystore-backed key.
+phone and stored encrypted with an Android Keystore-backed key, and so are
+the session keys (never in the app's database).
 
 **Keys.** The core reaches the identity only through a signer port
 (`IdentitySigner`; over the FFI, `UniffiIdentitySigner`, which Kotlin can
 implement for an external NIP-55 signer). The identity signs every event the
 phone publishes — commands, grants, relay NIP-42 AUTH, Blossom upload auth —
 so a relay or image server allowlist only ever needs that one pubkey. Each
-install also holds one local session key, granted to every bridge that
+install also holds a local session key, granted to every bridge that
 advertises `session-keys` (with the pair-request, or once its heartbeat
-shows the capability; renewed a month before its 89-day grant lapses, at
-most every 10 minutes while unconfirmed). Once a bridge confirms it (a
-message it encrypted to the key), payloads both ways use the session key;
-until then, and whenever the bridge speaks to the identity again, the
-signer encrypts and decrypts. See
+shows the capability; at most every 10 minutes while unconfirmed). A key
+lives 89 days; a month before it lapses a fresh one replaces it and is
+granted to every bridge, and the previous key is kept only until each
+bridge confirms the new one. Once a bridge confirms a key (a message it
+encrypted to it), payloads both ways use that key; until then, and whenever
+the bridge speaks to the identity again, the signer encrypts and decrypts.
+The core keeps the keys through a `SessionKeyStore` port (the Keystore on
+Android). See
 [`PROTOCOL.md`](PROTOCOL.md#session-keys).
+
+Unprompted by the user, the core asks the identity to sign only: one
+`refresh-sessions` per machine on each (re)connect; the `sync-request`s for
+sessions with gaps and their `sync-ack`s (held 500 ms, so a sync's chunks
+cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
+connection that challenges; and a grant, rarely. Everything else it signs —
+commands, Blossom upload auth — follows a user action.
 
 **Orbot.** A settings toggle routes the relay connections *and* Blossom image
 traffic through Orbot's SOCKS5 proxy (`127.0.0.1:9050`); DNS resolves at the

@@ -127,14 +127,22 @@ impl SyncServer {
         self.send_pass(out, transcripts, &sync_id);
     }
 
-    /// A phone acked one chunk.
-    pub fn ack(&mut self, out: &mut Out, sync_id: &str, range: SeqRange) {
+    /// A phone acked one or more chunks.
+    pub fn ack(&mut self, out: &mut Out, sync_id: &str, ranges: &[SeqRange]) {
         let Some(sync) = self.by_id.get_mut(sync_id) else { return };
-        let Some(chunk) = sync.chunks.iter_mut().find(|c| c.range == range) else {
-            log::info!("[Sync] {sync_id}: ack for unknown range [{},{}]", range.0, range.1);
+        let mut any = false;
+        for range in ranges {
+            match sync.chunks.iter_mut().find(|c| c.range == *range) {
+                Some(chunk) => {
+                    chunk.acked = true;
+                    any = true;
+                }
+                None => log::info!("[Sync] {sync_id}: ack for unknown range [{},{}]", range.0, range.1),
+            }
+        }
+        if !any {
             return;
-        };
-        chunk.acked = true;
+        }
         if sync.chunks.iter().all(|c| c.acked) {
             self.finish(out, sync_id, "complete");
         } else {
@@ -360,12 +368,26 @@ mod tests {
             other => panic!("{other:?}"),
         }
         for r in [(1, 50), (51, 100), (101, 120)] {
-            t.server.ack(&mut t.out, &id, r);
+            t.server.ack(&mut t.out, &id, &[r]);
         }
         let msgs = t.messages();
         assert_eq!(end_ranges(&msgs[0]), [(1, 120)]);
         assert_eq!(t.server.active(), 0);
         assert!(t.out.timers.is_empty(), "every timer cancelled");
+    }
+
+    #[test]
+    fn one_ack_can_cover_every_chunk() {
+        let mut t = T::with_entries(120);
+        let id = t.request("phone", &[], 120);
+        t.messages();
+        t.server.ack(&mut t.out, &id, &[(1, 50), (51, 100)]);
+        assert!(t.messages().is_empty());
+        assert_eq!(t.server.active(), 1);
+        // An unknown range beside known ones does not spoil the batch.
+        t.server.ack(&mut t.out, &id, &[(7, 9), (101, 120)]);
+        assert_eq!(end_ranges(&t.messages()[0]), [(1, 120)]);
+        assert_eq!(t.server.active(), 0);
     }
 
     #[test]
@@ -390,7 +412,7 @@ mod tests {
         let mut t = T::with_entries(100);
         let id = t.request("phone", &[], 100);
         t.messages();
-        t.server.ack(&mut t.out, &id, (1, 50));
+        t.server.ack(&mut t.out, &id, &[(1, 50)]);
         assert_eq!(t.ack_delay(&id), 10_000);
         t.fire(&id, SyncTimer::Ack);
         assert_eq!(chunk_ranges_of(&t.messages()), [(51, 100)], "only the unacked chunk is resent");
@@ -407,10 +429,10 @@ mod tests {
     fn an_ack_during_the_retries_completes_the_sync() {
         let mut t = T::with_entries(100);
         let id = t.request("phone", &[], 100);
-        t.server.ack(&mut t.out, &id, (1, 50));
+        t.server.ack(&mut t.out, &id, &[(1, 50)]);
         t.fire(&id, SyncTimer::Ack);
         t.messages();
-        t.server.ack(&mut t.out, &id, (51, 100));
+        t.server.ack(&mut t.out, &id, &[(51, 100)]);
         assert_eq!(end_ranges(&t.messages()[0]), [(1, 100)]);
     }
 
@@ -423,9 +445,9 @@ mod tests {
         let msgs = t.messages();
         assert!(!msgs.iter().any(|m| matches!(m, BridgeToPhone::SyncEnd(_))));
         assert_eq!(t.server.active(), 1);
-        t.server.ack(&mut t.out, &old, (1, 50));
+        t.server.ack(&mut t.out, &old, &[(1, 50)]);
         assert!(t.messages().is_empty(), "acks for the superseded sync are ignored");
-        t.server.ack(&mut t.out, &new, (51, 60));
+        t.server.ack(&mut t.out, &new, &[(51, 60)]);
         assert_eq!(end_ranges(&t.messages()[0]), [(51, 60)]);
     }
 
@@ -441,7 +463,7 @@ mod tests {
     fn an_idle_sync_closes_with_what_was_acked() {
         let mut t = T::with_entries(100);
         let id = t.request("phone", &[], 100);
-        t.server.ack(&mut t.out, &id, (1, 50));
+        t.server.ack(&mut t.out, &id, &[(1, 50)]);
         t.messages();
         t.fire(&id, SyncTimer::Idle);
         assert_eq!(end_ranges(&t.messages()[0]), [(1, 50)]);
@@ -452,8 +474,8 @@ mod tests {
         let mut t = T::with_entries(10);
         let id = t.request("phone", &[], 10);
         t.messages();
-        t.server.ack(&mut t.out, "nope", (1, 10));
-        t.server.ack(&mut t.out, &id, (3, 4));
+        t.server.ack(&mut t.out, "nope", &[(1, 10)]);
+        t.server.ack(&mut t.out, &id, &[(3, 4)]);
         assert!(t.messages().is_empty());
         assert_eq!(t.server.active(), 1);
     }
@@ -482,7 +504,7 @@ mod tests {
         let id = t.request("phone", &[(1, 80)], highs["s"]);
         let msgs = t.messages();
         assert_eq!(chunk_ranges_of(&msgs), [(81, 120)]);
-        t.server.ack(&mut t.out, &id, (81, 120));
+        t.server.ack(&mut t.out, &id, &[(81, 120)]);
         assert_eq!(end_ranges(&t.messages()[0]), [(81, 120)]);
     }
 }
