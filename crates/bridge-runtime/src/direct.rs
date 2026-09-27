@@ -7,8 +7,9 @@
 //! - `ws://` on [`DirectConfig::onion_listen`], loopback only, for an onion
 //!   service to forward to.
 //!
-//! A connection must answer the challenge with a paired identity's HELLO
-//! within [`HELLO_TIMEOUT`]. Then it gets every event the bridge publishes
+//! A connection must finish its TLS and WebSocket handshakes within
+//! [`HANDSHAKE_TIMEOUT`], then answer the challenge with a paired identity's
+//! HELLO within [`HELLO_TIMEOUT`]. Then it gets every event the bridge publishes
 //! for that identity (and those of the last hour since its resume point),
 //! and its command events go to the engine exactly as a relay's would: the
 //! engine drops one it already saw by its id. Unpairing a phone closes its
@@ -39,8 +40,11 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::DirectConfig;
 
-/// How long a new connection has to say HELLO.
-const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a new connection has for its TLS and WebSocket handshakes.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long it then has to say HELLO. The phone signs it with its identity,
+/// which may wait on the user approving it in a signer app.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 /// A connection silent this long (the phone pings well within it) is dropped.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(400);
 /// Connections served at once, authenticated or not.
@@ -272,7 +276,7 @@ where
         let hub = Rc::clone(&hub);
         let secured = secure(stream);
         tokio::task::spawn_local(async move {
-            if let Ok(Some(stream)) = tokio::time::timeout(HELLO_TIMEOUT, secured).await {
+            if let Ok(Some(stream)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, secured).await {
                 serve(stream, &hub).await;
             }
             hub.open.set(hub.open.get() - 1);
@@ -283,7 +287,7 @@ where
 /// One connection: the handshake, then events both ways.
 async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
     let config = WebSocketConfig { max_message_size: Some(MAX_FRAME_BYTES), max_frame_size: Some(MAX_FRAME_BYTES), ..Default::default() };
-    let Ok(Ok(ws)) = tokio::time::timeout(HELLO_TIMEOUT, tokio_tungstenite::accept_async_with_config(stream, Some(config))).await
+    let Ok(Ok(ws)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::accept_async_with_config(stream, Some(config))).await
     else {
         return;
     };

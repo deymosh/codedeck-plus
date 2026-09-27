@@ -271,7 +271,8 @@ spec.
   is as authentic as the pairing. While the phone routes through Orbot it
   only uses `.onion` endpoints.
 - **Frames**, each a JSON array in one text message:
-  `["CHALLENGE", c]` (bridge, on connect) → `["HELLO", auth, since]` (phone:
+  `["CHALLENGE", c]` (bridge, on connect) → `["HELLO", auth, since]` (phone,
+  within a minute:
   `auth` a kind-22242 event signed by its identity, tagged
   `["challenge", c]`, `created_at` within 10 minutes) → `["READY"]` or
   `["CLOSED", reason]`. Then `["EVENT", event]` both ways, each phone event
