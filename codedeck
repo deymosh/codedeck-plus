@@ -210,7 +210,9 @@ DOCKERFILE
     -v codedeck-cargo-registry:/usr/local/cargo/registry \
     -v codedeck-check-target:/repo/target
 
-  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock
+  # The pack list must carry every repository-root file the workspace reads
+  # at compile time: bridge-runtime's tests include_str! config.example.json.
+  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock config.example.json
   case "$1" in
     typecheck) dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings ;;
     test) dexec -w /repo "$name" cargo test --locked --workspace ;;
