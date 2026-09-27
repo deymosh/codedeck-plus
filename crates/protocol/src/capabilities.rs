@@ -11,8 +11,8 @@
 //! (do not add a string as a "gate" unless a peer that has not seen it would
 //! otherwise hard-fail):
 //!
-//! * **HARD GATE** — absence changes behaviour: [`IMAGES`] (the client shows
-//!   image attach only when the bridge advertises it), [`SESSION_KEYS`] (the
+//! * **HARD GATE** — absence changes behaviour: [`FILES`] (the client shows
+//!   the attach control only when the bridge advertises it), [`SESSION_KEYS`] (the
 //!   client grants a session key only to a bridge that honours one).
 //! * **PRESENCE MARKER** — detection is on payload data: [`SYNC_1`],
 //!   [`FOLDERS`]. Kept so a session list is self-describing.
@@ -28,9 +28,10 @@ pub const PROTOCOL_VERSION: u32 = 11;
 pub const SYNC_1: &str = "sync/1";
 // PRESENCE MARKER — folder listing; client gates on `folders[]`/`roots[]`.
 pub const FOLDERS: &str = "folders";
-// HARD GATE (client-side) — image upload; the attach control shows only when
-// this is in the machine's heartbeat capabilities.
-pub const IMAGES: &str = "images";
+// HARD GATE (client-side) — session attachments of any kind (`upload-file`);
+// the attach control shows only when this is in the machine's heartbeat
+// capabilities.
+pub const FILES: &str = "files";
 // TRANSPORT BEACON — oversize-event `chunk` fragmentation. Advertised on both
 // sides, gated by neither.
 pub const CHUNKED: &str = "chunked";
@@ -41,7 +42,7 @@ pub const CHUNKED: &str = "chunked";
 pub const SESSION_KEYS: &str = "session-keys";
 
 /// Every capability the reference bridge ships with.
-pub const ALL_BRIDGE_CAPABILITIES: [&str; 5] = [SYNC_1, FOLDERS, IMAGES, CHUNKED, SESSION_KEYS];
+pub const ALL_BRIDGE_CAPABILITIES: [&str; 5] = [SYNC_1, FOLDERS, FILES, CHUNKED, SESSION_KEYS];
 
 /// Capabilities the reference client stamps on outgoing command `caps`.
 pub const ALL_PHONE_CAPABILITIES: [&str; 1] = [CHUNKED];
@@ -85,7 +86,7 @@ mod tests {
 
     #[test]
     fn capability_lists() {
-        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "images", "chunked", "session-keys"]);
+        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["sync/1", "folders", "files", "chunked", "session-keys"]);
         assert_eq!(ALL_PHONE_CAPABILITIES, ["chunked"]);
     }
 

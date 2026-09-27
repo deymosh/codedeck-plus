@@ -32,7 +32,7 @@ its event loop.
   `OutboxSettled`, `PairingSettled`, `ActionFailed`, `FolderAck`, `Ping`. No
   UI strings: the app writes the copy.
 - **Ports** the host supplies: `Kv` and `TranscriptStore` (SQLite on Android),
-  `Notifier`, `HttpFetch` (Blossom image uploads), a clock and an entropy
+  `Notifier`, `HttpFetch` (Blossom uploads of attachments), a clock and an entropy
   source.
 
 `client-ffi` re-exposes this to Kotlin. `CoreEvent` and the view types cross
@@ -69,7 +69,7 @@ dials the union of them (plus a pairing candidate's). A command is published
 only to its machine's relays. A phone with nothing paired dials nothing. The
 defaults a new session starts with (the agent, and per agent its mode,
 effort and model) are kept per machine too; everything else in Settings
-(appearance, notifications, stay connected, Orbot, Blossom, quick prompts)
+(appearance, notifications, stay connected, Orbot, quick prompts, uploads)
 is the phone's own, with the log viewer and the account last.
 
 **Login.** A fresh install opens on a welcome screen, and the core does not
@@ -108,7 +108,7 @@ cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
 connection that challenges; and a grant, rarely. Everything else it signs —
 commands, Blossom upload auth — follows a user action.
 
-**Orbot.** A settings toggle routes the relay connections *and* Blossom image
+**Orbot.** A settings toggle routes the relay connections *and* Blossom
 traffic through Orbot's SOCKS5 proxy (`127.0.0.1:9050`); DNS resolves at the
 proxy, so `.onion` relays work. The app does not launch or manage Orbot, and
 the toggle is fully applied on the next app start (while running it affects

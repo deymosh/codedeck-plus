@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.SettingsEthernet
 import androidx.compose.material.icons.outlined.TextFields
@@ -32,7 +33,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,29 +71,36 @@ private const val UI_SCALE_DEFAULT = 1f
 internal sealed interface SettingsPage {
     data object Hub : SettingsPage
     data class Machine(val pubkey: String) : SettingsPage
+    /** One agent's plugins on a machine, opened from the machine's page. */
+    data class Plugins(val pubkey: String, val agent: String) : SettingsPage
     data object Appearance : SettingsPage
     data object Notifications : SettingsPage
     data object Connection : SettingsPage
     data object Messages : SettingsPage
+    data object Uploads : SettingsPage
     data object Account : SettingsPage
 
     fun save(): String = when (this) {
         Hub -> "hub"
         is Machine -> "machine:$pubkey"
+        is Plugins -> "plugins:$pubkey:$agent"
         Appearance -> "appearance"
         Notifications -> "notifications"
         Connection -> "connection"
         Messages -> "messages"
+        Uploads -> "uploads"
         Account -> "account"
     }
 
     companion object {
         fun restore(saved: String): SettingsPage = when {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
+            saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
             saved == "appearance" -> Appearance
             saved == "notifications" -> Notifications
             saved == "connection" -> Connection
             saved == "messages" -> Messages
+            saved == "uploads" -> Uploads
             saved == "account" -> Account
             else -> Hub
         }
@@ -139,7 +146,9 @@ fun SettingsScreen(
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
-    if (page != SettingsPage.Hub) BackHandler(onBack = toHub)
+    // A plugins page goes back to its machine's page, every other to the hub.
+    val back = (page as? SettingsPage.Plugins)?.let { { open(SettingsPage.Machine(it.pubkey)) } } ?: toHub
+    if (page != SettingsPage.Hub) BackHandler(onBack = back)
 
     val view = settings
     if (view == null) {
@@ -176,9 +185,11 @@ fun SettingsScreen(
                     now = System.currentTimeMillis(),
                     dispatch = ::dispatch,
                     onBack = toHub,
+                    onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
                 )
             }
         }
+        is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
         SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
         SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)
         SettingsPage.Connection -> {
@@ -186,6 +197,7 @@ fun SettingsScreen(
             ConnectionPage(view, serviceForeground, ::dispatch, toHub)
         }
         SettingsPage.Messages -> MessagesPage(view, quickPrompts?.prompts.orEmpty(), ::dispatch, toHub)
+        SettingsPage.Uploads -> UploadsPage(view, ::dispatch, toHub)
         SettingsPage.Account -> AccountPage(npub, signerLabel, onLogOut, toHub)
     }
 }
@@ -248,7 +260,14 @@ internal fun SettingsHub(
                 "Messages",
                 onClick = { onOpen(SettingsPage.Messages) },
                 icon = { RowIcon(Icons.AutoMirrored.Outlined.Chat) },
-                subtitle = "Quick prompts and the image server",
+                subtitle = "Quick prompts",
+            )
+            Divider(inset = 68.dp)
+            NavRow(
+                "Uploads",
+                onClick = { onOpen(SettingsPage.Uploads) },
+                icon = { RowIcon(Icons.Outlined.CloudUpload) },
+                subtitle = if (view.blossomServer.isNotBlank()) "To ${blossomHost(view.blossomServer)}" else "Through the relays",
             )
         }
         Group {
@@ -407,33 +426,6 @@ internal fun MessagesPage(
                 }
             }
             NewQuickPrompt(dispatch)
-        }
-        Group(
-            title = "Image server",
-            footer = "The Blossom server images you attach are uploaded to, encrypted first; the key travels only " +
-                "inside the encrypted message. Empty uses the built-in one.",
-        ) {
-            GroupBody {
-                // Saved when the field loses focus; re-keyed on the stored
-                // value so a change made elsewhere replaces the draft.
-                var draft by remember(view.blossomServer) { mutableStateOf(view.blossomServer) }
-                var hadFocus by remember { mutableStateOf(false) }
-                Field(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    placeholder = "https://blossom.example.com",
-                    mono = true,
-                    modifier = Modifier.onFocusChanged { focus ->
-                        if (focus.isFocused) {
-                            hadFocus = true
-                        } else if (hadFocus) {
-                            // The first report is the initial, unfocused attach.
-                            hadFocus = false
-                            dispatch(UniffiIntent.SetBlossomServer(draft.trim()))
-                        }
-                    },
-                )
-            }
         }
     }
 }

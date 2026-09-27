@@ -41,7 +41,7 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - Claude Code and [OpenCode](https://opencode.ai), chosen per session — the
   protocol is agent-neutral, so another agent is one driver away
   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
-- Image attachments, and project/folder management on every paired bridge
+- File attachments (photos or any file), and project/folder management on every paired bridge
 - NIP-42 `AUTH` relays, and Tor on both ends (see below)
 
 ## About this fork

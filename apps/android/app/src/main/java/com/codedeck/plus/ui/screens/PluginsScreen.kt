@@ -1,17 +1,22 @@
 package com.codedeck.plus.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -91,21 +96,28 @@ fun PluginsContent(
     val agent = machine.agents.firstOrNull { it.id == agentId }
     val plugins = machine.plugins.firstOrNull { it.agent == agentId }
     var tab by remember(machine.pubkeyHex, agentId) { mutableStateOf(if (startOnBrowse) PluginsTab.Browse else PluginsTab.Installed) }
-    val marketplaceCount = plugins?.marketplaces?.size ?: 0
 
-    // The installed list on opening; the catalog each time it is shown, and
-    // again when a marketplace comes or goes.
+    // Everything on opening, the catalog included, so Browse is ready by the
+    // time it is shown; the catalog again when a marketplace comes or goes.
     LaunchedEffect(machine.pubkeyHex, agentId) {
-        dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, agentId, available = false))
+        dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, agentId, available = true))
     }
-    LaunchedEffect(machine.pubkeyHex, agentId, tab, marketplaceCount) {
-        if (tab == PluginsTab.Browse) dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, agentId, available = true))
+    val marketplaceNames = plugins?.marketplaces?.map { it.name }
+    var seenMarketplaces by remember(machine.pubkeyHex, agentId) { mutableStateOf(marketplaceNames) }
+    LaunchedEffect(marketplaceNames) {
+        val seen = seenMarketplaces
+        seenMarketplaces = marketplaceNames
+        if (seen != null && marketplaceNames != null && seen != marketplaceNames) {
+            dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, agentId, available = true))
+        }
     }
     fun act(action: String, target: String) = dispatch(UniffiIntent.PluginAction(machine.pubkeyHex, agentId, action, target))
 
     var confirm by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    Page(title = "${agent?.displayName ?: agentId} plugins", subtitle = machineLabel(machine.name), onBack = onBack) {
+    // Browse scrolls its own (lazy) list; the rest scrolls as one page.
+    val browsing = tab == PluginsTab.Browse && plugins?.marketplaces != null
+    Page(title = "${agent?.displayName ?: agentId} plugins", subtitle = machineLabel(machine.name), onBack = onBack, scroll = !browsing) {
         if (plugins?.marketplaces != null) TabSwitch(tab, installedCount = plugins.installed.size) { tab = it }
         plugins?.failure?.let { ErrorLine(failureLine(it)) }
         when {
@@ -320,8 +332,10 @@ private fun PackageInstall(plugins: UniffiAgentPlugins, act: (String, String) ->
     }
 }
 
+/** The catalog, as a lazy list: only the rows on screen are composed, so a
+ *  marketplace of hundreds opens at once. */
 @Composable
-private fun BrowseView(plugins: UniffiAgentPlugins, act: (String, String) -> Unit) {
+private fun ColumnScope.BrowseView(plugins: UniffiAgentPlugins, act: (String, String) -> Unit) {
     var query by remember { mutableStateOf("") }
     val available = plugins.available
     if (plugins.marketplaces.isNullOrEmpty()) {
@@ -333,14 +347,22 @@ private fun BrowseView(plugins: UniffiAgentPlugins, act: (String, String) -> Uni
         return
     }
     Field(query, { query = it }, placeholder = "Search ${available.size} plugins")
-    val results = browseResults(available, query)
+    val results = remember(available, query) { browseResults(available, query) }
     if (results.isEmpty()) {
         Note(if (available.isEmpty()) "Everything these marketplaces offer is installed." else "No plugin matches “${query.trim()}”.")
         return
     }
-    Group {
-        results.forEachIndexed { i, p ->
-            if (i > 0) Divider()
+    val shape = RoundedCornerShape(Tokens.RadiusXl)
+    LazyColumn(
+        Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Tokens.SurfaceRaised)
+            .border(1.dp, Tokens.Border, shape),
+    ) {
+        itemsIndexed(results, key = { _, p -> p.id }) { i, p ->
+            if (i > 0) HorizontalDivider(Modifier.padding(start = Tokens.Space4), thickness = 1.dp, color = Tokens.Border)
             AvailableRow(p, busy = p.id in plugins.busy) { act("install", p.id) }
         }
     }

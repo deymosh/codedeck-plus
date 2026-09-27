@@ -421,7 +421,7 @@ mod tests {
         let (id, mac) = (phone(), machine());
         let msg = decode_phone_to_bridge(
             &json!({
-                "type": "upload-image",
+                "type": "upload-file",
                 "sessionId": "s1",
                 "hash": "c".repeat(64),
                 "url": format!("https://blossom.example/{}", "c".repeat(64)),
@@ -442,7 +442,7 @@ mod tests {
         let plaintext = decrypt_from(&mac.secret_key, &id.pubkey_hex, &cmd.content).unwrap();
         let decoded = decode_phone_to_bridge(&plaintext).unwrap();
         match decoded {
-            PhoneToBridge::UploadImage(protocol::commands::UploadImageMsg::Blossom(b)) => {
+            PhoneToBridge::UploadFile(protocol::commands::UploadFileMsg::Blossom(b)) => {
                 assert_eq!(b.hash, "c".repeat(64));
                 assert_eq!(b.key, "a".repeat(64));
                 assert_eq!(b.iv, "b".repeat(24));
@@ -458,7 +458,7 @@ mod tests {
         let (id, mac) = (phone(), machine());
         let msg = decode_phone_to_bridge(
             &json!({
-                "type": "upload-image",
+                "type": "upload-file",
                 "sessionId": "s1",
                 "uploadId": "u-1",
                 "filename": "shot.png",
@@ -475,7 +475,7 @@ mod tests {
         let cmd = build_command(&id, &mac.pubkey_hex, &msg, 1_000).unwrap();
         let plaintext = decrypt_from(&mac.secret_key, &id.pubkey_hex, &cmd.content).unwrap();
         match decode_phone_to_bridge(&plaintext).unwrap() {
-            PhoneToBridge::UploadImage(protocol::commands::UploadImageMsg::Chunk(c)) => {
+            PhoneToBridge::UploadFile(protocol::commands::UploadFileMsg::Chunk(c)) => {
                 assert_eq!(c.upload_id, "u-1");
                 assert_eq!(c.chunk_index, 0);
                 assert_eq!(c.total_chunks, 3);

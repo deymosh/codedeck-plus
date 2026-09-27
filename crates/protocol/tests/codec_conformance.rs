@@ -79,7 +79,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::CloseSession(_) => "close-session",
         PhoneToBridge::Interrupt(_) => "interrupt",
         PhoneToBridge::CreateFolder(_) => "create-folder",
-        PhoneToBridge::UploadImage(_) => "upload-image",
+        PhoneToBridge::UploadFile(_) => "upload-file",
         PhoneToBridge::UsageRequest(_) => "usage-request",
         PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",

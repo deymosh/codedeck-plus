@@ -7,7 +7,7 @@
 //! runtime did not provide — the same inputs always give the same effects.
 
 use agent_protocol::{BridgeFrame, HostFrame, Secret};
-use protocol::commands::UploadImageMsg;
+use protocol::commands::UploadFileMsg;
 use protocol::common::GsdState;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
@@ -105,9 +105,9 @@ pub enum Input {
     /// Answer to [`Effect::CheckProviderToken`]; `None` when it could not be
     /// checked (network error).
     ProviderTokenChecked { ticket: u64, valid: Option<bool> },
-    /// An [`Effect::HandleImageUpload`] finished: the image is on disk and
+    /// An [`Effect::HandleFileUpload`] finished: the image is on disk and
     /// `text` (the user's words plus its path) is the session's next input.
-    ImageReady { session_id: String, text: String },
+    FileReady { session_id: String, text: String },
     /// Open a pairing window (replacing an open one).
     OpenPairing { duration_ms: Option<u64> },
     ClosePairing,
@@ -161,8 +161,8 @@ pub enum Effect {
         model: String,
     },
     /// Fetch / reassemble an uploaded image into the workspace; answer with
-    /// [`Input::ImageReady`] once it is on disk.
-    HandleImageUpload(UploadImageMsg),
+    /// [`Input::FileReady`] once it is on disk.
+    HandleFileUpload(UploadFileMsg),
     /// Shutdown is complete: every publish before this one must still go
     /// out, then the runtime may close the host and the relays.
     Stopped,

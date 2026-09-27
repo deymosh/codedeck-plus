@@ -25,7 +25,8 @@ pub struct SettingsData {
     pub stay_connected: bool,
     /// Route relay traffic through Orbot's SOCKS5 proxy.
     pub tor_proxy_enabled: bool,
-    /// Blossom server for session image attachments (`""` = built-in default).
+    /// Blossom server session attachments are uploaded to, encrypted; `""`
+    /// = none, and attachments travel through the relays in chunks.
     pub blossom_server: String,
     /// Master toggle for OS notifications AND the in-app ping (CDX-048).
     pub notifications_enabled: bool,
@@ -119,8 +120,17 @@ impl SettingsState {
     pub fn set_tor_proxy_enabled(&mut self, on: bool) {
         self.data.tor_proxy_enabled = on;
     }
-    pub fn set_blossom_server(&mut self, url: &str) {
-        self.data.blossom_server = url.trim().to_string();
+    /// `""` clears it. Anything else must be an https address: an upload
+    /// carries an auth event the phone's identity signed, which no
+    /// cleartext hop may see. Answers whether the value was taken.
+    pub fn set_blossom_server(&mut self, url: &str) -> bool {
+        let url = url.trim();
+        let https_host = url.strip_prefix("https://").is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'));
+        if !url.is_empty() && (!https_host || url.chars().any(char::is_whitespace)) {
+            return false;
+        }
+        self.data.blossom_server = url.to_string();
+        true
     }
     pub fn set_notifications_enabled(&mut self, on: bool) {
         self.data.notifications_enabled = on;
@@ -170,7 +180,19 @@ mod tests {
     #[test]
     fn setters_trim_and_write() {
         let mut st = SettingsState::default();
-        st.set_blossom_server("  https://blossom.example  ");
+        assert!(st.set_blossom_server("  https://blossom.example  "));
         assert_eq!(st.data.blossom_server, "https://blossom.example");
+    }
+
+    #[test]
+    fn a_blossom_server_is_https_or_nothing() {
+        let mut st = SettingsState::default();
+        assert!(st.set_blossom_server("https://blossom.example"));
+        for refused in ["http://blossom.example", "blossom.example", "https://", "https:///x", "https://a b"] {
+            assert!(!st.set_blossom_server(refused), "{refused}");
+            assert_eq!(st.data.blossom_server, "https://blossom.example");
+        }
+        assert!(st.set_blossom_server(""));
+        assert_eq!(st.data.blossom_server, "");
     }
 }

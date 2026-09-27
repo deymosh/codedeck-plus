@@ -3,7 +3,7 @@
 use agent_protocol::{BridgeMessage, SelectOutcome};
 use protocol::commands::{
     CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PhoneToBridge, PlanResponseMsg,
-    PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadImageMsg,
+    PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
 use protocol::common::{is_valid_provider_base_url, SessionOption, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{
@@ -33,7 +33,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::CloseSession(_) => "close-session",
         PhoneToBridge::Interrupt(_) => "interrupt",
         PhoneToBridge::CreateFolder(_) => "create-folder",
-        PhoneToBridge::UploadImage(_) => "upload-image",
+        PhoneToBridge::UploadFile(_) => "upload-file",
         PhoneToBridge::UsageRequest(_) => "usage-request",
         PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
@@ -105,7 +105,7 @@ impl Engine {
             PhoneToBridge::CloseSession(m) => self.on_close_session(&m.session_id),
             PhoneToBridge::Interrupt(m) => self.interrupt(&m.session_id),
             PhoneToBridge::CreateFolder(m) => self.on_create_folder(m),
-            PhoneToBridge::UploadImage(m) => self.on_upload_image(m),
+            PhoneToBridge::UploadFile(m) => self.on_upload_file(m),
             PhoneToBridge::UsageRequest(m) => self.on_usage_request(&m.session_id),
             PhoneToBridge::GsdRequest(m) => {
                 // Always answered, `available: false` included, so the phone
@@ -373,16 +373,16 @@ impl Engine {
         self.publish_all(BridgeToPhone::FolderAck(FolderAckMsg { request_id: m.request_id, success, path, error }));
     }
 
-    fn on_upload_image(&mut self, m: UploadImageMsg) {
+    fn on_upload_file(&mut self, m: UploadFileMsg) {
         let session_id = match &m {
-            UploadImageMsg::Blossom(b) => &b.session_id,
-            UploadImageMsg::Chunk(c) => &c.session_id,
+            UploadFileMsg::Blossom(b) => &b.session_id,
+            UploadFileMsg::Chunk(c) => &c.session_id,
         };
         if self.run_ref(session_id).is_none() {
             log::info!("[Engine] Image for {session_id}, which is not running — dropped");
             return;
         }
-        self.out.push(Effect::HandleImageUpload(m));
+        self.out.push(Effect::HandleFileUpload(m));
     }
 
     fn on_usage_request(&mut self, session_id: &str) {

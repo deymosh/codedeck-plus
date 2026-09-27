@@ -1,5 +1,5 @@
-//! Session image attachments — the AES-256-GCM blob crypto and the BUD-01/02
-//! Blossom upload.
+//! Session attachments — the AES-256-GCM blob crypto and the BUD-01/02
+//! Blossom upload, for any kind of file.
 //!
 //! The blob on the server is the ciphertext; the key + iv travel only inside
 //! the NIP-44 encrypted session command that references it. HTTP is a port
@@ -11,19 +11,35 @@ use protocol::crypto::bytes_to_hex;
 use nostr::{EventBuilder, JsonUtil, Kind, PublicKey, Tag, Timestamp};
 use sha2::{Digest, Sha256};
 
+use client_core::image_chunks::IMAGE_CHUNK_BYTES;
+
 use crate::deadline::{remaining_budget, with_deadline, StageError};
 use crate::ports::LocalBoxFuture;
 use crate::signer::IdentitySigner;
 
-/// Blossom server used when the user has not set one.
-pub const DEFAULT_BLOSSOM_SERVER: &str = "https://blossom.descendant.io";
+/// Most relay chunks one send may take when no Blossom server holds the
+/// bytes; a longer run could not finish inside the bridge's assembly window.
+pub const MAX_FALLBACK_CHUNKS: usize = 200;
+/// The most of one file the bridge keeps (its `MAX_UPLOAD_BYTES`).
+pub const MAX_BLOSSOM_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
+
+/// The largest file one send can carry: through a Blossom server, what the
+/// bridge keeps; through the relays alone, what fits in
+/// [`MAX_FALLBACK_CHUNKS`] base64 chunks.
+pub fn max_upload_bytes(blossom: bool) -> u64 {
+    if blossom {
+        MAX_BLOSSOM_UPLOAD_BYTES
+    } else {
+        (MAX_FALLBACK_CHUNKS * IMAGE_CHUNK_BYTES) as u64 / 4 * 3
+    }
+}
 
 /// BUD-02 authorization event kind.
 pub const BLOSSOM_AUTH_KIND: u16 = 24242;
 
-/// Where an uploaded image lives and how to decrypt it.
+/// Where an uploaded file lives and how to decrypt it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncryptedImageRef {
+pub struct EncryptedBlobRef {
     pub url: String,
     /// AES-256 key, 64 hex chars (lower-case).
     pub key: String,
@@ -34,7 +50,7 @@ pub struct EncryptedImageRef {
 // --- crypto -------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncryptedImage {
+pub struct EncryptedBlob {
     pub encrypted: Vec<u8>,
     /// AES-256 key, 64 lower-hex.
     pub key_hex: String,
@@ -50,14 +66,14 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// AES-256-GCM encrypt raw image bytes with a fresh random key + 12-byte nonce.
 /// Output layout (ciphertext ‖ 16-byte tag) matches WebCrypto's `AES-GCM`.
-pub fn encrypt_image(raw: &[u8]) -> EncryptedImage {
+pub fn encrypt_blob(raw: &[u8]) -> EncryptedBlob {
     let key = Aes256Gcm::generate_key(OsRng);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let cipher = Aes256Gcm::new(&key);
     let encrypted = cipher
         .encrypt(&nonce, raw)
         .expect("AES-GCM encrypt of an in-memory buffer never fails");
-    EncryptedImage {
+    EncryptedBlob {
         sha256_hex: sha256_hex(&encrypted),
         encrypted,
         key_hex: bytes_to_hex(&key),
@@ -114,39 +130,37 @@ pub const BLOSSOM_RETRY_FLOOR_MS: u64 = 10_000;
 const RETRYABLE_STATUSES: [u16; 5] = [502, 520, 522, 523, 524];
 const MAX_RETRIES: u32 = 2;
 
+/// The server is the one the user chose; there is no built-in one, since the
+/// server learns who uploads and when.
 pub struct UploadOptions<'a> {
-    pub server: Option<&'a str>,
+    pub server: &'a str,
     pub now_ms: u64,
     pub budget_ms: u64,
 }
 
-impl UploadOptions<'_> {
-    pub fn at(now_ms: u64) -> Self {
+impl<'a> UploadOptions<'a> {
+    pub fn at(server: &'a str, now_ms: u64) -> Self {
         Self {
-            server: None,
+            server,
             now_ms,
             budget_ms: BLOSSOM_TOTAL_BUDGET_MS,
         }
     }
 }
 
-/// Encrypt + upload one image; returns where it lives and its key + iv.
+/// Encrypt + upload one file; returns where it lives and its key + iv.
 /// `Err(StageError)` on
 /// definitive failure (the UI shows it and keeps the pending attachment for a
 /// retry). The BUD-02 auth event is signed by the phone's identity — the
 /// pubkey an allowlisting image server knows.
-pub async fn upload_encrypted_image(
+pub async fn upload_encrypted_blob(
     raw: &[u8],
     signer: &dyn IdentitySigner,
     fetch: &dyn HttpFetch,
     opts: UploadOptions<'_>,
-) -> Result<EncryptedImageRef, StageError> {
-    let server = opts
-        .server
-        .unwrap_or(DEFAULT_BLOSSOM_SERVER)
-        .trim_end_matches('/')
-        .to_string();
-    let enc = encrypt_image(raw);
+) -> Result<EncryptedBlobRef, StageError> {
+    let server = opts.server.trim_end_matches('/').to_string();
+    let enc = encrypt_blob(raw);
 
     let now_sec = opts.now_ms / 1000;
     let author_pk = PublicKey::from_hex(&signer.pubkey_hex()).map_err(|e| StageError::Failed(e.to_string()))?;
@@ -202,7 +216,7 @@ pub async fn upload_encrypted_image(
         };
         match outcome {
             Ok(resp) if (200..300).contains(&resp.status) => {
-                return Ok(EncryptedImageRef {
+                return Ok(EncryptedBlobRef {
                     url: format!("{server}/{}", enc.sha256_hex),
                     key: enc.key_hex,
                     iv: enc.iv_hex,
@@ -251,7 +265,7 @@ mod tests {
     #[test]
     fn aes_gcm_round_trips_and_the_blob_id_hashes_the_ciphertext() {
         let raw = b"\x00\x01\x02\xfa\xfb\xfc some image bytes";
-        let enc = encrypt_image(raw);
+        let enc = encrypt_blob(raw);
         assert_eq!(enc.key_hex.len(), 64);
         assert_eq!(enc.iv_hex.len(), 24);
         assert_ne!(enc.encrypted, raw);
@@ -306,9 +320,8 @@ mod tests {
             statuses: RefCell::new(vec![200]),
         };
 
-        let mut opts = UploadOptions::at(1_700_000_000_000);
-        opts.server = Some("https://blossom.example/");
-        let reference = upload_encrypted_image(raw, &crate::signer::LocalSigner(phone), &fetch, opts)
+        let opts = UploadOptions::at("https://blossom.example/", 1_700_000_000_000);
+        let reference = upload_encrypted_blob(raw, &crate::signer::LocalSigner(phone), &fetch, opts)
             .await
             .unwrap();
 
@@ -351,7 +364,7 @@ mod tests {
         let fetch = HangingFetch { calls: Rc::clone(&calls) };
         let started = tokio::time::Instant::now();
 
-        let r = upload_encrypted_image(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at("https://blossom.example", 0)).await;
 
         assert!(matches!(r, Err(StageError::Timeout { .. })));
         // Attempt 1 hits the 45 s per-attempt cap; attempt 2 gets only what is
@@ -370,7 +383,7 @@ mod tests {
             calls: Rc::clone(&calls),
             statuses: RefCell::new(vec![200, 502]),
         };
-        let r = upload_encrypted_image(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at("https://blossom.example", 0)).await;
         assert!(r.is_ok());
         assert_eq!(calls.borrow().len(), 2);
 
@@ -378,7 +391,7 @@ mod tests {
             calls: Rc::new(RefCell::new(Vec::new())),
             statuses: RefCell::new(vec![403]),
         };
-        let r = upload_encrypted_image(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at("https://blossom.example", 0)).await;
         assert!(matches!(r, Err(StageError::Failed(m)) if m.contains("403")));
     }
 }

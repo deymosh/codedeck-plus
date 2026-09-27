@@ -111,7 +111,7 @@ fun MachineSettingsContent(
     now: Long,
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
-    onOpenPlugins: (agent: String) -> Unit = {},
+    onOpenPlugins: (agent: String) -> Unit,
 ) {
     // The model pickers need each agent's list, and the plugin rows their
     // counts: ask for them on opening.
@@ -387,7 +387,7 @@ private fun MachineRelays(machine: UniffiMachineSummary, connectedRelays: Set<St
 
 /** [MachineSettingsContent] for the machine [pubkey], from the core; closes when the machine goes away. */
 @Composable
-fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit, onOpenPlugins: (agent: String) -> Unit = {}) {
+fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit, onOpenPlugins: (agent: String) -> Unit) {
     val machinesView by core.machines.collectAsState()
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()

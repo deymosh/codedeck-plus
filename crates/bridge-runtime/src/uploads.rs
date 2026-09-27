@@ -1,8 +1,8 @@
-//! Images a phone sends into a session. Two forms:
+//! Files a phone attaches to a session — photos or anything else. Two forms:
 //! - Blossom: the phone uploaded an AES-256-GCM-encrypted blob and sends its
 //!   URL, sha256, key and iv; the bridge downloads it (https only, size
 //!   capped), checks the hash, decrypts it (tag = last 16 bytes);
-//! - chunked: the image arrives as base64 pieces, reassembled here; a
+//! - chunked: the file arrives as base64 pieces, reassembled here; a
 //!   partial upload idle for a minute is dropped.
 //!
 //! Either way the file lands in `<first root>/.codedeck/uploads` — inside
@@ -17,49 +17,77 @@ use std::time::{Duration, Instant};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
-use protocol::commands::{UploadImageBlossomMsg, UploadImageChunkMsg};
+use protocol::commands::{UploadFileBlossomMsg, UploadFileChunkMsg};
 use sha2::{Digest, Sha256};
 
-/// Phone photos are a few MB; the cap keeps a hostile message from making
-/// the bridge buffer arbitrarily much.
-pub const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+/// Enough for photos and ordinary documents; the cap keeps a hostile
+/// message from making the bridge buffer arbitrarily much.
+pub const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 const ASSEMBLY_IDLE: Duration = Duration::from_secs(60);
 const MAX_OPEN_UPLOADS: usize = 16;
-/// The same image with the same words, sent again within this window, is a
+/// The same file with the same words, sent again within this window, is a
 /// resend (the phone could not confirm delivery) — not a new message.
 const DEDUP_WINDOW: Duration = Duration::from_secs(10 * 60);
 const DEDUP_CAP: usize = 200;
 
-/// The session input for a saved image.
-pub fn input_text(user_text: &str, path: &Path) -> String {
+/// The session input for a saved file: an image is to be looked at, any
+/// other file is named for the agent to open as it sees fit.
+pub fn input_text(user_text: &str, path: &Path, mime: &str) -> String {
     let trimmed = user_text.trim();
     let path = path.display();
-    if trimmed.is_empty() {
-        format!("Please examine this image: {path}")
-    } else {
-        format!("{trimmed}\n\n[Attached image: {path} — use the Read tool to view it]")
+    let image = mime.starts_with("image/");
+    match (trimmed.is_empty(), image) {
+        (true, true) => format!("Please examine this image: {path}"),
+        (true, false) => format!("Please look at the attached file: {path}"),
+        (false, true) => format!("{trimmed}\n\n[Attached image: {path} — use the Read tool to view it]"),
+        (false, false) => format!("{trimmed}\n\n[Attached file: {path}]"),
     }
 }
 
-/// Download, verify and decrypt a Blossom image.
-pub async fn fetch_blossom(http: &reqwest::Client, msg: &UploadImageBlossomMsg) -> Result<Vec<u8>, String> {
+/// The extension a file of `mime` usually has, for a name that has none.
+fn extension_for(mime: &str) -> Option<&'static str> {
+    Some(match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "application/pdf" => "pdf",
+        "application/zip" => "zip",
+        "application/json" => "json",
+        "text/plain" => "txt",
+        "text/markdown" => "md",
+        "text/csv" => "csv",
+        _ => return None,
+    })
+}
+
+/// Whether `name` ends in an extension (a short alphanumeric suffix).
+fn has_extension(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && (1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// Download, verify and decrypt a Blossom upload.
+pub async fn fetch_blossom(http: &reqwest::Client, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
     // The URL is phone-supplied: https only, and the body capped regardless
     // of the size the message claims — the bridge is not a general HTTP client.
     if !msg.url.starts_with("https://") {
         return Err("download refused: https required".into());
     }
-    if msg.size_bytes as usize > MAX_IMAGE_BYTES {
-        return Err(format!("download refused: {} bytes is over the {MAX_IMAGE_BYTES}-byte cap", msg.size_bytes));
+    if msg.size_bytes as usize > MAX_UPLOAD_BYTES {
+        return Err(format!("download refused: {} bytes is over the {MAX_UPLOAD_BYTES}-byte cap", msg.size_bytes));
     }
-    log::info!("[Images] Downloading {} ({} bytes)", msg.url, msg.size_bytes);
+    log::info!("[Uploads] Downloading {} ({} bytes)", msg.url, msg.size_bytes);
     let mut res = http.get(&msg.url).timeout(Duration::from_secs(60)).send().await.map_err(|e| format!("download failed: {e}"))?;
     if !res.status().is_success() {
         return Err(format!("download failed: HTTP {}", res.status()));
     }
     let mut body = Vec::new();
     while let Some(chunk) = res.chunk().await.map_err(|e| format!("download failed: {e}"))? {
-        if body.len() + chunk.len() > MAX_IMAGE_BYTES {
-            return Err(format!("download refused: the body is over the {MAX_IMAGE_BYTES}-byte cap"));
+        if body.len() + chunk.len() > MAX_UPLOAD_BYTES {
+            return Err(format!("download refused: the body is over the {MAX_UPLOAD_BYTES}-byte cap"));
         }
         body.extend_from_slice(&chunk);
     }
@@ -92,35 +120,35 @@ struct Upload {
 }
 
 /// Where uploads go, chunk assembly, and the resend guard.
-pub struct Images {
+pub struct Uploads {
     dir: PathBuf,
     uploads: BTreeMap<String, Upload>,
     injected: VecDeque<(String, Instant)>,
 }
 
-/// A finished image: which session gets which message.
+/// A finished upload: which session gets which message.
 pub type Delivery = (String, String);
 
-impl Images {
+impl Uploads {
     pub fn new(first_root: &Path) -> Self {
         Self { dir: first_root.join(".codedeck").join("uploads"), uploads: BTreeMap::new(), injected: VecDeque::new() }
     }
 
     /// Take one chunk; the delivery once every chunk is in.
-    pub fn chunk(&mut self, msg: UploadImageChunkMsg) -> Option<Delivery> {
+    pub fn chunk(&mut self, msg: UploadFileChunkMsg) -> Option<Delivery> {
         self.uploads.retain(|id, u| {
             let fresh = u.last.elapsed() < ASSEMBLY_IDLE;
             if !fresh {
-                log::warn!("[Images] Upload {id} timed out ({}/{} chunks)", u.parts.len(), u.total);
+                log::warn!("[Uploads] Upload {id} timed out ({}/{} chunks)", u.parts.len(), u.total);
             }
             fresh
         });
         if msg.total_chunks == 0 || msg.chunk_index >= msg.total_chunks {
-            log::warn!("[Images] Chunk {} out of range for upload {} — skipped", msg.chunk_index, msg.upload_id);
+            log::warn!("[Uploads] Chunk {} out of range for upload {} — skipped", msg.chunk_index, msg.upload_id);
             return None;
         }
         if !self.uploads.contains_key(&msg.upload_id) && self.uploads.len() >= MAX_OPEN_UPLOADS {
-            log::warn!("[Images] Too many uploads in progress — {} dropped", msg.upload_id);
+            log::warn!("[Uploads] Too many uploads in progress — {} dropped", msg.upload_id);
             return None;
         }
         let upload = self.uploads.entry(msg.upload_id.clone()).or_insert_with(|| Upload {
@@ -138,8 +166,8 @@ impl Images {
             upload.text = msg.text.clone();
         }
         let size: usize = upload.parts.values().map(String::len).sum::<usize>() + msg.base64_data.len();
-        if size > MAX_IMAGE_BYTES * 4 / 3 + 4 {
-            log::warn!("[Images] Upload {} is over the size cap — dropped", msg.upload_id);
+        if size > MAX_UPLOAD_BYTES * 4 / 3 + 4 {
+            log::warn!("[Uploads] Upload {} is over the size cap — dropped", msg.upload_id);
             self.uploads.remove(&msg.upload_id);
             return None;
         }
@@ -152,43 +180,49 @@ impl Images {
         let data = match base64::engine::general_purpose::STANDARD.decode(joined.as_bytes()) {
             Ok(data) => data,
             Err(err) => {
-                log::warn!("[Images] Upload {} is not valid base64: {err}", msg.upload_id);
+                log::warn!("[Uploads] Upload {} is not valid base64: {err}", msg.upload_id);
                 return None;
             }
         };
         self.finish(&upload.session_id, &upload.filename, &upload.mime_type, &upload.text, &data, &format!("upload:{}", msg.upload_id))
     }
 
-    /// Save a decoded image and build its delivery (None: write failed, or a
+    /// Save a decoded file and build its delivery (None: write failed, or a
     /// resend of one already delivered).
     pub fn finish(&mut self, session_id: &str, filename: &str, mime: &str, text: &str, data: &[u8], identity: &str) -> Option<Delivery> {
         let key = format!("{session_id}|{identity}|{}", &hex::encode(Sha256::digest(text.as_bytes()))[..16]);
         self.injected.retain(|(_, at)| at.elapsed() < DEDUP_WINDOW);
         if self.injected.iter().any(|(k, _)| *k == key) {
-            log::info!("[Images] A resend of an image already delivered to {session_id} — ignored");
+            log::info!("[Uploads] A resend of a file already delivered to {session_id} — ignored");
             return None;
         }
         let path = match self.write(filename, mime, data) {
             Ok(path) => path,
             Err(err) => {
-                log::error!("[Images] Could not save an image: {err}");
+                log::error!("[Uploads] Could not save a file: {err}");
                 return None;
             }
         };
-        log::info!("[Images] Saved {} ({} bytes)", path.display(), data.len());
+        log::info!("[Uploads] Saved {} ({} bytes)", path.display(), data.len());
         self.injected.push_back((key, Instant::now()));
         while self.injected.len() > DEDUP_CAP {
             self.injected.pop_front();
         }
-        Some((session_id.to_string(), input_text(text, &path)))
+        Some((session_id.to_string(), input_text(text, &path, mime)))
     }
 
+    /// Saved under a timestamp and the file's own (sanitized) name, which
+    /// keeps its extension; a name without one gets the extension its MIME
+    /// type usually has, when that is known.
     fn write(&self, filename: &str, mime: &str, data: &[u8]) -> std::io::Result<PathBuf> {
         fs::create_dir_all(&self.dir)?;
         let safe: String = filename.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).collect();
-        let ext = if mime == "image/png" { ".png" } else { ".jpg" };
+        let safe = if safe.trim_matches(['.', '_']).is_empty() { "file".to_string() } else { safe };
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-        let name = if safe.to_lowercase().ends_with(ext) { format!("{stamp}-{safe}") } else { format!("{stamp}-{safe}{ext}") };
+        let name = match extension_for(mime) {
+            Some(ext) if !has_extension(&safe) => format!("{stamp}-{safe}.{ext}"),
+            _ => format!("{stamp}-{safe}"),
+        };
         let path = self.dir.join(name);
         fs::write(&path, data)?;
         Ok(path)
@@ -199,8 +233,8 @@ impl Images {
 mod tests {
     use super::*;
 
-    fn chunk(id: &str, i: u64, n: u64, data: &str, text: &str) -> UploadImageChunkMsg {
-        UploadImageChunkMsg {
+    fn chunk(id: &str, i: u64, n: u64, data: &str, text: &str) -> UploadFileChunkMsg {
+        UploadFileChunkMsg {
             version: Default::default(),
             session_id: "s".into(),
             upload_id: id.into(),
@@ -216,11 +250,11 @@ mod tests {
     #[test]
     fn chunks_reassemble_in_any_order_into_a_safe_file_name() {
         let dir = tempfile::tempdir().unwrap();
-        let mut images = Images::new(dir.path());
+        let mut uploads = Uploads::new(dir.path());
         let b64 = base64::engine::general_purpose::STANDARD.encode(b"PNGDATA-123");
         let (a, b) = b64.split_at(6);
-        assert!(images.chunk(chunk("u1", 1, 2, b, "")).is_none());
-        let (session, text) = images.chunk(chunk("u1", 0, 2, a, "what is this?")).unwrap();
+        assert!(uploads.chunk(chunk("u1", 1, 2, b, "")).is_none());
+        let (session, text) = uploads.chunk(chunk("u1", 0, 2, a, "what is this?")).unwrap();
         assert_eq!(session, "s");
         assert!(text.starts_with("what is this?\n\n[Attached image: ") && text.contains("-.._photo_name.png"));
         let path = text.split("image: ").nth(1).unwrap().split(" —").next().unwrap();
@@ -231,18 +265,18 @@ mod tests {
     #[test]
     fn a_resend_of_the_same_image_and_words_is_delivered_once() {
         let dir = tempfile::tempdir().unwrap();
-        let mut images = Images::new(dir.path());
-        assert!(images.finish("s", "a.jpg", "image/jpeg", "hi", b"x", "hash1").is_some());
-        assert!(images.finish("s", "a.jpg", "image/jpeg", "hi", b"x", "hash1").is_none());
-        assert!(images.finish("s", "a.jpg", "image/jpeg", "another question", b"x", "hash1").is_some());
+        let mut uploads = Uploads::new(dir.path());
+        assert!(uploads.finish("s", "a.jpg", "image/jpeg", "hi", b"x", "hash1").is_some());
+        assert!(uploads.finish("s", "a.jpg", "image/jpeg", "hi", b"x", "hash1").is_none());
+        assert!(uploads.finish("s", "a.jpg", "image/jpeg", "another question", b"x", "hash1").is_some());
     }
 
     #[test]
     fn out_of_range_chunks_are_skipped() {
         let dir = tempfile::tempdir().unwrap();
-        let mut images = Images::new(dir.path());
-        assert!(images.chunk(chunk("u", 3, 2, "AA", "")).is_none());
-        assert!(images.uploads.is_empty());
+        let mut uploads = Uploads::new(dir.path());
+        assert!(uploads.chunk(chunk("u", 3, 2, "AA", "")).is_none());
+        assert!(uploads.uploads.is_empty());
     }
 
     #[test]
@@ -258,7 +292,24 @@ mod tests {
     }
 
     #[test]
-    fn plain_images_ask_to_be_examined() {
-        assert_eq!(input_text("  ", Path::new("/w/x.png")), "Please examine this image: /w/x.png");
+    fn an_image_is_to_be_looked_at_and_any_other_file_is_named() {
+        assert_eq!(input_text("  ", Path::new("/w/x.png"), "image/png"), "Please examine this image: /w/x.png");
+        assert_eq!(input_text("", Path::new("/w/a.pdf"), "application/pdf"), "Please look at the attached file: /w/a.pdf");
+        assert_eq!(input_text("summarise", Path::new("/w/a.pdf"), "application/pdf"), "summarise\n\n[Attached file: /w/a.pdf]");
+    }
+
+    #[test]
+    fn a_file_keeps_its_own_extension_and_gets_one_only_when_it_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploads = Uploads::new(dir.path());
+        let name = |filename: &str, mime: &str| {
+            uploads.write(filename, mime, b"x").unwrap().file_name().unwrap().to_string_lossy().split_once('-').unwrap().1.to_string()
+        };
+        assert_eq!(name("report.pdf", "application/pdf"), "report.pdf");
+        assert_eq!(name("notes.md", "application/octet-stream"), "notes.md");
+        assert_eq!(name("scan", "application/pdf"), "scan.pdf");
+        assert_eq!(name("blob", "application/x-unknown"), "blob");
+        assert_eq!(name("photo.heic", "image/heic"), "photo.heic");
+        assert_eq!(name("..", "text/plain"), "file.txt");
     }
 }

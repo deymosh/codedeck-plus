@@ -40,7 +40,7 @@ use client_core::notifications::session_notify_tag;
 use client_core::stores::ui::UiEffect;
 
 use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
-use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionImageSend, UndoTimer};
+use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionFileSend, UndoTimer};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{
     Kv, KvSessionKeyStore, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, SessionKeyStore, TranscriptStore,
@@ -1459,7 +1459,7 @@ impl Loop {
     }
 
     /// Fold a user action into the stores and carry out its effects. Returns
-    /// `reply` unless an image send took it over (see [`Self::spawn_session_image`]).
+    /// `reply` unless an image send took it over (see [`Self::spawn_session_file`]).
     async fn on_intent(
         &mut self,
         intent: Intent,
@@ -1473,18 +1473,18 @@ impl Loop {
             visible: self.conn.visible,
         };
         let result = apply_intent(&mut self.stores, intent, &self.keys, ctx);
-        let session_image_send = result.session_image_send.clone();
+        let session_file_send = result.session_file_send.clone();
         self.interpret_intent(result).await;
-        if let Some(send) = session_image_send {
-            self.spawn_session_image(send, reply.take());
+        if let Some(send) = session_file_send {
+            self.spawn_session_file(send, reply.take());
         }
         reply
     }
 
     /// The ports an image send needs, cloned out of the loop so the send can
     /// run as its own task.
-    fn image_send_ctx(&self, machine: &str) -> ImageSendCtx {
-        ImageSendCtx {
+    fn image_send_ctx(&self, machine: &str) -> FileSendCtx {
+        FileSendCtx {
             signer: Rc::clone(&self.signer),
             cipher: self.cipher_for(machine),
             relays: self.stores.relays_for(machine),
@@ -1493,17 +1493,18 @@ impl Loop {
             clock: Rc::clone(&self.clock),
             entropy: Rc::clone(&self.entropy),
             observer: Rc::clone(&self.observer),
+            blossom_server: Some(self.stores.settings.data.blossom_server.trim().to_string()).filter(|s| !s.is_empty()),
         }
     }
 
-    /// Runs [`ImageSendCtx::send_session_image`] as its own task and answers
+    /// Runs [`FileSendCtx::send_session_file`] as its own task and answers
     /// `reply` when it finishes. An upload can take minutes (Blossom retries,
     /// then a paced chunk fallback); on the loop it would hold up relay
     /// events, reconnects and every view query for that long.
-    fn spawn_session_image(&self, send: SessionImageSend, reply: Option<oneshot::Sender<()>>) {
+    fn spawn_session_file(&self, send: SessionFileSend, reply: Option<oneshot::Sender<()>>) {
         let ctx = self.image_send_ctx(&send.machine);
         tokio::task::spawn_local(async move {
-            ctx.send_session_image(send).await;
+            ctx.send_session_file(send).await;
             if let Some(reply) = reply {
                 let _ = reply.send(());
             }
@@ -1905,9 +1906,9 @@ impl Loop {
 }
 
 /// The ports an image send needs, cloned out of the loop so the send runs
-/// as its own task (see `Loop::spawn_session_image`). It never touches the
+/// as its own task (see `Loop::spawn_session_file`). It never touches the
 /// stores: everything it reports goes through the observer.
-struct ImageSendCtx {
+struct FileSendCtx {
     signer: Rc<dyn IdentitySigner>,
     /// The machine's payload cipher, decided when the send started.
     cipher: Cipher,
@@ -1918,9 +1919,11 @@ struct ImageSendCtx {
     clock: Rc<dyn Clock>,
     entropy: Rc<dyn Entropy>,
     observer: Rc<dyn CoreObserver>,
+    /// The Blossom server the user chose, if any.
+    blossom_server: Option<String>,
 }
 
-impl ImageSendCtx {
+impl FileSendCtx {
     /// Build + sign + publish one command inline (unlike [`Loop::publish_command`],
     /// which is fire-and-forget off the loop) so a caller can branch on the
     /// verdict — the session-image upload needs that to decide Blossom vs.
@@ -1942,22 +1945,23 @@ impl ImageSendCtx {
         }
     }
 
-    /// Session image upload (CDX-029), Blossom-first with a relay-chunk
-    /// fallback — port of the TS `sendSessionImage`. Two INDEPENDENT stages:
+    /// A session attachment, through the user's Blossom server when one is
+    /// set, else (or when it fails) through the relays in chunks. Two
+    /// INDEPENDENT stages:
     /// stage 1 puts the bytes somewhere durable, stage 2 tells the bridge
     /// where they are. Only a stage-1 failure reaches the chunk fallback — once
     /// the bridge is told a URL, the bytes are already on the server, so a
     /// stage-2 rejection is a hard failure, never a reason to re-upload
     /// megabytes over the relays. No optimistic local echo: the image lands in
     /// the transcript only once the bridge injects it, like any other output.
-    async fn send_session_image(
+    async fn send_session_file(
         &self,
-        send: SessionImageSend,
+        send: SessionFileSend,
     ) {
-        let SessionImageSend { machine, session_id, text, image, filename, mime_type } = send;
+        let SessionFileSend { machine, session_id, text, data, filename, mime_type } = send;
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
         use protocol::commands::{
-            UploadImageBlossomMsg, UploadImageChunkMsg, UploadImageMsg, VersionFields,
+            UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg, VersionFields,
         };
 
         /// Overall wall clock for the whole send, all stages together.
@@ -1967,11 +1971,10 @@ impl ImageSendCtx {
         /// chunk) — past that point every further chunk is guaranteed waste,
         /// the tracker is already gone. PAIRED CONSTANT with the bridge side.
         const CHUNK_ASSEMBLY_BUDGET_MS: u64 = 55_000;
-        /// A run that cannot fit this window needs Blossom, not patience.
-        const MAX_FALLBACK_CHUNKS: usize = 200;
+        use crate::attachments::MAX_FALLBACK_CHUNKS;
 
         let started_at = self.clock.now_ms();
-        let size_bytes = image.len() as u64;
+        let size_bytes = data.len() as u64;
 
         let fail = |this: &Self| {
             this.observer.action_failed(ActionFailedKind::PublishRejected);
@@ -1979,16 +1982,19 @@ impl ImageSendCtx {
                 .on_event(CoreEvent::ActionFailed { kind: ActionFailedKind::PublishRejected });
         };
 
-        // --- Stage 1: the bytes ---
-        let opts = crate::attachments::UploadOptions::at(started_at);
-        let uploaded =
-            crate::attachments::upload_encrypted_image(&image, self.signer.as_ref(), self.http.as_ref(), opts)
-                .await;
+        // --- Stage 1: the bytes, on the user's server when they chose one ---
+        let uploaded = match self.blossom_server.as_deref() {
+            Some(server) => {
+                let opts = crate::attachments::UploadOptions::at(server, started_at);
+                Some(crate::attachments::upload_encrypted_blob(&data, self.signer.as_ref(), self.http.as_ref(), opts).await)
+            }
+            None => None,
+        };
 
-        if let Ok(reference) = uploaded {
+        if let Some(Ok(reference)) = uploaded {
             // --- Stage 2: the reference ---
             let hash = client_core::image_chunks::blossom_hash_from_url(&reference.url).to_string();
-            let msg = PhoneToBridge::UploadImage(UploadImageMsg::Blossom(UploadImageBlossomMsg {
+            let msg = PhoneToBridge::UploadFile(UploadFileMsg::Blossom(UploadFileBlossomMsg {
                 version: VersionFields::default(),
                 session_id,
                 hash,
@@ -2011,8 +2017,8 @@ impl ImageSendCtx {
 
         // --- Stage 3: chunk fallback (nobody holds the bytes) ---
         use base64::Engine as _;
-        let base64_image = base64::engine::general_purpose::STANDARD.encode(&image);
-        let chunks = chunk_base64(&base64_image, IMAGE_CHUNK_BYTES);
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+        let chunks = chunk_base64(&base64_data, IMAGE_CHUNK_BYTES);
         if chunks.len() > MAX_FALLBACK_CHUNKS {
             fail(self);
             return;
@@ -2028,7 +2034,7 @@ impl ImageSendCtx {
                 fail(self);
                 return;
             }
-            let msg = PhoneToBridge::UploadImage(UploadImageMsg::Chunk(UploadImageChunkMsg {
+            let msg = PhoneToBridge::UploadFile(UploadFileMsg::Chunk(UploadFileChunkMsg {
                 version: VersionFields::default(),
                 session_id: session_id.clone(),
                 upload_id: upload_id.clone(),
@@ -2096,10 +2102,10 @@ mod tests {
     use crate::transport::mock::{mock_relay, MockRelay};
     use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
     use protocol::codec::encode_bridge_to_phone;
-    use protocol::commands::UploadImageMsg;
+    use protocol::commands::UploadFileMsg;
     use protocol::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
     use crate::stores::LAST_STORED_SEEN_KEY;
-    use crate::intent::SessionImageSend;
+    use crate::intent::SessionFileSend;
     use std::sync::Mutex;
     use tokio::task::LocalSet;
 
@@ -2246,15 +2252,16 @@ mod tests {
                 core.start();
                 eose_all(&mut mock).await;
                 settle().await;
+                core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
 
                 let core2 = core.clone();
                 let upload = tokio::task::spawn_local(async move {
                     core2
-                        .dispatch(Intent::SendSessionImage(SessionImageSend {
+                        .dispatch(Intent::SendSessionFile(SessionFileSend {
                             machine: "m".into(),
                             session_id: "s1".into(),
                             text: String::new(),
-                            image: b"bytes".to_vec(),
+                            data: b"bytes".to_vec(),
                             filename: "a.jpg".into(),
                             mime_type: "image/jpeg".into(),
                         }))
@@ -3197,15 +3204,17 @@ mod tests {
                 eose_all(&mut mock).await;
                 settle().await;
 
+                core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
+
                 let core2 = core.clone();
                 let machine_pubkey = machine.pubkey_hex.clone();
                 let dispatched = tokio::task::spawn_local(async move {
                     core2
-                        .dispatch(Intent::SendSessionImage(SessionImageSend {
+                        .dispatch(Intent::SendSessionFile(SessionFileSend {
                             machine: machine_pubkey,
                             session_id: "s1".into(),
                             text: "look at this".into(),
-                            image: b"png bytes here".to_vec(),
+                            data: b"png bytes here".to_vec(),
                             filename: "photo.png".into(),
                             mime_type: "image/png".into(),
                         }))
@@ -3216,13 +3225,13 @@ mod tests {
                     &mut mock,
                     &phone.pubkey_hex,
                     &machine,
-                    |m| matches!(m, PhoneToBridge::UploadImage(_)),
+                    |m| matches!(m, PhoneToBridge::UploadFile(_)),
                 )
                 .await;
                 dispatched.await.unwrap();
 
                 match msg {
-                    PhoneToBridge::UploadImage(UploadImageMsg::Blossom(m)) => {
+                    PhoneToBridge::UploadFile(UploadFileMsg::Blossom(m)) => {
                         assert_eq!(m.session_id, "s1");
                         assert_eq!(m.text, "look at this");
                         assert_eq!(m.filename, "photo.png");
@@ -3230,6 +3239,61 @@ mod tests {
                         assert!(!m.hash.is_empty());
                     }
                     other => panic!("Blossom succeeded — should not chunk: {other:?}"),
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn with_no_blossom_server_a_file_goes_through_the_relays() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let ports = CorePorts {
+                    http: Rc::new(OkHttp),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                let core2 = core.clone();
+                let machine_pubkey = machine.pubkey_hex.clone();
+                let dispatched = tokio::task::spawn_local(async move {
+                    core2
+                        .dispatch(Intent::SendSessionFile(SessionFileSend {
+                            machine: machine_pubkey,
+                            session_id: "s1".into(),
+                            text: "look at this".into(),
+                            data: b"%PDF-1.7 bytes".to_vec(),
+                            filename: "notes.pdf".into(),
+                            mime_type: "application/pdf".into(),
+                        }))
+                        .await;
+                });
+
+                let msg = find_command_frame(
+                    &mut mock,
+                    &phone.pubkey_hex,
+                    &machine,
+                    |m| matches!(m, PhoneToBridge::UploadFile(_)),
+                )
+                .await;
+                dispatched.await.unwrap();
+
+                // The HTTP port would accept an upload: only the missing
+                // server keeps the file off Blossom.
+                match msg {
+                    PhoneToBridge::UploadFile(UploadFileMsg::Chunk(m)) => {
+                        assert_eq!((m.filename.as_str(), m.mime_type.as_str()), ("notes.pdf", "application/pdf"));
+                        assert_eq!(m.total_chunks, 1);
+                    }
+                    other => panic!("no Blossom server is set: {other:?}"),
                 }
             })
             .await;
@@ -3253,15 +3317,17 @@ mod tests {
                 eose_all(&mut mock).await;
                 settle().await;
 
+                core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
+
                 let core2 = core.clone();
                 let machine_pubkey = machine.pubkey_hex.clone();
                 let dispatched = tokio::task::spawn_local(async move {
                     core2
-                        .dispatch(Intent::SendSessionImage(SessionImageSend {
+                        .dispatch(Intent::SendSessionFile(SessionFileSend {
                             machine: machine_pubkey,
                             session_id: "s1".into(),
                             text: "a caption".into(),
-                            image: b"small image bytes".to_vec(),
+                            data: b"small image bytes".to_vec(),
                             filename: "photo.jpg".into(),
                             mime_type: "image/jpeg".into(),
                         }))
@@ -3284,13 +3350,13 @@ mod tests {
                     &mut mock,
                     &phone.pubkey_hex,
                     &machine,
-                    |m| matches!(m, PhoneToBridge::UploadImage(_)),
+                    |m| matches!(m, PhoneToBridge::UploadFile(_)),
                 )
                 .await;
                 dispatched.await.unwrap();
 
                 match msg {
-                    PhoneToBridge::UploadImage(UploadImageMsg::Chunk(m)) => {
+                    PhoneToBridge::UploadFile(UploadFileMsg::Chunk(m)) => {
                         assert_eq!(m.session_id, "s1");
                         assert_eq!(m.chunk_index, 0);
                         assert_eq!(m.total_chunks, 1); // well under 35 KB

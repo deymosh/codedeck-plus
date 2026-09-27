@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -20,7 +21,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -49,8 +54,8 @@ import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiQuickPrompt
 
 /**
- * The message input: attach, the text, dictation, and a round Send that
- * lights up once there is something to send. One rounded surface, so the
+ * The message input: attach (a photo or any file), the text, dictation,
+ * and a round Send that lights up once there is something to send. One rounded surface, so the
  * controls read as parts of the input rather than a row of buttons. With
  * `onSlash`, an empty input also offers `/`, which starts a command — the
  * key sits on a phone keyboard's second page.
@@ -63,7 +68,8 @@ internal fun Composer(
     canAttach: Boolean,
     uploading: Boolean,
     canSend: Boolean,
-    onAttach: () -> Unit,
+    onAttachPhoto: () -> Unit,
+    onAttachFile: () -> Unit,
     onDictate: () -> Unit,
     onSend: () -> Unit,
     focusRequester: FocusRequester = FocusRequester(),
@@ -86,18 +92,37 @@ internal fun Composer(
         verticalAlignment = Alignment.Bottom,
     ) {
         if (canAttach) {
-            // Dimmed while an upload runs, so the disabled state is visible.
-            IconButton(onClick = onAttach, enabled = !uploading) {
-                Icon(Icons.Outlined.AttachFile, contentDescription = "Attach image", tint = if (uploading) Tokens.TextDim else Tokens.TextMuted)
+            var choosing by remember { mutableStateOf(false) }
+            Box {
+                // Dimmed while an upload runs, so the disabled state is visible.
+                IconButton(onClick = { choosing = true }, enabled = !uploading) {
+                    Icon(Icons.Outlined.AttachFile, contentDescription = "Attach", tint = if (uploading) Tokens.TextDim else Tokens.TextMuted)
+                }
+                DropdownMenu(
+                    expanded = choosing,
+                    onDismissRequest = { choosing = false },
+                    modifier = Modifier.background(Tokens.SurfaceRaised),
+                ) {
+                    AttachChoice("Photo", Icons.Outlined.Image) {
+                        choosing = false
+                        onAttachPhoto()
+                    }
+                    AttachChoice("File", Icons.Outlined.Description) {
+                        choosing = false
+                        onAttachFile()
+                    }
+                }
             }
         } else {
             Box(Modifier.size(Tokens.Space3))
         }
         if (onSlash != null && draft.isEmpty()) {
-            // Narrower than an icon button, so the placeholder keeps its words.
+            // Narrower than an icon button and tucked against the attach
+            // icon, so the placeholder keeps its words.
             Box(
                 Modifier
-                    .size(width = 36.dp, height = 48.dp)
+                    .offset(x = (-6).dp)
+                    .size(width = 30.dp, height = 48.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onSlash)
                     .semantics { contentDescription = "Start a command" },
@@ -145,6 +170,15 @@ internal fun Composer(
             )
         }
     }
+}
+
+@Composable
+private fun AttachChoice(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(label, color = Tokens.Text, fontSize = Tokens.TextMd) },
+        leadingIcon = { Icon(icon, contentDescription = null, tint = Tokens.TextMuted) },
+        onClick = onClick,
+    )
 }
 
 /** The user's quick prompts as pills above the input; a tap puts the text in the draft, never sends. */

@@ -400,7 +400,7 @@ mod tests {
             "type":"sessions","machine":"m","host":"service","sessions":[session()],
             "agents":[agent()],
             "credentials":[{"id":"github_pat","label":"GitHub token","present":false}],
-            "protocolVersion":11,"capabilities":["sync/1","images"],
+            "protocolVersion":11,"capabilities":["sync/1","files"],
             "folders":["a","b"],"roots":["/w"],"removedSessions":["old"],"machineOffline":true
         }));
         match m {

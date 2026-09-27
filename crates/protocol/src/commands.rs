@@ -195,7 +195,7 @@ pub struct CreateFolderMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct UploadImageBlossomMsg {
+pub struct UploadFileBlossomMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub session_id: String,
@@ -212,7 +212,7 @@ pub struct UploadImageBlossomMsg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct UploadImageChunkMsg {
+pub struct UploadFileChunkMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub session_id: String,
@@ -231,9 +231,9 @@ pub struct UploadImageChunkMsg {
 /// `uploadId`/`base64Data`). `untagged` tries each.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(untagged)]
-pub enum UploadImageMsg {
-    Blossom(UploadImageBlossomMsg),
-    Chunk(UploadImageChunkMsg),
+pub enum UploadFileMsg {
+    Blossom(UploadFileBlossomMsg),
+    Chunk(UploadFileChunkMsg),
 }
 
 /// Store or clear credentials. `agent` names the agent they belong to;
@@ -348,7 +348,7 @@ pub enum PhoneToBridge {
     CloseSession(SessionIdMsg),
     Interrupt(SessionIdMsg),
     CreateFolder(CreateFolderMsg),
-    UploadImage(UploadImageMsg),
+    UploadFile(UploadFileMsg),
     UsageRequest(SessionIdMsg),
     GsdRequest(SessionIdMsg),
     ModelsRequest(ModelsRequestMsg),
@@ -407,8 +407,8 @@ mod tests {
         rt(&json!({"type":"close-session","sessionId":"s"}));
         rt(&json!({"type":"interrupt","sessionId":"s"}));
         rt(&json!({"type":"create-folder","path":"a/b","root":"/w","requestId":"r"}));
-        rt(&json!({"type":"upload-image","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":123}));
-        rt(&json!({"type":"upload-image","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"","chunkIndex":0,"totalChunks":2}));
+        rt(&json!({"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":123}));
+        rt(&json!({"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"","chunkIndex":0,"totalChunks":2}));
         rt(&json!({"type":"usage-request","sessionId":"s"}));
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
@@ -424,10 +424,10 @@ mod tests {
 
     #[test]
     fn upload_image_union_disambiguates_by_shape() {
-        let m = rt(&json!({"type":"upload-image","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"t","sizeBytes":1}));
-        assert!(matches!(m, PhoneToBridge::UploadImage(UploadImageMsg::Blossom(_))));
-        let m = rt(&json!({"type":"upload-image","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"t","chunkIndex":1,"totalChunks":4}));
-        assert!(matches!(m, PhoneToBridge::UploadImage(UploadImageMsg::Chunk(_))));
+        let m = rt(&json!({"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"t","sizeBytes":1}));
+        assert!(matches!(m, PhoneToBridge::UploadFile(UploadFileMsg::Blossom(_))));
+        let m = rt(&json!({"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"t","chunkIndex":1,"totalChunks":4}));
+        assert!(matches!(m, PhoneToBridge::UploadFile(UploadFileMsg::Chunk(_))));
     }
 
     #[test]
