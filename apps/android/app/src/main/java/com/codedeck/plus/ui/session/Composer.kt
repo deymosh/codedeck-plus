@@ -25,15 +25,23 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,7 +51,9 @@ import uniffi.client_ffi.UniffiQuickPrompt
 /**
  * The message input: attach, the text, dictation, and a round Send that
  * lights up once there is something to send. One rounded surface, so the
- * controls read as parts of the input rather than a row of buttons.
+ * controls read as parts of the input rather than a row of buttons. With
+ * `onSlash`, an empty input also offers `/`, which starts a command — the
+ * key sits on a phone keyboard's second page.
  */
 @Composable
 internal fun Composer(
@@ -57,8 +67,14 @@ internal fun Composer(
     onDictate: () -> Unit,
     onSend: () -> Unit,
     focusRequester: FocusRequester = FocusRequester(),
+    onSlash: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(26.dp)
+    // The field keeps its own cursor; a draft replaced from outside (a quick
+    // prompt, a picked command, a sent message) puts it at the end, so what
+    // is typed next follows the new text.
+    var field by remember { mutableStateOf(TextFieldValue(draft, TextRange(draft.length))) }
+    val shown = if (field.text == draft) field else TextFieldValue(draft, TextRange(draft.length))
     Row(
         Modifier
             .fillMaxWidth()
@@ -77,6 +93,19 @@ internal fun Composer(
         } else {
             Box(Modifier.size(Tokens.Space3))
         }
+        if (onSlash != null && draft.isEmpty()) {
+            // Narrower than an icon button, so the placeholder keeps its words.
+            Box(
+                Modifier
+                    .size(width = 36.dp, height = 48.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onSlash)
+                    .semantics { contentDescription = "Start a command" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("/", color = Tokens.TextMuted, fontFamily = Tokens.FontMono, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+            }
+        }
         Box(
             Modifier.weight(1f).heightIn(min = 48.dp).padding(vertical = 12.dp),
             contentAlignment = Alignment.CenterStart,
@@ -85,8 +114,11 @@ internal fun Composer(
                 Text(placeholder, color = Tokens.TextDim, fontSize = Tokens.TextLg, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             BasicTextField(
-                value = draft,
-                onValueChange = onDraftChange,
+                value = shown,
+                onValueChange = {
+                    field = it
+                    if (it.text != draft) onDraftChange(it.text)
+                },
                 textStyle = TextStyle(color = Tokens.Text, fontSize = Tokens.TextLg, lineHeight = 22.sp),
                 cursorBrush = SolidColor(Tokens.Text),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),

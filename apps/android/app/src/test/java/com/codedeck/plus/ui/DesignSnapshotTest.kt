@@ -28,6 +28,7 @@ import com.codedeck.plus.ui.session.Composer
 import com.codedeck.plus.ui.session.QuickPromptStrip
 import com.codedeck.plus.ui.session.SessionControlsBar
 import com.codedeck.plus.ui.session.SessionTopBar
+import com.codedeck.plus.ui.session.SlashCommandMenu
 import com.codedeck.plus.ui.session.ThinkingIndicator
 import com.codedeck.plus.ui.theme.CodeDeckTheme
 import com.codedeck.plus.ui.theme.Tokens
@@ -75,8 +76,27 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 contextPercentage = 42.0, contextWindow = 200_000, onEffortSelect = {}, onModeTap = {}, showUsageBadge = true, usage = null,
             )
             Composer(
-                draft = "", onDraftChange = {}, placeholder = "Message the session…", canAttach = true, uploading = false,
-                canSend = false, onAttach = {}, onDictate = {}, onSend = {},
+                draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
+                canSend = false, onAttach = {}, onDictate = {}, onSend = {}, onSlash = {},
+            )
+        }
+    },
+    "session_commands" to {
+        Column(Modifier.background(Tokens.Bg)) {
+            SessionTopBar(title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "idle", onBack = {})
+            TranscriptList(
+                displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
+                syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), dispatch = {},
+                modifier = Modifier.weight(1f),
+            )
+            SlashCommandMenu(DesignFixtures.commands, "co") {}
+            SessionControlsBar(
+                effort = "high", efforts = claude.efforts, modeLabel = "Accept edits", modePending = false, model = "claude-opus-5-5",
+                contextPercentage = 42.0, contextWindow = 200_000, onEffortSelect = {}, onModeTap = {}, showUsageBadge = true, usage = null,
+            )
+            Composer(
+                draft = "/co", onDraftChange = {}, placeholder = "Message the session…", canAttach = true, uploading = false,
+                canSend = true, onAttach = {}, onDictate = {}, onSend = {}, onSlash = {},
             )
         }
     },
@@ -150,6 +170,7 @@ class DesignSnapshotTest {
     @Test fun home() = paparazzi.page("home")
     @Test fun home_nothing_paired() = paparazzi.page("home_nothing_paired")
     @Test fun session() = paparazzi.page("session")
+    @Test fun session_commands() = paparazzi.page("session_commands")
     @Test fun transcript() = paparazzi.page("transcript")
     @Test fun new_session() = paparazzi.page("new_session")
     @Test fun pairing() = paparazzi.page("pairing")

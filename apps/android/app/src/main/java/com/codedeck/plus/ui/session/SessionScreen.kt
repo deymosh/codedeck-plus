@@ -468,6 +468,17 @@ fun SessionScreen(
         if (supportsUsage) core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
     }
 
+    // Slash commands: the menu opens while the draft is a bare `/name` (not
+    // while it answers a question), and every opening asks the bridge
+    // again — the list changes as plugins and skills come and go, and a
+    // phone that never types `/` never asks.
+    val supportsCommands = agent?.supportsCommands == true
+    val commandQuery = if (supportsCommands && activeQuestion == null) slashQuery(draft) else null
+    val commandMenuOpen = commandQuery != null
+    LaunchedEffect(machine, sessionId, commandMenuOpen) {
+        if (commandMenuOpen) core.dispatch(UniffiIntent.RequestCommands(machine = machine, sessionId = sessionId))
+    }
+
     // --- Outbox: the "send failed" bar shows this session's oldest failed
     // item; Retry re-publishes it (the transcript's per-row Retry covers the
     // rest).
@@ -594,8 +605,17 @@ fun SessionScreen(
             )
         }
 
-        // Quick prompts (none: no strip); a tap puts the prompt in the draft.
-        QuickPromptStrip(quickPromptsView?.prompts.orEmpty(), ::insertPrompt)
+        // The command menu takes the quick prompts' place while it is open;
+        // a pick leaves `/name ` in the draft for its arguments.
+        if (commandQuery != null) {
+            SlashCommandMenu(session?.commands, commandQuery) { command ->
+                draft = "/${command.name} "
+                inputFocus.requestFocus()
+            }
+        } else {
+            // Quick prompts (none: no strip); a tap puts the prompt in the draft.
+            QuickPromptStrip(quickPromptsView?.prompts.orEmpty(), ::insertPrompt)
+        }
 
         // A failed send sits right above the controls, the same way the
         // running turn's line does, with the message it failed to deliver.
@@ -625,7 +645,12 @@ fun SessionScreen(
         Composer(
             draft = draft,
             onDraftChange = { draft = it },
-            placeholder = if (activeQuestion != null) "Type your answer…" else "Message the session…",
+            // Shorter beside the `/` button, which would otherwise clip it.
+            placeholder = when {
+                activeQuestion != null -> "Type your answer…"
+                supportsCommands -> "Message…"
+                else -> "Message the session…"
+            },
             canAttach = canAttachImages,
             uploading = uploading,
             canSend = (draft.isNotBlank() || pendingImage != null) && !uploading,
@@ -633,6 +658,14 @@ fun SessionScreen(
             onDictate = ::dictate,
             onSend = ::send,
             focusRequester = inputFocus,
+            onSlash = if (supportsCommands && activeQuestion == null) {
+                {
+                    draft = "/"
+                    inputFocus.requestFocus()
+                }
+            } else {
+                null
+            },
         )
     }
 }

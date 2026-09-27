@@ -61,7 +61,7 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, gsd, interrupt}` and `credentials[]` status. Phones build every
+providers, gsd, interrupt, commands}` and `credentials[]` status. Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -202,6 +202,17 @@ wrong provider).
 An empty list always comes with an `error` saying why, so the phone can tell
 "no answer yet" from a lost message. Models are correlated by the machine that
 sent them (the event author), never by a payload field.
+
+### `commands`
+
+`commands-request {sessionId}` → `commands {sessionId, commands[], error?}`,
+for agents with `supports.commands`. Each command is `{name, description?,
+argumentHint?}`; `name` has no leading slash and may be namespaced
+(`plugin:command`). The bridge asks the agent every time — a session's
+commands change while it runs (plugins, skills) — and answers an unknown,
+stopped or command-less session at once. As with `models`, an empty list
+always carries an `error`. A command runs by sending `/name args` as plain
+`input`; the agent's driver turns it into whatever its agent needs.
 
 ### Pairing
 
@@ -344,6 +355,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `set-option {sessionId, option, value}` | `ack` when applied, else `error` |
 | `list-models {agent}` | `models {models, defaultModel?}` |
 | `get-usage {sessionId}` | `usage {usage?}` |
+| `list-commands {sessionId}` | `commands {commands}` |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds
