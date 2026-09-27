@@ -98,6 +98,32 @@ class Notifier(private val context: Context) : UniffiNotifier {
         NotificationManagerCompat.from(context).cancel(tag, idFor(tag))
     }
 
+    /** Tells the user the signer app is waiting for their approval while
+     *  the app is in the background; a tap opens the app, which hands the
+     *  request to the signer. */
+    fun signerApprovalNeeded() {
+        if (!hasPermission()) return
+        val open = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
+        val notification = NotificationCompat.Builder(context, CHANNEL_ACTION.id)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Approve in your signer")
+            .setContentText("Your signer app needs you to approve a request.")
+            .setAutoCancel(true)
+            .setPriority(CHANNEL_ACTION.priority)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    idFor(SIGNER_TAG),
+                    open,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .build()
+        NotificationManagerCompat.from(context).notify(SIGNER_TAG, idFor(SIGNER_TAG), notification)
+    }
+
+    fun cancelSignerApproval() = cancel(SIGNER_TAG)
+
     private fun idFor(tag: String): Int = tag.hashCode()
 
     /** The notification's tap target, or null for a tag that isn't
@@ -154,5 +180,6 @@ class Notifier(private val context: Context) : UniffiNotifier {
 
     companion object {
         private const val DEFAULT_TAG = "codedeck-default"
+        private const val SIGNER_TAG = "codedeck-signer-approval"
     }
 }

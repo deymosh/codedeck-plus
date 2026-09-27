@@ -35,7 +35,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import uniffi.client_ffi.localIdentitySigner
 import uniffi.client_ffi.persistedRelays
 import uniffi.client_ffi.persistedTorProxyEnabled
 
@@ -133,7 +132,12 @@ class StayConnectedService : Service() {
         instance = this
         connectivity = Connectivity(applicationContext)
         scope.launch(Dispatchers.IO) {
-            val core = openCore()
+            // Only started once a login exists (MainActivity); an OS restart
+            // after the user lost theirs has nothing to run.
+            val core = openCore() ?: run {
+                withContext(Dispatchers.Main) { stopSelf() }
+                return@launch
+            }
             val keep = synchronized(coreLock) {
                 if (!destroyed) _core.value = core
                 !destroyed
@@ -152,11 +156,12 @@ class StayConnectedService : Service() {
         }
     }
 
-    /** Blocking: reads the persisted settings and opens the core. */
-    private fun openCore(): CoreHost {
-        val aead = keystoreAead(applicationContext)
-        val identity = localIdentitySigner(readOrCreateIdentitySecretHex(aead, identityFile(applicationContext)))
-        val sessionKeys = KeystoreSessionKeyStore(aead, sessionKeysFile(applicationContext))
+    /** Blocking: reads the login and the persisted settings and opens the
+     *  core; `null` without a usable login. */
+    private fun openCore(): CoreHost? {
+        val login = LoginStore(applicationContext).load() ?: return null
+        val vault = KeyVault(applicationContext)
+        val identity = identitySignerFor(applicationContext, login, vault) ?: return null
         val notifier = Notifier(applicationContext)
         // `Core::spawn` dials its WebSocket transport from the constructor's
         // `relays` argument alone -- it never falls back to whatever it
@@ -173,7 +178,7 @@ class StayConnectedService : Service() {
         return CoreHost(
             relays = relays,
             identity = identity,
-            sessionKeys = sessionKeys,
+            sessionKeys = vault.sessionKeyStore(),
             notifier = notifier,
             dbPath = dbPath,
             // Orbot's SOCKS5 default -- sent unconditionally, same as

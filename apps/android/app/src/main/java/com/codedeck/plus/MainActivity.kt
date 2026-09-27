@@ -1,6 +1,7 @@
 package com.codedeck.plus
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -28,13 +29,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.platform.KeyVault
+import com.codedeck.plus.platform.Login
+import com.codedeck.plus.platform.LoginStore
+import com.codedeck.plus.platform.Notifier
+import com.codedeck.plus.platform.SignerAppInfo
+import com.codedeck.plus.platform.SignerIntents
 import com.codedeck.plus.platform.StayConnectedService
+import com.codedeck.plus.platform.freshSecretHex
+import com.codedeck.plus.platform.getPublicKeyIntent
+import com.codedeck.plus.platform.installedSignerApps
+import com.codedeck.plus.platform.signerAnswerOf
 import com.codedeck.plus.ui.OpenSessionRequest
 import com.codedeck.plus.ui.Shell
+import com.codedeck.plus.ui.screens.WelcomeBusy
+import com.codedeck.plus.ui.screens.WelcomeScreen
 import com.codedeck.plus.ui.theme.CodeDeckTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +58,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uniffi.client_ffi.pubkeyHexOf
+import uniffi.client_ffi.secretHexOf
 
 /**
  * Holds the [CoreHost] reference handed back once [MainActivity] binds to
@@ -64,6 +83,13 @@ class MainViewModel : ViewModel() {
     private val _openRequest = MutableStateFlow<OpenSessionRequest?>(null)
     val openRequest: StateFlow<OpenSessionRequest?> = _openRequest.asStateFlow()
 
+    /** Whether a login exists; until one does, the welcome screen shows and
+     *  no core runs. */
+    val loggedIn = MutableStateFlow<Boolean?>(null)
+    val welcomeBusy = MutableStateFlow<WelcomeBusy?>(null)
+    val welcomeError = MutableStateFlow<String?>(null)
+    val signers = MutableStateFlow<List<SignerAppInfo>>(emptyList())
+
     fun attach(core: CoreHost) {
         _core.value = core
     }
@@ -82,6 +108,33 @@ class MainActivity : ComponentActivity() {
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* no-op either way — Notifier.notify() re-checks itself before every post */ }
+
+    /** Runs the core's signer requests that need the signer app's activity. */
+    private val signerRequest =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val request = SignerIntents.inFlight ?: return@registerForActivityResult
+            SignerIntents.inFlight = null
+            SignerIntents.finish(request, signerAnswerOf(result.resultCode, result.data))
+        }
+
+    /** The welcome screen's `get_public_key` round trip. */
+    private val publicKeyRequest =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val chosen = (viewModel.welcomeBusy.value as? WelcomeBusy.Signer)?.packageName
+                ?: return@registerForActivityResult
+            val answer = signerAnswerOf(result.resultCode, result.data)
+            val pubkey = answer?.takeUnless { it.rejected }?.result?.let { pubkeyHexOf(it) }
+            if (pubkey == null) {
+                viewModel.welcomeBusy.value = null
+                viewModel.welcomeError.value = "The signer app did not share a key."
+                return@registerForActivityResult
+            }
+            val packageName = result.data?.getStringExtra("package")?.takeIf { it.isNotBlank() } ?: chosen
+            logIn(Login.SignerApp(packageName, pubkey)) { vault -> vault.clearIdentity() }
+        }
+
+    /** Whether this activity is bound to the service. */
+    private var bound = false
 
     /** Waits for the bound service's core to finish opening (the spinner
      *  shows meanwhile); cancelled with the binding. */
@@ -122,7 +175,10 @@ class MainActivity : ComponentActivity() {
         // service hosts the CoreHost the whole app runs on, so it must
         // exist whenever the app does. It reconciles its own foreground
         // state against the setting (see StayConnectedService).
-        ContextCompat.startForegroundService(this, Intent(this, StayConnectedService::class.java))
+        val login = LoginStore(this).load()
+        viewModel.loggedIn.value = login != null
+        if (login != null) startCore()
+        runSignerRequests()
         setContent {
             CodeDeckTheme {
                 Surface(
@@ -132,8 +188,21 @@ class MainActivity : ComponentActivity() {
                         .imePadding(),
                 ) {
                     val core by viewModel.core.collectAsState()
+                    val loggedIn by viewModel.loggedIn.collectAsState()
                     val current = core
-                    if (current != null) {
+                    if (loggedIn == false) {
+                        val signers by viewModel.signers.collectAsState()
+                        val busy by viewModel.welcomeBusy.collectAsState()
+                        val error by viewModel.welcomeError.collectAsState()
+                        WelcomeScreen(
+                            signers = signers,
+                            busy = busy,
+                            error = error,
+                            onUseSigner = ::useSigner,
+                            onCreateKey = { logIn(Login.OnDevice) { vault -> vault.setIdentity(freshSecretHex()) } },
+                            onImportKey = ::importKey,
+                        )
+                    } else if (current != null) {
                         // Density and fontScale multiply together so dp spacing
                         // and sp text scale as one, like the TSX multiplier.
                         val settings by current.settings.collectAsState()
@@ -161,13 +230,103 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        bindService(Intent(this, StayConnectedService::class.java), connection, Context.BIND_AUTO_CREATE)
+        SignerIntents.visible = true
+        Notifier(this).cancelSignerApproval()
+        if (viewModel.loggedIn.value == true) {
+            bind()
+        } else {
+            // Refreshed on every return: the user may have just installed one.
+            viewModel.signers.value = installedSignerApps(this)
+        }
     }
 
     override fun onStop() {
+        SignerIntents.visible = false
         attachJob?.cancel()
-        unbindService(connection)
+        if (bound) {
+            unbindService(connection)
+            bound = false
+        }
         super.onStop()
+    }
+
+    private fun bind() {
+        if (!bound) {
+            bound = bindService(Intent(this, StayConnectedService::class.java), connection, Context.BIND_AUTO_CREATE)
+        }
+    }
+
+    /** Starts the service that owns the core; only once a login exists. */
+    private fun startCore() {
+        // Launched unconditionally of the "stay connected" setting: this
+        // service hosts the CoreHost the whole app runs on, so it must
+        // exist whenever the app does. It reconciles its own foreground
+        // state against the setting (see StayConnectedService).
+        ContextCompat.startForegroundService(this, Intent(this, StayConnectedService::class.java))
+    }
+
+    /** Hands the core's queued signer requests to the signer app, one at a
+     *  time, while this activity is visible. */
+    private fun runSignerRequests() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                SignerIntents.next.collect { request ->
+                    if (request == null || SignerIntents.inFlight != null) return@collect
+                    SignerIntents.inFlight = request
+                    try {
+                        signerRequest.launch(request.intent)
+                    } catch (e: ActivityNotFoundException) {
+                        SignerIntents.inFlight = null
+                        SignerIntents.finish(request, null)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun useSigner(signer: SignerAppInfo) {
+        viewModel.welcomeError.value = null
+        viewModel.welcomeBusy.value = WelcomeBusy.Signer(signer.packageName)
+        try {
+            publicKeyRequest.launch(getPublicKeyIntent(signer.packageName))
+        } catch (e: ActivityNotFoundException) {
+            viewModel.welcomeBusy.value = null
+            viewModel.welcomeError.value = "Could not open ${signer.label}."
+        }
+    }
+
+    private fun importKey(input: String) {
+        val secret = secretHexOf(input)
+        if (secret == null) {
+            viewModel.welcomeError.value = "That is not an nsec or a hex secret key."
+            return
+        }
+        logIn(Login.OnDevice) { vault -> vault.setIdentity(secret) }
+    }
+
+    /** Store `login` (after `prepare` set up its keys, off the main thread),
+     *  give it a fresh session key, and start the core. */
+    private fun logIn(login: Login, prepare: (KeyVault) -> Unit) {
+        viewModel.welcomeError.value = null
+        if (viewModel.welcomeBusy.value == null) viewModel.welcomeBusy.value = WelcomeBusy.Key
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val vault = KeyVault(applicationContext)
+                    prepare(vault)
+                    vault.resetSession()
+                    LoginStore(applicationContext).save(login)
+                }.isSuccess
+            }
+            viewModel.welcomeBusy.value = null
+            if (!ok) {
+                viewModel.welcomeError.value = "Could not store the key on this device."
+                return@launch
+            }
+            viewModel.loggedIn.value = true
+            startCore()
+            bind()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
