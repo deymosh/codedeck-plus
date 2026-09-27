@@ -126,18 +126,12 @@ fun Shell(
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
-    // First run (no machines paired) starts on pairing. Waits for the first
-    // real `MachinesView` fetch (`machinesView != null`) rather than deciding
-    // off the empty pre-hydration list, so a phone that DOES have paired
-    // machines never flashes the pairing screen while `CoreHost.start()`'s
-    // initial fetch is still in flight.
-    var pairingAutoOpenDecided by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(machinesView) {
-        if (!pairingAutoOpenDecided && machinesView != null) {
-            pairingAutoOpenDecided = true
-            if (machines.isEmpty()) screen = Screen.Pairing
-        }
-    }
+    // The app always starts on the sessions list, paired or not: pairing
+    // opens only when the user asks for it (the list's pair button, its empty
+    // state) or a pairing link is in progress. Guessing "first run" from an
+    // empty machine list misfired whenever the list read empty for a moment
+    // at startup, dropping a paired phone onto the pairing screen.
+    //
     // A deep link (`codedeck://pair…`) can stage or begin a pair from
     // anywhere in the app — surface it regardless of what's currently open.
     // Only a pair in progress counts: the core outlives this activity, so a
