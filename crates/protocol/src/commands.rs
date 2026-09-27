@@ -259,6 +259,10 @@ pub struct PairRequestMsg {
 pub struct SessionKeyGrant {
     /// The session key's public half, lowercase hex.
     pub pubkey_hex: String,
+    /// The one bridge this grant is for (its pubkey, lowercase hex). A
+    /// bridge refuses a grant naming another, so a grant cannot be replayed
+    /// to a different bridge.
+    pub bridge_pubkey_hex: String,
     /// When the grant lapses, seconds since the Unix epoch. At most
     /// [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead; the phone grants a new key
     /// before this one lapses.
@@ -381,9 +385,9 @@ mod tests {
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
-        rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","expiresAt":1800000000}}));
+        rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"type":"provider-profiles-request"}));
-        rt(&json!({"type":"session-key","sessionKey":{"pubkeyHex":"bb","expiresAt":1800000000}}));
+        rt(&json!({"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
     }
 
     #[test]

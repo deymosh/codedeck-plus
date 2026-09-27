@@ -710,7 +710,7 @@ pub fn apply_pairing_effects(
             }
             PairingEffect::SendPairRequest { to, label, token } => {
                 out.sends.push(Send {
-                    machine: to,
+                    machine: to.clone(),
                     msg: PhoneToBridge::PairRequest(PairRequestMsg {
                         version: VersionFields::default(),
                         npub: keys.identity_npub.clone(),
@@ -719,6 +719,7 @@ pub fn apply_pairing_effects(
                         token,
                         session_key: Some(SessionKeyGrant {
                             pubkey_hex: keys.session_pubkey_hex.clone(),
+                            bridge_pubkey_hex: to,
                             expires_at: grant_expiry(now),
                         }),
                     }),

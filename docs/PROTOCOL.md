@@ -212,8 +212,10 @@ the pairing; the `pair-ack` is then already encrypted to that key.
 
 A phone whose identity key lives in an external signer (NIP-55) should not
 ask it to decrypt every message. It grants a local key, once:
-`session-key {sessionKey: {pubkeyHex, expiresAt}}` (or `sessionKey` on its
-`pair-request`). A session key only ever keys NIP-44 payloads; it never
+`session-key {sessionKey: {pubkeyHex, bridgePubkeyHex, expiresAt}}` (or
+`sessionKey` on its `pair-request`). `bridgePubkeyHex` names the one bridge
+the grant is for; a bridge refuses a grant naming another, so a grant one
+bridge saw cannot be replayed to a second. A session key only ever keys NIP-44 payloads; it never
 signs. Every event keeps the same parties — the phone signs everything it
 publishes (commands, grants, relay AUTH, image-server auth) with its
 identity, and the bridge `p`-tags everything to the identity — so allowlists

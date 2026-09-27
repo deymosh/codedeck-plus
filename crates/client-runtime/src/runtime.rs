@@ -1093,7 +1093,11 @@ impl Loop {
             machine.to_string(),
             PhoneToBridge::SessionKey(SessionKeyMsg {
                 version: Default::default(),
-                session_key: SessionKeyGrant { pubkey_hex: self.keys.session_pubkey_hex.clone(), expires_at },
+                session_key: SessionKeyGrant {
+                    pubkey_hex: self.keys.session_pubkey_hex.clone(),
+                    bridge_pubkey_hex: machine.to_string(),
+                    expires_at,
+                },
             }),
             None,
         );

@@ -13,14 +13,15 @@ use support::*;
 const NOW_SECS: u64 = T0 / 1000;
 const DAY: u64 = 24 * 3600;
 
-fn grant_msg(key: &str, expires_at: u64) -> serde_json::Value {
-    json!({"type":"session-key","sessionKey":{"pubkeyHex":key,"expiresAt":expires_at}})
+fn grant_msg(bridge: &str, key: &str, expires_at: u64) -> serde_json::Value {
+    json!({"type":"session-key","sessionKey":{"pubkeyHex":key,"bridgePubkeyHex":bridge,"expiresAt":expires_at}})
 }
 
 /// The paired phone grants `key`; returns the effects.
 fn grant(rig: &mut Rig, key: &Keypair, expires_at: u64) -> Vec<Effect> {
     rig.take();
-    rig.send(grant_msg(&key.pubkey_hex, expires_at));
+    let bridge = rig.bridge.pubkey_hex.clone();
+    rig.send(grant_msg(&bridge, &key.pubkey_hex, expires_at));
     rig.take()
 }
 
@@ -74,7 +75,8 @@ fn an_event_signed_by_the_session_key_is_not_heard() {
     grant(&mut rig, &key, NOW_SECS + DAY);
     rig.phone_event(&key, json!({"type":"refresh-sessions"}), Via::Commands);
     assert!(heartbeats(&rig.take()).is_empty());
-    rig.phone_event(&key, grant_msg(&generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Commands);
+    let bridge = rig.bridge.pubkey_hex.clone();
+    rig.phone_event(&key, grant_msg(&bridge, &generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Commands);
     assert_eq!(rig.engine.paired_phones()[0].session_keys.len(), 1, "a key cannot grant a key");
 }
 
@@ -99,11 +101,21 @@ fn bad_grants_are_refused() {
         ("the bridge's own key", rig.bridge.pubkey_hex.clone(), NOW_SECS + DAY),
         ("its own identity", rig.phone.pubkey_hex.clone(), NOW_SECS + DAY),
     ];
+    let bridge = rig.bridge.pubkey_hex.clone();
     for (why, key, expires_at) in cases {
-        rig.send(grant_msg(&key, expires_at));
+        rig.send(grant_msg(&bridge, &key, expires_at));
         rig.take();
         assert!(rig.engine.paired_phones()[0].session_keys.is_empty(), "{why}: refused");
     }
+}
+
+#[test]
+fn a_grant_for_another_bridge_is_refused() {
+    let mut rig = Rig::new();
+    let other_bridge = generate_keypair();
+    rig.send(grant_msg(&other_bridge.pubkey_hex, &generate_keypair().pubkey_hex, NOW_SECS + DAY));
+    rig.take();
+    assert!(rig.engine.paired_phones()[0].session_keys.is_empty());
 }
 
 #[test]
@@ -123,12 +135,13 @@ fn a_key_belongs_to_one_phone() {
         rig.phone_event(phone, json!({"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":token}), Via::Pairing);
     }
     let b_key = generate_keypair();
-    rig.phone_event(&b, grant_msg(&b_key.pubkey_hex, NOW_SECS + DAY), Via::Commands);
+    let bridge = rig.bridge.pubkey_hex.clone();
+    rig.phone_event(&b, grant_msg(&bridge, &b_key.pubkey_hex, NOW_SECS + DAY), Via::Commands);
     rig.take();
 
     // A names B's identity, then B's session key, as its own session key.
     for key in [&b.pubkey_hex, &b_key.pubkey_hex] {
-        rig.phone_event(&a, grant_msg(key, NOW_SECS + DAY), Via::Commands);
+        rig.phone_event(&a, grant_msg(&bridge, key, NOW_SECS + DAY), Via::Commands);
         rig.take();
     }
     let phones = rig.engine.paired_phones();
@@ -193,7 +206,7 @@ fn a_pair_request_can_grant_the_first_key() {
     let (phone, key) = (generate_keypair(), generate_keypair());
     let req = json!({
         "type":"pair-request","npub":"n","pubkeyHex":"x","label":"Pixel","token":token,
-        "sessionKey":{"pubkeyHex":key.pubkey_hex,"expiresAt":NOW_SECS + DAY}
+        "sessionKey":{"pubkeyHex":key.pubkey_hex,"bridgePubkeyHex":rig.bridge.pubkey_hex,"expiresAt":NOW_SECS + DAY}
     });
     rig.phone_event(&phone, req, Via::Pairing);
     let effects = rig.take();
