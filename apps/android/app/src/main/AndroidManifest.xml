@@ -19,6 +19,15 @@
         android:name="android.hardware.camera.any"
         android:required="false" />
 
+    <!-- NIP-55 signer apps: listing them, starting their activity, and
+         reaching their content provider all need them visible (Android 11+). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="nostrsigner" />
+        </intent>
+    </queries>
+
     <!-- No backup or device transfer: see res/xml/data_extraction_rules.xml. -->
     <application
         android:allowBackup="false"

@@ -55,9 +55,19 @@ regenerates them and CI fails on drift.
   transcript rows, pairing (QR scan), new session, settings.
 
 Pairing is a QR scan of the bridge's `codedeck://pair?…` URL (see
-[`PROTOCOL.md`](PROTOCOL.md#pairing)). The identity key is generated on the
-phone and stored encrypted with an Android Keystore-backed key, and so are
-the session keys (never in the app's database).
+[`PROTOCOL.md`](PROTOCOL.md#pairing)).
+
+**Login.** A fresh install opens on a welcome screen, and the core does not
+start until the user picks how the identity is held: a NIP-55 signer app
+(the app asks it for the public key and, up front, permission to sign
+kinds 4515, 22242 and 24242 and to NIP-44 encrypt/decrypt), a key created
+on the phone, or an imported `nsec`. A key on the phone is stored
+encrypted with an Android Keystore-backed key (`KeyVault`), and so are the
+session keys; neither is ever in the app's database. With a signer app,
+each request first goes to its content provider, which answers in the
+background once the user let it remember the permission; otherwise the
+signer's own activity asks the user (while the app is in the background, a
+notification says a request is waiting).
 
 **Keys.** The core reaches the identity only through a signer port
 (`IdentitySigner`; over the FFI, `UniffiIdentitySigner`, which Kotlin can
