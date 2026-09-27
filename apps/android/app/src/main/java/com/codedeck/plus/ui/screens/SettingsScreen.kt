@@ -46,6 +46,7 @@ import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
+import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiCredentialsAck
@@ -82,7 +83,7 @@ private fun preferenceOptions(choices: List<UniffiOptionChoice>, stored: String)
  * connection dots, and per-machine credentials/AI-provider blocks.
  */
 @Composable
-fun SettingsScreen(core: CoreHost, onClose: () -> Unit) {
+fun SettingsScreen(core: CoreHost, login: Login? = null, onLogOut: () -> Unit = {}, onClose: () -> Unit) {
     val settings by core.settings.collectAsState()
     val quickPrompts by core.quickPrompts.collectAsState()
     val connection by core.connection.collectAsState()
@@ -110,6 +111,9 @@ fun SettingsScreen(core: CoreHost, onClose: () -> Unit) {
             machines = machinesView?.machines.orEmpty(),
             ui = ui,
             dispatch = ::dispatch,
+            npub = remember { core.identityNpub() },
+            login = login,
+            onLogOut = onLogOut,
             onClose = onClose,
         )
     }
@@ -123,6 +127,9 @@ private fun SettingsBody(
     machines: List<UniffiMachineSummary>,
     ui: UniffiUiView?,
     dispatch: (UniffiIntent) -> Unit,
+    npub: String,
+    login: Login?,
+    onLogOut: () -> Unit,
     onClose: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize()) {
@@ -545,6 +552,12 @@ private fun SettingsBody(
                             }
                         }
                     }
+                }
+
+                // --- Account ---
+                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                    SectionHeading("Account")
+                    AccountSection(npub = npub, login = login, onLogOut = onLogOut)
                 }
 
                 Text(

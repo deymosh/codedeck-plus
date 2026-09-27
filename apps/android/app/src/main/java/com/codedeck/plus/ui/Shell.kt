@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.screens.NewSessionScreen
+import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
@@ -97,6 +98,8 @@ fun Shell(
     core: CoreHost,
     openRequest: OpenSessionRequest? = null,
     onOpenRequestHandled: () -> Unit = {},
+    login: Login? = null,
+    onLogOut: () -> Unit = {},
 ) {
     val machinesView by core.machines.collectAsState()
     val connection by core.connection.collectAsState()
@@ -196,7 +199,7 @@ fun Shell(
             // page's own close/back control; Back on the list leaves the app.
             if (screen != Screen.Sessions) BackHandler { screen = Screen.Sessions }
             when (val current = screen) {
-                Screen.Settings -> SettingsScreen(core, onClose = { screen = Screen.Sessions })
+                Screen.Settings -> SettingsScreen(core, login = login, onLogOut = onLogOut, onClose = { screen = Screen.Sessions })
                 Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
                 is Screen.NewSession -> NewSessionScreen(
                     core,
