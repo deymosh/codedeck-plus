@@ -1170,6 +1170,18 @@ impl Loop {
                 });
             }
             Ingested::DecodeFailed => {
+                // Why, so a device log can tell an old or foreign payload from
+                // a wire mismatch. The error is the decoder's (field names,
+                // at most a short quoted value), cut short; never the payload.
+                if let Some(record) = self.api.diagnostics().invalid.last() {
+                    let error: String = record.error.chars().take(160).collect();
+                    log::warn!(
+                        "undecodable message from {} (kind {}, event {}): {error}",
+                        record.machine.get(..8).unwrap_or(&record.machine),
+                        record.kind,
+                        record.event_id.get(..8).unwrap_or(&record.event_id),
+                    );
+                }
                 self.observer.action_failed(ActionFailedKind::DecodeFailed);
                 self.emit(CoreEvent::ActionFailed {
                     kind: ActionFailedKind::DecodeFailed,
