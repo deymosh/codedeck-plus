@@ -110,8 +110,10 @@ pub struct SyncAckMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub sync_id: String,
-    #[specta(type = (specta_typescript::Number, specta_typescript::Number))]
-    pub range: SeqRange,
+    /// The chunks this ack covers, each exactly a `sync-chunk`'s `range`.
+    /// One ack may cover several chunks, so a phone can batch them.
+    #[specta(type = Vec<(specta_typescript::Number, specta_typescript::Number)>)]
+    pub ranges: Vec<SeqRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -373,7 +375,7 @@ mod tests {
         rt(&json!({"type":"set-option","sessionId":"s","option":"mode","value":"plan"}));
         rt(&json!({"type":"set-option","sessionId":"s","option":"model","value":"anthropic/claude-x"}));
         rt(&json!({"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]}));
-        rt(&json!({"type":"sync-ack","syncId":"y","range":[1,50]}));
+        rt(&json!({"type":"sync-ack","syncId":"y","ranges":[[1,50],[51,100]]}));
         rt(&json!({"type":"create-session","agent":"opencode","effort":"high","cwd":"proj","createCwd":true,"providerId":"p"}));
         rt(&json!({"type":"refresh-sessions"}));
         rt(&json!({"type":"close-session","sessionId":"s"}));

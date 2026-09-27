@@ -295,7 +295,7 @@ impl<'a> Router<'a> {
                     PhoneToBridge::SyncAck(SyncAckMsg {
                         version: VersionFields::default(),
                         sync_id: m.sync_id.clone(),
-                        range: m.range,
+                        ranges: vec![m.range],
                     }),
                 );
             }
@@ -772,7 +772,7 @@ pub(crate) fn sync_effect_to_cmd(effect: SyncEffect) -> PhoneToBridge {
         SyncEffect::SendSyncAck { sync_id, range } => PhoneToBridge::SyncAck(SyncAckMsg {
             version: VersionFields::default(),
             sync_id,
-            range,
+            ranges: vec![range],
         }),
     }
 }
@@ -975,7 +975,7 @@ mod tests {
                 msg: PhoneToBridge::SyncAck(SyncAckMsg {
                     version: VersionFields::default(),
                     sync_id: "sy1".into(),
-                    range: (1, 2),
+                    ranges: vec![(1, 2)],
                 }),
             }]
         );

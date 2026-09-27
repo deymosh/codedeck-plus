@@ -96,7 +96,7 @@ impl Engine {
                     seq_high,
                 );
             }
-            PhoneToBridge::SyncAck(m) => self.sync.ack(&mut self.out, &m.sync_id, m.range),
+            PhoneToBridge::SyncAck(m) => self.sync.ack(&mut self.out, &m.sync_id, &m.ranges),
             PhoneToBridge::CreateSession(m) => self.on_create_session(m),
             PhoneToBridge::RefreshSessions(_) => self.list_dirty = true,
             PhoneToBridge::CloseSession(m) => self.on_close_session(&m.session_id),

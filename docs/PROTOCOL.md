@@ -129,8 +129,15 @@ question.
 ### Transcript sync
 
 `sync-request {sessionId, haveRanges}` → `sync-begin {syncId, seqHigh, ranges}`
-→ `sync-chunk {range, entries}` (each acked with `sync-ack {syncId, range}`)
+→ `sync-chunk {range, entries}` (acked with `sync-ack {syncId, ranges}`)
 → `sync-end {deliveredRanges}`.
+
+- Each range in a `sync-ack` is exactly one chunk's `range`. One ack may
+  cover several chunks: every command is signed by the phone's identity,
+  possibly in an external signer, so a phone batches the acks for chunks
+  that arrive together instead of signing one per chunk. The bridge waits
+  10 s for acks before resending a pass, so a batch must go out well
+  within that.
 
 - Seqs are assigned once by the bridge and are **never renumbered**; they
   continue across bridge restarts. A seq that arrives twice with different
