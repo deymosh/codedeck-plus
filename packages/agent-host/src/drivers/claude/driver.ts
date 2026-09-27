@@ -15,7 +15,18 @@ import type { HttpPost } from '../../net';
 import { isBenignPlanDirWrite } from '../../policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
-import type { AgentInfo, ModelEntry, OptionChoice, OutputEntry, ProviderBinding, SessionOption, StartSession, UsageData } from '../../types';
+import { slashCommand } from '../../commands';
+import type {
+  AgentInfo,
+  ModelEntry,
+  OptionChoice,
+  OutputEntry,
+  ProviderBinding,
+  SessionOption,
+  SlashCommand,
+  StartSession,
+  UsageData,
+} from '../../types';
 import { sdkMessageToEntries } from './adapter';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
 import {
@@ -165,6 +176,9 @@ export class ClaudeSession implements DriverSession {
   /** Most recent Task/Agent subagent_type — a best-effort label for a
    *  sub-agent's permission card (the SDK only exposes an opaque agent id). */
   private lastSubagentType: string | undefined;
+  /** Commands whose UX is bound to Claude Code's own terminal (its status
+   *  line, colours, …), as `init` names them — never offered on the phone. */
+  private readonly terminalCommands = new Set<string>();
 
   constructor(
     private readonly params: StartSession,
@@ -308,6 +322,7 @@ export class ClaudeSession implements DriverSession {
       this.mode = isMode(reported) ? reported : AUTO_APPROVE_MODE;
       // The model the SDK actually RESOLVED — a session started on the
       // default model otherwise reports none at all.
+      for (const name of init.terminal_slash_commands ?? []) this.terminalCommands.add(name);
       const modelChanged = typeof init.model === 'string' && init.model !== '' && init.model !== this.model;
       if (modelChanged) this.model = init.model;
       this.ctx.emit({
@@ -548,6 +563,17 @@ export class ClaudeSession implements DriverSession {
 
   /** The `/usage` snapshot. The SDK method is experimental, so anything
    *  unexpected yields null rather than a guess. */
+  /** Asked of the CLI each time — its list tracks plugins and skills that
+   *  appear while the session runs. Names starting with `_` are the CLI's
+   *  internal entry points, not commands a person types. */
+  async listCommands(): Promise<SlashCommand[]> {
+    if (!this.handle || this.ended) return [];
+    const commands = (await this.handle.supportedCommands()) ?? [];
+    return commands
+      .filter((c) => !c.name.startsWith('_') && !this.terminalCommands.has(c.name))
+      .map((c) => slashCommand(c.name, c.description, c.argumentHint));
+  }
+
   async getUsage(): Promise<UsageData | null> {
     if (!this.handle || this.ended) return null;
     try {
@@ -600,7 +626,7 @@ export class ClaudeDriver implements Driver {
       efforts: CLAUDE_EFFORTS,
       defaultMode: DEFAULT_MODE,
       defaultEffort: DEFAULT_EFFORT,
-      supports: { models: true, usage: true, providers: true, gsd: true, interrupt: true },
+      supports: { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true },
       credentials: [{ id: ANTHROPIC_API_KEY_CREDENTIAL, label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY' }],
     };
   }

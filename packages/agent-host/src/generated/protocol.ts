@@ -65,6 +65,11 @@ export type AgentSupports = {
 	gsd?: boolean,
 	/**  `interrupt` stops the running turn. */
 	interrupt?: boolean,
+	/**
+	 *  `commands-request` returns the slash commands a session of this agent
+	 *  understands.
+	 */
+	commands?: boolean,
 };
 
 /**  Bridge → host. */
@@ -106,6 +111,13 @@ export type BridgeMessage_Deserialize =
 } } | 
 /**  Reply: `usage`. */
 { kind: "get-usage"; payload: {
+	sessionId: string,
+} } | 
+/**
+ *  The slash commands the session understands now (they can change
+ *  while it runs: plugins, skills). Reply: `commands`.
+ */
+{ kind: "list-commands"; payload: {
 	sessionId: string,
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
@@ -157,6 +169,13 @@ export type BridgeMessage_Serialize =
 } } | 
 /**  Reply: `usage`. */
 { kind: "get-usage"; payload: {
+	sessionId: string,
+} } | 
+/**
+ *  The slash commands the session understands now (they can change
+ *  while it runs: plugins, skills). Reply: `commands`.
+ */
+{ kind: "list-commands"; payload: {
 	sessionId: string,
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
@@ -357,6 +376,10 @@ export type HostMessage_Deserialize =
 { kind: "usage"; payload: {
 	usage?: UsageData_Deserialize | null,
 } } | 
+/**  Reply to `list-commands`. */
+{ kind: "commands"; payload: {
+	commands: SlashCommand_Deserialize[],
+} } | 
 /**  Reply to `check-credential`; absent `valid` = it could not be checked. */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
@@ -392,6 +415,10 @@ export type HostMessage_Serialize =
 /**  Reply to `get-usage`; absent when the agent has none to report. */
 { kind: "usage"; payload: {
 	usage?: UsageData_Serialize | null,
+} } | 
+/**  Reply to `list-commands`. */
+{ kind: "commands"; payload: {
+	commands: SlashCommand_Serialize[],
 } } | 
 /**  Reply to `check-credential`; absent `valid` = it could not be checked. */
 { kind: "credential-checked"; payload: {
@@ -720,6 +747,36 @@ resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; en
  *  reports. Values are agent-defined strings (see [`AgentDescriptor`]).
  */
 export type SessionOption = "mode" | "effort" | "model";
+
+/**
+ *  A slash command a session understands: typed as `/name` (then its
+ *  arguments) in plain `input`.
+ */
+export type SlashCommand = SlashCommand_Serialize | SlashCommand_Deserialize;
+
+/**
+ *  A slash command a session understands: typed as `/name` (then its
+ *  arguments) in plain `input`.
+ */
+export type SlashCommand_Deserialize = {
+	/**  Without the leading slash; may be namespaced (`plugin:command`). */
+	name: string,
+	description?: string | null,
+	/**  What the command takes after its name, for display (`<file>`). */
+	argumentHint?: string | null,
+};
+
+/**
+ *  A slash command a session understands: typed as `/name` (then its
+ *  arguments) in plain `input`.
+ */
+export type SlashCommand_Serialize = {
+	/**  Without the leading slash; may be namespaced (`plugin:command`). */
+	name: string,
+	description?: string | null,
+	/**  What the command takes after its name, for display (`<file>`). */
+	argumentHint?: string | null,
+};
 
 export type StartSession = StartSession_Serialize | StartSession_Deserialize;
 

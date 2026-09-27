@@ -91,6 +91,7 @@ impl HostMessage {
                 | Self::Error { .. }
                 | Self::Models { .. }
                 | Self::Usage { .. }
+                | Self::Commands { .. }
                 | Self::CredentialChecked { .. }
         )
     }

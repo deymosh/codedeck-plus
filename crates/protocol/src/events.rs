@@ -208,6 +208,31 @@ pub struct ModelsMsg {
     pub error: Option<String>,
 }
 
+/// A slash command a session understands: typed as `/name` (then its
+/// arguments) in plain `input`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SlashCommand {
+    /// Without the leading slash; may be namespaced (`plugin:command`).
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// What the command takes after its name, for display (`<file>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+}
+
+/// Reply to `commands-request`. Like `models`, an empty list always comes
+/// with an `error` saying why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandsMsg {
+    pub session_id: String,
+    pub commands: Vec<SlashCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Reply to `set-credentials`: the resulting status of every credential in
 /// the written scope (`agent`, or the bridge's own when absent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -284,6 +309,7 @@ pub enum BridgeToPhone {
     Usage(UsageMsg),
     GsdState(GsdStateMsg),
     Models(ModelsMsg),
+    Commands(CommandsMsg),
     CredentialsAck(CredentialsAckMsg),
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
@@ -315,7 +341,7 @@ mod tests {
             "modes":[{"id":"default","label":"Default"},{"id":"plan","label":"Plan"}],
             "efforts":[{"id":"high","label":"High"}],
             "defaultMode":"default","defaultEffort":"high",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true},
+            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"fromEnv":true}]
         })
     }
@@ -379,6 +405,8 @@ mod tests {
         }}));
         rt(&json!({"type":"models","agent":"claude-code","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
         rt(&json!({"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
+        rt(&json!({"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
+        rt(&json!({"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
         rt(&json!({"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
         rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));

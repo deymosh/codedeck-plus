@@ -8,7 +8,7 @@ use protocol::commands::{
 use protocol::common::{is_valid_provider_base_url, SessionOption, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{
     BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
-    InputFailedReason, ModelsMsg, SessionFailedMsg, SessionPendingMsg,
+    CommandsMsg, InputFailedReason, ModelsMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
 use super::{Engine, HostCall};
@@ -37,6 +37,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::UsageRequest(_) => "usage-request",
         PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
+        PhoneToBridge::CommandsRequest(_) => "commands-request",
         PhoneToBridge::SetCredentials(_) => "set-credentials",
         PhoneToBridge::PairRequest(_) => "pair-request",
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
@@ -113,6 +114,7 @@ impl Engine {
                 }
             }
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
+            PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
             // Handled on arrival.
@@ -411,6 +413,30 @@ impl Engine {
         if let Some(error) = error {
             log::info!("[Engine] models-request: {error}");
             self.publish_all(BridgeToPhone::Models(ModelsMsg { agent, models: vec![], default_model: None, error: Some(error) }));
+        }
+    }
+
+    /// Asked of the agent every time: its commands change while a session
+    /// runs (plugins installed, skills found in a subdirectory).
+    fn on_commands_request(&mut self, session_id: String) {
+        let agent = self.sessions.get(&session_id).map(|s| s.rec.agent.clone());
+        let error = match agent {
+            None => Some("The bridge has no such session.".to_string()),
+            Some(agent) if !self.catalog.get(&agent).is_some_and(|a| a.supports.commands) => {
+                Some("This agent has no slash commands to list.".to_string())
+            }
+            Some(_) if !self.is_running(&session_id) => {
+                Some("The session is not running — its commands are listed once it is.".to_string())
+            }
+            Some(_) => {
+                let call = HostCall::ListCommands { session_id: session_id.clone() };
+                let sent = self.call(call, BridgeMessage::ListCommands { session_id: session_id.clone() });
+                sent.is_none().then(|| "The agent host is not running — try again in a moment.".to_string())
+            }
+        };
+        if let Some(error) = error {
+            log::info!("[Engine] commands-request for {session_id}: {error}");
+            self.publish_all(BridgeToPhone::Commands(CommandsMsg { session_id, commands: vec![], error: Some(error) }));
         }
     }
 }

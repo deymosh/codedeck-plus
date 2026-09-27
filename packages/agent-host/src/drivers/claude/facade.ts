@@ -146,6 +146,13 @@ export interface SdkContextUsage {
   contextWindow?: number;
 }
 
+/** One slash command as `query.supportedCommands()` lists it. */
+export interface SdkSlashCommand {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+}
+
 export interface SdkSessionHandle {
   /** The session's message stream. Iterate exactly once. */
   messages(): AsyncIterable<SDKMessage>;
@@ -169,6 +176,10 @@ export interface SdkSessionHandle {
   probeReady(): Promise<void>;
   /** Feature-detected `query.getContextUsage()`. Null when unsupported/failed. */
   getContextUsage(): Promise<SdkContextUsage | null>;
+  /** Feature-detected `query.supportedCommands()`: every slash command the
+   *  session understands now — built in, the user's and the project's, and
+   *  its plugins' (namespaced `plugin:command`). Null when unsupported/failed. */
+  supportedCommands(): Promise<SdkSlashCommand[] | null>;
   /** Feature-detected experimental `/usage` snapshot (rate-limit windows).
    *  Raw SDK shape — normalization is the caller's job. Null when unsupported. */
   getUsageSnapshot(): Promise<unknown | null>;
@@ -788,6 +799,19 @@ class RealSdkSessionHandle implements SdkSessionHandle {
           ? { contextWindow: res.maxTokens }
           : {}),
       };
+    } catch {
+      return null;
+    }
+  }
+
+  async supportedCommands(): Promise<SdkSlashCommand[] | null> {
+    const fn = (this.q as Partial<Pick<Query, 'supportedCommands'>>).supportedCommands;
+    if (typeof fn !== 'function') return null;
+    try {
+      const commands = await fn.call(this.q);
+      return commands
+        .filter((c) => typeof c?.name === 'string' && c.name !== '')
+        .map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint }));
     } catch {
       return null;
     }

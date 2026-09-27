@@ -11,7 +11,7 @@ use protocol::common::{
     AgentSupports, OptionChoice, OutputEntry, PermissionOption, ProviderModel, QuestionOption,
     SessionOption, Subagent, ToolKind, UsageData,
 };
-use protocol::events::ModelEntry;
+use protocol::events::{ModelEntry, SlashCommand};
 use serde::{Deserialize, Serialize};
 
 use crate::Secret;
@@ -252,6 +252,9 @@ pub enum BridgeMessage {
     ListModels { agent: String },
     /// Reply: `usage`.
     GetUsage { session_id: String },
+    /// The slash commands the session understands now (they can change
+    /// while it runs: plugins, skills). Reply: `commands`.
+    ListCommands { session_id: String },
     /// Check a credential value with its provider. Reply: `credential-checked`.
     CheckCredential {
         agent: String,
@@ -289,6 +292,8 @@ pub enum HostMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<UsageData>,
     },
+    /// Reply to `list-commands`.
+    Commands { commands: Vec<SlashCommand> },
     /// Reply to `check-credential`; absent `valid` = it could not be checked.
     CredentialChecked {
         #[serde(default, skip_serializing_if = "Option::is_none")]

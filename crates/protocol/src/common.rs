@@ -48,6 +48,10 @@ pub struct AgentSupports {
     /// `interrupt` stops the running turn.
     #[serde(default)]
     pub interrupt: bool,
+    /// `commands-request` returns the slash commands a session of this agent
+    /// understands.
+    #[serde(default)]
+    pub commands: bool,
 }
 
 /// A credential the bridge holds for an agent (or for itself), by id. The

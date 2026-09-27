@@ -10,6 +10,7 @@ import type {
   ModelDiscoveryOptions,
   SdkCanUseTool,
   SdkContextUsage,
+  SdkSlashCommand,
   SdkFacade,
   SdkMessage,
   SdkModelDescriptor,
@@ -30,6 +31,7 @@ class ScriptedHandle implements SdkSessionHandle {
   private closed: { error?: unknown } | null = null;
   probe: Promise<void> = Promise.resolve();
   contextUsage: SdkContextUsage | null = null;
+  commands: SdkSlashCommand[] | null = null;
 
   push(msg: unknown): void {
     this.queue.push(msg as SdkMessage);
@@ -72,6 +74,9 @@ class ScriptedHandle implements SdkSessionHandle {
   }
   async getContextUsage(): Promise<SdkContextUsage | null> {
     return this.contextUsage;
+  }
+  async supportedCommands(): Promise<SdkSlashCommand[] | null> {
+    return this.commands;
   }
   async getUsageSnapshot(): Promise<unknown | null> {
     return null;
@@ -355,6 +360,28 @@ describe('Claude options and setup', () => {
     const offline = new ClaudeDriver({ facade: new ScriptedFacade(), httpPost: async () => { throw new Error('ENOTFOUND'); } });
     expect(await offline.checkCredential('anthropic_api_key', 'sk')).toBeUndefined();
     expect(await offline.checkCredential('other', 'x')).toBeUndefined();
+  });
+});
+
+describe('Claude slash commands', () => {
+  it("lists the CLI's commands, without its terminal-bound or internal ones", async () => {
+    const { ctx, session, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    handle.commands = [
+      { name: 'compact', description: 'Free up context', argumentHint: '<instructions>' },
+      { name: 'color', description: 'Set the prompt bar color', argumentHint: '' },
+      { name: '__remote-workflow', description: 'internal' },
+      { name: 'commit-commands:commit', description: '(commit-commands) Create a git commit', argumentHint: '' },
+    ];
+    handle.push(init({ terminal_slash_commands: ['color'] }));
+    await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
+    expect(await session.listCommands!()).toEqual([
+      { name: 'compact', description: 'Free up context', argumentHint: '<instructions>' },
+      { name: 'commit-commands:commit', description: '(commit-commands) Create a git commit' },
+    ]);
+    handle.commands = null;
+    expect(await session.listCommands!()).toEqual([]);
+    await session.end();
   });
 });
 

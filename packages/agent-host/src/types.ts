@@ -29,6 +29,7 @@ export type PermissionOption = G.PermissionOption;
 export type OptionChoice = G.OptionChoice_Deserialize;
 export type QuestionSpec = G.QuestionSpec_Deserialize;
 export type ModelEntry = G.ModelEntry_Deserialize;
+export type SlashCommand = G.SlashCommand_Deserialize;
 export type UsageData = G.UsageData_Deserialize;
 export type UsageWindow = G.UsageWindow;
 export type PermissionRequest = G.PermissionRequest_Deserialize;

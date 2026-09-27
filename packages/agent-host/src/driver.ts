@@ -20,6 +20,7 @@ import type {
   SelectOutcome,
   SessionEvent,
   SessionOption,
+  SlashCommand,
   StartSession,
   UsageData,
 } from './types';
@@ -49,6 +50,10 @@ export interface DriverSession {
   setOption(option: SessionOption, value: string): Promise<void>;
   /** Subscription usage for this session's account, if the agent has any. */
   getUsage(): Promise<UsageData | null>;
+  /** The slash commands the session understands now, for an agent whose
+   *  catalog entry `supports.commands`. Asked every time the phone wants
+   *  them, so a list that changes while the session runs is never stale. */
+  listCommands?(): Promise<SlashCommand[]>;
   /** Stop the agent. Idempotent; no events are expected afterwards. */
   end(): Promise<void>;
 }

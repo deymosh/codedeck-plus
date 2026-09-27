@@ -346,6 +346,10 @@ impl<'a> Router<'a> {
                     .apply_usage(machine, &m.session_id, m.usage.clone());
                 r.persist(StoreId::Machines);
             }
+            BridgeToPhone::Commands(m) => {
+                self.stores.machines.apply_commands(machine, m);
+                r.persist(StoreId::Machines);
+            }
             BridgeToPhone::GsdState(m) => {
                 self.stores
                     .machines
