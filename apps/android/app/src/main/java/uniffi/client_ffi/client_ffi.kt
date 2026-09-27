@@ -1032,7 +1032,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_ffi_fn_method_core_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_client_ffi_fn_method_core_transcript_view(`ptr`: Pointer,`machine`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,
+    fun uniffi_client_ffi_fn_method_core_transcript_delta(`ptr`: Pointer,`machine`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,`since`: Long,
     ): Long
     fun uniffi_client_ffi_fn_method_core_ui_view(`ptr`: Pointer,
     ): Long
@@ -1272,7 +1272,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_ffi_checksum_method_core_stop(
     ): Short
-    fun uniffi_client_ffi_checksum_method_core_transcript_view(
+    fun uniffi_client_ffi_checksum_method_core_transcript_delta(
     ): Short
     fun uniffi_client_ffi_checksum_method_core_ui_view(
     ): Short
@@ -1396,7 +1396,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_core_stop() != 63056.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_method_core_transcript_view() != 31861.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_core_transcript_delta() != 26914.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_core_ui_view() != 57983.toShort()) {
@@ -1981,11 +1981,12 @@ public interface CoreInterface {
     fun `stop`()
     
     /**
-     * The grouped, ready-to-render transcript for one session — see
-     * `views.rs`'s doc comment for why this crosses the already-ported
-     * `presentation::display_entries` grouping rather than raw rows.
+     * The grouped, ready-to-render transcript for one session, as a change
+     * against revision `since` (0: none yet) — see `views.rs`'s doc comment
+     * for why this crosses the `presentation::display_entries` grouping
+     * rather than raw rows.
      */
-    suspend fun `transcriptView`(`machine`: kotlin.String, `sessionId`: kotlin.String): UniffiTranscriptRowsView
+    suspend fun `transcriptDelta`(`machine`: kotlin.String, `sessionId`: kotlin.String, `since`: kotlin.ULong): UniffiTranscriptDelta
     
     suspend fun `uiView`(): UniffiUiView
     
@@ -2389,24 +2390,25 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
 
     
     /**
-     * The grouped, ready-to-render transcript for one session — see
-     * `views.rs`'s doc comment for why this crosses the already-ported
-     * `presentation::display_entries` grouping rather than raw rows.
+     * The grouped, ready-to-render transcript for one session, as a change
+     * against revision `since` (0: none yet) — see `views.rs`'s doc comment
+     * for why this crosses the `presentation::display_entries` grouping
+     * rather than raw rows.
      */
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `transcriptView`(`machine`: kotlin.String, `sessionId`: kotlin.String) : UniffiTranscriptRowsView {
+    override suspend fun `transcriptDelta`(`machine`: kotlin.String, `sessionId`: kotlin.String, `since`: kotlin.ULong) : UniffiTranscriptDelta {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
-            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_transcript_view(
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_core_transcript_delta(
                 thisPtr,
-                FfiConverterString.lower(`machine`),FfiConverterString.lower(`sessionId`),
+                FfiConverterString.lower(`machine`),FfiConverterString.lower(`sessionId`),FfiConverterULong.lower(`since`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
         { future, continuation -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_complete_rust_buffer(future, continuation) },
         { future -> UniffiLib.INSTANCE.ffi_client_ffi_rust_future_free_rust_buffer(future) },
         // lift function
-        { FfiConverterTypeUniffiTranscriptRowsView.lift(it) },
+        { FfiConverterTypeUniffiTranscriptDelta.lift(it) },
         // Error FFI converter
         UniffiNullRustCallStatusErrorHandler,
     )
@@ -4808,6 +4810,45 @@ public object FfiConverterTypeUniffiHttpResponse: FfiConverterRustBuffer<UniffiH
 
 
 
+/**
+ * One display row, as JSON, under its key (`DisplayEntry::seq`).
+ */
+data class UniffiKeyedEntry (
+    var `key`: kotlin.ULong, 
+    /**
+     * `serde_json::to_string` of one
+     * `client_core::presentation::display_entries::DisplayEntry`.
+     */
+    var `json`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiKeyedEntry: FfiConverterRustBuffer<UniffiKeyedEntry> {
+    override fun read(buf: ByteBuffer): UniffiKeyedEntry {
+        return UniffiKeyedEntry(
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiKeyedEntry) = (
+            FfiConverterULong.allocationSize(value.`key`) +
+            FfiConverterString.allocationSize(value.`json`)
+    )
+
+    override fun write(value: UniffiKeyedEntry, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`key`, buf)
+            FfiConverterString.write(value.`json`, buf)
+    }
+}
+
+
+
 data class UniffiMachineSummary (
     var `pubkeyHex`: kotlin.String, 
     var `name`: kotlin.String, 
@@ -5754,13 +5795,31 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
 
 
 
-data class UniffiTranscriptRowsView (
+/**
+ * A session's grouped transcript as a change against the one the caller
+ * already has. Streaming appends a row (or grows the last one) many times a
+ * second; sending, and parsing, only what changed keeps each update small
+ * however long the transcript is.
+ */
+data class UniffiTranscriptDelta (
     /**
-     * `serde_json::to_string` of
-     * `Vec<client_core::presentation::display_entries::DisplayEntry>` —
-     * see this module's doc comment for why a JSON blob, not a `Record`.
+     * Pass back as `since` next time.
      */
-    var `displayEntriesJson`: kotlin.String, 
+    var `revision`: kotlin.ULong, 
+    /**
+     * `changed` is every row, in order: the caller's copy was not the base
+     * of this delta (first read, another session, or rows whose keys
+     * repeat), so it replaces it outright and ignores `order`.
+     */
+    var `full`: kotlin.Boolean, 
+    /**
+     * Every row's key, in display order.
+     */
+    var `order`: List<kotlin.ULong>, 
+    /**
+     * The rows new or changed since `since` (all of them when `full`).
+     */
+    var `changed`: List<UniffiKeyedEntry>, 
     /**
      * `serde_json::to_string` of a `PendingPermissionSummary`, present iff a
      * permission request is still unanswered and unresolved.
@@ -5779,25 +5838,34 @@ data class UniffiTranscriptRowsView (
 /**
  * @suppress
  */
-public object FfiConverterTypeUniffiTranscriptRowsView: FfiConverterRustBuffer<UniffiTranscriptRowsView> {
-    override fun read(buf: ByteBuffer): UniffiTranscriptRowsView {
-        return UniffiTranscriptRowsView(
-            FfiConverterString.read(buf),
+public object FfiConverterTypeUniffiTranscriptDelta: FfiConverterRustBuffer<UniffiTranscriptDelta> {
+    override fun read(buf: ByteBuffer): UniffiTranscriptDelta {
+        return UniffiTranscriptDelta(
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceULong.read(buf),
+            FfiConverterSequenceTypeUniffiKeyedEntry.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
         )
     }
 
-    override fun allocationSize(value: UniffiTranscriptRowsView) = (
-            FfiConverterString.allocationSize(value.`displayEntriesJson`) +
+    override fun allocationSize(value: UniffiTranscriptDelta) = (
+            FfiConverterULong.allocationSize(value.`revision`) +
+            FfiConverterBoolean.allocationSize(value.`full`) +
+            FfiConverterSequenceULong.allocationSize(value.`order`) +
+            FfiConverterSequenceTypeUniffiKeyedEntry.allocationSize(value.`changed`) +
             FfiConverterOptionalString.allocationSize(value.`pendingPermissionJson`) +
             FfiConverterString.allocationSize(value.`syncState`) +
             FfiConverterBoolean.allocationSize(value.`contiguous`)
     )
 
-    override fun write(value: UniffiTranscriptRowsView, buf: ByteBuffer) {
-            FfiConverterString.write(value.`displayEntriesJson`, buf)
+    override fun write(value: UniffiTranscriptDelta, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`revision`, buf)
+            FfiConverterBoolean.write(value.`full`, buf)
+            FfiConverterSequenceULong.write(value.`order`, buf)
+            FfiConverterSequenceTypeUniffiKeyedEntry.write(value.`changed`, buf)
             FfiConverterOptionalString.write(value.`pendingPermissionJson`, buf)
             FfiConverterString.write(value.`syncState`, buf)
             FfiConverterBoolean.write(value.`contiguous`, buf)
@@ -8163,6 +8231,34 @@ public object FfiConverterSequenceUInt: FfiConverterRustBuffer<List<kotlin.UInt>
 /**
  * @suppress
  */
+public object FfiConverterSequenceULong: FfiConverterRustBuffer<List<kotlin.ULong>> {
+    override fun read(buf: ByteBuffer): List<kotlin.ULong> {
+        val len = buf.getInt()
+        return List<kotlin.ULong>(len) {
+            FfiConverterULong.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.ULong>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterULong.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.ULong>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterULong.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -8377,6 +8473,34 @@ public object FfiConverterSequenceTypeUniffiHttpHeader: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiHttpHeader.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiKeyedEntry: FfiConverterRustBuffer<List<UniffiKeyedEntry>> {
+    override fun read(buf: ByteBuffer): List<UniffiKeyedEntry> {
+        val len = buf.getInt()
+        return List<UniffiKeyedEntry>(len) {
+            FfiConverterTypeUniffiKeyedEntry.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiKeyedEntry>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiKeyedEntry.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiKeyedEntry>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiKeyedEntry.write(it, buf)
         }
     }
 }

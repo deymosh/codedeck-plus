@@ -31,7 +31,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
 use client_runtime::client_core::presentation::display_entries::{
-    build_display_entries, find_pending_permission, SeqEntry,
+    build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
 };
 use client_runtime::{
     MachinesView, OutboxView, PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
@@ -777,18 +777,45 @@ pub fn build_uniffi_pairing_view(v: &PairingView) -> UniffiPairingView {
 
 // --- transcript (grouped, via the now-wired presentation module) -----------
 
+/// One display row, as JSON, under its key (`DisplayEntry::seq`).
 #[derive(Debug, Clone, uniffi::Record)]
-pub struct UniffiTranscriptRowsView {
-    /// `serde_json::to_string` of
-    /// `Vec<client_core::presentation::display_entries::DisplayEntry>` —
-    /// see this module's doc comment for why a JSON blob, not a `Record`.
-    pub display_entries_json: String,
+pub struct UniffiKeyedEntry {
+    pub key: u64,
+    /// `serde_json::to_string` of one
+    /// `client_core::presentation::display_entries::DisplayEntry`.
+    pub json: String,
+}
+
+/// A session's grouped transcript as a change against the one the caller
+/// already has. Streaming appends a row (or grows the last one) many times a
+/// second; sending, and parsing, only what changed keeps each update small
+/// however long the transcript is.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiTranscriptDelta {
+    /// Pass back as `since` next time.
+    pub revision: u64,
+    /// `changed` is every row, in order: the caller's copy was not the base
+    /// of this delta (first read, another session, or rows whose keys
+    /// repeat), so it replaces it outright and ignores `order`.
+    pub full: bool,
+    /// Every row's key, in display order.
+    pub order: Vec<u64>,
+    /// The rows new or changed since `since` (all of them when `full`).
+    pub changed: Vec<UniffiKeyedEntry>,
     /// `serde_json::to_string` of a `PendingPermissionSummary`, present iff a
     /// permission request is still unanswered and unresolved.
     pub pending_permission_json: Option<String>,
     /// `idle` / `requested` / `syncing` / `complete` / `failed`.
     pub sync_state: String,
     pub contiguous: bool,
+}
+
+/// The rows last handed out, which the next delta is taken against.
+pub struct TranscriptDeltaBase {
+    machine: String,
+    session_id: String,
+    revision: u64,
+    rows: Vec<DisplayEntry>,
 }
 
 /// This session's optimistically-responded card-id set, keyed the same way
@@ -803,10 +830,14 @@ pub fn responded_cards_for<'a>(
     ui.responded_cards.get(&session_key_of(machine, session_id))
 }
 
-pub fn build_uniffi_transcript_view(
+pub fn build_uniffi_transcript_delta(
     view: &TranscriptRowsView,
     responded_cards: Option<&BTreeSet<String>>,
-) -> UniffiTranscriptRowsView {
+    base: &mut Option<TranscriptDeltaBase>,
+    machine: &str,
+    session_id: &str,
+    since: u64,
+) -> UniffiTranscriptDelta {
     let seq_entries: Vec<SeqEntry> = view
         .rows
         .iter()
@@ -819,12 +850,110 @@ pub fn build_uniffi_transcript_view(
                 .map(|entry| SeqEntry { seq: r.seq, entry })
         })
         .collect();
-    let display = build_display_entries(&seq_entries);
+    let rows = build_display_entries(&seq_entries);
     let pending = find_pending_permission(&seq_entries, responded_cards);
-    UniffiTranscriptRowsView {
-        display_entries_json: serde_json::to_string(&display).unwrap_or_else(|_| "[]".to_string()),
+    let order: Vec<u64> = rows.iter().map(DisplayEntry::seq).collect();
+    let unique = order.iter().collect::<BTreeSet<_>>().len() == order.len();
+
+    let prior = base
+        .as_ref()
+        .filter(|b| since != 0 && b.revision == since && b.machine == machine && b.session_id == session_id && unique);
+    let keyed = |row: &DisplayEntry| UniffiKeyedEntry {
+        key: row.seq(),
+        json: serde_json::to_string(row).unwrap_or_else(|_| "null".to_string()),
+    };
+    let (full, changed, unchanged) = match prior {
+        Some(b) => {
+            let old: HashMap<u64, &DisplayEntry> = b.rows.iter().map(|r| (r.seq(), r)).collect();
+            let changed: Vec<UniffiKeyedEntry> =
+                rows.iter().filter(|r| old.get(&r.seq()) != Some(r)).map(keyed).collect();
+            let unchanged = changed.is_empty() && b.rows.len() == rows.len();
+            (false, changed, unchanged)
+        }
+        None => (true, rows.iter().map(keyed).collect(), false),
+    };
+    let last = base.as_ref().map_or(0, |b| b.revision);
+    let revision = if unchanged { since } else { last + 1 };
+    *base = Some(TranscriptDeltaBase {
+        machine: machine.to_string(),
+        session_id: session_id.to_string(),
+        revision,
+        rows,
+    });
+    UniffiTranscriptDelta {
+        revision,
+        full,
+        order,
+        changed,
         pending_permission_json: pending.and_then(|p| serde_json::to_string(&p).ok()),
         sync_state: wire_str(&view.sync.state),
         contiguous: view.sync.contiguous,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use client_runtime::view::TranscriptRowView;
+    use serde_json::json;
+
+    fn view(rows: &[(u64, serde_json::Value)]) -> TranscriptRowsView {
+        let mut v = TranscriptRowsView::empty();
+        v.rows = rows.iter().map(|(seq, entry)| TranscriptRowView { seq: *seq, entry: entry.clone() }).collect();
+        v
+    }
+    fn text(role: &str, text: &str) -> serde_json::Value {
+        json!({"timestamp": "t", "entryType": "text", "role": role, "text": text})
+    }
+    fn call(id: &str) -> serde_json::Value {
+        json!({"timestamp": "t", "entryType": "tool_call", "callId": id, "toolName": "Bash", "kind": "execute", "title": "ls"})
+    }
+    fn result(id: &str) -> serde_json::Value {
+        json!({"timestamp": "t", "entryType": "tool_result", "callId": id, "text": "ok"})
+    }
+    fn keys(d: &UniffiTranscriptDelta) -> Vec<u64> {
+        d.changed.iter().map(|e| e.key).collect()
+    }
+
+    #[test]
+    fn a_delta_carries_only_the_rows_that_changed() {
+        let mut base = None;
+        let mut rows = vec![(1, text("user", "hi")), (2, call("c1")), (3, text("agent", "done"))];
+        let first = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", 0);
+        assert!(first.full);
+        assert_eq!((keys(&first), first.order.clone()), (vec![1, 2, 3], vec![1, 2, 3]));
+
+        // Nothing new: nothing sent, the revision stays.
+        let same = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", first.revision);
+        assert!(!same.full && same.changed.is_empty());
+        assert_eq!(same.revision, first.revision);
+
+        // An appended row is the only one sent.
+        rows.push((4, text("user", "again")));
+        let appended = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", same.revision);
+        assert!(!appended.full);
+        assert_eq!((keys(&appended), appended.order.clone()), (vec![4], vec![1, 2, 3, 4]));
+        assert!(appended.revision > same.revision);
+
+        // A result lands on the call in an earlier row: that row is sent,
+        // not just the last.
+        rows.push((5, result("c1")));
+        let earlier = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", appended.revision);
+        assert_eq!(keys(&earlier), vec![2]);
+        assert!(earlier.changed[0].json.contains("\"ok\""), "{}", earlier.changed[0].json);
+    }
+
+    #[test]
+    fn a_caller_off_the_base_gets_everything() {
+        let mut base = None;
+        let rows = vec![(1, text("user", "hi"))];
+        let first = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", 0);
+        let _ = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "other", first.revision);
+        // `base` now holds another session: this caller is off it.
+        let back = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", first.revision);
+        assert!(back.full);
+        assert_eq!(keys(&back), vec![1]);
+        let stale = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", back.revision - 1);
+        assert!(stale.full, "a stale revision is not the base");
     }
 }
