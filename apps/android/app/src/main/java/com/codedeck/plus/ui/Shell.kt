@@ -133,9 +133,12 @@ fun Shell(
     }
     // A deep link (`codedeck://pair…`) can stage or begin a pair from
     // anywhere in the app — surface it regardless of what's currently open.
+    // Only a pair in progress counts: the core outlives this activity, so a
+    // finished pair (`paired`, `failed`) is still its state when the app is
+    // reopened, and must not pull the user back to pairing.
     LaunchedEffect(pairing?.phase, pairing?.staged) {
         val p = pairing
-        if (p != null && (p.phase != "idle" || p.staged != null)) screen = Screen.Pairing
+        if (p != null && (p.phase == "awaiting-ack" || p.staged != null)) screen = Screen.Pairing
     }
 
     LaunchedEffect(openRequest) {
