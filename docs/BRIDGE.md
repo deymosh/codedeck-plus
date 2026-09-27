@@ -140,7 +140,16 @@ on them. The listener serves a self-signed certificate made once in
 private addresses and VPN host names (Tailscale MagicDNS, WireGuard) work
 without a CA. Only paired phones get past the handshake. List every address
 a phone might use, in the order to try, e.g.
-`--direct-endpoint wss://192.168.1.20:7447 --direct-endpoint wss://laptop.tail1234.ts.net:7447`.
+`--direct-endpoint wss://192.168.1.20:7447 --direct-endpoint wss://laptop.tail1234.ts.net:7447`,
+or in `config.json` (a nested object; the bridge warns about keys it does
+not know):
+
+```json
+{ "direct": { "listen": "0.0.0.0:7447", "endpoints": ["wss://192.168.1.20:7447"] } }
+```
+
+At start the bridge logs `[Direct] Listening on …` and one
+`[Direct] Advertising …` per endpoint, or `[Direct] Off` without a listener.
 
 For a phone on Orbot, run an onion service that forwards to
 `direct.onionListen` (Tor: `HiddenServicePort 7448 127.0.0.1:7448`) and add

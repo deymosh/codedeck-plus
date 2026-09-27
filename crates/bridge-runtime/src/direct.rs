@@ -196,6 +196,7 @@ pub async fn start(
     inputs: mpsc::UnboundedSender<Input>,
 ) -> Result<Option<Direct>, String> {
     if !config.enabled() {
+        log::info!("[Direct] Off (no direct listener configured)");
         return Ok(None);
     }
     let hub = Hub::new(bridge_pubkey, inputs);
