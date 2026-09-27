@@ -962,6 +962,12 @@ internal open class UniffiVTableCallbackInterfaceUniffiSessionKeyStore(
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1088,11 +1094,17 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_client_ffi_fn_func_local_identity_signer(`secretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_client_ffi_fn_func_npub_of(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_func_persisted_relays(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_client_ffi_fn_func_provider_base_url_error(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_client_ffi_fn_func_pubkey_hex_of(`input`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_client_ffi_fn_func_secret_hex_of(`input`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_client_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1210,11 +1222,17 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_ffi_checksum_func_local_identity_signer(
     ): Short
+    fun uniffi_client_ffi_checksum_func_npub_of(
+    ): Short
     fun uniffi_client_ffi_checksum_func_persisted_relays(
     ): Short
     fun uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled(
     ): Short
     fun uniffi_client_ffi_checksum_func_provider_base_url_error(
+    ): Short
+    fun uniffi_client_ffi_checksum_func_pubkey_hex_of(
+    ): Short
+    fun uniffi_client_ffi_checksum_func_secret_hex_of(
     ): Short
     fun uniffi_client_ffi_checksum_method_core_connection_view(
     ): Short
@@ -1303,6 +1321,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_func_local_identity_signer() != 57844.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_func_npub_of() != 11463.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_func_persisted_relays() != 10018.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1310,6 +1331,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_func_provider_base_url_error() != 4866.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_func_pubkey_hex_of() != 33686.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_func_secret_hex_of() != 62353.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_core_connection_view() != 2560.toShort()) {
@@ -8772,6 +8799,18 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     
 
         /**
+         * The `npub1…` form of a hex public key, for display.
+         */ fun `npubOf`(`pubkeyHex`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_npub_of(
+        FfiConverterString.lower(`pubkeyHex`),_status)
+}
+    )
+    }
+    
+
+        /**
          * The relay list to pass into [`Core::new`]'s `relays` argument. Pure read,
          * safe to call before any `Core` exists — opens (and migrates, if it doesn't
          * exist yet) the same db file `Core::new` will open, so this always reflects
@@ -8813,6 +8852,33 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_provider_base_url_error(
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * The hex public key in `input`: an `npub1…`, or 64 hex characters (what
+         * a signer app may answer `get_public_key` with). `None` when it is
+         * neither.
+         */ fun `pubkeyHexOf`(`input`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_pubkey_hex_of(
+        FfiConverterString.lower(`input`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The hex secret key in `input`: an `nsec1…`, or 64 hex characters.
+         * `None` when it is neither — for validating an imported key.
+         */ fun `secretHexOf`(`input`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_secret_hex_of(
+        FfiConverterString.lower(`input`),_status)
 }
     )
     }

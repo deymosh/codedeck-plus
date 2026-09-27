@@ -45,7 +45,10 @@ pub use intent::{UniffiIntent, UniffiIntentError};
 pub use notifier::UniffiNotifier;
 use notifier::NotifierAdapter;
 pub use observer::CoreListener;
-pub use signer::{local_identity_signer, UniffiIdentitySigner, UniffiSessionKeyStore, UniffiSignerError};
+pub use signer::{
+    local_identity_signer, npub_of, pubkey_hex_of, secret_hex_of, UniffiIdentitySigner, UniffiSessionKeyStore,
+    UniffiSignerError,
+};
 use observer::UniffiObserver;
 pub use views::{
     UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,

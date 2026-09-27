@@ -51,6 +51,39 @@ pub fn local_identity_signer(secret_hex: String) -> Result<Arc<dyn UniffiIdentit
     Ok(Arc::new(LocalIdentity(keypair)))
 }
 
+/// The hex secret key in `input`: an `nsec1…`, or 64 hex characters.
+/// `None` when it is neither — for validating an imported key.
+#[uniffi::export]
+pub fn secret_hex_of(input: String) -> Option<String> {
+    let input = input.trim();
+    let key = if input.starts_with("nsec1") {
+        <nostr::SecretKey as nostr::nips::nip19::FromBech32>::from_bech32(input).ok()?
+    } else {
+        nostr::SecretKey::from_hex(input).ok()?
+    };
+    Some(key.to_secret_hex())
+}
+
+/// The hex public key in `input`: an `npub1…`, or 64 hex characters (what
+/// a signer app may answer `get_public_key` with). `None` when it is
+/// neither.
+#[uniffi::export]
+pub fn pubkey_hex_of(input: String) -> Option<String> {
+    let input = input.trim();
+    let key = if input.starts_with("npub1") {
+        <nostr::PublicKey as nostr::nips::nip19::FromBech32>::from_bech32(input).ok()?
+    } else {
+        nostr::PublicKey::from_hex(input).ok()?
+    };
+    Some(key.to_hex())
+}
+
+/// The `npub1…` form of a hex public key, for display.
+#[uniffi::export]
+pub fn npub_of(pubkey_hex: String) -> Option<String> {
+    protocol::crypto::npub_from_hex(&pubkey_hex).ok()
+}
+
 struct LocalIdentity(Keypair);
 
 impl UniffiIdentitySigner for LocalIdentity {
@@ -134,6 +167,19 @@ mod tests {
     use client_runtime::signer::{build_command, Cipher};
     use protocol::commands::{BareMsg, PhoneToBridge};
     use protocol::crypto::generate_keypair;
+
+    #[test]
+    fn keys_parse_from_bech32_or_hex() {
+        let k = generate_keypair();
+        let nsec = nostr::nips::nip19::ToBech32::to_bech32(&k.secret_key).unwrap();
+        assert_eq!(secret_hex_of(nsec), Some(k.secret_hex()));
+        assert_eq!(secret_hex_of(format!(" {} ", k.secret_hex())), Some(k.secret_hex()));
+        assert_eq!(secret_hex_of("nsec1nope".into()), None);
+        assert_eq!(pubkey_hex_of(k.npub.clone()), Some(k.pubkey_hex.clone()));
+        assert_eq!(pubkey_hex_of(k.pubkey_hex.clone()), Some(k.pubkey_hex.clone()));
+        assert_eq!(pubkey_hex_of("zz".into()), None);
+        assert_eq!(npub_of(k.pubkey_hex.clone()), Some(k.npub));
+    }
 
     #[tokio::test]
     async fn a_command_signs_through_the_foreign_trait_shape() {
