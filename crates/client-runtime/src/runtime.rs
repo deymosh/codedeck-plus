@@ -221,8 +221,9 @@ pub enum CoreEvent {
 
 // --- config ---------------------------------------------------------------
 
+/// The relays are not part of the configuration: the transport dials the
+/// paired machines' own (see [`CoreStores::relay_set`]).
 pub struct CoreConfig {
-    pub relays: Vec<String>,
     /// The phone's identity: signs every event the phone publishes, and
     /// keys the payloads for a bridge holding no live session key — see
     /// [`crate::signer`].
@@ -271,14 +272,8 @@ impl Default for CorePorts {
 }
 
 impl CoreConfig {
-    pub fn new(
-        relays: Vec<String>,
-        identity: Rc<dyn IdentitySigner>,
-        proxy: Option<String>,
-        tor: bool,
-    ) -> Self {
+    pub fn new(identity: Rc<dyn IdentitySigner>, proxy: Option<String>, tor: bool) -> Self {
         Self {
-            relays,
             identity,
             proxy,
             tor,
@@ -375,8 +370,9 @@ impl Core {
             machines: RefCell::new(initial_authors.clone()),
             cursor: RefCell::new(last_stored_seen),
         });
+        let relay_set = hydrated.stores.relay_set();
         let ws = WsTransport::new(WsConfig {
-            relays: config.relays.clone(),
+            relays: relay_set.clone(),
             auth: Rc::new(IdentityAuth(Rc::clone(&config.identity))),
             proxy: if config.tor { config.proxy.clone() } else { None },
         });
@@ -420,6 +416,7 @@ impl Core {
             ws,
             api: BridgeApi::new(),
             machines: initial_authors,
+            relay_set,
             host,
             retry_timer: None,
             vis_timer: None,
@@ -491,8 +488,9 @@ impl Core {
         let _ = self.tx.send(Msg::SetMachines(machines));
     }
 
-    /// Replace the relay list (settings changed). The transport re-dials the
-    /// diff and, if connected, the subscription client re-REQs.
+    /// Point the transport at `relays` until the paired machines' relays
+    /// next change (the loop keeps it on their set otherwise). The transport
+    /// re-dials the diff and, if connected, the subscription client re-REQs.
     pub fn set_relays(&self, relays: Vec<String>) {
         let _ = self.tx.send(Msg::SetRelays(relays));
     }
@@ -821,6 +819,9 @@ struct Loop {
     ws: WsTransport,
     api: BridgeApi,
     machines: Vec<String>,
+    /// The relays the transport was last pointed at from the stores (see
+    /// [`Loop::sync_relays`]).
+    relay_set: Vec<String>,
     host: Rc<LoopHost>,
     retry_timer: Option<AbortHandle>,
     vis_timer: Option<AbortHandle>,
@@ -1271,12 +1272,8 @@ impl Loop {
             self.persist_store(id).await;
             self.state_changed(slice_of(id));
         }
-        // Ahead of the sends below — same reasoning as `interpret_intent`:
-        // a relay learned from the pairing candidate must reach the
-        // transport before any send that depends on it goes out.
-        if let Some(relays) = r.relays_changed {
-            self.nostr.set_relays(&relays);
-        }
+        // Ahead of the sends below — same reasoning as `interpret_intent`.
+        self.sync_relays();
         // Also ahead of the sends: a send can provoke an immediate reply from
         // a machine this route just added (the refresh after a pair-ack), and
         // the subscription must already cover that machine when it arrives.
@@ -1429,6 +1426,18 @@ impl Loop {
         }
     }
 
+    /// Point the transport at the stores' relay set when it changed: a
+    /// pairing began or ended, a machine was added or removed, or its relays
+    /// were edited.
+    fn sync_relays(&mut self) {
+        let relays = self.stores.relay_set();
+        if relays != self.relay_set {
+            log::info!("relays: {relays:?}");
+            self.nostr.set_relays(&relays);
+            self.relay_set = relays;
+        }
+    }
+
     /// Subscription authors = registered machines + the pairing candidate (its
     /// pair-ack must pass the filter). Push them to the `LoopHost` and, if
     /// connected, re-REQ.
@@ -1478,6 +1487,7 @@ impl Loop {
         ImageSendCtx {
             signer: Rc::clone(&self.signer),
             cipher: self.cipher_for(machine),
+            relays: self.stores.relays_for(machine),
             http: Rc::clone(&self.http),
             ws: self.ws.clone(),
             clock: Rc::clone(&self.clock),
@@ -1506,13 +1516,10 @@ impl Loop {
             self.state_changed(slice_of(id));
         }
         // Relay/subscription reconfiguration runs BEFORE the sends below: a
-        // pairing-driven relay merge (`AddRelays`, or the pairing FSM's own
-        // `NotifyCandidate` relay learning) must reach the transport before
-        // a queued `SendPairRequest` is dispatched, or a bridge reachable
-        // only over the newly-learned relay never sees the request.
-        if let Some(relays) = r.relays_changed {
-            self.nostr.set_relays(&relays);
-        }
+        // pairing candidate's relays must reach the transport before its
+        // `SendPairRequest` is dispatched, or a bridge reachable only over
+        // one of them never sees the request.
+        self.sync_relays();
         if r.resubscribe {
             self.refresh_authors();
             self.state_changed(SliceId::Machines);
@@ -1742,6 +1749,7 @@ impl Loop {
         let settled = matches!(result.state.phase, PairingPhase::Failed);
         self.stores.pairing = result.state;
         abort(&mut self.pair_timer);
+        self.sync_relays();
         if settled {
             self.emit(CoreEvent::PairingSettled { paired: false });
             self.state_changed(SliceId::Pairing);
@@ -1843,8 +1851,10 @@ impl Loop {
         };
 
         // Publish off the loop so a 12s confirmation budget never blocks
-        // socket-close / lifecycle handling.
+        // socket-close / lifecycle handling. Only to `machine`'s relays: the
+        // other machines' relays have no use for it.
         let ws = self.ws.clone();
+        let relays = self.stores.relays_for(machine);
         let link = self.links.get(machine).map(|(_, link)| link.clone());
         let observer = Rc::clone(&self.observer);
         let self_tx = self.self_tx.clone();
@@ -1855,7 +1865,7 @@ impl Loop {
             };
             let result = match direct {
                 Some(result) => result,
-                None => ws.publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS).await,
+                None => ws.publish_confirmed_to(&event, &relays, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS).await,
             };
             let failed = match result.verdict {
                 PublishVerdict::Rejected => Some(ActionFailedKind::PublishRejected),
@@ -1901,6 +1911,8 @@ struct ImageSendCtx {
     signer: Rc<dyn IdentitySigner>,
     /// The machine's payload cipher, decided when the send started.
     cipher: Cipher,
+    /// The machine's relays (see `CoreStores::relays_for`).
+    relays: Vec<String>,
     http: Rc<dyn crate::attachments::HttpFetch>,
     ws: WsTransport,
     clock: Rc<dyn Clock>,
@@ -1922,7 +1934,7 @@ impl ImageSendCtx {
     ) -> PublishResult {
         let now = self.clock.now_ms();
         match crate::signer::build_command(self.signer.as_ref(), &self.cipher, machine, &msg, now).await {
-            Ok(event) => self.ws.publish_confirmed(&event, budget, attempts).await,
+            Ok(event) => self.ws.publish_confirmed_to(&event, &self.relays, budget, attempts).await,
             Err(err) => PublishResult {
                 verdict: PublishVerdict::Rejected,
                 detail: Some(egress_detail(&err)),
@@ -2154,9 +2166,8 @@ mod tests {
         spy: Rc<Spy>,
         ports: CorePorts,
     ) -> Core {
-        Core::spawn(
+        let core = Core::spawn(
             CoreConfig {
-                relays: vec![mock.url.clone()],
                 identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                 proxy: None,
                 tor: false,
@@ -2167,7 +2178,11 @@ mod tests {
             Rc::new(FixedClock(RefCell::new(1_000_000))),
             Rc::new(ZeroEntropy),
         )
-        .await
+        .await;
+        // No paired machine brings a relay here; point the transport at the
+        // mock the way a paired machine's relays would.
+        core.set_relays(vec![mock.url.clone()]);
+        core
     }
 
     struct OkHttp;
@@ -2282,7 +2297,6 @@ mod tests {
     async fn spawn_applies_the_boot_time_proxy_to_the_http_port_when_tor_is_on() {
         LocalSet::new()
             .run_until(async {
-                let mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let spy = Rc::new(Spy::default());
                 let recording = Rc::new(RecordingHttp::default());
@@ -2292,7 +2306,6 @@ mod tests {
                 };
                 let _core = Core::spawn(
                     CoreConfig {
-                        relays: vec![mock.url.clone()],
                         identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: Some("127.0.0.1:9050".to_string()),
                         tor: true,
@@ -2320,7 +2333,6 @@ mod tests {
     async fn spawn_leaves_the_http_port_direct_when_tor_is_off() {
         LocalSet::new()
             .run_until(async {
-                let mock = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let spy = Rc::new(Spy::default());
                 let recording = Rc::new(RecordingHttp::default());
@@ -2330,7 +2342,6 @@ mod tests {
                 };
                 let _core = Core::spawn(
                     CoreConfig {
-                        relays: vec![mock.url.clone()],
                         identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: Some("127.0.0.1:9050".to_string()),
                         tor: false,
@@ -2440,7 +2451,6 @@ mod tests {
                 let spy = Rc::new(Spy::default());
                 let core = Core::spawn(
                     CoreConfig {
-                        relays: vec![mock1.url.clone(), mock2.url.clone()],
                         identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: None,
                         tor: false,
@@ -2452,6 +2462,7 @@ mod tests {
                     Rc::new(ZeroEntropy),
                 )
                 .await;
+                core.set_relays(vec![mock1.url.clone(), mock2.url.clone()]);
 
                 core.set_machines(vec![machine.pubkey_hex.clone()]);
                 core.start();
@@ -2818,7 +2829,7 @@ mod tests {
                 let machine = generate_keypair();
 
                 let mut state = client_core::stores::machines::MachinesState::default();
-                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
                 let kv = MemoryKv::seeded([(
                     crate::stores::MACHINES_KEY,
                     client_core::stores::machines::serialize_machines(&state.machines),
@@ -3017,26 +3028,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_relay_intent_persists_and_repoints_the_transport() {
+    async fn editing_a_machines_relays_repoints_the_transport() {
         LocalSet::new()
             .run_until(async {
-                let mock = mock_relay().await;
+                let mut first = mock_relay().await;
+                let mut second = mock_relay().await;
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                // A machine paired in an earlier run, reached over `first`.
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[first.url.clone()]);
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
                 let spy = Rc::new(Spy::default());
-                let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+                let core = Core::spawn(
+                    CoreConfig {
+                        identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                        proxy: None,
+                        tor: false,
+                        reconnect: fast_reconnect(),
+                    },
+                    CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+                    Rc::clone(&spy) as Rc<dyn CoreObserver>,
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+                // Dialled from the stored machine alone: no relay configured.
+                core.start();
+                eose_all(&mut first).await;
+                settle().await;
 
-                core.dispatch(Intent::AddRelay {
-                    url: "wss://added.example".into(),
+                core.dispatch(Intent::SetMachineRelays {
+                    machine: machine.pubkey_hex.clone(),
+                    relays: vec![second.url.clone()],
                 })
                 .await;
-
-                let sv = core.settings_view().await.unwrap();
-                assert!(sv.0.relays.iter().any(|r| r == "wss://added.example"));
-                // the intent emits a Settings + a Machines (resubscribe) slice change
-                let events = spy.events.lock().unwrap();
-                assert!(events.contains(&CoreEvent::StateChanged {
-                    slice: SliceId::Settings
-                }));
+                for _ in 0..3 {
+                    let req = second.next_frame().await;
+                    assert!(req.starts_with(r#"["REQ""#), "got {req}");
+                }
+                assert!(spy.events.lock().unwrap().contains(&CoreEvent::StateChanged { slice: SliceId::Machines }));
             })
             .await;
     }
@@ -3495,6 +3529,60 @@ mod tests {
         ));
     }
 
+    /// A fresh phone has no relays at all: the pairing link's relays are the
+    /// first the transport dials, and the pair-request, sent while they are
+    /// still connecting, reaches them.
+    #[tokio::test]
+    async fn a_phone_with_no_relays_pairs_over_the_relays_its_pairing_names() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let core = Core::spawn(
+                    CoreConfig {
+                        identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                        proxy: None,
+                        tor: false,
+                        reconnect: fast_reconnect(),
+                    },
+                    CorePorts::default(),
+                    Rc::new(Spy::default()),
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+                core.start();
+                settle().await;
+
+                core.dispatch(Intent::BeginManualPairing {
+                    npub: machine.npub.clone(),
+                    token: "tok".into(),
+                    relays: mock.url.clone(),
+                    label: "laptop".into(),
+                })
+                .await;
+                let mut pair_request = false;
+                for _ in 0..12 {
+                    let frame = mock.next_frame().await;
+                    let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                    match v[0].as_str() {
+                        Some("REQ") => mock.push(format!(r#"["EOSE","{}"]"#, v[1].as_str().unwrap())),
+                        Some("EVENT") => {
+                            let tags = v[1]["tags"].as_array().unwrap();
+                            if tags.iter().any(|t| t[0] == "p" && t[1] == machine.pubkey_hex) {
+                                pair_request = true;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(pair_request, "the pair-request never reached the pairing's relay");
+            })
+            .await;
+    }
+
     #[tokio::test]
     async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript() {
         LocalSet::new()
@@ -3514,6 +3602,7 @@ mod tests {
                 core.dispatch(Intent::BeginManualPairing {
                     npub: machine.npub.clone(),
                     token: "tok".into(),
+                    relays: mock.url.clone(),
                     label: "laptop".into(),
                 })
                 .await;
@@ -3629,6 +3718,7 @@ mod tests {
                 core.dispatch(Intent::BeginManualPairing {
                     npub: machine.npub.clone(),
                     token: "tok".into(),
+                    relays: mock.url.clone(),
                     label: "laptop".into(),
                 })
                 .await;
@@ -3754,7 +3844,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let mut state = client_core::stores::machines::MachinesState::default();
-                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
                 let kv = MemoryKv::seeded([(
                     crate::stores::MACHINES_KEY,
                     client_core::stores::machines::serialize_machines(&state.machines),
@@ -3862,7 +3952,7 @@ mod tests {
                 let store = MemoryKeyStore::default();
                 *store.0.borrow_mut() = Some(SessionKeyRing { current: old.clone(), previous: None }.encode());
                 let mut state = client_core::stores::machines::MachinesState::default();
-                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
                 state.machines.get_mut(&machine.pubkey_hex).unwrap().session_grant = Some(SessionGrant {
                     pubkey_hex: old.pubkey_hex().to_string(),
                     expires_at: old.expires_at,
@@ -3921,7 +4011,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let mut state = client_core::stores::machines::MachinesState::default();
-                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
                 let kv = MemoryKv::seeded([(
                     crate::stores::MACHINES_KEY,
                     client_core::stores::machines::serialize_machines(&state.machines),
@@ -3929,7 +4019,6 @@ mod tests {
                 let clock = Rc::new(FixedClock(RefCell::new(1_000_000)));
                 let core = Core::spawn(
                     CoreConfig {
-                        relays: vec![mock.url.clone()],
                         identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: None,
                         tor: false,
@@ -3941,6 +4030,7 @@ mod tests {
                     Rc::new(ZeroEntropy),
                 )
                 .await;
+                core.set_relays(vec![mock.url.clone()]);
                 core.start();
                 eose_all(&mut mock).await;
                 let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
@@ -4025,7 +4115,7 @@ mod tests {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let endpoint = format!("ws://{}", listener.local_addr().unwrap());
                 let mut state = client_core::stores::machines::MachinesState::default();
-                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
                 state.machines.get_mut(&machine.pubkey_hex).unwrap().direct =
                     Some(protocol::direct::DirectInfo { endpoints: vec![endpoint.clone()], cert_sha256: None });
                 let kv = MemoryKv::seeded([(
@@ -4105,7 +4195,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let machine = generate_keypair();
                 let mut state = client_core::stores::machines::MachinesState::default();
-                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
                 let kv = MemoryKv::seeded([(
                     crate::stores::MACHINES_KEY,
                     client_core::stores::machines::serialize_machines(&state.machines),
@@ -4113,7 +4203,6 @@ mod tests {
                 let signs = Rc::new(std::cell::Cell::new(0));
                 let core = Core::spawn(
                     CoreConfig {
-                        relays: vec![mock.url.clone()],
                         identity: Rc::new(CountingSigner(crate::signer::LocalSigner(phone.clone()), Rc::clone(&signs))),
                         proxy: None,
                         tor: false,
@@ -4125,6 +4214,7 @@ mod tests {
                     Rc::new(ZeroEntropy),
                 )
                 .await;
+                core.set_relays(vec![mock.url.clone()]);
                 core.start();
                 eose_all(&mut mock).await;
                 let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;

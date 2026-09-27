@@ -55,7 +55,18 @@ regenerates them and CI fails on drift.
   transcript rows, pairing (QR scan), new session, settings.
 
 Pairing is a QR scan of the bridge's `codedeck://pair?…` URL (see
-[`PROTOCOL.md`](PROTOCOL.md#pairing)).
+[`PROTOCOL.md`](PROTOCOL.md#pairing)), or, by hand, the bridge's npub, token
+and relays.
+
+**Per-machine settings.** The phone has no relays of its own. Each paired
+machine keeps the relays it is reached over — the ones its pairing link and
+pair-ack named, editable on the machine's settings page — and the transport
+dials the union of them (plus a pairing candidate's). A command is published
+only to its machine's relays. A phone with nothing paired dials nothing. The
+defaults a new session starts with (the agent, and per agent its mode,
+effort and model) are kept per machine too; everything else in Settings
+(appearance, notifications, stay connected, Orbot, Blossom, quick prompts)
+is the phone's own.
 
 **Login.** A fresh install opens on a welcome screen, and the core does not
 start until the user picks how the identity is held: a NIP-55 signer app
@@ -118,6 +129,9 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
   25% jitter, 8 s → 60 s over Tor — and dials every relay at once. Going
   back online reconnects at once. A relay that comes back gets every open
   subscription's REQ again.
+- A publish waits, within its budget, for one of its relays to come up
+  when none is yet (a relay a pairing just added is still connecting when
+  the pair-request goes out); it is unreachable only when none does.
 - A REQ or event a relay refuses with `auth-required:` is re-sent once that
   relay has accepted the NIP-42 AUTH; if it refuses the AUTH, or asks again
   after accepting it, the subscription is dead there and the publish

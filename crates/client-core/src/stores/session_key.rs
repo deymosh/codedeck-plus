@@ -307,7 +307,7 @@ mod tests {
     fn store(caps: &[&str]) -> MachinesState {
         let mut s = MachinesState::new(Default::default(), MergeOptions::default());
         for m in ["m", "n"] {
-            s.register_machine(m, "laptop", None, None);
+            s.register_machine(m, "laptop", None, None, &[]);
             s.machines.get_mut(m).unwrap().capabilities = caps.iter().map(|c| c.to_string()).collect();
         }
         s

@@ -138,7 +138,7 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
             // --- the phone ---
             let store = Rc::new(MemoryTranscriptStore::new());
             let core = Core::spawn(
-                CoreConfig::new(vec![relay.clone()], Rc::new(LocalSigner(generate_keypair())), None, false),
+                CoreConfig::new(Rc::new(LocalSigner(generate_keypair())), None, false),
                 CorePorts { transcript_store: store.clone(), ..CorePorts::default() },
                 Rc::new(Observer),
                 Rc::new(SystemClock),
@@ -146,9 +146,8 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
             )
             .await;
             core.start();
-            connected(&core).await;
 
-            // --- pairing ---
+            // --- pairing (a fresh phone has no relays: the link names them) ---
             core.dispatch(Intent::BeginPairing { url: pairing_url, label: "e2e-phone".into() }).await;
             until("pairing", || async {
                 let view = core.pairing_view().await?;

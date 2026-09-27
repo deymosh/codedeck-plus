@@ -10,11 +10,11 @@
 
 use client_core::delete_controller::DeleteEffect;
 use client_core::stores::fetches::Fetch;
+use client_core::stores::machines::AgentDefaults;
 use client_core::stores::outbox::OutboxState;
 use client_core::stores::pairing::{
     parse_manual_pair, parse_pairing_url, pairing_reducer, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
-use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
     BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, ModelsRequestMsg, PermissionResponseMsg,
@@ -78,8 +78,6 @@ pub struct IntentResult {
     pub persist: Vec<StoreId>,
     /// The relay subscription authors filter changed — resubscribe.
     pub resubscribe: bool,
-    /// A new relay list — the loop reconfigures the transport.
-    pub relays_changed: Option<Vec<String>>,
     /// Tor toggled — the loop re-inits the transport proxy.
     pub tor_changed: Option<bool>,
     /// CDX-026c: surfaces so the loop can cancel a surface's notifications.
@@ -167,10 +165,12 @@ pub enum Intent {
         url: String,
         label: String,
     },
-    /// Manual npub + token fallback.
+    /// Manual fallback: the bridge's npub and token, and the relays it is
+    /// on (comma or space separated) — the phone has none of its own.
     BeginManualPairing {
         npub: String,
         token: String,
+        relays: String,
         label: String,
     },
     /// CDX-013: stage a deep-link URL for explicit confirmation.
@@ -196,6 +196,26 @@ pub enum Intent {
     SetDirectEndpoints {
         machine: String,
         endpoints: Vec<String>,
+    },
+    /// Replace the relays a machine is reached over. Purely local; ignored
+    /// for an empty list or a URL that is not a relay.
+    SetMachineRelays {
+        machine: String,
+        relays: Vec<String>,
+    },
+    /// The agent a machine's new sessions start on (`None`: its first).
+    SetDefaultAgent {
+        machine: String,
+        agent: Option<String>,
+    },
+    /// What a new session of `agent` on `machine` starts with (agent ids;
+    /// empty = the agent's own default).
+    SetAgentDefaults {
+        machine: String,
+        agent: String,
+        mode: String,
+        effort: String,
+        model: String,
     },
 
     // --- session commands ---
@@ -300,27 +320,10 @@ pub enum Intent {
         machine: String,
         session_id: Option<String>,
     },
-    AddRelay {
-        url: String,
-    },
-    RemoveRelay {
-        url: String,
-    },
-    /// Merge relays learned from a pairing URL. Not itself user-facing on the
-    /// pairing path (that already merges internally when a candidate settles)
-    /// — kept for a Settings UI that wants to bulk-add without a per-URL loop.
-    AddRelays {
-        urls: Vec<String>,
-    },
     SetTorEnabled(bool),
     SetStayConnected(bool),
     SetBlossomServer(String),
     SetNotificationsEnabled(bool),
-    /// Preferred mode / effort / model for new sessions (agent ids; empty =
-    /// the agent's default).
-    SetDefaultMode(String),
-    SetDefaultEffort(String),
-    SetDefaultModel(String),
     SetUiScale(f64),
     SetShowUsageBadge(bool),
     SetShowCommitBadge(bool),
@@ -435,9 +438,9 @@ pub fn apply(
             Ok(parts) => begin_pairing(stores, keys, ctx.now, PairingEvent::BeginPair { parts, label }, &mut r),
             Err(_) => stores.pairing.error = Some("invalid pairing URL".to_string()),
         },
-        Intent::BeginManualPairing { npub, token, label } => match parse_manual_pair(&npub, &token) {
+        Intent::BeginManualPairing { npub, token, relays, label } => match parse_manual_pair(&npub, &token, &relays) {
             Ok(parts) => begin_pairing(stores, keys, ctx.now, PairingEvent::BeginPair { parts, label }, &mut r),
-            Err(_) => stores.pairing.error = Some("invalid npub or token".to_string()),
+            Err(reason) => stores.pairing.error = Some(reason),
         },
         Intent::StagePairing { url } => match parse_pairing_url(&url) {
             Ok(parts) => begin_pairing(stores, keys, ctx.now, PairingEvent::StagePair(parts), &mut r),
@@ -476,6 +479,21 @@ pub fn apply(
         }
         Intent::SetDirectEndpoints { machine, endpoints } => {
             if stores.machines.set_direct_endpoints(&machine, endpoints) {
+                r.persist(StoreId::Machines);
+            }
+        }
+        Intent::SetMachineRelays { machine, relays } => {
+            if stores.machines.set_relays(&machine, relays) {
+                r.persist(StoreId::Machines);
+            }
+        }
+        Intent::SetDefaultAgent { machine, agent } => {
+            if stores.machines.set_default_agent(&machine, agent) {
+                r.persist(StoreId::Machines);
+            }
+        }
+        Intent::SetAgentDefaults { machine, agent, mode, effort, model } => {
+            if stores.machines.set_agent_defaults(&machine, &agent, AgentDefaults { mode, effort, model }) {
                 r.persist(StoreId::Machines);
             }
         }
@@ -696,11 +714,6 @@ pub fn apply(
                     .select_session(&machine, session_id.as_deref(), ctx.visible);
             r.ui_changed = true;
         }
-        Intent::AddRelay { url } => apply_relay_effects(stores.settings.add_relay(&url), &mut r),
-        Intent::RemoveRelay { url } => {
-            apply_relay_effects(stores.settings.remove_relay(&url), &mut r)
-        }
-        Intent::AddRelays { urls } => apply_relay_effects(stores.settings.add_relays(&urls), &mut r),
         Intent::SetTorEnabled(on) => {
             stores.settings.set_tor_proxy_enabled(on);
             r.tor_changed = Some(on);
@@ -716,18 +729,6 @@ pub fn apply(
         }
         Intent::SetNotificationsEnabled(on) => {
             stores.settings.set_notifications_enabled(on);
-            r.persist(StoreId::Settings);
-        }
-        Intent::SetDefaultMode(mode) => {
-            stores.settings.set_default_mode(&mode);
-            r.persist(StoreId::Settings);
-        }
-        Intent::SetDefaultEffort(level) => {
-            stores.settings.set_default_effort(&level);
-            r.persist(StoreId::Settings);
-        }
-        Intent::SetDefaultModel(model) => {
-            stores.settings.set_default_model(&model);
             r.persist(StoreId::Settings);
         }
         Intent::SetUiScale(scale) => {
@@ -771,18 +772,6 @@ pub fn apply(
     r
 }
 
-fn apply_relay_effects(effects: Vec<SettingsEffect>, r: &mut IntentResult) {
-    for effect in effects {
-        match effect {
-            SettingsEffect::RelaysChanged(relays) => {
-                r.relays_changed = Some(relays);
-                r.persist(StoreId::Settings);
-                r.resubscribe = true;
-            }
-        }
-    }
-}
-
 /// Run a pairing event through the reducer + [`apply_pairing_effects`], folding
 /// the transport-affecting effects into the [`IntentResult`].
 fn begin_pairing(
@@ -799,9 +788,6 @@ fn begin_pairing(
         r.persist(id);
     }
     r.resubscribe |= out.resubscribe;
-    if out.relays_changed.is_some() {
-        r.relays_changed = out.relays_changed;
-    }
     if out.pair_deadline.is_some() {
         r.pair_deadline = out.pair_deadline;
     }
@@ -917,7 +903,7 @@ mod tests {
     async fn send_input_queues_an_outbox_item_clears_unread_and_stamps_a_stopgap_title() {
         use client_core::stores::outbox::OutboxItemState;
         let (mut s, kp) = stores().await;
-        s.machines.register_machine("m", "laptop", None, None);
+        s.machines.register_machine("m", "laptop", None, None, &[]);
         s.ui.mark_session_unread("m", "s1");
 
         let out = apply(
@@ -971,7 +957,7 @@ mod tests {
     async fn delete_session_dismisses_removes_arms_the_undo_and_shows_a_toast() {
         use protocol::common::RemoteSessionInfo;
         let (mut s, kp) = stores().await;
-        s.machines.register_machine("m", "laptop", None, None);
+        s.machines.register_machine("m", "laptop", None, None, &[]);
         s.machines.apply_session_upsert(
             "m",
             &RemoteSessionInfo {
@@ -1026,7 +1012,7 @@ mod tests {
     async fn remove_machine_forgets_it_deselects_and_queues_its_sessions_for_transcript_removal() {
         use protocol::common::RemoteSessionInfo;
         let (mut s, kp) = stores().await;
-        s.machines.register_machine("m", "laptop", None, None);
+        s.machines.register_machine("m", "laptop", None, None, &[]);
         s.machines.apply_session_upsert(
             "m",
             &RemoteSessionInfo {
@@ -1073,8 +1059,8 @@ mod tests {
     #[tokio::test]
     async fn remove_machine_leaves_the_selection_alone_when_a_different_machine_is_selected() {
         let (mut s, kp) = stores().await;
-        s.machines.register_machine("m1", "laptop", None, None);
-        s.machines.register_machine("m2", "desktop", None, None);
+        s.machines.register_machine("m1", "laptop", None, None, &[]);
+        s.machines.register_machine("m2", "desktop", None, None, &[]);
         s.ui.select_machine(Some("m2"));
 
         let out = apply(
@@ -1112,6 +1098,7 @@ mod tests {
             Intent::BeginManualPairing {
                 npub: peer.npub.clone(),
                 token: "tok".into(),
+                relays: "wss://typed.example".into(),
                 label: "my phone".into(),
             },
             &kp,
@@ -1122,6 +1109,7 @@ mod tests {
             s.pairing.candidate.as_ref().unwrap().pubkey_hex,
             peer.pubkey_hex
         );
+        assert_eq!(s.relay_set(), vec!["wss://typed.example"]);
         assert!(matches!(out.pair_deadline, Some(PairDeadline::Arm { .. })));
         assert!(out.resubscribe);
         assert!(matches!(
@@ -1140,6 +1128,7 @@ mod tests {
             Intent::BeginManualPairing {
                 npub: "npub1nope".into(),
                 token: "t".into(),
+                relays: "wss://r.example".into(),
                 label: "x".into(),
             },
             &kp,
@@ -1148,16 +1137,29 @@ mod tests {
         assert!(s2.pairing.candidate.is_none());
         assert!(s2.pairing.error.is_some());
         assert_eq!(bad, IntentResult::default());
+
+        // without a relay there is nowhere to send the request
+        let mut s3 = stores().await.0;
+        apply(
+            &mut s3,
+            Intent::BeginManualPairing {
+                npub: peer.npub.clone(),
+                token: "t".into(),
+                relays: " ".into(),
+                label: "x".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(s3.pairing.candidate.is_none());
+        assert_eq!(s3.pairing.error.as_deref(), Some("missing relays"));
     }
 
     #[tokio::test]
-    async fn begin_pairing_from_a_url_merges_its_relays_before_the_pair_request_send() {
+    async fn begin_pairing_from_a_url_puts_its_relays_in_the_relay_set() {
         let (mut s, kp) = stores().await;
         let bridge = protocol::crypto::generate_keypair();
-        assert!(
-            !s.settings.data.relays.iter().any(|r| r == "wss://new-relay.example"),
-            "test relay must not already be a default"
-        );
+        assert!(s.relay_set().is_empty(), "a phone has no relays of its own");
 
         let url = format!(
             "codedeck://pair?npub={}&relays=wss%3A%2F%2Fnew-relay.example&machine=bridge&token=tok",
@@ -1170,16 +1172,11 @@ mod tests {
             ctx(),
         );
 
-        // The relay is merged into settings and signalled to the loop
-        // (`interpret_intent` applies `relays_changed` before `out.sends`,
-        // so the transport is already pointed at it once the pair-request
-        // below is actually dispatched).
-        assert!(s.settings.data.relays.iter().any(|r| r == "wss://new-relay.example"));
-        assert!(out
-            .relays_changed
-            .as_ref()
-            .is_some_and(|relays| relays.iter().any(|r| r == "wss://new-relay.example")));
-        assert!(out.persist.contains(&StoreId::Settings));
+        // The candidate's relays are in the set the loop points the transport
+        // at (`interpret_intent` syncs it before `out.sends`), and its
+        // pair-request goes only there.
+        assert_eq!(s.relay_set(), vec!["wss://new-relay.example"]);
+        assert_eq!(s.relays_for(&bridge.pubkey_hex), vec!["wss://new-relay.example"]);
         assert!(matches!(
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::PairRequest(_) }] if *machine == bridge.pubkey_hex
@@ -1367,34 +1364,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_relay_emits_a_relays_changed_effect_and_persists() {
+    async fn machine_relays_and_new_session_defaults_are_set_per_machine() {
         let (mut s, kp) = stores().await;
-        let out = apply(
-            &mut s, Intent::AddRelay { url: "wss://new.example".into() }, &kp, ctx());
-        assert!(out.relays_changed.unwrap().iter().any(|r| r == "wss://new.example"));
-        assert_eq!(out.persist, vec![StoreId::Settings]);
-        assert!(out.resubscribe);
-        // adding the same relay again is a no-op
-        let out2 = apply(
-            &mut s, Intent::AddRelay { url: "wss://new.example".into() }, &kp, ctx());
-        assert_eq!(out2, IntentResult::default());
-    }
+        s.machines.register_machine("m", "laptop", None, None, &["wss://a.example".to_string()]);
 
-    #[tokio::test]
-    async fn add_relays_merges_a_batch_in_one_call() {
-        let (mut s, kp) = stores().await;
         let out = apply(
             &mut s,
-            Intent::AddRelays {
-                urls: vec!["wss://a.example".into(), "wss://b.example".into()],
+            Intent::SetMachineRelays { machine: "m".into(), relays: vec!["wss://b.example".into()] },
+            &kp,
+            ctx(),
+        );
+        assert_eq!(out.persist, vec![StoreId::Machines]);
+        assert_eq!(s.relay_set(), vec!["wss://b.example"]);
+        // an empty list would strand the machine: ignored
+        let out = apply(&mut s, Intent::SetMachineRelays { machine: "m".into(), relays: vec![] }, &kp, ctx());
+        assert_eq!(out, IntentResult::default());
+
+        apply(&mut s, Intent::SetDefaultAgent { machine: "m".into(), agent: Some("opencode".into()) }, &kp, ctx());
+        let out = apply(
+            &mut s,
+            Intent::SetAgentDefaults {
+                machine: "m".into(),
+                agent: "opencode".into(),
+                mode: "build".into(),
+                effort: String::new(),
+                model: "gpt".into(),
             },
             &kp,
             ctx(),
         );
-        let relays = out.relays_changed.unwrap();
-        assert!(relays.iter().any(|r| r == "wss://a.example"));
-        assert!(relays.iter().any(|r| r == "wss://b.example"));
-        assert_eq!(out.persist, vec![StoreId::Settings]);
+        assert_eq!(out.persist, vec![StoreId::Machines]);
+        let m = s.machines.machine("m").unwrap();
+        assert_eq!(m.default_agent.as_deref(), Some("opencode"));
+        assert_eq!(m.agent_defaults["opencode"].model, "gpt");
     }
 
     #[tokio::test]
@@ -1404,12 +1406,6 @@ mod tests {
         let out = apply(&mut s, Intent::SetBlossomServer("https://blossom.example".into()), &kp, ctx());
         assert_eq!(out.persist, vec![StoreId::Settings]);
         assert_eq!(s.settings.data.blossom_server, "https://blossom.example");
-
-        apply(&mut s, Intent::SetDefaultEffort("high".into()), &kp, ctx());
-        assert_eq!(s.settings.data.default_effort, "high");
-        // empty string is the valid "unset" sentinel — not coerced to a default
-        apply(&mut s, Intent::SetDefaultEffort(String::new()), &kp, ctx());
-        assert_eq!(s.settings.data.default_effort, "");
 
         apply(&mut s, Intent::SetShowUsageBadge(false), &kp, ctx());
         assert!(!s.settings.data.show_usage_badge);

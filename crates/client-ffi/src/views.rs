@@ -383,6 +383,29 @@ pub struct UniffiMachineSummary {
     pub direct_endpoints: Vec<String>,
     /// The endpoint the direct link is up on; `None` means the relays.
     pub direct_up: Option<String>,
+    /// The bridge's npub (its pubkey in the form users see).
+    pub npub: String,
+    /// The relays this machine is reached over.
+    pub relays: Vec<String>,
+    /// When its last heartbeat arrived (ms), if one has since this start.
+    pub last_heartbeat_at: Option<u64>,
+    /// The bridge said it is shutting down, or none of its heartbeats has
+    /// arrived since this start.
+    pub machine_offline: bool,
+    /// The agent new sessions start on; `None`: the bridge's first.
+    pub default_agent: Option<String>,
+    /// What each agent's new sessions start with.
+    pub agent_defaults: Vec<UniffiAgentDefaults>,
+}
+
+/// The mode / effort / model one agent's new sessions on a machine start
+/// with: agent ids, `""` = the agent's own default.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentDefaults {
+    pub agent: String,
+    pub mode: String,
+    pub effort: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -463,6 +486,21 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                 direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
                 direct_endpoints: m.direct_endpoints.clone(),
                 direct_up: v.direct_up.get(&m.pubkey_hex).cloned(),
+                npub: protocol::crypto::npub_from_hex(&m.pubkey_hex).unwrap_or_else(|_| m.pubkey_hex.clone()),
+                relays: m.relays.clone(),
+                last_heartbeat_at: m.last_heartbeat_at,
+                machine_offline: m.machine_offline,
+                default_agent: m.default_agent.clone(),
+                agent_defaults: m
+                    .agent_defaults
+                    .iter()
+                    .map(|(agent, d)| UniffiAgentDefaults {
+                        agent: agent.clone(),
+                        mode: d.mode.clone(),
+                        effort: d.effort.clone(),
+                        model: d.model.clone(),
+                    })
+                    .collect(),
             })
             .collect(),
     }
@@ -622,16 +660,10 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiSettingsView {
-    pub relays: Vec<String>,
     pub ui_scale: f64,
     pub stay_connected: bool,
     pub tor_proxy_enabled: bool,
     pub blossom_server: String,
-    /// Preferred mode / effort / model for new sessions: agent ids, `""` =
-    /// the agent's default.
-    pub default_mode: String,
-    pub default_effort: String,
-    pub default_model: String,
     pub notifications_enabled: bool,
     pub show_usage_badge: bool,
     pub show_commit_badge: bool,
@@ -640,14 +672,10 @@ pub struct UniffiSettingsView {
 pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
     let d = &v.0;
     UniffiSettingsView {
-        relays: d.relays.clone(),
         ui_scale: d.ui_scale,
         stay_connected: d.stay_connected,
         tor_proxy_enabled: d.tor_proxy_enabled,
         blossom_server: d.blossom_server.clone(),
-        default_mode: d.default_mode.clone(),
-        default_effort: d.default_effort.clone(),
-        default_model: d.default_model.clone(),
         notifications_enabled: d.notifications_enabled,
         show_usage_badge: d.show_usage_badge,
         show_commit_badge: d.show_commit_badge,

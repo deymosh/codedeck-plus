@@ -394,13 +394,13 @@ mod tests {
     #[tokio::test]
     async fn settings_and_machines_views_are_thin_over_the_store() {
         let mut s = stores().await;
-        s.machines.register_machine("m", "laptop", None, None);
-        s.settings.add_relay("wss://extra.example");
+        s.machines.register_machine("m", "laptop", None, None, &["wss://extra.example".to_string()]);
+        s.settings.set_ui_scale(1.2);
 
         let mv = MachinesView::from_stores(&s);
-        assert!(mv.machines.contains_key("m"));
+        assert_eq!(mv.machines["m"].relays, vec!["wss://extra.example"]);
         let sv = SettingsView::from_stores(&s);
-        assert!(sv.0.relays.iter().any(|r| r == "wss://extra.example"));
+        assert_eq!(sv.0.ui_scale, 1.2);
         // transparent — serializes as the bare SettingsData
         assert!(serde_json::to_string(&sv).unwrap().starts_with('{'));
     }

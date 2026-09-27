@@ -85,27 +85,19 @@ fn is_direct_endpoint(url: String) -> bool {
     client_runtime::client_core::stores::machines::is_direct_endpoint(url.trim())
 }
 
-/// The relay list to pass into [`Core::new`]'s `relays` argument. Pure read,
-/// safe to call before any `Core` exists — opens (and migrates, if it doesn't
-/// exist yet) the same db file `Core::new` will open, so this always reflects
-/// whatever the user actually has persisted (or the shipped defaults, on a
-/// fresh install) instead of a caller-guessed list. `Core::spawn` dials its
-/// WebSocket transport from the constructor argument alone, not from its own
-/// later hydration read, so skipping this call is what leaves a host with no
-/// relays at all — see `db::relays_from_kv`'s doc comment for the full story.
+/// Whether the user may add `url` as a machine's relay: `wss://` to any
+/// host, `ws://` only to an onion service — the rule the core applies to
+/// `SetMachineRelays` and pairing.
 #[uniffi::export]
-fn persisted_relays(db_path: String) -> Vec<String> {
-    match open_native_db(&PathBuf::from(db_path)) {
-        Ok(conn) => db::relays_from_kv(&conn),
-        Err(_) => client_runtime::client_core::stores::settings::default_settings().relays,
-    }
+fn is_relay_url(url: String) -> bool {
+    client_runtime::client_core::stores::pairing::is_relay_url(url.trim())
 }
 
-/// The other half of the same pre-init read, for [`Core::new`]'s `tor`
-/// argument — see [`persisted_relays`]'s doc comment for why a caller must
-/// read this itself rather than relying on anything `Core::spawn` does once
-/// it's already running. `false` (the shipped default) on any read failure,
-/// same fallback shape as `persisted_relays`.
+/// Whether Orbot routing was on when settings were last saved, for
+/// [`Core::new`]'s `tor` argument. Pure read, safe before any `Core` exists:
+/// the proxy must be known before the first relay or Blossom connection,
+/// which `Core::spawn` makes before anything could ask a running core.
+/// `false` (the shipped default) on any read failure.
 #[uniffi::export]
 fn persisted_tor_proxy_enabled(db_path: String) -> bool {
     match open_native_db(&PathBuf::from(db_path)) {
@@ -265,7 +257,6 @@ impl Core {
     #[uniffi::constructor]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        relays: Vec<String>,
         // The phone's identity: signs every event; see `signer.rs`.
         identity: Arc<dyn UniffiIdentitySigner>,
         // Where the session keys are kept; `None` keeps them in the database.
@@ -284,7 +275,7 @@ impl Core {
         tor: bool,
     ) -> Result<Arc<Self>, CoreInitError> {
         android_log::install();
-        log::info!("Core::new: relays={relays:?} tor={tor} proxy={proxy:?} db_path={db_path}");
+        log::info!("Core::new: tor={tor} proxy={proxy:?} db_path={db_path}");
         let identity_pubkey = identity.pubkey_hex();
         let identity_npub =
             npub_from_hex(&identity_pubkey).map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
@@ -306,7 +297,7 @@ impl Core {
                     let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                     let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
                     let signer = Rc::new(signer::SignerAdapter::new(identity, identity_pubkey));
-                    let config = CoreConfig::new(relays, signer, proxy, tor);
+                    let config = CoreConfig::new(signer, proxy, tor);
 
                     let conn = match open_native_db(&db_path) {
                         Ok(conn) => Rc::new(RefCell::new(conn)),
@@ -526,7 +517,6 @@ mod tests {
     fn identity_npub_is_the_bech32_form_of_the_constructor_identity() {
         let (_dir, db_path) = temp_db_path();
         let core = Core::new(
-            vec![],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             None,
             Arc::new(NoopListener),
@@ -547,97 +537,41 @@ mod tests {
     }
 
     /// The whole point of a real (not `CorePorts::default()`'s in-memory)
-    /// `Kv`: a relay added in one process lifetime is still there after the
-    /// app (and its `Core`) restarts, against the same db file.
+    /// `Kv`: a setting changed in one process lifetime is still there after
+    /// the app (and its `Core`) restarts, against the same db file.
     #[tokio::test]
     async fn settings_persist_across_a_restart_against_the_same_db_file() {
         let (_dir, db_path) = temp_db_path();
-        let core = Core::new(
-            vec!["wss://relay-a.example".to_string()],
-            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
-            None,
-            Arc::new(NoopListener),
-            Arc::new(NoopTestNotifier),
-            None,
-            db_path.clone(),
-            None,
-            false,
-        )
-        .expect("core spawns");
-
-        core.dispatch(UniffiIntent::AddRelay { url: "wss://relay-b.example".to_string() })
-            .await
-            .expect("dispatch succeeds");
+        let spawn = |db_path: String| {
+            Core::new(
+                local_identity_signer(SEC_PHONE.to_string()).unwrap(),
+                None,
+                Arc::new(NoopListener),
+                Arc::new(NoopTestNotifier),
+                None,
+                db_path,
+                None,
+                false,
+            )
+        };
+        let core = spawn(db_path.clone()).expect("core spawns");
+        core.dispatch(UniffiIntent::SetUiScale { scale: 1.2 }).await.expect("dispatch succeeds");
         // The store's persist-to-kv runs on the core's own loop, not inline
         // with `dispatch`'s send — give it a moment before tearing the core
         // down under it.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         core.shutdown();
 
-        let core2 = Core::new(
-            // Deliberately a DIFFERENT relay list than what's persisted — a
-            // real device only ever passes `db_path`'s own settings.relays at
-            // boot, but this proves the persisted value wins over whatever
-            // the constructor argument says once a db file already exists.
-            vec!["wss://relay-a.example".to_string()],
-            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
-            None,
-            Arc::new(NoopListener),
-            Arc::new(NoopTestNotifier),
-            None,
-            db_path,
-            None,
-            false,
-        )
-        .expect("core re-spawns against the same db");
+        let core2 = spawn(db_path).expect("core re-spawns against the same db");
         let settings = core2.settings_view().await.expect("settings hydrated from the db");
-        assert!(
-            settings.relays.iter().any(|r| r == "wss://relay-b.example"),
-            "{:?}",
-            settings.relays
-        );
+        assert_eq!(settings.ui_scale, 1.2);
         core2.shutdown();
-    }
-
-    /// `Core::spawn` dials its transport from the `relays` constructor
-    /// argument alone (never from its own hydration read), so a caller MUST
-    /// pre-read this before restarting `Core` — this proves `persisted_relays`
-    /// is that read: it survives a shutdown/restart cycle without a `Core`
-    /// running at all, matching what `settings_view()` on a live core reports.
-    #[tokio::test]
-    async fn persisted_relays_reflects_a_relay_added_in_a_prior_core_lifetime() {
-        let (_dir, db_path) = temp_db_path();
-        // The constructor `relays` argument only ever seeds the WS transport
-        // dial list — the settings STORE hydrates purely from the db, so a
-        // fresh db starts from `default_settings()` regardless of what's
-        // passed here. `AddRelay` mutates that store, not this argument.
-        let core = Core::new(
-            vec!["wss://relay-a.example".to_string()],
-            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
-            None,
-            Arc::new(NoopListener),
-            Arc::new(NoopTestNotifier),
-            None,
-            db_path.clone(),
-            None,
-            false,
-        )
-        .expect("core spawns");
-        core.dispatch(UniffiIntent::AddRelay { url: "wss://relay-b.example".to_string() })
-            .await
-            .expect("dispatch succeeds");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        core.shutdown();
-
-        let relays = persisted_relays(db_path);
-        assert!(relays.iter().any(|r| r == "wss://relay-b.example"), "{relays:?}");
     }
 
     #[tokio::test]
     async fn persisted_tor_proxy_enabled_reflects_a_toggle_from_a_prior_core_lifetime() {
         let (_dir, db_path) = temp_db_path();
         let core = Core::new(
-            vec![],
             local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             None,
             Arc::new(NoopListener),
@@ -655,16 +589,5 @@ mod tests {
         core.shutdown();
 
         assert!(persisted_tor_proxy_enabled(db_path));
-    }
-
-    #[test]
-    fn persisted_relays_falls_back_to_defaults_for_a_path_that_does_not_exist_yet() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let db_path = dir.path().join("fresh.db").to_string_lossy().into_owned();
-        let relays = persisted_relays(db_path);
-        assert_eq!(
-            relays,
-            client_runtime::client_core::stores::settings::default_settings().relays
-        );
     }
 }

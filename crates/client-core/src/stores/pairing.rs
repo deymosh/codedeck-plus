@@ -83,11 +83,46 @@ fn decode_uri_component(s: &str) -> Result<String, ()> {
     String::from_utf8(out).map_err(|_| ())
 }
 
-fn is_relay_url(relay: &str) -> bool {
-    relay
-        .strip_prefix("wss://")
-        .or_else(|| relay.strip_prefix("ws://"))
-        .is_some_and(|rest| !rest.is_empty())
+/// Whether `relay` is a relay URL the phone may dial: `wss://` to any host;
+/// cleartext `ws://` only to an onion service (Tor encrypts it end to end)
+/// or to this device's loopback.
+pub fn is_relay_url(relay: &str) -> bool {
+    let host = |rest: &str| -> String {
+        let authority = rest.split('/').next().unwrap_or("");
+        let host = match authority.strip_prefix('[') {
+            Some(v6) => v6.split(']').next().unwrap_or(""),
+            None => authority.split(':').next().unwrap_or(""),
+        };
+        host.to_ascii_lowercase()
+    };
+    match (relay.strip_prefix("wss://"), relay.strip_prefix("ws://")) {
+        (Some(rest), _) => !host(rest).is_empty(),
+        (None, Some(rest)) => {
+            let h = host(rest);
+            h.ends_with(".onion") || h == "localhost" || h == "::1" || h.starts_with("127.")
+        }
+        _ => false,
+    }
+}
+
+/// Relay URLs typed by the user, separated by commas or whitespace.
+pub fn parse_relay_list(input: &str) -> Result<Vec<String>, String> {
+    let mut relays: Vec<String> = Vec::new();
+    for relay in input.split(|c: char| c == ',' || c.is_whitespace()).filter(|r| !r.is_empty()) {
+        if !is_relay_url(relay) {
+            return Err(format!("invalid relay URL: {relay}"));
+        }
+        if !relays.iter().any(|r| r == relay) {
+            relays.push(relay.to_string());
+        }
+    }
+    if relays.is_empty() {
+        return Err("missing relays".to_string());
+    }
+    if relays.len() > MAX_PAIRING_RELAYS {
+        return Err(format!("too many relays (max {MAX_PAIRING_RELAYS})"));
+    }
+    Ok(relays)
 }
 
 /// Parse + validate a pairing URL. Never panics — malformed input is `Err`.
@@ -165,19 +200,21 @@ pub fn parse_pairing_url(url: &str) -> ParsePairingResult {
     })
 }
 
-/// Manual fallback: the bridge npub + token typed by the user. `machine` is the
+/// Manual fallback: the bridge npub, token and relays typed by the user — the
+/// relays are required, since the phone has none of its own. `machine` is the
 /// `(manual)` placeholder until the `pair-ack` carries the real name (CDX-041).
-pub fn parse_manual_pair(npub: &str, token: &str) -> ParsePairingResult {
+pub fn parse_manual_pair(npub: &str, token: &str, relays: &str) -> ParsePairingResult {
     let npub = npub.trim();
     let token = token.trim();
     let pubkey_hex = hex_from_npub(npub).map_err(|_| "invalid npub".to_string())?;
     if token.is_empty() {
         return Err("missing token".to_string());
     }
+    let relays = parse_relay_list(relays)?;
     Ok(ParsedPairingUrl {
         npub: npub.to_string(),
         pubkey_hex,
-        relays: Vec::new(),
+        relays,
         machine: "(manual)".to_string(),
         token: token.to_string(),
     })
@@ -527,12 +564,28 @@ mod tests {
     #[test]
     fn parse_manual_pair_validates() {
         let n = bridge_npub();
-        assert_eq!(parse_manual_pair("npub1garbage", "tok").unwrap_err(), "invalid npub");
-        assert_eq!(parse_manual_pair(&n, "   ").unwrap_err(), "missing token");
-        let p = parse_manual_pair(&format!(" {n} "), " tok ").unwrap();
+        assert_eq!(parse_manual_pair("npub1garbage", "tok", "wss://r").unwrap_err(), "invalid npub");
+        assert_eq!(parse_manual_pair(&n, "   ", "wss://r").unwrap_err(), "missing token");
+        assert_eq!(parse_manual_pair(&n, "tok", " ").unwrap_err(), "missing relays");
+        assert_eq!(parse_manual_pair(&n, "tok", "https://r").unwrap_err(), "invalid relay URL: https://r");
+        let p = parse_manual_pair(&format!(" {n} "), " tok ", "wss://a.example, wss://b.example wss://a.example").unwrap();
         assert_eq!(p.token, "tok");
         assert_eq!(p.machine, "(manual)");
-        assert!(p.relays.is_empty());
+        assert_eq!(p.relays, vec!["wss://a.example", "wss://b.example"]);
+    }
+
+    #[test]
+    fn cleartext_relays_are_only_onion_or_loopback() {
+        assert!(is_relay_url("wss://relay.example"));
+        assert!(is_relay_url("wss://192.168.1.2:7777/path"));
+        assert!(is_relay_url("ws://abcdef.onion"));
+        assert!(is_relay_url("ws://127.0.0.1:4869"));
+        assert!(is_relay_url("ws://localhost:4869"));
+        assert!(is_relay_url("ws://[::1]:4869"));
+        assert!(!is_relay_url("ws://relay.example"));
+        assert!(!is_relay_url("ws://192.168.1.2:7777"));
+        assert!(!is_relay_url("wss://"));
+        assert!(!is_relay_url("https://relay.example"));
     }
 
     // --- FSM ---
@@ -614,7 +667,7 @@ mod tests {
 
     #[test]
     fn manual_pairing_learns_relays_host_and_name_from_the_ack() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "P".into() }, CFG);
         assert_eq!(begun.state.candidate.as_ref().unwrap().machine, "(manual)");
         let r = pairing_reducer(
@@ -628,7 +681,7 @@ mod tests {
         assert_eq!(r.state.candidate.as_ref().unwrap().machine, "laptop");
         match r.effects.iter().find(|e| matches!(e, PairingEffect::OnPaired { .. })).unwrap() {
             PairingEffect::OnPaired { candidate, host, .. } => {
-                assert_eq!(candidate.relays, vec!["wss://relay2.descendant.io", "wss://relay.primal.net"]);
+                assert_eq!(candidate.relays, vec!["wss://typed.example", "wss://relay2.descendant.io", "wss://relay.primal.net"]);
                 assert_eq!(*host, Some(BridgeHostKind::Cli));
             }
             _ => unreachable!(),
@@ -637,7 +690,7 @@ mod tests {
 
     #[test]
     fn a_nameless_ack_keeps_the_manual_placeholder() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p.clone(), label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::PairAck { machine_pubkey: p.pubkey_hex, msg: ack("", true, None, None, None) }, CFG);
         assert_eq!(r.state.candidate.as_ref().unwrap().machine, "(manual)");
@@ -660,7 +713,7 @@ mod tests {
 
     #[test]
     fn silence_past_the_deadline_fails_with_all_three_causes_named() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p, label: "P".into() }, CFG);
         let r = pairing_reducer(&begun.state, PairingEvent::DeadlineFired, CFG);
         assert_eq!(r.state.phase, PairingPhase::Failed);
@@ -673,7 +726,7 @@ mod tests {
 
     #[test]
     fn a_late_ack_after_a_timeout_still_pairs() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let s = run(PairingState::default(), vec![
             PairingEvent::BeginPair { parts: p.clone(), label: "P".into() },
             PairingEvent::DeadlineFired,
@@ -686,7 +739,7 @@ mod tests {
 
     #[test]
     fn a_bridge_nack_is_terminal_a_later_ack_is_ignored() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let s = run(PairingState::default(), vec![
             PairingEvent::BeginPair { parts: p.clone(), label: "P".into() },
             PairingEvent::PairAck { machine_pubkey: p.pubkey_hex.clone(), msg: ack("box", false, Some(PairAckReason::BadToken), None, None) },
@@ -700,7 +753,7 @@ mod tests {
 
     #[test]
     fn deadline_fired_after_a_pair_is_ignored() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let s = run(PairingState::default(), vec![
             PairingEvent::BeginPair { parts: p.clone(), label: "P".into() },
             PairingEvent::PairAck { machine_pubkey: p.pubkey_hex, msg: ack("box", true, None, None, None) },
@@ -712,7 +765,7 @@ mod tests {
 
     #[test]
     fn configurable_deadline_names_the_seconds() {
-        let p = parse_manual_pair(&bridge_npub(), "tok").unwrap();
+        let p = parse_manual_pair(&bridge_npub(), "tok", "wss://typed.example").unwrap();
         let begun = pairing_reducer(&PairingState::default(), PairingEvent::BeginPair { parts: p, label: "P".into() }, 5_000);
         let r = pairing_reducer(&begun.state, PairingEvent::DeadlineFired, 5_000);
         assert!(r.state.error.unwrap().contains("5s"));
