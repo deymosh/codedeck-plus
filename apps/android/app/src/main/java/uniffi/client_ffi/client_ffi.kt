@@ -968,6 +968,8 @@ internal open class UniffiVTableCallbackInterfaceUniffiSessionKeyStore(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1090,6 +1092,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_method_uniffisessionkeystore_save(`ptr`: Pointer,`ring`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_client_ffi_fn_func_is_direct_endpoint(`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_client_ffi_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_client_ffi_fn_func_local_identity_signer(`secretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1218,6 +1222,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_client_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_client_ffi_checksum_func_is_direct_endpoint(
+    ): Short
     fun uniffi_client_ffi_checksum_func_is_valid_provider_base_url(
     ): Short
     fun uniffi_client_ffi_checksum_func_local_identity_signer(
@@ -1315,6 +1321,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_client_ffi_checksum_func_is_direct_endpoint() != 27567.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_func_is_valid_provider_base_url() != 58480.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -4822,7 +4831,24 @@ data class UniffiMachineSummary (
      * Live model lists, one entry per agent that has answered `RequestModels`.
      */
     var `models`: List<UniffiAgentModels>, 
-    var `providerProfiles`: List<UniffiProviderProfileInfo>
+    var `providerProfiles`: List<UniffiProviderProfileInfo>, 
+    /**
+     * The direct endpoints the bridge advertises, in its order.
+     */
+    var `directAdvertised`: List<kotlin.String>, 
+    /**
+     * Whether the bridge advertised a certificate pin (without one no
+     * `wss://` endpoint is dialled).
+     */
+    var `directPinned`: kotlin.Boolean, 
+    /**
+     * The direct endpoints the user added, tried after the advertised ones.
+     */
+    var `directEndpoints`: List<kotlin.String>, 
+    /**
+     * The endpoint the direct link is up on; `None` means the relays.
+     */
+    var `directUp`: kotlin.String?
 ) {
     
     companion object
@@ -4845,6 +4871,10 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiCredentialStatus.read(buf),
             FfiConverterSequenceTypeUniffiAgentModels.read(buf),
             FfiConverterSequenceTypeUniffiProviderProfileInfo.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -4859,7 +4889,11 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgent.allocationSize(value.`agents`) +
             FfiConverterSequenceTypeUniffiCredentialStatus.allocationSize(value.`credentials`) +
             FfiConverterSequenceTypeUniffiAgentModels.allocationSize(value.`models`) +
-            FfiConverterSequenceTypeUniffiProviderProfileInfo.allocationSize(value.`providerProfiles`)
+            FfiConverterSequenceTypeUniffiProviderProfileInfo.allocationSize(value.`providerProfiles`) +
+            FfiConverterSequenceString.allocationSize(value.`directAdvertised`) +
+            FfiConverterBoolean.allocationSize(value.`directPinned`) +
+            FfiConverterSequenceString.allocationSize(value.`directEndpoints`) +
+            FfiConverterOptionalString.allocationSize(value.`directUp`)
     )
 
     override fun write(value: UniffiMachineSummary, buf: ByteBuffer) {
@@ -4874,6 +4908,10 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiCredentialStatus.write(value.`credentials`, buf)
             FfiConverterSequenceTypeUniffiAgentModels.write(value.`models`, buf)
             FfiConverterSequenceTypeUniffiProviderProfileInfo.write(value.`providerProfiles`, buf)
+            FfiConverterSequenceString.write(value.`directAdvertised`, buf)
+            FfiConverterBoolean.write(value.`directPinned`, buf)
+            FfiConverterSequenceString.write(value.`directEndpoints`, buf)
+            FfiConverterOptionalString.write(value.`directUp`, buf)
     }
 }
 
@@ -6481,6 +6519,16 @@ sealed class UniffiIntent {
     }
     
     /**
+     * Replace the direct endpoints the user added for a machine (see
+     * `is_direct_endpoint`); ignored if any is not allowed.
+     */
+    data class SetDirectEndpoints(
+        val `machine`: kotlin.String, 
+        val `endpoints`: List<kotlin.String>) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
      * Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
      */
     data class BeginPairing(
@@ -6689,23 +6737,27 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             38 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
-            39 -> UniffiIntent.BeginPairing(
+            39 -> UniffiIntent.SetDirectEndpoints(
+                FfiConverterString.read(buf),
+                FfiConverterSequenceString.read(buf),
+                )
+            40 -> UniffiIntent.BeginPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            40 -> UniffiIntent.BeginManualPairing(
+            41 -> UniffiIntent.BeginManualPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            41 -> UniffiIntent.StagePairing(
+            42 -> UniffiIntent.StagePairing(
                 FfiConverterString.read(buf),
                 )
-            42 -> UniffiIntent.ConfirmStagedPairing(
+            43 -> UniffiIntent.ConfirmStagedPairing(
                 FfiConverterString.read(buf),
                 )
-            43 -> UniffiIntent.DismissStagedPairing
-            44 -> UniffiIntent.ResetPairing
+            44 -> UniffiIntent.DismissStagedPairing
+            45 -> UniffiIntent.ResetPairing
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -7023,6 +7075,14 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`pubkeyHex`)
             )
         }
+        is UniffiIntent.SetDirectEndpoints -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterSequenceString.allocationSize(value.`endpoints`)
+            )
+        }
         is UniffiIntent.BeginPairing -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -7306,35 +7366,41 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
-            is UniffiIntent.BeginPairing -> {
+            is UniffiIntent.SetDirectEndpoints -> {
                 buf.putInt(39)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterSequenceString.write(value.`endpoints`, buf)
+                Unit
+            }
+            is UniffiIntent.BeginPairing -> {
+                buf.putInt(40)
                 FfiConverterString.write(value.`url`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.BeginManualPairing -> {
-                buf.putInt(40)
+                buf.putInt(41)
                 FfiConverterString.write(value.`npub`, buf)
                 FfiConverterString.write(value.`token`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.StagePairing -> {
-                buf.putInt(41)
+                buf.putInt(42)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ConfirmStagedPairing -> {
-                buf.putInt(42)
+                buf.putInt(43)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.DismissStagedPairing -> {
-                buf.putInt(43)
+                buf.putInt(44)
                 Unit
             }
             is UniffiIntent.ResetPairing -> {
-                buf.putInt(44)
+                buf.putInt(45)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -8769,6 +8835,20 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
 
 
 
+
+        /**
+         * Whether the user may add `url` as a machine's direct endpoint: `wss://`
+         * to any host, `ws://` only to an onion service — the rule the core applies
+         * to `SetDirectEndpoints`.
+         */ fun `isDirectEndpoint`(`url`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_is_direct_endpoint(
+        FfiConverterString.lower(`url`),_status)
+}
+    )
+    }
+    
 
         /**
          * CDX-071 gate for a custom provider's base URL, exposed as a plain

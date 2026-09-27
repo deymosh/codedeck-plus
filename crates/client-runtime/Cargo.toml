@@ -58,3 +58,6 @@ nostr = { version = "0.44", default-features = false, features = ["std", "nip44"
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util", "process"] }
 nostr-transport = { path = "../nostr-transport", features = ["mock"] }
+# A scripted bridge serving the direct link, for the runtime's tests.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

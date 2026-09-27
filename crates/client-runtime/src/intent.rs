@@ -189,6 +189,13 @@ pub enum Intent {
     RemoveMachine {
         pubkey_hex: String,
     },
+    /// Replace the direct endpoints the user added for a machine (tried
+    /// after the ones its bridge advertises). Purely local. Ignored if any
+    /// is neither `wss://…` nor `ws://….onion`.
+    SetDirectEndpoints {
+        machine: String,
+        endpoints: Vec<String>,
+    },
 
     // --- session commands ---
     /// Answer a permission request with one of its advertised options.
@@ -460,6 +467,11 @@ pub fn apply(
                 if stores.ui.selected_machine.as_deref() == Some(pubkey_hex.as_str()) {
                     stores.ui.select_machine(None);
                 }
+            }
+        }
+        Intent::SetDirectEndpoints { machine, endpoints } => {
+            if stores.machines.set_direct_endpoints(&machine, endpoints) {
+                r.persist(StoreId::Machines);
             }
         }
         Intent::RespondPermission {

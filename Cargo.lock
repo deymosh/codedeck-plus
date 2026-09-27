@@ -613,6 +613,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "client-core",
+ "futures-util",
  "log",
  "nostr",
  "nostr-transport",
@@ -623,6 +624,7 @@ dependencies = [
  "specta",
  "specta-typescript",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "uniffi",
 ]
@@ -1440,6 +1442,7 @@ dependencies = [
  "protocol",
  "rustls",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-socks",
  "tokio-tungstenite",

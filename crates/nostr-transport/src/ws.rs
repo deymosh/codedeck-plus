@@ -71,7 +71,7 @@ pub const PING_EVERY: Duration = Duration::from_secs(30);
 const DEAD_AFTER: Duration = dead_after(PING_EVERY);
 
 /// Two missed pings plus a margin for a slow round trip.
-const fn dead_after(ping_every: Duration) -> Duration {
+pub(crate) const fn dead_after(ping_every: Duration) -> Duration {
     Duration::from_secs(ping_every.as_secs() * 2 + 15)
 }
 /// Default wall-clock budget for one `publish_confirmed` (under the outbox

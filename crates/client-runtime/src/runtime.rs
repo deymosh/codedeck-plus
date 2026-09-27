@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
 use client_core::stores::session_key::{Recipient, SessionKeyRing, REGRANT_EVERY_MS};
+use nostr_transport::direct::{DirectConfig as LinkConfig, DirectHandlers, DirectLink};
 use nostr_transport::{PublishResult, PublishVerdict};
 use client_core::connection::{
     connection_reducer, heartbeats_all_stale, initial_connection_state, ConnectionEffect,
@@ -73,6 +74,18 @@ const WRITE_DEBOUNCE: Duration = Duration::from_secs(2);
 /// a bridge sends a sync's chunks back to back: one ack per sync per window
 /// instead of one per chunk. The bridge resends a pass only after 10 s.
 const ACK_BATCH_WINDOW: Duration = Duration::from_millis(500);
+/// How long a command sent over a direct link waits for the bridge's `OK`
+/// before it goes to the relays instead.
+const DIRECT_PUBLISH_WAIT: Duration = Duration::from_secs(5);
+
+/// Where a machine's direct link goes: its endpoints, the certificate pin,
+/// and the proxy (Orbot) in force.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectTarget {
+    endpoints: Vec<String>,
+    pin: Option<String>,
+    proxy: Option<String>,
+}
 
 // --- clock and entropy ports -----------------------------------------------
 
@@ -395,6 +408,10 @@ impl Core {
             flush_timer: None,
             pending_acks: Vec::new(),
             ack_timer: None,
+            links: HashMap::new(),
+            links_up: HashMap::new(),
+            links_on: false,
+            link_ping: PING_EVERY,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -526,6 +543,7 @@ impl Core {
     pub async fn machines_view(&self) -> MachinesView {
         self.query(ViewQuery::Machines).await.unwrap_or(MachinesView {
             machines: Default::default(),
+            direct_up: Default::default(),
         })
     }
     pub async fn settings_view(&self) -> Option<SettingsView> {
@@ -642,9 +660,17 @@ enum Msg {
     },
     /// The identity's signer wrote (or failed to) a command.
     CommandSigned {
+        machine: String,
         event: Result<SignedEvent, EgressError>,
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
+    },
+    /// A bridge's direct link delivered an event.
+    DirectEvent(NostrEvent),
+    /// A machine's direct link came up on an endpoint, or went down.
+    DirectState {
+        machine: String,
+        endpoint: Option<String>,
     },
 }
 
@@ -674,6 +700,7 @@ async fn run_signer(
         let msg = match job {
             SignerJob::Command { machine, msg, cipher, now, reply, outbox_id } => Msg::CommandSigned {
                 event: crate::signer::build_command(signer.as_ref(), &cipher, &machine, &msg, now).await,
+                machine,
                 reply,
                 outbox_id,
             },
@@ -797,6 +824,15 @@ struct Loop {
     pending_acks: Vec<(String, String, Vec<SeqRange>)>,
     /// Pending [`Msg::FlushAcks`].
     ack_timer: Option<AbortHandle>,
+    /// A direct link per machine that has somewhere to try, with the target
+    /// (endpoints, pin, proxy) it was started for.
+    links: HashMap<String, (DirectTarget, DirectLink)>,
+    /// The endpoint each machine's link is up on.
+    links_up: HashMap<String, String>,
+    /// Whether the core is started: links run only then.
+    links_on: bool,
+    /// The ping interval links use (foreground or background).
+    link_ping: Duration,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- the composed store layer ---
     stores: CoreStores,
@@ -814,11 +850,15 @@ impl Loop {
                     log::info!("core: Start (status was {:?})", self.conn.status);
                     self.dispatch(ConnectionEvent::ConnectRequested);
                     self.arm_stale_watchdog();
+                    self.links_on = true;
+                    self.sync_direct_links();
                 }
                 Msg::Stop => {
                     log::info!("core: Stop (status was {:?})", self.conn.status);
                     self.dispatch(ConnectionEvent::DisconnectRequested);
                     abort(&mut self.stale_timer);
+                    self.links_on = false;
+                    self.sync_direct_links();
                     self.flush_acks();
                     self.flush_writes().await;
                 }
@@ -827,10 +867,12 @@ impl Loop {
                     self.flush_acks();
                     self.flush_writes().await;
                     self.ws.set_ping_interval(BACKGROUND_PING_EVERY);
+                    self.set_link_ping(BACKGROUND_PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: false });
                 }
                 Msg::Resume => {
                     self.ws.set_ping_interval(PING_EVERY);
+                    self.set_link_ping(PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: true });
                     self.dispatch(ConnectionEvent::Resume);
                 }
@@ -850,11 +892,17 @@ impl Loop {
                     self.check_connected_relays_changed();
                     let _ = reply.send(());
                 }
-                Msg::SetOnline(true) => self.dispatch(ConnectionEvent::Online),
+                Msg::SetOnline(true) => {
+                    self.dispatch(ConnectionEvent::Online);
+                    for (_, link) in self.links.values() {
+                        link.retry_now();
+                    }
+                }
                 Msg::SetOnline(false) => self.dispatch(ConnectionEvent::Offline),
                 Msg::SetMachines(machines) => {
                     *self.host.machines.borrow_mut() = machines.clone();
                     self.machines = machines;
+                    self.sync_direct_links();
                     if matches!(
                         self.conn.status,
                         ConnectionStatus::Connected | ConnectionStatus::Connecting
@@ -913,7 +961,17 @@ impl Loop {
                     };
                     self.on_ingested(&event, ingested, &Recipient::Identity).await;
                 }
-                Msg::CommandSigned { event, reply, outbox_id } => self.publish_built(event, reply, outbox_id),
+                Msg::CommandSigned { machine, event, reply, outbox_id } => self.publish_built(&machine, event, reply, outbox_id),
+                Msg::DirectEvent(event) => self.nostr.deliver(&event),
+                Msg::DirectState { machine, endpoint } => {
+                    let changed = match endpoint {
+                        Some(endpoint) => self.links_up.insert(machine, endpoint.clone()) != Some(endpoint),
+                        None => self.links_up.remove(&machine).is_some(),
+                    };
+                    if changed {
+                        self.state_changed(SliceId::Machines);
+                    }
+                }
             }
         }
     }
@@ -1236,6 +1294,64 @@ impl Loop {
             None => {}
         }
         // `r.heartbeat` is already covered by the pre-decode path above;
+        // a heartbeat may have changed where a bridge can be reached.
+        self.sync_direct_links();
+    }
+
+    /// Start, restart or stop each machine's direct link to match where it
+    /// can be reached now (and the Orbot proxy, and whether the core runs).
+    fn sync_direct_links(&mut self) {
+        let proxy = self.ws.current_proxy();
+        let wanted: HashMap<String, DirectTarget> = if self.links_on {
+            self.machines
+                .iter()
+                .filter_map(|m| {
+                    let (endpoints, pin) = self.stores.machines.direct_target(m)?;
+                    Some((m.clone(), DirectTarget { endpoints, pin, proxy: proxy.clone() }))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let stale: Vec<String> =
+            self.links.iter().filter(|(m, (target, _))| wanted.get(*m) != Some(target)).map(|(m, _)| m.clone()).collect();
+        for machine in stale {
+            if let Some((_, link)) = self.links.remove(&machine) {
+                link.stop();
+            }
+        }
+        for (machine, target) in wanted {
+            if self.links.contains_key(&machine) {
+                continue;
+            }
+            let (events, states) = (self.self_tx.clone(), self.self_tx.clone());
+            let name = machine.clone();
+            let link = DirectLink::start(
+                LinkConfig {
+                    endpoints: target.endpoints.clone(),
+                    cert_sha256: target.pin.clone(),
+                    proxy: target.proxy.clone(),
+                    auth: Rc::new(IdentityAuth(Rc::clone(&self.signer))),
+                },
+                DirectHandlers {
+                    on_event: Rc::new(move |event| {
+                        let _ = events.send(Msg::DirectEvent(event));
+                    }),
+                    on_state: Rc::new(move |endpoint| {
+                        let _ = states.send(Msg::DirectState { machine: name.clone(), endpoint });
+                    }),
+                },
+            );
+            link.set_ping_interval(self.link_ping);
+            self.links.insert(machine, (target, link));
+        }
+    }
+
+    fn set_link_ping(&mut self, every: Duration) {
+        self.link_ping = every;
+        for (_, link) in self.links.values() {
+            link.set_ping_interval(every);
+        }
     }
 
     async fn persist_store(&mut self, id: StoreId) {
@@ -1412,6 +1528,8 @@ impl Loop {
             self.nostr.set_proxy(proxy.clone());
             self.http.set_proxy(proxy.as_deref());
         }
+        // Orbot toggled, a machine removed, or its endpoints edited.
+        self.sync_direct_links();
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
@@ -1510,7 +1628,9 @@ impl Loop {
     async fn answer_view(&self, query: ViewQuery) {
         match query {
             ViewQuery::Machines(reply) => {
-                let _ = reply.send(MachinesView::from_stores(&self.stores));
+                let mut view = MachinesView::from_stores(&self.stores);
+                view.direct_up = self.links_up.iter().map(|(m, e)| (m.clone(), e.clone())).collect();
+                let _ = reply.send(view);
             }
             ViewQuery::Settings(reply) => {
                 let _ = reply.send(SettingsView::from_stores(&self.stores));
@@ -1637,9 +1757,12 @@ impl Loop {
         let _ = self.signer_jobs.send(SignerJob::Command { machine, msg: Box::new(msg), cipher, now, reply, outbox_id });
     }
 
-    /// Publish a built command, or report why it could not be built.
+    /// Publish a built command, or report why it could not be built. It goes
+    /// over `machine`'s direct link when that is up and the bridge answers,
+    /// else to the relays.
     fn publish_built(
         &mut self,
+        machine: &str,
         event: Result<SignedEvent, EgressError>,
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
@@ -1664,12 +1787,18 @@ impl Loop {
         // Publish off the loop so a 12s confirmation budget never blocks
         // socket-close / lifecycle handling.
         let ws = self.ws.clone();
+        let link = self.links.get(machine).map(|(_, link)| link.clone());
         let observer = Rc::clone(&self.observer);
         let self_tx = self.self_tx.clone();
         tokio::task::spawn_local(async move {
-            let result = ws
-                .publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
-                .await;
+            let direct = match &link {
+                Some(link) => link.publish(&event, DIRECT_PUBLISH_WAIT).await,
+                None => None,
+            };
+            let result = match direct {
+                Some(result) => result,
+                None => ws.publish_confirmed(&event, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS).await,
+            };
             let failed = match result.verdict {
                 PublishVerdict::Rejected => Some(ActionFailedKind::PublishRejected),
                 PublishVerdict::Unreachable => Some(ActionFailedKind::PublishUnreachable),
@@ -3711,6 +3840,112 @@ mod tests {
                 core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
                 let cmd = next_command_via(&mut mock, &phone, &new, &machine).await;
                 assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+            })
+            .await;
+    }
+
+    /// A bridge's direct link, scripted: it takes the phone's HELLO, pushes
+    /// `push` (a message for the phone), then answers every command with an
+    /// `OK` and hands it to `commands`.
+    async fn scripted_direct_bridge(
+        listener: tokio::net::TcpListener,
+        machine: Keypair,
+        phone_pubkey: String,
+        push: BridgeToPhone,
+        commands: mpsc::UnboundedSender<PhoneToBridge>,
+    ) {
+        use futures_util::{SinkExt, StreamExt};
+        use protocol::direct::{check_direct_auth, decode_direct_frame, encode_direct_frame, DirectFrame};
+        use tokio_tungstenite::tungstenite::Message;
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let text = |f: &DirectFrame| Message::Text(encode_direct_frame(f));
+        ws.send(text(&DirectFrame::Challenge("c1".into()))).await.unwrap();
+        let hello = loop {
+            if let Some(Ok(Message::Text(t))) = ws.next().await {
+                break decode_direct_frame(&t).unwrap();
+            }
+        };
+        let DirectFrame::Hello { auth, .. } = hello else { panic!("expected HELLO") };
+        assert_eq!(check_direct_auth(&auth, "c1", auth.created_at).unwrap(), phone_pubkey, "signed by the identity");
+        ws.send(text(&DirectFrame::Ready)).await.unwrap();
+
+        let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone_pubkey, &encode_bridge_to_phone(&push)).unwrap();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+            .tag(nostr::Tag::public_key(nostr::PublicKey::from_hex(&phone_pubkey).unwrap()))
+            .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+            .unwrap();
+        ws.send(text(&DirectFrame::Event(SignedEvent::from_nostr(&event)))).await.unwrap();
+
+        loop {
+            if let Some(Ok(Message::Text(t))) = ws.next().await {
+                if let Ok(DirectFrame::Event(command)) = decode_direct_frame(&t) {
+                    ws.send(text(&DirectFrame::Ok { id: command.id.clone(), accepted: true, message: String::new() })).await.unwrap();
+                    let plaintext = protocol::crypto::decrypt_from(&machine.secret_key, &phone_pubkey, &command.content).unwrap();
+                    let _ = commands.send(protocol::codec::decode_phone_to_bridge(&plaintext).unwrap());
+                }
+            }
+        }
+    }
+
+    /// A bridge that advertises a direct endpoint gets a link: its messages
+    /// arrive over it, the machines view says so, and commands go over it.
+    #[tokio::test]
+    async fn a_direct_link_carries_messages_and_commands() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                state.machines.get_mut(&machine.pubkey_hex).unwrap().direct =
+                    Some(protocol::direct::DirectInfo { endpoints: vec![endpoint.clone()], cert_sha256: None });
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let push = protocol::codec::decode_bridge_to_phone(r#"{"type":"input-ack","sessionId":"s1","inputId":"i1"}"#).unwrap();
+                let (commands_tx, mut commands) = mpsc::unbounded_channel();
+                tokio::task::spawn_local(scripted_direct_bridge(
+                    listener,
+                    machine.clone(),
+                    phone.pubkey_hex.clone(),
+                    push,
+                    commands_tx,
+                ));
+
+                let spy = Rc::new(Spy::default());
+                let core = core_for_ports(&mock, &phone, Rc::clone(&spy), CorePorts { kv: Rc::new(kv), ..CorePorts::default() }).await;
+                core.start();
+                eose_all(&mut mock).await;
+                for _ in 0..100 {
+                    if spy.messages.lock().unwrap().iter().any(|(_, m)| matches!(m, BridgeToPhone::InputAck(_))) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                assert!(
+                    spy.messages.lock().unwrap().iter().any(|(m, msg)| *m == machine.pubkey_hex && matches!(msg, BridgeToPhone::InputAck(_))),
+                    "the pushed message arrived over the link"
+                );
+                assert_eq!(core.machines_view().await.direct_up.get(&machine.pubkey_hex), Some(&endpoint));
+
+                core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+                // Other commands (the session-key grant) may come first.
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        match commands.recv().await {
+                            Some(PhoneToBridge::Interrupt(_)) => break,
+                            Some(_) => {}
+                            None => panic!("the link closed"),
+                        }
+                    }
+                })
+                .await
+                .expect("the interrupt went over the link in time");
             })
             .await;
     }

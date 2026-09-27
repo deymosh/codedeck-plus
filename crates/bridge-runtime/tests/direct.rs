@@ -1,5 +1,5 @@
-//! The direct link server over a real socket: wss with the pinned
-//! certificate, the handshake, events both ways, and unpairing.
+//! The direct link over a real socket: the bridge's server, first against a
+//! hand-driven client (the frames), then against the phone's `DirectLink`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,54 +13,17 @@ use protocol::direct::{decode_direct_frame, encode_direct_frame, DirectFrame};
 use protocol::kinds::COMMAND_KIND;
 use protocol::nip42::build_auth_event;
 use protocol::nostr_event::SignedEvent;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme};
-use sha2::{Digest, Sha256};
+use rustls::pki_types::ServerName;
+use std::cell::RefCell;
+use std::rc::Rc;
 use tokio::sync::mpsc;
 use tokio::task::LocalSet;
 use tokio_tungstenite::tungstenite::Message;
 
-/// Accepts exactly the certificate with this SHA-256, as a phone does.
-#[derive(Debug)]
-struct Pinned(String, Arc<rustls::crypto::CryptoProvider>);
-
-impl ServerCertVerifier for Pinned {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _: &[CertificateDer<'_>],
-        _: &ServerName<'_>,
-        _: &[u8],
-        _: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        if hex::encode(Sha256::digest(end_entity.as_ref())) == self.0 {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(rustls::Error::General("certificate does not match the pin".into()))
-        }
-    }
-    fn verify_tls12_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(m, c, d, &self.1.signature_verification_algorithms)
-    }
-    fn verify_tls13_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(m, c, d, &self.1.signature_verification_algorithms)
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.1.signature_verification_algorithms.supported_schemes()
-    }
-}
-
 type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 
 async fn connect(endpoint: &str, pin: &str) -> Result<Ws, String> {
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Pinned(pin.to_string(), provider)))
-        .with_no_client_auth();
+    let config = nostr_transport::direct::pinned_client_config(pin);
     let addr = endpoint.strip_prefix("wss://").unwrap();
     let tcp = tokio::net::TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config))
@@ -154,6 +117,79 @@ async fn a_paired_phone_gets_its_events_and_sends_commands_over_the_pinned_link(
             link.hub.set_paired(&[]);
             assert_eq!(next_frame(&mut ws).await, DirectFrame::Closed("closed".into()));
             link.shutdown();
+        })
+        .await;
+}
+
+async fn wait_until(cond: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !cond() {
+        assert!(std::time::Instant::now() < deadline, "timed out");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The phone's link against the real server: up on the pinned endpoint,
+/// events in, a command out and acknowledged, down when unpaired; never up
+/// with the wrong pin.
+#[tokio::test]
+async fn the_phone_link_talks_to_the_bridge() {
+    use nostr_transport::direct::{DirectConfig as LinkConfig, DirectHandlers, DirectLink};
+    use nostr_transport::PublishVerdict;
+    LocalSet::new()
+        .run_until(async {
+            let home = tempfile::tempdir().unwrap();
+            let (bridge, phone) = (generate_keypair(), generate_keypair());
+            let (inputs, mut engine) = mpsc::unbounded_channel();
+            let config = DirectConfig { listen: Some("127.0.0.1:0".parse().unwrap()), ..Default::default() };
+            let mut server = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs).await.unwrap().unwrap();
+            server.hub.set_paired(std::slice::from_ref(&phone.pubkey_hex));
+
+            let start = |pin: String| {
+                let events = Rc::new(RefCell::new(Vec::new()));
+                let states = Rc::new(RefCell::new(Vec::new()));
+                let (e, s) = (Rc::clone(&events), Rc::clone(&states));
+                let link = DirectLink::start(
+                    LinkConfig {
+                        endpoints: server.info.endpoints.clone(),
+                        cert_sha256: Some(pin),
+                        proxy: None,
+                        auth: Rc::new(phone.clone()),
+                    },
+                    DirectHandlers {
+                        on_event: Rc::new(move |ev| e.borrow_mut().push(ev)),
+                        on_state: Rc::new(move |st| s.borrow_mut().push(st)),
+                    },
+                );
+                (link, events, states)
+            };
+
+            // The wrong pin never gets it up.
+            let (wrong, _, wrong_states) = start("00".repeat(32));
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            assert!(wrong_states.borrow().is_empty() && wrong.endpoint().is_none());
+            wrong.stop();
+
+            let (link, events, states) = start(server.info.cert_sha256.clone().unwrap());
+            wait_until(|| link.endpoint().is_some()).await;
+            assert_eq!(states.borrow().as_slice(), [Some(server.info.endpoints[0].clone())]);
+
+            let live = event(&bridge, 24515, &phone.pubkey_hex, "live");
+            server.hub.deliver(&phone.pubkey_hex, &live);
+            wait_until(|| !events.borrow().is_empty()).await;
+            assert_eq!(events.borrow()[0].id, live.id);
+
+            let command = event(&phone, COMMAND_KIND, &bridge.pubkey_hex, "cmd");
+            let result = link.publish(&command, Duration::from_secs(5)).await.expect("answered");
+            assert_eq!(result.verdict, PublishVerdict::Accepted);
+            assert!(matches!(engine.recv().await, Some(Input::RelayEvent { event, .. }) if event.id == command.id));
+
+            server.hub.set_paired(&[]);
+            wait_until(|| link.endpoint().is_none()).await;
+            assert_eq!(states.borrow().last(), Some(&None));
+            assert!(link.publish(&command, Duration::from_secs(1)).await.is_none(), "down: the caller uses the relays");
+            link.stop();
+            server.shutdown();
         })
         .await;
 }

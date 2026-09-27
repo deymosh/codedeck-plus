@@ -22,6 +22,18 @@ use protocol::common::{
 use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
 use super::session_key::SessionGrant;
+use protocol::direct::DirectInfo;
+
+/// Whether `url` is a direct endpoint the phone may dial: `wss://` to any
+/// host, `ws://` only to an onion service.
+pub fn is_direct_endpoint(url: &str) -> bool {
+    let host = |rest: &str| rest.split(['/', ':']).next().unwrap_or("").to_ascii_lowercase();
+    match (url.strip_prefix("wss://"), url.strip_prefix("ws://")) {
+        (Some(rest), _) => !host(rest).is_empty(),
+        (None, Some(rest)) => host(rest).ends_with(".onion"),
+        _ => false,
+    }
+}
 
 /// A user-dismissed session id keeps suppressing incoming lists for this long
 /// (then the bridge is trusted again — it has had ample time to process the
@@ -231,6 +243,14 @@ pub struct MachineView {
     /// A grant sent to this bridge and not confirmed yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_grant_sent: Option<SessionGrant>,
+    /// Where the bridge says it can be reached directly (its heartbeat's
+    /// `direct`), as last heard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct: Option<DirectInfo>,
+    /// Direct endpoints the user added for this bridge (a VPN name the
+    /// bridge cannot know, say), tried after the advertised ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub direct_endpoints: Vec<String>,
 }
 
 /// One agent's live model list on one machine. `models` stays `None` until
@@ -272,6 +292,8 @@ impl MachineView {
             provider_profiles: None,
             session_grant: None,
             session_grant_sent: None,
+            direct: None,
+            direct_endpoints: Vec::new(),
         }
     }
 }
@@ -426,8 +448,35 @@ impl MachinesState {
         entry.credentials = msg.credentials.clone();
         entry.protocol_version = Some(msg.protocol_version);
         entry.machine_offline = msg.machine_offline.unwrap_or(false);
+        entry.direct = msg.direct.clone();
         entry.last_heartbeat_at = Some(at);
         entry.sessions = sessions;
+    }
+
+    /// Where to reach `machine` directly: the endpoints to try, in order,
+    /// and the certificate pin for its `wss://` ones. `None` when there is
+    /// nowhere to try.
+    pub fn direct_target(&self, machine_pubkey: &str) -> Option<(Vec<String>, Option<String>)> {
+        let m = self.machines.get(machine_pubkey)?;
+        let mut endpoints: Vec<String> = m.direct.iter().flat_map(|d| d.endpoints.iter().cloned()).collect();
+        for extra in &m.direct_endpoints {
+            if !endpoints.contains(extra) {
+                endpoints.push(extra.clone());
+            }
+        }
+        let pin = m.direct.as_ref().and_then(|d| d.cert_sha256.clone());
+        (!endpoints.is_empty()).then_some((endpoints, pin))
+    }
+
+    /// Replace the user's own direct endpoints for `machine`. Returns false
+    /// (and changes nothing) for an unknown machine or an endpoint that is
+    /// neither `wss://…` nor `ws://….onion`.
+    pub fn set_direct_endpoints(&mut self, machine_pubkey: &str, endpoints: Vec<String>) -> bool {
+        let endpoints: Vec<String> = endpoints.into_iter().map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+        if !endpoints.iter().all(|e| is_direct_endpoint(e)) {
+            return false;
+        }
+        self.with_machine(machine_pubkey, |m| m.direct_endpoints = endpoints)
     }
 
     fn with_machine<F: FnOnce(&mut MachineView)>(&mut self, machine_pubkey: &str, f: F) -> bool {
@@ -1229,5 +1278,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_direct_target_is_the_advertised_endpoints_then_the_users_own() {
+        let mut s = MachinesState::new(Default::default(), MergeOptions::default());
+        s.apply_session_list("m", &list(&[], json!({})), 1);
+        assert_eq!(s.direct_target("m"), None, "nothing advertised, nothing added");
+
+        let direct = json!({"direct": {"endpoints": ["wss://192.168.1.20:7447"], "certSha256": "ab"}});
+        s.apply_session_list("m", &list(&[], direct), 2);
+        assert!(s.set_direct_endpoints("m", vec![" wss://laptop.ts.net:7447 ".into(), "wss://192.168.1.20:7447".into()]));
+        assert_eq!(
+            s.direct_target("m"),
+            Some((vec!["wss://192.168.1.20:7447".into(), "wss://laptop.ts.net:7447".into()], Some("ab".into())))
+        );
+        // A heartbeat without it withdraws the advertised part only.
+        s.apply_session_list("m", &list(&[], json!({})), 3);
+        assert_eq!(s.direct_target("m").unwrap().0.len(), 2, "the user's own stay");
+        assert_eq!(s.direct_target("m").unwrap().1, None);
+
+        assert!(!s.set_direct_endpoints("m", vec!["ws://192.168.1.20:7447".into()]), "no cleartext off Tor");
+        assert!(!s.set_direct_endpoints("unknown", vec![]));
+        assert!(s.set_direct_endpoints("m", vec!["ws://abc.onion:7448".into()]));
     }
 }

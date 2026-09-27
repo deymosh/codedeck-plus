@@ -33,6 +33,8 @@ tokio-socks = "0.5"
 tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 url = "2"
+# Pinning a direct link's certificate by its SHA-256.
+sha2 = "0.10"
 nostr = { version = "0.44", default-features = false, features = ["std", "nip44"] }
 
 [dev-dependencies]

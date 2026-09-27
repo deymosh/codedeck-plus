@@ -77,6 +77,14 @@ fn provider_base_url_error() -> String {
     protocol::common::PROVIDER_BASE_URL_ERROR.to_string()
 }
 
+/// Whether the user may add `url` as a machine's direct endpoint: `wss://`
+/// to any host, `ws://` only to an onion service — the rule the core applies
+/// to `SetDirectEndpoints`.
+#[uniffi::export]
+fn is_direct_endpoint(url: String) -> bool {
+    client_runtime::client_core::stores::machines::is_direct_endpoint(url.trim())
+}
+
 /// The relay list to pass into [`Core::new`]'s `relays` argument. Pure read,
 /// safe to call before any `Core` exists — opens (and migrates, if it doesn't
 /// exist yet) the same db file `Core::new` will open, so this always reflects
