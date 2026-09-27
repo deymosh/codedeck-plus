@@ -374,6 +374,15 @@ pub struct UniffiMachineSummary {
     /// Live model lists, one entry per agent that has answered `RequestModels`.
     pub models: Vec<UniffiAgentModels>,
     pub provider_profiles: Vec<UniffiProviderProfileInfo>,
+    /// The direct endpoints the bridge advertises, in its order.
+    pub direct_advertised: Vec<String>,
+    /// Whether the bridge advertised a certificate pin (without one no
+    /// `wss://` endpoint is dialled).
+    pub direct_pinned: bool,
+    /// The direct endpoints the user added, tried after the advertised ones.
+    pub direct_endpoints: Vec<String>,
+    /// The endpoint the direct link is up on; `None` means the relays.
+    pub direct_up: Option<String>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -450,6 +459,10 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         has_token: p.has_token,
                     })
                     .collect(),
+                direct_advertised: m.direct.as_ref().map(|d| d.endpoints.clone()).unwrap_or_default(),
+                direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
+                direct_endpoints: m.direct_endpoints.clone(),
+                direct_up: v.direct_up.get(&m.pubkey_hex).cloned(),
             })
             .collect(),
     }

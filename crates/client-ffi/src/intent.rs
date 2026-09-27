@@ -306,6 +306,12 @@ pub enum UniffiIntent {
     RemoveMachine {
         pubkey_hex: String,
     },
+    /// Replace the direct endpoints the user added for a machine (see
+    /// `is_direct_endpoint`); ignored if any is not allowed.
+    SetDirectEndpoints {
+        machine: String,
+        endpoints: Vec<String>,
+    },
     /// Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
     BeginPairing {
         url: String,
@@ -459,6 +465,9 @@ impl TryFrom<UniffiIntent> for Intent {
                 Intent::DismissPendingSession { pending_id }
             }
             UniffiIntent::RemoveMachine { pubkey_hex } => Intent::RemoveMachine { pubkey_hex },
+            UniffiIntent::SetDirectEndpoints { machine, endpoints } => {
+                Intent::SetDirectEndpoints { machine, endpoints }
+            }
             UniffiIntent::BeginPairing { url, label } => Intent::BeginPairing { url, label },
             UniffiIntent::BeginManualPairing { npub, token, label } => {
                 Intent::BeginManualPairing { npub, token, label }
