@@ -5,10 +5,13 @@
 //! endpoints answers, trying them in order and backing off between rounds
 //! the way the relay transport does. `wss://` endpoints are pinned to the
 //! certificate hash the bridge's heartbeat advertises (no CA: private
-//! addresses and VPN names work). While a SOCKS5 proxy (Orbot) is set, only
-//! `.onion` endpoints are used, dialled through it; without one they are
-//! skipped. Cleartext `ws://` only goes to an onion service, or to loopback
-//! for tests.
+//! addresses and VPN names work). A direct link goes to the user's own
+//! bridge on a network they set up (a LAN, a VPN), so it is dialled directly
+//! whether or not a SOCKS5 proxy (Orbot) is set: Orbot is there to hide the
+//! phone from public relays. The exception is an `.onion` endpoint, which
+//! only Tor reaches: it is dialled through the proxy, and skipped without
+//! one. Cleartext `ws://` only goes to an onion service, or to loopback for
+//! tests.
 //!
 //! The HELLO is signed by the identity through the [`AuthSigner`], like a
 //! relay's AUTH. Every event that arrives is checked (id and signature) and
@@ -67,8 +70,8 @@ pub struct DirectConfig {
     /// The SHA-256 (lowercase hex) of the certificate `wss://` endpoints
     /// serve. Without it no `wss://` endpoint is dialled.
     pub cert_sha256: Option<String>,
-    /// SOCKS5 `host:port` (Orbot). While set, only `.onion` endpoints are
-    /// dialled, through it.
+    /// SOCKS5 `host:port` (Orbot), used for `.onion` endpoints only; without
+    /// it those are skipped.
     pub proxy: Option<String>,
     /// Signs the HELLO with the identity.
     pub auth: Rc<dyn AuthSigner>,
@@ -179,9 +182,9 @@ impl DirectLink {
                 let Some(host) = Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)) else {
                     return false;
                 };
+                // Only Tor reaches an onion service.
                 let onion = host.ends_with(".onion");
-                // Orbot on: only onion services, through it; off: none.
-                if config.proxy.is_some() != onion {
+                if onion && config.proxy.is_none() {
                     return false;
                 }
                 if url.starts_with("wss://") {
@@ -220,7 +223,7 @@ impl DirectLink {
 
     /// Dial `endpoint` and complete the handshake.
     async fn connect(&self, endpoint: &str) -> Result<Stream, String> {
-        let proxy = self.0.config.proxy.clone();
+        let proxy = if is_onion(endpoint) { self.0.config.proxy.clone() } else { None };
         let deadline = if proxy.is_some() { DIAL_TIMEOUT_PROXIED } else { DIAL_TIMEOUT };
         let mut ws = tokio::time::timeout(deadline, dial(endpoint, proxy, self.0.config.cert_sha256.as_deref()))
             .await
@@ -366,6 +369,11 @@ async fn dial(endpoint: &str, proxy: Option<String>, pin: Option<&str>) -> Resul
     Ok(ws)
 }
 
+/// Whether `endpoint`'s host is an onion service.
+fn is_onion(endpoint: &str) -> bool {
+    Url::parse(endpoint).ok().and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase().ends_with(".onion"))).unwrap_or(false)
+}
+
 fn is_loopback(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "::1" | "[::1]" | "localhost")
 }
@@ -480,7 +488,19 @@ mod tests {
     }
 
     #[test]
-    fn with_orbot_only_onion_endpoints_are_used() {
-        assert_eq!(link_with(&ALL, Some("ab"), Some("127.0.0.1:9050")).usable(), ["wss://abc.onion:7447", "ws://abc.onion:7448"]);
+    fn with_orbot_onion_endpoints_are_added_and_the_rest_stay() {
+        assert_eq!(
+            link_with(&ALL, Some("ab"), Some("127.0.0.1:9050")).usable(),
+            ["wss://192.168.1.20:7447", "wss://abc.onion:7447", "ws://abc.onion:7448", "ws://127.0.0.1:7447"],
+            "the user's own endpoints are dialled directly, onion ones through Orbot"
+        );
+    }
+
+    #[test]
+    fn only_onion_endpoints_go_through_the_proxy() {
+        assert!(is_onion("wss://abc.onion:7447"));
+        assert!(is_onion("ws://ABC.ONION:7448"));
+        assert!(!is_onion("wss://192.168.1.20:7447"));
+        assert!(!is_onion("wss://laptop.tail1234.ts.net:7447"));
     }
 }

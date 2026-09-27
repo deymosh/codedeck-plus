@@ -203,9 +203,12 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   every bridge relay connection goes through it; other outbound calls (HTTP
   checks, image downloads, the agents' own API traffic) do not use it and are
   not a proxy bypass. On the phone, the Orbot setting covers relay and Blossom
-  image traffic alike: no phone network path may bypass it while it is on.
-  Cleartext `ws://` is allowed only for `.onion` relays (and
-  loopback, for tests).
+  image traffic alike: no path to a public relay or Blossom server may bypass
+  it while it is on. A machine's direct link is not such a path — it goes to
+  the user's own bridge on a network they set up (LAN, VPN) and is dialled
+  directly either way; only its `.onion` endpoints go through Orbot. Cleartext
+  `ws://` is allowed only for `.onion` relays and endpoints (and loopback, for
+  tests).
 - Secrets — API keys, GitHub PATs, custom-provider tokens, Android keystore
   material — are never logged, never echoed back over the wire, and are wiped
   from component state immediately after send. In Rust they travel as
