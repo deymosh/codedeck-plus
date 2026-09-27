@@ -209,8 +209,8 @@ A pairing window is a time-boxed subscription with **no author filter** — the
 only way an unpaired phone reaches the bridge — plus a QR:
 `codedeck://pair?npub=…&relays=…&machine=…&token=…`.
 Only a `pair-request` echoing the window's one-time token pairs. A successful
-`pair-ack` carries `relays` and `host`, so a phone that paired from a bare
-npub learns where the bridge lives. Rejections (`bad-token`,
+`pair-ack` carries `relays` and `host`: the phone keeps the machine's relays
+(the pairing's own plus the ack's) and reaches it over them from then on. Rejections (`bad-token`,
 `window-closed`) are answered at most five times per ten minutes. A
 `pair-request` may carry `sessionKey` to grant the first session key with
 the pairing; the `pair-ack` is then already encrypted to that key.

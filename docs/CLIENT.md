@@ -51,8 +51,12 @@ regenerates them and CI fails on drift.
   its notification summarizes machines, sessions and relays.
 - `platform/` also holds the SQLite-backed ports, the notifier (one channel
   per attention class; a tap opens the session) and the Blossom HTTP client.
-- `ui/` is the Compose UI: the sessions list, the session screen and its
-  transcript rows, pairing (QR scan), new session, settings.
+- `ui/` is the Compose UI: the welcome (login) screen, the sessions list
+  (home), the session screen and its transcript rows, pairing (QR scan),
+  new session, settings (a hub with a page per machine and per phone
+  setting), and the log viewer. `ui/components/` holds the shared kit the
+  screens are built from (page frame, grouped rows, buttons, fields, the
+  app's own icons).
 
 Pairing is a QR scan of the bridge's `codedeck://pair?…` URL (see
 [`PROTOCOL.md`](PROTOCOL.md#pairing)), or, by hand, the bridge's npub, token
@@ -66,7 +70,7 @@ only to its machine's relays. A phone with nothing paired dials nothing. The
 defaults a new session starts with (the agent, and per agent its mode,
 effort and model) are kept per machine too; everything else in Settings
 (appearance, notifications, stay connected, Orbot, Blossom, quick prompts)
-is the phone's own.
+is the phone's own, with the log viewer and the account last.
 
 **Login.** A fresh install opens on a welcome screen, and the core does not
 start until the user picks how the identity is held: a NIP-55 signer app

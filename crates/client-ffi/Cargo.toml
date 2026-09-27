@@ -23,7 +23,7 @@ protocol = { path = "../protocol" }
 # Same version as client-runtime's derive-only dependency. "cli" is the
 # `uniffi-bindgen` binary below; "tokio" lets `#[uniffi::export(async_runtime
 # = "tokio")]` export `async fn`s as Kotlin `suspend fun`s.
-uniffi = { version = "0.28", features = ["tokio", "cli"] }
+uniffi = { version = "0.32", features = ["tokio", "cli"] }
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time", "macros"] }
 serde = "1"
 serde_json = "1"

@@ -142,7 +142,7 @@ dependencies {
     // crates/client-ffi's cdylib. Version pinned loosely on purpose — this
     // is exactly the dependency the generated bindings file itself declares
     // as a prerequisite; keep it in step with whatever `uniffi` crate version
-    // crates/client-ffi/Cargo.toml pins (currently 0.28).
+    // crates/client-ffi/Cargo.toml pins (currently 0.32).
     implementation("net.java.dev.jna:jna:5.19.0@aar")
 
     // Tink directly, not its deprecated androidx.security:security-crypto

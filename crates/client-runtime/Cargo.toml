@@ -42,7 +42,7 @@ specta-typescript = "0.0.12"
 # `#[uniffi::export(async_runtime = "tokio")]` surface itself lives in
 # `crates/client-ffi`, which pulls in uniffi's "tokio" feature on its own.
 # Keep the version in step with client-ffi's.
-uniffi = { version = "0.28", optional = true }
+uniffi = { version = "0.32", optional = true }
 
 # The relay transport (WebSocket + SOCKS5 driver), shared with other runtimes.
 nostr-transport = { path = "../nostr-transport" }
