@@ -45,6 +45,7 @@ import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.QuietButton
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.ValueRow
+import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -148,9 +149,9 @@ internal fun PairingBody(
                 // CDX-013: a deep link arrived without direct user action —
                 // show what it wants to pair with and require an explicit
                 // tap. Nothing has been sent to the bridge yet.
-                staged != null && view.phase == "idle" -> StagedConfirm(staged.machine, staged.npub, staged.relays, dispatch)
-                view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine, dispatch)
-                view.phase == "paired" -> Paired(view.candidate?.machine, dispatch, onClose)
+                staged != null && view.phase == "idle" -> StagedConfirm(machineLabel(staged.machine), staged.npub, staged.relays, dispatch)
+                view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine?.let(::machineLabel), dispatch)
+                view.phase == "paired" -> Paired(view.candidate?.machine?.let(::machineLabel), dispatch, onClose)
                 else -> PairingForm(
                     view = view,
                     selfNpub = selfNpub,

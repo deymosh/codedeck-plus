@@ -103,7 +103,8 @@ impl CoreStores {
                     .or_else(|| non_blank(&sv.info.slug))
                     .map(str::to_string)
             }),
-            machine: non_blank(&mv.name).map(str::to_string),
+            // In capitals, as the app shows machine names everywhere.
+            machine: non_blank(&mv.name).map(str::to_uppercase),
             // The catalog's display name; the bare id when the bridge has not
             // advertised the agent (yet).
             agent: session.map(|sv| {
@@ -248,6 +249,14 @@ mod tests {
         assert!(h.stores.quick_prompts.prompts.is_empty());
         // settings come up at their built-in defaults
         assert_eq!(h.stores.settings.data, client_core::stores::settings::default_settings());
+    }
+
+    #[tokio::test]
+    async fn notification_labels_name_the_machine_in_capitals() {
+        let mut s = hydrate(&MemoryKv::new(), &MemoryTranscriptStore::new(), &StoresConfig::default()).await.stores;
+        s.machines.register_machine("m", "laptop-01", None, None, &[]);
+        assert_eq!(s.notification_labels("m", "s").machine.as_deref(), Some("LAPTOP-01"));
+        assert_eq!(s.notification_labels("unknown", "s"), NotificationLabels::default());
     }
 
     #[tokio::test]

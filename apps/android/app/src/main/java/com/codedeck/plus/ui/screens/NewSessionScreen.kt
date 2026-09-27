@@ -38,6 +38,7 @@ import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.ValueRow
+import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -373,7 +374,7 @@ internal fun NewSessionBody(
 
     Page(
         title = "New session",
-        subtitle = "on ${machine.name}",
+        subtitle = "on ${machineLabel(machine.name)}",
         onBack = onClose,
         backLabel = "Cancel",
         bottomBar = {

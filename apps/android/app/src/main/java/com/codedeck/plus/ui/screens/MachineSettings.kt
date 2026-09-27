@@ -53,6 +53,7 @@ import com.codedeck.plus.ui.components.QuietButton
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.ValueRow
+import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiAgent
@@ -116,7 +117,7 @@ fun MachineSettingsContent(
     }
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
 
-    Page(title = machine.name, onBack = onBack) {
+    Page(title = machineLabel(machine.name), onBack = onBack) {
         MachineHeader(machine, now)
         NewSessionDefaults(machine, dispatch)
         MachineRelays(machine, connectedRelays, dispatch)
@@ -147,7 +148,7 @@ fun MachineSettingsContent(
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             containerColor = Tokens.SurfaceRaised,
-            title = { Text("Remove ${machine.name}?", color = Tokens.Text) },
+            title = { Text("Remove ${machineLabel(machine.name)}?", color = Tokens.Text) },
             text = {
                 Text(
                     "Its sessions keep running on the machine. This phone forgets the pairing and the " +

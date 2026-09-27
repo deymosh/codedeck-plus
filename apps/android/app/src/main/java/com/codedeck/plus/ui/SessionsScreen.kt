@@ -62,6 +62,8 @@ import com.codedeck.plus.ui.components.DeckIcons
 import com.codedeck.plus.ui.components.Dot
 import com.codedeck.plus.ui.components.EmptyState
 import com.codedeck.plus.ui.components.IconAction
+import com.codedeck.plus.ui.components.MachineLabelTracking
+import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.components.ThinkingGlyph
 import com.codedeck.plus.ui.components.topGlow
 import com.codedeck.plus.ui.screens.MachinePresence
@@ -389,10 +391,11 @@ private fun MachineHeader(machine: UniffiMachineSummary, now: Long, first: Boole
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                machine.name,
+                machineLabel(machine.name),
                 color = Tokens.Text,
-                fontSize = 18.sp,
+                fontSize = Tokens.TextLg,
                 fontWeight = FontWeight.SemiBold,
+                letterSpacing = MachineLabelTracking,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

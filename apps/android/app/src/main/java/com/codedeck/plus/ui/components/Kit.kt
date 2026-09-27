@@ -51,6 +51,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.codedeck.plus.ui.theme.Tokens
 
@@ -485,3 +486,13 @@ fun EmptyState(
         PrimaryButton(action, onAction, Modifier.padding(top = Tokens.Space3), icon = actionIcon)
     }
 }
+
+/**
+ * A machine's name as the app shows it everywhere: in capitals, like the
+ * name plate on the hardware, so a machine reads apart from the sessions
+ * (sentence case) running on it — whatever case the bridge reports it in.
+ */
+fun machineLabel(name: String): String = name.uppercase()
+
+/** The letter spacing machine names get, so the capitals stay legible. */
+val MachineLabelTracking = 0.06.em

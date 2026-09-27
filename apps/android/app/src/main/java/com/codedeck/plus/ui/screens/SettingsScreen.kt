@@ -52,6 +52,7 @@ import com.codedeck.plus.ui.components.RowIcon
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.SwitchRow
 import com.codedeck.plus.ui.components.ValueRow
+import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiIntent
@@ -201,13 +202,14 @@ internal fun SettingsHub(
     onPairMachine: () -> Unit,
     onOpenLogs: () -> Unit,
     onClose: () -> Unit,
+    version: String = BuildConfig.VERSION_NAME,
 ) {
     Page(title = "Settings", onBack = onClose, backLabel = "Close settings") {
         Group(title = "Machines", footer = "Relays, agents and defaults are kept per machine.") {
             machines.forEach { machine ->
                 key(machine.pubkeyHex) {
                     NavRow(
-                        title = machine.name,
+                        title = machineLabel(machine.name),
                         subtitle = machineStatusText(machine, now) + sessionCount(machine),
                         icon = { RowIcon(DeckIcons.Machine, tint = if (machinePresence(machine, now) == MachinePresence.Online) Tokens.PresenceLive else Tokens.TextMuted) },
                         onClick = { onOpen(SettingsPage.Machine(machine.pubkeyHex)) },
@@ -260,7 +262,7 @@ internal fun SettingsHub(
             )
         }
         Text(
-            "CodeDeck+ ${BuildConfig.VERSION_NAME}",
+            "CodeDeck+ $version",
             color = Tokens.TextDim,
             fontSize = Tokens.TextXs,
             modifier = Modifier.fillMaxWidth().padding(horizontal = Tokens.Space2),

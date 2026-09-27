@@ -105,6 +105,8 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         SettingsHub(
             machines = listOf(buildBox, workstation), view = settings, npub = workstation.npub, signerLabel = "Amber", now = NOW,
             onOpen = {}, onPairMachine = {}, onOpenLogs = {}, onClose = {},
+            // Fixed: the real one comes from the build and differs per machine.
+            version = "1.0.0",
         )
     },
     "settings_machine" to {
