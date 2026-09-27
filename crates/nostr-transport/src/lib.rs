@@ -13,6 +13,7 @@
 //! Hand-rolled on `tokio-tungstenite` + `tokio-socks` rather than a relay-pool
 //! crate — see [`ws`]'s module docs for why.
 
+pub mod direct;
 pub mod frames;
 pub mod port;
 pub mod publish;

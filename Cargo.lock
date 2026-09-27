@@ -1440,6 +1440,7 @@ dependencies = [
  "protocol",
  "rustls",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-socks",
  "tokio-tungstenite",
