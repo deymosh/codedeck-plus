@@ -5,7 +5,8 @@
 //! Per-traffic-class subscriptions — what structurally kills bug A's since-filter
 //! starvation:
 //! - 30515 session-list heartbeat: NO `since` (replaceable — always fetch current)
-//! - 4516 stored responses: `since = last_stored_seen − 60s` (low-frequency only)
+//! - 4516 stored responses: `since = last_stored_seen − 60s` (low-frequency only;
+//!   a fresh store starts the cursor at its first start, not at the beginning)
 //! - 24515 ephemeral live output: NO `since` (relays never store it)
 //!
 //! Generation guard (CDB-037): every (re)connect bumps `epoch`; callbacks from
