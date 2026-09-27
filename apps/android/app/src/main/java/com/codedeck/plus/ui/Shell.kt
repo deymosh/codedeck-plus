@@ -3,9 +3,7 @@ package com.codedeck.plus.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -186,67 +184,64 @@ fun Shell(
         }
     }
 
-    // The failure banner floats over the top of the content, so its arrival
-    // never shifts the screen under the user's finger; a tap dismisses it
-    // early to uncover the header controls it sits on. The undo toast is
-    // stacked below the content instead — overlaid, it covered the
-    // composer's Send — and takes space only while it is showing.
-    Column(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            // System Back on any page returns to the sessions list, like each
-            // page's own close/back control; Back on the list leaves the app.
-            // The log is opened from Settings, so Back returns there.
-            if (screen != Screen.Sessions) {
-                BackHandler { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Sessions }
-            }
-            when (val current = screen) {
-                Screen.Settings -> SettingsScreen(
-                    core,
-                    login = login,
-                    onLogOut = onLogOut,
-                    onOpenLogs = { screen = Screen.Logs },
-                    onClose = { screen = Screen.Sessions },
-                )
-                Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
-                Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
-                is Screen.NewSession -> NewSessionScreen(
-                    core,
-                    machinePubkey = current.machine,
-                    onClose = { screen = Screen.Sessions },
-                    onCreated = { knownIds ->
-                        awaited = AwaitedSession(current.machine, knownIds)
-                        screen = Screen.Sessions
-                    },
-                )
-                is Screen.Session -> SessionScreen(
-                    core,
-                    current.machine,
-                    current.sessionId,
-                    onBack = { screen = Screen.Sessions },
-                    modifier = Modifier.fillMaxSize().background(Tokens.Bg),
-                )
-                Screen.Sessions -> SessionsScreen(
-                    core = core,
-                    machines = machines,
-                    pendingSessions = pendingSessions?.pending.orEmpty(),
-                    connectionStatus = connection?.status,
-                    needsPairingCheck = connection?.needsPairingCheck ?: false,
-                    showCommitBadge = settings?.showCommitBadge ?: false,
-                    unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
-                    selectedMachine = selectedMachine,
-                    selectedSession = selectedSession,
-                    onSelectSession = ::openSession,
-                    onNewSession = { screen = Screen.NewSession(it) },
-                    onOpenSettings = { screen = Screen.Settings },
-                    onOpenPairing = { screen = Screen.Pairing },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
+    // The failure banner and the undo toast both float over the content, so
+    // neither shifts the screen under the user's finger: the banner over the
+    // top (a tap dismisses it early to uncover the header controls it sits
+    // on), the toast over the bottom for its few seconds.
+    Box(Modifier.fillMaxSize()) {
+        // System Back on any page returns to the sessions list, like each
+        // page's own close/back control; Back on the list leaves the app.
+        // The log is opened from Settings, so Back returns there.
+        if (screen != Screen.Sessions) {
+            BackHandler { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Sessions }
         }
+        when (val current = screen) {
+            Screen.Settings -> SettingsScreen(
+                core,
+                login = login,
+                onLogOut = onLogOut,
+                onOpenLogs = { screen = Screen.Logs },
+                onClose = { screen = Screen.Sessions },
+            )
+            Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
+            Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
+            is Screen.NewSession -> NewSessionScreen(
+                core,
+                machinePubkey = current.machine,
+                onClose = { screen = Screen.Sessions },
+                onCreated = { knownIds ->
+                    awaited = AwaitedSession(current.machine, knownIds)
+                    screen = Screen.Sessions
+                },
+            )
+            is Screen.Session -> SessionScreen(
+                core,
+                current.machine,
+                current.sessionId,
+                onBack = { screen = Screen.Sessions },
+                modifier = Modifier.fillMaxSize().background(Tokens.Bg),
+            )
+            Screen.Sessions -> SessionsScreen(
+                core = core,
+                machines = machines,
+                pendingSessions = pendingSessions?.pending.orEmpty(),
+                connectionStatus = connection?.status,
+                needsPairingCheck = connection?.needsPairingCheck ?: false,
+                showCommitBadge = settings?.showCommitBadge ?: false,
+                unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
+                selectedMachine = selectedMachine,
+                selectedSession = selectedSession,
+                onSelectSession = ::openSession,
+                onNewSession = { screen = Screen.NewSession(it) },
+                onOpenSettings = { screen = Screen.Settings },
+                onOpenPairing = { screen = Screen.Pairing },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
         // Undo toast for an optimistic session delete — at the shell's root so it
         // is visible on whichever screen is showing. Emits nothing while no undo
         // window is open.
-        UndoToast(core, Modifier.align(Alignment.CenterHorizontally))
+        UndoToast(core, Modifier.align(Alignment.BottomCenter))
     }
 }
