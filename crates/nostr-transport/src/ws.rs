@@ -277,6 +277,8 @@ struct State {
     sub_seq: u64,
     next_generation: u64,
     timing: Timing,
+    /// Told whenever a relay's socket comes up or goes down.
+    on_relays_changed: Option<Rc<dyn Fn()>>,
 }
 
 /// A publish in flight: who is waiting for the verdict, and the frame, kept
@@ -380,7 +382,21 @@ impl WsTransport {
                 sub_seq: 0,
                 next_generation: 0,
                 timing: TIMING,
+                on_relays_changed: None,
             })),
+        }
+    }
+
+    /// Call `f` whenever a relay's socket comes up or goes down, so the set
+    /// [`Self::connected_relays`] reports can be re-read at once.
+    pub fn on_relays_changed(&self, f: Rc<dyn Fn()>) {
+        self.state.borrow_mut().on_relays_changed = Some(f);
+    }
+
+    fn relays_changed(&self) {
+        let f = self.state.borrow().on_relays_changed.clone();
+        if let Some(f) = f {
+            f();
         }
     }
 
@@ -749,12 +765,15 @@ impl WsTransport {
                 .map(|(id, e)| frames::req_frame(id, std::slice::from_ref(&e.filter)))
                 .collect()
         };
-        let st = self.state.borrow();
-        if let Some(c) = st.conns.get(relay) {
-            for frame in replays {
-                c.send(frame);
+        {
+            let st = self.state.borrow();
+            if let Some(c) = st.conns.get(relay) {
+                for frame in replays {
+                    c.send(frame);
+                }
             }
         }
+        self.relays_changed();
         true
     }
 
@@ -789,6 +808,7 @@ impl WsTransport {
             }
             actions
         };
+        self.relays_changed();
         self.apply(actions, Some(reason));
     }
 

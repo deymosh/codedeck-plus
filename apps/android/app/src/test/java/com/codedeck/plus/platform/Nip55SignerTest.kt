@@ -27,6 +27,12 @@ class Nip55SignerTest {
     }
 
     @Test
+    fun json_plaintext_reaches_the_signer_as_text() {
+        assertEquals(" {\"type\":\"pair-request\"}", signerPlaintext("{\"type\":\"pair-request\"}"))
+        assertEquals("hello", signerPlaintext("hello"))
+    }
+
+    @Test
     fun an_empty_cursor_needs_the_user() {
         assertEquals(ProviderAnswer.NeedsApproval, providerAnswerOf(MatrixCursor(arrayOf("result"))))
     }

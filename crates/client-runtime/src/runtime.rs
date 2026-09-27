@@ -357,16 +357,36 @@ impl Core {
             }
             authors
         };
+        // A store that has never seen a stored response starts its cursor
+        // now: everything already on the relays for this identity answered an
+        // earlier install or login (session keys this one does not hold), and
+        // whatever this one needs (a pair-ack, sync chunks) answers a request
+        // it has yet to send. Without a cursor the relays would replay the
+        // identity's whole history, each event handed to the signer in vain.
+        let last_stored_seen = if hydrated.last_stored_seen > 0 {
+            hydrated.last_stored_seen
+        } else {
+            let now = i64::try_from(clock.now_ms() / 1000).unwrap_or(0);
+            let _ = tx.send(Msg::NoteStoredSeen(now));
+            now
+        };
         let host = Rc::new(LoopHost {
             tx: tx.clone(),
             machines: RefCell::new(initial_authors.clone()),
-            cursor: RefCell::new(hydrated.last_stored_seen),
+            cursor: RefCell::new(last_stored_seen),
         });
         let ws = WsTransport::new(WsConfig {
             relays: config.relays.clone(),
             auth: Rc::new(IdentityAuth(Rc::clone(&config.identity))),
             proxy: if config.tor { config.proxy.clone() } else { None },
         });
+        // The connected-relay set is reported as it changes, not only when
+        // the watchdog next looks (with nothing subscribed yet, "connected"
+        // comes before any relay is).
+        let relays_tx = tx.clone();
+        ws.on_relays_changed(Rc::new(move || {
+            let _ = relays_tx.send(Msg::RelaysChanged);
+        }));
         // The HTTP port's own boot-time proxy — mirrors `WsConfig.proxy` above.
         // Without this, a host that starts with Tor already on (e.g. Android
         // reading a persisted `tor_proxy_enabled: true` before this call) has
@@ -643,6 +663,8 @@ enum Msg {
     },
     /// The delete-controller's 4 s undo window elapsed.
     UndoTimerFired,
+    /// A relay's socket came up or went down.
+    RelaysChanged,
     /// The connection FSM asked for a reconcile: after a (re)connect, or
     /// (`reconnected: false`) on a resume with the socket still up.
     RefreshReconcile { reconnected: bool },
@@ -921,6 +943,7 @@ impl Loop {
                     let _ = reply.send((self.conn.status, self.conn.needs_pairing_check, connected));
                 }
                 Msg::RetryDue => self.dispatch(ConnectionEvent::RetryDue),
+                Msg::RelaysChanged => self.check_connected_relays_changed(),
                 Msg::VisibilitySettled => self.dispatch(ConnectionEvent::VisibilitySettled),
                 Msg::SocketOpen => {
                     let at = self.clock.now_ms();
@@ -1170,6 +1193,18 @@ impl Loop {
                 });
             }
             Ingested::DecodeFailed => {
+                // Why, so a device log can tell an old or foreign payload from
+                // a wire mismatch. The error is the decoder's (field names,
+                // at most a short quoted value), cut short; never the payload.
+                if let Some(record) = self.api.diagnostics().invalid.last() {
+                    let error: String = record.error.chars().take(160).collect();
+                    log::warn!(
+                        "undecodable message from {} (kind {}, event {}): {error}",
+                        record.machine.get(..8).unwrap_or(&record.machine),
+                        record.kind,
+                        record.event_id.get(..8).unwrap_or(&record.event_id),
+                    );
+                }
                 self.observer.action_failed(ActionFailedKind::DecodeFailed);
                 self.emit(CoreEvent::ActionFailed {
                     kind: ActionFailedKind::DecodeFailed,
@@ -2391,14 +2426,11 @@ mod tests {
 
     /// One relay of two dying leaves overall `ConnectionStatus` untouched
     /// (`NostrClient::on_close` only fires once EVERY relay for a
-    /// subscription is dead — see `router::tests::
-    /// eose_fires_once_after_every_live_relay_reports` for the same
-    /// aggregate rule on the open side), so `dispatch`'s status-transition
-    /// gate never runs. Without the periodic watchdog picking this up too,
-    /// Settings' per-relay dot would freeze on the stale, fuller set forever
-    /// — this is the "dots never show any color" report's root cause.
+    /// subscription is dead), so `dispatch`'s status-transition gate never
+    /// runs. The transport reports the relay going down itself, so Settings'
+    /// per-relay dot follows at once rather than at the watchdog's next tick.
     #[tokio::test]
-    async fn a_relay_dying_while_another_survives_is_caught_by_the_periodic_watchdog() {
+    async fn a_relay_dying_while_another_survives_is_reported_at_once() {
         LocalSet::new()
             .run_until(async {
                 let mut mock1 = mock_relay().await;
@@ -2430,23 +2462,10 @@ mod tests {
 
                 let before = spy.connected_relays.lock().unwrap().last().unwrap().clone();
                 assert_eq!(before.len(), 2, "{before:?}");
-                let before_status_calls = spy.statuses.lock().unwrap().len();
 
+                // Real time only, far short of the watchdog's 30 s tick.
                 mock2.close();
-                settle().await; // real time — confirms the close registers on its own
-                // The status-transition gate did NOT fire — confirms this
-                // scenario actually needs the watchdog, not dispatch's own
-                // path (which the previous test already covers).
-                assert_eq!(spy.statuses.lock().unwrap().len(), before_status_calls, "{:?}", spy.statuses.lock().unwrap());
-
-                // Fast-forward past the watchdog's 30s tick. Paused only NOW
-                // (after the real socket close above already settled) so it
-                // never races the mock relays' own real-time handshake.
-                tokio::time::pause();
-                tokio::time::advance(Duration::from_secs(31)).await;
-                for _ in 0..20 {
-                    tokio::task::yield_now().await;
-                }
+                settle().await;
 
                 let after = spy.connected_relays.lock().unwrap().last().unwrap().clone();
                 assert_eq!(after, vec![mock1.url.clone()], "{after:?}");
@@ -2595,6 +2614,31 @@ mod tests {
                     )),
                     "{events:?}",
                 );
+            })
+            .await;
+    }
+
+    /// A fresh store asks for stored responses from its first start (less the
+    /// grace), not the identity's whole history: what earlier installs were
+    /// sent is under keys this one does not hold.
+    #[tokio::test]
+    async fn a_fresh_store_asks_for_stored_responses_from_its_start() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+                core.set_machines(vec![generate_keypair().pubkey_hex]);
+                core.start();
+                let since = loop {
+                    let frame = mock.next_frame().await;
+                    let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                    if v[0] == "REQ" && v[2]["kinds"][0] == RESPONSE_KIND {
+                        break v[2]["since"].as_i64();
+                    }
+                };
+                // The test clock reads 1_000 s.
+                assert_eq!(since, Some(1_000 - crate::nostr_client::STORED_SINCE_GRACE_SECONDS));
             })
             .await;
     }

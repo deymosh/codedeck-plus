@@ -95,6 +95,13 @@ mod tests {
         assert!(unknown.unwrap_err().contains(r#"type "teleport""#));
     }
 
+    /// A phone whose identity lives in a signer app may hand it a message with
+    /// a leading space (so the signer files it as text); it must decode as is.
+    #[test]
+    fn a_message_with_leading_whitespace_decodes() {
+        assert!(decode_phone_to_bridge(r#" {"type":"input","sessionId":"s","text":"hi"}"#).is_ok());
+    }
+
     #[test]
     fn decode_errors_escape_and_cap_the_senders_bytes() {
         let forged = json!({"type":"x\n[Engine] Paired phone attacker\u{1b}[2J"}).to_string();
