@@ -354,6 +354,61 @@ describe('OpenCode default model', () => {
   });
 });
 
+describe('OpenCode context usage', () => {
+  const withLimits = (client: FakeClient) =>
+    Object.assign(client, {
+      config: {
+        providers: vi.fn().mockResolvedValue({
+          data: {
+            providers: [{
+              id: 'anthropic',
+              models: {
+                'claude-sonnet-5': { id: 'claude-sonnet-5', name: 'Sonnet', cost: { input: 3, output: 3 }, status: 'active', limit: { context: 200_000, output: 64_000 } },
+                'no-limit': { id: 'no-limit', name: 'Custom', cost: { input: 0, output: 0 }, status: 'active', limit: { context: 0, output: 0 } },
+              },
+            }],
+            default: {},
+          },
+          error: undefined,
+        }),
+        get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+      },
+    });
+  const step = (modelID: string, input: number, cacheRead = 0) => ({
+    type: 'message.updated',
+    properties: {
+      info: {
+        id: `msg_${input}`, sessionID: 'ses_1', role: 'assistant', providerID: 'anthropic', modelID,
+        tokens: { input, output: 1_000, reasoning: 0, cache: { read: cacheRead, write: 0 } },
+      },
+    },
+  });
+
+  it('reports the window of the model that ran and how full it is, only when it changes', async () => {
+    const ctx = start(withLimits(clientWith([
+      step('claude-sonnet-5', 49_000),
+      step('claude-sonnet-5', 49_000),
+      step('claude-sonnet-5', 9_000, 90_000),
+    ])));
+    await ctx.ended();
+    expect(ctx.events.filter((e) => e.type === 'info' && ('contextPercentage' in e || 'contextWindow' in e))).toEqual([
+      { type: 'info', contextPercentage: 25, contextWindow: 200_000 },
+      { type: 'info', contextPercentage: 50 },
+    ]);
+  });
+
+  it('reports nothing for a model whose provider declares no limit', async () => {
+    const ctx = start(withLimits(clientWith([step('no-limit', 49_000)])));
+    await ctx.ended();
+    expect(ctx.events.some((e) => e.type === 'info' && 'contextPercentage' in e)).toBe(false);
+  });
+
+  it('lists only declared limits with the models', async () => {
+    const catalog = await OpenCodeDriver.withClient(withLimits(clientWith([]))).listModels();
+    expect(catalog.contextLimits).toEqual({ 'anthropic/claude-sonnet-5': 200_000 });
+  });
+});
+
 describe('OpenCode model checks', () => {
   const catalog = {
     providers: vi.fn().mockResolvedValue({
