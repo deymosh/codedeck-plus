@@ -132,6 +132,11 @@ Two files configure it:
   the ones you need), and [`docs/BRIDGE.md`](docs/BRIDGE.md#configuration)
   explains each. Restart the container after editing it.
 
+  The most common of them can be set in `.env` instead (`CODEDECK_RELAYS`,
+  `CODEDECK_TOR_PROXY_URL`, the OpenCode and direct-link ones — see
+  `.env.example`). Use whichever you prefer: a variable set in `.env` wins
+  over `config.json`, and one left unset leaves the file's value in place.
+
   ```json
   {
     "relays": ["wss://relay.example.com"],
@@ -178,6 +183,7 @@ docker compose up -d --build
 ```bash
 docker compose --profile tor up -d --build
 # then set "torProxyUrl": "socks5h://codedeck-tor:9050" in data/config.json
+# (or CODEDECK_TOR_PROXY_URL in .env)
 ```
 
 3. Check the logs to scan the pairing QR code with the CodeDeck+ Android app:

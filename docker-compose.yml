@@ -15,10 +15,6 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    # Only what the container itself needs lives here. The bridge's own
-    # settings (relays, Tor, OpenCode, the direct link, …) are in
-    # ./data/config.json — created on first start, every key shown in
-    # config.example.json.
     environment:
       - NODE_ENV=production
       # For the entrypoint: Git identity, repositories to clone, GSD.
@@ -29,6 +25,18 @@ services:
       # Claude Code's own settings, for an LLM gateway / router.
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}
+      # The bridge's own settings live in ./data/config.json (created on
+      # first start; config.example.json shows every key). The common ones
+      # can also be set in .env: a variable set there wins over the file,
+      # one left empty leaves the file's value in place.
+      - CODEDECK_MACHINE_NAME=${CODEDECK_MACHINE_NAME:-}
+      - CODEDECK_RELAYS=${CODEDECK_RELAYS:-}
+      - CODEDECK_TOR_PROXY_URL=${CODEDECK_TOR_PROXY_URL:-}
+      - CODEDECK_OPENCODE_SERVER_URL=${CODEDECK_OPENCODE_SERVER_URL:-}
+      - CODEDECK_OPENCODE_AUTO_START=${CODEDECK_OPENCODE_AUTO_START:-}
+      - CODEDECK_OPENCODE_PORT=${CODEDECK_OPENCODE_PORT:-}
+      - CODEDECK_DIRECT_LISTEN=${CODEDECK_DIRECT_LISTEN:-}
+      - CODEDECK_DIRECT_ENDPOINTS=${CODEDECK_DIRECT_ENDPOINTS:-}
     # The direct link: phones on your network (or VPN) reach the bridge here
     # without a relay. Only paired phones get past its handshake.
     ports:
