@@ -8,7 +8,8 @@
 //!
 //! - A visibility flip is DEBOUNCED and NEVER tears down a healthy socket.
 //! - Reconnects back off exponentially (2s → 30s) with +25% jitter.
-//! - Every successful (re)connect triggers `RefreshAndReconcile`.
+//! - Every successful (re)connect triggers `RefreshAndReconcile`; a resume
+//!   on a socket that survived triggers the lighter `ResumeReconcile`.
 //! - Decrypt failures increment a diagnostics counter and raise
 //!   `needs_pairing_check` — they are NEVER a lost connection.
 //! - Presence per machine is an honest `f(30515 age, socket state)`.
@@ -132,6 +133,9 @@ pub enum ConnectionEffect {
     ScheduleVisibilityCheck { delay_ms: u64 },
     CancelVisibilityCheck,
     RefreshAndReconcile,
+    /// The app came back with the socket still up: reconcile, but only ask
+    /// for session lists the heartbeats have not kept current.
+    ResumeReconcile,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -245,7 +249,7 @@ pub fn connection_reducer(
             if state.status == S::Connected {
                 // Cheap resync-on-resume: the socket survived, but the world may
                 // have moved while the OS had us frozen.
-                return with(state.clone(), vec![ConnectionEffect::RefreshAndReconcile]);
+                return with(state.clone(), vec![ConnectionEffect::ResumeReconcile]);
             }
             if state.status == S::Stopped || !state.online {
                 return no_effects(state.clone());
@@ -565,7 +569,7 @@ mod tests {
     fn resume_while_connected_is_cheap_refresh_no_churn() {
         let r = connection_reducer(&connected_state(), &ConnectionEvent::Resume, CFG);
         assert_eq!(r.state.status, S::Connected);
-        assert_eq!(r.effects, vec![ConnectionEffect::RefreshAndReconcile]);
+        assert_eq!(r.effects, vec![ConnectionEffect::ResumeReconcile]);
     }
 
     #[test]

@@ -67,6 +67,7 @@ fun GsdStrip(
     machine: String,
     sessionId: String,
     gsd: UniffiGsdState?,
+    supportsGsd: Boolean,
     sessionState: String?,
     modifier: Modifier = Modifier,
 ) {
@@ -77,9 +78,10 @@ fun GsdStrip(
 
     // One request on mount, per session — gating this on already-having state
     // meant neither side ever initiated and the strip could never render.
-    // Also refreshes stored state from a prior run.
-    LaunchedEffect(machine, sessionId) {
-        core.dispatch(UniffiIntent.RequestGsd(machine = machine, sessionId = sessionId))
+    // Also refreshes stored state from a prior run. Only for an agent whose
+    // catalog entry supports GSD: no other can ever answer.
+    LaunchedEffect(machine, sessionId, supportsGsd) {
+        if (supportsGsd) core.dispatch(UniffiIntent.RequestGsd(machine = machine, sessionId = sessionId))
     }
 
     if (gsd == null || !gsd.available) return

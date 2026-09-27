@@ -19,6 +19,7 @@ use client_core::notifications::{
 use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
+use client_core::stores::fetches::Fetch;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
@@ -327,6 +328,13 @@ impl<'a> Router<'a> {
             // --- slice C: machines-slice updates + fire-and-answer acks ---
             BridgeToPhone::Models(m) => {
                 self.stores.machines.apply_models(machine, m);
+                // An empty list comes with the reason: ask again next time.
+                let fetch = Fetch::Models(m.agent.clone());
+                if m.models.is_empty() {
+                    self.stores.machines.fetches.forget(machine, fetch);
+                } else {
+                    self.stores.machines.fetches.answered(machine, fetch, self.now);
+                }
                 r.persist(StoreId::Machines);
             }
             BridgeToPhone::Usage(m) => {
@@ -364,6 +372,7 @@ impl<'a> Router<'a> {
             }
             BridgeToPhone::ProviderProfiles(m) => {
                 self.stores.machines.apply_provider_profiles(machine, m);
+                self.stores.machines.fetches.answered(machine, Fetch::ProviderProfiles, self.now);
                 // CDX-062: provider profiles are never persisted.
             }
             BridgeToPhone::CredentialsAck(m) => {
@@ -383,6 +392,8 @@ impl<'a> Router<'a> {
                         m.agent.as_deref(),
                         &m.credentials,
                     );
+                    // New credentials can change what the agents list.
+                    self.stores.machines.fetches.forget_models(machine);
                     r.persist(StoreId::Machines);
                 }
             }

@@ -9,6 +9,7 @@
 //! (Blossom-first, relay-chunk fallback).
 
 use client_core::delete_controller::DeleteEffect;
+use client_core::stores::fetches::Fetch;
 use client_core::stores::outbox::OutboxState;
 use client_core::stores::pairing::{
     parse_manual_pair, parse_pairing_url, pairing_reducer, PairingEvent, PAIR_ACK_TIMEOUT_MS,
@@ -249,6 +250,8 @@ pub enum Intent {
     RefreshSessions {
         machine: String,
     },
+    /// Ask for an agent's model list — sent only when the one held is not
+    /// fresh (see `client_core::stores::fetches`).
     RequestModels {
         machine: String,
         agent: String,
@@ -276,6 +279,8 @@ pub enum Intent {
         profile_id: String,
         profile: Option<ProviderProfileWrite>,
     },
+    /// Ask for the provider profiles — sent only when this connection has
+    /// not had them yet (the bridge pushes every change).
     RequestProviderProfiles {
         machine: String,
     },
@@ -599,13 +604,17 @@ pub fn apply(
         Intent::RefreshSessions { machine } => {
             r.send(&machine, PhoneToBridge::RefreshSessions(BareMsg { version: v() }))
         }
-        Intent::RequestModels { machine, agent } => r.send(
-            &machine,
-            PhoneToBridge::ModelsRequest(ModelsRequestMsg {
-                version: v(),
-                agent,
-            }),
-        ),
+        Intent::RequestModels { machine, agent } => {
+            if stores.machines.fetches.should_request(&machine, Fetch::Models(agent.clone()), ctx.now) {
+                r.send(
+                    &machine,
+                    PhoneToBridge::ModelsRequest(ModelsRequestMsg {
+                        version: v(),
+                        agent,
+                    }),
+                )
+            }
+        }
         Intent::RequestUsage {
             machine,
             session_id,
@@ -656,10 +665,11 @@ pub fn apply(
                 profile,
             }),
         ),
-        Intent::RequestProviderProfiles { machine } => r.send(
-            &machine,
-            PhoneToBridge::ProviderProfilesRequest(BareMsg { version: v() }),
-        ),
+        Intent::RequestProviderProfiles { machine } => {
+            if stores.machines.fetches.should_request(&machine, Fetch::ProviderProfiles, ctx.now) {
+                r.send(&machine, PhoneToBridge::ProviderProfilesRequest(BareMsg { version: v() }))
+            }
+        }
         Intent::CreateFolder {
             machine,
             path,
@@ -1283,6 +1293,31 @@ mod tests {
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::ProviderProfilesRequest(_) }] if machine == "m"
         ));
+    }
+
+    /// Screens ask each time they open; only what is not fresh goes out.
+    #[tokio::test]
+    async fn screens_reopening_send_only_the_requests_whose_answers_are_not_fresh() {
+        let (mut s, kp) = stores().await;
+        let mut sent = 0;
+        let mut open_screen = |s: &mut CoreStores, now: u64| {
+            for intent in [
+                Intent::RequestProviderProfiles { machine: "m".into() },
+                Intent::RequestModels { machine: "m".into(), agent: "claude".into() },
+            ] {
+                sent += apply(s, intent, &kp, IntentCtx { now, visible: true }).sends.len();
+            }
+            std::mem::take(&mut sent)
+        };
+        assert_eq!(open_screen(&mut s, 0), 2, "first open asks for both");
+        assert_eq!(open_screen(&mut s, 1_000), 0, "both still in flight");
+        s.machines.fetches.answered("m", Fetch::ProviderProfiles, 2_000);
+        s.machines.fetches.answered("m", Fetch::Models("claude".into()), 2_000);
+        assert_eq!(open_screen(&mut s, 60_000), 0, "both answered and fresh");
+        let later = 2_000 + client_core::stores::fetches::MODELS_FRESH_FOR_MS;
+        assert_eq!(open_screen(&mut s, later), 1, "the model list went stale; profiles are pushed");
+        s.machines.fetches.forget_all();
+        assert_eq!(open_screen(&mut s, later + 1), 2, "a reconnect asks again");
     }
 
     #[tokio::test]
