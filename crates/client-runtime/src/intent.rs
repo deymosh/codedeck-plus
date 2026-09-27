@@ -59,7 +59,7 @@ pub struct SessionFileSend {
     pub machine: String,
     pub session_id: String,
     pub text: String,
-    pub image: Vec<u8>,
+    pub data: Vec<u8>,
     pub filename: String,
     pub mime_type: String,
 }
@@ -766,8 +766,9 @@ pub fn apply(
             r.persist(StoreId::Settings);
         }
         Intent::SetBlossomServer(url) => {
-            stores.settings.set_blossom_server(&url);
-            r.persist(StoreId::Settings);
+            if stores.settings.set_blossom_server(&url) {
+                r.persist(StoreId::Settings);
+            }
         }
         Intent::SetNotificationsEnabled(on) => {
             stores.settings.set_notifications_enabled(on);

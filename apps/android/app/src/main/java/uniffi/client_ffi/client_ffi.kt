@@ -6660,7 +6660,16 @@ data class UniffiSettingsView (
     , 
     var `torProxyEnabled`: kotlin.Boolean
     , 
+    /**
+     * The Blossom server attachments are uploaded to; `""` = none, and
+     * they travel through the relays.
+     */
     var `blossomServer`: kotlin.String
+    , 
+    /**
+     * The largest file one attachment can be, with or without that server.
+     */
+    var `maxUploadBytes`: kotlin.ULong
     , 
     var `notificationsEnabled`: kotlin.Boolean
     , 
@@ -6687,6 +6696,7 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -6698,6 +6708,7 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
             FfiConverterBoolean.allocationSize(value.`stayConnected`) +
             FfiConverterBoolean.allocationSize(value.`torProxyEnabled`) +
             FfiConverterString.allocationSize(value.`blossomServer`) +
+            FfiConverterULong.allocationSize(value.`maxUploadBytes`) +
             FfiConverterBoolean.allocationSize(value.`notificationsEnabled`) +
             FfiConverterBoolean.allocationSize(value.`showUsageBadge`) +
             FfiConverterBoolean.allocationSize(value.`showCommitBadge`)
@@ -6708,6 +6719,7 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
             FfiConverterBoolean.write(value.`stayConnected`, buf)
             FfiConverterBoolean.write(value.`torProxyEnabled`, buf)
             FfiConverterString.write(value.`blossomServer`, buf)
+            FfiConverterULong.write(value.`maxUploadBytes`, buf)
             FfiConverterBoolean.write(value.`notificationsEnabled`, buf)
             FfiConverterBoolean.write(value.`showUsageBadge`, buf)
             FfiConverterBoolean.write(value.`showCommitBadge`, buf)
@@ -7295,10 +7307,10 @@ sealed class UniffiIntent {
     }
     
     /**
-     * Attach an image to `session_id`'s next input (CDX-029). The loop
-     * uploads it to the configured Blossom server through the `UniffiHttpFetch`
-     * port, falling back to relay chunks, then publishes the `upload-image`
-     * command — no outbox item, no local echo (the transcript shows it once
+     * Attach a file to `session_id`'s next input. The loop uploads it to
+     * the user's Blossom server (when one is set) through the
+     * `UniffiHttpFetch` port, else or on failure sends it as relay chunks,
+     * then publishes the `upload-file` command — no outbox item, no local echo (the transcript shows it once
      * the bridge injects it, like any other output).
      */
     data class SendSessionFile(
@@ -7309,12 +7321,12 @@ sealed class UniffiIntent {
          */
         val `text`: kotlin.String, 
         /**
-         * Raw image bytes (a Kotlin `ByteArray` across the FFI).
+         * The file's bytes (a Kotlin `ByteArray` across the FFI).
          */
-        val `image`: kotlin.ByteArray, 
+        val `data`: kotlin.ByteArray, 
         val `filename`: kotlin.String, 
         /**
-         * IANA media type of `image` (e.g. `"image/png"`), forwarded to the
+         * IANA media type of `data` (e.g. `"application/pdf"`), forwarded to the
          * bridge verbatim — the attachment command carries it as-is.
          */
         val `mimeType`: kotlin.String) : UniffiIntent()
@@ -8103,7 +8115,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`machine`)
                 + FfiConverterString.allocationSize(value.`sessionId`)
                 + FfiConverterString.allocationSize(value.`text`)
-                + FfiConverterByteArray.allocationSize(value.`image`)
+                + FfiConverterByteArray.allocationSize(value.`data`)
                 + FfiConverterString.allocationSize(value.`filename`)
                 + FfiConverterString.allocationSize(value.`mimeType`)
             )
@@ -8486,7 +8498,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`text`, buf)
-                FfiConverterByteArray.write(value.`image`, buf)
+                FfiConverterByteArray.write(value.`data`, buf)
                 FfiConverterString.write(value.`filename`, buf)
                 FfiConverterString.write(value.`mimeType`, buf)
                 Unit

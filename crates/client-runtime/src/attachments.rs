@@ -1,5 +1,5 @@
-//! Session image attachments — the AES-256-GCM blob crypto and the BUD-01/02
-//! Blossom upload.
+//! Session attachments — the AES-256-GCM blob crypto and the BUD-01/02
+//! Blossom upload, for any kind of file.
 //!
 //! The blob on the server is the ciphertext; the key + iv travel only inside
 //! the NIP-44 encrypted session command that references it. HTTP is a port
@@ -11,17 +11,33 @@ use protocol::crypto::bytes_to_hex;
 use nostr::{EventBuilder, JsonUtil, Kind, PublicKey, Tag, Timestamp};
 use sha2::{Digest, Sha256};
 
+use client_core::image_chunks::IMAGE_CHUNK_BYTES;
+
 use crate::deadline::{remaining_budget, with_deadline, StageError};
 use crate::ports::LocalBoxFuture;
 use crate::signer::IdentitySigner;
 
-/// Blossom server used when the user has not set one.
-pub const DEFAULT_BLOSSOM_SERVER: &str = "https://blossom.descendant.io";
+/// Most relay chunks one send may take when no Blossom server holds the
+/// bytes; a longer run could not finish inside the bridge's assembly window.
+pub const MAX_FALLBACK_CHUNKS: usize = 200;
+/// The most of one file the bridge keeps (its `MAX_UPLOAD_BYTES`).
+pub const MAX_BLOSSOM_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
+
+/// The largest file one send can carry: through a Blossom server, what the
+/// bridge keeps; through the relays alone, what fits in
+/// [`MAX_FALLBACK_CHUNKS`] base64 chunks.
+pub fn max_upload_bytes(blossom: bool) -> u64 {
+    if blossom {
+        MAX_BLOSSOM_UPLOAD_BYTES
+    } else {
+        (MAX_FALLBACK_CHUNKS * IMAGE_CHUNK_BYTES) as u64 / 4 * 3
+    }
+}
 
 /// BUD-02 authorization event kind.
 pub const BLOSSOM_AUTH_KIND: u16 = 24242;
 
-/// Where an uploaded image lives and how to decrypt it.
+/// Where an uploaded file lives and how to decrypt it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedBlobRef {
     pub url: String,
@@ -114,23 +130,25 @@ pub const BLOSSOM_RETRY_FLOOR_MS: u64 = 10_000;
 const RETRYABLE_STATUSES: [u16; 5] = [502, 520, 522, 523, 524];
 const MAX_RETRIES: u32 = 2;
 
+/// The server is the one the user chose; there is no built-in one, since the
+/// server learns who uploads and when.
 pub struct UploadOptions<'a> {
-    pub server: Option<&'a str>,
+    pub server: &'a str,
     pub now_ms: u64,
     pub budget_ms: u64,
 }
 
-impl UploadOptions<'_> {
-    pub fn at(now_ms: u64) -> Self {
+impl<'a> UploadOptions<'a> {
+    pub fn at(server: &'a str, now_ms: u64) -> Self {
         Self {
-            server: None,
+            server,
             now_ms,
             budget_ms: BLOSSOM_TOTAL_BUDGET_MS,
         }
     }
 }
 
-/// Encrypt + upload one image; returns where it lives and its key + iv.
+/// Encrypt + upload one file; returns where it lives and its key + iv.
 /// `Err(StageError)` on
 /// definitive failure (the UI shows it and keeps the pending attachment for a
 /// retry). The BUD-02 auth event is signed by the phone's identity — the
@@ -141,11 +159,7 @@ pub async fn upload_encrypted_blob(
     fetch: &dyn HttpFetch,
     opts: UploadOptions<'_>,
 ) -> Result<EncryptedBlobRef, StageError> {
-    let server = opts
-        .server
-        .unwrap_or(DEFAULT_BLOSSOM_SERVER)
-        .trim_end_matches('/')
-        .to_string();
+    let server = opts.server.trim_end_matches('/').to_string();
     let enc = encrypt_blob(raw);
 
     let now_sec = opts.now_ms / 1000;
@@ -306,8 +320,7 @@ mod tests {
             statuses: RefCell::new(vec![200]),
         };
 
-        let mut opts = UploadOptions::at(1_700_000_000_000);
-        opts.server = Some("https://blossom.example/");
+        let opts = UploadOptions::at("https://blossom.example/", 1_700_000_000_000);
         let reference = upload_encrypted_blob(raw, &crate::signer::LocalSigner(phone), &fetch, opts)
             .await
             .unwrap();
@@ -351,7 +364,7 @@ mod tests {
         let fetch = HangingFetch { calls: Rc::clone(&calls) };
         let started = tokio::time::Instant::now();
 
-        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at("https://blossom.example", 0)).await;
 
         assert!(matches!(r, Err(StageError::Timeout { .. })));
         // Attempt 1 hits the 45 s per-attempt cap; attempt 2 gets only what is
@@ -370,7 +383,7 @@ mod tests {
             calls: Rc::clone(&calls),
             statuses: RefCell::new(vec![200, 502]),
         };
-        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at("https://blossom.example", 0)).await;
         assert!(r.is_ok());
         assert_eq!(calls.borrow().len(), 2);
 
@@ -378,7 +391,7 @@ mod tests {
             calls: Rc::new(RefCell::new(Vec::new())),
             statuses: RefCell::new(vec![403]),
         };
-        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_blob(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at("https://blossom.example", 0)).await;
         assert!(matches!(r, Err(StageError::Failed(m)) if m.contains("403")));
     }
 }

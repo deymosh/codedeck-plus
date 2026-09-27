@@ -1493,6 +1493,7 @@ impl Loop {
             clock: Rc::clone(&self.clock),
             entropy: Rc::clone(&self.entropy),
             observer: Rc::clone(&self.observer),
+            blossom_server: Some(self.stores.settings.data.blossom_server.trim().to_string()).filter(|s| !s.is_empty()),
         }
     }
 
@@ -1918,6 +1919,8 @@ struct FileSendCtx {
     clock: Rc<dyn Clock>,
     entropy: Rc<dyn Entropy>,
     observer: Rc<dyn CoreObserver>,
+    /// The Blossom server the user chose, if any.
+    blossom_server: Option<String>,
 }
 
 impl FileSendCtx {
@@ -1942,8 +1945,9 @@ impl FileSendCtx {
         }
     }
 
-    /// Session image upload (CDX-029), Blossom-first with a relay-chunk
-    /// fallback — port of the TS `sendSessionImage`. Two INDEPENDENT stages:
+    /// A session attachment, through the user's Blossom server when one is
+    /// set, else (or when it fails) through the relays in chunks. Two
+    /// INDEPENDENT stages:
     /// stage 1 puts the bytes somewhere durable, stage 2 tells the bridge
     /// where they are. Only a stage-1 failure reaches the chunk fallback — once
     /// the bridge is told a URL, the bytes are already on the server, so a
@@ -1954,7 +1958,7 @@ impl FileSendCtx {
         &self,
         send: SessionFileSend,
     ) {
-        let SessionFileSend { machine, session_id, text, image, filename, mime_type } = send;
+        let SessionFileSend { machine, session_id, text, data, filename, mime_type } = send;
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
         use protocol::commands::{
             UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg, VersionFields,
@@ -1967,11 +1971,10 @@ impl FileSendCtx {
         /// chunk) — past that point every further chunk is guaranteed waste,
         /// the tracker is already gone. PAIRED CONSTANT with the bridge side.
         const CHUNK_ASSEMBLY_BUDGET_MS: u64 = 55_000;
-        /// A run that cannot fit this window needs Blossom, not patience.
-        const MAX_FALLBACK_CHUNKS: usize = 200;
+        use crate::attachments::MAX_FALLBACK_CHUNKS;
 
         let started_at = self.clock.now_ms();
-        let size_bytes = image.len() as u64;
+        let size_bytes = data.len() as u64;
 
         let fail = |this: &Self| {
             this.observer.action_failed(ActionFailedKind::PublishRejected);
@@ -1979,13 +1982,16 @@ impl FileSendCtx {
                 .on_event(CoreEvent::ActionFailed { kind: ActionFailedKind::PublishRejected });
         };
 
-        // --- Stage 1: the bytes ---
-        let opts = crate::attachments::UploadOptions::at(started_at);
-        let uploaded =
-            crate::attachments::upload_encrypted_blob(&image, self.signer.as_ref(), self.http.as_ref(), opts)
-                .await;
+        // --- Stage 1: the bytes, on the user's server when they chose one ---
+        let uploaded = match self.blossom_server.as_deref() {
+            Some(server) => {
+                let opts = crate::attachments::UploadOptions::at(server, started_at);
+                Some(crate::attachments::upload_encrypted_blob(&data, self.signer.as_ref(), self.http.as_ref(), opts).await)
+            }
+            None => None,
+        };
 
-        if let Ok(reference) = uploaded {
+        if let Some(Ok(reference)) = uploaded {
             // --- Stage 2: the reference ---
             let hash = client_core::image_chunks::blossom_hash_from_url(&reference.url).to_string();
             let msg = PhoneToBridge::UploadFile(UploadFileMsg::Blossom(UploadFileBlossomMsg {
@@ -2011,8 +2017,8 @@ impl FileSendCtx {
 
         // --- Stage 3: chunk fallback (nobody holds the bytes) ---
         use base64::Engine as _;
-        let base64_image = base64::engine::general_purpose::STANDARD.encode(&image);
-        let chunks = chunk_base64(&base64_image, IMAGE_CHUNK_BYTES);
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+        let chunks = chunk_base64(&base64_data, IMAGE_CHUNK_BYTES);
         if chunks.len() > MAX_FALLBACK_CHUNKS {
             fail(self);
             return;
@@ -2246,6 +2252,7 @@ mod tests {
                 core.start();
                 eose_all(&mut mock).await;
                 settle().await;
+                core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
 
                 let core2 = core.clone();
                 let upload = tokio::task::spawn_local(async move {
@@ -2254,7 +2261,7 @@ mod tests {
                             machine: "m".into(),
                             session_id: "s1".into(),
                             text: String::new(),
-                            image: b"bytes".to_vec(),
+                            data: b"bytes".to_vec(),
                             filename: "a.jpg".into(),
                             mime_type: "image/jpeg".into(),
                         }))
@@ -3197,6 +3204,8 @@ mod tests {
                 eose_all(&mut mock).await;
                 settle().await;
 
+                core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
+
                 let core2 = core.clone();
                 let machine_pubkey = machine.pubkey_hex.clone();
                 let dispatched = tokio::task::spawn_local(async move {
@@ -3205,7 +3214,7 @@ mod tests {
                             machine: machine_pubkey,
                             session_id: "s1".into(),
                             text: "look at this".into(),
-                            image: b"png bytes here".to_vec(),
+                            data: b"png bytes here".to_vec(),
                             filename: "photo.png".into(),
                             mime_type: "image/png".into(),
                         }))
@@ -3236,6 +3245,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_no_blossom_server_a_file_goes_through_the_relays() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let ports = CorePorts {
+                    http: Rc::new(OkHttp),
+                    ..CorePorts::default()
+                };
+                let core =
+                    core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.set_machines(vec![machine.pubkey_hex.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                settle().await;
+
+                let core2 = core.clone();
+                let machine_pubkey = machine.pubkey_hex.clone();
+                let dispatched = tokio::task::spawn_local(async move {
+                    core2
+                        .dispatch(Intent::SendSessionFile(SessionFileSend {
+                            machine: machine_pubkey,
+                            session_id: "s1".into(),
+                            text: "look at this".into(),
+                            data: b"%PDF-1.7 bytes".to_vec(),
+                            filename: "notes.pdf".into(),
+                            mime_type: "application/pdf".into(),
+                        }))
+                        .await;
+                });
+
+                let msg = find_command_frame(
+                    &mut mock,
+                    &phone.pubkey_hex,
+                    &machine,
+                    |m| matches!(m, PhoneToBridge::UploadFile(_)),
+                )
+                .await;
+                dispatched.await.unwrap();
+
+                // The HTTP port would accept an upload: only the missing
+                // server keeps the file off Blossom.
+                match msg {
+                    PhoneToBridge::UploadFile(UploadFileMsg::Chunk(m)) => {
+                        assert_eq!((m.filename.as_str(), m.mime_type.as_str()), ("notes.pdf", "application/pdf"));
+                        assert_eq!(m.total_chunks, 1);
+                    }
+                    other => panic!("no Blossom server is set: {other:?}"),
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn sending_a_session_image_falls_back_to_chunks_when_blossom_is_unreachable() {
         LocalSet::new()
             .run_until(async {
@@ -3253,6 +3317,8 @@ mod tests {
                 eose_all(&mut mock).await;
                 settle().await;
 
+                core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
+
                 let core2 = core.clone();
                 let machine_pubkey = machine.pubkey_hex.clone();
                 let dispatched = tokio::task::spawn_local(async move {
@@ -3261,7 +3327,7 @@ mod tests {
                             machine: machine_pubkey,
                             session_id: "s1".into(),
                             text: "a caption".into(),
-                            image: b"small image bytes".to_vec(),
+                            data: b"small image bytes".to_vec(),
                             filename: "photo.jpg".into(),
                             mime_type: "image/jpeg".into(),
                         }))

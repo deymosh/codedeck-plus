@@ -106,20 +106,20 @@ pub enum UniffiIntent {
         text: String,
         input_id: String,
     },
-    /// Attach an image to `session_id`'s next input (CDX-029). The loop
-    /// uploads it to the configured Blossom server through the `UniffiHttpFetch`
-    /// port, falling back to relay chunks, then publishes the `upload-image`
-    /// command — no outbox item, no local echo (the transcript shows it once
+    /// Attach a file to `session_id`'s next input. The loop uploads it to
+    /// the user's Blossom server (when one is set) through the
+    /// `UniffiHttpFetch` port, else or on failure sends it as relay chunks,
+    /// then publishes the `upload-file` command — no outbox item, no local echo (the transcript shows it once
     /// the bridge injects it, like any other output).
     SendSessionFile {
         machine: String,
         session_id: String,
         /// Caption carried on the input the bridge runs after the upload.
         text: String,
-        /// Raw image bytes (a Kotlin `ByteArray` across the FFI).
-        image: Vec<u8>,
+        /// The file's bytes (a Kotlin `ByteArray` across the FFI).
+        data: Vec<u8>,
         filename: String,
-        /// IANA media type of `image` (e.g. `"image/png"`), forwarded to the
+        /// IANA media type of `data` (e.g. `"application/pdf"`), forwarded to the
         /// bridge verbatim — the attachment command carries it as-is.
         mime_type: String,
     },
@@ -385,12 +385,12 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SendInput { machine, session_id, text, input_id } => {
                 Intent::SendInput { machine, session_id, text, input_id }
             }
-            UniffiIntent::SendSessionFile { machine, session_id, text, image, filename, mime_type } => {
+            UniffiIntent::SendSessionFile { machine, session_id, text, data, filename, mime_type } => {
                 Intent::SendSessionFile(SessionFileSend {
                     machine,
                     session_id,
                     text,
-                    image,
+                    data,
                     filename,
                     mime_type,
                 })
@@ -547,12 +547,12 @@ mod tests {
     }
 
     #[test]
-    fn send_session_image_maps_field_for_field() {
+    fn send_session_file_maps_field_for_field() {
         let intent = UniffiIntent::SendSessionFile {
             machine: "m".into(),
             session_id: "s".into(),
             text: "look at this".into(),
-            image: vec![0x89, b'P', b'N', b'G'],
+            data: vec![0x89, b'P', b'N', b'G'],
             filename: "cat.png".into(),
             mime_type: "image/png".into(),
         };
@@ -563,7 +563,7 @@ mod tests {
                 machine: "m".into(),
                 session_id: "s".into(),
                 text: "look at this".into(),
-                image: vec![0x89, b'P', b'N', b'G'],
+                data: vec![0x89, b'P', b'N', b'G'],
                 filename: "cat.png".into(),
                 mime_type: "image/png".into(),
             })

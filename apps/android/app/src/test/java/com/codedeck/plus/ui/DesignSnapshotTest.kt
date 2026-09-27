@@ -24,6 +24,7 @@ import com.codedeck.plus.ui.screens.NewSessionBody
 import com.codedeck.plus.ui.screens.NotificationsPage
 import com.codedeck.plus.ui.screens.PairingBody
 import com.codedeck.plus.ui.screens.PluginsContent
+import com.codedeck.plus.ui.screens.UploadsPage
 import com.codedeck.plus.ui.screens.SettingsHub
 import com.codedeck.plus.ui.session.Composer
 import com.codedeck.plus.ui.session.QuickPromptStrip
@@ -78,7 +79,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             )
             Composer(
                 draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
-                canSend = false, onAttach = {}, onDictate = {}, onSend = {}, onSlash = {},
+                canSend = false, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
             )
         }
     },
@@ -97,7 +98,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             )
             Composer(
                 draft = "/co", onDraftChange = {}, placeholder = "Message the session…", canAttach = true, uploading = false,
-                canSend = true, onAttach = {}, onDictate = {}, onSend = {}, onSlash = {},
+                canSend = true, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
             )
         }
     },
@@ -143,6 +144,10 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "settings_notifications" to { NotificationsPage(settings, {}, {}) },
     "settings_connection" to { ConnectionPage(settings, serviceForeground = true, dispatch = {}, onBack = {}) },
     "settings_messages" to { MessagesPage(settings, quickPrompts, {}, {}) },
+    "settings_uploads" to { UploadsPage(settings, {}, {}) },
+    "settings_uploads_blossom" to {
+        UploadsPage(settings.copy(blossomServer = "https://blossom.example.com", maxUploadBytes = 26_214_400uL), {}, {})
+    },
     "logs" to {
         LogsContent(
             lines = listOf(
@@ -185,6 +190,8 @@ class DesignSnapshotTest {
     @Test fun settings_appearance() = paparazzi.page("settings_appearance")
     @Test fun settings_notifications() = paparazzi.page("settings_notifications")
     @Test fun settings_connection() = paparazzi.page("settings_connection")
+    @Test fun settings_uploads() = paparazzi.page("settings_uploads")
+    @Test fun settings_uploads_blossom() = paparazzi.page("settings_uploads_blossom")
     @Test fun logs() = paparazzi.page("logs")
 }
 

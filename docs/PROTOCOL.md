@@ -163,6 +163,18 @@ question.
 The bridge writes the user's transcript entry itself (agents do not reliably
 echo input) and drops an agent's echo of it.
 
+### Attachments
+
+With the `files` capability, a phone attaches a file of any kind to a session
+with `upload-file {sessionId, filename, mimeType, text, …}` in one of two
+shapes: `{hash, url, key, iv, sizeBytes}` for a file it uploaded, AES-256-GCM
+encrypted, to the user's own Blossom server (the key travels only in this
+message), or `{uploadId, base64Data, chunkIndex, totalChunks}` pieces through
+the relays when no server is set (or it failed). The bridge saves the file
+under its own name in `<first root>/.codedeck/uploads` and runs `text` with
+the path added as the session's next input — an image to be looked at, any
+other file named. At most 25 MiB; a relay-only upload must fit 200 chunks.
+
 ### Credentials
 
 `set-credentials {agent?, values: {id: secret | null}}` → `credentials-ack
@@ -321,7 +333,7 @@ The heartbeat carries `protocolVersion` + `capabilities[]`; phones stamp
 commands with `v` (+ optional `caps`). What an AGENT can do is catalog data
 (`supports`), not a capability. The bridge's capabilities:
 
-- **hard gates** — `images`: the phone shows image attach only when present;
+- **hard gates** — `files`: the phone shows the attach control only when present;
   `session-keys`: the phone grants a session key only when present;
 - **presence markers** — `sync/1`, `folders`: the feature is detected from
   payload data;

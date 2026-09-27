@@ -21,6 +21,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -139,7 +141,7 @@ private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
 /** The backstop is the send budget plus a grace, so the bounded stages inside
  *  (the file read, the Rust-side upload stages) always get to report their
  *  own, more specific failure first. */
-private const val SESSION_IMAGE_SEND_BACKSTOP_MS = SESSION_IMAGE_SEND_BUDGET_MS + 5_000L
+private const val SESSION_FILE_SEND_BACKSTOP_MS = SESSION_FILE_SEND_BUDGET_MS + 5_000L
 
 /**
  * The session screen, top to bottom: [SessionTopBar] (back, title,
@@ -174,7 +176,7 @@ fun SessionScreen(
     // Image attach is gated on the machine advertising the `images`
     // capability in its heartbeat; without the string the attach affordance
     // is not RENDERED at all (a hard gate on the wire, not a hidden one).
-    val canAttachImages = machineSummary?.capabilities?.contains("files") == true
+    val canAttachFiles = machineSummary?.capabilities?.contains("files") == true
     // The session's agent as the bridge advertises it: its modes and effort
     // levels are what the controls bar offers.
     val agent = machineSummary?.agents?.firstOrNull { it.id == session?.agent }
@@ -199,10 +201,10 @@ fun SessionScreen(
     var draft by remember(machine, sessionId) { mutableStateOf("") }
     val inputFocus = remember { FocusRequester() }
 
-    // Image attachment: staged pick -> processed (read + resize + compress)
-    // + uploaded on Send, all inside the single Rust dispatch (Blossom
-    // first, relay chunks as fallback) with the draft as the accompanying
-    // text. `attachGeneration` is the abandonment guard: it rises on every
+    // Attachment: staged pick -> processed (read, and a huge image
+    // downscaled) + uploaded on Send, all inside the single Rust dispatch
+    // (the user's Blossom server when set, else relay chunks) with the draft
+    // as the accompanying text. `attachGeneration` is the abandonment guard: it rises on every
     // attach and remove, and a completion belonging to a stale generation
     // writes NOTHING back — no banner about an attachment the user already
     // dropped, no `draft = ""` over text they have since retyped, no
@@ -210,18 +212,16 @@ fun SessionScreen(
     // itself cannot be cancelled once it reaches Rust; only reacting to it
     // can stop.
     val context = LocalContext.current
-    var pendingImage by remember(machine, sessionId) { mutableStateOf<PickedImage?>(null) }
+    var pendingFile by remember(machine, sessionId) { mutableStateOf<PickedFile?>(null) }
     var uploading by remember(machine, sessionId) { mutableStateOf(false) }
     var uploadError by remember(machine, sessionId) { mutableStateOf<String?>(null) }
     val attachGeneration = remember(machine, sessionId) { AttachGeneration() }
 
-    // Photo picker: no storage permission — the system picker mediates
-    // access. ImageOnly is the analog of the reference's hidden
-    // `accept="image/*"` file input.
-    val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    // Both pickers are the system's own, so the app needs no storage
+    // permission: the photo picker for photos, the document picker for any
+    // other file.
+    fun stage(uri: Uri?) {
+        if (uri == null) return
         attachGeneration.bump() // a fresh pick abandons any in-flight send
         // The reference resets these synchronously at pick time: the spinner
         // and any stale banner die the moment a new image is chosen, NOT when
@@ -230,33 +230,38 @@ fun SessionScreen(
         uploading = false
         uploadError = null
         scope.launch {
-            val staged = withTimeoutOrNull(IMAGE_READ_TIMEOUT_MS) {
+            val staged = withTimeoutOrNull(FILE_READ_TIMEOUT_MS) {
                 runInterruptible(Dispatchers.IO) {
-                    readPickedImage(context.contentResolver, uri)
+                    readPickedFile(context.contentResolver, uri)
                 }
             }
             if (staged != null) {
-                pendingImage = staged
+                pendingFile = staged
             } else {
                 // A provider that surrenders neither metadata nor decodable
                 // bytes within the budget stages nothing: the current
                 // attachment (if any) stays, and the read-failure banner is
                 // the honest surface.
-                uploadError = "Failed to read file (timed out after $IMAGE_READ_TIMEOUT_MS ms)"
+                uploadError = "Failed to read file (timed out after $FILE_READ_TIMEOUT_MS ms)"
             }
         }
     }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), ::stage)
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), ::stage)
 
-    fun pickImage() {
-        imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    fun pickPhoto() {
+        photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+    fun pickFile() {
+        filePicker.launch(arrayOf("*/*"))
     }
 
     // The remove handler stays live mid-upload: a read or upload that has
     // not come back leaves the chip with this icon as its ONLY exit, so
     // disabling it would make a stalled send unrecoverable on-screen.
-    fun removePendingImage() {
+    fun removePendingFile() {
         attachGeneration.bump()
-        pendingImage = null
+        pendingFile = null
         uploading = false
         uploadError = null
     }
@@ -295,34 +300,37 @@ fun SessionScreen(
     }
 
     /**
-     * Send the staged image: read + resize + compress off the main thread,
-     * then the single Rust dispatch that uploads (Blossom first, relay
-     * chunks as fallback) and publishes the `upload-image` command. The
+     * Send the staged file: read (and downscale a huge image) off the main
+     * thread, then the single Rust dispatch that uploads (the user's Blossom
+     * server when set, else relay chunks) and publishes the `upload-file`
+     * command. A file over the limit is refused here, before any upload. The
      * backstop stops the SPINNER, not the send — the Rust loop keeps going
-     * past it, so the image can still land after the banner shows. A
+     * past it, so the file can still land after the banner shows. A
      * dispatch that resolves but failed internally (Blossom unreachable AND
      * the chunk fallback exhausted) reports through the core's ActionFailed
      * event rather than a thrown error, so resolution clears the composer
      * exactly as it does in the reference.
      */
-    fun sendWithImage(text: String) {
-        val staged = pendingImage ?: return
+    fun sendWithFile(text: String) {
+        val staged = pendingFile ?: return
+        val maxBytes = (settings?.maxUploadBytes ?: 0uL).toLong()
+        val blossom = !settings?.blossomServer.isNullOrBlank()
         if (uploading) return
         val generation = attachGeneration.current
         val abandoned = { generation != attachGeneration.current }
         uploading = true
         uploadError = null
         scope.launch {
-            var processed: ProcessedImage? = null
+            var processed: ProcessedFile? = null
             var failure: String? = null
             try {
-                processed = withTimeoutOrNull(IMAGE_READ_TIMEOUT_MS) {
+                processed = withTimeoutOrNull(FILE_READ_TIMEOUT_MS) {
                     runInterruptible(Dispatchers.IO) {
-                        processPickedImage(context.contentResolver, staged)
+                        processPickedFile(context.contentResolver, staged, maxBytes, blossom)
                     }
                 }
                 if (processed == null) {
-                    failure = "Failed to read file (timed out after $IMAGE_READ_TIMEOUT_MS ms)"
+                    failure = "Failed to read file (timed out after $FILE_READ_TIMEOUT_MS ms)"
                 }
             } catch (err: CancellationException) {
                 throw err
@@ -342,13 +350,13 @@ fun SessionScreen(
             // failure is a banner, never a crash. Timeout keeps its own
             // branch below — it is not an error thrown, it is the backstop.
             val completed = try {
-                withTimeoutOrNull(SESSION_IMAGE_SEND_BACKSTOP_MS) {
+                withTimeoutOrNull(SESSION_FILE_SEND_BACKSTOP_MS) {
                     core.dispatch(
                         UniffiIntent.SendSessionFile(
                             machine = machine,
                             sessionId = sessionId,
                             text = text,
-                            image = processed.bytes,
+                            `data` = processed.bytes,
                             filename = processed.filename,
                             mimeType = processed.mimeType,
                         ),
@@ -368,9 +376,9 @@ fun SessionScreen(
                 // The attachment stays staged: the send may still land, and
                 // retry (or the always-live remove) is one tap either way.
                 uploadError =
-                    "TimeoutError: image send timed out after $SESSION_IMAGE_SEND_BACKSTOP_MS ms"
+                    "TimeoutError: the file send timed out after $SESSION_FILE_SEND_BACKSTOP_MS ms"
             } else {
-                pendingImage = null
+                pendingFile = null
                 draft = ""
             }
             uploading = false
@@ -390,8 +398,8 @@ fun SessionScreen(
 
     fun send() {
         val text = draft.trim()
-        if (pendingImage != null) {
-            sendWithImage(text)
+        if (pendingFile != null) {
+            sendWithFile(text)
             return
         }
         if (text.isEmpty()) return
@@ -548,7 +556,7 @@ fun SessionScreen(
 
         // Staged-attachment strip: thumbnail, name, size (or the literal
         // "uploading…" the device checks read) and the always-live remove.
-        pendingImage?.let { staged ->
+        pendingFile?.let { staged ->
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -557,16 +565,17 @@ fun SessionScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
             ) {
-                staged.thumbnail?.let { thumb ->
-                    Image(
-                        bitmap = thumb,
-                        contentDescription = "attachment preview",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(Tokens.RadiusSm))
-                            .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusSm)),
-                    )
+                val tile = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusSm))
+                val thumb = staged.thumbnail
+                if (thumb != null) {
+                    Image(bitmap = thumb, contentDescription = "attachment preview", contentScale = ContentScale.Crop, modifier = tile)
+                } else {
+                    Box(tile.background(Tokens.SurfaceHover), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Description, contentDescription = null, tint = Tokens.TextMuted)
+                    }
                 }
                 Text(
                     staged.displayName,
@@ -580,12 +589,12 @@ fun SessionScreen(
                     if (uploading) {
                         "uploading…"
                     } else {
-                        "${max(1, (staged.sizeBytes / 1024.0).roundToInt())} KB"
+                        formatSize(staged.sizeBytes)
                     },
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextXs,
                 )
-                IconButton(onClick = ::removePendingImage) {
+                IconButton(onClick = ::removePendingFile) {
                     Icon(Icons.Outlined.Close, contentDescription = "Remove attachment", tint = Tokens.TextMuted)
                 }
             }
@@ -594,7 +603,7 @@ fun SessionScreen(
             // Same banner placement and tone as the reference's
             // `{uploadError && <div className={s.bannerError}>…</div>}`.
             Text(
-                "Image upload failed: $error",
+                "Upload failed: $error",
                 color = Tokens.Danger,
                 fontSize = Tokens.TextSm,
                 modifier = Modifier
@@ -651,10 +660,11 @@ fun SessionScreen(
                 supportsCommands -> "Message…"
                 else -> "Message the session…"
             },
-            canAttach = canAttachImages,
+            canAttach = canAttachFiles,
             uploading = uploading,
-            canSend = (draft.isNotBlank() || pendingImage != null) && !uploading,
-            onAttach = ::pickImage,
+            canSend = (draft.isNotBlank() || pendingFile != null) && !uploading,
+            onAttachPhoto = ::pickPhoto,
+            onAttachFile = ::pickFile,
             onDictate = ::dictate,
             onSend = ::send,
             focusRequester = inputFocus,

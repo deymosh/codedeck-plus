@@ -12,7 +12,7 @@
 //! otherwise hard-fail):
 //!
 //! * **HARD GATE** — absence changes behaviour: [`FILES`] (the client shows
-//!   image attach only when the bridge advertises it), [`SESSION_KEYS`] (the
+//!   the attach control only when the bridge advertises it), [`SESSION_KEYS`] (the
 //!   client grants a session key only to a bridge that honours one).
 //! * **PRESENCE MARKER** — detection is on payload data: [`SYNC_1`],
 //!   [`FOLDERS`]. Kept so a session list is self-describing.
@@ -28,8 +28,9 @@ pub const PROTOCOL_VERSION: u32 = 11;
 pub const SYNC_1: &str = "sync/1";
 // PRESENCE MARKER — folder listing; client gates on `folders[]`/`roots[]`.
 pub const FOLDERS: &str = "folders";
-// HARD GATE (client-side) — image upload; the attach control shows only when
-// this is in the machine's heartbeat capabilities.
+// HARD GATE (client-side) — session attachments of any kind (`upload-file`);
+// the attach control shows only when this is in the machine's heartbeat
+// capabilities.
 pub const FILES: &str = "files";
 // TRANSPORT BEACON — oversize-event `chunk` fragmentation. Advertised on both
 // sides, gated by neither.

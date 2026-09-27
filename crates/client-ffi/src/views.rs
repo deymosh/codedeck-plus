@@ -801,7 +801,11 @@ pub struct UniffiSettingsView {
     pub ui_scale: f64,
     pub stay_connected: bool,
     pub tor_proxy_enabled: bool,
+    /// The Blossom server attachments are uploaded to; `""` = none, and
+    /// they travel through the relays.
     pub blossom_server: String,
+    /// The largest file one attachment can be, with or without that server.
+    pub max_upload_bytes: u64,
     pub notifications_enabled: bool,
     pub show_usage_badge: bool,
     pub show_commit_badge: bool,
@@ -814,6 +818,7 @@ pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
         stay_connected: d.stay_connected,
         tor_proxy_enabled: d.tor_proxy_enabled,
         blossom_server: d.blossom_server.clone(),
+        max_upload_bytes: client_runtime::attachments::max_upload_bytes(!d.blossom_server.trim().is_empty()),
         notifications_enabled: d.notifications_enabled,
         show_usage_badge: d.show_usage_badge,
         show_commit_badge: d.show_commit_badge,

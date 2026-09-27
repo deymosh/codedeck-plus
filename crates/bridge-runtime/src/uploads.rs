@@ -1,8 +1,8 @@
-//! Uploads a phone sends into a session. Two forms:
+//! Files a phone attaches to a session — photos or anything else. Two forms:
 //! - Blossom: the phone uploaded an AES-256-GCM-encrypted blob and sends its
 //!   URL, sha256, key and iv; the bridge downloads it (https only, size
 //!   capped), checks the hash, decrypts it (tag = last 16 bytes);
-//! - chunked: the image arrives as base64 pieces, reassembled here; a
+//! - chunked: the file arrives as base64 pieces, reassembled here; a
 //!   partial upload idle for a minute is dropped.
 //!
 //! Either way the file lands in `<first root>/.codedeck/uploads` — inside
@@ -20,28 +20,56 @@ use base64::Engine as _;
 use protocol::commands::{UploadFileBlossomMsg, UploadFileChunkMsg};
 use sha2::{Digest, Sha256};
 
-/// Phone photos are a few MB; the cap keeps a hostile message from making
-/// the bridge buffer arbitrarily much.
+/// Enough for photos and ordinary documents; the cap keeps a hostile
+/// message from making the bridge buffer arbitrarily much.
 pub const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 const ASSEMBLY_IDLE: Duration = Duration::from_secs(60);
 const MAX_OPEN_UPLOADS: usize = 16;
-/// The same image with the same words, sent again within this window, is a
+/// The same file with the same words, sent again within this window, is a
 /// resend (the phone could not confirm delivery) — not a new message.
 const DEDUP_WINDOW: Duration = Duration::from_secs(10 * 60);
 const DEDUP_CAP: usize = 200;
 
-/// The session input for a saved image.
-pub fn input_text(user_text: &str, path: &Path) -> String {
+/// The session input for a saved file: an image is to be looked at, any
+/// other file is named for the agent to open as it sees fit.
+pub fn input_text(user_text: &str, path: &Path, mime: &str) -> String {
     let trimmed = user_text.trim();
     let path = path.display();
-    if trimmed.is_empty() {
-        format!("Please examine this image: {path}")
-    } else {
-        format!("{trimmed}\n\n[Attached image: {path} — use the Read tool to view it]")
+    let image = mime.starts_with("image/");
+    match (trimmed.is_empty(), image) {
+        (true, true) => format!("Please examine this image: {path}"),
+        (true, false) => format!("Please look at the attached file: {path}"),
+        (false, true) => format!("{trimmed}\n\n[Attached image: {path} — use the Read tool to view it]"),
+        (false, false) => format!("{trimmed}\n\n[Attached file: {path}]"),
     }
 }
 
-/// Download, verify and decrypt a Blossom image.
+/// The extension a file of `mime` usually has, for a name that has none.
+fn extension_for(mime: &str) -> Option<&'static str> {
+    Some(match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "application/pdf" => "pdf",
+        "application/zip" => "zip",
+        "application/json" => "json",
+        "text/plain" => "txt",
+        "text/markdown" => "md",
+        "text/csv" => "csv",
+        _ => return None,
+    })
+}
+
+/// Whether `name` ends in an extension (a short alphanumeric suffix).
+fn has_extension(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && (1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// Download, verify and decrypt a Blossom upload.
 pub async fn fetch_blossom(http: &reqwest::Client, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
     // The URL is phone-supplied: https only, and the body capped regardless
     // of the size the message claims — the bridge is not a general HTTP client.
@@ -98,7 +126,7 @@ pub struct Uploads {
     injected: VecDeque<(String, Instant)>,
 }
 
-/// A finished image: which session gets which message.
+/// A finished upload: which session gets which message.
 pub type Delivery = (String, String);
 
 impl Uploads {
@@ -159,19 +187,19 @@ impl Uploads {
         self.finish(&upload.session_id, &upload.filename, &upload.mime_type, &upload.text, &data, &format!("upload:{}", msg.upload_id))
     }
 
-    /// Save a decoded image and build its delivery (None: write failed, or a
+    /// Save a decoded file and build its delivery (None: write failed, or a
     /// resend of one already delivered).
     pub fn finish(&mut self, session_id: &str, filename: &str, mime: &str, text: &str, data: &[u8], identity: &str) -> Option<Delivery> {
         let key = format!("{session_id}|{identity}|{}", &hex::encode(Sha256::digest(text.as_bytes()))[..16]);
         self.injected.retain(|(_, at)| at.elapsed() < DEDUP_WINDOW);
         if self.injected.iter().any(|(k, _)| *k == key) {
-            log::info!("[Uploads] A resend of an image already delivered to {session_id} — ignored");
+            log::info!("[Uploads] A resend of a file already delivered to {session_id} — ignored");
             return None;
         }
         let path = match self.write(filename, mime, data) {
             Ok(path) => path,
             Err(err) => {
-                log::error!("[Uploads] Could not save an image: {err}");
+                log::error!("[Uploads] Could not save a file: {err}");
                 return None;
             }
         };
@@ -180,15 +208,21 @@ impl Uploads {
         while self.injected.len() > DEDUP_CAP {
             self.injected.pop_front();
         }
-        Some((session_id.to_string(), input_text(text, &path)))
+        Some((session_id.to_string(), input_text(text, &path, mime)))
     }
 
+    /// Saved under a timestamp and the file's own (sanitized) name, which
+    /// keeps its extension; a name without one gets the extension its MIME
+    /// type usually has, when that is known.
     fn write(&self, filename: &str, mime: &str, data: &[u8]) -> std::io::Result<PathBuf> {
         fs::create_dir_all(&self.dir)?;
         let safe: String = filename.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).collect();
-        let ext = if mime == "image/png" { ".png" } else { ".jpg" };
+        let safe = if safe.trim_matches(['.', '_']).is_empty() { "file".to_string() } else { safe };
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-        let name = if safe.to_lowercase().ends_with(ext) { format!("{stamp}-{safe}") } else { format!("{stamp}-{safe}{ext}") };
+        let name = match extension_for(mime) {
+            Some(ext) if !has_extension(&safe) => format!("{stamp}-{safe}.{ext}"),
+            _ => format!("{stamp}-{safe}"),
+        };
         let path = self.dir.join(name);
         fs::write(&path, data)?;
         Ok(path)
@@ -258,7 +292,24 @@ mod tests {
     }
 
     #[test]
-    fn plain_images_ask_to_be_examined() {
-        assert_eq!(input_text("  ", Path::new("/w/x.png")), "Please examine this image: /w/x.png");
+    fn an_image_is_to_be_looked_at_and_any_other_file_is_named() {
+        assert_eq!(input_text("  ", Path::new("/w/x.png"), "image/png"), "Please examine this image: /w/x.png");
+        assert_eq!(input_text("", Path::new("/w/a.pdf"), "application/pdf"), "Please look at the attached file: /w/a.pdf");
+        assert_eq!(input_text("summarise", Path::new("/w/a.pdf"), "application/pdf"), "summarise\n\n[Attached file: /w/a.pdf]");
+    }
+
+    #[test]
+    fn a_file_keeps_its_own_extension_and_gets_one_only_when_it_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let uploads = Uploads::new(dir.path());
+        let name = |filename: &str, mime: &str| {
+            uploads.write(filename, mime, b"x").unwrap().file_name().unwrap().to_string_lossy().split_once('-').unwrap().1.to_string()
+        };
+        assert_eq!(name("report.pdf", "application/pdf"), "report.pdf");
+        assert_eq!(name("notes.md", "application/octet-stream"), "notes.md");
+        assert_eq!(name("scan", "application/pdf"), "scan.pdf");
+        assert_eq!(name("blob", "application/x-unknown"), "blob");
+        assert_eq!(name("photo.heic", "image/heic"), "photo.heic");
+        assert_eq!(name("..", "text/plain"), "file.txt");
     }
 }
