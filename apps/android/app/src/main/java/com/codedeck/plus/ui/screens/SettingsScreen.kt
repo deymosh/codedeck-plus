@@ -376,8 +376,8 @@ internal fun ConnectionPage(view: UniffiSettingsView, serviceForeground: Boolean
         }
         Group(
             footer = "Sends relay and image-server traffic through Orbot (127.0.0.1:9050), which must be installed and " +
-                "running. A machine's direct link skips it, except to .onion addresses. Fully applied the next time " +
-                "the app starts.",
+                "running. A machine's direct link skips it, except to .onion addresses. Changes apply immediately, " +
+                "tearing down and re-dialing all relay connections.",
         ) {
             SwitchRow(
                 "Route through Orbot",
