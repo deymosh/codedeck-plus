@@ -5079,8 +5079,8 @@ public object FfiConverterTypeUniffiGsdState: FfiConverterRustBuffer<UniffiGsdSt
 
 /**
  * One request header. A plain Rust `(String, String)` tuple is not a
- * UniFFI-crossable type in 0.28 (no `FfiConverter` for tuples in
- * proc-macro mode), so the ordered header list crosses as this record
+ * UniFFI-crossable type (no `FfiConverter` for tuples in proc-macro
+ * mode), so the ordered header list crosses as this record
  * instead — order and duplicates preserved, same as the core's own
  * `Vec<(String, String)>` shape.
  */

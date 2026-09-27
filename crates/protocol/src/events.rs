@@ -236,8 +236,8 @@ pub struct PairAckMsg {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<PairAckReason>,
-    /// the bridge's relay list, so a manual-npub pairing still learns where it
-    /// lives (merged into settings, deduped).
+    /// The bridge's relay list: the phone adds it to the relays it keeps for
+    /// the machine (deduped), beside the ones the pairing itself named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relays: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

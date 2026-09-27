@@ -21,14 +21,6 @@ maintainer uses elsewhere):
 | `KEY_STORE_PASSWORD` | keystore password |
 | `KEY_PASSWORD` | key password |
 
-Optional, to bundle the nostr-vpn mesh engine into the APK (otherwise the app
-ships without mesh, exactly like a local build with no checkout):
-
-| Name | Value |
-|---|---|
-| `vars.NVPN_REPO` | `owner/repo` of the nostr-vpn source |
-| `secrets.NVPN_REPO_TOKEN` | a PAT that can read it |
-
 The bridge image publishes to `ghcr.io/<owner>/codedeck-plus-bridge` using the
 built-in `GITHUB_TOKEN` — no extra secret, but the first push may need
 Packages write enabled for Actions in repo settings.

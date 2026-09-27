@@ -87,8 +87,9 @@ private const val AWAIT_CREATED_SESSION_MS = 120_000L
 
 /**
  * App shell — one full-screen page at a time, driven by a single saved
- * [Screen]. The sessions list (`SessionsScreen`) is home; a session,
- * New Session, Settings and Pairing each replace it, and Back returns to it.
+ * [Screen]. The sessions list (`SessionsScreen`) is home; a session, New
+ * Session, Settings, a machine's page and Pairing each replace it, and Back
+ * returns to it. Logs is opened from Settings, and Back returns there.
  *
  * Which session is open is this navigation state, not the core's selection:
  * opening a session also dispatches `SelectSession`, and leaving it clears
