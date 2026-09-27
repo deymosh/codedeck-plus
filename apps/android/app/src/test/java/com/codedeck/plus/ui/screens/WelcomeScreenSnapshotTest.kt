@@ -15,8 +15,7 @@ class WelcomeScreenSnapshotTest {
     @get:Rule
     val paparazzi = Paparazzi(
         // What a 360x740 dp phone leaves between its status and navigation
-        // bars (the app pads for both): 360x680 dp. The whole screen fits it
-        // without scrolling.
+        // bars (the app pads for both): 360x680 dp.
         deviceConfig = DeviceConfig.PIXEL_6.copy(
             softButtons = false,
             screenWidth = 1080,
@@ -78,9 +77,9 @@ class WelcomeScreenSnapshotTest {
     }
 
     /** The tallest the screen gets: two signers, the import open, an error.
-     *  It must still fit, nothing below the fold. */
+     *  The hero and the footnote stay whole; only the login options scroll. */
     @Test
-    fun the_tallest_state_still_fits() {
+    fun the_tallest_state_scrolls_only_the_options() {
         paparazzi.snapshot {
             CodeDeckTheme {
                 WelcomeScreen(

@@ -39,6 +39,26 @@ class LoginStore(context: Context) {
         // Committed synchronously: the service reads it right after.
         edit.commit()
     }
+
+    fun clear() {
+        prefs.edit().clear().commit()
+    }
+}
+
+/** The core's database file (in the app's database directory). */
+const val CORE_DATABASE = "codedeck.db"
+
+/** Forget the login and everything kept for it: the stored choice, the
+ *  on-device key, the session keys, and the core's database (paired
+ *  machines, transcripts and settings all belong to that identity). The
+ *  core must already be shut down. */
+fun forgetLogin(context: Context) {
+    LoginStore(context).clear()
+    KeyVault(context).apply {
+        clearIdentity()
+        resetSession()
+    }
+    context.applicationContext.deleteDatabase(CORE_DATABASE)
 }
 
 /** The stored fields back into a [Login]; `null` for anything incomplete. */

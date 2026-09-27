@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -25,6 +26,7 @@ import com.codedeck.plus.R
 import com.codedeck.plus.core.CoreHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +107,12 @@ class StayConnectedService : Service() {
     private val coreLock = Any()
     private var destroyed = false
 
+    /** Set by [logOut]; a later start (the next login) opens a core again. */
+    private var loggedOut = false
+
+    /** The work tied to the current core (its collectors); cancelled with it. */
+    private var coreJob: Job? = null
+
     private var connectivity: Connectivity? = null
 
     /** Latest summary for the notification; written by the collector in
@@ -131,7 +139,13 @@ class StayConnectedService : Service() {
         super.onCreate()
         instance = this
         connectivity = Connectivity(applicationContext)
-        scope.launch(Dispatchers.IO) {
+        launchCore()
+    }
+
+    private fun launchCore() {
+        val job = SupervisorJob(scope.coroutineContext[Job])
+        coreJob = job
+        CoroutineScope(scope.coroutineContext + job).launch(Dispatchers.IO) {
             // Only started once a login exists (MainActivity); an OS restart
             // after the user lost theirs has nothing to run.
             val core = openCore() ?: run {
@@ -152,8 +166,37 @@ class StayConnectedService : Service() {
             withContext(Dispatchers.Main) {
                 ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
             }
-            observe(core)
+            observe(core, this)
         }
+    }
+
+    /**
+     * Log out: stop the core for good, then forget the login, its keys and
+     * everything stored for it — paired machines, transcripts and settings
+     * all belong to that identity — clear the app's notifications, and stop.
+     * Returns once all of it is gone.
+     */
+    suspend fun logOut() {
+        val core = synchronized(coreLock) {
+            destroyed = true
+            loggedOut = true
+            _core.value.also { _core.value = null }
+        }
+        coreJob?.cancel()
+        withContext(Dispatchers.Main) {
+            ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
+        }
+        withContext(Dispatchers.IO) {
+            // Joins the core's thread, so its database is closed before it
+            // is deleted.
+            core?.shutdown()
+            forgetLogin(applicationContext)
+        }
+        cancelKeepAlive()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foreground.value = null
+        NotificationManagerCompat.from(this).cancelAll()
+        stopSelf()
     }
 
     /** Blocking: reads the login and the persisted settings and opens the
@@ -172,7 +215,7 @@ class StayConnectedService : Service() {
         // `apps/mobile`'s `createPhoneCoreNative.ts` does from its own KV
         // before calling `core.init`, against the SAME db file `Core` is
         // about to open below.
-        val dbPath = applicationContext.getDatabasePath("codedeck.db").absolutePath
+        val dbPath = applicationContext.getDatabasePath(CORE_DATABASE).absolutePath
         val relays = persistedRelays(dbPath)
         val torProxyEnabled = persistedTorProxyEnabled(dbPath)
         return CoreHost(
@@ -189,7 +232,7 @@ class StayConnectedService : Service() {
         )
     }
 
-    private fun observe(core: CoreHost) {
+    private fun observe(core: CoreHost, scope: CoroutineScope) {
         // Network reachability drives the connection FSM's offline/online
         // transitions; the first emission reconciles the state at startup.
         connectivity?.let { network ->
@@ -231,6 +274,17 @@ class StayConnectedService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A login right after a logout can reach this instance before it is
+        // destroyed: open the new login's core here.
+        val reopen = synchronized(coreLock) {
+            (loggedOut && LoginStore(applicationContext).load() != null).also {
+                if (it) {
+                    loggedOut = false
+                    destroyed = false
+                }
+            }
+        }
+        if (reopen) launchCore()
         if (intent?.action == ACTION_REPOST) {
             // The user swiped the notification away (possible for ongoing
             // foreground notifications since Android 14). The service kept

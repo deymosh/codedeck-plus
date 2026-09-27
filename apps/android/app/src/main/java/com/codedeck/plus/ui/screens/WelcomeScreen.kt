@@ -8,20 +8,15 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -52,14 +47,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,12 +73,10 @@ sealed interface WelcomeBusy {
  * device, or an imported one. The core only starts after a choice. Pure:
  * every action is a callback, so it renders the same in a snapshot.
  *
- * It does not scroll on a phone. It is laid out roomy (the full pitch, the
- * signer apps' package names, a footnote) while that fits, and compact once
- * it would not (a shorter screen, the import open, an error). The fit is
- * judged against the screen without the keyboard, so the keyboard never
- * switches it. Only when even compact cannot fit (the keyboard up, a small
- * screen at a large font size) does it scroll.
+ * Always the full layout. The hero at the top and the footnote at the
+ * bottom stay put; the login options between them scroll on their own, and
+ * only when they do not fit (a short screen, the import open, an error, the
+ * keyboard up). When everything fits, the whole is centred.
  */
 @Composable
 fun WelcomeScreen(
@@ -100,7 +91,7 @@ fun WelcomeScreen(
     var importOpen by rememberSaveable { mutableStateOf(importInitiallyOpen) }
     var importText by rememberSaveable { mutableStateOf("") }
 
-    BoxWithConstraints(
+    Box(
         Modifier
             .fillMaxSize()
             .background(Tokens.Bg)
@@ -113,120 +104,44 @@ fun WelcomeScreen(
             ),
         contentAlignment = Alignment.TopCenter,
     ) {
-        val screenHeight = maxHeight
-        // The height without the keyboard: the app pads for it (beyond the
-        // navigation bar it covers), so add that back.
-        val keyboard = WindowInsets.ime.exclude(WindowInsets.systemBars).asPaddingValues().calculateBottomPadding()
-        PickDensity(
-            available = screenHeight + keyboard,
-            roomyProbe = {
-                Content(
-                    roomy = true,
-                    signers = signers,
-                    busy = busy,
-                    error = error,
-                    importOpen = importOpen,
-                    importText = importText,
-                    onUseSigner = {},
-                    onCreateKey = {},
-                    onToggleImport = {},
-                    onImportText = {},
-                    onImport = {},
-                )
-            },
-        ) { roomy ->
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .heightIn(min = screenHeight),
-                contentAlignment = Alignment.Center,
-            ) {
-                Content(
-                    roomy = roomy,
-                    signers = signers,
-                    busy = busy,
-                    error = error,
-                    importOpen = importOpen,
-                    importText = importText,
-                    onUseSigner = onUseSigner,
-                    onCreateKey = onCreateKey,
-                    onToggleImport = { importOpen = !importOpen },
-                    onImportText = { importText = it },
-                    onImport = { onImportKey(importText) },
-                )
+        Column(
+            Modifier
+                // Keeps the column readable on a tablet.
+                .widthIn(max = 560.dp)
+                .fillMaxSize()
+                .padding(horizontal = Tokens.Space5, vertical = Tokens.Space6),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space6, Alignment.CenterVertically),
+        ) {
+            Hero()
+            // Takes only the height it needs, up to what the hero and the
+            // footer leave.
+            val scroll = rememberScrollState()
+            Box(Modifier.weight(1f, fill = false)) {
+                Box(Modifier.verticalScroll(scroll)) {
+                    LoginOptions(
+                        signers = signers,
+                        busy = busy,
+                        error = error,
+                        importOpen = importOpen,
+                        importText = importText,
+                        onUseSigner = onUseSigner,
+                        onCreateKey = onCreateKey,
+                        onToggleImport = { importOpen = !importOpen },
+                        onImportText = { importText = it },
+                        onImport = { onImportKey(importText) },
+                    )
+                }
+                // Says there is more below while the options are cut off.
+                if (scroll.canScrollForward) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(Tokens.Space6)
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Tokens.Bg))),
+                    )
+                }
             }
-        }
-    }
-}
-
-/** Lays out `content(true)` when `roomyProbe` (the roomy layout, measured
- *  but never shown) fits in `available`, else `content(false)`. */
-@Composable
-private fun PickDensity(available: Dp, roomyProbe: @Composable () -> Unit, content: @Composable (roomy: Boolean) -> Unit) {
-    SubcomposeLayout { constraints ->
-        val probe = subcompose("probe", roomyProbe).map { it.measure(Constraints(maxWidth = constraints.maxWidth)) }
-        val roomy = probe.sumOf { it.height } <= available.roundToPx()
-        val placeables = subcompose(roomy) { content(roomy) }.map { it.measure(constraints) }
-        layout(constraints.maxWidth, placeables.maxOfOrNull { it.height } ?: 0) {
-            placeables.forEach { it.place(0, 0) }
-        }
-    }
-}
-
-/** The screen's content, roomy or compact; stateless. */
-@Composable
-private fun Content(
-    roomy: Boolean,
-    signers: List<SignerAppInfo>,
-    busy: WelcomeBusy?,
-    error: String?,
-    importOpen: Boolean,
-    importText: String,
-    onUseSigner: (SignerAppInfo) -> Unit,
-    onCreateKey: () -> Unit,
-    onToggleImport: () -> Unit,
-    onImportText: (String) -> Unit,
-    onImport: () -> Unit,
-) {
-    Column(
-        Modifier
-            // Keeps the column readable on a tablet.
-            .widthIn(max = 560.dp)
-            .fillMaxWidth()
-            .padding(horizontal = Tokens.Space5, vertical = if (roomy) Tokens.Space6 else Tokens.Space4),
-        verticalArrangement = Arrangement.spacedBy(if (roomy) Tokens.Space6 else Tokens.Space5),
-    ) {
-        Hero(roomy)
-
-        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-            if (roomy) SectionLabel("Your identity")
-            SignerCard(roomy, signers, busy, onUseSigner)
-            OptionCard(
-                roomy = roomy,
-                icon = Icons.Outlined.Key,
-                title = if (roomy) "Create a key on this device" else "Create a new key",
-                body = if (roomy) "A fresh Nostr key, encrypted by the Android Keystore." else "Kept in the Android Keystore.",
-                busy = busy == WelcomeBusy.Key && !importOpen,
-                enabled = busy == null,
-                onClick = onCreateKey,
-            )
-            ImportCard(
-                roomy = roomy,
-                open = importOpen,
-                text = importText,
-                busy = busy == WelcomeBusy.Key && importOpen,
-                enabled = busy == null,
-                onToggle = onToggleImport,
-                onTextChange = onImportText,
-                onImport = onImport,
-            )
-            if (error != null) {
-                Text(error, color = Tokens.Danger, fontSize = Tokens.TextSm)
-            }
-        }
-
-        if (roomy) {
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                 Icon(Icons.Outlined.Shield, contentDescription = null, tint = Tokens.TextDim, modifier = Modifier.size(16.dp))
                 Text(
@@ -240,36 +155,67 @@ private fun Content(
     }
 }
 
+/** The three ways to hold the identity, and the last error; stateless. */
 @Composable
-private fun Hero(roomy: Boolean) {
+private fun LoginOptions(
+    signers: List<SignerAppInfo>,
+    busy: WelcomeBusy?,
+    error: String?,
+    importOpen: Boolean,
+    importText: String,
+    onUseSigner: (SignerAppInfo) -> Unit,
+    onCreateKey: () -> Unit,
+    onToggleImport: () -> Unit,
+    onImportText: (String) -> Unit,
+    onImport: () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-        if (roomy) {
+        SectionLabel("Your identity")
+        SignerCard(signers, busy, onUseSigner)
+        OptionCard(
+            icon = Icons.Outlined.Key,
+            title = "Create a key on this device",
+            body = "A fresh Nostr key, encrypted by the Android Keystore.",
+            busy = busy == WelcomeBusy.Key && !importOpen,
+            enabled = busy == null,
+            onClick = onCreateKey,
+        )
+        ImportCard(
+            open = importOpen,
+            text = importText,
+            busy = busy == WelcomeBusy.Key && importOpen,
+            enabled = busy == null,
+            onToggle = onToggleImport,
+            onTextChange = onImportText,
+            onImport = onImport,
+        )
+        if (error != null) {
+            Text(error, color = Tokens.Danger, fontSize = Tokens.TextSm)
+        }
+    }
+}
+
+@Composable
+private fun Hero() {
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+        // The name beside the logo, not under it: the height goes to the
+        // login options instead.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
             Logo(64.dp)
             Text("CodeDeck+", color = Tokens.Text, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
-            Text(
-                "Drive your coding agents from your phone.",
-                color = Tokens.Text,
-                fontSize = Tokens.TextXl,
-                lineHeight = 26.sp,
-            )
-            Text(
-                "Claude Code, OpenCode and friends run on your machine; you steer them from here.",
-                color = Tokens.TextMuted,
-                fontSize = Tokens.TextMd,
-                lineHeight = 20.sp,
-            )
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-                Logo(48.dp)
-                Text("CodeDeck+", color = Tokens.Text, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
-            }
-            Text(
-                "Drive your coding agents from your phone.",
-                color = Tokens.Text,
-                fontSize = Tokens.TextLg,
-                lineHeight = 22.sp,
-            )
         }
+        Text(
+            "Drive your coding agents from your phone.",
+            color = Tokens.Text,
+            fontSize = Tokens.TextXl,
+            lineHeight = 26.sp,
+        )
+        Text(
+            "Claude Code, OpenCode and friends run on your machine; you steer them from here.",
+            color = Tokens.TextMuted,
+            fontSize = Tokens.TextMd,
+            lineHeight = 20.sp,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
             Pill("End-to-end encrypted")
             Pill("Nostr")
@@ -326,8 +272,6 @@ private fun SectionLabel(text: String) {
     )
 }
 
-private fun cardPadding(roomy: Boolean): Dp = if (roomy) Tokens.Space4 else Tokens.Space3
-
 @Composable
 private fun Card(highlight: Boolean = false, content: @Composable () -> Unit) {
     Surface(
@@ -374,17 +318,13 @@ private fun CardHeader(icon: ImageVector, title: String, body: String, badge: St
 }
 
 @Composable
-private fun SignerCard(roomy: Boolean, signers: List<SignerAppInfo>, busy: WelcomeBusy?, onUseSigner: (SignerAppInfo) -> Unit) {
+private fun SignerCard(signers: List<SignerAppInfo>, busy: WelcomeBusy?, onUseSigner: (SignerAppInfo) -> Unit) {
     Card(highlight = true) {
-        Column(Modifier.padding(cardPadding(roomy)), verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+        Column(Modifier.padding(Tokens.Space4), verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
             CardHeader(
                 icon = Icons.Outlined.Shield,
                 title = "Use a signer app",
-                body = if (roomy) {
-                    "Your key stays in a NIP-55 signer; CodeDeck+ asks it to sign."
-                } else {
-                    "Your key stays in a NIP-55 signer: one identity across reinstalls."
-                },
+                body = "Your key stays in a NIP-55 signer; CodeDeck+ asks it to sign.",
                 badge = "RECOMMENDED",
             )
             if (signers.isEmpty()) {
@@ -403,7 +343,6 @@ private fun SignerCard(roomy: Boolean, signers: List<SignerAppInfo>, busy: Welco
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     for (signer in signers) {
                         SignerRow(
-                            roomy = roomy,
                             signer = signer,
                             busy = busy == WelcomeBusy.Signer(signer.packageName),
                             enabled = busy == null,
@@ -417,7 +356,7 @@ private fun SignerCard(roomy: Boolean, signers: List<SignerAppInfo>, busy: Welco
 }
 
 @Composable
-private fun SignerRow(roomy: Boolean, signer: SignerAppInfo, busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun SignerRow(signer: SignerAppInfo, busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -449,16 +388,14 @@ private fun SignerRow(roomy: Boolean, signer: SignerAppInfo, busy: Boolean, enab
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (roomy) {
-                Text(
-                    signer.packageName,
-                    color = Tokens.TextDim,
-                    fontSize = Tokens.TextXs,
-                    fontFamily = Tokens.FontMono,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                signer.packageName,
+                color = Tokens.TextDim,
+                fontSize = Tokens.TextXs,
+                fontFamily = Tokens.FontMono,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (busy) {
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Tokens.Text)
@@ -470,7 +407,6 @@ private fun SignerRow(roomy: Boolean, signer: SignerAppInfo, busy: Boolean, enab
 
 @Composable
 private fun OptionCard(
-    roomy: Boolean,
     icon: ImageVector,
     title: String,
     body: String,
@@ -479,7 +415,7 @@ private fun OptionCard(
     onClick: () -> Unit,
 ) {
     Card {
-        Box(Modifier.clickable(enabled = enabled, onClick = onClick).padding(cardPadding(roomy))) {
+        Box(Modifier.clickable(enabled = enabled, onClick = onClick).padding(Tokens.Space4)) {
             CardHeader(icon, title, body) {
                 if (busy) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Tokens.Text)
@@ -493,7 +429,6 @@ private fun OptionCard(
 
 @Composable
 private fun ImportCard(
-    roomy: Boolean,
     open: Boolean,
     text: String,
     busy: Boolean,
@@ -504,27 +439,19 @@ private fun ImportCard(
 ) {
     Card {
         Column {
-            Box(Modifier.clickable(enabled = enabled, onClick = onToggle).padding(cardPadding(roomy))) {
+            Box(Modifier.clickable(enabled = enabled, onClick = onToggle).padding(Tokens.Space4)) {
                 CardHeader(
                     icon = Icons.Outlined.Download,
-                    title = if (roomy) "Import an existing key" else "Import a key",
-                    body = if (roomy) "Paste an nsec; it is stored encrypted on this device." else "Paste an nsec; kept encrypted here.",
+                    title = "Import an existing key",
+                    body = "Paste an nsec; it is stored encrypted on this device.",
                 )
             }
             AnimatedVisibility(open) {
-                val pad = Modifier.padding(start = cardPadding(roomy), end = cardPadding(roomy), bottom = cardPadding(roomy))
+                val pad = Modifier.padding(start = Tokens.Space4, end = Tokens.Space4, bottom = Tokens.Space4)
                 val canImport = enabled && text.isNotBlank()
-                if (roomy) {
-                    Column(pad, verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-                        KeyField(text, onTextChange, Modifier.fillMaxWidth())
-                        ImportButton(canImport, busy, "Import key", onImport, Modifier.fillMaxWidth().heightIn(min = Tokens.TapMin))
-                    }
-                } else {
-                    // The field and its button share a row, to fit.
-                    Row(pad, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                        KeyField(text, onTextChange, Modifier.weight(1f))
-                        ImportButton(canImport, busy, "Import", onImport, Modifier.heightIn(min = 56.dp))
-                    }
+                Column(pad, verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+                    KeyField(text, onTextChange, Modifier.fillMaxWidth())
+                    ImportButton(canImport, busy, "Import key", onImport, Modifier.fillMaxWidth().heightIn(min = Tokens.TapMin))
                 }
             }
         }

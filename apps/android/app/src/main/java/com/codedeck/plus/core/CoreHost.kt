@@ -163,6 +163,10 @@ class CoreHost(
 
     fun stop() = core.stop()
 
+    /** Stop for good and wait for the core's thread to end (its database is
+     *  closed then). Blocking. */
+    fun shutdown() = core.shutdown()
+
     /** The OS backgrounded the app — debounced, never tears a healthy socket.
      *  Called from `platform/StayConnectedService.kt`'s `ProcessLifecycleOwner`
      *  observer. */

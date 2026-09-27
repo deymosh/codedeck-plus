@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -94,6 +95,10 @@ class MainViewModel : ViewModel() {
         _core.value = core
     }
 
+    fun detach() {
+        _core.value = null
+    }
+
     fun requestOpenSession(machine: String, sessionId: String) {
         _openRequest.value = OpenSessionRequest(machine, sessionId)
     }
@@ -136,6 +141,9 @@ class MainActivity : ComponentActivity() {
     /** Whether this activity is bound to the service. */
     private var bound = false
 
+    /** The bound service, while it is. */
+    private var service: StayConnectedService? = null
+
     /** Waits for the bound service's core to finish opening (the spinner
      *  shows meanwhile); cancelled with the binding. */
     private var attachJob: Job? = null
@@ -143,12 +151,14 @@ class MainActivity : ComponentActivity() {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val service = (binder as? StayConnectedService.LocalBinder)?.getService() ?: return
+            this@MainActivity.service = service
             attachJob?.cancel()
             attachJob = lifecycleScope.launch {
                 viewModel.attach(service.core.filterNotNull().first())
             }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
+            service = null
             attachJob?.cancel()
         }
     }
@@ -216,6 +226,8 @@ class MainActivity : ComponentActivity() {
                                 current,
                                 openRequest = openRequest,
                                 onOpenRequestHandled = viewModel::openRequestHandled,
+                                login = remember { LoginStore(this@MainActivity).load() },
+                                onLogOut = ::logOut,
                             )
                         }
                     } else {
@@ -243,11 +255,16 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         SignerIntents.visible = false
         attachJob?.cancel()
+        unbind()
+        super.onStop()
+    }
+
+    private fun unbind() {
         if (bound) {
             unbindService(connection)
             bound = false
+            service = null
         }
-        super.onStop()
     }
 
     private fun bind() {
@@ -326,6 +343,19 @@ class MainActivity : ComponentActivity() {
             viewModel.loggedIn.value = true
             startCore()
             bind()
+        }
+    }
+
+    /** Log out (see [StayConnectedService.logOut]) and return to the welcome
+     *  screen; the spinner shows until everything is gone. */
+    private fun logOut() {
+        val service = service ?: return
+        viewModel.detach()
+        lifecycleScope.launch {
+            service.logOut()
+            unbind()
+            viewModel.signers.value = installedSignerApps(this@MainActivity)
+            viewModel.loggedIn.value = false
         }
     }
 
