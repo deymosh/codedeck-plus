@@ -34,7 +34,7 @@ import uniffi.client_ffi.UniffiPendingSessionsView
 import uniffi.client_ffi.UniffiQuickPromptsView
 import uniffi.client_ffi.UniffiSessionKeyStore
 import uniffi.client_ffi.UniffiSettingsView
-import uniffi.client_ffi.UniffiTranscriptRowsView
+import uniffi.client_ffi.UniffiTranscriptDelta
 import uniffi.client_ffi.UniffiUiView
 
 /**
@@ -194,7 +194,8 @@ class CoreHost(
     fun identityNpub(): String = core.identityNpub()
 
     /**
-     * One session's grouped, ready-to-render transcript — emits once
+     * One session's grouped, ready-to-render transcript, as deltas each taken
+     * against the one before (the first is the whole transcript) — emits once
      * immediately, then again on every `CoreEvent` that could have changed
      * it: `TranscriptAppended` naming this exact session, or a `StateChanged`
      * on the `TRANSCRIPT` slice (sync-status-only changes, e.g. a gap being
@@ -207,10 +208,12 @@ class CoreHost(
      * synthetic trigger is emitted from `onSubscription`), so an append that
      * lands between the two is never missed. Triggers that arrive while a
      * read is in flight are conflated into one follow-up read — a streaming
-     * turn appends far faster than a full view needs re-reading.
+     * turn appends far faster than a full view needs re-reading. A
+     * collector must apply every delta, in order, to one copy.
      */
-    fun transcriptFlow(machine: String, sessionId: String): Flow<UniffiTranscriptRowsView> =
-        events
+    fun transcriptFlow(machine: String, sessionId: String): Flow<UniffiTranscriptDelta> {
+        var since = 0uL
+        return events
             .onSubscription { emit(CoreEvent.StateChanged(SliceId.TRANSCRIPT)) }
             .filter { event ->
                 when (event) {
@@ -220,7 +223,8 @@ class CoreHost(
                 }
             }
             .conflate()
-            .map { core.transcriptView(machine, sessionId) }
+            .map { core.transcriptDelta(machine, sessionId, since).also { since = it.revision } }
+    }
 
     override fun connectionChanged(view: ConnectionView) {
         _connection.value = view

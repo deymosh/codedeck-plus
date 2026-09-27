@@ -77,7 +77,7 @@ import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.PendingPermissionSummary
 import com.codedeck.plus.ui.transcript.TranscriptList
-import com.codedeck.plus.ui.transcript.parseDisplayEntries
+import com.codedeck.plus.ui.transcript.TranscriptRows
 import com.codedeck.plus.ui.transcript.parsePendingPermission
 import com.codedeck.plus.ui.transcript.questionCardKey
 import java.time.Instant
@@ -92,7 +92,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -100,31 +99,31 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiOptionChoice
-import uniffi.client_ffi.UniffiTranscriptRowsView
+import uniffi.client_ffi.UniffiTranscriptDelta
 import uniffi.client_ffi.UniffiUsageData
 
 /**
- * A transcript view with its JSON payloads already decoded. Built off the main
- * thread: a long transcript's `displayEntriesJson` is large, and decoding it
- * inside composition on every append would stall frames during a streaming
- * turn. [of] reuses the previous decode for any payload whose JSON did not
- * change (a sync-status-only update, or an append that leaves the pending
- * permission alone), which also keeps the decoded list referentially stable
- * so the transcript does not recompose for nothing.
+ * The session's transcript, decoded: the core's deltas applied in order, off
+ * the main thread. Each delta carries only the rows that changed, so a
+ * streaming turn decodes one row per append however long the transcript is,
+ * and an update that changes no row keeps the list referentially stable.
  */
 private class ParsedTranscript(
-    val view: UniffiTranscriptRowsView,
-    val displayEntries: List<DisplayEntry>,
+    val view: UniffiTranscriptDelta,
+    val rows: TranscriptRows,
     val pendingPermission: PendingPermissionSummary?,
 ) {
+    val displayEntries: List<DisplayEntry> get() = rows.entries
+
     companion object {
-        fun of(view: UniffiTranscriptRowsView, previous: ParsedTranscript?): ParsedTranscript = ParsedTranscript(
+        fun of(view: UniffiTranscriptDelta, previous: ParsedTranscript?): ParsedTranscript = ParsedTranscript(
             view = view,
-            displayEntries = if (previous != null && previous.view.displayEntriesJson == view.displayEntriesJson) {
-                previous.displayEntries
-            } else {
-                parseDisplayEntries(view.displayEntriesJson)
-            },
+            rows = TranscriptRows.apply(
+                previous?.rows ?: TranscriptRows.EMPTY,
+                full = view.full,
+                order = view.order,
+                changed = view.changed.map { it.key to it.json },
+            ),
             pendingPermission = if (previous != null && previous.view.pendingPermissionJson == view.pendingPermissionJson) {
                 previous.pendingPermission
             } else {
@@ -183,8 +182,8 @@ fun SessionScreen(
     var transcript by remember(machine, sessionId) { mutableStateOf<ParsedTranscript?>(null) }
     LaunchedEffect(machine, sessionId) {
         var previous: ParsedTranscript? = null
+        // Every delta is applied, in order: each builds on the one before.
         core.transcriptFlow(machine, sessionId)
-            .distinctUntilChanged()
             .map { view -> ParsedTranscript.of(view, previous).also { previous = it } }
             .flowOn(Dispatchers.Default)
             .collect { transcript = it }

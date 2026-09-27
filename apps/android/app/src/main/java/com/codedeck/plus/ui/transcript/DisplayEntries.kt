@@ -11,7 +11,7 @@ import kotlinx.serialization.json.JsonClassDiscriminator
  * `DisplayEntry` / `ToolStep` / `QuestionView` / `PendingPermissionSummary` —
  * the exact JSON `crates/client-ffi/src/views.rs`'s
  * `build_uniffi_transcript_view` crosses as
- * `UniffiTranscriptRowsView.displayEntriesJson` / `pendingPermissionJson`.
+ * `UniffiKeyedEntry.json` / `UniffiTranscriptDelta.pendingPermissionJson`.
  * These are render-ready rows: the grouping, the call/result pairing and the
  * answered-state detection all happen in Rust; this file is a decode target,
  * not a second implementation.
@@ -201,11 +201,14 @@ sealed class DisplayEntry {
  *  `client_runtime::intent::question_card_key`. */
 fun questionCardKey(requestId: String, index: Int): String = "$requestId:q$index"
 
-/** Parses `UniffiTranscriptRowsView.displayEntriesJson` (a bare
- *  `Vec<DisplayEntry>` array — NOT wrapped the way the shared test fixture
- *  is). `Json.decodeFromString` throws on a genuinely malformed payload,
- *  which would mean the FFI boundary itself is broken. */
+/** Parses a bare `Vec<DisplayEntry>` JSON array (the shared test fixture
+ *  wraps one). `Json.decodeFromString` throws on a genuinely malformed
+ *  payload, which would mean the FFI boundary itself is broken. */
 fun parseDisplayEntries(json: String): List<DisplayEntry> =
+    displayEntriesJson.decodeFromString(json)
+
+/** Parses one row, `UniffiKeyedEntry.json`. */
+fun parseDisplayEntry(json: String): DisplayEntry =
     displayEntriesJson.decodeFromString(json)
 
 fun parsePendingPermission(json: String): PendingPermissionSummary =

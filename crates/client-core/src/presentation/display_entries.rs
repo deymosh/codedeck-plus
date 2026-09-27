@@ -150,6 +150,26 @@ pub enum DisplayEntry {
     },
 }
 
+impl DisplayEntry {
+    /// The seq of the first transcript entry this row is built from: each
+    /// entry lands in at most one row, so it keys the row across rebuilds
+    /// (a later result or answer changes a row's content, never its key).
+    pub fn seq(&self) -> u64 {
+        match self {
+            DisplayEntry::UserMessage { seq, .. }
+            | DisplayEntry::AgentMessage { seq, .. }
+            | DisplayEntry::ToolGroup { seq, .. }
+            | DisplayEntry::Diff { seq, .. }
+            | DisplayEntry::Error { seq, .. }
+            | DisplayEntry::Status { seq, .. }
+            | DisplayEntry::Notice { seq, .. }
+            | DisplayEntry::PlanApproval { seq, .. }
+            | DisplayEntry::Question { seq, .. }
+            | DisplayEntry::PermissionRequest { seq, .. } => *seq,
+        }
+    }
+}
+
 /// Entries the transcript never shows as a row of their own.
 pub fn is_hidden_entry(entry: &OutputEntry) -> bool {
     match &entry.body {

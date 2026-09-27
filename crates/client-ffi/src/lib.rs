@@ -52,13 +52,13 @@ pub use signer::{
 use observer::UniffiObserver;
 pub use views::{
     UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,
-    UniffiPendingSessionsView, UniffiQuickPromptsView, UniffiSettingsView, UniffiTranscriptRowsView,
+    UniffiPendingSessionsView, UniffiQuickPromptsView, UniffiSettingsView, UniffiTranscriptDelta,
     UniffiUiView,
 };
 use views::{
     build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_pairing_view,
     build_uniffi_pending_sessions_view, build_uniffi_quick_prompts_view, build_uniffi_settings_view,
-    build_uniffi_transcript_view, build_uniffi_ui_view, responded_cards_for,
+    build_uniffi_transcript_delta, build_uniffi_ui_view, responded_cards_for, TranscriptDeltaBase,
 };
 
 uniffi::setup_scaffolding!();
@@ -242,6 +242,8 @@ pub struct Core {
     identity_npub: String,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     join: Mutex<Option<JoinHandle<()>>>,
+    /// The transcript rows last handed out, for the next delta.
+    transcript_base: Mutex<Option<TranscriptDeltaBase>>,
 }
 
 // TEMPORARY (see `diag.rs`) — proves/disproves a premature Kotlin-side GC of
@@ -373,6 +375,7 @@ impl Core {
             identity_npub,
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             join: Mutex::new(Some(join)),
+            transcript_base: Mutex::new(None),
         }))
     }
 
@@ -461,14 +464,16 @@ impl Core {
         self.handle.pairing_view().await.map(|v| build_uniffi_pairing_view(&v))
     }
 
-    /// The grouped, ready-to-render transcript for one session — see
-    /// `views.rs`'s doc comment for why this crosses the already-ported
-    /// `presentation::display_entries` grouping rather than raw rows.
-    pub async fn transcript_view(&self, machine: String, session_id: String) -> UniffiTranscriptRowsView {
+    /// The grouped, ready-to-render transcript for one session, as a change
+    /// against revision `since` (0: none yet) — see `views.rs`'s doc comment
+    /// for why this crosses the `presentation::display_entries` grouping
+    /// rather than raw rows.
+    pub async fn transcript_delta(&self, machine: String, session_id: String, since: u64) -> UniffiTranscriptDelta {
         let raw = self.handle.transcript_view(machine.clone(), session_id.clone()).await;
         let ui = self.handle.ui_view().await;
         let responded = responded_cards_for(&ui, &machine, &session_id);
-        build_uniffi_transcript_view(&raw, responded)
+        let mut base = self.transcript_base.lock().unwrap();
+        build_uniffi_transcript_delta(&raw, responded, &mut base, &machine, &session_id, since)
     }
 
     /// Stops the loop and joins the dedicated thread — used by this crate's
