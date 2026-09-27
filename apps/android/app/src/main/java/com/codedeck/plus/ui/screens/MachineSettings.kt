@@ -41,6 +41,7 @@ import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.ActionRow
 import com.codedeck.plus.ui.components.GroupScope
 import com.codedeck.plus.ui.components.IconAction
+import com.codedeck.plus.ui.components.NavRow
 import com.codedeck.plus.ui.components.Chip
 import com.codedeck.plus.ui.components.DeckIcons
 import com.codedeck.plus.ui.components.Dot
@@ -96,7 +97,8 @@ internal fun shortKey(key: String): String = if (key.length <= 20) key else "${k
 /**
  * One machine's page: who it is and whether it is up, what its new sessions
  * start with, the relays it is reached over, its direct link, the
- * credentials and AI providers kept on it, and forgetting it. Pure — the
+ * credentials and AI providers kept on it, its agents' plugins (each on a
+ * page of its own, opened through [onOpenPlugins]), and forgetting it. Pure — the
  * caller supplies the machine and a dispatcher — so it renders the same in
  * a snapshot.
  */
@@ -109,11 +111,16 @@ fun MachineSettingsContent(
     now: Long,
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
+    onOpenPlugins: (agent: String) -> Unit = {},
 ) {
-    // The model pickers need each agent's list: ask for them on opening.
+    // The model pickers need each agent's list, and the plugin rows their
+    // counts: ask for them on opening.
     LaunchedEffect(machine.pubkeyHex) {
         machine.agents.filter { it.supportsModels }.forEach { dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, it.id)) }
         if (machine.agents.any { it.supportsProviders }) dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
+        machine.agents.filter { it.supportsPlugins }.forEach {
+            dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, it.id, available = false))
+        }
     }
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
 
@@ -137,6 +144,16 @@ fun MachineSettingsContent(
         if (machine.agents.any { it.supportsProviders }) {
             Group(title = "AI providers") {
                 GroupBody { MachineProviders(machine, providerProfileStatus, dispatch) }
+            }
+        }
+        val pluginAgents = machine.agents.filter { it.supportsPlugins }
+        if (pluginAgents.isNotEmpty()) {
+            Group(title = "Plugins", footer = "Installed on the machine, for every session of that agent.") {
+                pluginAgents.forEachIndexed { i, agent ->
+                    if (i > 0) Divider()
+                    val count = machine.plugins.firstOrNull { it.agent == agent.id }?.installed?.size
+                    NavRow(agent.displayName, onClick = { onOpenPlugins(agent.id) }, value = count?.let { "$it installed" })
+                }
             }
         }
         Group(footer = "Its sessions keep running on the machine; this phone forgets the pairing and its transcripts.") {
@@ -370,7 +387,7 @@ private fun MachineRelays(machine: UniffiMachineSummary, connectedRelays: Set<St
 
 /** [MachineSettingsContent] for the machine [pubkey], from the core; closes when the machine goes away. */
 @Composable
-fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
+fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit, onOpenPlugins: (agent: String) -> Unit = {}) {
     val machinesView by core.machines.collectAsState()
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -388,5 +405,6 @@ fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
         now = System.currentTimeMillis(),
         dispatch = { intent -> scope.launch { core.dispatch(intent) } },
         onBack = onBack,
+        onOpenPlugins = onOpenPlugins,
     )
 }

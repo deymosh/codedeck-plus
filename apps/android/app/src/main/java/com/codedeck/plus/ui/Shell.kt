@@ -24,6 +24,7 @@ import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.screens.LogsScreen
 import com.codedeck.plus.ui.screens.MachineSettingsScreen
 import com.codedeck.plus.ui.screens.PairingScreen
+import com.codedeck.plus.ui.screens.PluginsScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
@@ -43,6 +44,8 @@ private sealed interface Screen {
     data object Pairing : Screen
     /** A machine's settings page, opened from its name on the sessions list. */
     data class Machine(val machine: String) : Screen
+    /** One agent's plugins on a machine, opened from the machine's page. */
+    data class Plugins(val machine: String, val agent: String) : Screen
 }
 
 /** Saves [Screen] as a flat string list, so the open page survives rotation
@@ -57,6 +60,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             Screen.Logs -> listOf("logs")
             Screen.Pairing -> listOf("pairing")
             is Screen.Machine -> listOf("machine", screen.machine)
+            is Screen.Plugins -> listOf("plugins", screen.machine, screen.agent)
         }
     },
     restore = { saved ->
@@ -67,6 +71,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "logs" -> Screen.Logs
             "pairing" -> Screen.Pairing
             "machine" -> Screen.Machine(saved[1])
+            "plugins" -> Screen.Plugins(saved[1], saved[2])
             else -> Screen.Sessions
         }
     },
@@ -199,9 +204,16 @@ fun Shell(
     Box(Modifier.fillMaxSize()) {
         // System Back on any page returns to the sessions list, like each
         // page's own close/back control; Back on the list leaves the app.
-        // The log is opened from Settings, so Back returns there.
+        // The log is opened from Settings and plugins from their machine's
+        // page, so Back returns there.
         if (screen != Screen.Sessions) {
-            BackHandler { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Sessions }
+            BackHandler {
+                screen = when (val current = screen) {
+                    Screen.Logs -> Screen.Settings
+                    is Screen.Plugins -> Screen.Machine(current.machine)
+                    else -> Screen.Sessions
+                }
+            }
         }
         when (val current = screen) {
             Screen.Settings -> SettingsScreen(
@@ -212,7 +224,13 @@ fun Shell(
                 onPairMachine = { screen = Screen.Pairing },
                 onClose = { screen = Screen.Sessions },
             )
-            is Screen.Machine -> MachineSettingsScreen(core, current.machine, onBack = { screen = Screen.Sessions })
+            is Screen.Machine -> MachineSettingsScreen(
+                core,
+                current.machine,
+                onBack = { screen = Screen.Sessions },
+                onOpenPlugins = { agent -> screen = Screen.Plugins(current.machine, agent) },
+            )
+            is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { screen = Screen.Machine(current.machine) })
             Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
             Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
             is Screen.NewSession -> NewSessionScreen(

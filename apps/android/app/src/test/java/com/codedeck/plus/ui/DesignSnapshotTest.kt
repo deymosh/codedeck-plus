@@ -23,6 +23,7 @@ import com.codedeck.plus.ui.screens.MessagesPage
 import com.codedeck.plus.ui.screens.NewSessionBody
 import com.codedeck.plus.ui.screens.NotificationsPage
 import com.codedeck.plus.ui.screens.PairingBody
+import com.codedeck.plus.ui.screens.PluginsContent
 import com.codedeck.plus.ui.screens.SettingsHub
 import com.codedeck.plus.ui.session.Composer
 import com.codedeck.plus.ui.session.QuickPromptStrip
@@ -135,6 +136,9 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {},
         )
     },
+    "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
+    "plugins_browse" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}, startOnBrowse = true) },
+    "plugins_opencode" to { PluginsContent(workstation, "opencode", dispatch = {}, onBack = {}) },
     "settings_appearance" to { AppearancePage(settings, {}, {}) },
     "settings_notifications" to { NotificationsPage(settings, {}, {}) },
     "settings_connection" to { ConnectionPage(settings, serviceForeground = true, dispatch = {}, onBack = {}) },
@@ -175,6 +179,9 @@ class DesignSnapshotTest {
     @Test fun new_session() = paparazzi.page("new_session")
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
+    @Test fun plugins() = paparazzi.page("plugins")
+    @Test fun plugins_browse() = paparazzi.page("plugins_browse")
+    @Test fun plugins_opencode() = paparazzi.page("plugins_opencode")
     @Test fun settings_appearance() = paparazzi.page("settings_appearance")
     @Test fun settings_notifications() = paparazzi.page("settings_notifications")
     @Test fun settings_connection() = paparazzi.page("settings_connection")
@@ -193,5 +200,6 @@ class DesignFullPageSnapshotTest {
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
     @Test fun settings_machine() = paparazzi.page("settings_machine")
+    @Test fun plugins() = paparazzi.page("plugins")
     @Test fun settings_messages() = paparazzi.page("settings_messages")
 }

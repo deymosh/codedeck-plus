@@ -11,6 +11,11 @@ import kotlinx.serialization.json.jsonObject
 import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiAgentDefaults
 import uniffi.client_ffi.UniffiAgentModels
+import uniffi.client_ffi.UniffiAgentPlugins
+import uniffi.client_ffi.UniffiAvailablePlugin
+import uniffi.client_ffi.UniffiInstalledPlugin
+import uniffi.client_ffi.UniffiPluginFailure
+import uniffi.client_ffi.UniffiPluginMarketplace
 import uniffi.client_ffi.UniffiCredentialStatus
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
@@ -51,15 +56,47 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true,
         credentials = emptyList(),
+    )
+
+    private const val OFFICIAL = "claude-plugins-official"
+
+    /** Claude Code's plugins: two installed (one off), two marketplaces, an
+     *  install under way, and a change that failed. */
+    val claudePlugins = UniffiAgentPlugins(
+        agent = "claude-code",
+        installed = listOf(
+            UniffiInstalledPlugin("commit-commands@$OFFICIAL", "commit-commands", OFFICIAL, "fa59bc903774", "Streamline your git workflow with simple commands for committing, pushing, and creating pull requests", enabled = true),
+            UniffiInstalledPlugin("my-skills@deymosh-skills", "my-skills", "deymosh-skills", "1.4.0", "The skills I carry from project to project", enabled = false),
+        ),
+        marketplaces = listOf(
+            UniffiPluginMarketplace(OFFICIAL, "anthropics/claude-plugins-official"),
+            UniffiPluginMarketplace("deymosh-skills", "https://github.com/deymosh/claude-skills.git"),
+        ),
+        toggles = true,
+        available = listOf(
+            UniffiAvailablePlugin("code-review@$OFFICIAL", "code-review", OFFICIAL, "Automated code review for pull requests using multiple specialized agents", 9120uL),
+            UniffiAvailablePlugin("frontend-design@$OFFICIAL", "frontend-design", OFFICIAL, "Distinctive, intentional visual design for new UI", 5874uL),
+            UniffiAvailablePlugin("security-guidance@$OFFICIAL", "security-guidance", OFFICIAL, "Warns about risky patterns while Claude edits files", 3327uL),
+            UniffiAvailablePlugin("agentforce-adlc@$OFFICIAL", "agentforce-adlc", OFFICIAL, "Agentforce Agent Development Life Cycle — author, discover, scaffold, deploy, test, and optimize .agent files", 1490uL),
+        ),
+        error = null,
+        busy = listOf("frontend-design@$OFFICIAL"),
+        failure = UniffiPluginFailure("install", "nope@$OFFICIAL", "Plugin \"nope\" not found in marketplace \"$OFFICIAL\""),
+    )
+
+    val opencodePlugins = UniffiAgentPlugins(
+        agent = "opencode",
+        installed = listOf(UniffiInstalledPlugin("opencode-wakatime", "opencode-wakatime", null, null, null, enabled = true)),
+        marketplaces = null, toggles = false, available = null, error = null, busy = emptyList(), failure = null,
     )
 
     val workstation = UniffiMachineSummary(
@@ -73,7 +110,8 @@ internal object DesignFixtures {
         agents = listOf(claude, opencode),
         credentials = listOf(UniffiCredentialStatus("github", "GitHub token", present = false, fromEnv = false, valid = null)),
         models = listOf(UniffiAgentModels("claude-code", listOf(UniffiModelEntry("opus", "Opus"), UniffiModelEntry("fable", "Fable")), "opus", null)),
-        providerProfiles = emptyList(), directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
+        providerProfiles = emptyList(), plugins = listOf(claudePlugins, opencodePlugins),
+        directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
         npub = "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvw",
         relays = listOf("wss://relay.example.org", "wss://nostr.home.lan:4869"),
