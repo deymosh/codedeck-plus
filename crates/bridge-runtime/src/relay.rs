@@ -13,6 +13,7 @@
 //! produced them. Each event also goes to the phone's direct link, if it has
 //! one open (see `crate::direct`), ahead of the relays.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use bridge_core::{Addressee, InboundEvent, Input, Via};
@@ -101,6 +102,17 @@ impl EventFactory {
     }
 }
 
+/// Publish `event` and wait for a relay's word; whether one took it.
+async fn publish(transport: &WsTransport, event: &SignedEvent) -> bool {
+    let result = transport
+        .publish_confirmed(event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
+        .await;
+    if !result.verdict.is_delivered() {
+        log::warn!("[Relays] Publish of kind {} not delivered: {:?} {:?}", event.kind, result.verdict, result.detail);
+    }
+    result.verdict.is_delivered()
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -109,6 +121,8 @@ enum Job {
     Publish { to: Vec<Addressee>, message: Box<BridgeToPhone> },
     /// Resolves once every job queued before it is done.
     Flush(oneshot::Sender<()>),
+    /// A relay's socket came up or went down.
+    RelaysChanged,
 }
 
 /// The relay connections, the bridge's subscriptions on them, and the
@@ -135,18 +149,27 @@ impl Relays {
     ) -> Self {
         let bridge_pubkey = keys.pubkey_hex.clone();
         let transport = WsTransport::new(WsConfig { relays, auth: Rc::new(keys.clone()), proxy });
-        transport.ensure_connected();
 
         let (jobs, mut queue) = mpsc::unbounded_channel::<Job>();
+        let relays_changed = jobs.clone();
+        transport.on_relays_changed(Rc::new(move || {
+            let _ = relays_changed.send(Job::RelaysChanged);
+        }));
+        transport.ensure_connected();
         let publisher = transport.clone();
         tokio::task::spawn_local(async move {
             let mut factory = EventFactory::new(keys, machine);
+            // Per phone, the latest heartbeat no relay took (the first one
+            // goes out before any relay is up, over Tor by seconds): sent
+            // again once a relay is, instead of at the next beat a minute on.
+            let mut unsent_beats: HashMap<String, Vec<SignedEvent>> = HashMap::new();
             while let Some(job) = queue.recv().await {
                 match job {
                     Job::Flush(done) => {
                         let _ = done.send(());
                     }
                     Job::Publish { to, message } => {
+                        let beat = matches!(*message, BridgeToPhone::Sessions(_));
                         for addressee in to {
                             let events = match factory.events(&message, &addressee, now_secs()) {
                                 Ok(events) => events,
@@ -156,16 +179,33 @@ impl Relays {
                                     continue;
                                 }
                             };
-                            for event in events {
+                            let mut delivered = true;
+                            for event in &events {
                                 if let Some(direct) = &direct {
-                                    direct.deliver(&addressee.phone, &event);
+                                    direct.deliver(&addressee.phone, event);
                                 }
-                                let result = publisher
-                                    .publish_confirmed(&event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
-                                    .await;
-                                if !result.verdict.is_delivered() {
-                                    log::warn!("[Relays] Publish of kind {} not delivered: {:?} {:?}", event.kind, result.verdict, result.detail);
+                                delivered &= publish(&publisher, event).await;
+                            }
+                            if beat {
+                                if delivered {
+                                    unsent_beats.remove(&addressee.phone);
+                                } else {
+                                    unsent_beats.insert(addressee.phone.clone(), events);
                                 }
+                            }
+                        }
+                    }
+                    Job::RelaysChanged => {
+                        if unsent_beats.is_empty() || publisher.connected_relays().is_empty() {
+                            continue;
+                        }
+                        for (phone, events) in std::mem::take(&mut unsent_beats) {
+                            let mut delivered = true;
+                            for event in &events {
+                                delivered &= publish(&publisher, event).await;
+                            }
+                            if !delivered {
+                                unsent_beats.insert(phone, events);
                             }
                         }
                     }
@@ -286,6 +326,41 @@ mod tests {
             machine_offline: None,
             direct: None,
         })
+    }
+
+    /// A heartbeat published before any relay is up goes out as soon as one
+    /// is, without waiting for the next beat.
+    #[tokio::test]
+    async fn a_heartbeat_no_relay_took_goes_out_when_one_comes_up() {
+        use futures_util::StreamExt;
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                // Dialled but not answered: the relay stays down until accepted.
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}", listener.local_addr().unwrap());
+                let (inputs, _events) = mpsc::unbounded_channel();
+                let bridge = generate_keypair();
+                let phone = generate_keypair();
+                let relays = Relays::start(vec![url], bridge, "laptop".into(), None, inputs, None);
+                relays.publish(vec![to(&phone.pubkey_hex)], heartbeat());
+                relays.flush().await;
+
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                let kind = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) = ws.next().await else { continue };
+                        let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        if frame[0] == "EVENT" {
+                            break frame[1]["kind"].as_u64();
+                        }
+                    }
+                })
+                .await
+                .expect("the heartbeat went out once the relay was up");
+                assert_eq!(kind, Some(u64::from(SESSION_LIST_KIND)));
+            })
+            .await;
     }
 
     #[test]
