@@ -141,10 +141,6 @@ a driver-protocol type, regenerate the host's types with
   in backticks (`` `@codedeck/core` ``), dropping the `@` ("the codedeck/core
   package"), or rephrasing. Scan every drafted commit message for `@` before
   `git commit`; "does this look like a person" is not a sufficient filter.
-- **Every commit Claude Code makes ends with a `Co-Authored-By:` trailer** naming
-  the model that did the work, e.g.
-  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`. Apply it every time,
-  unprompted.
 - **Comments and commit messages must stand on their own.** State the actual
   invariant, constraint, or behaviour being preserved — do not make a `CDX-0NN` /
   `CDB-0NN` ticket id or "see commit `<sha>`" the *only* explanation. Upstream's
