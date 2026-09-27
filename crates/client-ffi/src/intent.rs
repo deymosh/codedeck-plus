@@ -158,6 +158,12 @@ pub enum UniffiIntent {
         machine: String,
         session_id: String,
     },
+    /// Ask the bridge for the slash commands this session understands now;
+    /// the answer lands in `UniffiSessionSummary.commands`.
+    RequestCommands {
+        machine: String,
+        session_id: String,
+    },
     /// Ask the bridge for this session's GSD workflow state; the answer
     /// lands in `UniffiSessionSummary.gsd`.
     RequestGsd {
@@ -396,6 +402,9 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::RequestModels { machine, agent } => Intent::RequestModels { machine, agent },
             UniffiIntent::RequestUsage { machine, session_id } => {
                 Intent::RequestUsage { machine, session_id }
+            }
+            UniffiIntent::RequestCommands { machine, session_id } => {
+                Intent::RequestCommands { machine, session_id }
             }
             UniffiIntent::RequestGsd { machine, session_id } => {
                 Intent::RequestGsd { machine, session_id }

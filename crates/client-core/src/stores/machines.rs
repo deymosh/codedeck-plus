@@ -19,7 +19,7 @@ use protocol::capabilities::BridgeHostKind;
 use protocol::common::{
     AgentDescriptor, CredentialStatus, GsdState, ProviderProfileInfo, RemoteSessionInfo, UsageData,
 };
-use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
+use protocol::events::{CommandsMsg, ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg, SlashCommand};
 
 use super::fetches::Fetches;
 use super::pairing::is_relay_url;
@@ -52,7 +52,8 @@ pub enum ListingPresence {
 }
 
 /// One session as the machines store holds it. The per-session extras (`usage`,
-/// `gsd`) survive every heartbeat — the merge spreads the previous view.
+/// `gsd`, `commands`) survive every heartbeat — the merge spreads the previous
+/// view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
@@ -65,6 +66,20 @@ pub struct SessionView {
     pub usage: Option<UsageData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gsd: Option<GsdState>,
+    /// Never persisted (see [`serialize_machines`]): the list is only good
+    /// while the session runs, and the phone asks again when it needs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<SessionCommands>,
+}
+
+/// A session's slash commands as its agent last listed them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCommands {
+    pub commands: Vec<SlashCommand>,
+    /// Why the last request got no list. The list held before is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl SessionView {
@@ -76,6 +91,7 @@ impl SessionView {
             last_listed_at: now,
             usage: None,
             gsd: None,
+            commands: None,
         }
     }
 }
@@ -132,6 +148,7 @@ pub fn merge_session_list(
                 // per-session extras survive every heartbeat
                 usage: prior.and_then(|p| p.usage.clone()),
                 gsd: prior.and_then(|p| p.gsd.clone()),
+                commands: prior.and_then(|p| p.commands.clone()),
             },
         );
     }
@@ -336,8 +353,8 @@ impl MachineView {
     }
 }
 
-/// `serializeMachines`: a JSON array of the machines, `providerProfiles`
-/// stripped. Round-tripping through this can never truncate — it holds the FULL
+/// `serializeMachines`: a JSON array of the machines, `providerProfiles` and
+/// every session's `commands` stripped. Round-tripping through this can never truncate — it holds the FULL
 /// map, unlike the old app's merged-short list.
 ///
 /// The strip happens HERE, not via a `#[serde(skip)]` on the field itself —
@@ -349,6 +366,9 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
         .cloned()
         .map(|mut m| {
             m.provider_profiles = None;
+            for s in m.sessions.values_mut() {
+                s.commands = None;
+            }
             m
         })
         .collect();
@@ -600,6 +620,7 @@ impl MachinesState {
                 last_listed_at: at,
                 usage: prior.and_then(|p| p.usage.clone()),
                 gsd: prior.and_then(|p| p.gsd.clone()),
+                commands: prior.and_then(|p| p.commands.clone()),
             };
             m.sessions.insert(info.id.clone(), view);
         });
@@ -628,6 +649,7 @@ impl MachinesState {
                     presence: ListingPresence::Live,
                     last_listed_at: at,
                     usage: prev.as_ref().and_then(|p| p.usage.clone()),
+                    commands: prev.as_ref().and_then(|p| p.commands.clone()),
                     gsd: prev.and_then(|p| p.gsd),
                 },
             );
@@ -691,6 +713,20 @@ impl MachinesState {
         self.with_machine(machine_pubkey, |m| {
             if let Some(s) = m.sessions.get_mut(session_id) {
                 s.usage = Some(usage);
+            }
+        });
+    }
+
+    /// A list replaces the one held; an empty answer (it always carries the
+    /// reason) keeps the held list and records why.
+    pub fn apply_commands(&mut self, machine_pubkey: &str, msg: &CommandsMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let Some(s) = m.sessions.get_mut(&msg.session_id) else { return };
+            if msg.commands.is_empty() {
+                let held = s.commands.take().map(|c| c.commands).unwrap_or_default();
+                s.commands = Some(SessionCommands { commands: held, error: msg.error.clone() });
+            } else {
+                s.commands = Some(SessionCommands { commands: msg.commands.clone(), error: None });
             }
         });
     }
@@ -816,6 +852,7 @@ mod tests {
             last_listed_at,
             usage: None,
             gsd: None,
+            commands: None,
         }
     }
 
@@ -1105,6 +1142,31 @@ mod tests {
         // a later good answer clears the error
         st.apply_models("pk", &models_msg(&["opus", "sonnet"], None));
         assert_eq!(agent_models(&st, "claude-code").error, None);
+    }
+
+    #[test]
+    fn session_commands_keep_the_held_list_on_an_error_and_are_never_persisted() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[info("s1")], NONE()), 10);
+        let cmd = |name: &str| SlashCommand { name: name.into(), description: None, argument_hint: None };
+        let msg = |commands: Vec<SlashCommand>, error: Option<&str>| CommandsMsg {
+            session_id: "s1".into(),
+            commands,
+            error: error.map(str::to_string),
+        };
+        let held = |st: &MachinesState| st.machine("pk").unwrap().sessions["s1"].commands.clone().unwrap();
+
+        st.apply_commands("pk", &msg(vec![cmd("compact")], None));
+        st.apply_commands("pk", &msg(vec![], Some("not running")));
+        assert_eq!(held(&st), SessionCommands { commands: vec![cmd("compact")], error: Some("not running".into()) });
+        st.apply_commands("pk", &msg(vec![cmd("init")], None));
+        assert_eq!(held(&st), SessionCommands { commands: vec![cmd("init")], error: None });
+
+        // Survives a heartbeat, but not a restart.
+        st.apply_session_list("pk", &list(&[info("s1")], NONE()), 20);
+        assert_eq!(held(&st).commands, vec![cmd("init")]);
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert_eq!(back["pk"].sessions["s1"].commands, None);
     }
 
     #[test]

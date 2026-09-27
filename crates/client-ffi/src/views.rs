@@ -86,6 +86,26 @@ pub struct UniffiSessionSummary {
     /// GSD workflow state — requested via `UniffiIntent::RequestGsd`,
     /// absent until the bridge answers.
     pub gsd: Option<UniffiGsdState>,
+    /// Slash commands — requested via `UniffiIntent::RequestCommands`,
+    /// absent until the bridge answers.
+    pub commands: Option<UniffiSessionCommands>,
+}
+
+/// One slash command a session understands; typed as `/name` then its
+/// arguments.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiSlashCommand {
+    pub name: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
+}
+
+/// A session's slash commands as its agent last listed them, and why the
+/// last request got none (the list held before is kept).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiSessionCommands {
+    pub commands: Vec<UniffiSlashCommand>,
+    pub error: Option<String>,
 }
 
 /// One usage-limit window — mirrors `protocol::common::UsageWindow` field for
@@ -309,6 +329,7 @@ pub struct UniffiAgent {
     pub supports_providers: bool,
     pub supports_gsd: bool,
     pub supports_interrupt: bool,
+    pub supports_commands: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
 }
 
@@ -353,6 +374,7 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         supports_providers: a.supports.providers,
         supports_gsd: a.supports.gsd,
         supports_interrupt: a.supports.interrupt,
+        supports_commands: a.supports.commands,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
     }
 }
@@ -446,6 +468,18 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             seq_high: info.seq_high,
                             usage: s.usage.as_ref().map(to_uniffi_usage_data),
                             gsd: s.gsd.as_ref().map(to_uniffi_gsd_state),
+                            commands: s.commands.as_ref().map(|c| UniffiSessionCommands {
+                                commands: c
+                                    .commands
+                                    .iter()
+                                    .map(|x| UniffiSlashCommand {
+                                        name: x.name.clone(),
+                                        description: x.description.clone(),
+                                        argument_hint: x.argument_hint.clone(),
+                                    })
+                                    .collect(),
+                                error: c.error.clone(),
+                            }),
                         }
                     })
                     .collect(),

@@ -284,6 +284,11 @@ pub enum Intent {
         machine: String,
         session_id: String,
     },
+    /// Ask for the slash commands a session understands right now.
+    RequestCommands {
+        machine: String,
+        session_id: String,
+    },
     /// Store credentials on the bridge host (CDX-011) for `agent`, or for the
     /// bridge itself when `None`: a string sets an id, `null` clears it, an
     /// id not listed is kept. Secrets: never logged.
@@ -639,6 +644,16 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::UsageRequest(SessionIdMsg {
+                version: v(),
+                session_id,
+            }),
+        ),
+        Intent::RequestCommands {
+            machine,
+            session_id,
+        } => r.send(
+            &machine,
+            PhoneToBridge::CommandsRequest(SessionIdMsg {
                 version: v(),
                 session_id,
             }),

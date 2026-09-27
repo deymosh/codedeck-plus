@@ -409,6 +409,52 @@ describe('OpenCode context usage', () => {
   });
 });
 
+describe('OpenCode slash commands', () => {
+  const commands = [
+    { name: 'init', description: 'create/update AGENTS.md', template: 't', hints: [] },
+    { name: 'review', description: 'review changes', template: 't', hints: ['$ARGUMENTS'] },
+    { name: 'fix', template: 't', hints: ['$1', '$2'] },
+  ];
+  const withCommands = (client: FakeClient) => {
+    Object.assign(client, { command: { list: vi.fn().mockResolvedValue({ data: commands, error: undefined }) } });
+    Object.assign(client.session, {
+      command: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+      promptAsync: vi.fn().mockResolvedValue({ data: undefined, error: undefined }),
+    });
+    return client as FakeClient & { session: { command: ReturnType<typeof vi.fn>; promptAsync: ReturnType<typeof vi.fn> } };
+  };
+
+  it('lists its commands with their argument placeholders as hints', async () => {
+    const client = withCommands(clientWith([]));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'a/b', resume: 'x' }, ctx);
+    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
+    expect(await session.listCommands!()).toEqual([
+      { name: 'init', description: 'create/update AGENTS.md' },
+      { name: 'review', description: 'review changes', argumentHint: '<arguments>' },
+      { name: 'fix', argumentHint: '<arg1> <arg2>' },
+    ]);
+    await session.end();
+  });
+
+  it('runs a typed /command through session.command, and anything else as a prompt', async () => {
+    const client = withCommands(clientWith([]));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'anthropic/sonnet', resume: 'x' }, ctx);
+    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
+    session.prompt('/review  the auth module');
+    session.prompt('/unknown thing');
+    session.prompt('/etc/hosts is broken');
+    await expect.poll(() => client.session.promptAsync.mock.calls.length).toBe(2);
+    expect(client.session.command).toHaveBeenCalledTimes(1);
+    expect(client.session.command.mock.calls[0]![0]).toEqual({
+      sessionID: 'ses_1', directory: '/tmp', command: 'review', arguments: 'the auth module', model: 'anthropic/sonnet',
+    });
+    expect(client.session.promptAsync.mock.calls.map((c) => c[0].parts[0].text).sort()).toEqual(['/etc/hosts is broken', '/unknown thing']);
+    await session.end();
+  });
+});
+
 describe('OpenCode model checks', () => {
   const catalog = {
     providers: vi.fn().mockResolvedValue({

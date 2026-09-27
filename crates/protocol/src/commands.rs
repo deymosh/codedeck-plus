@@ -331,6 +331,9 @@ pub enum PhoneToBridge {
     UsageRequest(SessionIdMsg),
     GsdRequest(SessionIdMsg),
     ModelsRequest(ModelsRequestMsg),
+    /// The slash commands a session understands (agents with
+    /// `supports.commands`). Reply: `commands`.
+    CommandsRequest(SessionIdMsg),
     SetCredentials(SetCredentialsMsg),
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
@@ -386,6 +389,7 @@ mod tests {
         rt(&json!({"type":"usage-request","sessionId":"s"}));
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
+        rt(&json!({"type":"commands-request","sessionId":"s"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"type":"provider-profiles-request"}));

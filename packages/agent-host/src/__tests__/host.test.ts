@@ -133,19 +133,21 @@ describe('AgentHost', () => {
     expect(h.events()).toEqual([{ type: 'ended', error: 'the conversation to resume is gone', resumeLost: true }]);
   });
 
-  it('options, models, usage and credential checks reply with their own kinds', async () => {
+  it('options, models, usage, commands and credential checks reply with their own kinds', async () => {
     const h = harness();
     await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });
     await h.send('set-option', { sessionId: 's1', option: 'mode', value: 'plan' }, 'o1');
     await h.send('set-option', { sessionId: 's1', option: 'model', value: 'invalid' }, 'o2');
     await h.send('list-models', { agent: 'fake' }, 'm');
     await h.send('get-usage', { sessionId: 's1' }, 'u');
+    await h.send('list-commands', { sessionId: 's1' }, 'l');
     await h.send('check-credential', { agent: 'fake', credential: 'fake_token', value: 'invalid' }, 'c1');
     await h.send('check-credential', { agent: 'fake', credential: 'fake_token', value: 'unknown' }, 'c2');
     expect(h.reply('o1')).toMatchObject({ kind: 'ack' });
     expect(h.reply('o2')).toMatchObject({ kind: 'error' });
     expect(h.reply('m')).toMatchObject({ kind: 'models', payload: { defaultModel: 'fake-model', models: [{ id: 'fake-model' }, { id: 'fake-large' }] } });
     expect(h.reply('u')).toMatchObject({ kind: 'usage', payload: { usage: { available: true } } });
+    expect(h.reply('l')).toMatchObject({ kind: 'commands', payload: { commands: [{ name: 'permission', argumentHint: '<title>' }, { name: 'question' }, { name: 'plan' }] } });
     expect(h.reply('c1')).toEqual({ v: 1, id: 'c1', kind: 'credential-checked', payload: { valid: false } });
     expect(h.reply('c2')).toEqual({ v: 1, id: 'c2', kind: 'credential-checked', payload: {} });
   });

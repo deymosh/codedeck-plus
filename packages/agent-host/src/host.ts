@@ -172,6 +172,10 @@ export class AgentHost {
         const usage = await this.session(message.payload.sessionId).getUsage();
         return { kind: 'usage', payload: usage ? { usage } : {} };
       }
+      case 'list-commands': {
+        const commands = (await this.session(message.payload.sessionId).listCommands?.()) ?? [];
+        return { kind: 'commands', payload: { commands } };
+      }
       case 'check-credential': {
         const driver = this.driver(message.payload.agent);
         const valid = await driver.checkCredential?.(message.payload.credential, message.payload.value);

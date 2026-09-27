@@ -15,7 +15,7 @@
  */
 import type { Driver, DriverSession, SessionContext } from '../driver';
 import { now, PERMISSION_ALLOW, PERMISSION_DENY } from '../tools';
-import type { AgentInfo, OutputEntry, SessionOption, StartSession, UsageData } from '../types';
+import type { AgentInfo, OutputEntry, SessionOption, SlashCommand, StartSession, UsageData } from '../types';
 
 export const FAKE_AGENT_ID = 'fake';
 
@@ -128,6 +128,14 @@ class FakeSession implements DriverSession {
     return { available: true, windows: [{ label: '5h', utilization: 10, resetsAt: null }], fetchedAt: now() };
   }
 
+  async listCommands(): Promise<SlashCommand[]> {
+    return [
+      { name: 'permission', description: 'Ask to allow a tool call', argumentHint: '<title>' },
+      { name: 'question', description: 'Ask one multiple-choice question' },
+      { name: 'plan', description: 'Propose a plan and ask for approval' },
+    ];
+  }
+
   async end(): Promise<void> {
     this.ended = true;
   }
@@ -144,7 +152,7 @@ export class FakeDriver implements Driver {
         { id: 'high', label: 'High' },
       ],
       defaultMode: 'default',
-      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true },
+      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true, commands: true },
       credentials: [{ id: 'fake_token', label: 'Fake token', envVar: 'FAKE_AGENT_TOKEN' }],
     };
   }

@@ -16,7 +16,9 @@ import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiQuickPrompt
+import uniffi.client_ffi.UniffiSessionCommands
 import uniffi.client_ffi.UniffiSessionSummary
+import uniffi.client_ffi.UniffiSlashCommand
 import uniffi.client_ffi.UniffiSettingsView
 
 /** Fixed data the design snapshots render: two machines, their agents and
@@ -28,22 +30,35 @@ internal object DesignFixtures {
         UniffiSessionSummary(
             id = id, title = title, slug = id, cwd = "/home/me/code/$project", project = project, state = state,
             presence = "live", lastActivity = "2026-09-27T10:00:00Z", agent = agent, model = null, mode = null, effort = null,
-            contextPercentage = null, contextWindow = null, committed = committed, seqHigh = null, usage = null, gsd = null,
+            contextPercentage = null, contextWindow = null, committed = committed, seqHigh = null, usage = null, gsd = null, commands = null,
         )
+
+    /** A Claude Code session's commands, a plugin's among them. */
+    val commands = UniffiSessionCommands(
+        commands = listOf(
+            UniffiSlashCommand("compact", "Free up context by summarizing the conversation so far", "<optional custom summarization instructions>"),
+            UniffiSlashCommand("code-review", "Review the current diff, or a PR, for correctness bugs", "[low|medium|high] [--fix] [<pr#>]"),
+            UniffiSlashCommand("commit-commands:commit", "(commit-commands) Create a git commit", null),
+            UniffiSlashCommand("commit-commands:commit-push-pr", "(commit-commands) Commit, push, and open a PR", null),
+            UniffiSlashCommand("context", "Show current context usage", null),
+            UniffiSlashCommand("init", "Initialize a new CLAUDE.md file with codebase documentation", null),
+        ),
+        error = null,
+    )
 
     val claude = UniffiAgent(
         id = "claude-code", displayName = "Claude Code",
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true,
         credentials = emptyList(),
     )
 

@@ -18,6 +18,7 @@
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import type {
   AssistantMessage,
+  Command,
   Event,
   EventPermissionAsked,
   EventQuestionAsked,
@@ -29,10 +30,11 @@ import type {
   Session,
   SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
+import { parseSlashCommand, slashCommand } from '../../commands';
 import type { Driver, DriverSession, SessionContext } from '../../driver';
 import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
-import type { AgentInfo, ModelEntry, QuestionSpec, SessionOption, StartSession, UsageData } from '../../types';
+import type { AgentInfo, ModelEntry, QuestionSpec, SessionOption, SlashCommand, StartSession, UsageData } from '../../types';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { resolveOpenCodePath, startOpenCodeServer, type OpenCodeServerHandle } from './server';
 
@@ -190,6 +192,18 @@ export function describePermission(permission: string, patterns: string[]): stri
   }
 }
 
+/** A command's argument placeholders (`$ARGUMENTS`, `$1`, …) as a hint the
+ *  phone can show; none when the command takes no arguments. */
+export function commandArgumentHint(hints: string[]): string | undefined {
+  const shown = hints.map((h) => (h === '$ARGUMENTS' ? '<arguments>' : h.replace(/^\$(\d+)$/, '<arg$1>')));
+  return shown.length > 0 ? shown.join(' ') : undefined;
+}
+
+/** OpenCode's commands as the phone's command menu lists them. */
+export function toSlashCommands(commands: Command[]): SlashCommand[] {
+  return commands.map((c) => slashCommand(c.name, c.description, commandArgumentHint(c.hints ?? [])));
+}
+
 /** OpenCode's questions in the wire's question shape. */
 export function toQuestionSpecs(questions: QuestionInfo[]): QuestionSpec[] {
   return questions.map((q) => ({
@@ -267,6 +281,10 @@ export class OpenCodeSession implements DriverSession {
   private contextLimits?: Promise<Record<string, number>>;
   private contextWindow?: number;
   private contextPercentage?: number;
+  /** Names of the session's commands, from the last list fetched: a typed
+   *  `/name` runs as that command only when OpenCode has one by that name.
+   *  Dropped again when the fetch failed, so the next one asks again. */
+  private commandNames?: Promise<Set<string>>;
 
   /** Resolves once the OpenCode session exists server-side. */
   private readonly ready: Promise<{ client: OpencodeClient; session: Session }>;
@@ -687,22 +705,67 @@ export class OpenCodeSession implements DriverSession {
       .catch(reject);
   }
 
+  /**
+   * A typed `/name args` naming one of OpenCode's commands runs through
+   * `session.command`, which expands the command's template; sent as plain
+   * text it would reach the model verbatim. Anything else is a prompt.
+   */
   prompt(text: string): void {
+    const command = parseSlashCommand(text);
     this.ready
-      .then(({ client, session }) =>
-        client.session.promptAsync({
+      .then(async ({ client, session }) => {
+        if (command && (await this.knownCommands(client)).has(command.name)) {
+          this.runCommand(client, session.id, command.name, command.args);
+          return;
+        }
+        const { error } = await client.session.promptAsync({
           sessionID: session.id,
           directory: this.cwd,
           parts: [{ type: 'text', text }],
           ...(this.model ? { model: this.model } : {}),
-        }),
-      )
-      .then(({ error }) => {
+        });
         if (error) this.deliver({ type: 'error', content: `OpenCode prompt failed: ${JSON.stringify(error)}` });
       })
       .catch((err) => {
         this.deliver({ type: 'error', content: `OpenCode prompt failed: ${err instanceof Error ? err.message : String(err)}` });
       });
+  }
+
+  /** `session.command` answers only once the whole turn is over, so it is
+   *  not awaited: the turn itself arrives on the event stream. A refusal
+   *  becomes an error entry; a connection given up on while the turn runs
+   *  (the stream still carries it) is only logged. */
+  private runCommand(client: OpencodeClient, sessionID: string, name: string, args: string): void {
+    const model = this.model ? `${this.model.providerID}/${this.model.modelID}` : undefined;
+    client.session
+      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}) })
+      .then(({ error }) => {
+        if (error) this.deliver({ type: 'error', content: `OpenCode /${name} failed: ${JSON.stringify(error)}` });
+      })
+      .catch((err) => this.ctx.log(`[opencode] /${name}: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  private async fetchCommands(client: OpencodeClient): Promise<Command[]> {
+    const { data, error } = await client.command.list({ directory: this.cwd });
+    if (error || !data) throw new Error(`OpenCode could not list its commands: ${JSON.stringify(error ?? 'no list')}`);
+    this.commandNames = Promise.resolve(new Set(data.map((c) => c.name)));
+    return data;
+  }
+
+  private knownCommands(client: OpencodeClient): Promise<Set<string>> {
+    this.commandNames ??= this.fetchCommands(client).then(
+      (commands) => new Set(commands.map((c) => c.name)),
+      () => {
+        this.commandNames = undefined;
+        return new Set<string>();
+      },
+    );
+    return this.commandNames;
+  }
+
+  async listCommands(): Promise<SlashCommand[]> {
+    const { client } = await this.ready;
+    return toSlashCommands(await this.fetchCommands(client));
   }
 
   async setOption(option: SessionOption, value: string): Promise<void> {
@@ -863,7 +926,7 @@ export class OpenCodeDriver implements Driver {
       defaultMode: DEFAULT_MODE,
       // No subscription usage; sessions always use the providers configured
       // on the OpenCode server itself.
-      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true },
+      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };

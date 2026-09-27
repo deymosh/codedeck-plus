@@ -20,7 +20,9 @@ use agent_protocol::{
     BridgeMessage, HostFrame, HostMessage, QuestionOutcome, SelectOutcome, SessionEvent, StartSession,
 };
 use protocol::common::{EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
-use protocol::events::{BridgeToPhone, ModelsMsg, OptionConfirmedMsg, SessionFailedMsg, SessionReadyMsg, UsageMsg};
+use protocol::events::{
+    BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, SessionFailedMsg, SessionReadyMsg, UsageMsg,
+};
 
 use super::Engine;
 use crate::io::Effect;
@@ -42,6 +44,7 @@ pub(crate) enum HostCall {
     SetOption { session_id: String, option: SessionOption, value: String },
     ListModels { agent: String },
     GetUsage { session_id: String },
+    ListCommands { session_id: String },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
 }
 
@@ -190,6 +193,7 @@ impl Engine {
                     self.publish_all(BridgeToPhone::Usage(UsageMsg { session_id, usage }));
                 }
             }
+            HostCall::ListCommands { session_id } => self.on_commands_reply(session_id, result),
             HostCall::CheckCredential { ticket, agent, credential, value } => {
                 let valid = match result {
                     Ok(HostMessage::CredentialChecked { valid }) => valid,
@@ -253,6 +257,20 @@ impl Engine {
             log::info!("[Engine] models-request: {error}");
         }
         self.publish_all(BridgeToPhone::Models(ModelsMsg { agent, models, default_model, error }));
+    }
+
+    /// Like `models`, an empty list goes out with the reason.
+    fn on_commands_reply(&mut self, session_id: String, result: Result<HostMessage, String>) {
+        let (commands, error) = match result {
+            Ok(HostMessage::Commands { commands }) if !commands.is_empty() => (commands, None),
+            Ok(HostMessage::Commands { .. }) => (Vec::new(), Some("The agent lists no slash commands for this session.".to_string())),
+            Ok(_) => (Vec::new(), Some("The agent gave no command list.".to_string())),
+            Err(err) => (Vec::new(), Some(format!("Could not list the session's commands: {err}"))),
+        };
+        if let Some(error) = &error {
+            log::info!("[Engine] commands-request for {session_id}: {error}");
+        }
+        self.publish_all(BridgeToPhone::Commands(CommandsMsg { session_id, commands, error }));
     }
 
     // --- starting sessions ---

@@ -10,6 +10,7 @@
  */
 import type {
   SdkContextUsage,
+  SdkSlashCommand,
   SdkFacade,
   SdkMessage,
   SdkModelDescriptor,
@@ -182,6 +183,9 @@ class TestModeSession implements SdkSessionHandle {
   async probeReady(): Promise<void> {}
   async getContextUsage(): Promise<SdkContextUsage | null> {
     return null;
+  }
+  async supportedCommands(): Promise<SdkSlashCommand[] | null> {
+    return [{ name: 'compact', description: 'Free up context by summarizing the conversation so far' }];
   }
   async getUsageSnapshot(): Promise<unknown | null> {
     return null;

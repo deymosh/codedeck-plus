@@ -68,6 +68,7 @@ mod tests {
         assert!(matches!(set.message, BridgeMessage::SetOption { option: SessionOption::Effort, .. }));
         bridge_rt(json!({"v":1,"id":"8","kind":"list-models","payload":{"agent":"opencode"}}));
         bridge_rt(json!({"v":1,"id":"9","kind":"get-usage","payload":{"sessionId":"s"}}));
+        bridge_rt(json!({"v":1,"id":"10","kind":"list-commands","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"10","kind":"check-credential","payload":{"agent":"claude-code","credential":"anthropic_api_key","value":"sk"}}));
         bridge_rt(json!({"v":1,"id":"h1","kind":"permission-outcome","payload":{"outcome":"selected","optionId":"allow"}}));
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
@@ -79,17 +80,18 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true},
+            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}]
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true},
+            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true,"commands":false},
             "credentials":[],"unavailableReason":"opencode is not installed"
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
         host_rt(json!({"v":1,"id":"3","kind":"error","payload":{"message":"no such agent"}}));
         host_rt(json!({"v":1,"id":"4","kind":"models","payload":{"models":[{"id":"m","label":"M"}],"defaultModel":"m"}}));
         host_rt(json!({"v":1,"id":"5","kind":"usage","payload":{}}));
+        host_rt(json!({"v":1,"id":"7","kind":"commands","payload":{"commands":[{"name":"compact","argumentHint":"<focus>"}]}}));
         host_rt(json!({"v":1,"id":"6","kind":"usage","payload":{"usage":{"available":true,"windows":[{"label":"5h","utilization":12.5,"resetsAt":null}],"fetchedAt":"t"}}}));
         host_rt(json!({"v":1,"id":"7","kind":"credential-checked","payload":{"valid":false}}));
         host_rt(json!({"v":1,"id":"8","kind":"credential-checked","payload":{}}));

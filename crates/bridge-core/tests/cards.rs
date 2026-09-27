@@ -258,6 +258,39 @@ fn usage_is_asked_only_of_agents_that_report_it() {
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::GetUsage { .. })));
 }
 
+fn commands_reply(rig: &mut Rig) -> Option<protocol::events::CommandsMsg> {
+    rig.messages().into_iter().find_map(|m| match m {
+        BridgeToPhone::Commands(x) => Some(x),
+        _ => None,
+    })
+}
+
+#[test]
+fn commands_are_asked_of_the_agent_or_the_phone_is_told_why_not() {
+    let mut rig = Rig::new();
+    let s = ready(&mut rig);
+    rig.send(json!({"type":"commands-request","sessionId":s}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::ListCommands { .. }));
+    assert!(matches!(msg, BridgeMessage::ListCommands { ref session_id } if *session_id == s));
+    let compact = protocol::events::SlashCommand { name: "compact".into(), description: None, argument_hint: None };
+    rig.host_reply(&id, HostMessage::Commands { commands: vec![compact.clone()] });
+    let reply = commands_reply(&mut rig).expect("commands published");
+    assert_eq!((reply.session_id.as_str(), reply.commands, reply.error), (s.as_str(), vec![compact], None));
+
+    rig.send(json!({"type":"commands-request","sessionId":s}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListCommands { .. }));
+    rig.host_reply(&id, HostMessage::Error { message: "boom".into() });
+    assert!(commands_reply(&mut rig).and_then(|r| r.error).is_some_and(|e| e.contains("boom")));
+
+    // An agent without commands, or an unknown session, is answered at once.
+    let b = rig.ready_session("beta");
+    rig.send(json!({"type":"commands-request","sessionId":b}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::ListCommands { .. })));
+    assert!(commands_reply(&mut rig).is_some_and(|r| r.commands.is_empty() && r.error.is_some()));
+    rig.send(json!({"type":"commands-request","sessionId":"nope"}));
+    assert!(commands_reply(&mut rig).is_some_and(|r| r.error.is_some()));
+}
+
 fn models_error(rig: &mut Rig) -> Option<String> {
     rig.messages().into_iter().find_map(|m| match m {
         BridgeToPhone::Models(x) => Some(x.error.unwrap_or_default()),
