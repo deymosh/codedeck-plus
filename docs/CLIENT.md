@@ -58,6 +58,20 @@ Pairing is a QR scan of the bridge's `codedeck://pair?…` URL (see
 [`PROTOCOL.md`](PROTOCOL.md#pairing)). The identity key is generated on the
 phone and stored encrypted with an Android Keystore-backed key.
 
+**Keys.** The core reaches the identity only through a signer port
+(`IdentitySigner`; over the FFI, `UniffiIdentitySigner`, which Kotlin can
+implement for an external NIP-55 signer). The identity signs every event the
+phone publishes — commands, grants, relay NIP-42 AUTH, Blossom upload auth —
+so a relay or image server allowlist only ever needs that one pubkey. Each
+install also holds one local session key, granted to every bridge that
+advertises `session-keys` (with the pair-request, or once its heartbeat
+shows the capability; renewed a month before its 89-day grant lapses, at
+most every 10 minutes while unconfirmed). Once a bridge confirms it (a
+message it encrypted to the key), payloads both ways use the session key;
+until then, and whenever the bridge speaks to the identity again, the
+signer encrypts and decrypts. See
+[`PROTOCOL.md`](PROTOCOL.md#session-keys).
+
 **Orbot.** A settings toggle routes the relay connections *and* Blossom image
 traffic through Orbot's SOCKS5 proxy (`127.0.0.1:9050`); DNS resolves at the
 proxy, so `.onion` relays work. The app does not launch or manage Orbot, and

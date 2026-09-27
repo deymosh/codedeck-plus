@@ -9,7 +9,7 @@
 use protocol::crypto::Keypair;
 use client_core::delete_controller::DeleteController;
 use client_core::notifications::{NotificationContext, NotificationCoordinator};
-use client_core::stores::identity::{load_or_create_identity, IDENTITY_STORAGE_KEY};
+use client_core::stores::session_key::{load_or_create_session_key, SESSION_KEY_STORAGE_KEY};
 use client_core::stores::machines::{
     hydrate_machines, serialize_machines, MachinesState, MergeOptions,
 };
@@ -30,7 +30,7 @@ pub const MACHINES_KEY: &str = "machines";
 pub const OUTBOX_KEY: &str = "outbox";
 pub const SETTINGS_KEY: &str = "settings";
 pub const QUICK_PROMPTS_KEY: &str = QUICK_PROMPTS_STORAGE_KEY;
-pub const IDENTITY_KEY: &str = IDENTITY_STORAGE_KEY;
+pub const SESSION_KEY_KEY: &str = SESSION_KEY_STORAGE_KEY;
 /// `nostr_client`'s `last_stored_seen` cursor (seconds), persisted so a reboot
 /// resumes its since-window.
 pub const LAST_STORED_SEEN_KEY: &str = "client.lastStoredSeen";
@@ -110,10 +110,11 @@ fn non_blank(s: &str) -> Option<&str> {
 /// What [`hydrate`] resolved from the KV.
 pub struct HydratedCore {
     pub stores: CoreStores,
-    /// The install identity (fresh on first boot, else the stored secret).
-    pub keypair: Keypair,
-    /// The stored identity secret was absent or corrupt — persist the new one.
-    pub identity_needs_persist: bool,
+    /// The install's session key (fresh on first boot, else the stored
+    /// secret).
+    pub session_key: Keypair,
+    /// The stored session key was absent or corrupt — persist the new one.
+    pub session_key_needs_persist: bool,
     /// `last_stored_seen` cursor, seconds.
     pub last_stored_seen: i64,
 }
@@ -125,7 +126,7 @@ pub async fn hydrate(
     transcript_store: &dyn TranscriptStore,
     config: &StoresConfig,
 ) -> HydratedCore {
-    let identity = load_or_create_identity(kv.get(IDENTITY_KEY).await.as_deref());
+    let session_key = load_or_create_session_key(kv.get(SESSION_KEY_KEY).await.as_deref());
 
     let settings = SettingsState::new(hydrate_settings(kv.get(SETTINGS_KEY).await.as_deref()));
     let quick_prompts =
@@ -166,8 +167,8 @@ pub async fn hydrate(
             notifications: NotificationCoordinator::default(),
             delete_controller: DeleteController::default(),
         },
-        keypair: identity.keypair,
-        identity_needs_persist: identity.needs_persist,
+        session_key: session_key.keypair,
+        session_key_needs_persist: session_key.needs_persist,
         last_stored_seen,
     }
 }
@@ -202,8 +203,8 @@ impl<'a> Persister<'a> {
             .await;
     }
 
-    pub async fn save_identity_secret(&self, keypair: &Keypair) {
-        self.kv.set(IDENTITY_KEY, &keypair.secret_hex()).await;
+    pub async fn save_session_key(&self, keypair: &Keypair) {
+        self.kv.set(SESSION_KEY_KEY, &keypair.secret_hex()).await;
     }
 
     pub async fn save_last_stored_seen(&self, ts: i64) {
@@ -218,13 +219,13 @@ mod tests {
     use client_core::stores::outbox::OutboxItemState;
 
     #[tokio::test]
-    async fn hydrate_from_an_empty_kv_gives_defaults_and_a_fresh_identity() {
+    async fn hydrate_from_an_empty_kv_gives_defaults_and_a_fresh_session_key() {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
 
-        assert!(h.identity_needs_persist);
-        assert_eq!(h.keypair.pubkey_hex.len(), 64);
+        assert!(h.session_key_needs_persist);
+        assert_eq!(h.session_key.pubkey_hex.len(), 64);
         assert_eq!(h.last_stored_seen, 0);
         assert!(h.stores.machines.machines.is_empty());
         assert!(h.stores.outbox.items.is_empty());
@@ -240,7 +241,7 @@ mod tests {
 
         let mut h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let p = Persister::new(&kv);
-        p.save_identity_secret(&h.keypair).await;
+        p.save_session_key(&h.session_key).await;
 
         // mutate a few stores + persist them
         h.stores.quick_prompts.add_prompt("qp-1", "Go", "continue");
@@ -254,8 +255,8 @@ mod tests {
 
         // a "second Core" over the same KV
         let h2 = hydrate(&kv, &ts, &StoresConfig::default()).await;
-        assert!(!h2.identity_needs_persist);
-        assert_eq!(h2.keypair.pubkey_hex, h.keypair.pubkey_hex);
+        assert!(!h2.session_key_needs_persist);
+        assert_eq!(h2.session_key.pubkey_hex, h.session_key.pubkey_hex);
         assert_eq!(h2.last_stored_seen, 1_234);
         assert_eq!(h2.stores.quick_prompts.prompts[0].label, "Go");
         assert_eq!(h2.stores.outbox.items["in-1"].state, OutboxItemState::Pending);

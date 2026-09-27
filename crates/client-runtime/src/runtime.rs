@@ -16,7 +16,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use client_core::bridge_api::{build_command, BridgeApi, EgressError, IncomingEvent, Ingested};
+use std::collections::HashMap;
+
+use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
+use client_core::stores::session_key::{grant_expiry, Recipient, REGRANT_EVERY_MS};
 use nostr_transport::{PublishResult, PublishVerdict};
 use client_core::connection::{
     connection_reducer, heartbeats_all_stale, initial_connection_state, ConnectionEffect,
@@ -25,7 +28,8 @@ use client_core::connection::{
 };
 use protocol::crypto::Keypair;
 use client_core::notifications::NotifyEffect;
-use protocol::commands::PhoneToBridge;
+use protocol::commands::{PhoneToBridge, SessionKeyGrant, SessionKeyMsg};
+use protocol::nostr_event::SignedEvent;
 use protocol::events::BridgeToPhone;
 use protocol::kinds::SESSION_LIST_KIND;
 use tokio::sync::{mpsc, oneshot};
@@ -38,6 +42,7 @@ use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, Stor
 use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionImageSend, UndoTimer};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{Kv, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, TranscriptStore};
+use crate::signer::{Cipher, IdentityAuth, IdentitySigner, PhoneKeys, SignerError};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use crate::transport::ws::{WsConfig, WsTransport, PING_EVERY, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
@@ -194,7 +199,10 @@ pub enum CoreEvent {
 
 pub struct CoreConfig {
     pub relays: Vec<String>,
-    pub identity: Keypair,
+    /// The phone's identity: signs every event the phone publishes, and
+    /// keys the payloads for a bridge holding no live session key — see
+    /// [`crate::signer`].
+    pub identity: Rc<dyn IdentitySigner>,
     /// SOCKS5 `host:port` (Orbot) — the address to dial through WHEN Tor is
     /// on. Sent unconditionally by the phone (not nulled out when starting
     /// with Tor off), so a later `Intent::SetTorEnabled(true)` has an address
@@ -236,7 +244,7 @@ impl Default for CorePorts {
 impl CoreConfig {
     pub fn new(
         relays: Vec<String>,
-        identity: Keypair,
+        identity: Rc<dyn IdentitySigner>,
         proxy: Option<String>,
         tor: bool,
     ) -> Self {
@@ -287,11 +295,13 @@ impl Core {
             &StoresConfig::default(),
         )
         .await;
-        if hydrated.identity_needs_persist {
+        if hydrated.session_key_needs_persist {
             Persister::new(ports.kv.as_ref())
-                .save_identity_secret(&config.identity)
+                .save_session_key(&hydrated.session_key)
                 .await;
         }
+        let session = hydrated.session_key;
+        let keys = PhoneKeys::new(&config.identity.pubkey_hex(), &session);
 
         // A machine paired in a PRIOR run is already in `hydrated.stores.machines`
         // — nothing about a plain (re)connect ever calls `refresh_authors()` for
@@ -319,7 +329,7 @@ impl Core {
         });
         let ws = WsTransport::new(WsConfig {
             relays: config.relays.clone(),
-            auth: Rc::new(config.identity.clone()),
+            auth: Rc::new(IdentityAuth(Rc::clone(&config.identity))),
             proxy: if config.tor { config.proxy.clone() } else { None },
         });
         // The HTTP port's own boot-time proxy — mirrors `WsConfig.proxy` above.
@@ -334,11 +344,17 @@ impl Core {
         let nostr = NostrClient::new(
             ws.clone(),
             Rc::clone(&host),
-            config.identity.pubkey_hex.clone(),
+            keys.identity_pubkey_hex.clone(),
         );
+        let (signer_jobs, jobs_rx) = mpsc::unbounded_channel::<SignerJob>();
+        tokio::task::spawn_local(run_signer(Rc::clone(&config.identity), jobs_rx, tx.clone()));
         let event_loop = Loop {
             reconnect: config.reconnect,
-            identity: config.identity,
+            signer: config.identity,
+            session,
+            keys,
+            signer_jobs,
+            grant_attempts: HashMap::new(),
             tor_proxy_address: config.proxy,
             clock,
             entropy,
@@ -595,6 +611,58 @@ enum Msg {
     NoteStoredSeen(i64),
     /// The write-debounce window elapsed: flush what is dirty.
     FlushWrites,
+    /// The identity's signer decrypted (or failed to) an event addressed to
+    /// the identity.
+    IdentityDecrypted {
+        event: NostrEvent,
+        plaintext: Result<String, SignerError>,
+    },
+    /// The identity's signer wrote (or failed to) a command.
+    CommandSigned {
+        event: Result<SignedEvent, EgressError>,
+        reply: Option<oneshot::Sender<PublishResult>>,
+        outbox_id: Option<String>,
+    },
+}
+
+/// Work for the identity's signer. One task runs it in order, off the loop:
+/// a signer may take seconds (another app, a prompt to the user), and the
+/// order of commands and of a bridge's messages must hold.
+enum SignerJob {
+    /// Sign a command, its payload encrypted with `cipher`.
+    Command {
+        machine: String,
+        msg: Box<PhoneToBridge>,
+        cipher: Cipher,
+        now: u64,
+        reply: Option<oneshot::Sender<PublishResult>>,
+        outbox_id: Option<String>,
+    },
+    /// Decrypt a message the session key could not.
+    Decrypt(NostrEvent),
+}
+
+async fn run_signer(
+    signer: Rc<dyn IdentitySigner>,
+    mut jobs: mpsc::UnboundedReceiver<SignerJob>,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    while let Some(job) = jobs.recv().await {
+        let msg = match job {
+            SignerJob::Command { machine, msg, cipher, now, reply, outbox_id } => Msg::CommandSigned {
+                event: crate::signer::build_command(signer.as_ref(), &cipher, &machine, &msg, now).await,
+                reply,
+                outbox_id,
+            },
+            SignerJob::Decrypt(event) => Msg::IdentityDecrypted {
+                plaintext: signer.nip44_decrypt(&event.pubkey, &event.content).await,
+                event,
+            },
+        };
+        if tx.send(msg).is_err() {
+            return;
+        }
+    }
 }
 
 /// A read-projection request answered off the loop's own store snapshot.
@@ -654,7 +722,15 @@ impl NostrClientHost for LoopHost {
 
 struct Loop {
     reconnect: ReconnectConfig,
-    identity: Keypair,
+    signer: Rc<dyn IdentitySigner>,
+    /// The local session key: keys the payloads with bridges that hold it
+    /// (see [`crate::signer`]).
+    session: Keypair,
+    keys: PhoneKeys,
+    signer_jobs: mpsc::UnboundedSender<SignerJob>,
+    /// When each machine was last granted the session key (ms), to space
+    /// out grants a bridge does not confirm.
+    grant_attempts: HashMap<String, u64>,
     /// The SOCKS5 address to dial through WHEN Tor is on — remembered
     /// regardless of whether it's currently in use, so `Intent::SetTorEnabled`
     /// can toggle `self.ws`'s live proxy without the phone resending it.
@@ -796,6 +872,16 @@ impl Loop {
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
                 Msg::UndoTimerFired => self.on_undo_timer().await,
                 Msg::RefreshReconcile => self.on_refresh_reconcile().await,
+                Msg::IdentityDecrypted { event, plaintext } => {
+                    let incoming = incoming_of(&event);
+                    let now = self.clock.now_ms();
+                    let ingested = match plaintext {
+                        Ok(text) => self.api.ingest_plaintext(&incoming, text, now),
+                        Err(err) => self.api.decrypt_failed(&incoming, err.0),
+                    };
+                    self.on_ingested(&event, ingested, Recipient::Identity).await;
+                }
+                Msg::CommandSigned { event, reply, outbox_id } => self.publish_built(event, reply, outbox_id),
             }
         }
     }
@@ -916,15 +1002,26 @@ impl Loop {
             });
         }
 
-        let incoming = IncomingEvent {
-            id: &event.id,
-            pubkey: &event.pubkey,
-            kind: event.kind,
-            content: &event.content,
-        };
-        let ingested = self
-            .api
-            .ingest(&incoming, &self.identity, known, self.clock.now_ms());
+        if !known {
+            return;
+        }
+        // A bridge that holds the session key encrypts to it; try that
+        // first, locally. Only what it cannot read goes to the identity's
+        // signer.
+        match protocol::crypto::decrypt_from(&self.session.secret_key, &event.pubkey, &event.content) {
+            Ok(plaintext) => {
+                let ingested = self.api.ingest_plaintext(&incoming_of(&event), plaintext, self.clock.now_ms());
+                self.on_ingested(&event, ingested, Recipient::SessionKey).await;
+            }
+            Err(_) => {
+                let _ = self.signer_jobs.send(SignerJob::Decrypt(event));
+            }
+        }
+    }
+
+    /// Carry on with an event `ingest` has decided about; `via` is the key it
+    /// was encrypted to.
+    async fn on_ingested(&mut self, event: &NostrEvent, ingested: Ingested, via: Recipient) {
         match ingested {
             Ingested::Message(msg) => {
                 // Fold the decoded message into the store layer, then carry
@@ -937,7 +1034,7 @@ impl Loop {
                 let mut router = Router::new(
                     &mut self.stores,
                     self.transcript_store.as_ref(),
-                    &self.identity,
+                    &self.keys,
                     now,
                 );
                 router.visible = visible;
@@ -946,7 +1043,15 @@ impl Loop {
                 // the router may decide one (`Router::new` defaults to not).
                 router.ping_available = true;
                 let result = router.route(&machine, &msg).await;
+                // Ahead of the route's sends: a pair-ack encrypted to the
+                // session key confirms the grant the pairing carried, so the
+                // refresh it provokes already goes out under the key.
+                let created_at = u64::try_from(event.created_at).unwrap_or(0);
+                if self.stores.machines.note_heard_via(&machine, via, created_at) {
+                    self.persist_store(StoreId::Machines).await;
+                }
                 self.interpret_route(result).await;
+                self.grant_session_key_if_due(&machine).await;
                 self.observer.bridge_message(machine, *msg);
             }
             Ingested::DecryptFailed => {
@@ -964,6 +1069,34 @@ impl Loop {
             }
             Ingested::Buffered | Ingested::UnknownMachine => {}
         }
+    }
+
+    /// Grant `machine` the session key if it honours session keys and holds
+    /// no grant with long enough to run, at most once per
+    /// [`REGRANT_EVERY_MS`]: the grant goes through the identity's signer.
+    async fn grant_session_key_if_due(&mut self, machine: &str) {
+        let now = self.clock.now_ms();
+        if !self.stores.machines.wants_session_grant(machine, now)
+            || self
+                .grant_attempts
+                .get(machine)
+                .is_some_and(|at| now.saturating_sub(*at) < REGRANT_EVERY_MS)
+        {
+            return;
+        }
+        self.grant_attempts.insert(machine.to_string(), now);
+        let expires_at = grant_expiry(now);
+        self.stores.machines.note_session_grant_sent(machine, expires_at);
+        self.persist_store(StoreId::Machines).await;
+        log::info!("session key: granting it to {}...", machine.get(..8).unwrap_or(machine));
+        self.on_send(
+            machine.to_string(),
+            PhoneToBridge::SessionKey(SessionKeyMsg {
+                version: Default::default(),
+                session_key: SessionKeyGrant { pubkey_hex: self.keys.session_pubkey_hex.clone(), expires_at },
+            }),
+            None,
+        );
     }
 
     fn emit(&self, event: CoreEvent) {
@@ -1112,7 +1245,7 @@ impl Loop {
             now: self.clock.now_ms(),
             visible: self.conn.visible,
         };
-        let result = apply_intent(&mut self.stores, intent, &self.identity, ctx);
+        let result = apply_intent(&mut self.stores, intent, &self.keys, ctx);
         let session_image_send = result.session_image_send.clone();
         self.interpret_intent(result).await;
         if let Some(send) = session_image_send {
@@ -1123,9 +1256,10 @@ impl Loop {
 
     /// The ports an image send needs, cloned out of the loop so the send can
     /// run as its own task.
-    fn image_send_ctx(&self) -> ImageSendCtx {
+    fn image_send_ctx(&self, machine: &str) -> ImageSendCtx {
         ImageSendCtx {
-            identity: self.identity.clone(),
+            signer: Rc::clone(&self.signer),
+            cipher: self.cipher_for(machine),
             http: Rc::clone(&self.http),
             ws: self.ws.clone(),
             clock: Rc::clone(&self.clock),
@@ -1139,7 +1273,7 @@ impl Loop {
     /// then a paced chunk fallback); on the loop it would hold up relay
     /// events, reconnects and every view query for that long.
     fn spawn_session_image(&self, send: SessionImageSend, reply: Option<oneshot::Sender<()>>) {
-        let ctx = self.image_send_ctx();
+        let ctx = self.image_send_ctx(&send.machine);
         tokio::task::spawn_local(async move {
             ctx.send_session_image(send).await;
             if let Some(reply) = reply {
@@ -1392,6 +1526,16 @@ impl Loop {
         self.publish_command(machine, msg, None, Some(id));
     }
 
+    /// What encrypts payloads for `machine`: the session key once it holds
+    /// a confirmed grant, else the identity.
+    fn cipher_for(&self, machine: &str) -> Cipher {
+        if self.stores.machines.uses_session_key(machine, self.clock.now_ms()) {
+            Cipher::SessionKey(self.session.clone())
+        } else {
+            Cipher::Identity
+        }
+    }
+
     fn publish_command(
         &mut self,
         machine: String,
@@ -1399,8 +1543,25 @@ impl Loop {
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
     ) {
+        // Every command is signed by the identity, in order, through the
+        // signer; `publish_built` takes it from there.
         let now = self.clock.now_ms();
-        let event = match build_command(&self.identity, &machine, &msg, now) {
+        let cipher = match msg {
+            // A pairing candidate does not know the session key yet.
+            PhoneToBridge::PairRequest(_) => Cipher::Identity,
+            _ => self.cipher_for(&machine),
+        };
+        let _ = self.signer_jobs.send(SignerJob::Command { machine, msg: Box::new(msg), cipher, now, reply, outbox_id });
+    }
+
+    /// Publish a built command, or report why it could not be built.
+    fn publish_built(
+        &mut self,
+        event: Result<SignedEvent, EgressError>,
+        reply: Option<oneshot::Sender<PublishResult>>,
+        outbox_id: Option<String>,
+    ) {
+        let event = match event {
             Ok(event) => event,
             Err(err) => {
                 self.observer.action_failed(ActionFailedKind::PublishRejected);
@@ -1467,7 +1628,9 @@ impl Loop {
 /// as its own task (see `Loop::spawn_session_image`). It never touches the
 /// stores: everything it reports goes through the observer.
 struct ImageSendCtx {
-    identity: Keypair,
+    signer: Rc<dyn IdentitySigner>,
+    /// The machine's payload cipher, decided when the send started.
+    cipher: Cipher,
     http: Rc<dyn crate::attachments::HttpFetch>,
     ws: WsTransport,
     clock: Rc<dyn Clock>,
@@ -1488,7 +1651,7 @@ impl ImageSendCtx {
         attempts: u32,
     ) -> PublishResult {
         let now = self.clock.now_ms();
-        match build_command(&self.identity, machine, &msg, now) {
+        match crate::signer::build_command(self.signer.as_ref(), &self.cipher, machine, &msg, now).await {
             Ok(event) => self.ws.publish_confirmed(&event, budget, attempts).await,
             Err(err) => PublishResult {
                 verdict: PublishVerdict::Rejected,
@@ -1537,7 +1700,7 @@ impl ImageSendCtx {
         // --- Stage 1: the bytes ---
         let opts = crate::attachments::UploadOptions::at(started_at);
         let uploaded =
-            crate::attachments::upload_encrypted_image(&image, &self.identity, self.http.as_ref(), opts)
+            crate::attachments::upload_encrypted_image(&image, self.signer.as_ref(), self.http.as_ref(), opts)
                 .await;
 
         if let Ok(reference) = uploaded {
@@ -1610,6 +1773,15 @@ impl ImageSendCtx {
         }
     }
 
+}
+
+fn incoming_of(event: &NostrEvent) -> IncomingEvent<'_> {
+    IncomingEvent {
+        id: &event.id,
+        pubkey: &event.pubkey,
+        kind: event.kind,
+        content: &event.content,
+    }
 }
 
 fn abort(slot: &mut Option<AbortHandle>) {
@@ -1715,7 +1887,7 @@ mod tests {
         Core::spawn(
             CoreConfig {
                 relays: vec![mock.url.clone()],
-                identity: phone.clone(),
+                identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                 proxy: None,
                 tor: false,
                 reconnect: fast_reconnect(),
@@ -1851,7 +2023,7 @@ mod tests {
                 let _core = Core::spawn(
                     CoreConfig {
                         relays: vec![mock.url.clone()],
-                        identity: phone,
+                        identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: Some("127.0.0.1:9050".to_string()),
                         tor: true,
                         reconnect: fast_reconnect(),
@@ -1889,7 +2061,7 @@ mod tests {
                 let _core = Core::spawn(
                     CoreConfig {
                         relays: vec![mock.url.clone()],
-                        identity: phone,
+                        identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: Some("127.0.0.1:9050".to_string()),
                         tor: false,
                         reconnect: fast_reconnect(),
@@ -2002,7 +2174,7 @@ mod tests {
                 let core = Core::spawn(
                     CoreConfig {
                         relays: vec![mock1.url.clone(), mock2.url.clone()],
-                        identity: phone.clone(),
+                        identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                         proxy: None,
                         tor: false,
                         reconnect: fast_reconnect(),
@@ -3246,6 +3418,105 @@ mod tests {
                      UiView consumer has no other way to learn the toast \
                      cleared itself"
                 );
+            })
+            .await;
+    }
+
+    /// The next command EVENT the identity `phone` signed for `machine`,
+    /// with its payload decrypted as from `payload_key` (the phone's
+    /// identity or its session key). Every EVENT is ACKed on the way.
+    async fn next_command_via(
+        mock: &mut MockRelay,
+        phone: &Keypair,
+        payload_key: &str,
+        machine: &Keypair,
+    ) -> Option<PhoneToBridge> {
+        for _ in 0..16 {
+            let frame = mock.next_frame().await;
+            let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+            if v[0] != "EVENT" {
+                continue;
+            }
+            mock.push(format!(r#"["OK","{}",true,""]"#, v[1]["id"].as_str().unwrap()));
+            let ev: nostr::Event = serde_json::from_value(v[1].clone()).unwrap();
+            assert!(ev.verify().is_ok());
+            assert_eq!(ev.pubkey.to_hex(), phone.pubkey_hex, "every event is signed by the identity");
+            let plaintext = protocol::crypto::decrypt_from(&machine.secret_key, payload_key, &ev.content).ok()?;
+            return protocol::codec::decode_phone_to_bridge(&plaintext).ok();
+        }
+        None
+    }
+
+    fn heartbeat_with(caps: &[&str]) -> BridgeToPhone {
+        protocol::codec::decode_bridge_to_phone(
+            &serde_json::json!({
+                "type": "sessions",
+                "machine": "laptop",
+                "sessions": [],
+                "agents": [],
+                "credentials": [],
+                "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
+                "capabilities": caps,
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    /// The whole grant life cycle against a bridge advertising session keys:
+    /// granted by the identity, confirmed by a message under the key, used
+    /// for payloads (never for signing), and dropped when the bridge speaks
+    /// to the identity again.
+    #[tokio::test]
+    async fn a_bridge_with_session_keys_gets_payloads_under_the_key_and_signatures_by_the_identity() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let ports = CorePorts { kv: Rc::new(kv), ..CorePorts::default() };
+                let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+                core.start();
+                eose_all(&mut mock).await;
+                // The reconnect's refresh, under the identity.
+                let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+
+                // A heartbeat advertising session keys earns a grant.
+                let heartbeat = heartbeat_with(&[protocol::capabilities::SESSION_KEYS]);
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat);
+                let grant = match next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await {
+                    Some(PhoneToBridge::SessionKey(m)) => m.session_key,
+                    other => panic!("expected a grant, got {other:?}"),
+                };
+                let session = grant.pubkey_hex.clone();
+                assert_ne!(session, phone.pubkey_hex);
+
+                // Before the bridge confirms, payloads stay under the identity.
+                core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+                let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+
+                // The heartbeat under the key confirms it: payloads switch.
+                push_bridge_to_phone_event(&mock, &machine, &session, "cd-1", &heartbeat);
+                settle().await;
+                core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+                let cmd = next_command_via(&mut mock, &phone, &session, &machine).await;
+                assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+
+                // A later message under the identity: the bridge lost the key.
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat);
+                settle().await;
+                core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+                let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
             })
             .await;
     }

@@ -24,6 +24,7 @@ import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
 import uniffi.client_ffi.Core
 import uniffi.client_ffi.CoreListener
+import uniffi.client_ffi.UniffiIdentitySigner
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachinesView
 import uniffi.client_ffi.UniffiNotifier
@@ -53,7 +54,7 @@ import uniffi.client_ffi.UniffiUiView
  */
 class CoreHost(
     relays: List<String>,
-    identitySecretHex: String,
+    identity: UniffiIdentitySigner,
     notifier: UniffiNotifier,
     dbPath: String,
     proxy: String?,
@@ -139,7 +140,7 @@ class CoreHost(
     // Constructed last: `Core` holds `this` as its listener and may call back
     // from its own thread straight away, so every field a callback touches
     // (the refreshers above) must already be initialized.
-    private val core: Core = Core(relays, identitySecretHex, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
+    private val core: Core = Core(relays, identity, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
 
     fun start() {
         core.start()
