@@ -10,7 +10,8 @@
 //!
 //! A message too big for one event is split into `chunk` fragments below the
 //! message layer. Publishes go out one at a time, in the order the engine
-//! produced them.
+//! produced them. Each event also goes to the phone's direct link, if it has
+//! one open (see `crate::direct`), ahead of the relays.
 
 use std::rc::Rc;
 
@@ -130,6 +131,7 @@ impl Relays {
         machine: String,
         proxy: Option<String>,
         inputs: mpsc::UnboundedSender<Input>,
+        direct: Option<Rc<crate::direct::Hub>>,
     ) -> Self {
         let bridge_pubkey = keys.pubkey_hex.clone();
         let transport = WsTransport::new(WsConfig { relays, auth: Rc::new(keys.clone()), proxy });
@@ -155,6 +157,9 @@ impl Relays {
                                 }
                             };
                             for event in events {
+                                if let Some(direct) = &direct {
+                                    direct.deliver(&addressee.phone, &event);
+                                }
                                 let result = publisher
                                     .publish_confirmed(&event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
                                     .await;

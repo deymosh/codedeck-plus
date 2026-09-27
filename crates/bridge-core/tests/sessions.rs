@@ -40,6 +40,23 @@ fn start_publishes_a_heartbeat_then_the_catalog_once_the_host_reports() {
 }
 
 #[test]
+fn the_heartbeat_advertises_the_direct_link() {
+    let mut rig = Rig::new();
+    assert_eq!(last_heartbeat(&rig.messages()).direct, None, "none unless configured");
+    let mut rig = Rig::with(RigOptions {
+        configure: |c| {
+            c.direct = Some(protocol::direct::DirectInfo {
+                endpoints: vec!["wss://10.0.0.2:7447".into()],
+                cert_sha256: Some("ab".repeat(32)),
+            })
+        },
+        ..Default::default()
+    });
+    let direct = last_heartbeat(&rig.messages()).direct.expect("advertised");
+    assert_eq!(direct.endpoints, ["wss://10.0.0.2:7447"]);
+}
+
+#[test]
 fn without_a_paired_phone_nothing_is_published() {
     let mut rig = Rig::with(RigOptions { paired: false, ..Default::default() });
     assert!(rig.messages().is_empty());

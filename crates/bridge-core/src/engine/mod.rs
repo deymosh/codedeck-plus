@@ -64,6 +64,9 @@ pub struct Config {
     pub host_kind: Option<BridgeHostKind>,
     /// Relays the bridge listens on — told to a phone when it pairs.
     pub relays: Vec<String>,
+    /// Where phones can reach the bridge without a relay, advertised in the
+    /// heartbeat (see `protocol::direct`).
+    pub direct: Option<protocol::direct::DirectInfo>,
     /// Reported to the agent host at `initialize`.
     pub bridge_version: String,
     /// 0 disables the periodic heartbeat (tests).
@@ -86,6 +89,7 @@ impl Config {
             machine: machine.into(),
             host_kind: None,
             relays: Vec::new(),
+            direct: None,
             bridge_version: String::new(),
             heartbeat_interval_ms: DEFAULT_HEARTBEAT_INTERVAL_MS,
             git_poll_interval_ms: DEFAULT_GIT_POLL_INTERVAL_MS,
@@ -537,7 +541,7 @@ impl Engine {
             roots: Some(self.workspace.roots()),
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
-            direct: None,
+            direct: self.config.direct.clone(),
         });
         self.publish_all(message);
     }

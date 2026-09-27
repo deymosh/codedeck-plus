@@ -97,6 +97,7 @@ struct Runtime {
     images: Rc<RefCell<Images>>,
     gsd: Rc<Gsd>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
+    direct: Option<crate::direct::Direct>,
 }
 
 fn say(line: &str) {
@@ -126,7 +127,16 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     };
 
     let (inputs, mut rx) = mpsc::unbounded_channel();
-    let relays = Relays::start(config.relays.clone(), keys, config.machine.clone(), config.tor_proxy.clone(), inputs.clone());
+    let direct = crate::direct::start(&config.direct, &config.home, keys.pubkey_hex.clone(), inputs.clone()).await?;
+    engine_config.direct = direct.as_ref().map(|d| d.info.clone());
+    let relays = Relays::start(
+        config.relays.clone(),
+        keys,
+        config.machine.clone(),
+        config.tor_proxy.clone(),
+        inputs.clone(),
+        direct.as_ref().map(|d| Rc::clone(&d.hub)),
+    );
     let host = host::supervise(
         HostCommand::node(&config.node_path, config.agent_host_path.clone(), config.host_env.clone()),
         inputs.clone(),
@@ -157,6 +167,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         images: Rc::new(RefCell::new(Images::new(&first_root))),
         gsd: Rc::new(gsd),
         pairing_urls: options.pairing_urls,
+        direct,
     };
 
     rt.step(Input::Start).await;
@@ -208,6 +219,9 @@ impl Runtime {
                 self.relays.flush().await;
                 self.host.stop().await;
                 self.relays.shutdown();
+                if let Some(direct) = &mut self.direct {
+                    direct.shutdown();
+                }
                 for (_, timer) in self.timers.drain() {
                     timer.abort();
                 }
@@ -237,6 +251,9 @@ impl Runtime {
             }
             Effect::Resubscribe => {
                 let filter = self.engine.commands_filter();
+                if let Some(direct) = &self.direct {
+                    direct.hub.set_paired(&filter.authors);
+                }
                 self.relays.subscribe_commands(filter.authors, filter.since);
             }
             Effect::OpenPairingSubscription { since } => self.relays.open_pairing(since),

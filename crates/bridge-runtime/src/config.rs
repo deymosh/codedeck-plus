@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use protocol::capabilities::BridgeHostKind;
@@ -25,6 +26,9 @@ pub struct Flags {
     pub agent_host: Option<PathBuf>,
     pub service: bool,
     pub test_mode: bool,
+    pub direct_listen: Option<String>,
+    pub direct_onion_listen: Option<String>,
+    pub direct_endpoints: Vec<String>,
 }
 
 /// `config.json`; every key optional.
@@ -47,6 +51,81 @@ struct FileConfig {
     open_code_port: Option<u16>,
     agent_host_path: Option<String>,
     node_path: Option<String>,
+    direct: Option<FileDirect>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileDirect {
+    listen: Option<String>,
+    onion_listen: Option<String>,
+    endpoints: Option<Vec<String>>,
+}
+
+/// The direct link (see `crate::direct`): where to listen, and what to
+/// advertise. Off unless a listener is set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DirectConfig {
+    /// The `wss://` listener (TLS, self-signed certificate phones pin).
+    pub listen: Option<SocketAddr>,
+    /// A plain `ws://` listener for an onion service to forward to. Loopback
+    /// only: cleartext never leaves the machine except inside Tor.
+    pub onion_listen: Option<SocketAddr>,
+    /// The URLs phones dial, in order. Empty: the `wss://` listener's LAN
+    /// address, found at start.
+    pub endpoints: Vec<String>,
+}
+
+impl DirectConfig {
+    pub fn enabled(&self) -> bool {
+        self.listen.is_some() || self.onion_listen.is_some()
+    }
+}
+
+/// Whether `url` is a direct endpoint a phone may dial: `wss://` anywhere,
+/// `ws://` only to an onion service.
+pub fn is_direct_endpoint(url: &str) -> bool {
+    let host = |rest: &str| rest.split(['/', ':']).next().unwrap_or("").to_ascii_lowercase();
+    if let Some(rest) = url.strip_prefix("wss://") {
+        !host(rest).is_empty()
+    } else if let Some(rest) = url.strip_prefix("ws://") {
+        host(rest).ends_with(".onion")
+    } else {
+        false
+    }
+}
+
+fn direct_config(flags: &Flags, file: Option<FileDirect>) -> Result<DirectConfig, String> {
+    let file = file.unwrap_or_default();
+    let addr = |what: &str, value: Option<String>| -> Result<Option<SocketAddr>, String> {
+        value
+            .map(|v| v.parse::<SocketAddr>().map_err(|e| format!("direct {what} {v:?}: {e} (expected ip:port)")))
+            .transpose()
+    };
+    let listen = addr("listen", flags.direct_listen.clone().or_else(|| env("CODEDECK_DIRECT_LISTEN")).or(file.listen))?;
+    let onion_listen = addr(
+        "onion listen",
+        flags.direct_onion_listen.clone().or_else(|| env("CODEDECK_DIRECT_ONION_LISTEN")).or(file.onion_listen),
+    )?;
+    if onion_listen.is_some_and(|a| !a.ip().is_loopback()) {
+        return Err("the direct onion listener serves cleartext: it must listen on loopback (e.g. 127.0.0.1:7448)".into());
+    }
+    let endpoints = non_empty(flags.direct_endpoints.clone())
+        .or_else(|| split_list(env("CODEDECK_DIRECT_ENDPOINTS")))
+        .or(file.endpoints)
+        .unwrap_or_default();
+    for url in &endpoints {
+        if !is_direct_endpoint(url) {
+            return Err(format!("direct endpoint {url:?}: use wss://host:port, or ws:// only for a .onion"));
+        }
+        if url.starts_with("wss://") && listen.is_none() {
+            return Err(format!("direct endpoint {url:?} needs a direct listener (--direct-listen)"));
+        }
+        if url.starts_with("ws://") && onion_listen.is_none() {
+            return Err(format!("direct endpoint {url:?} needs an onion listener (--direct-onion-listen)"));
+        }
+    }
+    Ok(DirectConfig { listen, onion_listen, endpoints })
 }
 
 /// An admin endpoint that registers a paired phone's pubkey.
@@ -83,6 +162,7 @@ pub struct Config {
     pub test_mode: bool,
     /// Environment handed to the agent host (driver settings).
     pub host_env: BTreeMap<String, String>,
+    pub direct: DirectConfig,
 }
 
 /// Read an env var; empty counts as unset (Compose's `${VAR:-}` defines every
@@ -265,6 +345,8 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     // Agent binaries the host installs on demand live under the bridge's home.
     put("CODEDECK_AGENT_CACHE", Some(home.join("agents").to_string_lossy().into_owned()));
 
+    let direct = direct_config(flags, file.direct)?;
+
     let agent_host_path = flags
         .agent_host
         .clone()
@@ -290,6 +372,7 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         agent_host_path: absolute(&agent_host_path),
         test_mode,
         host_env,
+        direct,
         home,
     })
 }
@@ -315,6 +398,35 @@ mod tests {
         std::fs::write(dir.path().join(NODE_BIN), "#!/bin/sh").unwrap();
         let bundled = bundled_node(Some(dir.path())).unwrap();
         assert!(bundled.ends_with(NODE_BIN));
+    }
+
+    #[test]
+    fn direct_endpoints_are_wss_or_onion_only() {
+        assert!(is_direct_endpoint("wss://192.168.1.20:7447"));
+        assert!(is_direct_endpoint("wss://laptop.tail1234.ts.net:7447"));
+        assert!(is_direct_endpoint("ws://abcdef.onion:7448"));
+        assert!(!is_direct_endpoint("ws://192.168.1.20:7447"), "no cleartext on a LAN");
+        assert!(!is_direct_endpoint("ws://evil.onion.example.com:80"));
+        assert!(!is_direct_endpoint("https://x"));
+        assert!(!is_direct_endpoint("wss://"));
+    }
+
+    #[test]
+    fn the_onion_listener_must_be_loopback_and_endpoints_need_their_listener() {
+        let flags = |listen: Option<&str>, onion: Option<&str>, endpoints: &[&str]| Flags {
+            direct_listen: listen.map(str::to_string),
+            direct_onion_listen: onion.map(str::to_string),
+            direct_endpoints: endpoints.iter().map(|e| e.to_string()).collect(),
+            ..Flags::default()
+        };
+        assert_eq!(direct_config(&flags(None, None, &[]), None).unwrap(), DirectConfig::default());
+        assert!(direct_config(&flags(None, Some("0.0.0.0:7448"), &[]), None).is_err());
+        assert!(direct_config(&flags(None, None, &["wss://10.0.0.2:7447"]), None).is_err());
+        assert!(direct_config(&flags(Some("0.0.0.0:7447"), None, &["ws://x.onion:7448"]), None).is_err());
+        let ok = direct_config(&flags(Some("0.0.0.0:7447"), Some("127.0.0.1:7448"), &["wss://10.0.0.2:7447", "ws://x.onion:7448"]), None).unwrap();
+        assert!(ok.enabled());
+        assert_eq!(ok.endpoints.len(), 2);
+        assert!(direct_config(&flags(Some("not an addr"), None, &[]), None).is_err());
     }
 
     #[test]

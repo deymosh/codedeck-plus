@@ -61,6 +61,15 @@ struct Cli {
     /// Agents answer canned test commands instead of running for real (no API key needed) [env: CODEDECK_TEST_MODE]
     #[arg(long, global = true)]
     test_mode: bool,
+    /// Serve phones directly over wss (self-signed, pinned) on this ip:port, e.g. 0.0.0.0:7447 [env: CODEDECK_DIRECT_LISTEN]
+    #[arg(long, global = true)]
+    direct_listen: Option<String>,
+    /// Plain ws listener for an onion service to forward to; loopback only, e.g. 127.0.0.1:7448 [env: CODEDECK_DIRECT_ONION_LISTEN]
+    #[arg(long, global = true)]
+    direct_onion_listen: Option<String>,
+    /// URL phones dial for the direct link, repeatable (wss://…, or ws://….onion) [env: CODEDECK_DIRECT_ENDPOINTS] [default: the LAN address]
+    #[arg(long = "direct-endpoint", global = true)]
+    direct_endpoints: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -102,6 +111,9 @@ fn main() -> ExitCode {
         agent_host: cli.agent_host.clone(),
         service: cli.service,
         test_mode: cli.test_mode,
+        direct_listen: cli.direct_listen.clone(),
+        direct_onion_listen: cli.direct_onion_listen.clone(),
+        direct_endpoints: cli.direct_endpoints.clone(),
     };
     let command = cli.command.unwrap_or(Command::Run);
     if let Command::Version = command {
