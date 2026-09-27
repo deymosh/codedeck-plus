@@ -152,6 +152,17 @@ describe('AgentHost', () => {
     expect(h.reply('c2')).toEqual({ v: 1, id: 'c2', kind: 'credential-checked', payload: {} });
   });
 
+  it("plugins are listed and changed through the agent's driver", async () => {
+    const h = harness();
+    await h.send('list-plugins', { agent: 'fake', available: true }, 'p1');
+    await h.send('plugin-action', { agent: 'fake', action: 'install', target: 'echo@fake' }, 'p2');
+    await h.send('plugin-action', { agent: 'fake', action: 'install', target: 'nope@fake' }, 'p3');
+    expect(h.reply('p1')).toMatchObject({ kind: 'plugins', payload: { installed: [], available: [{ id: 'echo@fake' }] } });
+    expect(h.reply('p2')).toMatchObject({ kind: 'plugins', payload: { installed: [{ id: 'echo@fake', enabled: true }] } });
+    expect(h.reply('p2')!.payload).not.toHaveProperty('available');
+    expect(h.reply('p3')).toMatchObject({ kind: 'error', payload: { message: expect.stringMatching(/not found/) } });
+  });
+
   it('shutdown cancels what the host is still waiting on', async () => {
     const h = harness();
     await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });

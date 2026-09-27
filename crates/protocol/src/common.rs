@@ -52,6 +52,72 @@ pub struct AgentSupports {
     /// understands.
     #[serde(default)]
     pub commands: bool,
+    /// `plugins-request` / `plugin-action` list and manage the agent's
+    /// plugins and the marketplaces they come from, for the whole machine.
+    #[serde(default)]
+    pub plugins: bool,
+}
+
+// --- plugins ---
+
+/// A plugin installed for an agent on the bridge's machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledPlugin {
+    /// What `plugin-action` names it by (`name@marketplace`).
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// A disabled plugin stays installed but no session loads it.
+    pub enabled: bool,
+}
+
+/// A plugin one of the known marketplaces offers and that is not installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailablePlugin {
+    /// What `plugin-action` installs it by (`name@marketplace`).
+    pub id: String,
+    pub name: String,
+    pub marketplace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// How many times the marketplace says it was installed, when it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub install_count: Option<u64>,
+}
+
+/// A marketplace plugins are installed from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMarketplace {
+    /// What `plugin-action` names it by.
+    pub name: String,
+    /// Where it comes from, for display: `owner/repo`, a URL or a path.
+    pub source: String,
+}
+
+/// A change to an agent's plugins; `target` names a plugin (`install`,
+/// `uninstall`, `enable`, `disable`) or a marketplace (`add-marketplace`
+/// takes its source: `owner/repo`, a git URL or a marketplace.json URL;
+/// `remove-marketplace` and `update-marketplace` its name). For an agent
+/// without marketplaces, `install` takes a package name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginAction {
+    Install,
+    Uninstall,
+    Enable,
+    Disable,
+    AddMarketplace,
+    RemoveMarketplace,
+    UpdateMarketplace,
 }
 
 /// A credential the bridge holds for an agent (or for itself), by id. The

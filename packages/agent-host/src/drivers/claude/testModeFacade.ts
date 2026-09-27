@@ -184,6 +184,7 @@ class TestModeSession implements SdkSessionHandle {
   async getContextUsage(): Promise<SdkContextUsage | null> {
     return null;
   }
+  async reloadPlugins(): Promise<void> {}
   async supportedCommands(): Promise<SdkSlashCommand[] | null> {
     return [{ name: 'compact', description: 'Free up context by summarizing the conversation so far' }];
   }

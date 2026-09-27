@@ -10,7 +10,7 @@
  * - a request the host sent is settled exactly once — by the bridge's reply,
  *   or with `cancelled` when the host shuts down.
  */
-import type { Driver, DriverSession, SessionContext } from './driver';
+import type { Driver, DriverSession, PluginManager, SessionContext } from './driver';
 import {
   DRIVER_PROTOCOL_VERSION,
   type BridgeFrame,
@@ -172,6 +172,12 @@ export class AgentHost {
         const usage = await this.session(message.payload.sessionId).getUsage();
         return { kind: 'usage', payload: usage ? { usage } : {} };
       }
+      case 'list-plugins':
+        return { kind: 'plugins', payload: await this.plugins(message.payload.agent).list(message.payload.available ?? false) };
+      case 'plugin-action': {
+        const { agent, action, target } = message.payload;
+        return { kind: 'plugins', payload: await this.plugins(agent).act(action, target) };
+      }
       case 'list-commands': {
         const commands = (await this.session(message.payload.sessionId).listCommands?.()) ?? [];
         return { kind: 'commands', payload: { commands } };
@@ -256,6 +262,12 @@ export class AgentHost {
     const driver = this.drivers.get(agent);
     if (!driver) throw new Error(`no agent '${agent}' in this host`);
     return driver;
+  }
+
+  private plugins(agent: string): PluginManager {
+    const driver = this.driver(agent);
+    if (!driver.plugins) throw new Error(`${driver.info().displayName} has no plugins to manage`);
+    return driver.plugins;
   }
 
   private session(sessionId: string): DriverSession {

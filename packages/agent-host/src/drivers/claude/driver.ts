@@ -10,7 +10,7 @@
  * Claude Code's modes get their meaning — which calls run unasked, which
  * need the user, and how plan approval switches the mode.
  */
-import type { Driver, DriverSession, SessionContext } from '../../driver';
+import type { Driver, DriverSession, PluginManager, SessionContext } from '../../driver';
 import type { HttpPost } from '../../net';
 import { isBenignPlanDirWrite } from '../../policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
@@ -44,6 +44,7 @@ import {
   type SdkSessionOptions,
   type SdkSystemMessage,
 } from './facade';
+import { ClaudePlugins, execCli, type CliRunner } from './plugins';
 import { normalizeUsage } from './usage';
 
 export const CLAUDE_CODE_AGENT_ID = 'claude-code';
@@ -147,6 +148,10 @@ export interface ClaudeDriverDeps {
    *  answer it — and once at start, so the list is ready before any session
    *  exists. */
   discoverModels?: boolean;
+  /** Manage plugins through the CLI (the `claude` binary sessions run, or
+   *  `runCli` in tests). */
+  managePlugins?: boolean;
+  runCli?: CliRunner;
 }
 
 export class ClaudeSession implements DriverSession {
@@ -160,6 +165,15 @@ export class ClaudeSession implements DriverSession {
   private queuedInput: string[] = [];
   private ready = false;
   private ended = false;
+  /** Load the plugins as they are on disk now. */
+  async reloadPlugins(): Promise<void> {
+    if (!this.ended) await this.handle?.reloadPlugins();
+  }
+
+  get isEnded(): boolean {
+    return this.ended;
+  }
+
   /** Messages seen on this spawn. >0 proves the subprocess came up and (if a
    *  resume was asked for) the conversation resolved — so a later exit is
    *  some OTHER failure, whatever its stderr tail says. */
@@ -598,11 +612,33 @@ export class ClaudeDriver implements Driver {
   /** The last non-empty model list — what a requested model is checked
    *  against. Empty until one has been fetched. */
   private knownModels: SdkModelDescriptor[] = [];
+  /** Sessions a plugin change is announced to; ended ones are dropped. */
+  private readonly sessions = new Set<ClaudeSession>();
+  readonly plugins?: PluginManager;
 
   constructor(private readonly options: ClaudeDriverDeps) {
     // Start at once, so the binary is usually in place by the first session.
     if (options.installClaude) void this.claudePath();
     if (options.discoverModels) void this.listModels().catch(() => {});
+    if (options.managePlugins) {
+      const run = options.runCli ?? execCli(() => this.cliPath());
+      this.plugins = new ClaudePlugins(run, () => this.reloadPlugins());
+    }
+  }
+
+  /** The binary plugin commands run: the one sessions use, waiting for an
+   *  install in progress. */
+  private async cliPath(): Promise<string> {
+    const path = await this.claudePath();
+    if (!path) throw new Error('Claude Code is not installed on this machine.');
+    return path;
+  }
+
+  private async reloadPlugins(): Promise<void> {
+    for (const session of [...this.sessions]) {
+      if (session.isEnded) this.sessions.delete(session);
+      else await session.reloadPlugins().catch(() => {});
+    }
   }
 
   private claudePath(): string | Promise<string> | undefined {
@@ -626,7 +662,15 @@ export class ClaudeDriver implements Driver {
       efforts: CLAUDE_EFFORTS,
       defaultMode: DEFAULT_MODE,
       defaultEffort: DEFAULT_EFFORT,
-      supports: { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true },
+      supports: {
+        models: true,
+        usage: true,
+        providers: true,
+        gsd: true,
+        interrupt: true,
+        commands: true,
+        plugins: this.plugins !== undefined,
+      },
       credentials: [{ id: ANTHROPIC_API_KEY_CREDENTIAL, label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY' }],
     };
   }
@@ -649,6 +693,8 @@ export class ClaudeDriver implements Driver {
       checkModel: (model) => unsupportedModelReason(model, this.knownModels),
     });
     session.start();
+    for (const s of this.sessions) if (s.isEnded) this.sessions.delete(s);
+    this.sessions.add(session);
     return session;
   }
 

@@ -18,11 +18,11 @@ use client_core::stores::pairing::{
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
     BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, ModelsRequestMsg, PermissionResponseMsg,
-    PhoneToBridge, PlanResponseMsg, ProviderProfileWrite, QuestionAnswer, QuestionResponseMsg,
-    SessionIdMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
+    PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
+    QuestionResponseMsg, SessionIdMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     VersionFields,
 };
-use protocol::common::{CredentialValues, SessionOption};
+use protocol::common::{CredentialValues, PluginAction, SessionOption};
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
@@ -288,6 +288,21 @@ pub enum Intent {
     RequestCommands {
         machine: String,
         session_id: String,
+    },
+    /// Ask for an agent's plugins on a machine; with `available`, also what
+    /// its marketplaces offer.
+    RequestPlugins {
+        machine: String,
+        agent: String,
+        available: bool,
+    },
+    /// Change an agent's plugins; the target is busy until the bridge
+    /// acknowledges it.
+    PluginAction {
+        machine: String,
+        agent: String,
+        action: PluginAction,
+        target: String,
     },
     /// Store credentials on the bridge host (CDX-011) for `agent`, or for the
     /// bridge itself when `None`: a string sets an id, `null` clears it, an
@@ -658,6 +673,18 @@ pub fn apply(
                 session_id,
             }),
         ),
+        Intent::RequestPlugins { machine, agent, available } => r.send(
+            &machine,
+            PhoneToBridge::PluginsRequest(PluginsRequestMsg { version: v(), agent, available }),
+        ),
+        Intent::PluginAction { machine, agent, action, target } => {
+            let target = target.trim().to_string();
+            if !target.is_empty() {
+                stores.machines.plugin_action_sent(&machine, &agent, &target);
+                r.persist(StoreId::Machines);
+                r.send(&machine, PhoneToBridge::PluginAction(PluginActionMsg { version: v(), agent, action, target }));
+            }
+        }
         Intent::RequestGsd {
             machine,
             session_id,

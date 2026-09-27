@@ -346,6 +346,14 @@ impl<'a> Router<'a> {
                     .apply_usage(machine, &m.session_id, m.usage.clone());
                 r.persist(StoreId::Machines);
             }
+            BridgeToPhone::Plugins(m) => {
+                self.stores.machines.apply_plugins(machine, m);
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::PluginAck(m) => {
+                self.stores.machines.apply_plugin_ack(machine, m);
+                r.persist(StoreId::Machines);
+            }
             BridgeToPhone::Commands(m) => {
                 self.stores.machines.apply_commands(machine, m);
                 r.persist(StoreId::Machines);

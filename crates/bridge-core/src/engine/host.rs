@@ -20,8 +20,10 @@ use agent_protocol::{
     BridgeMessage, HostFrame, HostMessage, QuestionOutcome, SelectOutcome, SessionEvent, StartSession,
 };
 use protocol::common::{EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
+use protocol::common::PluginAction;
 use protocol::events::{
-    BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, SessionFailedMsg, SessionReadyMsg, UsageMsg,
+    BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
+    SessionReadyMsg, UsageMsg,
 };
 
 use super::Engine;
@@ -45,6 +47,8 @@ pub(crate) enum HostCall {
     ListModels { agent: String },
     GetUsage { session_id: String },
     ListCommands { session_id: String },
+    ListPlugins { agent: String },
+    PluginAction { agent: String, action: PluginAction, target: String },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
 }
 
@@ -194,6 +198,8 @@ impl Engine {
                 }
             }
             HostCall::ListCommands { session_id } => self.on_commands_reply(session_id, result),
+            HostCall::ListPlugins { agent } => self.on_plugins_reply(agent, result),
+            HostCall::PluginAction { agent, action, target } => self.on_plugin_action_reply(agent, action, target, result),
             HostCall::CheckCredential { ticket, agent, credential, value } => {
                 let valid = match result {
                     Ok(HostMessage::CredentialChecked { valid }) => valid,
@@ -271,6 +277,51 @@ impl Engine {
             log::info!("[Engine] commands-request for {session_id}: {error}");
         }
         self.publish_all(BridgeToPhone::Commands(CommandsMsg { session_id, commands, error }));
+    }
+
+    fn on_plugins_reply(&mut self, agent: String, result: Result<HostMessage, String>) {
+        let msg = match result {
+            Ok(HostMessage::Plugins { installed, marketplaces, toggles, available }) => {
+                PluginsMsg { agent, installed, marketplaces, toggles, available, error: None }
+            }
+            Ok(_) => Self::plugins_error(agent, "The agent gave no plugin list.".into()),
+            Err(err) => Self::plugins_error(agent, format!("Could not list the plugins: {err}")),
+        };
+        if let Some(error) = &msg.error {
+            log::info!("[Engine] plugins-request: {error}");
+        }
+        self.publish_all(BridgeToPhone::Plugins(msg));
+    }
+
+    pub(super) fn plugins_error(agent: String, error: String) -> PluginsMsg {
+        PluginsMsg { agent, installed: vec![], marketplaces: None, toggles: false, available: None, error: Some(error) }
+    }
+
+    /// A done action is acknowledged, then the new list goes out, so every
+    /// phone showing the plugins sees the change.
+    fn on_plugin_action_reply(
+        &mut self,
+        agent: String,
+        action: PluginAction,
+        target: String,
+        result: Result<HostMessage, String>,
+    ) {
+        let (plugins, error) = match result {
+            Ok(HostMessage::Plugins { installed, marketplaces, toggles, .. }) => {
+                let plugins = PluginsMsg { agent: agent.clone(), installed, marketplaces, toggles, available: None, error: None };
+                (Some(plugins), None)
+            }
+            Ok(_) => (None, Some("The agent gave no answer to the change.".to_string())),
+            Err(err) => (None, Some(err)),
+        };
+        match &error {
+            Some(error) => log::info!("[Engine] plugin-action {action:?} {target}: {error}"),
+            None => log::info!("[Engine] plugin-action {action:?} {target}: done"),
+        }
+        self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg { agent, action, target, success: error.is_none(), error }));
+        if let Some(plugins) = plugins {
+            self.publish_all(BridgeToPhone::Plugins(plugins));
+        }
     }
 
     // --- starting sessions ---

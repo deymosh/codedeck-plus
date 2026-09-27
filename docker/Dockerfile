@@ -120,6 +120,11 @@ RUN apt-get update \
 # container recreation instead of silently vanishing.
 ENV XDG_CONFIG_HOME=/data/.config
 ENV XDG_DATA_HOME=/data/.local/share
+# Claude Code keeps its settings, plugins and marketplaces, and the
+# conversations a session resumes, under ~/.claude — moved under /data for
+# the same reason, so plugins installed from the phone and resumable
+# sessions both survive recreation.
+ENV CLAUDE_CONFIG_DIR=/data/.claude
 # The bridge home, named directly rather than through the ~/.codedeck
 # symlink, so the paths the bridge reports (its default workspace root,
 # /data/workspaces, among them) are the volume's own.

@@ -13,9 +13,9 @@
  * Starting with `resume: "lost"` ends at once with `resumeLost`, like an
  * agent whose conversation is gone.
  */
-import type { Driver, DriverSession, SessionContext } from '../driver';
+import type { Driver, DriverSession, PluginManager, PluginState, SessionContext } from '../driver';
 import { now, PERMISSION_ALLOW, PERMISSION_DENY } from '../tools';
-import type { AgentInfo, OutputEntry, SessionOption, SlashCommand, StartSession, UsageData } from '../types';
+import type { AgentInfo, InstalledPlugin, OutputEntry, PluginAction, SessionOption, SlashCommand, StartSession, UsageData } from '../types';
 
 export const FAKE_AGENT_ID = 'fake';
 
@@ -141,7 +141,32 @@ class FakeSession implements DriverSession {
   }
 }
 
+/** One marketplace offering `echo`; installing, toggling and removing it
+ *  change nothing outside this object. `nope` is never found. */
+class FakePlugins implements PluginManager {
+  private installed: InstalledPlugin[] = [];
+
+  async list(available: boolean): Promise<PluginState> {
+    const offered = this.installed.length === 0 ? [{ id: 'echo@fake', name: 'echo', marketplace: 'fake' }] : [];
+    return { ...this.state(), ...(available ? { available: offered } : {}) };
+  }
+
+  async act(action: PluginAction, target: string): Promise<PluginState> {
+    if (target !== 'echo@fake') throw new Error(`Plugin "${target}" not found in marketplace "fake"`);
+    if (action === 'install') this.installed = [{ id: target, name: 'echo', marketplace: 'fake', enabled: true }];
+    else if (action === 'uninstall') this.installed = [];
+    else if (action === 'enable' || action === 'disable') this.installed = this.installed.map((p) => ({ ...p, enabled: action === 'enable' }));
+    return this.state();
+  }
+
+  private state(): PluginState {
+    return { installed: this.installed, marketplaces: [{ name: 'fake', source: 'fake/plugins' }], toggles: true };
+  }
+}
+
 export class FakeDriver implements Driver {
+  readonly plugins = new FakePlugins();
+
   info(): AgentInfo {
     return {
       id: FAKE_AGENT_ID,
@@ -152,7 +177,7 @@ export class FakeDriver implements Driver {
         { id: 'high', label: 'High' },
       ],
       defaultMode: 'default',
-      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true, commands: true },
+      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true, commands: true, plugins: true },
       credentials: [{ id: 'fake_token', label: 'Fake token', envVar: 'FAKE_AGENT_TOKEN' }],
     };
   }

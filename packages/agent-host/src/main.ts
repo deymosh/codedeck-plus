@@ -71,6 +71,7 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
             ...(!testMode && !claudePath ? { installClaude: install(claudeBinary()) } : {}),
             httpPost,
             discoverModels: !testMode,
+            managePlugins: !testMode,
           }),
         );
         break;

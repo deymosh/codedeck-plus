@@ -30,6 +30,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
+use client_runtime::client_core::stores::machines::AgentPlugins;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
 };
@@ -330,6 +331,7 @@ pub struct UniffiAgent {
     pub supports_gsd: bool,
     pub supports_interrupt: bool,
     pub supports_commands: bool,
+    pub supports_plugins: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
 }
 
@@ -375,6 +377,7 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         supports_gsd: a.supports.gsd,
         supports_interrupt: a.supports.interrupt,
         supports_commands: a.supports.commands,
+        supports_plugins: a.supports.plugins,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
     }
 }
@@ -396,6 +399,8 @@ pub struct UniffiMachineSummary {
     /// Live model lists, one entry per agent that has answered `RequestModels`.
     pub models: Vec<UniffiAgentModels>,
     pub provider_profiles: Vec<UniffiProviderProfileInfo>,
+    /// Plugins, one entry per agent that has answered `RequestPlugins`.
+    pub plugins: Vec<UniffiAgentPlugins>,
     /// The direct endpoints the bridge advertises, in its order.
     pub direct_advertised: Vec<String>,
     /// Whether the bridge advertised a certificate pin (without one no
@@ -418,6 +423,104 @@ pub struct UniffiMachineSummary {
     pub default_agent: Option<String>,
     /// What each agent's new sessions start with.
     pub agent_defaults: Vec<UniffiAgentDefaults>,
+}
+
+/// A plugin installed for an agent on a machine.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiInstalledPlugin {
+    /// What `UniffiIntent::PluginAction` names it by.
+    pub id: String,
+    pub name: String,
+    pub marketplace: Option<String>,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub enabled: bool,
+}
+
+/// A plugin a marketplace offers that is not installed.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAvailablePlugin {
+    pub id: String,
+    pub name: String,
+    pub marketplace: String,
+    pub description: Option<String>,
+    pub install_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPluginMarketplace {
+    pub name: String,
+    /// `owner/repo`, a URL or a path.
+    pub source: String,
+}
+
+/// The last plugin change that failed: its action's wire name, its target,
+/// and why.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPluginFailure {
+    pub action: String,
+    pub target: String,
+    pub error: String,
+}
+
+/// One agent's plugins on a machine.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentPlugins {
+    pub agent: String,
+    pub installed: Vec<UniffiInstalledPlugin>,
+    /// `None`: plugins are installed by package name, from no marketplace.
+    pub marketplaces: Option<Vec<UniffiPluginMarketplace>>,
+    /// A plugin can be switched off without uninstalling it.
+    pub toggles: bool,
+    /// What the marketplaces offer, once asked for with `available`.
+    pub available: Option<Vec<UniffiAvailablePlugin>>,
+    /// Why the last list could not be read (the lists held are kept).
+    pub error: Option<String>,
+    /// Targets of changes sent and not acknowledged yet.
+    pub busy: Vec<String>,
+    pub failure: Option<UniffiPluginFailure>,
+}
+
+fn to_uniffi_agent_plugins(agent: &str, p: &AgentPlugins) -> UniffiAgentPlugins {
+    UniffiAgentPlugins {
+        agent: agent.to_string(),
+        installed: p
+            .installed
+            .iter()
+            .map(|i| UniffiInstalledPlugin {
+                id: i.id.clone(),
+                name: i.name.clone(),
+                marketplace: i.marketplace.clone(),
+                version: i.version.clone(),
+                description: i.description.clone(),
+                enabled: i.enabled,
+            })
+            .collect(),
+        marketplaces: p.marketplaces.as_ref().map(|list| {
+            list.iter()
+                .map(|m| UniffiPluginMarketplace { name: m.name.clone(), source: m.source.clone() })
+                .collect()
+        }),
+        toggles: p.toggles,
+        available: p.available.as_ref().map(|list| {
+            list.iter()
+                .map(|a| UniffiAvailablePlugin {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    marketplace: a.marketplace.clone(),
+                    description: a.description.clone(),
+                    install_count: a.install_count,
+                })
+                .collect()
+        }),
+        error: p.error.clone(),
+        busy: p.busy.clone(),
+        failure: p.failure.as_ref().map(|f| UniffiPluginFailure {
+            action: wire_str(&f.action),
+            target: f.target.clone(),
+            error: f.error.clone(),
+        }),
+    }
 }
 
 /// The mode / effort / model one agent's new sessions on a machine start
@@ -516,6 +619,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         has_token: p.has_token,
                     })
                     .collect(),
+                plugins: m.plugins.iter().map(|(agent, p)| to_uniffi_agent_plugins(agent, p)).collect(),
                 direct_advertised: m.direct.as_ref().map(|d| d.endpoints.clone()).unwrap_or_default(),
                 direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
                 direct_endpoints: m.direct_endpoints.clone(),

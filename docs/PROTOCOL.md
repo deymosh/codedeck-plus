@@ -61,7 +61,7 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, gsd, interrupt, commands}` and `credentials[]` status. Phones build every
+providers, gsd, interrupt, commands, plugins}` and `credentials[]` status. Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -214,6 +214,29 @@ stopped or command-less session at once. As with `models`, an empty list
 always carries an `error`. A command runs by sending `/name args` as plain
 `input`; the agent's driver turns it into whatever its agent needs.
 
+### `plugins`
+
+For agents with `supports.plugins`, a phone lists and changes the agent's
+plugins on the bridge's machine (all its sessions share them):
+
+- `plugins-request {agent, available?}` → `plugins {agent, installed[],
+  marketplaces?, toggles, available?, error?}`. `installed[]` is `{id, name,
+  marketplace?, version?, description?, enabled}`; `available` (only when
+  asked for) is what the known marketplaces offer and is not installed,
+  `{id, name, marketplace, description?, installCount?}`. An agent without
+  marketplaces — it installs plugins by package name — sends no
+  `marketplaces`; `toggles` says whether a plugin can be switched off without
+  uninstalling it. A list that could not be read comes empty, with `error`.
+- `plugin-action {agent, action, target}` → `plugin-ack {agent, action,
+  target, success, error?}`, then (when done) the new `plugins`, without
+  `available`, to every phone. `action` is `install`, `uninstall`, `enable`,
+  `disable` (target: a plugin `id`, or a package name to install where there
+  are no marketplaces) or `add-marketplace` (target: `owner/repo` or a URL),
+  `remove-marketplace`, `update-marketplace` (target: its name). The bridge
+  refuses a target that is empty, starts with `-` or holds control
+  characters. A change reaches running sessions: Claude Code reloads its
+  plugins in place; OpenCode reloads, restarting its running sessions.
+
 ### Pairing
 
 A pairing window is a time-boxed subscription with **no author filter** — the
@@ -356,6 +379,8 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `list-models {agent}` | `models {models, defaultModel?}` |
 | `get-usage {sessionId}` | `usage {usage?}` |
 | `list-commands {sessionId}` | `commands {commands}` |
+| `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, available?}` |
+| `plugin-action {agent, action, target}` | `plugins {…}` once done, or `error` with the agent's reason |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds

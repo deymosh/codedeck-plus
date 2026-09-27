@@ -291,6 +291,53 @@ fn commands_are_asked_of_the_agent_or_the_phone_is_told_why_not() {
     assert!(commands_reply(&mut rig).is_some_and(|r| r.error.is_some()));
 }
 
+#[test]
+fn plugins_are_listed_and_changed_by_the_agent_host() {
+    use protocol::common::{InstalledPlugin, PluginAction};
+    let mut rig = Rig::new();
+    rig.host_up();
+    let plugin = InstalledPlugin {
+        id: "c@m".into(),
+        name: "c".into(),
+        marketplace: Some("m".into()),
+        version: None,
+        description: None,
+        enabled: true,
+    };
+    let plugins = || HostMessage::Plugins { installed: vec![plugin.clone()], marketplaces: Some(vec![]), toggles: true, available: None };
+
+    rig.send(json!({"type":"plugins-request","agent":"alpha","available":true}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::ListPlugins { .. }));
+    assert!(matches!(msg, BridgeMessage::ListPlugins { ref agent, available: true } if agent == "alpha"));
+    rig.host_reply(&id, plugins());
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.installed.len() == 1 && p.error.is_none())));
+
+    // Done: acknowledged, then the new list for every phone.
+    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"disable","target":" c@m "}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
+    assert!(matches!(msg, BridgeMessage::PluginAction { action: PluginAction::Disable, ref target, .. } if target == "c@m"));
+    rig.host_reply(&id, plugins());
+    let msgs = rig.messages();
+    let ack = msgs.iter().position(|m| matches!(m, BridgeToPhone::PluginAck(a) if a.success && a.target == "c@m"));
+    let list = msgs.iter().position(|m| matches!(m, BridgeToPhone::Plugins(_)));
+    assert!(ack.is_some() && ack < list, "{msgs:?}");
+
+    // Refused by the agent: the reason goes back.
+    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"install","target":"nope@m"}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
+    rig.host_reply(&id, HostMessage::Error { message: "Plugin nope not found".into() });
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::PluginAck(a) if !a.success && a.error.as_deref() == Some("Plugin nope not found"))));
+
+    // A target that would read as an option, or an agent without plugins,
+    // never reaches the host.
+    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"uninstall","target":"--prune"}));
+    rig.send(json!({"type":"plugins-request","agent":"beta"}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::PluginAction { .. } | BridgeMessage::ListPlugins { .. })));
+    let msgs = rig.messages();
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::PluginAck(a) if !a.success && a.target == "--prune")));
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.agent == "beta" && p.error.is_some())));
+}
+
 fn models_error(rig: &mut Rig) -> Option<String> {
     rig.messages().into_iter().find_map(|m| match m {
         BridgeToPhone::Models(x) => Some(x.error.unwrap_or_default()),

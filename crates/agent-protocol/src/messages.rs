@@ -8,8 +8,9 @@
 use std::collections::BTreeMap;
 
 use protocol::common::{
-    AgentSupports, OptionChoice, OutputEntry, PermissionOption, ProviderModel, QuestionOption,
-    SessionOption, Subagent, ToolKind, UsageData,
+    AgentSupports, AvailablePlugin, InstalledPlugin, OptionChoice, OutputEntry, PermissionOption,
+    PluginAction, PluginMarketplace, ProviderModel, QuestionOption, SessionOption, Subagent, ToolKind,
+    UsageData,
 };
 use protocol::events::{ModelEntry, SlashCommand};
 use serde::{Deserialize, Serialize};
@@ -255,6 +256,20 @@ pub enum BridgeMessage {
     /// The slash commands the session understands now (they can change
     /// while it runs: plugins, skills). Reply: `commands`.
     ListCommands { session_id: String },
+    /// The agent's plugins and marketplaces; with `available`, also what the
+    /// marketplaces offer. Reply: `plugins`.
+    ListPlugins {
+        agent: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        available: bool,
+    },
+    /// Change the agent's plugins. Reply: `plugins` once done (without
+    /// `available`), or `error` saying why it was not.
+    PluginAction {
+        agent: String,
+        action: PluginAction,
+        target: String,
+    },
     /// Check a credential value with its provider. Reply: `credential-checked`.
     CheckCredential {
         agent: String,
@@ -294,6 +309,17 @@ pub enum HostMessage {
     },
     /// Reply to `list-commands`.
     Commands { commands: Vec<SlashCommand> },
+    /// Reply to `list-plugins` and `plugin-action` (the fields mean what
+    /// they mean on the phone wire's `plugins`).
+    Plugins {
+        installed: Vec<InstalledPlugin>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        marketplaces: Option<Vec<PluginMarketplace>>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        toggles: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        available: Option<Vec<AvailablePlugin>>,
+    },
     /// Reply to `check-credential`; absent `valid` = it could not be checked.
     CredentialChecked {
         #[serde(default, skip_serializing_if = "Option::is_none")]
