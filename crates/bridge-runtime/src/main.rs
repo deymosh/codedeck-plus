@@ -92,6 +92,13 @@ enum Command {
     Version,
 }
 
+/// The start banner's title art.
+const BANNER: &str = r"   ______          __     ____            __
+  / ____/___  ____/ /__  / __ \___  _____/ /__  __
+ / /   / __ \/ __  / _ \/ / / / _ \/ ___/ //_/_/ /_
+/ /___/ /_/ / /_/ /  __/ /_/ /  __/ /__/ ,< /_  __/
+\____/\____/\__,_/\___/_____/\___/\___/_/|_| /_/";
+
 fn main() -> ExitCode {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,rustls=warn,hyper=warn,hyper_util=warn,reqwest=warn,tungstenite=warn,tokio_tungstenite=warn"),
@@ -186,8 +193,9 @@ fn serve(config: Config, mode: Mode) -> Result<ExitCode, String> {
             config.agent_host_path.display()
         ));
     }
+    println!("{BANNER}");
     println!(
-        "codedeck-bridge {}{}\n  machine:    {} (host: {})\n  npub:       {}\n  relays:     {}{}\n  workspaces: {}\n  paired:     {} phone(s)",
+        "codedeck-bridge {}{}\n  machine:    {} (host: {})\n  npub:       {}\n  relays:     {}{}\n  direct:     {}\n  workspaces: {}\n  paired:     {} phone(s)",
         bridge_runtime::version(),
         if config.test_mode { " — TEST MODE (agents answer canned test commands)" } else { "" },
         config.machine,
@@ -195,6 +203,7 @@ fn serve(config: Config, mode: Mode) -> Result<ExitCode, String> {
         keys.npub,
         config.relays.join(", "),
         if config.tor_proxy.is_some() { " (via Tor)" } else { "" },
+        bridge_runtime::direct::summary(&config.direct),
         roots(&config),
         paired(&state).len(),
     );
@@ -224,6 +233,7 @@ fn status(config: &Config) -> Result<ExitCode, String> {
         format!("  machine:    {} (host: {})", config.machine, config.host_kind.as_wire()),
         format!("  identity:   {identity}"),
         format!("  relays:     {}{}", config.relays.join(", "), if config.tor_proxy.is_some() { " (via Tor)" } else { "" }),
+        format!("  direct:     {}", bridge_runtime::direct::summary(&config.direct)),
         format!("  workspaces: {}", roots(config)),
         format!(
             "  agent host: {}{}",
