@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import org.json.JSONObject
 import uniffi.client_ffi.UniffiIdentitySigner
 import uniffi.client_ffi.UniffiSignerException
+import uniffi.client_ffi.npubOf
 import java.util.UUID
 
 /** Event kinds the core has the identity sign: commands to a bridge, relay
@@ -100,6 +101,12 @@ class Nip55Signer(
 ) : UniffiIdentitySigner {
     private val app = context.applicationContext
 
+    /** The identity as the signer's current user. NIP-55 names pubkeys in
+     *  hex, but a signer that keys its accounts by npub (Amber's approval
+     *  activity) finds the account only from an npub; its content provider
+     *  takes either. */
+    private val currentUser: String = npubOf(pubkeyHex) ?: pubkeyHex
+
     override fun pubkeyHex(): String = pubkeyHex
 
     override fun signEvent(unsignedEventJson: String): String {
@@ -150,7 +157,7 @@ class Nip55Signer(
         val uri = Uri.parse("content://$packageName.$method")
         val cursor: Cursor = try {
             // NIP-55 passes the arguments in the projection slot.
-            app.contentResolver.query(uri, arrayOf(payload, peer, pubkeyHex), null, null, null)
+            app.contentResolver.query(uri, arrayOf(payload, peer, currentUser), null, null, null)
                 ?: return ProviderAnswer.NeedsApproval
         } catch (e: Exception) {
             return ProviderAnswer.Failed(e)
@@ -164,7 +171,7 @@ class Nip55Signer(
             `package` = packageName
             putExtra("type", type)
             putExtra("id", id)
-            putExtra("current_user", pubkeyHex)
+            putExtra("current_user", currentUser)
             if (peer != null) putExtra("pubkey", peer)
         }
         val answer = SignerIntents.request(app, intent, USER_APPROVAL_TIMEOUT_MS)
