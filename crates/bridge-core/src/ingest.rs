@@ -3,11 +3,13 @@
 //!
 //! - Events older than [`MAX_EVENT_AGE_SECS`] are dropped: a relay that does
 //!   not honour `since` must not replay old commands.
-//! - On the standing subscription, only paired phones (and their session
-//!   keys) are heard. The engine checks the author before calling
-//!   [`Ingest::accept`], so a flood from strangers never reaches the dedup
-//!   bookkeeping, cannot evict real ids from the set, and cannot reopen a
-//!   replay window.
+//! - On the standing subscription, only paired phones are heard. The engine
+//!   checks the author before calling [`Ingest::accept`], so a flood from
+//!   strangers never reaches the dedup bookkeeping, cannot evict real ids
+//!   from the set, and cannot reopen a replay window.
+//! - A paired phone's payload is encrypted with one of its live session
+//!   keys, or its identity; the event itself is always signed by the
+//!   identity.
 //! - Event ids are remembered (the last [`MAX_PROCESSED_IDS`]) and persisted:
 //!   a reconnect subscribes with `since` = last seen − 5 s, so the relay
 //!   replays recent commands, and without the ids they would run twice
@@ -76,8 +78,16 @@ impl Ingest {
     }
 
     /// An event from the standing subscription, whose author the caller has
-    /// already found paired.
-    pub fn accept(&mut self, event: &InboundEvent, keys: &Keypair, now_secs: u64) -> Option<PhoneToBridge> {
+    /// already found paired. `session_keys` are the author's live session
+    /// keys, newest first: the payload is encrypted with one of them or with
+    /// the author's identity.
+    pub fn accept(
+        &mut self,
+        event: &InboundEvent,
+        keys: &Keypair,
+        session_keys: &[String],
+        now_secs: u64,
+    ) -> Option<PhoneToBridge> {
         if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
             log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
             return None;
@@ -85,12 +95,13 @@ impl Ingest {
         if !self.mark(&event.id) {
             return None;
         }
-        let plaintext = match decrypt_from(&keys.secret_key, &event.pubkey, &event.content) {
-            Ok(p) => p,
-            Err(err) => {
-                log::info!("[Ingest] Failed to decrypt event {}...: {err}", short(&event.id));
-                return None;
-            }
+        let plaintext = session_keys
+            .iter()
+            .chain(std::iter::once(&event.pubkey))
+            .find_map(|peer| decrypt_from(&keys.secret_key, peer, &event.content).ok());
+        let Some(plaintext) = plaintext else {
+            log::info!("[Ingest] Failed to decrypt event {}...", short(&event.id));
+            return None;
         };
         let msg = match protocol::decode_phone_to_bridge(&plaintext) {
             Ok(msg) => msg,
@@ -170,7 +181,7 @@ mod tests {
             self.event_from(&phone, json, NOW)
         }
         fn accept(&mut self, event: &InboundEvent) -> Option<PhoneToBridge> {
-            self.ingest.accept(event, &self.bridge, NOW)
+            self.ingest.accept(event, &self.bridge, &[], NOW)
         }
     }
 

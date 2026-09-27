@@ -32,8 +32,9 @@ v10 data is carried over (a v11 bridge and app are a fresh install).
 
 All content is NIP-44 encrypted between the bridge keypair and the phone
 keypair — the phone's identity, or a session key it granted (see
-[Session keys](#session-keys)). Identity is ALWAYS the event author's pubkey,
-or the identity that granted the authoring session key — payload claims (e.g.
+[Session keys](#session-keys)). Every event the phone writes is signed by its
+identity, and every event for the phone is `p`-tagged to its identity: identity
+is ALWAYS the event author's pubkey — payload claims (e.g.
 `pair-request.pubkeyHex`) are display-only.
 
 ### Traffic-class subscription rules
@@ -205,32 +206,34 @@ Only a `pair-request` echoing the window's one-time token pairs. A successful
 npub learns where the bridge lives. Rejections (`bad-token`,
 `window-closed`) are answered at most five times per ten minutes. A
 `pair-request` may carry `sessionKey` to grant the first session key with
-the pairing; the `pair-ack` then already goes to that key.
+the pairing; the `pair-ack` is then already encrypted to that key.
 
 ### Session keys
 
 A phone whose identity key lives in an external signer (NIP-55) should not
-ask it to sign and decrypt every message. It grants a local key instead,
-once: `session-key {sessionKey: {pubkeyHex, expiresAt}}` (or `sessionKey`
-on its `pair-request`), written by the identity itself. From then on:
+ask it to decrypt every message. It grants a local key, once:
+`session-key {sessionKey: {pubkeyHex, expiresAt}}` (or `sessionKey` on its
+`pair-request`). A session key only ever keys NIP-44 payloads; it never
+signs. Every event keeps the same parties — the phone signs everything it
+publishes (commands, grants, relay AUTH, image-server auth) with its
+identity, and the bridge `p`-tags everything to the identity — so allowlists
+on relays and image servers only ever see the identity. From the grant on:
 
-- the bridge hears commands authored by the key as the identity's, and adds
-  the key to its command subscription's authors;
-- it encrypts and addresses (`p` tag) everything for that phone to the key.
-  The first heartbeat after the grant is the phone's confirmation;
-- `expiresAt` (seconds) is at most 90 days ahead; a lapsed key is ignored and
-  the identity is addressed again. The phone grants a new key before then;
-  each identity keeps its two newest keys, so commands sent from the previous
-  one while rotating are still heard, and messages go to the newest;
-- a grant from a session key, or naming a key the bridge already knows for
-  anyone (a paired identity, another phone's key, its own), is refused;
-- a write-restricted relay or image server registered for the phone gets
-  the key registered too.
+- the bridge reads a command's payload encrypted with any of the identity's
+  live keys, or with the identity itself;
+- it encrypts everything for that phone to its newest live key. The first
+  heartbeat after the grant is the phone's confirmation;
+- `expiresAt` (seconds) is at most 90 days ahead; a lapsed key is dropped
+  and the identity is encrypted to again. The phone grants a new key before
+  then; each identity keeps its two newest keys, so commands encrypted with
+  the previous one while rotating are still read;
+- an event authored by a session key is not heard (only paired identities
+  are); a grant naming a key the bridge already knows for anyone (a paired
+  identity, another phone's key, its own) is refused.
 
-A phone acts through a session key only with a bridge advertising
-`session-keys`; with any other, it uses its identity for everything. A phone
-receiving a message addressed to its identity from a bridge it granted a key
-learns the bridge has no live key for it, and grants again.
+A phone grants a session key only to a bridge advertising `session-keys`. A
+phone that can decrypt a message from a bridge it granted a key only with
+its identity learns the bridge has no live key for it, and grants again.
 
 ### Capabilities
 
@@ -239,7 +242,7 @@ commands with `v` (+ optional `caps`). What an AGENT can do is catalog data
 (`supports`), not a capability. The bridge's capabilities:
 
 - **hard gates** — `images`: the phone shows image attach only when present;
-  `session-keys`: the phone acts through a session key only when present;
+  `session-keys`: the phone grants a session key only when present;
 - **presence markers** — `sync/1`, `folders`: the feature is detected from
   payload data;
 - **transport beacon** — `chunked`: advertised on both sides, gated by neither.

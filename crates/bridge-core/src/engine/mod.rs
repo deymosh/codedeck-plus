@@ -230,14 +230,14 @@ impl Engine {
         effects
     }
 
-    /// The command subscription to hold: paired phones and their live
-    /// session keys as authors, starting at the ingest cursor. Asked for at
-    /// every (re)connect and after [`Effect::Resubscribe`].
+    /// The command subscription to hold: paired phones as authors, starting
+    /// at the ingest cursor. Asked for at every (re)connect and after
+    /// [`Effect::Resubscribe`].
     pub fn commands_filter(&self) -> CommandsFilter {
-        let now_secs = self.system.now_ms() / 1000;
-        let mut authors = self.phones();
-        authors.extend(session_keys::live_keys(&self.paired, now_secs).map(str::to_string));
-        CommandsFilter { authors, since: since_for_connect(self.ingest.last_seen(), now_secs) }
+        CommandsFilter {
+            authors: self.phones(),
+            since: since_for_connect(self.ingest.last_seen(), self.system.now_ms() / 1000),
+        }
     }
 
     pub fn paired_phones(&self) -> &[PairedPhone] {

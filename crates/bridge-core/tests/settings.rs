@@ -47,7 +47,9 @@ fn pairing_a_phone_end_to_end() {
     let acks: Vec<_> = effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Publish { to, message: BridgeToPhone::PairAck(a) } => Some((to.clone(), a.clone())),
+            Effect::Publish { to, message: BridgeToPhone::PairAck(a) } => {
+                Some((to.iter().map(|a| a.phone.clone()).collect::<Vec<_>>(), a.clone()))
+            }
             _ => None,
         })
         .collect();

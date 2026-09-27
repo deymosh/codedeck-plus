@@ -1,5 +1,5 @@
-//! Session keys through the engine: granting, acting through one, where
-//! messages go, and every refusal.
+//! Session keys through the engine: granting, commands encrypted with one,
+//! how messages are encrypted and addressed, and every refusal.
 
 mod support;
 
@@ -24,37 +24,58 @@ fn grant(rig: &mut Rig, key: &Keypair, expires_at: u64) -> Vec<Effect> {
     rig.take()
 }
 
-fn registered(effects: &[Effect], key: &Keypair) -> bool {
-    effects.iter().any(|e| matches!(e, Effect::RegisterPhone { pubkey_hex, .. } if *pubkey_hex == key.pubkey_hex))
-}
-
-fn heartbeat_recipients(effects: &[Effect]) -> Vec<Vec<String>> {
+/// Each heartbeat's addressees, as `(phone, key)` pairs.
+fn heartbeats(effects: &[Effect]) -> Vec<Vec<(String, String)>> {
     effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Publish { to, message: BridgeToPhone::Sessions(_) } => Some(to.clone()),
+            Effect::Publish { to, message: BridgeToPhone::Sessions(_) } => {
+                Some(to.iter().map(|a| (a.phone.clone(), a.key.clone())).collect())
+            }
             _ => None,
         })
         .collect()
 }
 
+fn to(phone: &Keypair, key: &Keypair) -> Vec<Vec<(String, String)>> {
+    vec![vec![(phone.pubkey_hex.clone(), key.pubkey_hex.clone())]]
+}
+
+/// A refresh from the phone, its payload encrypted with `key`.
+fn refresh_via(rig: &mut Rig, key: &Keypair) {
+    let phone = rig.phone.clone();
+    rig.phone_event_via_key(&phone, key, json!({"type":"refresh-sessions"}), Via::Commands);
+}
+
 #[test]
-fn a_granted_key_is_heard_registered_and_addressed() {
+fn a_granted_key_encrypts_and_the_identity_stays_the_party() {
     let mut rig = Rig::new();
     let key = generate_keypair();
     let effects = grant(&mut rig, &key, NOW_SECS + 30 * DAY);
 
-    assert!(effects.iter().any(|e| matches!(e, Effect::Resubscribe)));
-    assert!(registered(&effects, &key));
-    assert_eq!(heartbeat_recipients(&effects), vec![vec![key.pubkey_hex.clone()]], "the heartbeat confirms the key");
-    let filter = rig.engine.commands_filter();
-    assert!(filter.authors.contains(&rig.phone.pubkey_hex) && filter.authors.contains(&key.pubkey_hex));
+    assert_eq!(heartbeats(&effects), to(&rig.phone, &key), "the heartbeat confirms the key");
+    // Only the identity is ever an author or registered anywhere.
+    assert!(!effects.iter().any(|e| matches!(e, Effect::Resubscribe | Effect::RegisterPhone { .. })));
+    assert_eq!(rig.engine.commands_filter().authors, vec![rig.phone.pubkey_hex.clone()]);
     assert!(rig.store.snapshot()["pairedPhones"].contains(&key.pubkey_hex), "survives a restart");
 
-    // A command written with the key counts as the phone's.
+    // A command the identity signed with the payload under the key is heard.
+    refresh_via(&mut rig, &key);
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
+    // So is one still encrypted with the identity.
+    rig.send(json!({"type":"refresh-sessions"}));
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
+}
+
+#[test]
+fn an_event_signed_by_the_session_key_is_not_heard() {
+    let mut rig = Rig::new();
+    let key = generate_keypair();
+    grant(&mut rig, &key, NOW_SECS + DAY);
     rig.phone_event(&key, json!({"type":"refresh-sessions"}), Via::Commands);
-    let to = heartbeat_recipients(&rig.take());
-    assert_eq!(to, vec![vec![key.pubkey_hex.clone()]]);
+    assert!(heartbeats(&rig.take()).is_empty());
+    rig.phone_event(&key, grant_msg(&generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Commands);
+    assert_eq!(rig.engine.paired_phones()[0].session_keys.len(), 1, "a key cannot grant a key");
 }
 
 #[test]
@@ -63,22 +84,9 @@ fn a_restarted_bridge_keeps_the_key() {
     let key = generate_keypair();
     grant(&mut rig, &key, NOW_SECS + DAY);
     let mut rig = rig.restart();
-    assert!(rig.engine.commands_filter().authors.contains(&key.pubkey_hex));
-    assert_eq!(heartbeat_recipients(&rig.take()), vec![vec![key.pubkey_hex.clone()]], "even the first heartbeat");
-    rig.phone_event(&key, json!({"type":"refresh-sessions"}), Via::Commands);
-    assert_eq!(heartbeat_recipients(&rig.take()), vec![vec![key.pubkey_hex.clone()]]);
-}
-
-#[test]
-fn a_session_key_cannot_grant_a_key() {
-    let mut rig = Rig::new();
-    let key = generate_keypair();
-    grant(&mut rig, &key, NOW_SECS + DAY);
-    let other = generate_keypair();
-    rig.phone_event(&key, grant_msg(&other.pubkey_hex, NOW_SECS + DAY), Via::Commands);
-    let effects = rig.take();
-    assert!(!registered(&effects, &other));
-    assert!(!rig.engine.commands_filter().authors.contains(&other.pubkey_hex));
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key), "even the first heartbeat");
+    refresh_via(&mut rig, &key);
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
 }
 
 #[test]
@@ -93,17 +101,13 @@ fn bad_grants_are_refused() {
     ];
     for (why, key, expires_at) in cases {
         rig.send(grant_msg(&key, expires_at));
-        let effects = rig.take();
-        assert!(
-            !effects.iter().any(|e| matches!(e, Effect::RegisterPhone { .. })),
-            "{why}: refused"
-        );
+        rig.take();
+        assert!(rig.engine.paired_phones()[0].session_keys.is_empty(), "{why}: refused");
     }
-    assert_eq!(rig.engine.commands_filter().authors, vec![rig.phone.pubkey_hex.clone()]);
 }
 
 #[test]
-fn a_grant_cannot_capture_another_phones_traffic() {
+fn a_key_belongs_to_one_phone() {
     let mut rig = Rig::with(RigOptions { paired: false, ..Default::default() });
     let (a, b) = (generate_keypair(), generate_keypair());
     for phone in [&a, &b] {
@@ -125,29 +129,37 @@ fn a_grant_cannot_capture_another_phones_traffic() {
     // A names B's identity, then B's session key, as its own session key.
     for key in [&b.pubkey_hex, &b_key.pubkey_hex] {
         rig.phone_event(&a, grant_msg(key, NOW_SECS + DAY), Via::Commands);
-        assert!(!rig.take().iter().any(|e| matches!(e, Effect::RegisterPhone { .. })));
+        rig.take();
     }
-    // B's traffic is still B's.
-    rig.phone_event(&b_key, json!({"type":"refresh-sessions"}), Via::Commands);
-    let to = heartbeat_recipients(&rig.take());
-    assert_eq!(to, vec![vec![a.pubkey_hex.clone(), b_key.pubkey_hex.clone()]]);
+    let phones = rig.engine.paired_phones();
+    let a_keys = &phones.iter().find(|p| p.pubkey_hex == a.pubkey_hex).unwrap().session_keys;
+    assert!(a_keys.is_empty());
+    // A's messages still go to A; B's to B's key.
+    rig.phone_event(&b, json!({"type":"refresh-sessions"}), Via::Commands);
+    let sent = heartbeats(&rig.take());
+    assert_eq!(
+        sent,
+        vec![vec![
+            (a.pubkey_hex.clone(), a.pubkey_hex.clone()),
+            (b.pubkey_hex.clone(), b_key.pubkey_hex.clone())
+        ]]
+    );
 }
 
 #[test]
-fn the_ring_keeps_the_two_newest_keys_and_addresses_the_newest() {
+fn the_ring_keeps_the_two_newest_keys_and_encrypts_to_the_newest() {
     let mut rig = Rig::new();
     let (k1, k2, k3) = (generate_keypair(), generate_keypair(), generate_keypair());
     for k in [&k1, &k2, &k3] {
         grant(&mut rig, k, NOW_SECS + DAY);
     }
-    let authors = rig.engine.commands_filter().authors;
-    assert!(!authors.contains(&k1.pubkey_hex), "the oldest left the ring");
-    assert!(authors.contains(&k2.pubkey_hex) && authors.contains(&k3.pubkey_hex));
-
-    // The previous key is still heard while the phone rotates...
-    rig.phone_event(&k2, json!({"type":"refresh-sessions"}), Via::Commands);
-    // ...but messages go to the newest.
-    assert_eq!(heartbeat_recipients(&rig.take()), vec![vec![k3.pubkey_hex.clone()]]);
+    // The oldest left the ring: its payloads are unreadable.
+    refresh_via(&mut rig, &k1);
+    assert!(heartbeats(&rig.take()).is_empty());
+    // The previous key is still read while the phone rotates...
+    refresh_via(&mut rig, &k2);
+    // ...but messages are encrypted to the newest.
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &k3));
 }
 
 #[test]
@@ -156,15 +168,14 @@ fn a_lapsed_key_falls_back_to_the_identity() {
     let key = generate_keypair();
     grant(&mut rig, &key, NOW_SECS + 90);
     rig.advance(120_000);
-    let effects = rig.take();
-    assert!(effects.iter().any(|e| matches!(e, Effect::Resubscribe)), "pruned at the heartbeat");
-    assert_eq!(rig.engine.commands_filter().authors, vec![rig.phone.pubkey_hex.clone()]);
+    rig.take();
+    assert!(rig.engine.paired_phones()[0].session_keys.is_empty(), "pruned at the heartbeat");
 
-    // Unheard once lapsed; the identity is addressed again.
-    rig.phone_event(&key, json!({"type":"refresh-sessions"}), Via::Commands);
-    assert!(heartbeat_recipients(&rig.take()).is_empty());
+    // Its payloads are unreadable once lapsed; the identity is used again.
+    refresh_via(&mut rig, &key);
+    assert!(heartbeats(&rig.take()).is_empty());
     rig.send(json!({"type":"refresh-sessions"}));
-    assert_eq!(heartbeat_recipients(&rig.take()), vec![vec![rig.phone.pubkey_hex.clone()]]);
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &rig.phone.clone()));
 }
 
 #[test]
@@ -186,14 +197,18 @@ fn a_pair_request_can_grant_the_first_key() {
     });
     rig.phone_event(&phone, req, Via::Pairing);
     let effects = rig.take();
-    let ack_to: Vec<_> = effects
+    let acks: Vec<_> = effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Publish { to, message: BridgeToPhone::PairAck(a) } if a.ok => Some(to.clone()),
+            Effect::Publish { to, message: BridgeToPhone::PairAck(a) } if a.ok => {
+                Some(to.iter().map(|a| (a.phone.clone(), a.key.clone())).collect::<Vec<_>>())
+            }
             _ => None,
         })
         .collect();
-    assert_eq!(ack_to, vec![vec![key.pubkey_hex.clone()]], "the ack goes to the key");
-    assert!(registered(&effects, &key));
-    assert!(rig.engine.commands_filter().authors.contains(&key.pubkey_hex));
+    assert_eq!(acks, to(&phone, &key), "the ack is already encrypted to the key");
+    // The identity, never the key, is what gets registered.
+    assert!(!effects
+        .iter()
+        .any(|e| matches!(e, Effect::RegisterPhone { pubkey_hex, .. } if *pubkey_hex == key.pubkey_hex)));
 }
