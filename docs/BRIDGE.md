@@ -153,8 +153,9 @@ At start the bridge logs `[Direct] Listening on …` and one
 
 For a phone on Orbot, run an onion service that forwards to
 `direct.onionListen` (Tor: `HiddenServicePort 7448 127.0.0.1:7448`) and add
-`ws://<name>.onion:7448` to the endpoints; the phone only uses `.onion`
-endpoints while Orbot is on. An onion service on another host or container
+`ws://<name>.onion:7448` to the endpoints; the phone dials `.onion`
+endpoints through Orbot (and skips them without it), and LAN or VPN ones
+directly either way. An onion service on another host or container
 (the Compose `codedeck-tor` one) cannot reach that loopback listener: point
 it at the `wss://` listener instead (`HiddenServicePort 7447
 codedeck-bridge:7447`) and advertise `wss://<name>.onion:7447`; the phone

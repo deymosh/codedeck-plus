@@ -163,8 +163,12 @@ link is an extra path beside the relays, never a replacement.
   link when the endpoints, the pin or the Orbot proxy change.
 - `wss://` endpoints are pinned to the advertised certificate (no CA, so
   private addresses and VPN names work); without a pin they are skipped.
-  Cleartext `ws://` goes only to an onion service. While Orbot is on only
-  `.onion` endpoints are dialled, through it; LAN and VPN ones are skipped.
+  Cleartext `ws://` goes only to an onion service. Orbot does not apply to
+  the direct link: it protects the phone from public relays, while a direct
+  endpoint is the user's own bridge on their LAN or VPN, so it is dialled
+  directly with Orbot on or off. `.onion` endpoints are the exception: only
+  Tor reaches them, so they are dialled through Orbot and skipped without
+  it. Falling back to the relays, the phone uses Orbot as usual.
 - The HELLO is signed by the identity, like a relay's AUTH, and resumes from
   the newest event the link has seen (two minutes back on the first
   connection). Events that arrive go through the same dedup and ingest as a

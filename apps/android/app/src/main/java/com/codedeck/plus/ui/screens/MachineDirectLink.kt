@@ -34,7 +34,8 @@ internal fun directLinkStatusText(machine: UniffiMachineSummary): String {
  * relays), the endpoints the bridge advertises, and an editor for the user's
  * own ones (a VPN or MagicDNS name the bridge cannot know), one per line,
  * tried after the advertised ones. The relays stay the fallback whenever no
- * endpoint answers; while Orbot is on only `.onion` endpoints are dialled.
+ * endpoint answers. Orbot does not apply to these (they are the user's own
+ * bridge); only `.onion` ones go through it.
  */
 @Composable
 fun MachineDirectLink(machine: UniffiMachineSummary, dispatch: (UniffiIntent) -> Unit) {
@@ -91,7 +92,7 @@ private fun DirectEndpointsEditor(machine: UniffiMachineSummary, dispatch: (Unif
             Text(
                 if (invalid.isEmpty()) {
                     "One per line: wss://host:port, or ws://….onion:port. Tried after the bridge's own, " +
-                        "with the certificate it pinned; while Orbot is on only .onion ones are used."
+                        "with the certificate it pinned. They skip Orbot; .onion ones go through it."
                 } else {
                     "Not allowed: ${invalid.first()} — use wss://, or ws:// only to an .onion address."
                 },
