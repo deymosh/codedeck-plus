@@ -8,8 +8,9 @@ import com.codedeck.plus.ui.theme.CodeDeckTheme
 import org.junit.Rule
 import org.junit.Test
 
-/** The welcome screen on a tall phone: roomy while it fits, compact once
- *  the import is open and an error shows. */
+/** The welcome screen on a tall phone: centred while it fits, the options
+ *  scrolling between the hero and the footnote once the import is open and
+ *  an error shows. */
 class WelcomeScreenTallSnapshotTest {
 
     @get:Rule
@@ -28,7 +29,7 @@ class WelcomeScreenTallSnapshotTest {
     private val amber = SignerAppInfo("com.greenart7c3.nostrsigner", "Amber")
 
     @Test
-    fun roomy_with_a_signer_installed() {
+    fun with_a_signer_installed() {
         paparazzi.snapshot {
             CodeDeckTheme {
                 WelcomeScreen(
@@ -44,7 +45,7 @@ class WelcomeScreenTallSnapshotTest {
     }
 
     @Test
-    fun tallest_state_turns_compact_to_fit() {
+    fun the_tallest_state_scrolls_only_the_options() {
         paparazzi.snapshot {
             CodeDeckTheme {
                 WelcomeScreen(
