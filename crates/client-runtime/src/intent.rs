@@ -55,7 +55,7 @@ pub struct OutboxSend {
 /// picker/camera/resize API it has into this shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionImageSend {
+pub struct SessionFileSend {
     pub machine: String,
     pub session_id: String,
     pub text: String,
@@ -93,7 +93,7 @@ pub struct IntentResult {
     pub undo_timer: Option<UndoTimer>,
     /// The loop uploads a session image (Blossom-first, chunk fallback) then
     /// publishes the `upload-image` command.
-    pub session_image_send: Option<SessionImageSend>,
+    pub session_file_send: Option<SessionFileSend>,
     /// `pending_sessions` changed — not persisted, so this is the only signal
     /// a `PendingSessionsView` consumer gets that a re-fetch is worth doing.
     pub pending_sessions_changed: bool,
@@ -148,7 +148,7 @@ pub enum Intent {
     /// uploads it to Blossom, falling back to relay chunks, then publishes the
     /// `upload-image` command — no outbox item, no local echo (the transcript
     /// shows it once the bridge injects it, like any other output).
-    SendSessionImage(SessionImageSend),
+    SendSessionFile(SessionFileSend),
 
     // --- optimistic delete (4 s undo) ---
     DeleteSession {
@@ -430,8 +430,8 @@ pub fn apply(
             }
         }
 
-        Intent::SendSessionImage(send) => {
-            r.session_image_send = Some(send);
+        Intent::SendSessionFile(send) => {
+            r.session_file_send = Some(send);
         }
 
         Intent::DeleteSession {

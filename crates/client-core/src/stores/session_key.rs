@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn a_bridge_without_session_keys_is_never_granted() {
         let (ring, _) = SessionKeyRing::load(None, NOW);
-        let s = store(&["images"]);
+        let s = store(&["files"]);
         assert!(!s.wants_session_grant("m", &ring.current, NOW));
         assert!(!s.wants_session_grant("unknown", &ring.current, NOW));
         assert_eq!(s.session_key_of("unknown", NOW), None);

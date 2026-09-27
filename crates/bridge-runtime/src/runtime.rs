@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use bridge_core::ports::{Ports, System};
 use bridge_core::{Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TimerId};
-use protocol::commands::UploadImageMsg;
+use protocol::commands::UploadFileMsg;
 use protocol::crypto::Keypair;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -25,7 +25,7 @@ use crate::state::StateFile;
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
 use crate::gsd::Gsd;
-use crate::images::{self, Images};
+use crate::uploads::{self, Uploads};
 use crate::{qr, work};
 
 /// The real clock, ids and environment.
@@ -94,7 +94,7 @@ struct Runtime {
     timers: HashMap<TimerId, JoinHandle<()>>,
     http: reqwest::Client,
     outcome: Outcome,
-    images: Rc<RefCell<Images>>,
+    uploads: Rc<RefCell<Uploads>>,
     gsd: Rc<Gsd>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
     direct: Option<crate::direct::Direct>,
@@ -164,7 +164,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         timers: HashMap::new(),
         http: work::http_client(),
         outcome: Outcome::Stopped,
-        images: Rc::new(RefCell::new(Images::new(&first_root))),
+        uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
         gsd: Rc::new(gsd),
         pairing_urls: options.pairing_urls,
         direct,
@@ -294,19 +294,19 @@ impl Runtime {
                     let _ = inputs.send(Input::Gsd { session_id, gsd });
                 });
             }
-            Effect::HandleImageUpload(UploadImageMsg::Chunk(chunk)) => {
-                if let Some((session_id, text)) = self.images.borrow_mut().chunk(chunk) {
-                    let _ = self.inputs.send(Input::ImageReady { session_id, text });
+            Effect::HandleFileUpload(UploadFileMsg::Chunk(chunk)) => {
+                if let Some((session_id, text)) = self.uploads.borrow_mut().chunk(chunk) {
+                    let _ = self.inputs.send(Input::FileReady { session_id, text });
                 }
             }
-            Effect::HandleImageUpload(UploadImageMsg::Blossom(msg)) => {
-                let (inputs, images, http) = (self.inputs.clone(), Rc::clone(&self.images), self.http.clone());
+            Effect::HandleFileUpload(UploadFileMsg::Blossom(msg)) => {
+                let (inputs, uploads, http) = (self.inputs.clone(), Rc::clone(&self.uploads), self.http.clone());
                 tokio::task::spawn_local(async move {
-                    match images::fetch_blossom(&http, &msg).await {
+                    match uploads::fetch_blossom(&http, &msg).await {
                         Ok(data) => {
-                            let delivery = images.borrow_mut().finish(&msg.session_id, &msg.filename, &msg.mime_type, &msg.text, &data, &msg.hash);
+                            let delivery = uploads.borrow_mut().finish(&msg.session_id, &msg.filename, &msg.mime_type, &msg.text, &data, &msg.hash);
                             if let Some((session_id, text)) = delivery {
-                                let _ = inputs.send(Input::ImageReady { session_id, text });
+                                let _ = inputs.send(Input::FileReady { session_id, text });
                             }
                         }
                         Err(err) => log::warn!("[Runtime] Image for {} not delivered: {err}", msg.session_id),

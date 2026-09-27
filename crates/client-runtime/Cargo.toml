@@ -17,7 +17,7 @@ name = "client_runtime"
 # `SliceId`, `ActionFailed`, `ConnectionView` (the two derive families
 # compose on the same type with no conflict). `Intent` is NOT covered — a
 # `uniffi::Enum` derive is all-or-nothing for the whole enum, and several
-# variants carry `protocol` wire payloads (e.g. `SendSessionImage`) that
+# variants carry `protocol` wire payloads (e.g. `SendSessionFile`) that
 # would each need their own derive; `crates/client-ffi` instead hand-maps a
 # `UniffiIntent` onto the real `Intent` — a deliberate narrowing from "no
 # DTO duplication", not an oversight. Off by default: derive-only, but still

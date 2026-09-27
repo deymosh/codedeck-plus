@@ -19,7 +19,7 @@
 //! silent wrong mapping. Agent-defined values (modes, efforts, models) are
 //! plain ids the bridge validates.
 
-use client_runtime::intent::{Intent, SessionImageSend};
+use client_runtime::intent::{Intent, SessionFileSend};
 use protocol::commands::{ProviderProfileWrite, QuestionAnswer};
 use protocol::common::{CredentialValues, ProviderModel, SessionOption};
 use protocol::tristate::Tristate;
@@ -111,7 +111,7 @@ pub enum UniffiIntent {
     /// port, falling back to relay chunks, then publishes the `upload-image`
     /// command — no outbox item, no local echo (the transcript shows it once
     /// the bridge injects it, like any other output).
-    SendSessionImage {
+    SendSessionFile {
         machine: String,
         session_id: String,
         /// Caption carried on the input the bridge runs after the upload.
@@ -385,8 +385,8 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SendInput { machine, session_id, text, input_id } => {
                 Intent::SendInput { machine, session_id, text, input_id }
             }
-            UniffiIntent::SendSessionImage { machine, session_id, text, image, filename, mime_type } => {
-                Intent::SendSessionImage(SessionImageSend {
+            UniffiIntent::SendSessionFile { machine, session_id, text, image, filename, mime_type } => {
+                Intent::SendSessionFile(SessionFileSend {
                     machine,
                     session_id,
                     text,
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn send_session_image_maps_field_for_field() {
-        let intent = UniffiIntent::SendSessionImage {
+        let intent = UniffiIntent::SendSessionFile {
             machine: "m".into(),
             session_id: "s".into(),
             text: "look at this".into(),
@@ -559,7 +559,7 @@ mod tests {
         let mapped: Intent = intent.try_into().unwrap();
         assert_eq!(
             mapped,
-            Intent::SendSessionImage(SessionImageSend {
+            Intent::SendSessionFile(SessionFileSend {
                 machine: "m".into(),
                 session_id: "s".into(),
                 text: "look at this".into(),

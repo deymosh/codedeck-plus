@@ -10,7 +10,7 @@ pub mod config;
 pub mod direct;
 pub mod gsd;
 pub mod host;
-pub mod images;
+pub mod uploads;
 pub mod qr;
 pub mod relay;
 pub mod runtime;

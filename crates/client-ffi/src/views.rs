@@ -388,7 +388,7 @@ pub struct UniffiMachineSummary {
     pub name: String,
     pub host: Option<String>,
     pub sessions: Vec<UniffiSessionSummary>,
-    /// Bridge heartbeat capability strings (e.g. `"images"`).
+    /// Bridge heartbeat capability strings (e.g. `"files"`).
     pub capabilities: Vec<String>,
     pub folders: Vec<String>,
     pub roots: Vec<String>,

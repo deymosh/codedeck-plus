@@ -174,7 +174,7 @@ fun SessionScreen(
     // Image attach is gated on the machine advertising the `images`
     // capability in its heartbeat; without the string the attach affordance
     // is not RENDERED at all (a hard gate on the wire, not a hidden one).
-    val canAttachImages = machineSummary?.capabilities?.contains("images") == true
+    val canAttachImages = machineSummary?.capabilities?.contains("files") == true
     // The session's agent as the bridge advertises it: its modes and effort
     // levels are what the controls bar offers.
     val agent = machineSummary?.agents?.firstOrNull { it.id == session?.agent }
@@ -344,7 +344,7 @@ fun SessionScreen(
             val completed = try {
                 withTimeoutOrNull(SESSION_IMAGE_SEND_BACKSTOP_MS) {
                     core.dispatch(
-                        UniffiIntent.SendSessionImage(
+                        UniffiIntent.SendSessionFile(
                             machine = machine,
                             sessionId = sessionId,
                             text = text,

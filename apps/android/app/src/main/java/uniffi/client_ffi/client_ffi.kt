@@ -5438,7 +5438,7 @@ data class UniffiMachineSummary (
     var `sessions`: List<UniffiSessionSummary>
     , 
     /**
-     * Bridge heartbeat capability strings (e.g. `"images"`).
+     * Bridge heartbeat capability strings (e.g. `"files"`).
      */
     var `capabilities`: List<kotlin.String>
     , 
@@ -7301,7 +7301,7 @@ sealed class UniffiIntent {
      * command — no outbox item, no local echo (the transcript shows it once
      * the bridge injects it, like any other output).
      */
-    data class SendSessionImage(
+    data class SendSessionFile(
         val `machine`: kotlin.String, 
         val `sessionId`: kotlin.String, 
         /**
@@ -7891,7 +7891,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            2 -> UniffiIntent.SendSessionImage(
+            2 -> UniffiIntent.SendSessionFile(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
@@ -8096,7 +8096,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`inputId`)
             )
         }
-        is UniffiIntent.SendSessionImage -> {
+        is UniffiIntent.SendSessionFile -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -8481,7 +8481,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`inputId`, buf)
                 Unit
             }
-            is UniffiIntent.SendSessionImage -> {
+            is UniffiIntent.SendSessionFile -> {
                 buf.putInt(2)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
