@@ -461,10 +461,12 @@ fun SessionScreen(
     }
 
     // Refresh the subscription-usage snapshot on open: the bridge only
-    // publishes usage when asked; unsupported SDKs publish nothing and the
-    // header just shows no usage badge.
-    LaunchedEffect(machine, sessionId) {
-        core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
+    // publishes usage when asked. An agent whose catalog entry says it has
+    // no usage is not asked (it would publish nothing); until the catalog
+    // is known the effect waits, and fires once it says yes.
+    val supportsUsage = agent?.supportsUsage == true
+    LaunchedEffect(machine, sessionId, supportsUsage) {
+        if (supportsUsage) core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
     }
 
     // --- Outbox: the "send failed" bar shows this session's oldest failed
@@ -496,6 +498,7 @@ fun SessionScreen(
             machine = machine,
             sessionId = sessionId,
             gsd = session?.gsd,
+            supportsGsd = agent?.supportsGsd == true,
             sessionState = session?.state,
         )
 
