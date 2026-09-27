@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -94,10 +95,12 @@ internal fun Composer(
             Box(Modifier.size(Tokens.Space3))
         }
         if (onSlash != null && draft.isEmpty()) {
-            // Narrower than an icon button, so the placeholder keeps its words.
+            // Narrower than an icon button and tucked against the attach
+            // icon, so the placeholder keeps its words.
             Box(
                 Modifier
-                    .size(width = 36.dp, height = 48.dp)
+                    .offset(x = (-6).dp)
+                    .size(width = 30.dp, height = 48.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onSlash)
                     .semantics { contentDescription = "Start a command" },
