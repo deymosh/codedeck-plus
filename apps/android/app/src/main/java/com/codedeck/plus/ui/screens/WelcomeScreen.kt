@@ -100,9 +100,9 @@ fun WelcomeScreen(
         contentAlignment = Alignment.TopCenter,
     ) {
         val screenHeight = maxHeight
-        // Fits the screen: the hero at the top, the choices at the bottom,
-        // the space between them taking up the slack. It scrolls only when
-        // it cannot fit (the keyboard up for an import, a small screen at a
+        // Fits the screen: the hero and the choices stay together, centred,
+        // any spare height split above and below. It scrolls only when it
+        // cannot fit (the keyboard up for an import, a small screen at a
         // large font size).
         Column(
             Modifier
@@ -112,14 +112,11 @@ fun WelcomeScreen(
                 .verticalScroll(rememberScrollState())
                 .heightIn(min = screenHeight)
                 .padding(horizontal = Tokens.Space5, vertical = Tokens.Space4),
-            verticalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space6, Alignment.CenterVertically),
         ) {
             Hero()
 
-            Column(
-                Modifier.padding(top = Tokens.Space5),
-                verticalArrangement = Arrangement.spacedBy(Tokens.Space3),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
                 SignerCard(signers, busy, onUseSigner)
                 OptionCard(
                     icon = Icons.Outlined.Key,
