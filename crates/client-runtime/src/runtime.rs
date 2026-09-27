@@ -28,7 +28,8 @@ use client_core::connection::{
 };
 use protocol::crypto::Keypair;
 use client_core::notifications::NotifyEffect;
-use protocol::commands::{PhoneToBridge, SessionKeyGrant, SessionKeyMsg};
+use protocol::commands::{PhoneToBridge, SessionKeyGrant, SessionKeyMsg, SyncAckMsg};
+use protocol::ranges::SeqRange;
 use protocol::nostr_event::SignedEvent;
 use protocol::events::BridgeToPhone;
 use protocol::kinds::SESSION_LIST_KIND;
@@ -66,6 +67,11 @@ const KEEPALIVE_PROBE: Duration = Duration::from_secs(10);
 /// stopped, and losing the last few seconds to a crash only means the next
 /// heartbeat or a slightly wider stored-event replay restores them.
 const WRITE_DEBOUNCE: Duration = Duration::from_secs(2);
+/// How long a `sync-ack` waits for the acks of the chunks arriving behind it.
+/// Every command is a signature by the identity, perhaps in another app, and
+/// a bridge sends a sync's chunks back to back: one ack per sync per window
+/// instead of one per chunk. The bridge resends a pass only after 10 s.
+const ACK_BATCH_WINDOW: Duration = Duration::from_millis(500);
 
 // --- clock and entropy ports -----------------------------------------------
 
@@ -374,6 +380,8 @@ impl Core {
             machines_dirty: false,
             stored_seen_dirty: None,
             flush_timer: None,
+            pending_acks: Vec::new(),
+            ack_timer: None,
             self_tx: tx.clone(),
             stores: hydrated.stores,
             kv: ports.kv,
@@ -611,6 +619,8 @@ enum Msg {
     NoteStoredSeen(i64),
     /// The write-debounce window elapsed: flush what is dirty.
     FlushWrites,
+    /// [`ACK_BATCH_WINDOW`] elapsed: send the held sync acks.
+    FlushAcks,
     /// The identity's signer decrypted (or failed to) an event addressed to
     /// the identity.
     IdentityDecrypted {
@@ -768,6 +778,11 @@ struct Loop {
     stored_seen_dirty: Option<i64>,
     /// Pending [`Msg::FlushWrites`] (see [`WRITE_DEBOUNCE`]).
     flush_timer: Option<AbortHandle>,
+    /// Sync acks held for [`ACK_BATCH_WINDOW`]: per machine and sync, the
+    /// chunk ranges to ack, in arrival order.
+    pending_acks: Vec<(String, String, Vec<SeqRange>)>,
+    /// Pending [`Msg::FlushAcks`].
+    ack_timer: Option<AbortHandle>,
     self_tx: mpsc::UnboundedSender<Msg>,
     // --- the composed store layer ---
     stores: CoreStores,
@@ -790,10 +805,12 @@ impl Loop {
                     log::info!("core: Stop (status was {:?})", self.conn.status);
                     self.dispatch(ConnectionEvent::DisconnectRequested);
                     abort(&mut self.stale_timer);
+                    self.flush_acks();
                     self.flush_writes().await;
                 }
                 Msg::Pause => {
                     // Backgrounded: the OS may kill the process from here on.
+                    self.flush_acks();
                     self.flush_writes().await;
                     self.ws.set_ping_interval(BACKGROUND_PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: false });
@@ -859,6 +876,7 @@ impl Loop {
                     self.schedule_flush();
                 }
                 Msg::FlushWrites => self.flush_writes().await,
+                Msg::FlushAcks => self.flush_acks(),
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
                 Msg::PairDeadline => self.on_pair_deadline(),
                 Msg::Intent { intent, reply } => {
@@ -1521,7 +1539,31 @@ impl Loop {
         msg: PhoneToBridge,
         reply: Option<oneshot::Sender<PublishResult>>,
     ) {
-        self.publish_command(machine, msg, reply, None);
+        match (msg, reply) {
+            (PhoneToBridge::SyncAck(ack), None) => self.hold_ack(machine, ack),
+            (msg, reply) => self.publish_command(machine, msg, reply, None),
+        }
+    }
+
+    /// Hold `ack` for [`ACK_BATCH_WINDOW`], merged with the other acks of
+    /// its sync.
+    fn hold_ack(&mut self, machine: String, ack: SyncAckMsg) {
+        match self.pending_acks.iter_mut().find(|(m, id, _)| *m == machine && *id == ack.sync_id) {
+            Some((_, _, ranges)) => ranges.extend(ack.ranges),
+            None => self.pending_acks.push((machine, ack.sync_id, ack.ranges)),
+        }
+        if self.ack_timer.is_none() {
+            self.ack_timer = Some(self.arm(ACK_BATCH_WINDOW.as_millis() as u64, Msg::FlushAcks));
+        }
+    }
+
+    /// Send the held acks now, one command per sync.
+    fn flush_acks(&mut self) {
+        abort(&mut self.ack_timer);
+        for (machine, sync_id, ranges) in std::mem::take(&mut self.pending_acks) {
+            let ack = SyncAckMsg { version: Default::default(), sync_id, ranges };
+            self.publish_command(machine, PhoneToBridge::SyncAck(ack), None, None);
+        }
     }
 
     /// Like [`Self::on_send`] but the publish outcome comes back as
@@ -3521,6 +3563,86 @@ mod tests {
                 core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
                 let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
                 assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+            })
+            .await;
+    }
+
+    /// A local identity that counts its signatures.
+    struct CountingSigner(crate::signer::LocalSigner, Rc<std::cell::Cell<usize>>);
+    impl IdentitySigner for CountingSigner {
+        fn pubkey_hex(&self) -> String {
+            self.0.pubkey_hex()
+        }
+        fn sign_event(&self, event: nostr::UnsignedEvent) -> crate::ports::LocalBoxFuture<'_, Result<nostr::Event, SignerError>> {
+            self.1.set(self.1.get() + 1);
+            self.0.sign_event(event)
+        }
+        fn nip44_encrypt(&self, peer: &str, plaintext: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, SignerError>> {
+            self.0.nip44_encrypt(peer, plaintext)
+        }
+        fn nip44_decrypt(&self, peer: &str, ciphertext: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, SignerError>> {
+            self.0.nip44_decrypt(peer, ciphertext)
+        }
+    }
+
+    /// The identity signs on its own only for a handful of things: a
+    /// refresh per machine on each (re)connect, the sync requests and acks
+    /// that follow, and relay AUTH. A sync's chunks arrive back to back; they
+    /// cost one signed ack, not one each.
+    #[tokio::test]
+    async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let signs = Rc::new(std::cell::Cell::new(0));
+                let core = Core::spawn(
+                    CoreConfig {
+                        relays: vec![mock.url.clone()],
+                        identity: Rc::new(CountingSigner(crate::signer::LocalSigner(phone.clone()), Rc::clone(&signs))),
+                        proxy: None,
+                        tor: false,
+                        reconnect: fast_reconnect(),
+                    },
+                    CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+                    Rc::new(Spy::default()),
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+                core.start();
+                eose_all(&mut mock).await;
+                let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+                assert_eq!(signs.get(), 1, "the reconnect's refresh");
+
+                let decode = |v: serde_json::Value| protocol::codec::decode_bridge_to_phone(&v.to_string()).unwrap();
+                let entry = serde_json::json!({ "timestamp": "t", "entryType": "turn_complete" });
+                let begin = decode(serde_json::json!({
+                    "type": "sync-begin", "sessionId": "s1", "syncId": "y1", "seqHigh": 3, "ranges": [[1, 3]]
+                }));
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &begin);
+                for seq in 1..=3 {
+                    let chunk = decode(serde_json::json!({
+                        "type": "sync-chunk", "sessionId": "s1", "syncId": "y1", "range": [seq, seq],
+                        "entries": [{ "seq": seq, "entry": entry }]
+                    }));
+                    push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &chunk);
+                }
+                let ack = match next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await {
+                    Some(PhoneToBridge::SyncAck(ack)) => ack,
+                    other => panic!("expected a sync-ack, got {other:?}"),
+                };
+                assert_eq!((ack.sync_id.as_str(), ack.ranges), ("y1", vec![(1, 1), (2, 2), (3, 3)]));
+                settle().await;
+                assert_eq!(signs.get(), 2, "one signature for the three chunks");
             })
             .await;
     }

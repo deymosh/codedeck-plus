@@ -72,6 +72,13 @@ until then, and whenever the bridge speaks to the identity again, the
 signer encrypts and decrypts. See
 [`PROTOCOL.md`](PROTOCOL.md#session-keys).
 
+Unprompted by the user, the core asks the identity to sign only: one
+`refresh-sessions` per machine on each (re)connect; the `sync-request`s for
+sessions with gaps and their `sync-ack`s (held 500 ms, so a sync's chunks
+cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
+connection that challenges; and a grant, rarely. Everything else it signs —
+commands, Blossom upload auth — follows a user action.
+
 **Orbot.** A settings toggle routes the relay connections *and* Blossom image
 traffic through Orbot's SOCKS5 proxy (`127.0.0.1:9050`); DNS resolves at the
 proxy, so `.onion` relays work. The app does not launch or manage Orbot, and
