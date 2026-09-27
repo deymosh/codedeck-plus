@@ -77,9 +77,9 @@ class WelcomeScreenSnapshotTest {
     }
 
     /** The tallest the screen gets: two signers, the import open, an error.
-     *  The hero and the footnote stay whole; only the login options scroll. */
+     *  The whole screen scrolls as one page, from its top. */
     @Test
-    fun the_tallest_state_scrolls_only_the_options() {
+    fun the_tallest_state_scrolls_as_one_page() {
         paparazzi.snapshot {
             CodeDeckTheme {
                 WelcomeScreen(

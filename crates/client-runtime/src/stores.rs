@@ -61,6 +61,34 @@ pub struct CoreStores {
 }
 
 impl CoreStores {
+    /// The relays the transport dials: every paired machine's, plus a pairing
+    /// candidate's, which its pair-request and pair-ack travel over.
+    pub fn relay_set(&self) -> Vec<String> {
+        let mut relays = self.machines.relay_set();
+        for relay in self.pairing.candidate.iter().flat_map(|c| &c.relays) {
+            if !relays.contains(relay) {
+                relays.push(relay.clone());
+            }
+        }
+        relays
+    }
+
+    /// Where a command for `machine` is published: its relays, or, for the
+    /// pairing candidate, the relays its pairing named. Empty (every
+    /// connected relay) for a machine that has none on record.
+    pub fn relays_for(&self, machine: &str) -> Vec<String> {
+        match self.machines.machine(machine) {
+            Some(m) => m.relays.clone(),
+            None => self
+                .pairing
+                .candidate
+                .as_ref()
+                .filter(|c| c.pubkey_hex == machine)
+                .map(|c| c.relays.clone())
+                .unwrap_or_default(),
+        }
+    }
+
     /// Human labels for notification text, resolved from the machine view —
     /// notify events themselves only carry machine/session keys. Owned, so
     /// the borrow of `machines` ends before the coordinator's `&mut` emit.
@@ -75,7 +103,8 @@ impl CoreStores {
                     .or_else(|| non_blank(&sv.info.slug))
                     .map(str::to_string)
             }),
-            machine: non_blank(&mv.name).map(str::to_string),
+            // In capitals, as the app shows machine names everywhere.
+            machine: non_blank(&mv.name).map(str::to_uppercase),
             // The catalog's display name; the bare id when the bridge has not
             // advertised the agent (yet).
             agent: session.map(|sv| {
@@ -223,6 +252,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn notification_labels_name_the_machine_in_capitals() {
+        let mut s = hydrate(&MemoryKv::new(), &MemoryTranscriptStore::new(), &StoresConfig::default()).await.stores;
+        s.machines.register_machine("m", "laptop-01", None, None, &[]);
+        assert_eq!(s.notification_labels("m", "s").machine.as_deref(), Some("LAPTOP-01"));
+        assert_eq!(s.notification_labels("unknown", "s"), NotificationLabels::default());
+    }
+
+    #[tokio::test]
     async fn persist_then_hydrate_restores_every_store() {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
@@ -256,7 +293,7 @@ mod tests {
 
         // a persisted machine with one session
         let mut machines = MachinesState::new(Default::default(), MergeOptions::default());
-        machines.register_machine("m", "laptop", None, None);
+        machines.register_machine("m", "laptop", None, None, &[]);
         let info = RemoteSessionInfo {
             id: "s1".into(),
             agent: "claude-code".into(),

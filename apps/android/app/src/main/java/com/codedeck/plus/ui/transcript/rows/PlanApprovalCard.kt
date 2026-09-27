@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import uniffi.client_ffi.UniffiIntent
@@ -35,7 +36,7 @@ fun PlanApprovalCard(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(Tokens.RadiusMd))
+                .clip(RoundedCornerShape(Tokens.RadiusLg))
                 .background(Tokens.SurfaceRaised)
                 .padding(Tokens.Space3),
         ) {
@@ -47,7 +48,7 @@ fun PlanApprovalCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
             .background(Tokens.SurfaceRaised)
             .padding(Tokens.Space3),
     ) {
@@ -75,10 +76,10 @@ private fun PlanOption(label: String, description: String?, onClick: () -> Unit)
             .minimumInteractiveComponentSize()
             .fillMaxWidth()
             .padding(top = Tokens.Space2)
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
+            .clip(RoundedCornerShape(Tokens.RadiusMd + 4.dp))
             .background(Tokens.SurfaceHover)
             .clickable(onClick = onClick)
-            .padding(Tokens.Space2),
+            .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2 + 2.dp),
     ) {
         Text(label, color = Tokens.Text, fontSize = Tokens.TextSm)
         description?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextXs) }

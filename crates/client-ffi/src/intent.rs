@@ -248,12 +248,6 @@ pub enum UniffiIntent {
     /// Cancel a still-open delete window: the deleted session is restored,
     /// the toast hides, and no close-session is ever sent.
     UndoDelete,
-    AddRelay {
-        url: String,
-    },
-    RemoveRelay {
-        url: String,
-    },
     SetTorEnabled {
         enabled: bool,
     },
@@ -265,16 +259,6 @@ pub enum UniffiIntent {
     },
     SetNotificationsEnabled {
         enabled: bool,
-    },
-    /// Preferred mode for new sessions — an agent mode id; `""` = the agent's default.
-    SetDefaultMode {
-        mode: String,
-    },
-    SetDefaultEffort {
-        level: String,
-    },
-    SetDefaultModel {
-        model: String,
     },
     SetUiScale {
         scale: f64,
@@ -312,15 +296,37 @@ pub enum UniffiIntent {
         machine: String,
         endpoints: Vec<String>,
     },
+    /// Replace the relays a machine is reached over; ignored for an empty
+    /// list or a URL that is not a relay.
+    SetMachineRelays {
+        machine: String,
+        relays: Vec<String>,
+    },
+    /// The agent a machine's new sessions start on (`None`: its first).
+    SetDefaultAgent {
+        machine: String,
+        agent: Option<String>,
+    },
+    /// What a new `agent` session on `machine` starts with: agent ids, `""`
+    /// = the agent's own default.
+    SetAgentDefaults {
+        machine: String,
+        agent: String,
+        mode: String,
+        effort: String,
+        model: String,
+    },
     /// Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
     BeginPairing {
         url: String,
         label: String,
     },
-    /// Manual npub + token fallback.
+    /// Manual fallback: the bridge's npub, token and relays (comma or space
+    /// separated).
     BeginManualPairing {
         npub: String,
         token: String,
+        relays: String,
         label: String,
     },
     /// CDX-013: stage a deep-link URL for explicit confirmation before
@@ -446,15 +452,10 @@ impl TryFrom<UniffiIntent> for Intent {
                 Intent::DeleteSession { machine, session_id, label }
             }
             UniffiIntent::UndoDelete => Intent::UndoDelete,
-            UniffiIntent::AddRelay { url } => Intent::AddRelay { url },
-            UniffiIntent::RemoveRelay { url } => Intent::RemoveRelay { url },
             UniffiIntent::SetTorEnabled { enabled } => Intent::SetTorEnabled(enabled),
             UniffiIntent::SetStayConnected { enabled } => Intent::SetStayConnected(enabled),
             UniffiIntent::SetBlossomServer { url } => Intent::SetBlossomServer(url),
             UniffiIntent::SetNotificationsEnabled { enabled } => Intent::SetNotificationsEnabled(enabled),
-            UniffiIntent::SetDefaultMode { mode } => Intent::SetDefaultMode(mode),
-            UniffiIntent::SetDefaultEffort { level } => Intent::SetDefaultEffort(level),
-            UniffiIntent::SetDefaultModel { model } => Intent::SetDefaultModel(model),
             UniffiIntent::SetUiScale { scale } => Intent::SetUiScale(scale),
             UniffiIntent::SetShowUsageBadge { enabled } => Intent::SetShowUsageBadge(enabled),
             UniffiIntent::SetShowCommitBadge { enabled } => Intent::SetShowCommitBadge(enabled),
@@ -468,9 +469,14 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SetDirectEndpoints { machine, endpoints } => {
                 Intent::SetDirectEndpoints { machine, endpoints }
             }
+            UniffiIntent::SetMachineRelays { machine, relays } => Intent::SetMachineRelays { machine, relays },
+            UniffiIntent::SetDefaultAgent { machine, agent } => Intent::SetDefaultAgent { machine, agent },
+            UniffiIntent::SetAgentDefaults { machine, agent, mode, effort, model } => {
+                Intent::SetAgentDefaults { machine, agent, mode, effort, model }
+            }
             UniffiIntent::BeginPairing { url, label } => Intent::BeginPairing { url, label },
-            UniffiIntent::BeginManualPairing { npub, token, label } => {
-                Intent::BeginManualPairing { npub, token, label }
+            UniffiIntent::BeginManualPairing { npub, token, relays, label } => {
+                Intent::BeginManualPairing { npub, token, relays, label }
             }
             UniffiIntent::StagePairing { url } => Intent::StagePairing { url },
             UniffiIntent::ConfirmStagedPairing { label } => Intent::ConfirmStagedPairing { label },

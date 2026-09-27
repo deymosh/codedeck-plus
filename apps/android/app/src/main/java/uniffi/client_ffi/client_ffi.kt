@@ -998,7 +998,7 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_client_ffi_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_client_ffi_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identity`: Pointer,`sessionKeys`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_constructor_core_new(`identity`: Pointer,`sessionKeys`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_client_ffi_fn_method_core_connection_view(`ptr`: Pointer,
     ): Long
@@ -1094,13 +1094,13 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_ffi_fn_func_is_direct_endpoint(`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_client_ffi_fn_func_is_relay_url(`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_client_ffi_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_client_ffi_fn_func_local_identity_signer(`secretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_client_ffi_fn_func_npub_of(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_client_ffi_fn_func_persisted_relays(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1224,13 +1224,13 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_ffi_checksum_func_is_direct_endpoint(
     ): Short
+    fun uniffi_client_ffi_checksum_func_is_relay_url(
+    ): Short
     fun uniffi_client_ffi_checksum_func_is_valid_provider_base_url(
     ): Short
     fun uniffi_client_ffi_checksum_func_local_identity_signer(
     ): Short
     fun uniffi_client_ffi_checksum_func_npub_of(
-    ): Short
-    fun uniffi_client_ffi_checksum_func_persisted_relays(
     ): Short
     fun uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled(
     ): Short
@@ -1324,6 +1324,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_func_is_direct_endpoint() != 27567.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_func_is_relay_url() != 63899.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_func_is_valid_provider_base_url() != 58480.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1333,10 +1336,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_func_npub_of() != 11463.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_func_persisted_relays() != 10018.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled() != 64892.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled() != 30837.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_func_provider_base_url_error() != 4866.toShort()) {
@@ -1441,7 +1441,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_uniffisessionkeystore_save() != 30897.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 30794.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 51685.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2017,11 +2017,11 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
      * Hydration reads the whole local database, so this can take seconds on
      * a slow device: never call it on a UI or service main thread.
      */
-    constructor(`relays`: List<kotlin.String>, `identity`: UniffiIdentitySigner, `sessionKeys`: UniffiSessionKeyStore?, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
+    constructor(`identity`: UniffiIdentitySigner, `sessionKeys`: UniffiSessionKeyStore?, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
         this(
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_constructor_core_new(
-        FfiConverterSequenceString.lower(`relays`),FfiConverterTypeUniffiIdentitySigner.lower(`identity`),FfiConverterOptionalTypeUniffiSessionKeyStore.lower(`sessionKeys`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),FfiConverterString.lower(`dbPath`),FfiConverterOptionalString.lower(`proxy`),FfiConverterBoolean.lower(`tor`),_status)
+        FfiConverterTypeUniffiIdentitySigner.lower(`identity`),FfiConverterOptionalTypeUniffiSessionKeyStore.lower(`sessionKeys`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),FfiConverterString.lower(`dbPath`),FfiConverterOptionalString.lower(`proxy`),FfiConverterBoolean.lower(`tor`),_status)
 }
     )
 
@@ -4294,6 +4294,50 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
 
 
 /**
+ * The mode / effort / model one agent's new sessions on a machine start
+ * with: agent ids, `""` = the agent's own default.
+ */
+data class UniffiAgentDefaults (
+    var `agent`: kotlin.String, 
+    var `mode`: kotlin.String, 
+    var `effort`: kotlin.String, 
+    var `model`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiAgentDefaults: FfiConverterRustBuffer<UniffiAgentDefaults> {
+    override fun read(buf: ByteBuffer): UniffiAgentDefaults {
+        return UniffiAgentDefaults(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiAgentDefaults) = (
+            FfiConverterString.allocationSize(value.`agent`) +
+            FfiConverterString.allocationSize(value.`mode`) +
+            FfiConverterString.allocationSize(value.`effort`) +
+            FfiConverterString.allocationSize(value.`model`)
+    )
+
+    override fun write(value: UniffiAgentDefaults, buf: ByteBuffer) {
+            FfiConverterString.write(value.`agent`, buf)
+            FfiConverterString.write(value.`mode`, buf)
+            FfiConverterString.write(value.`effort`, buf)
+            FfiConverterString.write(value.`model`, buf)
+    }
+}
+
+
+
+/**
  * One agent's live model list on a machine.
  */
 data class UniffiAgentModels (
@@ -4889,7 +4933,32 @@ data class UniffiMachineSummary (
     /**
      * The endpoint the direct link is up on; `None` means the relays.
      */
-    var `directUp`: kotlin.String?
+    var `directUp`: kotlin.String?, 
+    /**
+     * The bridge's npub (its pubkey in the form users see).
+     */
+    var `npub`: kotlin.String, 
+    /**
+     * The relays this machine is reached over.
+     */
+    var `relays`: List<kotlin.String>, 
+    /**
+     * When its last heartbeat arrived (ms), if one has since this start.
+     */
+    var `lastHeartbeatAt`: kotlin.ULong?, 
+    /**
+     * The bridge said it is shutting down, or none of its heartbeats has
+     * arrived since this start.
+     */
+    var `machineOffline`: kotlin.Boolean, 
+    /**
+     * The agent new sessions start on; `None`: the bridge's first.
+     */
+    var `defaultAgent`: kotlin.String?, 
+    /**
+     * What each agent's new sessions start with.
+     */
+    var `agentDefaults`: List<UniffiAgentDefaults>
 ) {
     
     companion object
@@ -4916,6 +4985,12 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeUniffiAgentDefaults.read(buf),
         )
     }
 
@@ -4934,7 +5009,13 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceString.allocationSize(value.`directAdvertised`) +
             FfiConverterBoolean.allocationSize(value.`directPinned`) +
             FfiConverterSequenceString.allocationSize(value.`directEndpoints`) +
-            FfiConverterOptionalString.allocationSize(value.`directUp`)
+            FfiConverterOptionalString.allocationSize(value.`directUp`) +
+            FfiConverterString.allocationSize(value.`npub`) +
+            FfiConverterSequenceString.allocationSize(value.`relays`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastHeartbeatAt`) +
+            FfiConverterBoolean.allocationSize(value.`machineOffline`) +
+            FfiConverterOptionalString.allocationSize(value.`defaultAgent`) +
+            FfiConverterSequenceTypeUniffiAgentDefaults.allocationSize(value.`agentDefaults`)
     )
 
     override fun write(value: UniffiMachineSummary, buf: ByteBuffer) {
@@ -4953,6 +5034,12 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterBoolean.write(value.`directPinned`, buf)
             FfiConverterSequenceString.write(value.`directEndpoints`, buf)
             FfiConverterOptionalString.write(value.`directUp`, buf)
+            FfiConverterString.write(value.`npub`, buf)
+            FfiConverterSequenceString.write(value.`relays`, buf)
+            FfiConverterOptionalULong.write(value.`lastHeartbeatAt`, buf)
+            FfiConverterBoolean.write(value.`machineOffline`, buf)
+            FfiConverterOptionalString.write(value.`defaultAgent`, buf)
+            FfiConverterSequenceTypeUniffiAgentDefaults.write(value.`agentDefaults`, buf)
     }
 }
 
@@ -5724,18 +5811,10 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
 
 
 data class UniffiSettingsView (
-    var `relays`: List<kotlin.String>, 
     var `uiScale`: kotlin.Double, 
     var `stayConnected`: kotlin.Boolean, 
     var `torProxyEnabled`: kotlin.Boolean, 
     var `blossomServer`: kotlin.String, 
-    /**
-     * Preferred mode / effort / model for new sessions: agent ids, `""` =
-     * the agent's default.
-     */
-    var `defaultMode`: kotlin.String, 
-    var `defaultEffort`: kotlin.String, 
-    var `defaultModel`: kotlin.String, 
     var `notificationsEnabled`: kotlin.Boolean, 
     var `showUsageBadge`: kotlin.Boolean, 
     var `showCommitBadge`: kotlin.Boolean
@@ -5750,13 +5829,9 @@ data class UniffiSettingsView (
 public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiSettingsView> {
     override fun read(buf: ByteBuffer): UniffiSettingsView {
         return UniffiSettingsView(
-            FfiConverterSequenceString.read(buf),
             FfiConverterDouble.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -5765,28 +5840,20 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
     }
 
     override fun allocationSize(value: UniffiSettingsView) = (
-            FfiConverterSequenceString.allocationSize(value.`relays`) +
             FfiConverterDouble.allocationSize(value.`uiScale`) +
             FfiConverterBoolean.allocationSize(value.`stayConnected`) +
             FfiConverterBoolean.allocationSize(value.`torProxyEnabled`) +
             FfiConverterString.allocationSize(value.`blossomServer`) +
-            FfiConverterString.allocationSize(value.`defaultMode`) +
-            FfiConverterString.allocationSize(value.`defaultEffort`) +
-            FfiConverterString.allocationSize(value.`defaultModel`) +
             FfiConverterBoolean.allocationSize(value.`notificationsEnabled`) +
             FfiConverterBoolean.allocationSize(value.`showUsageBadge`) +
             FfiConverterBoolean.allocationSize(value.`showCommitBadge`)
     )
 
     override fun write(value: UniffiSettingsView, buf: ByteBuffer) {
-            FfiConverterSequenceString.write(value.`relays`, buf)
             FfiConverterDouble.write(value.`uiScale`, buf)
             FfiConverterBoolean.write(value.`stayConnected`, buf)
             FfiConverterBoolean.write(value.`torProxyEnabled`, buf)
             FfiConverterString.write(value.`blossomServer`, buf)
-            FfiConverterString.write(value.`defaultMode`, buf)
-            FfiConverterString.write(value.`defaultEffort`, buf)
-            FfiConverterString.write(value.`defaultModel`, buf)
             FfiConverterBoolean.write(value.`notificationsEnabled`, buf)
             FfiConverterBoolean.write(value.`showUsageBadge`, buf)
             FfiConverterBoolean.write(value.`showCommitBadge`, buf)
@@ -6490,16 +6557,6 @@ sealed class UniffiIntent {
     object UndoDelete : UniffiIntent()
     
     
-    data class AddRelay(
-        val `url`: kotlin.String) : UniffiIntent() {
-        companion object
-    }
-    
-    data class RemoveRelay(
-        val `url`: kotlin.String) : UniffiIntent() {
-        companion object
-    }
-    
     data class SetTorEnabled(
         val `enabled`: kotlin.Boolean) : UniffiIntent() {
         companion object
@@ -6517,24 +6574,6 @@ sealed class UniffiIntent {
     
     data class SetNotificationsEnabled(
         val `enabled`: kotlin.Boolean) : UniffiIntent() {
-        companion object
-    }
-    
-    /**
-     * Preferred mode for new sessions — an agent mode id; `""` = the agent's default.
-     */
-    data class SetDefaultMode(
-        val `mode`: kotlin.String) : UniffiIntent() {
-        companion object
-    }
-    
-    data class SetDefaultEffort(
-        val `level`: kotlin.String) : UniffiIntent() {
-        companion object
-    }
-    
-    data class SetDefaultModel(
-        val `model`: kotlin.String) : UniffiIntent() {
         companion object
     }
     
@@ -6597,6 +6636,38 @@ sealed class UniffiIntent {
     }
     
     /**
+     * Replace the relays a machine is reached over; ignored for an empty
+     * list or a URL that is not a relay.
+     */
+    data class SetMachineRelays(
+        val `machine`: kotlin.String, 
+        val `relays`: List<kotlin.String>) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * The agent a machine's new sessions start on (`None`: its first).
+     */
+    data class SetDefaultAgent(
+        val `machine`: kotlin.String, 
+        val `agent`: kotlin.String?) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
+     * What a new `agent` session on `machine` starts with: agent ids, `""`
+     * = the agent's own default.
+     */
+    data class SetAgentDefaults(
+        val `machine`: kotlin.String, 
+        val `agent`: kotlin.String, 
+        val `mode`: kotlin.String, 
+        val `effort`: kotlin.String, 
+        val `model`: kotlin.String) : UniffiIntent() {
+        companion object
+    }
+    
+    /**
      * Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
      */
     data class BeginPairing(
@@ -6606,11 +6677,13 @@ sealed class UniffiIntent {
     }
     
     /**
-     * Manual npub + token fallback.
+     * Manual fallback: the bridge's npub, token and relays (comma or space
+     * separated).
      */
     data class BeginManualPairing(
         val `npub`: kotlin.String, 
         val `token`: kotlin.String, 
+        val `relays`: kotlin.String, 
         val `label`: kotlin.String) : UniffiIntent() {
         companion object
     }
@@ -6750,82 +6823,83 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterOptionalString.read(buf),
                 )
             21 -> UniffiIntent.UndoDelete
-            22 -> UniffiIntent.AddRelay(
-                FfiConverterString.read(buf),
-                )
-            23 -> UniffiIntent.RemoveRelay(
-                FfiConverterString.read(buf),
-                )
-            24 -> UniffiIntent.SetTorEnabled(
+            22 -> UniffiIntent.SetTorEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            25 -> UniffiIntent.SetStayConnected(
+            23 -> UniffiIntent.SetStayConnected(
                 FfiConverterBoolean.read(buf),
                 )
-            26 -> UniffiIntent.SetBlossomServer(
+            24 -> UniffiIntent.SetBlossomServer(
                 FfiConverterString.read(buf),
                 )
-            27 -> UniffiIntent.SetNotificationsEnabled(
+            25 -> UniffiIntent.SetNotificationsEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            28 -> UniffiIntent.SetDefaultMode(
-                FfiConverterString.read(buf),
-                )
-            29 -> UniffiIntent.SetDefaultEffort(
-                FfiConverterString.read(buf),
-                )
-            30 -> UniffiIntent.SetDefaultModel(
-                FfiConverterString.read(buf),
-                )
-            31 -> UniffiIntent.SetUiScale(
+            26 -> UniffiIntent.SetUiScale(
                 FfiConverterDouble.read(buf),
                 )
-            32 -> UniffiIntent.SetShowUsageBadge(
+            27 -> UniffiIntent.SetShowUsageBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            33 -> UniffiIntent.SetShowCommitBadge(
+            28 -> UniffiIntent.SetShowCommitBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            34 -> UniffiIntent.AddQuickPrompt(
+            29 -> UniffiIntent.AddQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            35 -> UniffiIntent.UpdateQuickPrompt(
+            30 -> UniffiIntent.UpdateQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            36 -> UniffiIntent.RemoveQuickPrompt(
+            31 -> UniffiIntent.RemoveQuickPrompt(
                 FfiConverterString.read(buf),
                 )
-            37 -> UniffiIntent.DismissPendingSession(
+            32 -> UniffiIntent.DismissPendingSession(
                 FfiConverterString.read(buf),
                 )
-            38 -> UniffiIntent.RemoveMachine(
+            33 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
-            39 -> UniffiIntent.SetDirectEndpoints(
+            34 -> UniffiIntent.SetDirectEndpoints(
                 FfiConverterString.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            40 -> UniffiIntent.BeginPairing(
+            35 -> UniffiIntent.SetMachineRelays(
+                FfiConverterString.read(buf),
+                FfiConverterSequenceString.read(buf),
+                )
+            36 -> UniffiIntent.SetDefaultAgent(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            37 -> UniffiIntent.SetAgentDefaults(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            41 -> UniffiIntent.BeginManualPairing(
+            38 -> UniffiIntent.BeginPairing(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            39 -> UniffiIntent.BeginManualPairing(
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            42 -> UniffiIntent.StagePairing(
+            40 -> UniffiIntent.StagePairing(
                 FfiConverterString.read(buf),
                 )
-            43 -> UniffiIntent.ConfirmStagedPairing(
+            41 -> UniffiIntent.ConfirmStagedPairing(
                 FfiConverterString.read(buf),
                 )
-            44 -> UniffiIntent.DismissStagedPairing
-            45 -> UniffiIntent.ResetPairing
+            42 -> UniffiIntent.DismissStagedPairing
+            43 -> UniffiIntent.ResetPairing
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -7020,20 +7094,6 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 4UL
             )
         }
-        is UniffiIntent.AddRelay -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`url`)
-            )
-        }
-        is UniffiIntent.RemoveRelay -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`url`)
-            )
-        }
         is UniffiIntent.SetTorEnabled -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -7060,27 +7120,6 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             (
                 4UL
                 + FfiConverterBoolean.allocationSize(value.`enabled`)
-            )
-        }
-        is UniffiIntent.SetDefaultMode -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`mode`)
-            )
-        }
-        is UniffiIntent.SetDefaultEffort -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`level`)
-            )
-        }
-        is UniffiIntent.SetDefaultModel -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterString.allocationSize(value.`model`)
             )
         }
         is UniffiIntent.SetUiScale -> {
@@ -7151,6 +7190,33 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterSequenceString.allocationSize(value.`endpoints`)
             )
         }
+        is UniffiIntent.SetMachineRelays -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterSequenceString.allocationSize(value.`relays`)
+            )
+        }
+        is UniffiIntent.SetDefaultAgent -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterOptionalString.allocationSize(value.`agent`)
+            )
+        }
+        is UniffiIntent.SetAgentDefaults -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`agent`)
+                + FfiConverterString.allocationSize(value.`mode`)
+                + FfiConverterString.allocationSize(value.`effort`)
+                + FfiConverterString.allocationSize(value.`model`)
+            )
+        }
         is UniffiIntent.BeginPairing -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -7165,6 +7231,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 4UL
                 + FfiConverterString.allocationSize(value.`npub`)
                 + FfiConverterString.allocationSize(value.`token`)
+                + FfiConverterString.allocationSize(value.`relays`)
                 + FfiConverterString.allocationSize(value.`label`)
             )
         }
@@ -7345,130 +7412,127 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 buf.putInt(21)
                 Unit
             }
-            is UniffiIntent.AddRelay -> {
-                buf.putInt(22)
-                FfiConverterString.write(value.`url`, buf)
-                Unit
-            }
-            is UniffiIntent.RemoveRelay -> {
-                buf.putInt(23)
-                FfiConverterString.write(value.`url`, buf)
-                Unit
-            }
             is UniffiIntent.SetTorEnabled -> {
-                buf.putInt(24)
+                buf.putInt(22)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetStayConnected -> {
-                buf.putInt(25)
+                buf.putInt(23)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetBlossomServer -> {
-                buf.putInt(26)
+                buf.putInt(24)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.SetNotificationsEnabled -> {
-                buf.putInt(27)
+                buf.putInt(25)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.SetDefaultMode -> {
-                buf.putInt(28)
-                FfiConverterString.write(value.`mode`, buf)
-                Unit
-            }
-            is UniffiIntent.SetDefaultEffort -> {
-                buf.putInt(29)
-                FfiConverterString.write(value.`level`, buf)
-                Unit
-            }
-            is UniffiIntent.SetDefaultModel -> {
-                buf.putInt(30)
-                FfiConverterString.write(value.`model`, buf)
-                Unit
-            }
             is UniffiIntent.SetUiScale -> {
-                buf.putInt(31)
+                buf.putInt(26)
                 FfiConverterDouble.write(value.`scale`, buf)
                 Unit
             }
             is UniffiIntent.SetShowUsageBadge -> {
-                buf.putInt(32)
+                buf.putInt(27)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetShowCommitBadge -> {
-                buf.putInt(33)
+                buf.putInt(28)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.AddQuickPrompt -> {
-                buf.putInt(34)
+                buf.putInt(29)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is UniffiIntent.UpdateQuickPrompt -> {
-                buf.putInt(35)
+                buf.putInt(30)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is UniffiIntent.RemoveQuickPrompt -> {
-                buf.putInt(36)
+                buf.putInt(31)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DismissPendingSession -> {
-                buf.putInt(37)
+                buf.putInt(32)
                 FfiConverterString.write(value.`pendingId`, buf)
                 Unit
             }
             is UniffiIntent.RemoveMachine -> {
-                buf.putInt(38)
+                buf.putInt(33)
                 FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
             is UniffiIntent.SetDirectEndpoints -> {
-                buf.putInt(39)
+                buf.putInt(34)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterSequenceString.write(value.`endpoints`, buf)
                 Unit
             }
+            is UniffiIntent.SetMachineRelays -> {
+                buf.putInt(35)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterSequenceString.write(value.`relays`, buf)
+                Unit
+            }
+            is UniffiIntent.SetDefaultAgent -> {
+                buf.putInt(36)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterOptionalString.write(value.`agent`, buf)
+                Unit
+            }
+            is UniffiIntent.SetAgentDefaults -> {
+                buf.putInt(37)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`agent`, buf)
+                FfiConverterString.write(value.`mode`, buf)
+                FfiConverterString.write(value.`effort`, buf)
+                FfiConverterString.write(value.`model`, buf)
+                Unit
+            }
             is UniffiIntent.BeginPairing -> {
-                buf.putInt(40)
+                buf.putInt(38)
                 FfiConverterString.write(value.`url`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.BeginManualPairing -> {
-                buf.putInt(41)
+                buf.putInt(39)
                 FfiConverterString.write(value.`npub`, buf)
                 FfiConverterString.write(value.`token`, buf)
+                FfiConverterString.write(value.`relays`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.StagePairing -> {
-                buf.putInt(42)
+                buf.putInt(40)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ConfirmStagedPairing -> {
-                buf.putInt(43)
+                buf.putInt(41)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.DismissStagedPairing -> {
-                buf.putInt(44)
+                buf.putInt(42)
                 Unit
             }
             is UniffiIntent.ResetPairing -> {
-                buf.putInt(45)
+                buf.putInt(43)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -8315,6 +8379,34 @@ public object FfiConverterSequenceTypeUniffiAgent: FfiConverterRustBuffer<List<U
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeUniffiAgentDefaults: FfiConverterRustBuffer<List<UniffiAgentDefaults>> {
+    override fun read(buf: ByteBuffer): List<UniffiAgentDefaults> {
+        val len = buf.getInt()
+        return List<UniffiAgentDefaults>(len) {
+            FfiConverterTypeUniffiAgentDefaults.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiAgentDefaults>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiAgentDefaults.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiAgentDefaults>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiAgentDefaults.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeUniffiAgentModels: FfiConverterRustBuffer<List<UniffiAgentModels>> {
     override fun read(buf: ByteBuffer): List<UniffiAgentModels> {
         val len = buf.getInt()
@@ -8975,6 +9067,20 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     
 
         /**
+         * Whether the user may add `url` as a machine's relay: `wss://` to any
+         * host, `ws://` only to an onion service — the rule the core applies to
+         * `SetMachineRelays` and pairing.
+         */ fun `isRelayUrl`(`url`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_is_relay_url(
+        FfiConverterString.lower(`url`),_status)
+}
+    )
+    }
+    
+
+        /**
          * CDX-071 gate for a custom provider's base URL, exposed as a plain
          * function so Android validates against the same rule the bridge itself
          * enforces rather than a hand-duplicated regex.
@@ -9015,30 +9121,11 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     
 
         /**
-         * The relay list to pass into [`Core::new`]'s `relays` argument. Pure read,
-         * safe to call before any `Core` exists — opens (and migrates, if it doesn't
-         * exist yet) the same db file `Core::new` will open, so this always reflects
-         * whatever the user actually has persisted (or the shipped defaults, on a
-         * fresh install) instead of a caller-guessed list. `Core::spawn` dials its
-         * WebSocket transport from the constructor argument alone, not from its own
-         * later hydration read, so skipping this call is what leaves a host with no
-         * relays at all — see `db::relays_from_kv`'s doc comment for the full story.
-         */ fun `persistedRelays`(`dbPath`: kotlin.String): List<kotlin.String> {
-            return FfiConverterSequenceString.lift(
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_persisted_relays(
-        FfiConverterString.lower(`dbPath`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * The other half of the same pre-init read, for [`Core::new`]'s `tor`
-         * argument — see [`persisted_relays`]'s doc comment for why a caller must
-         * read this itself rather than relying on anything `Core::spawn` does once
-         * it's already running. `false` (the shipped default) on any read failure,
-         * same fallback shape as `persisted_relays`.
+         * Whether Orbot routing was on when settings were last saved, for
+         * [`Core::new`]'s `tor` argument. Pure read, safe before any `Core` exists:
+         * the proxy must be known before the first relay or Blossom connection,
+         * which `Core::spawn` makes before anything could ask a running core.
+         * `false` (the shipped default) on any read failure.
          */ fun `persistedTorProxyEnabled`(`dbPath`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->

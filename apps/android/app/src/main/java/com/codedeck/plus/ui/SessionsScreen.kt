@@ -12,10 +12,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,19 +26,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxDefaults
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.SwipeToDismissBoxDefaults
-import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,29 +48,42 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.ui.components.AppLogo
+import com.codedeck.plus.ui.components.Chip
+import com.codedeck.plus.ui.components.DeckIcons
+import com.codedeck.plus.ui.components.Dot
+import com.codedeck.plus.ui.components.EmptyState
+import com.codedeck.plus.ui.components.IconAction
+import com.codedeck.plus.ui.components.MachineLabelTracking
+import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.components.ThinkingGlyph
+import com.codedeck.plus.ui.components.topGlow
+import com.codedeck.plus.ui.screens.MachinePresence
+import com.codedeck.plus.ui.screens.machinePresence
+import com.codedeck.plus.ui.screens.machineStatusText
 import com.codedeck.plus.ui.theme.Tokens
-import com.codedeck.plus.ui.theme.connectionColor
 import com.codedeck.plus.ui.theme.presenceColor
 import com.codedeck.plus.ui.theme.stateColor
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import uniffi.client_runtime.CoreEvent
-import uniffi.client_runtime.SliceId
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiPendingSession
 import uniffi.client_ffi.UniffiSessionSummary
+import uniffi.client_runtime.CoreEvent
+import uniffi.client_runtime.SliceId
 
 /** Port of `apps/mobile/src/core/sessionNeedsAttention.ts` — true when the
  *  session is blocked on the user (permission approval or an
@@ -80,15 +95,15 @@ import uniffi.client_ffi.UniffiSessionSummary
 private fun sessionNeedsAttention(state: String?, isUnread: Boolean): Boolean =
     state == "waiting_permission" || state == "waiting_question" || isUnread
 
+/** How often the machines' online/offline status is re-read from their last heartbeat. */
+private const val PRESENCE_TICK_MS = 30_000L
+
 /**
- * The sessions page — the app's home screen: a full-screen, machine-grouped
- * session list with a per-machine "+" for a new session. Port of
- * `apps/mobile/src/ui/Sidebar.tsx` (a side panel there; a page of its own
- * here, never shown beside a session): pending/failed session placeholder
- * cards, pull-to-refresh, swipe-left-to-delete with the shell's undo toast,
- * the attention/unread dot, the committed badge, and the decrypt-failure
- * pairing banner. The card of the core's selected session (the one last
- * opened) keeps a highlight so it is easy to find again.
+ * The home page: every paired machine with its sessions. Pull to refresh
+ * asks each machine for its list again; a session swiped left is deleted
+ * with a few seconds to undo (the shell's toast). The button at the lower
+ * right pairs another machine; with none paired the page is an invitation
+ * to pair the first.
  */
 @Composable
 fun SessionsScreen(
@@ -103,335 +118,364 @@ fun SessionsScreen(
     selectedSession: String?,
     onSelectSession: (machine: String, sessionId: String) -> Unit,
     onNewSession: (machine: String) -> Unit,
+    onOpenMachine: (machine: String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPairing: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier
-            .background(Tokens.Surface)
-            .padding(Tokens.Space3),
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("Sessions", color = Tokens.Text, fontSize = Tokens.TextLg)
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                Box(
-                    Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
-                        .background(Tokens.SurfaceRaised)
-                        .clickable(onClick = onOpenPairing)
-                        .padding(Tokens.Space2),
-                ) {
-                    Icon(
-                        Icons.Outlined.AddCircleOutline,
-                        contentDescription = "Pair a machine",
-                        tint = Tokens.Text,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                Box(
-                    Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
-                        .background(Tokens.SurfaceRaised)
-                        .clickable(onClick = onOpenSettings)
-                        .padding(Tokens.Space2),
-                ) {
-                    Icon(
-                        Icons.Outlined.Settings,
-                        contentDescription = "Settings",
-                        tint = Tokens.Text,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
+    var refreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(PRESENCE_TICK_MS)
+            now = System.currentTimeMillis()
         }
+    }
+    // A fresh heartbeat moves the machine's status at once, not at the next tick.
+    LaunchedEffect(machines) { now = System.currentTimeMillis() }
 
-        // Banners, matching `Sidebar.tsx`'s order: the decrypt-failure /
-        // re-pair warning first, then the plain connection-status banner.
-        if (needsPairingCheck) {
-            Text(
-                "Some messages could not be decrypted — check that this phone is still paired with its bridges.",
-                color = Tokens.Warn,
-                fontSize = Tokens.TextSm,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = Tokens.Space2)
-                    .clip(RoundedCornerShape(Tokens.RadiusMd))
-                    .border(1.dp, Tokens.Warn, RoundedCornerShape(Tokens.RadiusMd))
-                    .padding(Tokens.Space3),
-            )
-        }
-        if (connectionStatus != null && connectionStatus != "connected") {
-            Row(
-                Modifier.fillMaxWidth().padding(top = Tokens.Space2),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
-            ) {
-                PresenceDot(connectionColor(connectionStatus))
-                Text("connection: $connectionStatus", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-            }
-        }
-
-        // Pull-to-refresh: re-request the session list from every paired
-        // machine (the same "refresh each machine" fan-out `Sidebar.tsx`'s
-        // refreshAll does). Dispatch is fire-and-forget, so the spinner stays
-        // up until the first MACHINES slice-changed lands (bounded by a
-        // timeout so a dead network can never pin it).
-        var refreshing by remember { mutableStateOf(false) }
-        val pullScope = rememberCoroutineScope()
-
-        PullToRefreshBox(
-            isRefreshing = refreshing,
-            onRefresh = {
-                if (refreshing || machines.isEmpty()) return@PullToRefreshBox
+    SessionsContent(
+        machines = machines,
+        pendingSessions = pendingSessions,
+        connectionStatus = connectionStatus,
+        needsPairingCheck = needsPairingCheck,
+        showCommitBadge = showCommitBadge,
+        unreadSessions = unreadSessions,
+        selectedMachine = selectedMachine,
+        selectedSession = selectedSession,
+        now = now,
+        refreshing = refreshing,
+        onRefresh = {
+            if (!refreshing && machines.isNotEmpty()) {
                 refreshing = true
-                pullScope.launch {
-                    // Subscribed (UNDISPATCHED runs up to the first
-                    // suspension, i.e. into `first`) before anything is
-                    // dispatched: `events` has no replay, so a reply landing
-                    // before a late subscription would be lost.
+                scope.launch {
+                    // Subscribed before anything is dispatched: `events` has
+                    // no replay, so a reply landing before a late
+                    // subscription would be lost. The spinner stays up until
+                    // the first answer, or 5 s on a dead network.
                     val landed = async(start = CoroutineStart.UNDISPATCHED) {
                         withTimeoutOrNull(5_000) {
-                            core.events.first { event ->
-                                event is CoreEvent.StateChanged && event.slice == SliceId.MACHINES
-                            }
+                            core.events.first { it is CoreEvent.StateChanged && it.slice == SliceId.MACHINES }
                         }
                     }
-                    machines.forEach { machine ->
-                        core.dispatch(UniffiIntent.RefreshSessions(machine.pubkeyHex))
-                    }
+                    machines.forEach { core.dispatch(UniffiIntent.RefreshSessions(it.pubkeyHex)) }
                     landed.await()
                     refreshing = false
                 }
-            },
-            modifier = Modifier.weight(1f).padding(top = Tokens.Space2),
-        ) {
-            LazyColumn(Modifier.fillMaxSize()) {
-                if (machines.isEmpty()) {
-                    item(key = "empty") {
-                        Text(
-                            "No machines paired yet — tap to pair one.",
-                            color = Tokens.TextMuted,
-                            fontSize = Tokens.TextSm,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                                .clickable(onClick = onOpenPairing)
-                                .padding(vertical = Tokens.Space4),
-                        )
-                    }
-                }
+            }
+        },
+        onSelectSession = onSelectSession,
+        onNewSession = onNewSession,
+        onOpenMachine = onOpenMachine,
+        onDeleteSession = { m, id, label -> scope.launch { core.dispatch(UniffiIntent.DeleteSession(m, id, label)) } },
+        onDismissPending = { id -> scope.launch { core.dispatch(UniffiIntent.DismissPendingSession(id)) } },
+        onOpenSettings = onOpenSettings,
+        onOpenPairing = onOpenPairing,
+        modifier = modifier,
+    )
+}
 
-                // Failed pendings that never resolved to a machine
-                // (machine === "") — shown once at the top, not under every
-                // group (`Sidebar.tsx`'s orphanFailed).
-                val orphanFailed = pendingSessions
-                    .filter { it.machine.isBlank() && it.state == "failed" }
-                    .sortedBy { it.seenAt }
-                items(orphanFailed, key = { "orphan-${it.pendingId}" }) { pending ->
-                    PendingSessionCard(
-                        pending = pending,
-                        onDismiss = { dismissId ->
-                            pullScope.launch {
-                                core.dispatch(UniffiIntent.DismissPendingSession(dismissId))
-                            }
-                        },
-                        modifier = Modifier.padding(vertical = Tokens.Space1),
+/** [SessionsScreen]'s page from plain data, so it renders the same in a snapshot. */
+@Composable
+fun SessionsContent(
+    machines: List<UniffiMachineSummary>,
+    pendingSessions: List<UniffiPendingSession>,
+    connectionStatus: String?,
+    needsPairingCheck: Boolean,
+    showCommitBadge: Boolean,
+    unreadSessions: Set<String>,
+    selectedMachine: String?,
+    selectedSession: String?,
+    now: Long,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    onSelectSession: (machine: String, sessionId: String) -> Unit,
+    onNewSession: (machine: String) -> Unit,
+    onOpenMachine: (machine: String) -> Unit,
+    onDeleteSession: (machine: String, sessionId: String, label: String) -> Unit,
+    onDismissPending: (pendingId: String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenPairing: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.fillMaxSize().background(Tokens.Bg).topGlow()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = Tokens.Space5, end = Tokens.Space2, top = Tokens.Space3, bottom = Tokens.Space2),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
+            ) {
+                AppLogo(30.dp)
+                Text(
+                    "CodeDeck+",
+                    color = Tokens.Text,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.3).sp,
+                    modifier = Modifier.weight(1f),
+                )
+                IconAction(Icons.Outlined.Settings, "Settings", onOpenSettings)
+            }
+
+            if (machines.isNotEmpty()) {
+                ConnectionNotice(connectionStatus, needsPairingCheck)
+            }
+
+            if (machines.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    EmptyState(
+                        icon = DeckIcons.PairMachine,
+                        title = "Pair your first machine",
+                        body = "Run codedeck-bridge on your laptop or server, then scan the code it shows. " +
+                            "Its coding agents appear here, ready to drive.",
+                        action = "Pair a machine",
+                        onAction = onOpenPairing,
+                        modifier = Modifier.padding(bottom = Tokens.Space7),
                     )
                 }
-
-                orderedMachines(machines).forEach { machine ->
-                    item(key = "${machine.pubkeyHex}-header", contentType = "header") {
-                        MachineHeader(
-                            machine,
-                            connectionStatus = connectionStatus,
-                            onNewSession = { onNewSession(machine.pubkeyHex) },
-                        )
-                    }
-                    val machinePending = pendingSessions
-                        .filter { it.machine == machine.pubkeyHex }
-                        .sortedBy { it.seenAt }
-                    items(machinePending, key = { "pend-${it.pendingId}" }) { pending ->
-                        PendingSessionCard(
-                            pending = pending,
-                            onDismiss = { dismissId ->
-                                pullScope.launch {
-                                    core.dispatch(UniffiIntent.DismissPendingSession(dismissId))
-                                }
-                            },
-                            modifier = Modifier.padding(vertical = Tokens.Space1),
-                        )
-                    }
-                    val sessions = orderedSessions(machine.sessions)
-                    if (sessions.isEmpty()) {
-                        if (machinePending.isEmpty()) {
-                            item(key = "${machine.pubkeyHex}-empty") {
-                                Text(
-                                    "No sessions — tap + to start one.",
-                                    color = Tokens.TextDim,
-                                    fontSize = Tokens.TextSm,
-                                    modifier = Modifier.padding(vertical = Tokens.Space2),
-                                )
-                            }
-                        }
-                    } else {
-                        items(sessions, key = { "${machine.pubkeyHex}-${it.id}" }) { session ->
-                            val key = sessionKeyOf(machine.pubkeyHex, session.id)
-                            SwipeToDeleteSessionCard(
-                                machine = machine.pubkeyHex,
-                                session = session,
-                                isUnread = key in unreadSessions,
-                                isSelected =
-                                selectedMachine == machine.pubkeyHex && selectedSession == session.id,
-                                showCommitBadge = showCommitBadge,
-                                onClick = { onSelectSession(machine.pubkeyHex, session.id) },
-                                onDelete = { m, id, label ->
-                                    pullScope.launch {
-                                        core.dispatch(UniffiIntent.DeleteSession(m, id, label))
-                                    }
-                                },
-                                // Same vertical rhythm PendingSessionCard already
-                                // uses — without it, adjacent cards in one
-                                // machine group touched with no visible gap
-                                // (device-observed 2026-09-19).
-                                modifier = Modifier.padding(vertical = Tokens.Space1),
-                            )
-                        }
-                    }
+            } else {
+                PullToRefreshBox(
+                    isRefreshing = refreshing,
+                    onRefresh = onRefresh,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                ) {
+                    SessionList(
+                        machines = machines,
+                        pendingSessions = pendingSessions,
+                        showCommitBadge = showCommitBadge,
+                        unreadSessions = unreadSessions,
+                        selectedMachine = selectedMachine,
+                        selectedSession = selectedSession,
+                        now = now,
+                        onSelectSession = onSelectSession,
+                        onNewSession = onNewSession,
+                        onOpenMachine = onOpenMachine,
+                        onDeleteSession = onDeleteSession,
+                        onDismissPending = onDismissPending,
+                    )
                 }
+            }
+        }
+        if (machines.isNotEmpty()) {
+            PairFab(onOpenPairing, Modifier.align(Alignment.BottomEnd).padding(Tokens.Space5))
+        }
+    }
+}
+
+/** The one filled, white button of the page: pair another machine. */
+@Composable
+private fun PairFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(60.dp)
+            .shadow(12.dp, CircleShape, ambientColor = Color.White.copy(alpha = 0.25f), spotColor = Color.White.copy(alpha = 0.25f))
+            .clip(CircleShape)
+            .background(Tokens.Accent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(DeckIcons.PairMachine, contentDescription = "Pair a machine", tint = Tokens.AccentContrast, modifier = Modifier.size(28.dp))
+    }
+}
+
+/** Says why sessions may be out of date: the relays are not reached, or messages fail to decrypt. */
+@Composable
+private fun ConnectionNotice(connectionStatus: String?, needsPairingCheck: Boolean) {
+    val text = when {
+        needsPairingCheck -> "Some messages could not be decrypted. Check this phone is still paired with its machines."
+        connectionStatus == null || connectionStatus == "connected" -> return
+        connectionStatus == "connecting" -> "Connecting…"
+        connectionStatus == "offline" -> "Offline. Sessions update when the network is back."
+        else -> "Reconnecting…"
+    }
+    val color = if (needsPairingCheck) Tokens.Warn else Tokens.TextMuted
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Tokens.Space4, vertical = Tokens.Space1)
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
+            .background(Tokens.SurfaceRaised)
+            .padding(horizontal = Tokens.Space4, vertical = Tokens.Space3),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
+    ) {
+        Dot(if (needsPairingCheck) Tokens.Warn else Tokens.PresenceStale)
+        Text(text, color = color, fontSize = Tokens.TextSm)
+    }
+}
+
+@Composable
+private fun SessionList(
+    machines: List<UniffiMachineSummary>,
+    pendingSessions: List<UniffiPendingSession>,
+    showCommitBadge: Boolean,
+    unreadSessions: Set<String>,
+    selectedMachine: String?,
+    selectedSession: String?,
+    now: Long,
+    onSelectSession: (machine: String, sessionId: String) -> Unit,
+    onNewSession: (machine: String) -> Unit,
+    onOpenMachine: (machine: String) -> Unit,
+    onDeleteSession: (machine: String, sessionId: String, label: String) -> Unit,
+    onDismissPending: (pendingId: String) -> Unit,
+) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        // Room under the last card for the pairing button.
+        contentPadding = PaddingValues(start = Tokens.Space4, end = Tokens.Space4, top = Tokens.Space2, bottom = 104.dp),
+        verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
+    ) {
+        // Failed creates that never reached a machine, once at the top.
+        val orphanFailed = pendingSessions.filter { it.machine.isBlank() && it.state == "failed" }.sortedBy { it.seenAt }
+        items(orphanFailed, key = { "orphan-${it.pendingId}" }) { pending ->
+            PendingSessionCard(pending, onDismissPending)
+        }
+
+        orderedMachines(machines).forEachIndexed { index, machine ->
+            item(key = "${machine.pubkeyHex}-header", contentType = "header") {
+                MachineHeader(
+                    machine = machine,
+                    now = now,
+                    first = index == 0,
+                    onOpen = { onOpenMachine(machine.pubkeyHex) },
+                    onNewSession = { onNewSession(machine.pubkeyHex) },
+                )
+            }
+            val machinePending = pendingSessions.filter { it.machine == machine.pubkeyHex }.sortedBy { it.seenAt }
+            items(machinePending, key = { "pend-${it.pendingId}" }) { pending ->
+                PendingSessionCard(pending, onDismissPending)
+            }
+            val sessions = orderedSessions(machine.sessions)
+            if (sessions.isEmpty() && machinePending.isEmpty()) {
+                item(key = "${machine.pubkeyHex}-empty") {
+                    Text(
+                        "No sessions yet.",
+                        color = Tokens.TextDim,
+                        fontSize = Tokens.TextSm,
+                        modifier = Modifier.padding(horizontal = Tokens.Space2, vertical = Tokens.Space2),
+                    )
+                }
+            }
+            items(sessions, key = { "${machine.pubkeyHex}-${it.id}" }) { session ->
+                SwipeToDeleteSessionCard(
+                    machine = machine.pubkeyHex,
+                    session = session,
+                    agentName = machine.agents.takeIf { it.size > 1 }?.firstOrNull { it.id == session.agent }?.displayName,
+                    isUnread = sessionKeyOf(machine.pubkeyHex, session.id) in unreadSessions,
+                    isSelected = selectedMachine == machine.pubkeyHex && selectedSession == session.id,
+                    showCommitBadge = showCommitBadge,
+                    onClick = { onSelectSession(machine.pubkeyHex, session.id) },
+                    onDelete = onDeleteSession,
+                )
             }
         }
     }
 }
 
-/**
- * Port of mobile `Sidebar.tsx`'s `.groupHeading`: a presence dot, the machine name
- * in caps (`text-transform: uppercase`, bold, letter-spaced, muted — this
- * whole row is a label, not body text), an optional host badge, and the "+".
- */
+/** A machine's name (opens its settings), whether it is up, and starting a session on it. */
 @Composable
-private fun MachineHeader(machine: UniffiMachineSummary, connectionStatus: String?, onNewSession: () -> Unit) {
+private fun MachineHeader(machine: UniffiMachineSummary, now: Long, first: Boolean, onOpen: () -> Unit, onNewSession: () -> Unit) {
+    val presence = machinePresence(machine, now)
     Row(
-        Modifier.fillMaxWidth().padding(vertical = Tokens.Space2),
+        Modifier.fillMaxWidth().padding(top = if (first) Tokens.Space2 else Tokens.Space5, bottom = Tokens.Space1),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        // True per-machine presence (mobile's `connection.presence(pubkey)`,
-        // driven by that machine's own last heartbeat) isn't part of
-        // `UniffiMachinesView` yet — only the overall relay connection
-        // status is. A phone with one bridge paired reads the same either
-        // way; this dot is that honest proxy, not a claim of per-machine
-        // heartbeat freshness.
-        PresenceDot(connectionColor(connectionStatus))
-        Text(
-            machine.name.uppercase(),
-            color = Tokens.TextMuted,
-            fontSize = Tokens.TextXs,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.05.em,
-            modifier = Modifier.weight(1f),
-        )
-        // Which host binary published this machine's heartbeat — "cli" /
-        // "vscode" / "service" (protocol's own `host` enum) — absent on an
-        // older bridge that predates the field.
-        machine.host?.let { host ->
-            Text(
-                host.uppercase(),
-                color = Tokens.TextMuted,
-                fontSize = Tokens.TextXs,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.05.em,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.Text.copy(alpha = 0.03f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-        }
-        Box(
+        Column(
             Modifier
-                .minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.SurfaceRaised)
-                .clickable(onClick = onNewSession)
+                .weight(1f)
+                .clip(RoundedCornerShape(Tokens.RadiusMd))
+                .clickable(onClick = onOpen)
                 .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text("+", color = Tokens.Text, fontSize = Tokens.TextMd)
+            Text(
+                machineLabel(machine.name),
+                color = Tokens.Text,
+                fontSize = Tokens.TextLg,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = MachineLabelTracking,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Dot(presence.color, size = 7.dp)
+                val status = machineStatusText(machine, now) + if (machine.directUp != null) ", direct link" else ""
+                Text(status, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+            }
         }
+        NewSessionPill(enabled = machine.agents.isNotEmpty() || presence == MachinePresence.Online, onClick = onNewSession)
+    }
+}
+
+@Composable
+private fun NewSessionPill(enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .background(Tokens.SurfaceHover)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(start = Tokens.Space3, end = Tokens.Space4),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val color = if (enabled) Tokens.Text else Tokens.TextDim
+        Icon(Icons.Outlined.Add, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+        Text("New session", color = color, fontSize = Tokens.TextSm, fontWeight = FontWeight.Medium)
     }
 }
 
 /**
- * Swipe-left-to-delete wrapper around [SessionCard] — the Compose idiomatic
- * equivalent of `apps/mobile/src/ui/useSwipeToDelete.ts` (left-only translate,
- * ≥threshold commits the optimistic delete, anything less snaps back; mobile
- * animates the card off-screen for 0.2 s before firing the callback, this
- * box's dismiss anchor does the same job). Mobile's 80 CSS px threshold maps
- * to the material positional threshold here.
+ * Swipe-left-to-delete around [SessionCard]: past the threshold the
+ * optimistic delete fires (undoable from the shell's toast), anything less
+ * snaps back.
  */
 @Composable
 private fun SwipeToDeleteSessionCard(
     machine: String,
     session: UniffiSessionSummary,
+    agentName: String?,
     isUnread: Boolean,
     isSelected: Boolean,
     showCommitBadge: Boolean,
     onClick: () -> Unit,
     onDelete: (machine: String, sessionId: String, label: String) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    // The LaunchedEffect below captures these on first composition —
-    // `rememberUpdatedState` keeps a swipe deleting THIS session, not a
-    // stale one.
+    // The effect below captures these on first composition —
+    // `rememberUpdatedState` keeps a swipe deleting THIS session.
     val currentOnDelete by rememberUpdatedState(onDelete)
     val currentSession by rememberUpdatedState(session)
     // Plain `remember`, NOT `rememberSwipeToDismissBoxState` (which is
     // `rememberSaveable`): the list keeps each item key's saveable state after
     // the item leaves, so a session brought back by Undo came back already
-    // swiped away — drawn as its red Delete panel, and the settled
-    // EndToStart value fired the delete below all over again (a fresh toast,
-    // and the close-session sent once that new window ran out). A card that
+    // swiped away, and its settled value fired the delete again. A card that
     // (re)enters the list must always start settled.
     val positionalThreshold = SwipeToDismissBoxDefaults.positionalThreshold
     val dismissState = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold) }
 
-    // Delete fires once a left swipe settles at EndToStart (observing the
-    // value rather than a confirmValueChange veto — deprecated without
-    // replacement in material3). enableDismissFromStartToEnd=false below
-    // leaves Settled and EndToStart as the only reachable values.
+    // Delete fires once a left swipe settles at EndToStart; with
+    // start-to-end disabled that and Settled are the only values.
     LaunchedEffect(dismissState) {
-        snapshotFlow { dismissState.currentValue }
-            .collect { value ->
-                if (value == SwipeToDismissBoxValue.EndToStart) {
-                    val s = currentSession
-                    val label = s.title?.takeIf { it.isNotBlank() }
-                        ?: s.slug.takeIf { it.isNotBlank() }
-                        ?: "Session"
-                    currentOnDelete(machine, s.id, label)
-                }
+        snapshotFlow { dismissState.currentValue }.collect { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                val s = currentSession
+                val label = s.title?.takeIf { it.isNotBlank() } ?: s.slug.takeIf { it.isNotBlank() } ?: "Session"
+                currentOnDelete(machine, s.id, label)
             }
+        }
     }
     SwipeToDismissBox(
         state = dismissState,
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         enableDismissFromStartToEnd = false,
         enableDismissFromEndToStart = true,
         backgroundContent = {
-            // Full-width danger panel behind the card; "Delete" hugs the
-            // right edge and is revealed as the opaque card slides left.
-            // Clipped to the SAME corner radius as `SessionCard` below —
-            // without it, this panel's sharp corners peeked out from behind
-            // the card's rounded ones as a thin red outline even at rest,
-            // fully swiped away or not (device-observed 2026-09-19).
+            // Clipped to the card's own corners, so no red edge shows
+            // around a card at rest.
             Row(
-                Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(Tokens.RadiusMd))
-                    .background(Tokens.Danger),
+                Modifier.fillMaxSize().clip(RoundedCornerShape(Tokens.RadiusLg)).background(Tokens.Danger),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
@@ -445,121 +489,98 @@ private fun SwipeToDeleteSessionCard(
             }
         },
     ) {
-        SessionCard(
-            session = session,
-            isUnread = isUnread,
-            isSelected = isSelected,
-            showCommitBadge = showCommitBadge,
-            onClick = onClick,
-        )
+        SessionCard(session, agentName, isUnread, isSelected, showCommitBadge, onClick)
     }
 }
 
 @Composable
 private fun SessionCard(
     session: UniffiSessionSummary,
+    agentName: String?,
     isUnread: Boolean,
     isSelected: Boolean,
     showCommitBadge: Boolean,
     onClick: () -> Unit,
 ) {
+    val shape = RoundedCornerShape(Tokens.RadiusLg)
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(shape)
             .background(if (isSelected) Tokens.SurfaceHover else Tokens.SurfaceRaised)
+            .border(1.dp, if (isSelected) Tokens.BorderStrong else Tokens.Border, shape)
             .clickable(onClick = onClick)
-            .padding(Tokens.Space3),
+            .padding(start = Tokens.Space3, end = Tokens.Space4, top = Tokens.Space3, bottom = Tokens.Space3),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
     ) {
+        // The state rail: the session's state at the card's edge, bright
+        // while it runs or waits, faint while idle.
+        val idle = session.state == null || session.state == "idle"
         Box(
-            // Full-height, fixed-WIDTH accent bar — modifier order matters
-            // here: `.size(3.dp)` sets an exact 3x3dp box outright, and a
-            // `.fillMaxHeight()` chained after it has nothing left to
-            // stretch (the enclosing `.size()` already fixed both
-            // dimensions). The result was a tiny 3dp square floating
-            // mid-row instead of a bar spanning the card (device-observed
-            // 2026-09-19, the odd gray dot between the title and subtitle
-            // lines). `.fillMaxHeight()` first, `.width()` after, is the
-            // standard Compose idiom for a row-height divider/accent bar.
             Modifier
                 .fillMaxHeight()
+                .heightIn(min = 36.dp)
                 .width(3.dp)
-                .background(stateColor(session.state)),
+                .clip(RoundedCornerShape(Tokens.RadiusPill))
+                .background(stateColor(session.state).copy(alpha = if (idle) 0.35f else 1f)),
         )
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 session.title ?: session.slug.ifBlank { session.id.take(8) },
                 color = Tokens.Text,
-                fontSize = Tokens.TextMd,
+                fontSize = Tokens.TextLg,
+                fontWeight = if (isUnread) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                // One line, so a long cwd fallback cannot balloon the card.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                val where = session.project.ifBlank { session.cwd.substringAfterLast('/').substringAfterLast('\\') }
                 Text(
-                    session.project.ifBlank { session.cwd },
+                    listOfNotNull(where.ifBlank { null }, agentName).joinToString(" · "),
                     color = Tokens.TextMuted,
-                    fontSize = Tokens.TextXs,
+                    fontSize = Tokens.TextSm,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 if (session.presence != "live") {
-                    Text("· ${session.presence}", color = Tokens.TextDim, fontSize = Tokens.TextXs)
+                    Chip(session.presence, color = Tokens.TextDim, border = Tokens.Border)
                 }
                 if (showCommitBadge && session.committed == true) {
-                    Text(
-                        "committed",
-                        color = Tokens.Success,
-                        fontSize = Tokens.TextXs,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(Tokens.RadiusSm))
-                            .background(Tokens.Success.copy(alpha = 0.12f))
-                            .padding(horizontal = Tokens.Space1),
-                    )
+                    Chip("committed", color = Tokens.Success, border = Tokens.Success.copy(alpha = 0.4f))
                 }
             }
         }
-        StatusDot(state = session.state, isUnread = isUnread, presence = session.presence)
+        StatusMark(state = session.state, isUnread = isUnread, presence = session.presence)
     }
 }
 
 /**
- * The card's right-edge dot, mirroring `Sidebar.tsx`'s `StatusDot` priority:
- * the loud attention dot when the session needs the user, the subtle muted
- * dot while it runs, otherwise the card falls back to this app's presence
- * dot (mobile carries presence as a text badge instead — the Android card
- * already had the dot, and it is kept as the idle-state filler).
+ * The card's end mark: the loud attention dot when the session needs the
+ * user, the thinking glyph while it runs, otherwise its presence.
  */
 @Composable
-private fun StatusDot(state: String?, isUnread: Boolean, presence: String) {
+private fun StatusMark(state: String?, isUnread: Boolean, presence: String) {
     // Blocked on the user outranks everything; a running turn outranks mere
-    // unread output (a turn streaming in the background is always "unread",
-    // so it would otherwise always show as a white attention dot).
+    // unread output (a turn streaming in the background is always "unread").
     when {
         state == "waiting_permission" || state == "waiting_question" -> AttentionDot()
         state == "running" -> ThinkingGlyph()
         sessionNeedsAttention(state, isUnread) -> AttentionDot()
-        else -> PresenceDot(presenceColor(presence))
+        else -> Dot(presenceColor(presence).copy(alpha = 0.6f))
     }
 }
 
-/** Solid, high-contrast, scale-only breathing dot (mobile's `.attentionDot`:
- *  opacity stays locked at 1 — a fading pulse reads as "no dot"). The 12 dp
- *  white dot sits inside a 3 dp translucent ring (mobile's box-shadow), and
- *  the whole element breathes on a 1.6 s scale cycle. */
+/** Solid, high-contrast, scale-only breathing dot: opacity stays at 1, since
+ *  a fading pulse reads as no dot at all. */
 @Composable
 private fun AttentionDot() {
     val breathe = rememberInfiniteTransition(label = "attentionBreathe")
     val scale by breathe.animateFloat(
         initialValue = 1f,
         targetValue = 1.12f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 800, easing = EaseInOut),
-            repeatMode = RepeatMode.Reverse,
-        ),
+        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 800, easing = EaseInOut), repeatMode = RepeatMode.Reverse),
         label = "attentionScale",
     )
     Box(
@@ -576,86 +597,48 @@ private fun AttentionDot() {
     )
 }
 
-@Composable
-private fun PresenceDot(color: androidx.compose.ui.graphics.Color) {
-    Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-}
-
 /**
- * A pending-session placeholder card — "Starting session…" while the bridge
- * is creating the session, an error card with the failure reason once it has
- * failed (mobile's `Sidebar.tsx` per-machine block + orphan-failed variant;
- * only the failed card carries a Dismiss action, since a still-pending one
- * may still become real).
+ * A session being created ("Starting…") or whose create failed, with the
+ * reason and a Dismiss — only a failed one can be dismissed, a pending one
+ * may still become real.
  */
 @Composable
-private fun PendingSessionCard(
-    pending: UniffiPendingSession,
-    onDismiss: (pendingId: String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val borderColor = if (pending.state == "failed") Tokens.Danger else Tokens.Border
+private fun PendingSessionCard(pending: UniffiPendingSession, onDismiss: (pendingId: String) -> Unit) {
+    val failed = pending.state == "failed"
+    val shape = RoundedCornerShape(Tokens.RadiusLg)
     Row(
-        modifier
+        Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(shape)
             .background(Tokens.Surface)
-            .border(1.dp, borderColor, RoundedCornerShape(Tokens.RadiusMd))
-            .padding(Tokens.Space3),
+            .border(1.dp, if (failed) Tokens.Danger.copy(alpha = 0.6f) else Tokens.Border, shape)
+            .padding(horizontal = Tokens.Space4, vertical = Tokens.Space3),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
     ) {
-        Column(Modifier.weight(1f)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
-            ) {
-                Text(
-                    if (pending.state == "pending") "Starting session…" else "Session failed",
-                    color = Tokens.Text,
-                    fontSize = Tokens.TextMd,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (pending.state == "pending") {
-                    PillBadge("pending", Tokens.Accent)
-                } else {
-                    PillBadge("failed", Tokens.Warn)
-                }
-            }
-            if (pending.state == "failed") {
-                Text(
-                    pending.reason ?: "unknown reason",
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextSm,
-                )
+        if (!failed) ThinkingGlyph()
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                if (failed) "Session failed to start" else "Starting a session…",
+                color = Tokens.Text,
+                fontSize = Tokens.TextMd,
+                fontWeight = FontWeight.Medium,
+            )
+            if (failed) {
+                Text(pending.reason ?: "The bridge gave no reason.", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
             }
         }
-        if (pending.state == "failed") {
+        if (failed) {
             Text(
                 "Dismiss",
                 color = Tokens.Text,
                 fontSize = Tokens.TextSm,
                 modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.SurfaceRaised)
+                    .clip(RoundedCornerShape(Tokens.RadiusPill))
+                    .background(Tokens.SurfaceHover)
                     .clickable { onDismiss(pending.pendingId) }
-                    .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
             )
         }
     }
-}
-
-/** Rounded outline badge, mirroring `shared.module.css`'s `.badge` family. */
-@Composable
-private fun PillBadge(text: String, color: Color) {
-    Text(
-        text,
-        color = color,
-        fontSize = Tokens.TextXs,
-        modifier = Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .border(1.dp, color, RoundedCornerShape(Tokens.RadiusPill))
-            .padding(horizontal = Tokens.Space2, vertical = 2.dp),
-    )
 }

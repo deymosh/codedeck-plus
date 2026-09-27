@@ -72,21 +72,7 @@ fn settings_from_kv(conn: &Connection) -> client_runtime::client_core::stores::s
     hydrate_settings(raw.as_deref())
 }
 
-/// The relay list `Core::new` will hydrate from this SAME db file once it
-/// opens it — read standalone, before any `Core` exists, so the Android host
-/// can pass a real persisted (or default, on a fresh install) relay list into
-/// `Core::new`'s `relays` constructor argument. Mirrors `apps/mobile`'s own
-/// `createPhoneCoreNative.ts`, which reads `loadPersistedSettings` from its
-/// KV before calling `core.init` for the exact same reason: `Core::spawn`
-/// dials `WsConfig.relays` from the constructor argument, not from whatever
-/// `hydrate()` separately reads once the core is already running, so nothing
-/// short of the caller pre-reading this row would put a persisted relay list
-/// on the wire at boot.
-pub fn relays_from_kv(conn: &Connection) -> Vec<String> {
-    settings_from_kv(conn).relays
-}
-
-/// Same rationale as [`relays_from_kv`], for the OTHER boot-time value
+/// Read standalone, before any `Core` exists, for the boot-time value
 /// `Core::new`'s `tor` argument needs: whether the user had Orbot routing on
 /// last time settings were saved. `Core::spawn`'s own `config.tor` check
 /// (which primes the HTTP port's proxy before the first request) only helps
@@ -385,28 +371,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM transcript", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
-    }
-
-    #[test]
-    fn relays_from_kv_falls_back_to_defaults_on_a_fresh_db() {
-        let (_dir, conn) = open_temp();
-        let defaults = hydrate_settings(None).relays;
-        assert!(!defaults.is_empty());
-        assert_eq!(relays_from_kv(&conn), defaults);
-    }
-
-    #[test]
-    fn relays_from_kv_reads_a_persisted_settings_row() {
-        let (_dir, conn) = open_temp();
-        conn.execute(
-            "INSERT INTO kv (key, value) VALUES (?, ?)",
-            rusqlite::params![
-                SETTINGS_KEY,
-                serde_json::json!({ "relays": ["wss://custom.example"] }).to_string(),
-            ],
-        )
-        .unwrap();
-        assert_eq!(relays_from_kv(&conn), vec!["wss://custom.example".to_string()]);
     }
 
     #[test]

@@ -8,9 +8,8 @@ import com.codedeck.plus.ui.theme.CodeDeckTheme
 import org.junit.Rule
 import org.junit.Test
 
-/** The welcome screen on a tall phone: centred while it fits, the options
- *  scrolling between the hero and the footnote once the import is open and
- *  an error shows. */
+/** The welcome screen on a tall phone: centred while it fits, scrolling as
+ *  one page once the import is open and an error shows. */
 class WelcomeScreenTallSnapshotTest {
 
     @get:Rule
@@ -45,7 +44,7 @@ class WelcomeScreenTallSnapshotTest {
     }
 
     @Test
-    fun the_tallest_state_scrolls_only_the_options() {
+    fun the_tallest_state_scrolls_as_one_page() {
         paparazzi.snapshot {
             CodeDeckTheme {
                 WelcomeScreen(

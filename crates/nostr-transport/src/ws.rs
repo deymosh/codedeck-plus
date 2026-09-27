@@ -557,6 +557,18 @@ impl WsTransport {
         budget: Duration,
         attempts: u32,
     ) -> PublishResult {
+        self.publish_confirmed_to(event, &[], budget, attempts).await
+    }
+
+    /// [`Self::publish_confirmed`] to the connected relays among `relays`
+    /// only; an empty `relays` means every connected relay.
+    pub async fn publish_confirmed_to(
+        &self,
+        event: &SignedEvent,
+        relays: &[String],
+        budget: Duration,
+        attempts: u32,
+    ) -> PublishResult {
         let deadline = tokio::time::Instant::now() + budget;
         let mut last = PublishResult {
             verdict: PublishVerdict::Unreachable,
@@ -568,17 +580,10 @@ impl WsTransport {
             if now >= deadline {
                 break;
             }
-            let targets: Vec<String> = {
-                let st = self.state.borrow();
-                st.conns
-                    .iter()
-                    .filter(|(_, c)| c.up)
-                    .map(|(r, _)| r.clone())
-                    .collect()
+            let targets = match self.up_targets(relays, deadline).await {
+                Some(targets) => targets,
+                None => return last,
             };
-            if targets.is_empty() {
-                return last;
-            }
 
             let (tx, rx) = oneshot::channel();
             {
@@ -621,6 +626,32 @@ impl WsTransport {
     }
 
     // --- internals ---------------------------------------------------
+
+    /// The connected relays among `relays` (all of them when empty). While
+    /// none is up but one of them is configured — being dialled, say, right
+    /// after a pairing added it, or waiting to be redialled — waits for one
+    /// until `deadline`: a command
+    /// sent to a relay that is still connecting is not unreachable. `None`
+    /// when none came up.
+    async fn up_targets(&self, relays: &[String], deadline: tokio::time::Instant) -> Option<Vec<String>> {
+        const POLL: Duration = Duration::from_millis(100);
+        loop {
+            let (targets, configured) = {
+                let st = self.state.borrow();
+                let wanted = |r: &String| relays.is_empty() || relays.contains(r);
+                let targets: Vec<String> =
+                    st.conns.iter().filter(|(r, c)| c.up && wanted(r)).map(|(r, _)| r.clone()).collect();
+                (targets, st.active && st.relays.iter().any(wanted))
+            };
+            if !targets.is_empty() {
+                return Some(targets);
+            }
+            if !configured || tokio::time::Instant::now() + POLL >= deadline {
+                return None;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    }
 
     fn spawn_relay(&self, relay: String) {
         let (tx, rx) = mpsc::channel::<Message>(OUTBOUND_QUEUE);
@@ -1580,6 +1611,50 @@ mod tests {
 
                 let result = handle.await.unwrap();
                 assert_eq!(result.verdict, PublishVerdict::Rejected);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_targeted_publish_skips_connected_relays_outside_its_list() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.ensure_connected();
+                let _sub = t.subscribe(
+                    a_filter(&phone),
+                    SubCallbacks {
+                        on_event: Rc::new(|_| {}),
+                        on_eose: Rc::new(|| {}),
+                        on_close: Rc::new(|_| {}),
+                    },
+                );
+                let _req = mock.next_frame().await;
+
+                let keys = nostr::Keys::new(phone.secret_key.clone());
+                let signed = nostr::EventBuilder::new(nostr::Kind::Custom(4515), "payload")
+                    .sign_with_keys(&keys)
+                    .unwrap();
+                let event = SignedEvent::from_nostr(&signed);
+
+                let elsewhere = vec!["wss://another-machine.example".to_string()];
+                let result = t.publish_confirmed_to(&event, &elsewhere, Duration::from_secs(1), 1).await;
+                assert_eq!(result.verdict, PublishVerdict::Unreachable);
+                assert_eq!(mock.frame_within(Duration::from_millis(200)).await, None, "nothing sent to the connected relay");
+
+                let here = vec![mock.url.clone()];
+                let pt = t.clone();
+                let handle = tokio::task::spawn_local(async move {
+                    pt.publish_confirmed_to(&event, &here, Duration::from_secs(3), 1).await
+                });
+                let sent = mock.next_frame().await;
+                let v: Vec<Value> = serde_json::from_str(&sent).unwrap();
+                assert_eq!(v[0], "EVENT");
+                let id = v[1]["id"].as_str().unwrap().to_string();
+                mock.push(format!(r#"["OK","{id}",true,""]"#));
+                assert_eq!(handle.await.unwrap().verdict, PublishVerdict::Accepted);
             })
             .await;
     }

@@ -11,10 +11,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.UnfoldMore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -84,11 +91,11 @@ fun SelectField(
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
             modifier = Modifier
                 .minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(Tokens.RadiusSm))
-                .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
-                .background(Tokens.SurfaceInput)
+                .widthIn(max = 220.dp)
+                .clip(RoundedCornerShape(Tokens.RadiusPill))
+                .background(Tokens.SurfaceHover)
                 .clickable(enabled = enabled) { open = true }
-                .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
+                .padding(start = Tokens.Space3, end = Tokens.Space2, top = 6.dp, bottom = 6.dp),
         ) {
             Text(
                 currentLabel,
@@ -98,13 +105,17 @@ fun SelectField(
                     else -> Tokens.Text
                 },
                 fontSize = Tokens.TextSm,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
-            // The trigger otherwise looks like plain bordered text, not
-            // something tappable — a small affordance glyph, the same plain-
-            // Unicode-glyph idiom this app already uses for its other
-            // chrome (SessionsScreen's "+", NavChevron's "‹"/"›") rather than
-            // pulling in a Material icon for one character.
-            Text("▾", color = if (enabled) Tokens.TextMuted else Tokens.TextDim, fontSize = Tokens.TextXs)
+            // Says the value is a choice, not plain text.
+            Icon(
+                Icons.Outlined.UnfoldMore,
+                contentDescription = null,
+                tint = if (enabled) Tokens.TextMuted else Tokens.TextDim,
+                modifier = Modifier.size(16.dp),
+            )
         }
         if (open) {
             Dialog(
@@ -118,10 +129,10 @@ fun SelectField(
                         Modifier
                             .width(sheetWidth)
                             .heightIn(max = sheetMaxHeight)
-                            .clip(RoundedCornerShape(Tokens.RadiusMd))
+                            .clip(RoundedCornerShape(Tokens.RadiusXl))
                             .background(Tokens.SurfaceRaised)
-                            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusMd))
-                            .padding(vertical = Tokens.Space1),
+                            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusXl))
+                            .padding(vertical = Tokens.Space2),
                     ) {
                         Column(Modifier.verticalScroll(rememberScrollState())) {
                             options.forEach { option ->
@@ -135,20 +146,22 @@ fun SelectField(
                                             onSelect(option.value)
                                         }
                                         .padding(
-                                            horizontal = Tokens.Space3,
-                                            vertical = Tokens.Space2,
+                                            horizontal = Tokens.Space4,
+                                            vertical = Tokens.Space3,
                                         ),
                                 ) {
                                     Text(
                                         option.label,
                                         // The chosen value reads at a glance in a
-                                        // long list (a native select sheet marks it
-                                        // the same way); everything else stays the
-                                        // plain body color.
-                                        color = if (isSelected) Tokens.Accent else Tokens.Text,
-                                        fontWeight = if (isSelected) FontWeight.Bold else null,
-                                        fontSize = Tokens.TextSm,
+                                        // long list: bolder, and checked.
+                                        color = Tokens.Text,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else null,
+                                        fontSize = Tokens.TextMd,
+                                        modifier = Modifier.weight(1f),
                                     )
+                                    if (isSelected) {
+                                        Icon(Icons.Outlined.Check, contentDescription = "Selected", tint = Tokens.Text, modifier = Modifier.size(18.dp))
+                                    }
                                 }
                             }
                         }

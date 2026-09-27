@@ -22,6 +22,7 @@ use protocol::common::{
 use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
 use super::fetches::Fetches;
+use super::pairing::is_relay_url;
 use super::session_key::SessionGrant;
 use protocol::direct::DirectInfo;
 
@@ -252,6 +253,39 @@ pub struct MachineView {
     /// bridge cannot know, say), tried after the advertised ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub direct_endpoints: Vec<String>,
+    /// The relays this bridge is reached over: learned when pairing (its
+    /// pairing link and pair-ack), editable by the user. The phone listens on
+    /// every paired machine's relays and sends each command only to its
+    /// machine's; it has no relays of its own.
+    #[serde(default)]
+    pub relays: Vec<String>,
+    /// The agent the new-session screen starts on (`None`: the bridge's
+    /// first one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
+    /// Per agent id, what a new session on this machine starts with.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_defaults: BTreeMap<String, AgentDefaults>,
+}
+
+/// The mode / effort / model a new session of one agent starts with, as that
+/// agent's own ids; `""` leaves it to the agent. Applied only while the agent
+/// still offers the id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDefaults {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+impl AgentDefaults {
+    fn is_empty(&self) -> bool {
+        self.mode.is_empty() && self.effort.is_empty() && self.model.is_empty()
+    }
 }
 
 /// One agent's live model list on one machine. `models` stays `None` until
@@ -295,6 +329,9 @@ impl MachineView {
             session_grant_sent: None,
             direct: None,
             direct_endpoints: Vec::new(),
+            relays: Vec::new(),
+            default_agent: None,
+            agent_defaults: BTreeMap::new(),
         }
     }
 }
@@ -383,13 +420,15 @@ impl MachinesState {
     }
 
     /// Upsert a machine record (pair-ack). An existing record keeps its fields;
-    /// only `name` (and `label` / `host` when given) update.
+    /// only `name` (and `label` / `host` when given) update, and `relays` the
+    /// pairing learned are added to the ones it has.
     pub fn register_machine(
         &mut self,
         pubkey_hex: &str,
         name: &str,
         label: Option<String>,
         host: Option<BridgeHostKind>,
+        relays: &[String],
     ) {
         let entry = self
             .machines
@@ -402,6 +441,64 @@ impl MachinesState {
         if let Some(h) = host {
             entry.host = Some(h);
         }
+        for relay in relays {
+            if !entry.relays.contains(relay) {
+                entry.relays.push(relay.clone());
+            }
+        }
+    }
+
+    /// Every paired machine's relays, deduplicated, in machine order.
+    pub fn relay_set(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for relay in self.machines.values().flat_map(|m| &m.relays) {
+            if !out.contains(relay) {
+                out.push(relay.clone());
+            }
+        }
+        out
+    }
+
+    /// Replace `machine`'s relays. Returns false (and changes nothing) for an
+    /// unknown machine, an empty list — a machine must stay reachable — or a
+    /// URL that is not a relay the phone may dial.
+    pub fn set_relays(&mut self, machine_pubkey: &str, relays: Vec<String>) -> bool {
+        let mut clean: Vec<String> = Vec::new();
+        for relay in relays.into_iter().map(|r| r.trim().to_string()).filter(|r| !r.is_empty()) {
+            if !is_relay_url(&relay) {
+                return false;
+            }
+            if !clean.contains(&relay) {
+                clean.push(relay);
+            }
+        }
+        if clean.is_empty() {
+            return false;
+        }
+        self.with_machine(machine_pubkey, |m| m.relays = clean)
+    }
+
+    /// The agent `machine`'s new sessions start on; `None` clears it.
+    pub fn set_default_agent(&mut self, machine_pubkey: &str, agent: Option<String>) -> bool {
+        let agent = agent.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+        self.with_machine(machine_pubkey, |m| m.default_agent = agent)
+    }
+
+    /// What a new `agent` session on `machine` starts with; all-empty
+    /// forgets the entry.
+    pub fn set_agent_defaults(&mut self, machine_pubkey: &str, agent: &str, defaults: AgentDefaults) -> bool {
+        let defaults = AgentDefaults {
+            mode: defaults.mode.trim().to_string(),
+            effort: defaults.effort.trim().to_string(),
+            model: defaults.model.trim().to_string(),
+        };
+        self.with_machine(machine_pubkey, |m| {
+            if defaults.is_empty() {
+                m.agent_defaults.remove(agent);
+            } else {
+                m.agent_defaults.insert(agent.to_string(), defaults);
+            }
+        })
     }
 
     pub fn remove_machine(&mut self, pubkey_hex: &str) -> bool {
@@ -1112,7 +1209,7 @@ mod tests {
     #[test]
     fn title_guard_covers_upsert_and_replaced() {
         let mut st = MachinesState::default();
-        st.register_machine("m1", "m1", None, None);
+        st.register_machine("m1", "m1", None, None, &[]);
         st.apply_session_upsert("m1", &info("s1"), 0);
         st.note_first_user_message("m1", "s1", "stopgap");
 
@@ -1129,7 +1226,7 @@ mod tests {
     #[test]
     fn note_first_user_message_only_titles_an_untitled_known_session_once() {
         let mut st = MachinesState::default();
-        st.register_machine("m1", "m1", None, None);
+        st.register_machine("m1", "m1", None, None, &[]);
         st.apply_session_upsert("m1", &info("s1"), 0);
 
         st.note_first_user_message("m1", "UNKNOWN", "hi");
@@ -1156,12 +1253,56 @@ mod tests {
     }
 
     #[test]
+    fn relays_are_per_machine_learned_at_pairing_and_editable() {
+        let mut st = MachinesState::default();
+        let r = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        st.register_machine("pk1", "M1", None, None, &r(&["wss://a", "wss://b"]));
+        st.register_machine("pk2", "M2", None, None, &r(&["wss://b", "wss://c"]));
+        // Re-pairing adds what it learned, keeps what was there.
+        st.register_machine("pk1", "M1", None, None, &r(&["wss://d"]));
+        assert_eq!(st.machine("pk1").unwrap().relays, r(&["wss://a", "wss://b", "wss://d"]));
+        assert_eq!(st.relay_set(), r(&["wss://a", "wss://b", "wss://d", "wss://c"]));
+
+        assert!(st.set_relays("pk2", r(&[" wss://c ", "wss://e", "wss://c"])));
+        assert_eq!(st.machine("pk2").unwrap().relays, r(&["wss://c", "wss://e"]));
+        // Never left unreachable, never a URL the phone may not dial.
+        assert!(!st.set_relays("pk2", vec![]));
+        assert!(!st.set_relays("pk2", r(&["ws://cleartext.example"])));
+        assert!(!st.set_relays("ghost", r(&["wss://x"])));
+        assert_eq!(st.machine("pk2").unwrap().relays, r(&["wss://c", "wss://e"]));
+
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert_eq!(back["pk2"].relays, r(&["wss://c", "wss://e"]));
+    }
+
+    #[test]
+    fn new_session_defaults_are_per_machine_and_agent() {
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "M", None, None, &[]);
+        assert!(st.set_default_agent("pk", Some(" opencode ".into())));
+        let d = |mode: &str, model: &str| AgentDefaults { mode: mode.into(), effort: String::new(), model: model.into() };
+        assert!(st.set_agent_defaults("pk", "claude-code", d("plan", " opus ")));
+        assert_eq!(st.machine("pk").unwrap().default_agent.as_deref(), Some("opencode"));
+        assert_eq!(st.machine("pk").unwrap().agent_defaults["claude-code"], d("plan", "opus"));
+
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert_eq!(back["pk"].agent_defaults["claude-code"], d("plan", "opus"));
+
+        // All-empty forgets the agent's entry; an empty agent clears the pick.
+        assert!(st.set_agent_defaults("pk", "claude-code", AgentDefaults::default()));
+        assert!(st.machine("pk").unwrap().agent_defaults.is_empty());
+        assert!(st.set_default_agent("pk", Some("".into())));
+        assert_eq!(st.machine("pk").unwrap().default_agent, None);
+        assert!(!st.set_default_agent("ghost", None));
+    }
+
+    #[test]
     fn serialize_then_hydrate_never_truncates() {
         let mut st = MachinesState::default();
-        st.register_machine("pk1", "M1", Some("Laptop".into()), None);
+        st.register_machine("pk1", "M1", Some("Laptop".into()), None, &[]);
         st.apply_session_list("pk1", &list(&[info("a"), info("b")], NONE()), 50);
         st.apply_session_list("pk1", &list(&[info("a")], NONE()), 60); // b -> stale
-        st.register_machine("pk2", "M2", None, None);
+        st.register_machine("pk2", "M2", None, None, &[]);
         st.apply_models("pk1", &models_msg(&["opus", "fable"], Some("opus")));
 
         let hydrated = hydrate_machines(Some(&serialize_machines(&st.machines)));

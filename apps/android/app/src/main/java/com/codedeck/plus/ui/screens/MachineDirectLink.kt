@@ -3,17 +3,17 @@ package com.codedeck.plus.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import com.codedeck.plus.ui.components.Dot
+import com.codedeck.plus.ui.components.Field
+import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
@@ -41,14 +41,13 @@ internal fun directLinkStatusText(machine: UniffiMachineSummary): String {
 fun MachineDirectLink(machine: UniffiMachineSummary, dispatch: (UniffiIntent) -> Unit) {
     var editing by remember(machine.pubkeyHex) { mutableStateOf(false) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-        Text(
-            directLinkStatusText(machine),
-            color = if (machine.directUp != null) Tokens.Success else Tokens.TextMuted,
-            fontSize = Tokens.TextSm,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+            Dot(if (machine.directUp != null) Tokens.PresenceLive else Tokens.PresenceOffline)
+            Text(directLinkStatusText(machine), color = Tokens.Text, fontSize = Tokens.TextMd)
+        }
         if (machine.directAdvertised.isNotEmpty()) {
-            EndpointList("The bridge offers:", machine.directAdvertised)
+            EndpointList("The bridge offers", machine.directAdvertised)
             if (!machine.directPinned && machine.directAdvertised.any { it.startsWith("wss://") }) {
                 Text(
                     "No certificate pin came with them, so its wss:// endpoints are not used.",
@@ -61,20 +60,18 @@ fun MachineDirectLink(machine: UniffiMachineSummary, dispatch: (UniffiIntent) ->
             DirectEndpointsEditor(machine, dispatch, onDone = { editing = false })
         } else {
             if (machine.directEndpoints.isNotEmpty()) {
-                EndpointList("Added on this phone:", machine.directEndpoints)
+                EndpointList("Added on this phone", machine.directEndpoints)
             }
-            TextButton(onClick = { editing = true }) {
-                Text("Direct endpoints…")
-            }
+            SecondaryButton("Add your own endpoints", onClick = { editing = true })
         }
     }
 }
 
 @Composable
 private fun EndpointList(title: String, endpoints: List<String>) {
-    Text(title, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+    Text(title, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
     endpoints.forEach {
-        Text(it, color = Tokens.TextDim, fontSize = Tokens.TextXs, fontFamily = Tokens.FontMono)
+        Text(it, color = Tokens.Text, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
     }
 }
 
@@ -84,35 +81,25 @@ private fun DirectEndpointsEditor(machine: UniffiMachineSummary, dispatch: (Unif
     var draft by remember(machine.pubkeyHex) { mutableStateOf(machine.directEndpoints.joinToString("\n")) }
     val lines = draft.lines().map { it.trim() }.filter { it.isNotEmpty() }
     val invalid = lines.filterNot { isDirectEndpoint(it) }
-    OutlinedTextField(
+    Field(
         value = draft,
         onValueChange = { draft = it },
-        placeholder = { Text("wss://laptop.tailnet.ts.net:7447") },
-        supportingText = {
-            Text(
-                if (invalid.isEmpty()) {
-                    "One per line: wss://host:port, or ws://….onion:port. Tried after the bridge's own, " +
-                        "with the certificate it pinned. They skip Orbot; .onion ones go through it."
-                } else {
-                    "Not allowed: ${invalid.first()} — use wss://, or ws:// only to an .onion address."
-                },
-            )
+        placeholder = "wss://laptop.tailnet.ts.net:7447",
+        mono = true,
+        singleLine = false,
+        supporting = if (invalid.isEmpty()) {
+            "One per line: wss://host:port, or ws://….onion:port. Tried after the bridge's own, " +
+                "with the certificate it pinned. They skip Orbot; .onion ones go through it."
+        } else {
+            "Not allowed: ${invalid.first()}. Use wss://, or ws:// only to an .onion address."
         },
         isError = invalid.isNotEmpty(),
-        modifier = Modifier.fillMaxWidth(),
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-        Button(
-            onClick = {
-                dispatch(UniffiIntent.SetDirectEndpoints(machine = machine.pubkeyHex, endpoints = lines))
-                onDone()
-            },
-            enabled = invalid.isEmpty(),
-        ) {
-            Text("Save")
-        }
-        TextButton(onClick = onDone) {
-            Text("Cancel")
-        }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+        SecondaryButton("Save", onClick = {
+            dispatch(UniffiIntent.SetDirectEndpoints(machine = machine.pubkeyHex, endpoints = lines))
+            onDone()
+        }, enabled = invalid.isEmpty())
+        QuietButton("Cancel", onClick = onDone)
     }
 }

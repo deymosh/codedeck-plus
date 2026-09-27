@@ -1,39 +1,40 @@
 package com.codedeck.plus.ui.screens
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import android.content.ClipData
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.platform.readAppLogs
+import com.codedeck.plus.ui.components.IconAction
+import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.theme.Tokens
+import kotlinx.coroutines.launch
 
 /** How a log line is coloured, by its logcat level (`time` format:
  *  `MM-DD hh:mm:ss.mmm L/tag(pid): message`). */
@@ -47,7 +48,8 @@ internal fun logLineLevel(line: String): Char? =
  */
 @Composable
 fun LogsScreen(onBack: () -> Unit) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     var lines by remember { mutableStateOf<List<String>?>(null) }
     var reloads by remember { mutableIntStateOf(0) }
     val list = rememberLazyListState()
@@ -56,38 +58,50 @@ fun LogsScreen(onBack: () -> Unit) {
         lines = readAppLogs()
         lines?.let { if (it.isNotEmpty()) list.scrollToItem(it.lastIndex) }
     }
+    LogsContent(
+        lines = lines,
+        list = list,
+        onRefresh = { reloads++ },
+        onCopy = {
+            val text = lines.orEmpty().joinToString("\n")
+            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("CodeDeck+ logs", text))) }
+        },
+        onBack = onBack,
+    )
+}
 
-    Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(Tokens.Space3),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+/** [LogsScreen]'s page from the lines read (`null`: still reading). */
+@Composable
+internal fun LogsContent(
+    lines: List<String>?,
+    onRefresh: () -> Unit,
+    onCopy: () -> Unit,
+    onBack: () -> Unit,
+    list: LazyListState = rememberLazyListState(),
+) {
+    Page(
+        title = "Logs",
+        onBack = onBack,
+        scroll = false,
+        actions = {
+            IconAction(Icons.Outlined.Refresh, "Refresh", onRefresh)
+            IconAction(Icons.Outlined.ContentCopy, "Copy all", { if (!lines.isNullOrEmpty()) onCopy() }, tint = if (lines.isNullOrEmpty()) Tokens.TextDim else Tokens.Text)
+        },
+    ) {
+        when {
+            lines == null -> Text("Reading…", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+            lines.isEmpty() -> Text("Nothing logged yet.", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+            else -> Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Tokens.RadiusLg))
+                    .background(Tokens.Surface)
+                    .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusLg)),
             ) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack,
-                    contentDescription = "Back",
-                    tint = Tokens.TextMuted,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
-                        .clickable(onClick = onBack)
-                        .padding(Tokens.Space2)
-                        .size(20.dp),
-                )
-                Text("Logs", color = Tokens.Text, fontSize = Tokens.TextLg, modifier = Modifier.weight(1f))
-                TextButton(onClick = { reloads++ }) { Text("Refresh") }
-                TextButton(
-                    onClick = { clipboard.setText(AnnotatedString(lines.orEmpty().joinToString("\n"))) },
-                    enabled = !lines.isNullOrEmpty(),
-                ) { Text("Copy") }
-            }
-            val shown = lines
-            when {
-                shown == null -> Text("Reading…", color = Tokens.TextMuted, fontSize = Tokens.TextSm, modifier = Modifier.padding(Tokens.Space3))
-                shown.isEmpty() -> Text("Nothing logged yet.", color = Tokens.TextMuted, fontSize = Tokens.TextSm, modifier = Modifier.padding(Tokens.Space3))
-                else -> SelectionContainer(Modifier.weight(1f)) {
-                    LazyColumn(state = list, modifier = Modifier.fillMaxSize().padding(horizontal = Tokens.Space3)) {
-                        itemsIndexed(shown) { _, line ->
+                SelectionContainer {
+                    LazyColumn(state = list, modifier = Modifier.fillMaxSize().padding(Tokens.Space3)) {
+                        itemsIndexed(lines) { _, line ->
                             Text(
                                 line,
                                 color = when (logLineLevel(line)) {
@@ -98,7 +112,7 @@ fun LogsScreen(onBack: () -> Unit) {
                                 },
                                 fontSize = Tokens.TextXs,
                                 fontFamily = Tokens.FontMono,
-                                modifier = Modifier.padding(vertical = 1.dp),
+                                modifier = Modifier.padding(vertical = 2.dp),
                             )
                         }
                     }

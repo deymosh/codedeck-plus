@@ -15,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,11 +43,12 @@ fun UndoToast(core: CoreHost, modifier: Modifier = Modifier) {
 
     Row(
         modifier
-            .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2)
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
-            .background(Tokens.SurfaceRaised)
-            .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusMd))
-            .padding(horizontal = Tokens.Space4, vertical = Tokens.Space2),
+            .padding(horizontal = Tokens.Space4, vertical = Tokens.Space2)
+            .shadow(16.dp, RoundedCornerShape(Tokens.RadiusPill))
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .background(Tokens.SurfaceHover)
+            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusPill))
+            .padding(start = Tokens.Space5, end = Tokens.Space2, top = Tokens.Space1, bottom = Tokens.Space1),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
     ) {

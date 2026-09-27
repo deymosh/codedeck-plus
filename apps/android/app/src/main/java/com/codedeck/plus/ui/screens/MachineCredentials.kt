@@ -4,10 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -15,8 +12,15 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.codedeck.plus.ui.components.Chip
+import com.codedeck.plus.ui.components.Field
+import com.codedeck.plus.ui.components.PrimaryButton
+import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiCredentialStatus
 import uniffi.client_ffi.UniffiCredentialWrite
@@ -36,17 +40,18 @@ internal fun credentialStatusText(status: UniffiCredentialStatus): String {
         else -> "not set"
     }
     val validity = when (status.valid) {
-        true -> " (valid)"
-        false -> " (INVALID)"
+        true -> ", valid"
+        false -> ", rejected"
         null -> ""
     }
     return base + validity
 }
 
 /**
- * Machine credentials — an inline collapsible block listing every secret the
- * bridge declares: its own (e.g. a GitHub token) and each agent's (e.g. an
- * API key), grouped by owner. A field left blank is not sent (keeps the
+ * Machine credentials — every secret the bridge declares, its own (e.g. a
+ * GitHub token) and each agent's (e.g. an API key), grouped by owner, with
+ * whether each is set; "Change credentials" opens them for editing. A field
+ * left blank is not sent (keeps the
  * stored value), a filled field overwrites, and Clear sends
  * [UniffiTristate.Clear] after a confirmation. All fields are password inputs
  * and a group's drafts are wiped immediately after send — values are never
@@ -75,13 +80,6 @@ fun MachineCredentials(machine: UniffiMachineSummary, status: UniffiCredentialsA
 
     LaunchedEffect(status) { if (status != null) saving = false }
 
-    if (!open) {
-        Button(onClick = { open = true }) {
-            Text("Machine credentials…")
-        }
-        return
-    }
-
     fun draftKey(group: CredentialGroup, id: String) = "${group.agent.orEmpty()}/$id"
 
     fun send(group: CredentialGroup, values: List<UniffiCredentialWrite>) {
@@ -99,65 +97,80 @@ fun MachineCredentials(machine: UniffiMachineSummary, status: UniffiCredentialsA
         group.credentials.forEach { drafts.remove(draftKey(group, it.id)) }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-        Text("Machine credentials", color = Tokens.Text, fontSize = Tokens.TextSm)
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
         Text(
-            "Stored on the bridge host and fed into the sessions started there. " +
-                "Leave a field empty to keep the current value.",
+            "Kept on the machine and handed to the sessions started there. They never come back to the phone.",
             color = Tokens.TextMuted,
             fontSize = Tokens.TextSm,
         )
         groups.forEach { group ->
-            Text(group.title, color = Tokens.Text, fontSize = Tokens.TextSm)
-            group.credentials.forEach { cred ->
-                val dk = draftKey(group, cred.id)
-                OutlinedTextField(
-                    value = drafts[dk].orEmpty(),
-                    onValueChange = { drafts[dk] = it },
-                    placeholder = { Text(cred.label) },
-                    supportingText = { Text(credentialStatusText(cred)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                // Clearing deletes the stored secret on the bridge, so it asks
-                // first, like removing a machine or a provider does. A value
-                // coming from the bridge's environment cannot be cleared here.
-                if (cred.present && !cred.fromEnv) {
-                    if (confirmClear == dk) {
-                        Text("Delete ${cred.label} stored on the bridge?", color = Tokens.Text, fontSize = Tokens.TextSm)
-                        Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                            TextButton(onClick = {
-                                send(group, listOf(UniffiCredentialWrite(cred.id, UniffiTristate.Clear)))
-                                confirmClear = null
-                            }) {
-                                Text("Delete", color = Tokens.Danger)
-                            }
-                            TextButton(onClick = { confirmClear = null }) {
-                                Text("Cancel")
-                            }
-                        }
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                Text(group.title, color = Tokens.Text, fontSize = Tokens.TextMd, fontWeight = FontWeight.SemiBold)
+                group.credentials.forEach { cred ->
+                    val dk = draftKey(group, cred.id)
+                    if (open) {
+                        Field(
+                            value = drafts[dk].orEmpty(),
+                            onValueChange = { drafts[dk] = it },
+                            label = cred.label,
+                            placeholder = if (cred.present) "Leave empty to keep it" else null,
+                            supporting = credentialStatusText(cred),
+                            isError = cred.valid == false,
+                            visualTransformation = PasswordVisualTransformation(),
+                        )
                     } else {
-                        TextButton(onClick = { confirmClear = dk }) {
-                            Text("Clear ${cred.label}", color = Tokens.Danger)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                            Text(cred.label, color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
+                            Chip(
+                                credentialStatusText(cred),
+                                color = when {
+                                    cred.valid == false -> Tokens.Danger
+                                    cred.present || cred.fromEnv -> Tokens.Success
+                                    else -> Tokens.TextDim
+                                },
+                            )
+                        }
+                    }
+                    // Clearing deletes the stored secret on the bridge, so it
+                    // asks first. A value from the bridge's environment
+                    // cannot be cleared here.
+                    if (open && cred.present && !cred.fromEnv) {
+                        if (confirmClear == dk) {
+                            Text("Delete ${cred.label} stored on the machine?", color = Tokens.Text, fontSize = Tokens.TextSm)
+                            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                                SecondaryButton("Delete", danger = true, onClick = {
+                                    send(group, listOf(UniffiCredentialWrite(cred.id, UniffiTristate.Clear)))
+                                    confirmClear = null
+                                })
+                                QuietButton("Cancel", onClick = { confirmClear = null })
+                            }
+                        } else {
+                            QuietButton("Delete ${cred.label}", danger = true, onClick = { confirmClear = dk })
                         }
                     }
                 }
-            }
-            Button(
-                onClick = { save(group) },
-                enabled = group.credentials.any { !drafts[draftKey(group, it.id)].isNullOrBlank() },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Save ${group.title} credentials")
+                if (open) {
+                    PrimaryButton(
+                        "Save ${group.title}",
+                        onClick = { save(group) },
+                        enabled = group.credentials.any { !drafts[draftKey(group, it.id)].isNullOrBlank() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
-        TextButton(onClick = { open = false }) {
-            Text("Close")
+        if (open) {
+            QuietButton("Done", onClick = {
+                open = false
+                drafts.clear()
+            })
+        } else {
+            SecondaryButton("Change credentials", onClick = { open = true })
         }
         val text = when {
-            saving -> "Saving on the bridge…"
+            saving -> "Saving on the machine…"
             status == null -> null
-            status.state == "saving" -> "Saving on the bridge…"
+            status.state == "saving" -> "Saving on the machine…"
             status.state == "saved" -> "Saved"
             status.state == "failed" -> "Saving failed: ${status.error ?: "unknown error"}"
             else -> null

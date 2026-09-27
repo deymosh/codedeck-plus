@@ -21,7 +21,6 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::fetches::Fetch;
 use client_core::stores::transcript::SyncEffect;
-use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
     BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
@@ -73,11 +72,6 @@ pub struct RouteResult {
     pub transcript_removed: Vec<(String, String)>,
     /// The relay subscription authors filter changed — resubscribe.
     pub resubscribe: bool,
-    /// A new relay list — the loop reconfigures the transport with it. Only
-    /// ever set by `OnPaired` learning relays from the pair-ack (a staged
-    /// pairing's own relay learning surfaces earlier, through
-    /// `IntentResult::relays_changed` — see `PairingEffectsOut::relays_changed`).
-    pub relays_changed: Option<Vec<String>>,
     /// Arm / clear the pair-ack deadline timer.
     pub pair_deadline: Option<PairDeadline>,
     /// Outbox items settled this route: `(id, delivered)`.
@@ -609,7 +603,7 @@ impl<'a> Router<'a> {
     }
 
     /// The `pair-ack`. Runs the pairing reducer and interprets its effects:
-    /// register the machine, learn its relays, disarm the CDX-040 deadline,
+    /// register the machine with its relays, disarm the CDX-040 deadline,
     /// and refresh the subscription authors.
     fn on_pair_ack(
         &mut self,
@@ -650,13 +644,6 @@ pub struct PairingEffectsOut {
     pub sends: Vec<Send>,
     pub persist: Vec<StoreId>,
     pub resubscribe: bool,
-    /// A new relay list learned from the pairing candidate (the pairing URL's
-    /// own `relays` param, or — for a manual-npub pairing — the ack's
-    /// `relays` field). The loop must apply this to the live transport
-    /// before any queued send (in particular `SendPairRequest`) actually
-    /// goes out, or a bridge reachable only over a relay the phone didn't
-    /// already have never sees the request.
-    pub relays_changed: Option<Vec<String>>,
     pub pair_deadline: Option<PairDeadline>,
     /// `Some(true)` paired, `Some(false)` nack / timeout, `None` still pending.
     pub pairing_settled: Option<bool>,
@@ -669,9 +656,6 @@ impl PairingEffectsOut {
             r.persist(id);
         }
         r.resubscribe |= self.resubscribe;
-        if self.relays_changed.is_some() {
-            r.relays_changed = self.relays_changed;
-        }
         if self.pair_deadline.is_some() {
             r.pair_deadline = self.pair_deadline;
         }
@@ -682,7 +666,7 @@ impl PairingEffectsOut {
 }
 
 /// Run a [`client_core::stores::pairing::PairingResult`] against the stores:
-/// commit the new state, register the machine + learn its relays on `OnPaired`,
+/// commit the new state, register the machine with its relays on `OnPaired`,
 /// and return the transport-affecting effects.
 ///
 /// The `pair-request` grants the bridge the session key with the pairing, so
@@ -711,24 +695,12 @@ pub fn apply_pairing_effects(
         match effect {
             PairingEffect::DisarmDeadline => out.pair_deadline = Some(PairDeadline::Clear),
             PairingEffect::ArmDeadline { ms } => out.pair_deadline = Some(PairDeadline::Arm { ms }),
-            PairingEffect::NotifyCandidate(candidate) => {
-                out.resubscribe = true;
-                // Learn the pairing URL's relays now, BEFORE `SendPairRequest`
-                // below is processed — a bridge reachable only over a relay
-                // the phone didn't already have would otherwise never see
-                // the request (the pair-ack timeout's "phone and bridge may
-                // not share a relay" case).
-                if !candidate.relays.is_empty() {
-                    for effect in stores.settings.add_relays(&candidate.relays) {
-                        match effect {
-                            SettingsEffect::RelaysChanged(relays) => {
-                                out.relays_changed = Some(relays);
-                                out.persist.push(StoreId::Settings);
-                            }
-                        }
-                    }
-                }
-            }
+            // The candidate's relays join the transport's set (see
+            // `CoreStores::relay_set`) as soon as it is the candidate, so
+            // before `SendPairRequest` below goes out: a bridge reachable only
+            // over a relay no paired machine uses would otherwise never see
+            // the request.
+            PairingEffect::NotifyCandidate(_) => out.resubscribe = true,
             PairingEffect::SendPairRequest { to, label, token } => {
                 out.sends.push(Send {
                     machine: to.clone(),
@@ -752,18 +724,9 @@ pub fn apply_pairing_effects(
                     &machine_name,
                     Some(candidate.machine.clone()),
                     host,
+                    &candidate.relays,
                 );
                 stores.machines.note_session_grant_sent(&candidate.pubkey_hex, keys.grant_sent(now));
-                if !candidate.relays.is_empty() {
-                    for effect in stores.settings.add_relays(&candidate.relays) {
-                        match effect {
-                            SettingsEffect::RelaysChanged(relays) => {
-                                out.relays_changed = Some(relays);
-                            }
-                        }
-                    }
-                    out.persist.push(StoreId::Settings);
-                }
                 out.persist.push(StoreId::Machines);
                 out.resubscribe = true;
             }
@@ -1102,7 +1065,7 @@ mod tests {
     #[tokio::test]
     async fn a_heartbeat_transition_into_waiting_marks_unread_notifies_and_feeds_the_fsm() {
         let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
         // first sight: running — no transition
         {
             let mut r = Router::new(&mut s, &ts, &kp, 1_000);
@@ -1145,7 +1108,7 @@ mod tests {
     #[tokio::test]
     async fn the_foreground_watched_session_is_never_marked_or_notified() {
         let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
         s.ui.select_session(MACHINE, Some("s1"), true);
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
@@ -1165,7 +1128,7 @@ mod tests {
     #[tokio::test]
     async fn session_ready_upserts_the_session_and_sends_nothing() {
         let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
 
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
@@ -1186,7 +1149,7 @@ mod tests {
     #[tokio::test]
     async fn credentials_ack_updates_the_ui_ack_and_the_stored_statuses() {
         let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
@@ -1216,7 +1179,7 @@ mod tests {
     #[tokio::test]
     async fn models_updates_the_agents_list_and_asks_for_a_persist() {
         let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
         let out = r
             .route(
@@ -1242,7 +1205,7 @@ mod tests {
     #[tokio::test]
     async fn option_confirmed_writes_through_to_the_session_info() {
         let (mut s, ts, kp) = stores().await;
-        s.machines.register_machine(MACHINE, "laptop", None, None);
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
         s.machines.apply_session_upsert(MACHINE, &info("s1", None, None), 0);
         for (option, value) in [
             (protocol::common::SessionOption::Mode, "acceptEdits"),
