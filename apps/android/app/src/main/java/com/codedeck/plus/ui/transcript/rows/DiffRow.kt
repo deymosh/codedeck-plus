@@ -51,7 +51,7 @@ fun DiffRow(path: String, lines: List<DiffLine>, truncated: Boolean, expanded: B
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
             .background(Tokens.SurfaceInput)
             .padding(Tokens.Space2),
     ) {

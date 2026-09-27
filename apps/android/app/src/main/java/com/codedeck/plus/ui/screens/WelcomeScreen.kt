@@ -2,11 +2,11 @@ package com.codedeck.plus.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -44,20 +43,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.colorResource
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.codedeck.plus.R
 import com.codedeck.plus.platform.SignerAppInfo
+import com.codedeck.plus.ui.components.AppLogo
+import com.codedeck.plus.ui.components.topGlow
 import com.codedeck.plus.ui.theme.Tokens
 
 /** What the welcome screen is waiting on, if anything. */
@@ -73,10 +68,11 @@ sealed interface WelcomeBusy {
  * device, or an imported one. The core only starts after a choice. Pure:
  * every action is a callback, so it renders the same in a snapshot.
  *
- * Always the full layout. The hero at the top and the footnote at the
- * bottom stay put; the login options between them scroll on their own, and
- * only when they do not fit (a short screen, the import open, an error, the
- * keyboard up). When everything fits, the whole is centred.
+ * One screen that scrolls as a whole — the hero, the login options and the
+ * footnote — and only when it does not fit (a short screen, the import
+ * open, an error, the keyboard up); when everything fits it is centred. The
+ * keyboard therefore never pins anything over the options: the field being
+ * typed in scrolls into view like any other content.
  */
 @Composable
 fun WelcomeScreen(
@@ -91,57 +87,37 @@ fun WelcomeScreen(
     var importOpen by rememberSaveable { mutableStateOf(importInitiallyOpen) }
     var importText by rememberSaveable { mutableStateOf("") }
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Tokens.Bg)
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.10f), Color.Transparent),
-                    center = androidx.compose.ui.geometry.Offset(540f, 0f),
-                    radius = 900f,
-                ),
-            ),
+            .topGlow(),
         contentAlignment = Alignment.TopCenter,
     ) {
+        val viewport = maxHeight
         Column(
             Modifier
+                .verticalScroll(rememberScrollState())
                 // Keeps the column readable on a tablet.
                 .widthIn(max = 560.dp)
-                .fillMaxSize()
+                .fillMaxWidth()
+                .heightIn(min = viewport)
                 .padding(horizontal = Tokens.Space5, vertical = Tokens.Space6),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space6, Alignment.CenterVertically),
         ) {
             Hero()
-            // Takes only the height it needs, up to what the hero and the
-            // footer leave.
-            val scroll = rememberScrollState()
-            Box(Modifier.weight(1f, fill = false)) {
-                Box(Modifier.verticalScroll(scroll)) {
-                    LoginOptions(
-                        signers = signers,
-                        busy = busy,
-                        error = error,
-                        importOpen = importOpen,
-                        importText = importText,
-                        onUseSigner = onUseSigner,
-                        onCreateKey = onCreateKey,
-                        onToggleImport = { importOpen = !importOpen },
-                        onImportText = { importText = it },
-                        onImport = { onImportKey(importText) },
-                    )
-                }
-                // Says there is more below while the options are cut off.
-                if (scroll.canScrollForward) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height(Tokens.Space6)
-                            .background(Brush.verticalGradient(listOf(Color.Transparent, Tokens.Bg))),
-                    )
-                }
-            }
+            LoginOptions(
+                signers = signers,
+                busy = busy,
+                error = error,
+                importOpen = importOpen,
+                importText = importText,
+                onUseSigner = onUseSigner,
+                onCreateKey = onCreateKey,
+                onToggleImport = { importOpen = !importOpen },
+                onImportText = { importText = it },
+                onImport = { onImportKey(importText) },
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                 Icon(Icons.Outlined.Shield, contentDescription = null, tint = Tokens.TextDim, modifier = Modifier.size(16.dp))
                 Text(
@@ -201,7 +177,7 @@ private fun Hero() {
         // The name beside the logo, not under it: the height goes to the
         // login options instead.
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
-            Logo(64.dp)
+            AppLogo(64.dp)
             Text("CodeDeck+", color = Tokens.Text, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
         }
         Text(
@@ -224,31 +200,6 @@ private fun Hero() {
     }
 }
 
-/** The launcher icon: its foreground on its background colour, scaled so
- *  the mark fills the tile as the launcher's safe zone (66dp of a 108dp
- *  canvas) does. */
-@Composable
-private fun Logo(size: Dp) {
-    val corner = RoundedCornerShape(size * 0.29f)
-    Box(
-        Modifier
-            .size(size)
-            .clip(corner)
-            .background(colorResource(R.color.ic_launcher_background))
-            .border(
-                BorderStroke(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.6f), Tokens.BorderStrong))),
-                corner,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Image(
-            painterResource(R.drawable.ic_launcher_foreground),
-            contentDescription = null,
-            modifier = Modifier.requiredSize(size * 108f / 66f),
-        )
-    }
-}
-
 @Composable
 private fun Pill(text: String) {
     Text(
@@ -264,10 +215,9 @@ private fun Pill(text: String) {
 @Composable
 private fun SectionLabel(text: String) {
     Text(
-        text.uppercase(),
-        color = Tokens.TextDim,
-        fontSize = Tokens.TextXs,
-        letterSpacing = 1.2.sp,
+        text,
+        color = Tokens.TextMuted,
+        fontSize = Tokens.TextSm,
         fontWeight = FontWeight.Medium,
     )
 }
@@ -301,9 +251,8 @@ private fun CardHeader(icon: ImageVector, title: String, body: String, badge: St
                     Text(
                         badge,
                         color = Tokens.AccentContrast,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.6.sp,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
                             .clip(RoundedCornerShape(Tokens.RadiusPill))
                             .background(Tokens.Accent)
@@ -325,7 +274,7 @@ private fun SignerCard(signers: List<SignerAppInfo>, busy: WelcomeBusy?, onUseSi
                 icon = Icons.Outlined.Shield,
                 title = "Use a signer app",
                 body = "Your key stays in a NIP-55 signer; CodeDeck+ asks it to sign.",
-                badge = "RECOMMENDED",
+                badge = "Recommended",
             )
             if (signers.isEmpty()) {
                 Text(

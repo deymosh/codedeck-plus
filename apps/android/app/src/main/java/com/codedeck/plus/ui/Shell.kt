@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -16,10 +17,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.screens.NewSessionScreen
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.screens.LogsScreen
+import com.codedeck.plus.ui.screens.MachineSettingsScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
@@ -38,6 +41,8 @@ private sealed interface Screen {
     data object Settings : Screen
     data object Logs : Screen
     data object Pairing : Screen
+    /** A machine's settings page, opened from its name on the sessions list. */
+    data class Machine(val machine: String) : Screen
 }
 
 /** Saves [Screen] as a flat string list, so the open page survives rotation
@@ -51,6 +56,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             Screen.Settings -> listOf("settings")
             Screen.Logs -> listOf("logs")
             Screen.Pairing -> listOf("pairing")
+            is Screen.Machine -> listOf("machine", screen.machine)
         }
     },
     restore = { saved ->
@@ -60,6 +66,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "settings" -> Screen.Settings
             "logs" -> Screen.Logs
             "pairing" -> Screen.Pairing
+            "machine" -> Screen.Machine(saved[1])
             else -> Screen.Sessions
         }
     },
@@ -201,8 +208,10 @@ fun Shell(
                 login = login,
                 onLogOut = onLogOut,
                 onOpenLogs = { screen = Screen.Logs },
+                onPairMachine = { screen = Screen.Pairing },
                 onClose = { screen = Screen.Sessions },
             )
+            is Screen.Machine -> MachineSettingsScreen(core, current.machine, onBack = { screen = Screen.Sessions })
             Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
             Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
             is Screen.NewSession -> NewSessionScreen(
@@ -233,6 +242,7 @@ fun Shell(
                 selectedSession = selectedSession,
                 onSelectSession = ::openSession,
                 onNewSession = { screen = Screen.NewSession(it) },
+                onOpenMachine = { screen = Screen.Machine(it) },
                 onOpenSettings = { screen = Screen.Settings },
                 onOpenPairing = { screen = Screen.Pairing },
                 modifier = Modifier.fillMaxSize(),
@@ -242,6 +252,12 @@ fun Shell(
         // Undo toast for an optimistic session delete — at the shell's root so it
         // is visible on whichever screen is showing. Emits nothing while no undo
         // window is open.
-        UndoToast(core, Modifier.align(Alignment.BottomCenter))
+        // Above the pairing button on the sessions list.
+        UndoToast(
+            core,
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (screen == Screen.Sessions) 88.dp else Tokens.Space2),
+        )
     }
 }

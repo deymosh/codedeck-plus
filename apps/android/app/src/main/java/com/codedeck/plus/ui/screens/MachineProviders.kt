@@ -7,11 +7,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,7 +21,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.codedeck.plus.ui.components.Chip
+import com.codedeck.plus.ui.components.Field
+import com.codedeck.plus.ui.components.IconAction
 import com.codedeck.plus.ui.components.PickerOption
+import com.codedeck.plus.ui.components.PrimaryButton
+import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiIntent
@@ -100,7 +105,8 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
     val editingProfile = editingId?.let { id -> profiles.find { it.id == id } }
     val validModels = models.filter { it.id.trim().isNotEmpty() }
     val trimmedBaseUrl = baseUrl.trim()
-    val baseUrlValid = isValidProviderBaseUrl(trimmedBaseUrl)
+    // Only once there is something to check: an empty field is not an error yet.
+    val baseUrlValid = trimmedBaseUrl.isNotEmpty() && isValidProviderBaseUrl(trimmedBaseUrl)
     val baseUrlError = trimmedBaseUrl.isNotEmpty() && !baseUrlValid
     val canSave = label.trim().isNotEmpty() && baseUrlValid && validModels.isNotEmpty()
 
@@ -192,12 +198,10 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-        Text("AI providers", color = Tokens.Text, fontSize = Tokens.TextSm)
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
         Text(
-            "Custom Anthropic-compatible providers (Kimi, OpenRouter, …) stored on the bridge; " +
-                "new sessions can be bound to one at create time. Tokens stay on the bridge — " +
-                "this phone never stores them.",
+            "Anthropic-compatible providers (Kimi, OpenRouter, …) kept on the bridge. A new session can " +
+                "run on one. Their tokens stay on the bridge; this phone never stores them.",
             color = Tokens.TextMuted,
             fontSize = Tokens.TextSm,
         )
@@ -206,23 +210,23 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(Tokens.RadiusMd))
-                    .background(Tokens.SurfaceRaised)
-                    .padding(Tokens.Space2),
+                    .clip(RoundedCornerShape(Tokens.RadiusLg))
+                    .background(Tokens.SurfaceInput)
+                    .padding(Tokens.Space3),
                 verticalArrangement = Arrangement.spacedBy(Tokens.Space1),
             ) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                    Text(p.label, color = Tokens.Text, fontSize = Tokens.TextSm, modifier = Modifier.weight(1f))
-                    Text(
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                    Text(p.label, color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
+                    Chip(
                         if (p.hasToken) "token set" else "no token",
                         color = if (p.hasToken) Tokens.Success else Tokens.TextDim,
-                        fontSize = Tokens.TextXs,
+                        border = if (p.hasToken) Tokens.Success.copy(alpha = 0.4f) else Tokens.Border,
                     )
                 }
                 Text(p.baseUrl, color = Tokens.TextMuted, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
                 Text(
                     "${p.models.size} ${if (p.models.size == 1) "model" else "models"}" +
-                        (p.defaultModel?.let { " · default $it" } ?: ""),
+                        (p.defaultModel?.let { ", default $it" } ?: ""),
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextSm,
                 )
@@ -234,62 +238,43 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                         fontSize = Tokens.TextSm,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                        Button(onClick = { deleteProfile(p.id) }) { Text("Delete profile") }
-                        TextButton(onClick = { confirmDelete = null }) { Text("Cancel") }
+                        SecondaryButton("Delete provider", onClick = { deleteProfile(p.id) }, danger = true)
+                        QuietButton("Cancel", onClick = { confirmDelete = null })
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                        TextButton(onClick = { openEdit(p) }) { Text("Edit") }
-                        TextButton(onClick = { confirmDelete = p.id }) {
-                            Text("Delete…", color = Tokens.Danger)
-                        }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+                        QuietButton("Edit", onClick = { openEdit(p) })
+                        QuietButton("Delete", onClick = { confirmDelete = p.id }, danger = true)
                     }
                 }
             }
         }
 
         if (!formOpen) {
-            Button(onClick = ::openAdd) { Text("Add provider…") }
-        }
-
-        if (formOpen) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(Tokens.RadiusMd))
-                    .background(Tokens.SurfaceRaised)
-                    .padding(Tokens.Space2),
-                verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
-            ) {
+            SecondaryButton("Add provider", onClick = ::openAdd)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                 if (editingId == null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                        PRESETS.forEach { preset ->
-                            TextButton(onClick = { applyPreset(preset) }) { Text(preset.name) }
-                        }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+                        PRESETS.forEach { preset -> QuietButton(preset.name, onClick = { applyPreset(preset) }) }
                     }
                 }
-                OutlinedTextField(
-                    value = label,
-                    onValueChange = { label = it },
-                    placeholder = { Text("Label (e.g. Kimi K3)") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
+                Field(value = label, onValueChange = { label = it }, label = "Name", placeholder = "Kimi K3")
+                Field(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
-                    placeholder = { Text("https://api.moonshot.ai/anthropic") },
-                    modifier = Modifier.fillMaxWidth(),
+                    label = "Base URL",
+                    placeholder = "https://api.moonshot.ai/anthropic",
+                    mono = true,
+                    isError = baseUrlError,
+                    supporting = if (baseUrlError) providerBaseUrlError() else null,
                 )
-                if (baseUrlError) {
-                    Text(providerBaseUrlError(), color = Tokens.Danger, fontSize = Tokens.TextSm)
-                }
-                OutlinedTextField(
+                Field(
                     value = token,
                     onValueChange = { token = it },
-                    placeholder = { Text(if (editingProfile?.hasToken == true) "unchanged" else "API token (sk-…)") },
-                    enabled = !clearToken,
+                    label = "API token",
+                    placeholder = if (editingProfile?.hasToken == true) "unchanged" else "sk-…",
                     visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
                 )
                 if (editingProfile?.hasToken == true) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
@@ -300,7 +285,7 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                                 if (it) token = ""
                             },
                         )
-                        Text("Clear token (removes the stored token on save)", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+                        Text("Delete the stored token when saving", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
                     }
                 }
                 models.forEachIndexed { i, row ->
@@ -309,30 +294,31 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
                     ) {
-                        OutlinedTextField(
+                        Field(
                             value = row.id,
                             onValueChange = { v -> models = models.mapIndexed { j, m -> if (j == i) m.copy(id = v) else m } },
-                            placeholder = { Text("model id (e.g. kimi-k3)") },
+                            placeholder = "model id",
+                            mono = true,
                             modifier = Modifier.weight(1f),
                         )
-                        OutlinedTextField(
+                        Field(
                             value = row.label,
                             onValueChange = { v -> models = models.mapIndexed { j, m -> if (j == i) m.copy(label = v) else m } },
-                            placeholder = { Text("label (optional)") },
+                            placeholder = "label",
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(
-                            onClick = { models = models.filterIndexed { j, _ -> j != i } },
-                            enabled = models.size > 1,
-                        ) {
-                            Text("Remove", color = Tokens.Danger)
-                        }
+                        IconAction(
+                            Icons.Outlined.Close,
+                            "Remove model",
+                            onClick = { if (models.size > 1) models = models.filterIndexed { j, _ -> j != i } },
+                            tint = if (models.size > 1) Tokens.TextMuted else Tokens.TextDim,
+                        )
                     }
                 }
-                TextButton(onClick = { models = models + EMPTY_ROW }) { Text("Add model") }
+                QuietButton("Add model", onClick = { models = models + EMPTY_ROW })
 
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                    Text("Default model", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                    Text("Default model", color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
                     SelectField(
                         options = buildList {
                             add(PickerOption("", "First model"))
@@ -346,18 +332,12 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                     )
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                    Button(onClick = ::save, enabled = canSave, modifier = Modifier.weight(1f)) {
-                        Text("Save on bridge")
-                    }
-                    TextButton(
-                        onClick = {
-                            formOpen = false
-                            resetForm()
-                        },
-                    ) {
-                        Text("Cancel")
-                    }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                    PrimaryButton("Save on the bridge", onClick = ::save, enabled = canSave, modifier = Modifier.weight(1f))
+                    QuietButton("Cancel", onClick = {
+                        formOpen = false
+                        resetForm()
+                    })
                 }
             }
         }
@@ -366,8 +346,8 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
             val text = when (status.state) {
                 "saving" -> "Saving on the bridge…"
                 "saved" -> "Saved" + when (status.tokenValid) {
-                    true -> " · token valid"
-                    false -> " · token INVALID"
+                    true -> ", token valid"
+                    false -> ", token rejected"
                     null -> ""
                 }
                 "failed" -> "Saving failed: ${status.error ?: "unknown error"}"

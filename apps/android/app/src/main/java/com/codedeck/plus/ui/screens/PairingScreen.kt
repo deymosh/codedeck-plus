@@ -6,8 +6,6 @@ import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,19 +13,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,12 +29,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.ui.components.EmptyState
+import com.codedeck.plus.ui.components.Field
+import com.codedeck.plus.ui.components.Group
+import com.codedeck.plus.ui.components.GroupBody
+import com.codedeck.plus.ui.components.IconAction
+import com.codedeck.plus.ui.components.Page
+import com.codedeck.plus.ui.components.PrimaryButton
+import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.SecondaryButton
+import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -114,7 +114,7 @@ fun PairingScreen(core: CoreHost, onClose: () -> Unit) {
 }
 
 @Composable
-private fun PairingBody(
+internal fun PairingBody(
     view: UniffiPairingView,
     selfNpub: String?,
     dispatch: (UniffiIntent) -> Unit,
@@ -141,71 +141,43 @@ private fun PairingBody(
         }
     }
 
-    Surface(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(Tokens.Space3),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Pair a machine", color = Tokens.Text, fontSize = Tokens.TextLg, modifier = Modifier.weight(1f))
-                    Icon(
-                        Icons.Outlined.Close,
-                        contentDescription = "Close",
-                        tint = Tokens.TextMuted,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(Tokens.RadiusSm))
-                            .clickable(onClick = onClose)
-                            .padding(Tokens.Space2)
-                            .size(20.dp),
-                    )
-                }
-
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
-                    verticalArrangement = Arrangement.spacedBy(Tokens.Space4),
-                ) {
-                    val staged = view.staged
-                    when {
-                        // CDX-013: a deep link arrived without direct user action —
-                        // show what it wants to pair with and require an explicit
-                        // tap. Nothing has been sent to the bridge yet.
-                        staged != null && view.phase == "idle" -> StagedConfirm(staged.machine, staged.npub, staged.relays, dispatch)
-                        view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine, dispatch)
-                        view.phase == "paired" -> Paired(view.candidate?.machine, dispatch, onClose)
-                        else -> PairingForm(
-                            view = view,
-                            selfNpub = selfNpub,
-                            url = url,
-                            onUrlChange = { url = it },
-                            onScanTap = { startScan() },
-                            dispatch = dispatch,
-                        )
-                    }
-                }
-            }
-
-            // Rendered only while open AND after CAMERA is granted (the
-            // launcher above gates it), so PairingScanView's binding effect
-            // runs exactly once per granted+open window.
-            if (scanOpen) {
-                PairingScanView(
-                    onDecoded = { decoded ->
-                        // One path, same as a paste: the raw string fills the
-                        // visible field AND crosses into BeginPairing
-                        // unparsed — the Rust side parses, and its failure
-                        // surfaces as this view's "failed" phase.
-                        url = decoded
-                        dispatch(UniffiIntent.BeginPairing(decoded.trim(), PHONE_LABEL))
-                        scanOpen = false
-                    },
-                    onDismiss = { scanOpen = false },
+    Box(Modifier.fillMaxSize()) {
+        Page(title = "Pair a machine", onBack = onClose, backLabel = "Close") {
+            val staged = view.staged
+            when {
+                // CDX-013: a deep link arrived without direct user action —
+                // show what it wants to pair with and require an explicit
+                // tap. Nothing has been sent to the bridge yet.
+                staged != null && view.phase == "idle" -> StagedConfirm(staged.machine, staged.npub, staged.relays, dispatch)
+                view.phase == "awaiting-ack" -> AwaitingAck(view.candidate?.machine, dispatch)
+                view.phase == "paired" -> Paired(view.candidate?.machine, dispatch, onClose)
+                else -> PairingForm(
+                    view = view,
+                    selfNpub = selfNpub,
+                    url = url,
+                    onUrlChange = { url = it },
+                    onScanTap = { startScan() },
+                    dispatch = dispatch,
                 )
             }
+        }
+
+        // Rendered only while open AND after CAMERA is granted (the
+        // launcher above gates it), so PairingScanView's binding effect
+        // runs exactly once per granted+open window.
+        if (scanOpen) {
+            PairingScanView(
+                onDecoded = { decoded ->
+                    // One path, same as a paste: the raw string fills the
+                    // visible field AND crosses into BeginPairing
+                    // unparsed — the Rust side parses, and its failure
+                    // surfaces as this view's "failed" phase.
+                    url = decoded
+                    dispatch(UniffiIntent.BeginPairing(decoded.trim(), PHONE_LABEL))
+                    scanOpen = false
+                },
+                onDismiss = { scanOpen = false },
+            )
         }
     }
 }
@@ -217,78 +189,54 @@ private fun StagedConfirm(
     relays: List<String>,
     dispatch: (UniffiIntent) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-        Banner(
-            "A pairing link wants to connect this phone to a machine. Only continue " +
-                "if YOU opened this link (e.g. from your own bridge).",
-            Tokens.Warn,
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(Tokens.RadiusMd))
-                .background(Tokens.SurfaceRaised)
-                .padding(Tokens.Space3),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                Text("Machine: $machine", color = Tokens.Text, fontSize = Tokens.TextSm)
-                Text(
-                    "Bridge npub: ${npub.take(12)}…${npub.takeLast(6)}",
-                    color = Tokens.Text,
-                    fontSize = Tokens.TextSm,
-                    fontFamily = Tokens.FontMono,
-                )
-                Text("Relays: ${relays.joinToString(", ")}", color = Tokens.Text, fontSize = Tokens.TextSm)
-            }
-        }
-        Button(onClick = { dispatch(UniffiIntent.ConfirmStagedPairing(PHONE_LABEL)) }) {
-            Text("Pair with $machine")
-        }
-        Text(
-            "Dismiss",
-            color = Tokens.TextMuted,
-            fontSize = Tokens.TextSm,
-            modifier = Modifier
-                .minimumInteractiveComponentSize()
-                .clickable { dispatch(UniffiIntent.DismissStagedPairing) }
-                .padding(Tokens.Space2),
-        )
+    Group(
+        title = "Pair with this machine?",
+        footer = "A pairing link asked to connect this phone. Continue only if you opened it yourself, from your own bridge.",
+    ) {
+        ValueRow("Machine", subtitle = machine) {}
+        Divider()
+        ValueRow("Key", subtitle = shortKey(npub), mono = true) {}
+        Divider()
+        ValueRow("Relays", subtitle = relays.joinToString("\n") { it.removePrefix("wss://") }, mono = true) {}
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+        PrimaryButton("Pair with $machine", onClick = { dispatch(UniffiIntent.ConfirmStagedPairing(PHONE_LABEL)) }, modifier = Modifier.weight(1f))
+        QuietButton("Dismiss", onClick = { dispatch(UniffiIntent.DismissStagedPairing) })
     }
 }
 
 @Composable
 private fun AwaitingAck(machine: String?, dispatch: (UniffiIntent) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-        Banner(
-            "Pairing with ${machine ?: "bridge"}… waiting for the bridge to answer " +
-                "(the pairing window on the bridge must be open).",
-            Tokens.TextMuted,
-        )
+    Column(
+        Modifier.fillMaxWidth().padding(top = Tokens.Space7),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Tokens.Space3),
+    ) {
+        CircularProgressIndicator(color = Tokens.Text, strokeWidth = 2.dp)
+        Text("Pairing with ${machine ?: "the machine"}…", color = Tokens.Text, fontSize = Tokens.TextXl)
         Text(
-            "Cancel",
+            "Waiting for the bridge to answer. Its pairing window must still be open.",
             color = Tokens.TextMuted,
-            fontSize = Tokens.TextSm,
-            modifier = Modifier
-                .minimumInteractiveComponentSize()
-                .clickable { dispatch(UniffiIntent.ResetPairing) }
-                .padding(Tokens.Space2),
+            fontSize = Tokens.TextMd,
+            textAlign = TextAlign.Center,
         )
+        QuietButton("Cancel", onClick = { dispatch(UniffiIntent.ResetPairing) })
     }
 }
 
 @Composable
 private fun Paired(machine: String?, dispatch: (UniffiIntent) -> Unit, onClose: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-        Banner("Paired with ${machine ?: "bridge"}.", Tokens.Success)
-        Button(
-            onClick = {
-                dispatch(UniffiIntent.ResetPairing)
-                onClose()
-            },
-        ) {
-            Text("Go to machines")
-        }
-    }
+    EmptyState(
+        icon = Icons.Outlined.Check,
+        title = "Paired with ${machine ?: "the machine"}",
+        body = "Its sessions appear on the home screen. Start one from there.",
+        action = "Done",
+        onAction = {
+            dispatch(UniffiIntent.ResetPairing)
+            onClose()
+        },
+        modifier = Modifier.fillMaxWidth().padding(top = Tokens.Space7),
+    )
 }
 
 @Composable
@@ -302,106 +250,60 @@ private fun PairingForm(
 ) {
     var manualNpub by remember { mutableStateOf("") }
     var manualToken by remember { mutableStateOf("") }
+    var manualRelays by remember { mutableStateOf("") }
 
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
-        if (view.phase == "failed") {
-            Banner("Pairing failed: ${view.error ?: "rejected"}. Open a fresh pairing window on the bridge and try again.", Tokens.Danger)
-        }
+    if (view.phase == "failed") {
+        Text(
+            "Pairing failed: ${view.error ?: "rejected"}. Open a fresh pairing window on the bridge and try again.",
+            color = Tokens.Danger,
+            fontSize = Tokens.TextSm,
+            modifier = Modifier.padding(horizontal = Tokens.Space2),
+        )
+    }
 
-        Button(onClick = onScanTap) {
-            Text("Scan pairing QR")
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-            Text("Pairing link (from the bridge QR / codedeck pair)", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-            OutlinedTextField(
-                value = url,
-                onValueChange = onUrlChange,
-                placeholder = { Text("codedeck://pair?npub=…") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = { dispatch(UniffiIntent.BeginPairing(url.trim(), PHONE_LABEL)) },
-                enabled = url.isNotBlank(),
-            ) {
-                Text("Pair with link")
-            }
-        }
-
-        Text("or manually", color = Tokens.TextDim, fontSize = Tokens.TextSm)
-
-        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-            OutlinedTextField(
-                value = manualNpub,
-                onValueChange = { manualNpub = it },
-                label = { Text("Bridge npub") },
-                placeholder = { Text("npub1…") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = manualToken,
-                onValueChange = { manualToken = it },
-                label = { Text("One-time token") },
-                placeholder = { Text("token from the bridge pairing screen") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = {
-                    dispatch(UniffiIntent.BeginManualPairing(manualNpub.trim(), manualToken.trim(), PHONE_LABEL))
-                },
-                enabled = manualNpub.isNotBlank() && manualToken.isNotBlank(),
-            ) {
-                Text("Pair manually")
-            }
-        }
-
-        selfNpub?.let { npub ->
-            val clipboard = LocalClipboard.current
-            val context = LocalContext.current
-            val scope = rememberCoroutineScope()
-            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                Text("This phone's npub", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
-                ) {
-                    Text(
-                        npub,
-                        color = Tokens.Text,
-                        fontSize = Tokens.TextSm,
-                        fontFamily = Tokens.FontMono,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = "Copy npub",
-                        tint = Tokens.TextMuted,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .clickable {
-                                val clipData = ClipData.newPlainText("npub", npub)
-                                scope.launch {
-                                    clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(clipData))
-                                }
-                                Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                            }
-                            .padding(Tokens.Space2),
-                    )
-                }
-            }
+    Group(footer = "On the machine, run codedeck-bridge and scan the code it shows when its pairing window opens.") {
+        GroupBody {
+            PrimaryButton("Scan the pairing code", onClick = onScanTap, icon = Icons.Outlined.QrCodeScanner, modifier = Modifier.fillMaxWidth())
         }
     }
-}
 
-@Composable
-private fun Banner(text: String, accent: androidx.compose.ui.graphics.Color) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
-            .background(Tokens.SurfaceRaised)
-            .padding(Tokens.Space3),
+    Group(title = "Or paste the pairing link") {
+        GroupBody {
+            Field(value = url, onValueChange = onUrlChange, placeholder = "codedeck://pair?npub=…", mono = true)
+            SecondaryButton("Pair", onClick = { dispatch(UniffiIntent.BeginPairing(url.trim(), PHONE_LABEL)) }, enabled = url.isNotBlank())
+        }
+    }
+
+    Group(
+        title = "Or enter it by hand",
+        footer = "The relays are the bridge's: the phone has none of its own, so the request goes there.",
     ) {
-        Text(text, color = accent, fontSize = Tokens.TextSm)
+        GroupBody {
+            Field(value = manualNpub, onValueChange = { manualNpub = it }, label = "Bridge npub", placeholder = "npub1…", mono = true)
+            Field(value = manualToken, onValueChange = { manualToken = it }, label = "One-time token", mono = true)
+            Field(value = manualRelays, onValueChange = { manualRelays = it }, label = "Relays", placeholder = "wss://relay.example.com", mono = true)
+            SecondaryButton(
+                "Pair",
+                onClick = {
+                    dispatch(UniffiIntent.BeginManualPairing(manualNpub.trim(), manualToken.trim(), manualRelays.trim(), PHONE_LABEL))
+                },
+                enabled = manualNpub.isNotBlank() && manualToken.isNotBlank() && manualRelays.isNotBlank(),
+            )
+        }
+    }
+
+    selfNpub?.let { npub ->
+        val clipboard = LocalClipboard.current
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+        Group(title = "This phone", footer = "The key the bridge will know this phone by.") {
+            ValueRow("Key", subtitle = npub, mono = true) {
+                IconAction(Icons.Outlined.ContentCopy, "Copy npub", onClick = {
+                    val clipData = ClipData.newPlainText("npub", npub)
+                    scope.launch { clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(clipData)) }
+                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                }, tint = Tokens.TextMuted)
+            }
+        }
     }
 }

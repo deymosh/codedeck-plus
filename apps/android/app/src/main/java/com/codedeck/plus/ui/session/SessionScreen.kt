@@ -594,37 +594,8 @@ fun SessionScreen(
             )
         }
 
-        // Quick prompts: hidden entirely when the user has none defined; a tap
-        // APPENDS the prompt into the draft — never an auto-send.
-        val prompts = quickPromptsView?.prompts.orEmpty()
-        if (prompts.isNotEmpty()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space1),
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                prompts.forEach { prompt ->
-                    Text(
-                        prompt.label,
-                        color = Tokens.TextMuted,
-                        fontSize = Tokens.TextXs,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .widthIn(max = 160.dp)
-                            .clip(RoundedCornerShape(Tokens.RadiusSm))
-                            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
-                            .background(Tokens.Text.copy(alpha = 0.03f))
-                            .clickable { insertPrompt(prompt.text) }
-                            .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
-                    )
-                }
-            }
-        }
+        // Quick prompts (none: no strip); a tap puts the prompt in the draft.
+        QuickPromptStrip(quickPromptsView?.prompts.orEmpty(), ::insertPrompt)
 
         // A failed send sits right above the controls, the same way the
         // running turn's line does, with the message it failed to deliver.
@@ -651,40 +622,18 @@ fun SessionScreen(
             usage = session?.usage,
         )
 
-        // Composer order matches the reference: attach, text field, mic, Send.
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = Tokens.Space1, vertical = Tokens.Space2),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (canAttachImages) {
-                // Dimmed while an upload runs, so the disabled state is visible.
-                IconButton(onClick = ::pickImage, enabled = !uploading) {
-                    Icon(
-                        Icons.Outlined.AttachFile,
-                        contentDescription = "Attach image",
-                        tint = if (uploading) Tokens.TextDim else Tokens.TextMuted,
-                    )
-                }
-            }
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                placeholder = { Text(if (activeQuestion != null) "Type your answer…" else "Message the session…") },
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                maxLines = 6,
-                modifier = Modifier.weight(1f).focusRequester(inputFocus),
-            )
-            IconButton(onClick = ::dictate) {
-                Icon(Icons.Outlined.Mic, contentDescription = "Dictate with voice", tint = Tokens.TextMuted)
-            }
-            Button(
-                onClick = ::send,
-                enabled = (draft.isNotBlank() || pendingImage != null) && !uploading,
-            ) {
-                Text("Send")
-            }
-        }
+        Composer(
+            draft = draft,
+            onDraftChange = { draft = it },
+            placeholder = if (activeQuestion != null) "Type your answer…" else "Message the session…",
+            canAttach = canAttachImages,
+            uploading = uploading,
+            canSend = (draft.isNotBlank() || pendingImage != null) && !uploading,
+            onAttach = ::pickImage,
+            onDictate = ::dictate,
+            onSend = ::send,
+            focusRequester = inputFocus,
+        )
     }
 }
 
@@ -824,7 +773,7 @@ internal fun SessionControlsBar(
             ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
         }
         if (modeLabel != null) {
-            ModeButton(modeLabel.uppercase(), modePending, onModeTap)
+            ModeButton(modeLabel, modePending, onModeTap)
         }
         if (efforts.isNotEmpty()) {
             EffortSelector(effort, efforts, onEffortSelect)
@@ -909,21 +858,26 @@ private fun EffortSelector(current: String?, efforts: List<UniffiOptionChoice>, 
 
 /** The mode cycle button — taps step through the agent's modes. While a
  *  request is in flight the label is the REQUESTED mode, pulsing. */
+/** Inner padding of the controls bar's pills (model, mode, usage), sized
+ *  to match the effort picker beside them. */
+private val ControlPadH = 12.dp
+private val ControlPadV = 7.dp
+
 @Composable
 private fun ModeButton(label: String, pending: Boolean, onTap: () -> Unit) {
     val alpha = if (pending) pulsingAlpha(min = 0.35f, max = 1f, halfPeriodMs = 500) else 1f
     Text(
         label,
         color = Tokens.Text,
-        fontSize = Tokens.TextXs,
-        fontWeight = FontWeight.Bold,
+        fontSize = Tokens.TextSm,
+        fontWeight = FontWeight.Medium,
         modifier = Modifier
             .minimumInteractiveComponentSize()
             .graphicsLayer { this.alpha = alpha }
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
-            .background(Tokens.Text.copy(alpha = 0.03f))
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .background(Tokens.SurfaceHover)
             .clickable(onClick = onTap)
-            .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
+            .padding(horizontal = ControlPadH, vertical = ControlPadV),
     )
 }
 
@@ -940,16 +894,15 @@ private fun UsageBox(usage: UniffiUsageData?, badges: List<UsageBadgeData>) {
     val fill = when (usageSeverity(usage, badges)) {
         "critical" -> Tokens.Danger.copy(alpha = 0.10f)
         "warn" -> Tokens.Warn.copy(alpha = 0.10f)
-        else -> Tokens.Text.copy(alpha = 0.03f)
+        else -> Tokens.SurfaceHover
     }
     // One line ("5h 61% · 7d 23%") so it stays as short as the other chips
     // in the controls bar.
     Row(
         Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
-            .border(1.dp, accent, RoundedCornerShape(Tokens.RadiusSm))
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
             .background(fill)
-            .padding(horizontal = Tokens.ChipPadH, vertical = Tokens.ChipPadV),
+            .padding(horizontal = ControlPadH, vertical = ControlPadV),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         badges.forEachIndexed { i, badge ->
@@ -1123,12 +1076,11 @@ private fun ModelContextChip(
             }
         },
         modifier = Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
-            .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusSm))
-            .background(Tokens.Text.copy(alpha = 0.03f)),
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .background(Tokens.SurfaceHover),
     ) { measurables, constraints ->
-        val hpad = Tokens.ChipPadH.roundToPx()
-        val vpad = Tokens.ChipPadV.roundToPx()
+        val hpad = ControlPadH.roundToPx()
+        val vpad = ControlPadV.roundToPx()
         // In a scrolling row the width is unbounded; subtracting padding from
         // Constraints.Infinity yields an invalid constraint, so the children
         // measure unbounded there too.

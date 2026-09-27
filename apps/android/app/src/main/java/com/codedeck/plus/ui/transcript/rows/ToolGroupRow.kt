@@ -47,7 +47,7 @@ fun ToolGroupRow(steps: List<ToolStep>, summary: String, expanded: Boolean, onTo
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
             .background(Tokens.SurfaceRaised),
     ) {
         Row(

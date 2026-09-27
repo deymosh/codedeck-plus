@@ -24,6 +24,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.QuestionView
@@ -101,13 +107,13 @@ private fun QuestionAnswerBody(
                     .minimumInteractiveComponentSize()
                     .fillMaxWidth()
                     .padding(top = Tokens.Space1)
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .clip(RoundedCornerShape(Tokens.RadiusMd + 4.dp))
                     .background(if (on) Tokens.SurfaceHover else Tokens.SurfaceInput)
                     .clickable { selected = if (on) selected - i else selected + i }
-                    .padding(Tokens.Space2),
+                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2 + 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
             ) {
-                Text(if (on) "☑" else "☐", color = Tokens.Text)
+                Icon(if (on) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank, contentDescription = null, tint = if (on) Tokens.Text else Tokens.TextMuted, modifier = Modifier.size(20.dp))
                 Column {
                     Text(opt.label, color = Tokens.Text, fontSize = Tokens.TextSm)
                     opt.description?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextXs) }
@@ -132,10 +138,10 @@ private fun QuestionAnswerBody(
                     .minimumInteractiveComponentSize()
                     .fillMaxWidth()
                     .padding(top = Tokens.Space1)
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
+                    .clip(RoundedCornerShape(Tokens.RadiusMd + 4.dp))
                     .background(Tokens.SurfaceInput)
                     .clickable { if (i == freeTextIndex) showTextInput = true else onSelect(listOf(i)) }
-                    .padding(Tokens.Space2),
+                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2 + 2.dp),
             ) {
                 Column {
                     Text(opt.label, color = Tokens.Text, fontSize = Tokens.TextSm)
@@ -175,7 +181,7 @@ fun QuestionCard(
     val multi = item.questions.size > 1
 
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusMd)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusLg)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
     ) {
         if (item.answered != null || active == null) {
             item.questions.forEach { q ->

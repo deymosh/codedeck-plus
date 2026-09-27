@@ -59,7 +59,7 @@ fun TranscriptMarkdownTable(content: String, node: ASTNode, style: TextStyle) {
 
     BoxWithConstraints(
         Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
             .background(Tokens.Surface),
     ) {
         val minTableWidth = if (constraints.hasBoundedWidth) maxWidth else 0.dp

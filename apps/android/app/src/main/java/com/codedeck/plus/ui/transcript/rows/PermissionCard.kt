@@ -14,6 +14,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.PermissionOption
@@ -60,7 +62,7 @@ fun PermissionCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
             .background(Tokens.SurfaceRaised)
             .padding(Tokens.Space3),
     ) {
@@ -105,12 +107,13 @@ internal fun ActionChip(
         label,
         color = color,
         fontSize = Tokens.TextSm,
+        fontWeight = FontWeight.Medium,
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(Tokens.RadiusSm))
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
             .background(Tokens.SurfaceHover)
             .clickable(onClick = onClick)
-            .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
+            .padding(horizontal = Tokens.Space4, vertical = Tokens.Space2),
     )
 }
 
@@ -119,7 +122,7 @@ internal fun ResolvedCard(title: String, description: String?, outcome: String, 
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .clip(RoundedCornerShape(Tokens.RadiusLg))
             .background(Tokens.SurfaceRaised)
             .padding(Tokens.Space3),
     ) {

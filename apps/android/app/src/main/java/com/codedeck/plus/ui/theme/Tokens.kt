@@ -35,6 +35,8 @@ object Tokens {
     val TextMd = 14.sp
     val TextLg = 16.sp
     val TextXl = 20.sp
+    /** A page's own title. */
+    val TextTitle = 26.sp
 
     // --- Fonts (tokens.css --font-sans / --font-mono) ---
     val FontSans = FontFamily.Default
@@ -47,14 +49,13 @@ object Tokens {
     /** Android's minimum touch target (Material / accessibility guideline),
      *  not tokens.css's 44px web value. */
     val TapMin = 48.dp
-    /** Inner padding of the small rectangular header/badge chips. */
-    val ChipPadH = 6.dp
-    val ChipPadV = 2.dp
 
     // --- Radii (tokens.css --radius-*) ---
     val RadiusSm = 4.dp
     val RadiusMd = 8.dp
     val RadiusLg = 16.dp
+    /** Grouped settings blocks and the larger surfaces. */
+    val RadiusXl = 20.dp
     val RadiusPill = 999.dp
 
     // --- Z-order (tokens.css --z-*, Compose zIndex float) ---
@@ -67,17 +68,20 @@ object Tokens {
     const val TransitionFastMs = 120
     const val TransitionMs = 200
 
-    // --- Color ramp (tokens.css: dark-only, near-black monochrome) ---
+    // --- Color ramp: dark-only, monochrome. The page is true black; each
+    // raised layer (a group, a card, a sheet) steps up in lightness, and
+    // white is the only accent. Colour is kept for state (running, waiting,
+    // failed), so it always means something. ---
     val Bg = Color(0xFF000000)
-    val Surface = Color(0xFF0A0A0A)
-    val SurfaceRaised = Color(0xFF111111)
-    val SurfaceInput = Color(0xFF0D0D0D)
-    val SurfaceHover = Color(0xFF1A1A1A)
-    val Border = Color(0xFF1A1A1A)
-    val BorderStrong = Color(0xFF333333)
-    val Text = Color(0xFFFFFFFF)
-    val TextMuted = Color(0xFF999999)
-    val TextDim = Color(0xFF555555)
+    val Surface = Color(0xFF0B0B0C)
+    val SurfaceRaised = Color(0xFF141416)
+    val SurfaceInput = Color(0xFF0F0F11)
+    val SurfaceHover = Color(0xFF1D1D20)
+    val Border = Color(0xFF222226)
+    val BorderStrong = Color(0xFF36363C)
+    val Text = Color(0xFFF7F7F8)
+    val TextMuted = Color(0xFFA0A0A8)
+    val TextDim = Color(0xFF5E5E66)
 
     // --- Accent: inversion-as-emphasis identity ---
     val Accent = Color(0xFFFFFFFF)

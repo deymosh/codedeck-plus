@@ -15,18 +15,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.TranscriptMarkdown
 
 /** A message the user sent. */
 @Composable
 fun UserMessageRow(text: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+    // Your turns sit on the right, set off from the agent's full-width text.
+    Row(Modifier.fillMaxWidth().padding(start = Tokens.Space7), horizontalArrangement = Arrangement.End) {
         Column(
             Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusLg))
-                .background(Tokens.SurfaceRaised)
-                .padding(Tokens.Space3),
+                .clip(RoundedCornerShape(topStart = Tokens.RadiusXl, topEnd = Tokens.RadiusXl, bottomStart = Tokens.RadiusXl, bottomEnd = Tokens.RadiusSm))
+                .background(Tokens.SurfaceHover)
+                .padding(horizontal = Tokens.Space4, vertical = Tokens.Space3),
         ) {
             TranscriptMarkdown(text)
         }
@@ -40,7 +42,7 @@ fun AgentTextRow(text: String, isPlan: Boolean = false) {
     Column(
         Modifier
             .fillMaxWidth()
-            .let { if (isPlan) it.background(Tokens.SurfaceRaised, RoundedCornerShape(Tokens.RadiusMd)) else it }
+            .let { if (isPlan) it.background(Tokens.SurfaceRaised, RoundedCornerShape(Tokens.RadiusLg)) else it }
             .padding(if (isPlan) Tokens.Space3 else Tokens.Space1),
     ) {
         if (isPlan) {
@@ -68,7 +70,7 @@ fun ErrorRow(text: String, label: String? = null) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(Tokens.Danger.copy(alpha = 0.12f), RoundedCornerShape(Tokens.RadiusMd))
+            .background(Tokens.Danger.copy(alpha = 0.12f), RoundedCornerShape(Tokens.RadiusLg))
             .padding(Tokens.Space2),
     ) {
         if (label != null) {
@@ -127,7 +129,7 @@ fun OutboxRow(item: uniffi.client_ffi.UniffiOutboxItem, onRetry: (String) -> Uni
             .fillMaxWidth()
             .background(
                 if (failed) Tokens.Danger.copy(alpha = 0.1f) else Tokens.SurfaceRaised,
-                RoundedCornerShape(Tokens.RadiusMd),
+                RoundedCornerShape(Tokens.RadiusLg),
             )
             .padding(Tokens.Space2),
     ) {
@@ -151,7 +153,7 @@ fun OutboxRow(item: uniffi.client_ffi.UniffiOutboxItem, onRetry: (String) -> Uni
                     fontSize = Tokens.TextXs,
                     modifier = Modifier
                         .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(Tokens.RadiusSm))
+                        .clip(RoundedCornerShape(Tokens.RadiusMd + 4.dp))
                         .background(Tokens.SurfaceHover)
                         .clickable { onRetry(item.id) }
                         .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),

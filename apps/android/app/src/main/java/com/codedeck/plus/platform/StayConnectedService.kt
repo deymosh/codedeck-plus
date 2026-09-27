@@ -37,7 +37,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import uniffi.client_ffi.persistedRelays
 import uniffi.client_ffi.persistedTorProxyEnabled
 
 private const val CHANNEL_ID = "codedeck_stay_connected"
@@ -206,20 +205,13 @@ class StayConnectedService : Service() {
         val vault = KeyVault(applicationContext)
         val identity = identitySignerFor(applicationContext, login, vault) ?: return null
         val notifier = Notifier(applicationContext)
-        // `Core::spawn` dials its WebSocket transport from the constructor's
-        // `relays` argument alone -- it never falls back to whatever it
-        // separately hydrates from the db once already running -- so an
-        // empty list here would leave every boot connected to nothing,
-        // regardless of what the user actually has persisted. `persistedRelays`/
-        // `persistedTorProxyEnabled` are the same pre-init read
-        // `apps/mobile`'s `createPhoneCoreNative.ts` does from its own KV
-        // before calling `core.init`, against the SAME db file `Core` is
-        // about to open below.
+        // Whether Orbot is on must be known before the core's first
+        // connection, so it is read from the SAME db file `Core` is about to
+        // open, ahead of it. The relays need no such read: the core dials the
+        // paired machines' own, from that database.
         val dbPath = applicationContext.getDatabasePath(CORE_DATABASE).absolutePath
-        val relays = persistedRelays(dbPath)
         val torProxyEnabled = persistedTorProxyEnabled(dbPath)
         return CoreHost(
-            relays = relays,
             identity = identity,
             sessionKeys = vault.sessionKeyStore(),
             notifier = notifier,
@@ -255,14 +247,14 @@ class StayConnectedService : Service() {
         // a changed summary reposts, and only while the notification is up —
         // demoted, there is nothing to update.
         scope.launch {
-            combine(core.machines, core.connection, core.settings) { machines, connection, settings ->
+            combine(core.machines, core.connection) { machines, connection ->
                 val all = machines?.machines.orEmpty()
                 stayConnectedStatus(
                     machineCount = all.size,
                     sessionStates = all.flatMap { m -> m.sessions.map { it.state } },
                     connectionStatus = connection?.status,
                     connectedRelays = connection?.connectedRelays?.size ?: 0,
-                    configuredRelays = settings?.relays?.size ?: 0,
+                    configuredRelays = all.flatMap { it.relays }.distinct().size,
                 )
             }
                 .distinctUntilChanged()

@@ -54,7 +54,6 @@ import uniffi.client_ffi.UniffiUiView
  * for.
  */
 class CoreHost(
-    relays: List<String>,
     identity: UniffiIdentitySigner,
     sessionKeys: UniffiSessionKeyStore?,
     notifier: UniffiNotifier,
@@ -142,7 +141,7 @@ class CoreHost(
     // Constructed last: `Core` holds `this` as its listener and may call back
     // from its own thread straight away, so every field a callback touches
     // (the refreshers above) must already be initialized.
-    private val core: Core = Core(relays, identity, sessionKeys, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
+    private val core: Core = Core(identity, sessionKeys, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
 
     fun start() {
         core.start()
