@@ -319,7 +319,7 @@ impl Core {
         });
         let ws = WsTransport::new(WsConfig {
             relays: config.relays.clone(),
-            identity: config.identity.clone(),
+            auth: Rc::new(config.identity.clone()),
             proxy: if config.tor { config.proxy.clone() } else { None },
         });
         // The HTTP port's own boot-time proxy — mirrors `WsConfig.proxy` above.

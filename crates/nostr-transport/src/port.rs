@@ -2,7 +2,39 @@
 //! connection, independent of whether it is the real [`crate::ws`] driver or
 //! a scripted fake.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+
+use protocol::crypto::Keypair;
+use protocol::nip42::build_auth_event;
+use protocol::nostr_event::SignedEvent;
+
+/// Answers a relay's NIP-42 `AUTH` challenge: signs the kind-22242 event
+/// with the side's own identity. A local key answers at once; a key held
+/// elsewhere (a phone's external signer) may take a while, and the
+/// transport keeps serving the relay's other traffic meanwhile.
+pub trait AuthSigner {
+    /// The AUTH event answering `challenge` from `relay`, dated `now_ms`.
+    fn sign_auth(
+        &self,
+        relay: &str,
+        challenge: &str,
+        now_ms: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<SignedEvent, String>> + '_>>;
+}
+
+impl AuthSigner for Keypair {
+    fn sign_auth(
+        &self,
+        relay: &str,
+        challenge: &str,
+        now_ms: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<SignedEvent, String>> + '_>> {
+        let event = build_auth_event(self, relay, challenge, now_ms).map_err(|e| e.to_string());
+        Box::pin(async move { event })
+    }
+}
 
 /// A relay subscription filter (the subset CodeDeck+ uses).
 #[derive(Debug, Clone, PartialEq, Eq)]

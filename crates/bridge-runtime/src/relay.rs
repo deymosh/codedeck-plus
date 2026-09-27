@@ -132,7 +132,7 @@ impl Relays {
         inputs: mpsc::UnboundedSender<Input>,
     ) -> Self {
         let bridge_pubkey = keys.pubkey_hex.clone();
-        let transport = WsTransport::new(WsConfig { relays, identity: keys.clone(), proxy });
+        let transport = WsTransport::new(WsConfig { relays, auth: Rc::new(keys.clone()), proxy });
         transport.ensure_connected();
 
         let (jobs, mut queue) = mpsc::unbounded_channel::<Job>();

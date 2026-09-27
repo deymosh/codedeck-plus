@@ -22,6 +22,6 @@ pub mod ws;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-pub use port::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
+pub use port::{AuthSigner, Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
 pub use publish::{classify_publish, combine_publish, PublishResult, PublishVerdict};
 pub use ws::{WsConfig, WsTransport};

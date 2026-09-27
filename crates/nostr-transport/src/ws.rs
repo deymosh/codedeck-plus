@@ -44,10 +44,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::publish::{PublishResult, PublishVerdict};
-use protocol::crypto::Keypair;
-use protocol::nip42::build_auth_event;
 use protocol::nostr_event::SignedEvent;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::error::TrySendError;
@@ -62,7 +60,7 @@ use url::Url;
 
 use super::frames::{self, RelayMessage};
 use super::router::{Router, RouterAction};
-use crate::port::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
+use crate::port::{AuthSigner, Filter, NostrEvent, SubCallbacks, Transport, TransportSub};
 
 /// Ping every relay this often (all at once, so the radio wakes once per
 /// round rather than once per relay).
@@ -261,7 +259,7 @@ enum Ended {
 
 struct State {
     relays: Vec<String>,
-    identity: Keypair,
+    auth: Rc<dyn AuthSigner>,
     /// SOCKS5 `host:port` (Orbot). When set, EVERY relay is dialled through it
     /// — a `.onion` relay is only routable via Tor.
     proxy: Option<String>,
@@ -329,7 +327,8 @@ impl State {
 /// Config for [`WsTransport::new`].
 pub struct WsConfig {
     pub relays: Vec<String>,
-    pub identity: Keypair,
+    /// Signs the answers to relays' NIP-42 `AUTH` challenges.
+    pub auth: Rc<dyn AuthSigner>,
     pub proxy: Option<String>,
 }
 
@@ -369,7 +368,7 @@ impl WsTransport {
         Self {
             state: Rc::new(RefCell::new(State {
                 relays: config.relays,
-                identity: config.identity,
+                auth: config.auth,
                 proxy: config.proxy,
                 router: Router::new(),
                 conns: HashMap::new(),
@@ -886,15 +885,40 @@ impl WsTransport {
         self.state.borrow().subs.get(sub_id).map(|e| Rc::clone(&e.callbacks.on_close))
     }
 
+    /// Sign the answer to `relay`'s challenge and send it on the
+    /// connection that asked. A signer that answers at once is answered
+    /// inline; a slower one off this call, and its answer is dropped if that
+    /// connection is gone by then (a new one gets its own challenge).
     fn answer_auth(&self, relay: &str, challenge: &str) {
-        let mut st = self.state.borrow_mut();
-        let event = match build_auth_event(&st.identity, relay, challenge, now_ms()) {
+        let (auth, generation) = {
+            let st = self.state.borrow();
+            let Some(c) = st.conns.get(relay) else { return };
+            (Rc::clone(&st.auth), c.generation)
+        };
+        let this = self.clone();
+        let (relay, challenge) = (relay.to_string(), challenge.to_string());
+        let answer = async move {
+            let signed = auth.sign_auth(&relay, &challenge, now_ms()).await;
+            this.send_auth(&relay, generation, signed);
+        };
+        let mut answer = Box::pin(answer);
+        if answer.as_mut().now_or_never().is_none() {
+            tokio::task::spawn_local(answer);
+        }
+    }
+
+    fn send_auth(&self, relay: &str, generation: u64, signed: Result<SignedEvent, String>) {
+        let event = match signed {
             Ok(event) => event,
             Err(err) => {
                 log::warn!("ws: could not sign the AUTH answer for {relay}: {err}");
                 return;
             }
         };
+        let mut st = self.state.borrow_mut();
+        if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
+            return;
+        }
         st.router.auth_sent(relay, &event.id);
         if let Some(c) = st.conns.get(relay) {
             c.send(frames::auth_frame(&event));
@@ -1098,7 +1122,7 @@ mod tests {
     fn transport(mock: &MockRelay, phone: &Keypair) -> WsTransport {
         WsTransport::new(WsConfig {
             relays: vec![mock.url.clone()],
-            identity: phone.clone(),
+            auth: Rc::new(phone.clone()),
             proxy: None,
         })
     }
@@ -1277,7 +1301,7 @@ mod tests {
                     drop(tcp);
                 });
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
-                let t = WsTransport::new(WsConfig { relays: vec![url], identity: phone, proxy: None });
+                let t = WsTransport::new(WsConfig { relays: vec![url], auth: Rc::new(phone), proxy: None });
                 t.state.borrow_mut().timing = fast_timing();
                 t.ensure_connected();
                 assert_eq!(t.state.borrow().conns.len(), 1);
@@ -1305,7 +1329,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = WsTransport::new(WsConfig {
                     relays: vec![url],
-                    identity: phone.clone(),
+                    auth: Rc::new(phone.clone()),
                     proxy: None,
                 });
                 t.state.borrow_mut().timing = fast_timing();
@@ -1348,7 +1372,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = WsTransport::new(WsConfig {
                     relays: vec![url],
-                    identity: phone.clone(),
+                    auth: Rc::new(phone.clone()),
                     proxy: None,
                 });
                 t.ensure_connected();
@@ -1447,6 +1471,52 @@ mod tests {
                     .unwrap()
                     .iter()
                     .any(|tag| tag[0] == "challenge" && tag[1] == "chal-42"));
+            })
+            .await;
+    }
+
+    /// A signer that answers only after a while (an app on the phone).
+    struct SlowSigner(Keypair);
+    impl AuthSigner for SlowSigner {
+        fn sign_auth(
+            &self,
+            relay: &str,
+            challenge: &str,
+            now_ms: u64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SignedEvent, String>> + '_>> {
+            let (relay, challenge) = (relay.to_string(), challenge.to_string());
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                self.0.sign_auth(&relay, &challenge, now_ms).await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_auth_signer_still_answers_the_challenge() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![mock.url.clone()],
+                    auth: Rc::new(SlowSigner(phone.clone())),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                let _sub = t.subscribe(
+                    a_filter(&phone),
+                    SubCallbacks {
+                        on_event: Rc::new(|_| {}),
+                        on_eose: Rc::new(|| {}),
+                        on_close: Rc::new(|_| {}),
+                    },
+                );
+                let _req = mock.next_frame().await;
+                mock.push(r#"["AUTH","chal-slow"]"#.to_string());
+                let auth = mock.next_frame().await;
+                let v: Vec<Value> = serde_json::from_str(&auth).unwrap();
+                assert_eq!((v[0].as_str(), v[1]["pubkey"].as_str()), (Some("AUTH"), Some(phone.pubkey_hex.as_str())));
             })
             .await;
     }
@@ -1601,7 +1671,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = WsTransport::new(WsConfig {
                     relays: vec![mock.url.clone(), silent.clone()],
-                    identity: phone.clone(),
+                    auth: Rc::new(phone.clone()),
                     proxy: None,
                 });
                 t.ensure_connected();
@@ -1703,7 +1773,7 @@ mod tests {
                 let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
                 let t = WsTransport::new(WsConfig {
                     relays: mocks.iter().map(|m| m.url.clone()).collect(),
-                    identity: phone.clone(),
+                    auth: Rc::new(phone.clone()),
                     proxy: None,
                 });
                 t.ensure_connected();
