@@ -145,7 +145,17 @@ a phone might use, in the order to try, e.g.
 For a phone on Orbot, run an onion service that forwards to
 `direct.onionListen` (Tor: `HiddenServicePort 7448 127.0.0.1:7448`) and add
 `ws://<name>.onion:7448` to the endpoints; the phone only uses `.onion`
-endpoints while Orbot is on. See [`PROTOCOL.md`](PROTOCOL.md#direct-link).
+endpoints while Orbot is on. An onion service on another host or container
+(the Compose `codedeck-tor` one) cannot reach that loopback listener: point
+it at the `wss://` listener instead (`HiddenServicePort 7447
+codedeck-bridge:7447`) and advertise `wss://<name>.onion:7447`; the phone
+pins the certificate through Tor all the same. See
+[`PROTOCOL.md`](PROTOCOL.md#direct-link).
+
+Under Docker Compose, set `CODEDECK_DIRECT_LISTEN=0.0.0.0:7447`, publish the
+port (the commented `ports:` in `docker-compose.yml`), and set
+`CODEDECK_DIRECT_ENDPOINTS` to the host's addresses: inside the container the
+bridge only sees its container address.
 
 ## Files
 
