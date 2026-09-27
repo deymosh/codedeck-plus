@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use agent_protocol::{BridgeFrame, BridgeMessage, Frame};
 use protocol::events::BridgeToPhone;
 
-use crate::io::{Effect, TimerId};
+use crate::io::{Addressee, Effect, TimerId};
 
 /// What an armed timer is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +34,11 @@ impl Out {
         self.effects.push(effect);
     }
 
+    /// Publish to the phones (identities) in `to`, each encrypted to the
+    /// identity itself until the engine addresses it to a session key.
     pub fn publish(&mut self, to: Vec<String>, message: BridgeToPhone) {
         if !to.is_empty() {
+            let to = to.into_iter().map(|phone| Addressee { key: phone.clone(), phone }).collect();
             self.effects.push(Effect::Publish { to, message });
         }
     }

@@ -14,7 +14,7 @@
 
 use std::rc::Rc;
 
-use bridge_core::{InboundEvent, Input, Via};
+use bridge_core::{Addressee, InboundEvent, Input, Via};
 use nostr::{EventBuilder, Keys, Kind, PublicKey, Tag, TagKind, Timestamp};
 use nostr_transport::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub, WsConfig, WsTransport};
 use protocol::chunking::frame_encoded_message;
@@ -68,18 +68,20 @@ impl EventFactory {
     }
 
     /// Every event `message` becomes for `phone`, in order.
-    pub fn events(&mut self, message: &BridgeToPhone, phone: &str, now_secs: u64) -> Result<Vec<SignedEvent>, String> {
+    /// The signed events carrying `message` to `to`: `p`-tagged to the
+    /// phone's identity, the payload encrypted to `to.key`.
+    pub fn events(&mut self, message: &BridgeToPhone, to: &Addressee, now_secs: u64) -> Result<Vec<SignedEvent>, String> {
         let json = protocol::encode_bridge_to_phone(message);
         let (kind, expiry) = kind_for(message);
         let frames = frame_encoded_message(&json, || hex::encode(rand::random::<[u8; 16]>()));
         let chunked = frames.len() > 1;
         let created_at = self.next_created_at(now_secs);
-        let recipient = PublicKey::from_hex(phone).map_err(|e| format!("bad phone key: {e}"))?;
+        let recipient = PublicKey::from_hex(&to.phone).map_err(|e| format!("bad phone key: {e}"))?;
         let signer = Keys::new(self.keys.secret_key.clone());
         frames
             .iter()
             .map(|frame| {
-                let content = encrypt_to(&self.keys.secret_key, phone, frame).map_err(|e| e.to_string())?;
+                let content = encrypt_to(&self.keys.secret_key, &to.key, frame).map_err(|e| e.to_string())?;
                 let mut tags = vec![Tag::public_key(recipient)];
                 for (name, value) in tags_for(message, &self.machine, chunked) {
                     tags.push(Tag::custom(TagKind::custom(name), [value]));
@@ -103,7 +105,7 @@ fn now_secs() -> u64 {
 }
 
 enum Job {
-    Publish { to: Vec<String>, message: Box<BridgeToPhone> },
+    Publish { to: Vec<Addressee>, message: Box<BridgeToPhone> },
     /// Resolves once every job queued before it is done.
     Flush(oneshot::Sender<()>),
 }
@@ -130,7 +132,7 @@ impl Relays {
         inputs: mpsc::UnboundedSender<Input>,
     ) -> Self {
         let bridge_pubkey = keys.pubkey_hex.clone();
-        let transport = WsTransport::new(WsConfig { relays, identity: keys.clone(), proxy });
+        let transport = WsTransport::new(WsConfig { relays, auth: Rc::new(keys.clone()), proxy });
         transport.ensure_connected();
 
         let (jobs, mut queue) = mpsc::unbounded_channel::<Job>();
@@ -143,10 +145,11 @@ impl Relays {
                         let _ = done.send(());
                     }
                     Job::Publish { to, message } => {
-                        for phone in to {
-                            let events = match factory.events(&message, &phone, now_secs()) {
+                        for addressee in to {
+                            let events = match factory.events(&message, &addressee, now_secs()) {
                                 Ok(events) => events,
                                 Err(err) => {
+                                    let phone = &addressee.phone;
                                     log::error!("[Relays] Could not build an event for {}...: {err}", &phone[..8.min(phone.len())]);
                                     continue;
                                 }
@@ -168,7 +171,7 @@ impl Relays {
         Self { transport, bridge_pubkey, inputs, commands: None, pairing: None, jobs }
     }
 
-    pub fn publish(&self, to: Vec<String>, message: BridgeToPhone) {
+    pub fn publish(&self, to: Vec<Addressee>, message: BridgeToPhone) {
         let _ = self.jobs.send(Job::Publish { to, message: Box::new(message) });
     }
 
@@ -284,28 +287,44 @@ mod tests {
         let bridge = generate_keypair();
         let phone = generate_keypair();
         let mut f = EventFactory::new(bridge.clone(), "laptop".into());
-        let hb = f.events(&heartbeat(), &phone.pubkey_hex, 1000).unwrap().remove(0);
+        let hb = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!((hb.kind, tag(&hb, "d"), tag(&hb, "p")), (SESSION_LIST_KIND, Some("laptop"), Some(phone.pubkey_hex.as_str())));
         assert_eq!(tag(&hb, "expiration"), None);
 
         let out = BridgeToPhone::Output(OutputMsg { session_id: "s".into(), seq: 7, entry: OutputEntry::new("t", EntryBody::Status { text: "x".into() }) });
-        let ev = f.events(&out, &phone.pubkey_hex, 1000).unwrap().remove(0);
+        let ev = f.events(&out, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!((ev.kind, tag(&ev, "s"), tag(&ev, "seq")), (LIVE_KIND, Some("s"), Some("7")));
         let plain = decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).unwrap();
         assert_eq!(protocol::decode_bridge_to_phone(&plain).unwrap(), out);
 
         let ack = BridgeToPhone::InputAck(protocol::events::InputAckMsg { session_id: "s".into(), input_id: "i".into() });
-        let ev = f.events(&ack, &phone.pubkey_hex, 1000).unwrap().remove(0);
+        let ev = f.events(&ack, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!(ev.kind, RESPONSE_KIND);
         assert_eq!(tag(&ev, "expiration").unwrap().parse::<u64>().unwrap(), ev.created_at + 3600);
+    }
+
+    fn to(phone: &str) -> Addressee {
+        Addressee { phone: phone.to_string(), key: phone.to_string() }
+    }
+
+    #[test]
+    fn a_session_key_encrypts_the_payload_and_the_identity_stays_the_recipient() {
+        let bridge = generate_keypair();
+        let (phone, session) = (generate_keypair(), generate_keypair());
+        let mut f = EventFactory::new(bridge.clone(), "laptop".into());
+        let addressee = Addressee { phone: phone.pubkey_hex.clone(), key: session.pubkey_hex.clone() };
+        let ev = f.events(&heartbeat(), &addressee, 1000).unwrap().remove(0);
+        assert_eq!(tag(&ev, "p"), Some(phone.pubkey_hex.as_str()));
+        assert!(decrypt_from(&session.secret_key, &bridge.pubkey_hex, &ev.content).is_ok());
+        assert!(decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).is_err());
     }
 
     #[test]
     fn created_at_strictly_increases_within_a_second() {
         let phone = generate_keypair();
         let mut f = EventFactory::new(generate_keypair(), "m".into());
-        let a = f.events(&heartbeat(), &phone.pubkey_hex, 1000).unwrap()[0].created_at;
-        let b = f.events(&heartbeat(), &phone.pubkey_hex, 1000).unwrap()[0].created_at;
+        let a = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap()[0].created_at;
+        let b = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap()[0].created_at;
         assert!(b > a);
     }
 
@@ -318,7 +337,7 @@ mod tests {
             seq: 1,
             entry: OutputEntry::new("t", EntryBody::Status { text: "x".repeat(100_000) }),
         });
-        let events = f.events(&big, &phone.pubkey_hex, 1000).unwrap();
+        let events = f.events(&big, &to(&phone.pubkey_hex), 1000).unwrap();
         assert!(events.len() >= 3);
         assert!(events.iter().all(|e| tag(e, "seq").is_none() && e.content.len() <= 65_535));
         assert!(events.iter().all(|e| e.created_at == events[0].created_at));

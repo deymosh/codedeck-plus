@@ -11,7 +11,6 @@ use protocol::events::{
     InputFailedReason, ModelsMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
-use super::session_keys::resolve_author;
 use super::{Engine, HostCall};
 use crate::catalog::{is_effort, is_mode};
 use crate::io::{Effect, InboundEvent, Via};
@@ -60,20 +59,18 @@ impl Engine {
                 }
             }
             Via::Commands => {
-                let Some(author) = resolve_author(&self.paired, &event.pubkey, now_secs) else {
+                if !self.paired.iter().any(|p| p.pubkey_hex == event.pubkey) {
                     log::info!("[Engine] Ignoring event from unknown pubkey: {}...", short(&event.pubkey));
                     return;
-                };
-                let Some(msg) = self.ingest.accept(event, &self.config.keys, now_secs) else { return };
-                log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&author.identity));
+                }
+                let keys = self.payload_keys(&event.pubkey, now_secs);
+                let Some(msg) = self.ingest.accept(event, &self.config.keys, &keys, now_secs) else { return };
+                log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
                 match msg {
-                    PhoneToBridge::SessionKey(_) if author.by_session_key => {
-                        log::warn!("[Engine] A session key tried to grant a session key — refused");
-                    }
                     PhoneToBridge::SessionKey(m) => {
-                        self.grant_session_key(&author.identity, m.session_key);
+                        self.grant_session_key(&event.pubkey, m.session_key);
                     }
-                    msg => self.dispatch(msg, &author.identity),
+                    msg => self.dispatch(msg, &event.pubkey),
                 }
             }
         }
@@ -118,7 +115,7 @@ impl Engine {
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
-            // Handled on arrival, where it is known who wrote it.
+            // Handled on arrival.
             PhoneToBridge::SessionKey(_) => {}
             PhoneToBridge::SetProviderProfile(m) => self.on_set_provider_profile(m, phone),
             PhoneToBridge::ProviderProfilesRequest(_) => {

@@ -237,8 +237,8 @@ pub struct PairRequestMsg {
     pub pubkey_hex: String,
     pub label: String,
     pub token: String,
-    /// A session key granted with the pairing, so a phone whose identity
-    /// key lives in an external signer needs one signer round, not two.
+    /// A session key granted with the pairing, so the `pair-ack` is
+    /// already encrypted to it.
     /// Only sent to a bridge advertising
     /// [`SESSION_KEYS`](crate::capabilities::SESSION_KEYS); the pairing QR
     /// does not say, so a phone may send it to any bridge, and one without
@@ -247,12 +247,13 @@ pub struct PairRequestMsg {
     pub session_key: Option<SessionKeyGrant>,
 }
 
-/// A key the phone's identity lets act for it towards one bridge: the
-/// bridge accepts commands authored by `pubkey_hex` as the identity's and
-/// encrypts its messages to it. The phone keeps the secret half locally, so
-/// signing and NIP-44 per message never reach an external signer. Only the
-/// identity itself can grant one (the grant arrives in an event the identity
-/// signed); a session key cannot extend itself.
+/// A key the phone's identity lets encrypt its traffic with one bridge: the
+/// NIP-44 payloads of the phone's commands may be encrypted with it, and the
+/// bridge encrypts its messages to it. The phone keeps the secret half
+/// locally, so decrypting and encrypting per message never reach an
+/// external signer. It never signs: every event stays authored by (and, from
+/// the bridge, `p`-tagged to) the identity, so the key can only read and
+/// write payloads inside events the identity signed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKeyGrant {
@@ -268,8 +269,8 @@ pub struct SessionKeyGrant {
 /// The longest a [`SessionKeyGrant`] may run.
 pub const SESSION_KEY_MAX_LIFETIME_SECS: u64 = 90 * 24 * 3600;
 
-/// `session-key`: grant (or rotate to) a session key. Must be authored by
-/// the paired identity itself.
+/// `session-key`: grant (or rotate to) a session key. Like every command,
+/// authored by the paired identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKeyMsg {

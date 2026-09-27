@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import uniffi.client_ffi.localIdentitySigner
 import uniffi.client_ffi.persistedRelays
 import uniffi.client_ffi.persistedTorProxyEnabled
 
@@ -153,7 +154,7 @@ class StayConnectedService : Service() {
 
     /** Blocking: reads the persisted settings and opens the core. */
     private fun openCore(): CoreHost {
-        val identitySecretHex = readOrCreateIdentitySecretHex(applicationContext)
+        val identity = localIdentitySigner(readOrCreateIdentitySecretHex(applicationContext))
         val notifier = Notifier(applicationContext)
         // `Core::spawn` dials its WebSocket transport from the constructor's
         // `relays` argument alone -- it never falls back to whatever it
@@ -169,7 +170,7 @@ class StayConnectedService : Service() {
         val torProxyEnabled = persistedTorProxyEnabled(dbPath)
         return CoreHost(
             relays = relays,
-            identitySecretHex = identitySecretHex,
+            identity = identity,
             notifier = notifier,
             dbPath = dbPath,
             // Orbot's SOCKS5 default -- sent unconditionally, same as

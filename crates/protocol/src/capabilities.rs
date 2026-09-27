@@ -13,7 +13,7 @@
 //!
 //! * **HARD GATE** — absence changes behaviour: [`IMAGES`] (the client shows
 //!   image attach only when the bridge advertises it), [`SESSION_KEYS`] (the
-//!   client acts through a session key only when the bridge honours one).
+//!   client grants a session key only to a bridge that honours one).
 //! * **PRESENCE MARKER** — detection is on payload data: [`SYNC_1`],
 //!   [`FOLDERS`]. Kept so a session list is self-describing.
 //! * **TRANSPORT BEACON** — [`CHUNKED`]: advertised on both sides, gated by
@@ -35,9 +35,9 @@ pub const IMAGES: &str = "images";
 // sides, gated by neither.
 pub const CHUNKED: &str = "chunked";
 // HARD GATE (client-side) — the bridge honours `session-key` grants: it
-// accepts commands authored by a granted key and encrypts to it. A client
-// sends commands from a session key only when this is advertised; to a
-// bridge without it, those commands would go unheard.
+// reads command payloads encrypted with a granted key and encrypts to it. A
+// client grants a key only when this is advertised; a bridge without it
+// could not read a payload encrypted with one.
 pub const SESSION_KEYS: &str = "session-keys";
 
 /// Every capability the reference bridge ships with.

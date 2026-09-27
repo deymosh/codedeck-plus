@@ -26,6 +26,7 @@ pub mod intent;
 pub mod nostr_client;
 pub mod ports;
 pub mod runtime;
+pub mod signer;
 pub mod stores;
 pub mod view;
 
@@ -38,6 +39,7 @@ pub use runtime::{
     SystemClock, TimeEntropy,
 };
 pub use dispatch::StoreId;
+pub use signer::{IdentitySigner, LocalSigner, SignerError};
 pub use intent::{Intent, IntentCtx, SessionImageSend};
 pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
@@ -52,3 +54,5 @@ pub use view::{
 /// Cargo dependencies of their own just to name a type.
 pub use client_core;
 pub use protocol;
+/// The Nostr event types the signer port speaks.
+pub use nostr;

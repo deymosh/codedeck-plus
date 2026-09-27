@@ -21,7 +21,7 @@
 use std::collections::HashSet;
 
 use nostr::key::{Keys, PublicKey};
-use nostr::{EventBuilder, Kind, Tag, Timestamp};
+use nostr::{EventBuilder, Kind, Tag, Timestamp, UnsignedEvent};
 
 use protocol::chunking::{AssemblerResult, ChunkAssembler};
 use protocol::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
@@ -77,46 +77,65 @@ pub enum EgressError {
     /// The recipient pubkey or our own key was unusable.
     #[error("crypto: {0}")]
     Crypto(#[from] CryptoError),
-    /// Schnorr signing failed (should not happen with a valid identity key).
+    /// Signing failed: a local key's Schnorr signature (should not happen), or
+    /// the identity's signer refused or failed.
     #[error("sign: {0}")]
     Sign(String),
 }
 
-/// Encode (egress-validated), version-stamp, NIP-44-encrypt, and sign one
-/// phone→bridge command as a [`COMMAND_KIND`] event carrying `["p", machine]`
-/// and a NIP-40 `["expiration", …]` tag.
-///
-/// The returned [`SignedEvent`] is what the caller must re-publish verbatim on
-/// retry — see the module docs (CDX-086).
+/// Encode (egress-validated) and version-stamp one phone→bridge command: the
+/// plaintext a command event encrypts.
+pub fn command_plaintext(msg: &PhoneToBridge) -> Result<String, EgressError> {
+    let encoded = encode_phone_to_bridge(msg).map_err(EgressError::Invalid)?;
+    Ok(stamp_command(&encoded))
+}
+
+/// The unsigned [`COMMAND_KIND`] event for `msg` from `author_pubkey_hex`:
+/// `content` (the NIP-44 ciphertext of [`command_plaintext`]) with
+/// `["p", machine]` and a NIP-40 `["expiration", …]` tag. Split from
+/// [`build_command`] for a key that signs elsewhere (an external signer).
 ///
 /// `now_ms` is injected wall-clock in milliseconds; `created_at` is
 /// `now_ms / 1000`, matching the TS `Math.floor(now() / 1000)`.
-pub fn build_command(
-    identity: &Keypair,
+pub fn command_event(
+    author_pubkey_hex: &str,
     machine_pubkey_hex: &str,
     msg: &PhoneToBridge,
+    content: String,
     now_ms: u64,
-) -> Result<SignedEvent, EgressError> {
-    let encoded = encode_phone_to_bridge(msg).map_err(EgressError::Invalid)?;
-    let stamped = stamp_command(&encoded);
-
+) -> Result<UnsignedEvent, EgressError> {
     let machine_pk =
         PublicKey::from_hex(machine_pubkey_hex).map_err(|_| CryptoError::InvalidKey)?;
-    let content = encrypt_to(&identity.secret_key, machine_pubkey_hex, &stamped)?;
-
+    let author_pk = PublicKey::from_hex(author_pubkey_hex).map_err(|_| CryptoError::InvalidKey)?;
     let created_at = now_ms / 1000;
     let expiration = created_at + COMMAND_EXPIRY_SECONDS;
-    let keys = Keys::new(identity.secret_key.clone());
-
-    let event = EventBuilder::new(Kind::Custom(kind_for_message(msg)), content)
+    let mut event = EventBuilder::new(Kind::Custom(kind_for_message(msg)), content)
         .tags([
             Tag::public_key(machine_pk),
             Tag::expiration(Timestamp::from(expiration)),
         ])
         .custom_created_at(Timestamp::from(created_at))
-        .sign_with_keys(&keys)
-        .map_err(|e| EgressError::Sign(e.to_string()))?;
+        .build(author_pk);
+    event.ensure_id();
+    Ok(event)
+}
 
+/// Encode (egress-validated), version-stamp, NIP-44-encrypt, and sign one
+/// phone→bridge command with `key` — see [`command_event`] for its shape.
+///
+/// The returned [`SignedEvent`] is what the caller must re-publish verbatim on
+/// retry — see the module docs (CDX-086).
+pub fn build_command(
+    key: &Keypair,
+    machine_pubkey_hex: &str,
+    msg: &PhoneToBridge,
+    now_ms: u64,
+) -> Result<SignedEvent, EgressError> {
+    let stamped = command_plaintext(msg)?;
+    let content = encrypt_to(&key.secret_key, machine_pubkey_hex, &stamped)?;
+    let event = command_event(&key.pubkey_hex, machine_pubkey_hex, msg, content, now_ms)?
+        .sign_with_keys(&Keys::new(key.secret_key.clone()))
+        .map_err(|e| EgressError::Sign(e.to_string()))?;
     Ok(SignedEvent::from_nostr(&event))
 }
 
@@ -211,8 +230,8 @@ impl BridgeApi {
         &self.diagnostics
     }
 
-    /// Ingest one relay event. Never throws; mutates only the reassembler and the
-    /// diagnostics.
+    /// Ingest one relay event, decrypting it with `key`. Never throws;
+    /// mutates only the reassembler and the diagnostics.
     ///
     /// `is_known_machine` is decided by the runtime against the paired-machine
     /// list + active pairing candidate. `now_ms` drives the reassembler's TTL
@@ -220,23 +239,23 @@ impl BridgeApi {
     pub fn ingest(
         &mut self,
         event: &IncomingEvent<'_>,
-        identity: &Keypair,
+        key: &Keypair,
         is_known_machine: bool,
         now_ms: u64,
     ) -> Ingested {
         if !is_known_machine {
             return Ingested::UnknownMachine;
         }
+        match decrypt_from(&key.secret_key, event.pubkey, event.content) {
+            Ok(text) => self.ingest_plaintext(event, text, now_ms),
+            Err(err) => self.decrypt_failed(event, err.to_string()),
+        }
+    }
 
-        let plaintext = match decrypt_from(&identity.secret_key, event.pubkey, event.content) {
-            Ok(text) => text,
-            Err(err) => {
-                self.record_invalid(event, InvalidStage::Decrypt, err.to_string());
-                self.diagnostics.decrypt_failures += 1;
-                return Ingested::DecryptFailed;
-            }
-        };
-
+    /// The rest of [`Self::ingest`] for an event already decrypted elsewhere
+    /// (by the identity's signer). The caller has checked the author is a
+    /// known machine.
+    pub fn ingest_plaintext(&mut self, event: &IncomingEvent<'_>, plaintext: String, now_ms: u64) -> Ingested {
         // Oversize-message reassembly. A plaintext that is not a `chunk` envelope
         // passes straight through; a fragment is buffered until its group
         // completes, then the reassembled JSON takes its place.
@@ -259,6 +278,13 @@ impl BridgeApi {
                 Ingested::DecodeFailed
             }
         }
+    }
+
+    /// Record that `event` could not be decrypted (`error` says why).
+    pub fn decrypt_failed(&mut self, event: &IncomingEvent<'_>, error: String) -> Ingested {
+        self.record_invalid(event, InvalidStage::Decrypt, error);
+        self.diagnostics.decrypt_failures += 1;
+        Ingested::DecryptFailed
     }
 
     /// Allocate a `create-folder` request id and remember it as outstanding.

@@ -190,6 +190,11 @@ impl Rig {
     // --- the phone ---
 
     pub fn phone_event(&mut self, from: &Keypair, msg: Value, via: Via) -> InboundEvent {
+        self.phone_event_via_key(from, from, msg, via)
+    }
+
+    /// An event written by `from` whose payload `key` encrypted.
+    pub fn phone_event_via_key(&mut self, from: &Keypair, key: &Keypair, msg: Value, via: Via) -> InboundEvent {
         // Unique across rigs: a restarted engine remembers processed ids.
         static EVENTS: AtomicU64 = AtomicU64::new(0);
         let n = EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -197,7 +202,7 @@ impl Rig {
             id: format!("ev{n}"),
             pubkey: from.pubkey_hex.clone(),
             created_at: self.system_now() / 1000,
-            content: encrypt_to(&from.secret_key, &self.bridge.pubkey_hex, &msg.to_string()).unwrap(),
+            content: encrypt_to(&key.secret_key, &self.bridge.pubkey_hex, &msg.to_string()).unwrap(),
         };
         self.input(Input::RelayEvent { event: event.clone(), via });
         event
@@ -215,7 +220,7 @@ impl Rig {
         let mut rest = Vec::new();
         for effect in self.take() {
             match effect {
-                Effect::Publish { to, message } => out.push((to, message)),
+                Effect::Publish { to, message } => out.push((to.into_iter().map(|a| a.phone).collect(), message)),
                 other => rest.push(other),
             }
         }

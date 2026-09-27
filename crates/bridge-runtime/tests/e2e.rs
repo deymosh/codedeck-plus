@@ -29,7 +29,7 @@ use client_runtime::client_core::connection::ConnectionStatus;
 use client_runtime::client_core::stores::outbox::OutboxItemState;
 use client_runtime::protocol::crypto::generate_keypair;
 use client_runtime::protocol::events::BridgeToPhone;
-use client_runtime::{Core, CoreConfig, CoreObserver, CorePorts, Intent, MemoryTranscriptStore, SystemClock, TimeEntropy, TranscriptStore};
+use client_runtime::{Core, CoreConfig, CoreObserver, CorePorts, Intent, LocalSigner, MemoryTranscriptStore, SystemClock, TimeEntropy, TranscriptStore};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, LocalSet};
 
@@ -138,7 +138,7 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
             // --- the phone ---
             let store = Rc::new(MemoryTranscriptStore::new());
             let core = Core::spawn(
-                CoreConfig::new(vec![relay.clone()], generate_keypair(), None, false),
+                CoreConfig::new(vec![relay.clone()], Rc::new(LocalSigner(generate_keypair())), None, false),
                 CorePorts { transcript_store: store.clone(), ..CorePorts::default() },
                 Rc::new(Observer),
                 Rc::new(SystemClock),

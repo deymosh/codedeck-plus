@@ -685,6 +685,18 @@ internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod0 : com.sun.jna.C
 internal interface UniffiCallbackInterfaceUniffiHttpFetchMethod1 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`proxy`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceUniffiIdentitySignerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUniffiIdentitySignerMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`unsignedEventJson`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUniffiIdentitySignerMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`peerPubkeyHex`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUniffiIdentitySignerMethod3 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`peerPubkeyHex`: RustBuffer.ByValue,`ciphertext`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceUniffiNotifierMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`title`: RustBuffer.ByValue,`body`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
@@ -728,6 +740,31 @@ internal open class UniffiVTableCallbackInterfaceUniffiHttpFetch(
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceUniffiHttpFetch) {
         `put` = other.`put`
         `setProxy` = other.`setProxy`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+@Structure.FieldOrder("pubkeyHex", "signEvent", "nip44Encrypt", "nip44Decrypt", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceUniffiIdentitySigner(
+    @JvmField internal var `pubkeyHex`: UniffiCallbackInterfaceUniffiIdentitySignerMethod0? = null,
+    @JvmField internal var `signEvent`: UniffiCallbackInterfaceUniffiIdentitySignerMethod1? = null,
+    @JvmField internal var `nip44Encrypt`: UniffiCallbackInterfaceUniffiIdentitySignerMethod2? = null,
+    @JvmField internal var `nip44Decrypt`: UniffiCallbackInterfaceUniffiIdentitySignerMethod3? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `pubkeyHex`: UniffiCallbackInterfaceUniffiIdentitySignerMethod0? = null,
+        `signEvent`: UniffiCallbackInterfaceUniffiIdentitySignerMethod1? = null,
+        `nip44Encrypt`: UniffiCallbackInterfaceUniffiIdentitySignerMethod2? = null,
+        `nip44Decrypt`: UniffiCallbackInterfaceUniffiIdentitySignerMethod3? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceUniffiIdentitySigner(`pubkeyHex`,`signEvent`,`nip44Encrypt`,`nip44Decrypt`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceUniffiIdentitySigner) {
+        `pubkeyHex` = other.`pubkeyHex`
+        `signEvent` = other.`signEvent`
+        `nip44Encrypt` = other.`nip44Encrypt`
+        `nip44Decrypt` = other.`nip44Decrypt`
         `uniffiFree` = other.`uniffiFree`
     }
 
@@ -880,6 +917,19 @@ internal open class UniffiVTableCallbackInterfaceUniffiNotifier(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -892,6 +942,7 @@ internal interface UniffiLib : Library {
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceCoreListener.register(lib)
                 uniffiCallbackInterfaceUniffiHttpFetch.register(lib)
+                uniffiCallbackInterfaceUniffiIdentitySigner.register(lib)
                 uniffiCallbackInterfaceUniffiNotifier.register(lib)
                 }
         }
@@ -906,7 +957,7 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_client_ffi_fn_free_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_client_ffi_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identitySecretHex`: RustBuffer.ByValue,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_ffi_fn_constructor_core_new(`relays`: RustBuffer.ByValue,`identity`: Pointer,`listener`: Pointer,`notifier`: Pointer,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_client_ffi_fn_method_core_connection_view(`ptr`: Pointer,
     ): Long
@@ -966,6 +1017,20 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_method_uniffihttpfetch_set_proxy(`ptr`: Pointer,`proxy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_client_ffi_fn_clone_uniffiidentitysigner(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_client_ffi_fn_free_uniffiidentitysigner(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_client_ffi_fn_init_callback_vtable_uniffiidentitysigner(`vtable`: UniffiVTableCallbackInterfaceUniffiIdentitySigner,
+    ): Unit
+    fun uniffi_client_ffi_fn_method_uniffiidentitysigner_pubkey_hex(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_client_ffi_fn_method_uniffiidentitysigner_sign_event(`ptr`: Pointer,`unsignedEventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_client_ffi_fn_method_uniffiidentitysigner_nip44_encrypt(`ptr`: Pointer,`peerPubkeyHex`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_client_ffi_fn_method_uniffiidentitysigner_nip44_decrypt(`ptr`: Pointer,`peerPubkeyHex`: RustBuffer.ByValue,`ciphertext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_clone_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_client_ffi_fn_free_uniffinotifier(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -978,6 +1043,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_ffi_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_client_ffi_fn_func_local_identity_signer(`secretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
     fun uniffi_client_ffi_fn_func_persisted_relays(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_client_ffi_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1098,6 +1165,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_ffi_checksum_func_is_valid_provider_base_url(
     ): Short
+    fun uniffi_client_ffi_checksum_func_local_identity_signer(
+    ): Short
     fun uniffi_client_ffi_checksum_func_persisted_relays(
     ): Short
     fun uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled(
@@ -1150,6 +1219,14 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy(
     ): Short
+    fun uniffi_client_ffi_checksum_method_uniffiidentitysigner_pubkey_hex(
+    ): Short
+    fun uniffi_client_ffi_checksum_method_uniffiidentitysigner_sign_event(
+    ): Short
+    fun uniffi_client_ffi_checksum_method_uniffiidentitysigner_nip44_encrypt(
+    ): Short
+    fun uniffi_client_ffi_checksum_method_uniffiidentitysigner_nip44_decrypt(
+    ): Short
     fun uniffi_client_ffi_checksum_method_uniffinotifier_notify(
     ): Short
     fun uniffi_client_ffi_checksum_method_uniffinotifier_cancel(
@@ -1174,6 +1251,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_func_is_valid_provider_base_url() != 58480.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_func_local_identity_signer() != 57844.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_func_persisted_relays() != 10018.toShort()) {
@@ -1254,13 +1334,25 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_uniffihttpfetch_set_proxy() != 33556.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_uniffiidentitysigner_pubkey_hex() != 46584.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_uniffiidentitysigner_sign_event() != 60645.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_uniffiidentitysigner_nip44_encrypt() != 30221.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_uniffiidentitysigner_nip44_decrypt() != 4418.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_uniffinotifier_notify() != 16604.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_uniffinotifier_cancel() != 23418.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 46945.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_constructor_core_new() != 62691.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1829,17 +1921,17 @@ open class Core: Disposable, AutoCloseable, CoreInterface {
         this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
     }
     /**
-     * Builds the identity, spawns the dedicated core thread, and blocks
+     * Reads the identity's public key, spawns the dedicated core thread, and blocks
      * (this call is sync — Kotlin sees a plain constructor, not a suspend
      * fun) until the real `client_runtime::Core` has hydrated and is ready.
      * Hydration reads the whole local database, so this can take seconds on
      * a slow device: never call it on a UI or service main thread.
      */
-    constructor(`relays`: List<kotlin.String>, `identitySecretHex`: kotlin.String, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
+    constructor(`relays`: List<kotlin.String>, `identity`: UniffiIdentitySigner, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
         this(
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_constructor_core_new(
-        FfiConverterSequenceString.lower(`relays`),FfiConverterString.lower(`identitySecretHex`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),FfiConverterString.lower(`dbPath`),FfiConverterOptionalString.lower(`proxy`),FfiConverterBoolean.lower(`tor`),_status)
+        FfiConverterSequenceString.lower(`relays`),FfiConverterTypeUniffiIdentitySigner.lower(`identity`),FfiConverterTypeCoreListener.lower(`listener`),FfiConverterTypeUniffiNotifier.lower(`notifier`),FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),FfiConverterString.lower(`dbPath`),FfiConverterOptionalString.lower(`proxy`),FfiConverterBoolean.lower(`tor`),_status)
 }
     )
 
@@ -3003,6 +3095,400 @@ public object FfiConverterTypeUniffiHttpFetch: FfiConverter<UniffiHttpFetch, Poi
     override fun allocationSize(value: UniffiHttpFetch) = 8UL
 
     override fun write(value: UniffiHttpFetch, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * The phone's identity key, wherever it lives.
+ */
+public interface UniffiIdentitySigner {
+    
+    /**
+     * The identity's public key, lowercase hex. Called once, up front: the
+     * implementation knows it without asking the signer again.
+     */
+    fun `pubkeyHex`(): kotlin.String
+    
+    /**
+     * Sign the unsigned event JSON (the canonical event object with `id`
+     * and `pubkey`, no `sig`); return the signed event JSON. The core
+     * checks the answer is a valid signature over exactly that event.
+     */
+    fun `signEvent`(`unsignedEventJson`: kotlin.String): kotlin.String
+    
+    fun `nip44Encrypt`(`peerPubkeyHex`: kotlin.String, `plaintext`: kotlin.String): kotlin.String
+    
+    fun `nip44Decrypt`(`peerPubkeyHex`: kotlin.String, `ciphertext`: kotlin.String): kotlin.String
+    
+    companion object
+}
+
+/**
+ * The phone's identity key, wherever it lives.
+ */
+open class UniffiIdentitySignerImpl: Disposable, AutoCloseable, UniffiIdentitySigner {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_client_ffi_fn_free_uniffiidentitysigner(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_client_ffi_fn_clone_uniffiidentitysigner(pointer!!, status)
+        }
+    }
+
+    
+    /**
+     * The identity's public key, lowercase hex. Called once, up front: the
+     * implementation knows it without asking the signer again.
+     */override fun `pubkeyHex`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffiidentitysigner_pubkey_hex(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Sign the unsigned event JSON (the canonical event object with `id`
+     * and `pubkey`, no `sig`); return the signed event JSON. The core
+     * checks the answer is a valid signature over exactly that event.
+     */
+    @Throws(UniffiSignerException::class)override fun `signEvent`(`unsignedEventJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(UniffiSignerException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffiidentitysigner_sign_event(
+        it, FfiConverterString.lower(`unsignedEventJson`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(UniffiSignerException::class)override fun `nip44Encrypt`(`peerPubkeyHex`: kotlin.String, `plaintext`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(UniffiSignerException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffiidentitysigner_nip44_encrypt(
+        it, FfiConverterString.lower(`peerPubkeyHex`),FfiConverterString.lower(`plaintext`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(UniffiSignerException::class)override fun `nip44Decrypt`(`peerPubkeyHex`: kotlin.String, `ciphertext`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(UniffiSignerException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_uniffiidentitysigner_nip44_decrypt(
+        it, FfiConverterString.lower(`peerPubkeyHex`),FfiConverterString.lower(`ciphertext`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceUniffiIdentitySigner {
+    internal object `pubkeyHex`: UniffiCallbackInterfaceUniffiIdentitySignerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiIdentitySigner.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`pubkeyHex`(
+                )
+            }
+            val writeReturn = { value: kotlin.String -> uniffiOutReturn.setValue(FfiConverterString.lower(value)) }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `signEvent`: UniffiCallbackInterfaceUniffiIdentitySignerMethod1 {
+        override fun callback(`uniffiHandle`: Long,`unsignedEventJson`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiIdentitySigner.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`signEvent`(
+                    FfiConverterString.lift(`unsignedEventJson`),
+                )
+            }
+            val writeReturn = { value: kotlin.String -> uniffiOutReturn.setValue(FfiConverterString.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: UniffiSignerException -> FfiConverterTypeUniffiSignerError.lower(e) }
+            )
+        }
+    }
+    internal object `nip44Encrypt`: UniffiCallbackInterfaceUniffiIdentitySignerMethod2 {
+        override fun callback(`uniffiHandle`: Long,`peerPubkeyHex`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiIdentitySigner.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`nip44Encrypt`(
+                    FfiConverterString.lift(`peerPubkeyHex`),
+                    FfiConverterString.lift(`plaintext`),
+                )
+            }
+            val writeReturn = { value: kotlin.String -> uniffiOutReturn.setValue(FfiConverterString.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: UniffiSignerException -> FfiConverterTypeUniffiSignerError.lower(e) }
+            )
+        }
+    }
+    internal object `nip44Decrypt`: UniffiCallbackInterfaceUniffiIdentitySignerMethod3 {
+        override fun callback(`uniffiHandle`: Long,`peerPubkeyHex`: RustBuffer.ByValue,`ciphertext`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUniffiIdentitySigner.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`nip44Decrypt`(
+                    FfiConverterString.lift(`peerPubkeyHex`),
+                    FfiConverterString.lift(`ciphertext`),
+                )
+            }
+            val writeReturn = { value: kotlin.String -> uniffiOutReturn.setValue(FfiConverterString.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: UniffiSignerException -> FfiConverterTypeUniffiSignerError.lower(e) }
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeUniffiIdentitySigner.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceUniffiIdentitySigner.UniffiByValue(
+        `pubkeyHex`,
+        `signEvent`,
+        `nip44Encrypt`,
+        `nip44Decrypt`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_client_ffi_fn_init_callback_vtable_uniffiidentitysigner(vtable)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiIdentitySigner: FfiConverter<UniffiIdentitySigner, Pointer> {
+    internal val handleMap = UniffiHandleMap<UniffiIdentitySigner>()
+
+    override fun lower(value: UniffiIdentitySigner): Pointer {
+        return Pointer(handleMap.insert(value))
+    }
+
+    override fun lift(value: Pointer): UniffiIdentitySigner {
+        return UniffiIdentitySignerImpl(value)
+    }
+
+    override fun read(buf: ByteBuffer): UniffiIdentitySigner {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: UniffiIdentitySigner) = 8UL
+
+    override fun write(value: UniffiIdentitySigner, buf: ByteBuffer) {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
@@ -5104,8 +5590,8 @@ public object FfiConverterTypeUniffiUsageWindow: FfiConverterRustBuffer<UniffiUs
 
 
 /**
- * Returned by `Core::new` when the supplied identity secret doesn't parse —
- * the one thing that can go wrong before the background thread even starts.
+ * Returned by `Core::new` (and [`local_identity_signer`]) when something goes
+ * wrong before the core runs.
  */
 sealed class CoreInitException: kotlin.Exception() {
     
@@ -6523,6 +7009,69 @@ public object FfiConverterTypeUniffiIntentError : FfiConverterRustBuffer<UniffiI
 
 
 
+
+
+/**
+ * Why the signer did not answer: it refused, or it could not be reached.
+ * The field is `detail`, not `message`: see `UniffiHttpError`.
+ */
+sealed class UniffiSignerException: kotlin.Exception() {
+    
+    class Failed(
+        
+        val `detail`: kotlin.String
+        ) : UniffiSignerException() {
+        override val message
+            get() = "detail=${ `detail` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<UniffiSignerException> {
+        override fun lift(error_buf: RustBuffer.ByValue): UniffiSignerException = FfiConverterTypeUniffiSignerError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiSignerError : FfiConverterRustBuffer<UniffiSignerException> {
+    override fun read(buf: ByteBuffer): UniffiSignerException {
+        
+
+        return when(buf.getInt()) {
+            1 -> UniffiSignerException.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: UniffiSignerException): ULong {
+        return when(value) {
+            is UniffiSignerException.Failed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`detail`)
+            )
+        }
+    }
+
+    override fun write(value: UniffiSignerException, buf: ByteBuffer) {
+        when(value) {
+            is UniffiSignerException.Failed -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`detail`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
 /**
  * A UniFFI-crossable mirror of [`protocol::tristate::Tristate`] — see that
  * type's own doc comment for the keep/clear/set semantics this preserves.
@@ -7803,6 +8352,20 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_is_valid_provider_base_url(
         FfiConverterString.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * A signer for an identity whose secret the app holds itself (unwrapped
+         * from the platform keystore by the caller).
+         */
+    @Throws(CoreInitException::class) fun `localIdentitySigner`(`secretHex`: kotlin.String): UniffiIdentitySigner {
+            return FfiConverterTypeUniffiIdentitySigner.lift(
+    uniffiRustCallWithError(CoreInitException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_func_local_identity_signer(
+        FfiConverterString.lower(`secretHex`),_status)
 }
     )
     }

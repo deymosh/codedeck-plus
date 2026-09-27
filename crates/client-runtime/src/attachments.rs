@@ -7,12 +7,13 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{AeadCore, Aes256Gcm};
-use protocol::crypto::{bytes_to_hex, Keypair};
-use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
+use protocol::crypto::bytes_to_hex;
+use nostr::{EventBuilder, JsonUtil, Kind, PublicKey, Tag, Timestamp};
 use sha2::{Digest, Sha256};
 
 use crate::deadline::{remaining_budget, with_deadline, StageError};
 use crate::ports::LocalBoxFuture;
+use crate::signer::IdentitySigner;
 
 /// Blossom server used when the user has not set one.
 pub const DEFAULT_BLOSSOM_SERVER: &str = "https://blossom.descendant.io";
@@ -132,10 +133,11 @@ impl UploadOptions<'_> {
 /// Encrypt + upload one image; returns where it lives and its key + iv.
 /// `Err(StageError)` on
 /// definitive failure (the UI shows it and keeps the pending attachment for a
-/// retry). The BUD-02 auth event is signed with the phone's own key.
+/// retry). The BUD-02 auth event is signed by the phone's identity — the
+/// pubkey an allowlisting image server knows.
 pub async fn upload_encrypted_image(
     raw: &[u8],
-    identity: &Keypair,
+    signer: &dyn IdentitySigner,
     fetch: &dyn HttpFetch,
     opts: UploadOptions<'_>,
 ) -> Result<EncryptedImageRef, StageError> {
@@ -147,8 +149,8 @@ pub async fn upload_encrypted_image(
     let enc = encrypt_image(raw);
 
     let now_sec = opts.now_ms / 1000;
-    let keys = Keys::new(identity.secret_key.clone());
-    let auth_event = EventBuilder::new(Kind::Custom(BLOSSOM_AUTH_KIND), "Upload encrypted image via CodeDeck")
+    let author_pk = PublicKey::from_hex(&signer.pubkey_hex()).map_err(|e| StageError::Failed(e.to_string()))?;
+    let unsigned = EventBuilder::new(Kind::Custom(BLOSSOM_AUTH_KIND), "Upload encrypted image via CodeDeck")
         .tags([
             Tag::parse(["t".to_string(), "upload".to_string()])
                 .map_err(|e| StageError::Failed(e.to_string()))?,
@@ -158,8 +160,10 @@ pub async fn upload_encrypted_image(
                 .map_err(|e| StageError::Failed(e.to_string()))?,
         ])
         .custom_created_at(Timestamp::from_secs(now_sec))
-        .sign_with_keys(&keys)
-        .map_err(|e| StageError::Failed(e.to_string()))?;
+        .build(author_pk);
+    let auth_event = crate::signer::sign(signer, unsigned)
+        .await
+        .map_err(|e| StageError::Failed(format!("sign: {e}")))?;
     let auth_header = format!(
         "Nostr {}",
         base64_std(<nostr::Event as JsonUtil>::as_json(&auth_event).as_bytes())
@@ -304,7 +308,7 @@ mod tests {
 
         let mut opts = UploadOptions::at(1_700_000_000_000);
         opts.server = Some("https://blossom.example/");
-        let reference = upload_encrypted_image(raw, &phone, &fetch, opts)
+        let reference = upload_encrypted_image(raw, &crate::signer::LocalSigner(phone), &fetch, opts)
             .await
             .unwrap();
 
@@ -347,7 +351,7 @@ mod tests {
         let fetch = HangingFetch { calls: Rc::clone(&calls) };
         let started = tokio::time::Instant::now();
 
-        let r = upload_encrypted_image(b"x", &phone, &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_image(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
 
         assert!(matches!(r, Err(StageError::Timeout { .. })));
         // Attempt 1 hits the 45 s per-attempt cap; attempt 2 gets only what is
@@ -366,7 +370,7 @@ mod tests {
             calls: Rc::clone(&calls),
             statuses: RefCell::new(vec![200, 502]),
         };
-        let r = upload_encrypted_image(b"x", &phone, &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_image(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
         assert!(r.is_ok());
         assert_eq!(calls.borrow().len(), 2);
 
@@ -374,7 +378,7 @@ mod tests {
             calls: Rc::new(RefCell::new(Vec::new())),
             statuses: RefCell::new(vec![403]),
         };
-        let r = upload_encrypted_image(b"x", &phone, &fetch, UploadOptions::at(0)).await;
+        let r = upload_encrypted_image(b"x", &crate::signer::LocalSigner(phone.clone()), &fetch, UploadOptions::at(0)).await;
         assert!(matches!(r, Err(StageError::Failed(m)) if m.contains("403")));
     }
 }

@@ -12,7 +12,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use protocol::crypto::Keypair;
 use client_core::notifications::{
     classify_output_entry, is_agent_activity_entry, EmitInputs, NotifyEffect,
     NotifyEvent,
@@ -20,16 +19,18 @@ use client_core::notifications::{
 use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
+use client_core::stores::session_key::grant_expiry;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::settings::SettingsEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
+    BareMsg, PairRequestMsg, PhoneToBridge, SessionKeyGrant, SyncAckMsg, SyncRequestMsg, VersionFields,
 };
 use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
+use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
 
 /// A `client_core` store the runtime must re-serialize to the `Kv` after a
@@ -124,8 +125,8 @@ impl RouteResult {
 pub struct Router<'a> {
     pub stores: &'a mut CoreStores,
     pub transcript_store: &'a dyn TranscriptStore,
-    /// Phone identity — stamps the `pair-request`, decides self vs incoming.
-    pub identity: &'a Keypair,
+    /// The phone's keys — the `pair-request` names them.
+    pub keys: &'a PhoneKeys,
     pub now: u64,
     /// App visibility (debounced) — the unread/notify gate.
     pub visible: bool,
@@ -141,13 +142,13 @@ impl<'a> Router<'a> {
     pub fn new(
         stores: &'a mut CoreStores,
         transcript_store: &'a dyn TranscriptStore,
-        identity: &'a Keypair,
+        keys: &'a PhoneKeys,
         now: u64,
     ) -> Self {
         Self {
             stores,
             transcript_store,
-            identity,
+            keys,
             now,
             visible: true,
             notify_enabled: true,
@@ -603,7 +604,7 @@ impl<'a> Router<'a> {
             },
             PAIR_ACK_TIMEOUT_MS,
         );
-        let out = apply_pairing_effects(self.stores, self.identity, result);
+        let out = apply_pairing_effects(self.stores, self.keys, self.now, result);
         let paired = out.pairing_settled == Some(true);
         out.merge_into(r);
         // The bridge's greeting heartbeat (capabilities, folders, roots,
@@ -662,9 +663,15 @@ impl PairingEffectsOut {
 /// Run a [`client_core::stores::pairing::PairingResult`] against the stores:
 /// commit the new state, register the machine + learn its relays on `OnPaired`,
 /// and return the transport-affecting effects.
+///
+/// The `pair-request` grants the bridge the session key with the pairing, so
+/// a phone whose identity lives in an external signer needs one signer round;
+/// the new machine starts with that grant pending, confirmed by a pair-ack
+/// encrypted to the key.
 pub fn apply_pairing_effects(
     stores: &mut CoreStores,
-    identity: &Keypair,
+    keys: &PhoneKeys,
+    now: u64,
     result: client_core::stores::pairing::PairingResult,
 ) -> PairingEffectsOut {
     use client_core::stores::pairing::PairingPhase;
@@ -706,11 +713,14 @@ pub fn apply_pairing_effects(
                     machine: to,
                     msg: PhoneToBridge::PairRequest(PairRequestMsg {
                         version: VersionFields::default(),
-                        npub: identity.npub.clone(),
-                        pubkey_hex: identity.pubkey_hex.clone(),
+                        npub: keys.identity_npub.clone(),
+                        pubkey_hex: keys.identity_pubkey_hex.clone(),
                         label,
                         token,
-                        session_key: None,
+                        session_key: Some(SessionKeyGrant {
+                            pubkey_hex: keys.session_pubkey_hex.clone(),
+                            expires_at: grant_expiry(now),
+                        }),
                     }),
                 });
             }
@@ -725,6 +735,7 @@ pub fn apply_pairing_effects(
                     Some(candidate.machine.clone()),
                     host,
                 );
+                stores.machines.note_session_grant_sent(&candidate.pubkey_hex, grant_expiry(now));
                 if !candidate.relays.is_empty() {
                     for effect in stores.settings.add_relays(&candidate.relays) {
                         match effect {
@@ -820,11 +831,12 @@ mod tests {
         }
     }
 
-    async fn stores() -> (CoreStores, MemoryTranscriptStore, Keypair) {
+    async fn stores() -> (CoreStores, MemoryTranscriptStore, PhoneKeys) {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
-        (h.stores, ts, h.keypair)
+        let identity = protocol::crypto::generate_keypair();
+        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &h.session_key))
     }
 
     fn text_entry(content: &str) -> OutputEntry {

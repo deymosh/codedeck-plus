@@ -21,6 +21,7 @@ pub mod db;
 pub mod intent;
 pub mod notifier;
 pub mod observer;
+pub mod signer;
 pub mod views;
 
 use std::cell::RefCell;
@@ -35,7 +36,7 @@ use client_runtime::{
     Clock, ConnectionView, Core as RealCore, CoreConfig, CoreObserver, CorePorts, Entropy, SystemClock,
     TimeEntropy,
 };
-use protocol::crypto::keypair_from_secret_hex;
+use protocol::crypto::npub_from_hex;
 use tokio::sync::oneshot;
 
 use db::{open_native_db, KvSqlite, TranscriptStoreSqlite};
@@ -44,6 +45,7 @@ pub use intent::{UniffiIntent, UniffiIntentError};
 pub use notifier::UniffiNotifier;
 use notifier::NotifierAdapter;
 pub use observer::CoreListener;
+pub use signer::{local_identity_signer, UniffiIdentitySigner, UniffiSignerError};
 use observer::UniffiObserver;
 pub use views::{
     UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,
@@ -211,11 +213,11 @@ impl HttpFetch for HttpFetchAdapter {
     }
 }
 
-/// Returned by `Core::new` when the supplied identity secret doesn't parse —
-/// the one thing that can go wrong before the background thread even starts.
+/// Returned by `Core::new` (and [`local_identity_signer`]) when something goes
+/// wrong before the core runs.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum CoreInitError {
-    #[error("invalid identity secret: {detail}")]
+    #[error("invalid identity: {detail}")]
     BadIdentity { detail: String },
     #[error("core thread failed to start: {detail}")]
     ThreadSpawn { detail: String },
@@ -242,7 +244,7 @@ impl Drop for Core {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl Core {
-    /// Builds the identity, spawns the dedicated core thread, and blocks
+    /// Reads the identity's public key, spawns the dedicated core thread, and blocks
     /// (this call is sync — Kotlin sees a plain constructor, not a suspend
     /// fun) until the real `client_runtime::Core` has hydrated and is ready.
     /// Hydration reads the whole local database, so this can take seconds on
@@ -251,7 +253,8 @@ impl Core {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         relays: Vec<String>,
-        identity_secret_hex: String,
+        // The phone's identity: signs every event; see `signer.rs`.
+        identity: Arc<dyn UniffiIdentitySigner>,
         listener: Arc<dyn CoreListener>,
         notifier: Arc<dyn UniffiNotifier>,
         http: Option<Arc<dyn UniffiHttpFetch>>,
@@ -267,10 +270,9 @@ impl Core {
     ) -> Result<Arc<Self>, CoreInitError> {
         android_log::install();
         log::info!("Core::new: relays={relays:?} tor={tor} proxy={proxy:?} db_path={db_path}");
-        let identity = keypair_from_secret_hex(&identity_secret_hex)
-            .map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
-        let identity_npub = identity.npub.clone();
-        let config = CoreConfig::new(relays, identity, proxy, tor);
+        let identity_pubkey = identity.pubkey_hex();
+        let identity_npub =
+            npub_from_hex(&identity_pubkey).map_err(|e| CoreInitError::BadIdentity { detail: e.to_string() })?;
         let db_path = PathBuf::from(db_path);
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<RealCore, String>>();
@@ -288,6 +290,8 @@ impl Core {
                     let observer: Rc<dyn CoreObserver> = Rc::new(UniffiObserver { listener });
                     let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                     let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
+                    let signer = Rc::new(signer::SignerAdapter::new(identity, identity_pubkey));
+                    let config = CoreConfig::new(relays, signer, proxy, tor);
 
                     let conn = match open_native_db(&db_path) {
                         Ok(conn) => Rc::new(RefCell::new(conn)),
@@ -503,7 +507,7 @@ mod tests {
         let (_dir, db_path) = temp_db_path();
         let core = Core::new(
             vec![],
-            SEC_PHONE.to_string(),
+            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -512,7 +516,7 @@ mod tests {
             false,
         )
         .expect("core spawns");
-        let expected = keypair_from_secret_hex(SEC_PHONE).unwrap();
+        let expected = protocol::crypto::keypair_from_secret_hex(SEC_PHONE).unwrap();
 
         let npub = core.identity_npub();
         assert!(npub.starts_with("npub1"), "not a bech32 npub: {npub}");
@@ -529,7 +533,7 @@ mod tests {
         let (_dir, db_path) = temp_db_path();
         let core = Core::new(
             vec!["wss://relay-a.example".to_string()],
-            SEC_PHONE.to_string(),
+            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -554,7 +558,7 @@ mod tests {
             // boot, but this proves the persisted value wins over whatever
             // the constructor argument says once a db file already exists.
             vec!["wss://relay-a.example".to_string()],
-            SEC_PHONE.to_string(),
+            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -586,7 +590,7 @@ mod tests {
         // passed here. `AddRelay` mutates that store, not this argument.
         let core = Core::new(
             vec!["wss://relay-a.example".to_string()],
-            SEC_PHONE.to_string(),
+            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,
@@ -610,7 +614,7 @@ mod tests {
         let (_dir, db_path) = temp_db_path();
         let core = Core::new(
             vec![],
-            SEC_PHONE.to_string(),
+            local_identity_signer(SEC_PHONE.to_string()).unwrap(),
             Arc::new(NoopListener),
             Arc::new(NoopTestNotifier),
             None,

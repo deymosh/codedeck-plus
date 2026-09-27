@@ -25,6 +25,7 @@ use protocol::common::{CredentialValues, SessionOption};
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
+use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
 
 /// The `ui.responded_cards` key for question `index` of the ask `request_id`
@@ -340,7 +341,7 @@ pub enum Intent {
 pub fn apply(
     stores: &mut CoreStores,
     intent: Intent,
-    identity: &protocol::crypto::Keypair,
+    keys: &PhoneKeys,
     ctx: IntentCtx,
 ) -> IntentResult {
     let mut r = IntentResult::default();
@@ -419,24 +420,24 @@ pub fn apply(
         }
 
         Intent::BeginPairing { url, label } => match parse_pairing_url(&url) {
-            Ok(parts) => begin_pairing(stores, identity, PairingEvent::BeginPair { parts, label }, &mut r),
+            Ok(parts) => begin_pairing(stores, keys, ctx.now, PairingEvent::BeginPair { parts, label }, &mut r),
             Err(_) => stores.pairing.error = Some("invalid pairing URL".to_string()),
         },
         Intent::BeginManualPairing { npub, token, label } => match parse_manual_pair(&npub, &token) {
-            Ok(parts) => begin_pairing(stores, identity, PairingEvent::BeginPair { parts, label }, &mut r),
+            Ok(parts) => begin_pairing(stores, keys, ctx.now, PairingEvent::BeginPair { parts, label }, &mut r),
             Err(_) => stores.pairing.error = Some("invalid npub or token".to_string()),
         },
         Intent::StagePairing { url } => match parse_pairing_url(&url) {
-            Ok(parts) => begin_pairing(stores, identity, PairingEvent::StagePair(parts), &mut r),
+            Ok(parts) => begin_pairing(stores, keys, ctx.now, PairingEvent::StagePair(parts), &mut r),
             Err(_) => stores.pairing.error = Some("invalid pairing URL".to_string()),
         },
         Intent::ConfirmStagedPairing { label } => {
-            begin_pairing(stores, identity, PairingEvent::ConfirmStaged { label }, &mut r)
+            begin_pairing(stores, keys, ctx.now, PairingEvent::ConfirmStaged { label }, &mut r)
         }
         Intent::DismissStagedPairing => {
-            begin_pairing(stores, identity, PairingEvent::DismissStaged, &mut r)
+            begin_pairing(stores, keys, ctx.now, PairingEvent::DismissStaged, &mut r)
         }
-        Intent::ResetPairing => begin_pairing(stores, identity, PairingEvent::Reset, &mut r),
+        Intent::ResetPairing => begin_pairing(stores, keys, ctx.now, PairingEvent::Reset, &mut r),
         Intent::RemoveMachine { pubkey_hex } => {
             let session_ids: Vec<String> = stores
                 .machines
@@ -764,12 +765,13 @@ fn apply_relay_effects(effects: Vec<SettingsEffect>, r: &mut IntentResult) {
 /// the transport-affecting effects into the [`IntentResult`].
 fn begin_pairing(
     stores: &mut CoreStores,
-    identity: &protocol::crypto::Keypair,
+    keys: &PhoneKeys,
+    now: u64,
     event: PairingEvent,
     r: &mut IntentResult,
 ) {
     let result = pairing_reducer(&stores.pairing, event, PAIR_ACK_TIMEOUT_MS);
-    let out = apply_pairing_effects(stores, identity, result);
+    let out = apply_pairing_effects(stores, keys, now, result);
     r.sends.extend(out.sends);
     for id in out.persist {
         r.persist(id);
@@ -849,11 +851,12 @@ mod tests {
     use crate::ports::{MemoryKv, MemoryTranscriptStore};
     use crate::stores::{hydrate, StoresConfig};
 
-    async fn stores() -> (CoreStores, protocol::crypto::Keypair) {
+    async fn stores() -> (CoreStores, PhoneKeys) {
         let kv = MemoryKv::new();
         let ts = MemoryTranscriptStore::new();
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
-        (h.stores, h.keypair)
+        let identity = protocol::crypto::generate_keypair();
+        (h.stores, PhoneKeys::new(&identity.pubkey_hex, &h.session_key))
     }
 
     fn ctx() -> IntentCtx {
@@ -1102,7 +1105,8 @@ mod tests {
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::PairRequest(m) }]
                 if *machine == peer.pubkey_hex
-                    && m.pubkey_hex == kp.pubkey_hex
+                    && m.pubkey_hex == kp.identity_pubkey_hex
+                    && m.session_key.as_ref().is_some_and(|k| k.pubkey_hex == kp.session_pubkey_hex)
                     && m.token == "tok"
         ));
 

@@ -44,10 +44,21 @@ pub struct PairedPhone {
     pub pubkey_hex: String,
     pub label: String,
     pub paired_at: String,
-    /// Keys this identity granted to act for it, oldest first (see the
-    /// engine's `session_keys` module).
+    /// Session keys this identity granted, oldest first: the keys its
+    /// messages' payloads are encrypted with (see the engine's
+    /// `session_keys` module).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_keys: Vec<protocol::commands::SessionKeyGrant>,
+}
+
+/// One phone a message goes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressee {
+    /// The phone's identity (hex): the event's `p` tag.
+    pub phone: String,
+    /// The key the payload is NIP-44 encrypted to (hex): the phone's newest
+    /// live session key, else its identity.
+    pub key: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,10 +120,9 @@ pub enum Input {
 
 #[derive(Debug)]
 pub enum Effect {
-    /// Encrypt `message` to each phone in `to` (hex pubkeys: a phone's
-    /// current session key, else its identity) and publish it with the event
-    /// kind its type calls for.
-    Publish { to: Vec<String>, message: BridgeToPhone },
+    /// Publish `message` to each phone in `to`, with the event kind its type
+    /// calls for.
+    Publish { to: Vec<Addressee>, message: BridgeToPhone },
     /// Write one frame to the agent host's stdin.
     Host(BridgeFrame),
     SetTimer { id: TimerId, after_ms: u64 },
