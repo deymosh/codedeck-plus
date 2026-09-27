@@ -595,6 +595,8 @@ private fun MachineSection(
             fontFamily = Tokens.FontMono,
         )
 
+        MachineDirectLink(machine, dispatch)
+
         MachineCredentials(machine, credentialsStatus, dispatch)
 
         if (machine.agents.any { it.supportsProviders }) {
