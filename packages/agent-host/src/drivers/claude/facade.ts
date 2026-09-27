@@ -180,6 +180,9 @@ export interface SdkSessionHandle {
    *  session understands now — built in, the user's and the project's, and
    *  its plugins' (namespaced `plugin:command`). Null when unsupported/failed. */
   supportedCommands(): Promise<SdkSlashCommand[] | null>;
+  /** Feature-detected `query.reloadPlugins()`: load the plugins as they are
+   *  on disk now, so an install or a toggle reaches a running session. */
+  reloadPlugins(): Promise<void>;
   /** Feature-detected experimental `/usage` snapshot (rate-limit windows).
    *  Raw SDK shape — normalization is the caller's job. Null when unsupported. */
   getUsageSnapshot(): Promise<unknown | null>;
@@ -814,6 +817,16 @@ class RealSdkSessionHandle implements SdkSessionHandle {
         .map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint }));
     } catch {
       return null;
+    }
+  }
+
+  async reloadPlugins(): Promise<void> {
+    const fn = (this.q as Partial<Pick<Query, 'reloadPlugins'>>).reloadPlugins;
+    if (typeof fn !== 'function') return;
+    try {
+      await fn.call(this.q);
+    } catch {
+      // Best effort: the next session loads them anyway.
     }
   }
 

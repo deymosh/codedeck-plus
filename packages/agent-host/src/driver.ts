@@ -12,9 +12,13 @@
  */
 import type {
   AgentInfo,
+  AvailablePlugin,
+  InstalledPlugin,
   ModelEntry,
   OptionChoice,
   PermissionRequest,
+  PluginAction,
+  PluginMarketplace,
   QuestionOutcome,
   QuestionSpec,
   SelectOutcome,
@@ -58,6 +62,25 @@ export interface DriverSession {
   end(): Promise<void>;
 }
 
+/** An agent's plugins on this machine. `marketplaces` is absent for an
+ *  agent that installs plugins by package name; `toggles`: a plugin can be
+ *  switched off without uninstalling it; `available` is present only when
+ *  asked for. */
+export interface PluginState {
+  installed: InstalledPlugin[];
+  marketplaces?: PluginMarketplace[];
+  toggles: boolean;
+  available?: AvailablePlugin[];
+}
+
+/** For an agent whose catalog entry `supports.plugins`. */
+export interface PluginManager {
+  list(available: boolean): Promise<PluginState>;
+  /** Apply one change and answer the new state (without `available`).
+   *  Rejects with the agent's own reason when the change was refused. */
+  act(action: PluginAction, target: string): Promise<PluginState>;
+}
+
 export interface Driver {
   /** How this agent is advertised. Read once, at `initialize`. */
   info(): AgentInfo;
@@ -71,6 +94,8 @@ export interface Driver {
   /** Check a credential value with its provider: true/false, or undefined
    *  when it could not be checked. */
   checkCredential?(credential: string, value: string): Promise<boolean | undefined>;
+  /** Manages the agent's plugins, when it has any. */
+  readonly plugins?: PluginManager;
   /** Release driver-wide resources (servers it spawned). */
   shutdown?(): Promise<void>;
 }

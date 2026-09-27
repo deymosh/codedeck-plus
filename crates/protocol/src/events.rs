@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use super::capabilities::BridgeHostKind;
 use super::common::{
-    AgentDescriptor, CredentialStatus, GsdState, OutputEntry, ProviderProfileInfo,
-    RemoteSessionInfo, SessionOption, UsageData,
+    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, OutputEntry,
+    PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
+    UsageData,
 };
 use crate::ranges::SeqRange;
 
@@ -233,6 +234,42 @@ pub struct CommandsMsg {
     pub error: Option<String>,
 }
 
+/// An agent's plugins on the bridge's machine: the reply to
+/// `plugins-request`, and sent again after every `plugin-action`. `available`
+/// is present only when asked for. When the list could not be read, `error`
+/// says why and the lists are empty.
+///
+/// Agents manage plugins differently: `marketplaces` is absent for one that
+/// installs plugins by package name and has no marketplaces (nor anything
+/// `available`), and `toggles` says whether a plugin can be switched off
+/// without uninstalling it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginsMsg {
+    pub agent: String,
+    pub installed: Vec<InstalledPlugin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplaces: Option<Vec<PluginMarketplace>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggles: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<Vec<AvailablePlugin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Reply to `plugin-action`: whether it was done, and why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginAckMsg {
+    pub agent: String,
+    pub action: PluginAction,
+    pub target: String,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Reply to `set-credentials`: the resulting status of every credential in
 /// the written scope (`agent`, or the bridge's own when absent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -310,6 +347,8 @@ pub enum BridgeToPhone {
     GsdState(GsdStateMsg),
     Models(ModelsMsg),
     Commands(CommandsMsg),
+    Plugins(PluginsMsg),
+    PluginAck(PluginAckMsg),
     CredentialsAck(CredentialsAckMsg),
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
@@ -341,7 +380,7 @@ mod tests {
             "modes":[{"id":"default","label":"Default"},{"id":"plan","label":"Plan"}],
             "efforts":[{"id":"high","label":"High"}],
             "defaultMode":"default","defaultEffort":"high",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true},
+            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"fromEnv":true}]
         })
     }
@@ -407,6 +446,13 @@ mod tests {
         rt(&json!({"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
         rt(&json!({"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
         rt(&json!({"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
+        rt(&json!({"type":"plugins","agent":"claude-code",
+            "installed":[{"id":"c@m","name":"c","marketplace":"m","version":"1","description":"d","enabled":false}],
+            "marketplaces":[{"name":"m","source":"me/skills"}],"toggles":true,
+            "available":[{"id":"x@m","name":"x","marketplace":"m","installCount":12}]}));
+        rt(&json!({"type":"plugins","agent":"opencode","installed":[{"id":"opencode-wakatime","name":"opencode-wakatime","enabled":true}]}));
+        rt(&json!({"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
+        rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
         rt(&json!({"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
         rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));

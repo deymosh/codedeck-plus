@@ -70,6 +70,36 @@ export type AgentSupports = {
 	 *  understands.
 	 */
 	commands?: boolean,
+	/**
+	 *  `plugins-request` / `plugin-action` list and manage the agent's
+	 *  plugins and the marketplaces they come from, for the whole machine.
+	 */
+	plugins?: boolean,
+};
+
+/**  A plugin one of the known marketplaces offers and that is not installed. */
+export type AvailablePlugin = AvailablePlugin_Serialize | AvailablePlugin_Deserialize;
+
+/**  A plugin one of the known marketplaces offers and that is not installed. */
+export type AvailablePlugin_Deserialize = {
+	/**  What `plugin-action` installs it by (`name@marketplace`). */
+	id: string,
+	name: string,
+	marketplace: string,
+	description?: string | null,
+	/**  How many times the marketplace says it was installed, when it says. */
+	installCount?: number | null,
+};
+
+/**  A plugin one of the known marketplaces offers and that is not installed. */
+export type AvailablePlugin_Serialize = {
+	/**  What `plugin-action` installs it by (`name@marketplace`). */
+	id: string,
+	name: string,
+	marketplace: string,
+	description?: string | null,
+	/**  How many times the marketplace says it was installed, when it says. */
+	installCount?: number | null,
 };
 
 /**  Bridge → host. */
@@ -119,6 +149,23 @@ export type BridgeMessage_Deserialize =
  */
 { kind: "list-commands"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  The agent's plugins and marketplaces; with `available`, also what the
+ *  marketplaces offer. Reply: `plugins`.
+ */
+{ kind: "list-plugins"; payload: {
+	agent: string,
+	available?: boolean,
+} } | 
+/**
+ *  Change the agent's plugins. Reply: `plugins` once done (without
+ *  `available`), or `error` saying why it was not.
+ */
+{ kind: "plugin-action"; payload: {
+	agent: string,
+	action: PluginAction,
+	target: string,
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
 { kind: "check-credential"; payload: {
@@ -177,6 +224,23 @@ export type BridgeMessage_Serialize =
  */
 { kind: "list-commands"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  The agent's plugins and marketplaces; with `available`, also what the
+ *  marketplaces offer. Reply: `plugins`.
+ */
+{ kind: "list-plugins"; payload: {
+	agent: string,
+	available?: boolean,
+} } | 
+/**
+ *  Change the agent's plugins. Reply: `plugins` once done (without
+ *  `available`), or `error` saying why it was not.
+ */
+{ kind: "plugin-action"; payload: {
+	agent: string,
+	action: PluginAction,
+	target: string,
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
 { kind: "check-credential"; payload: {
@@ -380,6 +444,16 @@ export type HostMessage_Deserialize =
 { kind: "commands"; payload: {
 	commands: SlashCommand_Deserialize[],
 } } | 
+/**
+ *  Reply to `list-plugins` and `plugin-action` (the fields mean what
+ *  they mean on the phone wire's `plugins`).
+ */
+{ kind: "plugins"; payload: {
+	installed: InstalledPlugin_Deserialize[],
+	marketplaces?: PluginMarketplace[] | null,
+	toggles?: boolean,
+	available?: AvailablePlugin_Deserialize[] | null,
+} } | 
 /**  Reply to `check-credential`; absent `valid` = it could not be checked. */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
@@ -420,6 +494,16 @@ export type HostMessage_Serialize =
 { kind: "commands"; payload: {
 	commands: SlashCommand_Serialize[],
 } } | 
+/**
+ *  Reply to `list-plugins` and `plugin-action` (the fields mean what
+ *  they mean on the phone wire's `plugins`).
+ */
+{ kind: "plugins"; payload: {
+	installed: InstalledPlugin_Serialize[],
+	marketplaces?: PluginMarketplace[] | null,
+	toggles?: boolean,
+	available?: AvailablePlugin_Serialize[] | null,
+} } | 
 /**  Reply to `check-credential`; absent `valid` = it could not be checked. */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
@@ -435,6 +519,33 @@ export type HostMessage_Serialize =
 { kind: "ask-question"; payload: QuestionRequest_Serialize } | 
 /**  Reply: `plan-outcome`. */
 { kind: "request-plan-approval"; payload: PlanApprovalRequest_Serialize };
+
+/**  A plugin installed for an agent on the bridge's machine. */
+export type InstalledPlugin = InstalledPlugin_Serialize | InstalledPlugin_Deserialize;
+
+/**  A plugin installed for an agent on the bridge's machine. */
+export type InstalledPlugin_Deserialize = {
+	/**  What `plugin-action` names it by (`name@marketplace`). */
+	id: string,
+	name: string,
+	marketplace?: string | null,
+	version?: string | null,
+	description?: string | null,
+	/**  A disabled plugin stays installed but no session loads it. */
+	enabled: boolean,
+};
+
+/**  A plugin installed for an agent on the bridge's machine. */
+export type InstalledPlugin_Serialize = {
+	/**  What `plugin-action` names it by (`name@marketplace`). */
+	id: string,
+	name: string,
+	marketplace?: string | null,
+	version?: string | null,
+	description?: string | null,
+	/**  A disabled plugin stays installed but no session loads it. */
+	enabled: boolean,
+};
 
 export type ModelEntry = ModelEntry_Serialize | ModelEntry_Deserialize;
 
@@ -566,6 +677,23 @@ export type PlanApprovalRequest_Serialize = {
 	sessionId: string,
 	requestId: string,
 	options: OptionChoice_Serialize[],
+};
+
+/**
+ *  A change to an agent's plugins; `target` names a plugin (`install`,
+ *  `uninstall`, `enable`, `disable`) or a marketplace (`add-marketplace`
+ *  takes its source: `owner/repo`, a git URL or a marketplace.json URL;
+ *  `remove-marketplace` and `update-marketplace` its name). For an agent
+ *  without marketplaces, `install` takes a package name.
+ */
+export type PluginAction = "install" | "uninstall" | "enable" | "disable" | "add-marketplace" | "remove-marketplace" | "update-marketplace";
+
+/**  A marketplace plugins are installed from. */
+export type PluginMarketplace = {
+	/**  What `plugin-action` names it by. */
+	name: string,
+	/**  Where it comes from, for display: `owner/repo`, a URL or a path. */
+	source: string,
 };
 
 /**  A custom provider profile a session is bound to for its whole life. */

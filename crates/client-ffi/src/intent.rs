@@ -164,6 +164,24 @@ pub enum UniffiIntent {
         machine: String,
         session_id: String,
     },
+    /// Ask for an agent's plugins on a machine (with `available`, also what
+    /// its marketplaces offer); the answer lands in
+    /// `UniffiMachineSummary.plugins`.
+    RequestPlugins {
+        machine: String,
+        agent: String,
+        available: bool,
+    },
+    /// Change an agent's plugins. `action`: `install`, `uninstall`,
+    /// `enable`, `disable` (target: a plugin id), `add-marketplace` (target:
+    /// `owner/repo` or a URL), `remove-marketplace`, `update-marketplace`
+    /// (target: its name).
+    PluginAction {
+        machine: String,
+        agent: String,
+        action: String,
+        target: String,
+    },
     /// Ask the bridge for this session's GSD workflow state; the answer
     /// lands in `UniffiSessionSummary.gsd`.
     RequestGsd {
@@ -403,6 +421,15 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::RequestUsage { machine, session_id } => {
                 Intent::RequestUsage { machine, session_id }
             }
+            UniffiIntent::RequestPlugins { machine, agent, available } => {
+                Intent::RequestPlugins { machine, agent, available }
+            }
+            UniffiIntent::PluginAction { machine, agent, action, target } => Intent::PluginAction {
+                machine,
+                agent,
+                action: parse_enum("action", &action)?,
+                target,
+            },
             UniffiIntent::RequestCommands { machine, session_id } => {
                 Intent::RequestCommands { machine, session_id }
             }

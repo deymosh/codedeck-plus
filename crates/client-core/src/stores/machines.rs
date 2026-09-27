@@ -17,9 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::BridgeHostKind;
 use protocol::common::{
-    AgentDescriptor, CredentialStatus, GsdState, ProviderProfileInfo, RemoteSessionInfo, UsageData,
+    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, PluginAction,
+    PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, UsageData,
 };
-use protocol::events::{CommandsMsg, ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg, SlashCommand};
+use protocol::events::{
+    CommandsMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg, SessionListMsg, SlashCommand,
+};
 
 use super::fetches::Fetches;
 use super::pairing::is_relay_url;
@@ -255,6 +258,10 @@ pub struct MachineView {
     /// serializes normally into the live `MachinesView` an IPC boundary reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profiles: Option<Vec<ProviderProfileInfo>>,
+    /// Plugins, by agent id. Never persisted (see [`serialize_machines`]):
+    /// they live on the bridge's machine and are asked for when shown.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, AgentPlugins>,
     /// The session-key grant this bridge last confirmed. See
     /// `stores::session_key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -319,6 +326,41 @@ pub struct AgentModels {
     pub error: Option<String>,
 }
 
+/// One agent's plugins on a machine, as the bridge last reported them, and
+/// the changes asked for and not answered yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlugins {
+    pub installed: Vec<InstalledPlugin>,
+    /// Absent: the agent installs plugins by package name, from no
+    /// marketplace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplaces: Option<Vec<PluginMarketplace>>,
+    /// A plugin can be switched off without uninstalling it.
+    #[serde(default)]
+    pub toggles: bool,
+    /// What the marketplaces offer, once asked for; never an installed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<Vec<AvailablePlugin>>,
+    /// Why the last list could not be read. The lists held are kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Targets of the changes sent and not acknowledged yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub busy: Vec<String>,
+    /// The last change that failed, until the next one succeeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<PluginFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginFailure {
+    pub action: PluginAction,
+    pub target: String,
+    pub error: String,
+}
+
 impl MachineView {
     /// The catalog entry for `agent_id`, if this bridge advertises it.
     pub fn agent(&self, agent_id: &str) -> Option<&AgentDescriptor> {
@@ -342,6 +384,7 @@ impl MachineView {
             credentials: Vec::new(),
             models: BTreeMap::new(),
             provider_profiles: None,
+            plugins: BTreeMap::new(),
             session_grant: None,
             session_grant_sent: None,
             direct: None,
@@ -353,8 +396,8 @@ impl MachineView {
     }
 }
 
-/// `serializeMachines`: a JSON array of the machines, `providerProfiles` and
-/// every session's `commands` stripped. Round-tripping through this can never truncate — it holds the FULL
+/// `serializeMachines`: a JSON array of the machines, `providerProfiles`,
+/// `plugins` and every session's `commands` stripped. Round-tripping through this can never truncate — it holds the FULL
 /// map, unlike the old app's merged-short list.
 ///
 /// The strip happens HERE, not via a `#[serde(skip)]` on the field itself —
@@ -366,6 +409,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
         .cloned()
         .map(|mut m| {
             m.provider_profiles = None;
+            m.plugins.clear();
             for s in m.sessions.values_mut() {
                 s.commands = None;
             }
@@ -728,6 +772,52 @@ impl MachinesState {
             } else {
                 s.commands = Some(SessionCommands { commands: msg.commands.clone(), error: None });
             }
+        });
+    }
+
+    /// A list replaces the held one; a failed read keeps it and records why.
+    /// A list without `available` keeps the held offer, less anything now
+    /// installed.
+    pub fn apply_plugins(&mut self, machine_pubkey: &str, msg: &PluginsMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let p = m.plugins.entry(msg.agent.clone()).or_default();
+            if let Some(error) = &msg.error {
+                p.error = Some(error.clone());
+                return;
+            }
+            p.error = None;
+            p.installed = msg.installed.clone();
+            p.marketplaces = msg.marketplaces.clone();
+            p.toggles = msg.toggles;
+            if let Some(available) = &msg.available {
+                p.available = Some(available.clone());
+            }
+            let installed: Vec<&str> = p.installed.iter().map(|i| i.id.as_str()).collect();
+            if let Some(available) = &mut p.available {
+                available.retain(|a| !installed.contains(&a.id.as_str()));
+            }
+        });
+    }
+
+    /// A change was sent: its target is busy until acknowledged.
+    pub fn plugin_action_sent(&mut self, machine_pubkey: &str, agent: &str, target: &str) {
+        self.with_machine(machine_pubkey, |m| {
+            let p = m.plugins.entry(agent.to_string()).or_default();
+            if !p.busy.iter().any(|t| t == target) {
+                p.busy.push(target.to_string());
+            }
+        });
+    }
+
+    pub fn apply_plugin_ack(&mut self, machine_pubkey: &str, msg: &PluginAckMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let p = m.plugins.entry(msg.agent.clone()).or_default();
+            p.busy.retain(|t| *t != msg.target);
+            p.failure = (!msg.success).then(|| PluginFailure {
+                action: msg.action,
+                target: msg.target.clone(),
+                error: msg.error.clone().unwrap_or_else(|| "It could not be done.".into()),
+            });
         });
     }
 
@@ -1167,6 +1257,65 @@ mod tests {
         assert_eq!(held(&st).commands, vec![cmd("init")]);
         let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
         assert_eq!(back["pk"].sessions["s1"].commands, None);
+    }
+
+    #[test]
+    fn plugins_track_changes_in_flight_and_are_never_persisted() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[], NONE()), 10);
+        let installed = |id: &str| InstalledPlugin {
+            id: id.into(),
+            name: id.into(),
+            marketplace: None,
+            version: None,
+            description: None,
+            enabled: true,
+        };
+        let offer = |id: &str| AvailablePlugin {
+            id: id.into(),
+            name: id.into(),
+            marketplace: "m".into(),
+            description: None,
+            install_count: None,
+        };
+        let msg = |installed: Vec<InstalledPlugin>, available: Option<Vec<AvailablePlugin>>, error: Option<&str>| PluginsMsg {
+            agent: "claude-code".into(),
+            installed,
+            marketplaces: Some(vec![]),
+            toggles: true,
+            available,
+            error: error.map(str::to_string),
+        };
+        let held = |st: &MachinesState| st.machine("pk").unwrap().plugins["claude-code"].clone();
+
+        st.apply_plugins("pk", &msg(vec![installed("a@m")], Some(vec![offer("b@m"), offer("c@m")]), None));
+        st.plugin_action_sent("pk", "claude-code", "b@m");
+        assert_eq!(held(&st).busy, vec!["b@m".to_string()]);
+
+        // Installed: acknowledged, then the new list without the offer.
+        let ack = |success: bool| PluginAckMsg {
+            agent: "claude-code".into(),
+            action: PluginAction::Install,
+            target: "b@m".into(),
+            success,
+            error: (!success).then(|| "not found".into()),
+        };
+        st.apply_plugin_ack("pk", &ack(true));
+        st.apply_plugins("pk", &msg(vec![installed("a@m"), installed("b@m")], None, None));
+        let p = held(&st);
+        assert!(p.busy.is_empty() && p.failure.is_none());
+        assert_eq!(p.available.unwrap().iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["c@m"]);
+
+        st.plugin_action_sent("pk", "claude-code", "b@m");
+        st.apply_plugin_ack("pk", &ack(false));
+        assert_eq!(held(&st).failure.map(|f| f.error), Some("not found".into()));
+
+        // A failed read keeps what is held.
+        st.apply_plugins("pk", &msg(vec![], None, Some("no claude")));
+        assert_eq!((held(&st).installed.len(), held(&st).error), (2, Some("no claude".into())));
+
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert!(back["pk"].plugins.is_empty());
     }
 
     #[test]

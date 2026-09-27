@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{CredentialValues, ProviderModel, SessionOption};
+use super::common::{CredentialValues, PluginAction, ProviderModel, SessionOption};
 use super::tristate::Tristate;
 use crate::ranges::SeqRange;
 
@@ -151,6 +151,27 @@ pub struct ModelsRequestMsg {
     #[serde(flatten)]
     pub version: VersionFields,
     pub agent: String,
+}
+
+/// Ask for an agent's plugins (agents with `supports.plugins`); with
+/// `available`, also every plugin the known marketplaces offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PluginsRequestMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub available: bool,
+}
+
+/// Change an agent's plugins. Reply: `plugin-ack`, then the new `plugins`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PluginActionMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub agent: String,
+    pub action: PluginAction,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -334,6 +355,8 @@ pub enum PhoneToBridge {
     /// The slash commands a session understands (agents with
     /// `supports.commands`). Reply: `commands`.
     CommandsRequest(SessionIdMsg),
+    PluginsRequest(PluginsRequestMsg),
+    PluginAction(PluginActionMsg),
     SetCredentials(SetCredentialsMsg),
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
@@ -390,6 +413,9 @@ mod tests {
         rt(&json!({"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"type":"models-request","agent":"opencode"}));
         rt(&json!({"type":"commands-request","sessionId":"s"}));
+        rt(&json!({"type":"plugins-request","agent":"claude-code"}));
+        rt(&json!({"type":"plugins-request","agent":"claude-code","available":true}));
+        rt(&json!({"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"type":"provider-profiles-request"}));

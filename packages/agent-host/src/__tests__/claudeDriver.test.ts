@@ -78,6 +78,10 @@ class ScriptedHandle implements SdkSessionHandle {
   async supportedCommands(): Promise<SdkSlashCommand[] | null> {
     return this.commands;
   }
+  reloads = 0;
+  async reloadPlugins(): Promise<void> {
+    this.reloads++;
+  }
   async getUsageSnapshot(): Promise<unknown | null> {
     return null;
   }
@@ -382,6 +386,28 @@ describe('Claude slash commands', () => {
     handle.commands = null;
     expect(await session.listCommands!()).toEqual([]);
     await session.end();
+  });
+});
+
+describe('Claude plugins in the driver', () => {
+  it('are offered only when managed, and a change reloads the running sessions', async () => {
+    expect(new ClaudeDriver({ facade: new ScriptedFacade() }).info().supports?.plugins).toBe(false);
+    const runCli = async (args: string[]) => ({
+      code: 0,
+      stdout: args.includes('list') ? '[]' : '{"outcome":"ok"}',
+      stderr: '',
+    });
+    const facade = new ScriptedFacade();
+    const driver = new ClaudeDriver({ facade, managePlugins: true, runCli });
+    expect(driver.info().supports?.plugins).toBe(true);
+    const ctx = recordingContext();
+    const session = driver.startSession({ sessionId: 's1', agent: 'claude-code', cwd: '/w' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await driver.plugins!.act('install', 'a@m');
+    expect(facade.last.handle.reloads).toBe(1);
+    await session.end();
+    await driver.plugins!.act('disable', 'a@m');
+    expect(facade.last.handle.reloads).toBe(1);
   });
 });
 

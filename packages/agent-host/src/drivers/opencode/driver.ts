@@ -31,11 +31,12 @@ import type {
   SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
 import { parseSlashCommand, slashCommand } from '../../commands';
-import type { Driver, DriverSession, SessionContext } from '../../driver';
+import type { Driver, DriverSession, PluginManager, SessionContext } from '../../driver';
 import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
 import type { AgentInfo, ModelEntry, QuestionSpec, SessionOption, SlashCommand, StartSession, UsageData } from '../../types';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
+import { OpenCodePlugins } from './plugins';
 import { resolveOpenCodePath, startOpenCodeServer, type OpenCodeServerHandle } from './server';
 
 export const OPENCODE_AGENT_ID = 'opencode';
@@ -845,8 +846,15 @@ export class OpenCodeDriver implements Driver {
    *  session. */
   private installs = false;
   private stopped = false;
+  readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
+
+  /** The server's client, starting an install that failed before over. */
+  private client(): Promise<OpencodeClient> {
+    if (!this.clientPromise && this.installs && !this.stopped) this.launchInstalled();
+    return this.clientPromise ?? Promise.reject(new Error(this.unavailable ?? NOT_CONFIGURED));
+  }
 
   /** Connect to (or start) the configured server. Never throws: a driver
    *  that cannot reach OpenCode is still advertised, with the reason. */
@@ -926,7 +934,7 @@ export class OpenCodeDriver implements Driver {
       defaultMode: DEFAULT_MODE,
       // No subscription usage; sessions always use the providers configured
       // on the OpenCode server itself.
-      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true },
+      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true, plugins: true },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };

@@ -3,12 +3,12 @@
 use agent_protocol::{BridgeMessage, SelectOutcome};
 use protocol::commands::{
     CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PhoneToBridge, PlanResponseMsg,
-    QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadImageMsg,
+    PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadImageMsg,
 };
 use protocol::common::{is_valid_provider_base_url, SessionOption, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{
     BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
-    CommandsMsg, InputFailedReason, ModelsMsg, SessionFailedMsg, SessionPendingMsg,
+    CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
 use super::{Engine, HostCall};
@@ -38,6 +38,8 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
         PhoneToBridge::CommandsRequest(_) => "commands-request",
+        PhoneToBridge::PluginsRequest(_) => "plugins-request",
+        PhoneToBridge::PluginAction(_) => "plugin-action",
         PhoneToBridge::SetCredentials(_) => "set-credentials",
         PhoneToBridge::PairRequest(_) => "pair-request",
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
@@ -115,6 +117,8 @@ impl Engine {
             }
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
+            PhoneToBridge::PluginsRequest(m) => self.on_plugins_request(m.agent, m.available),
+            PhoneToBridge::PluginAction(m) => self.on_plugin_action(m),
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
             // Handled on arrival.
@@ -413,6 +417,49 @@ impl Engine {
         if let Some(error) = error {
             log::info!("[Engine] models-request: {error}");
             self.publish_all(BridgeToPhone::Models(ModelsMsg { agent, models: vec![], default_model: None, error: Some(error) }));
+        }
+    }
+
+    /// Why `agent`'s plugins cannot be managed here, if they cannot.
+    fn plugins_unusable(&self, agent: &str) -> Option<String> {
+        match self.catalog.usable(agent) {
+            Err(reason) => Some(reason),
+            Ok(a) if !a.supports.plugins => Some(format!("{} has no plugins to manage.", a.display_name)),
+            Ok(_) => None,
+        }
+    }
+
+    fn on_plugins_request(&mut self, agent: String, available: bool) {
+        let error = self.plugins_unusable(&agent).or_else(|| {
+            let call = HostCall::ListPlugins { agent: agent.clone() };
+            let sent = self.call(call, BridgeMessage::ListPlugins { agent: agent.clone(), available });
+            sent.is_none().then(|| "The agent host is not running — try again in a moment.".to_string())
+        });
+        if let Some(error) = error {
+            log::info!("[Engine] plugins-request: {error}");
+            self.publish_all(BridgeToPhone::Plugins(Self::plugins_error(agent, error)));
+        }
+    }
+
+    /// The target goes to the agent as a command-line argument, never through
+    /// a shell; one that is empty, starts with `-` (it would read as an
+    /// option) or holds control characters is refused here.
+    fn on_plugin_action(&mut self, m: PluginActionMsg) {
+        let PluginActionMsg { agent, action, target, .. } = m;
+        let target = target.trim().to_string();
+        let malformed = target.is_empty() || target.starts_with('-') || target.len() > 1024 || target.chars().any(char::is_control);
+        let error = if malformed {
+            Some("That is not a plugin or marketplace name.".to_string())
+        } else {
+            self.plugins_unusable(&agent).or_else(|| {
+                let call = HostCall::PluginAction { agent: agent.clone(), action, target: target.clone() };
+                let sent = self.call(call, BridgeMessage::PluginAction { agent: agent.clone(), action, target: target.clone() });
+                sent.is_none().then(|| "The agent host is not running — try again in a moment.".to_string())
+            })
+        };
+        if let Some(error) = error {
+            log::info!("[Engine] plugin-action {action:?} {target}: {error}");
+            self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg { agent, action, target, success: false, error: Some(error) }));
         }
     }
 
