@@ -200,6 +200,7 @@ impl TranscriptStore for MemoryTranscriptStore {
             .data
             .borrow()
             .get(&key)
+            .filter(|_| from <= to)
             .map(|t| {
                 t.range(from..=to)
                     .map(|(seq, entry)| TranscriptRow {
@@ -253,7 +254,12 @@ impl CachedSession {
         self.machine == machine && self.session == session
     }
 
+    /// The cached rows in `from..=to`; none for an empty range (a
+    /// `BTreeMap` range panics when its start is past its end).
     fn rows(&self, from: u64, to: u64) -> Vec<TranscriptRow> {
+        if from > to {
+            return Vec::new();
+        }
         self.rows
             .range(from..=to)
             .map(|(seq, entry)| TranscriptRow { seq: *seq, entry: entry.clone() })
@@ -539,6 +545,10 @@ mod tests {
             ("b", &[2, 3], 2, 3),
             ("a", &[7], 1, 7),
             ("a", &[], 1, 9),
+            // A read that starts past the cached high, and empty ranges.
+            ("a", &[10, 11], 11, 12),
+            ("a", &[], 5, 3),
+            ("a", &[], 13, 12),
         ];
         for (session, seqs, from, to) in script {
             let r = rows(seqs);
