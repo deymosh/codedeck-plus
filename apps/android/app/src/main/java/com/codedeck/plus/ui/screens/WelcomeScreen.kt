@@ -1,5 +1,10 @@
 package com.codedeck.plus.ui.screens
 
+import com.codedeck.plus.R
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.colorResource
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -7,9 +12,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,6 +54,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.codedeck.plus.platform.SignerAppInfo
@@ -80,7 +86,7 @@ fun WelcomeScreen(
     var importOpen by rememberSaveable { mutableStateOf(importInitiallyOpen) }
     var importText by rememberSaveable { mutableStateOf("") }
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Tokens.Bg)
@@ -93,24 +99,32 @@ fun WelcomeScreen(
             ),
         contentAlignment = Alignment.TopCenter,
     ) {
+        val screenHeight = maxHeight
+        // Fits the screen: the hero at the top, the choices at the bottom,
+        // the space between them taking up the slack. It scrolls only when
+        // it cannot fit (the keyboard up for an import, a small screen at a
+        // large font size).
         Column(
             Modifier
                 // Keeps the column readable on a tablet.
                 .widthIn(max = 560.dp)
-                .fillMaxSize()
+                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Tokens.Space5, vertical = Tokens.Space6),
-            verticalArrangement = Arrangement.spacedBy(Tokens.Space5),
+                .heightIn(min = screenHeight)
+                .padding(horizontal = Tokens.Space5, vertical = Tokens.Space4),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Hero()
 
-            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-                SectionLabel("Your identity")
+            Column(
+                Modifier.padding(top = Tokens.Space5),
+                verticalArrangement = Arrangement.spacedBy(Tokens.Space3),
+            ) {
                 SignerCard(signers, busy, onUseSigner)
                 OptionCard(
                     icon = Icons.Outlined.Key,
-                    title = "Create a key on this device",
-                    body = "A fresh Nostr key, encrypted by the Android Keystore.",
+                    title = "Create a new key",
+                    body = "Kept in the Android Keystore.",
                     busy = busy == WelcomeBusy.Key && !importOpen,
                     enabled = busy == null,
                     onClick = onCreateKey,
@@ -128,16 +142,6 @@ fun WelcomeScreen(
                     Text(error, color = Tokens.Danger, fontSize = Tokens.TextSm)
                 }
             }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                Icon(Icons.Outlined.Shield, contentDescription = null, tint = Tokens.TextDim, modifier = Modifier.size(16.dp))
-                Text(
-                    "A signer app keeps your key outside CodeDeck+, so you stay the same identity across reinstalls and apps.",
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextXs,
-                    lineHeight = 16.sp,
-                )
-            }
         }
     }
 }
@@ -145,32 +149,34 @@ fun WelcomeScreen(
 @Composable
 private fun Hero() {
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-        Box(
-            Modifier
-                .size(64.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Brush.linearGradient(listOf(Tokens.SurfaceHover, Tokens.Bg)))
-                .border(
-                    BorderStroke(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.6f), Tokens.BorderStrong))),
-                    RoundedCornerShape(18.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("›_", color = Tokens.Text, fontFamily = Tokens.FontMono, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+            // The launcher icon: its foreground on its background colour,
+            // scaled so the mark fills the tile as the launcher's safe zone
+            // (66dp of a 108dp canvas) does.
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colorResource(R.color.ic_launcher_background))
+                    .border(
+                        BorderStroke(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.6f), Tokens.BorderStrong))),
+                        RoundedCornerShape(14.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painterResource(R.drawable.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.requiredSize(48.dp * 108f / 66f),
+                )
+            }
+            Text("CodeDeck+", color = Tokens.Text, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
         }
-        Spacer(Modifier.height(Tokens.Space1))
-        Text("CodeDeck+", color = Tokens.Text, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
         Text(
             "Drive your coding agents from your phone.",
             color = Tokens.Text,
-            fontSize = Tokens.TextXl,
-            lineHeight = 26.sp,
-        )
-        Text(
-            "Claude Code, OpenCode and friends run on your machine; you steer them from here.",
-            color = Tokens.TextMuted,
-            fontSize = Tokens.TextMd,
-            lineHeight = 20.sp,
+            fontSize = Tokens.TextLg,
+            lineHeight = 22.sp,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
             Pill("End-to-end encrypted")
@@ -189,17 +195,6 @@ private fun Pill(text: String) {
         modifier = Modifier
             .border(1.dp, Tokens.BorderStrong, RoundedCornerShape(Tokens.RadiusPill))
             .padding(horizontal = Tokens.Space2, vertical = Tokens.Space1),
-    )
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text.uppercase(),
-        color = Tokens.TextDim,
-        fontSize = Tokens.TextXs,
-        letterSpacing = 1.2.sp,
-        fontWeight = FontWeight.Medium,
     )
 }
 
@@ -251,16 +246,16 @@ private fun CardHeader(icon: ImageVector, title: String, body: String, badge: St
 @Composable
 private fun SignerCard(signers: List<SignerAppInfo>, busy: WelcomeBusy?, onUseSigner: (SignerAppInfo) -> Unit) {
     Card(highlight = true) {
-        Column(Modifier.padding(Tokens.Space4), verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+        Column(Modifier.padding(Tokens.Space3), verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
             CardHeader(
                 icon = Icons.Outlined.Shield,
                 title = "Use a signer app",
-                body = "Your key stays in a NIP-55 signer; CodeDeck+ asks it to sign.",
+                body = "Your key stays in a NIP-55 signer: one identity across reinstalls.",
                 badge = "RECOMMENDED",
             )
             if (signers.isEmpty()) {
                 Text(
-                    "No signer app found on this phone. Install one (Amber, for example), then come back.",
+                    "No signer app found. Install one (Amber, for example), then come back.",
                     color = Tokens.TextDim,
                     fontSize = Tokens.TextSm,
                     lineHeight = 18.sp,
@@ -310,10 +305,15 @@ private fun SignerRow(signer: SignerAppInfo, busy: Boolean, enabled: Boolean, on
                 fontWeight = FontWeight.Bold,
             )
         }
-        Column(Modifier.weight(1f)) {
-            Text(signer.label, color = Tokens.Text, fontSize = Tokens.TextMd, fontWeight = FontWeight.Medium)
-            Text(signer.packageName, color = Tokens.TextDim, fontSize = Tokens.TextXs, fontFamily = Tokens.FontMono)
-        }
+        Text(
+            signer.label,
+            color = Tokens.Text,
+            fontSize = Tokens.TextMd,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         if (busy) {
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Tokens.Text)
         } else {
@@ -332,7 +332,7 @@ private fun OptionCard(
     onClick: () -> Unit,
 ) {
     Card {
-        Box(Modifier.clickable(enabled = enabled, onClick = onClick).padding(Tokens.Space4)) {
+        Box(Modifier.clickable(enabled = enabled, onClick = onClick).padding(Tokens.Space3)) {
             CardHeader(icon, title, body) {
                 if (busy) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Tokens.Text)
@@ -356,17 +356,20 @@ private fun ImportCard(
 ) {
     Card {
         Column {
-            Box(Modifier.clickable(enabled = enabled, onClick = onToggle).padding(Tokens.Space4)) {
+            Box(Modifier.clickable(enabled = enabled, onClick = onToggle).padding(Tokens.Space3)) {
                 CardHeader(
                     icon = Icons.Outlined.Download,
-                    title = "Import an existing key",
-                    body = "Paste an nsec; it is stored encrypted on this device.",
+                    title = "Import a key",
+                    body = "Paste an nsec; kept encrypted here.",
                 )
             }
             AnimatedVisibility(open) {
-                Column(
-                    Modifier.padding(start = Tokens.Space4, end = Tokens.Space4, bottom = Tokens.Space4),
-                    verticalArrangement = Arrangement.spacedBy(Tokens.Space3),
+                // The field and its button share a row: the screen fits
+                // with the import open too.
+                Row(
+                    Modifier.padding(start = Tokens.Space3, end = Tokens.Space3, bottom = Tokens.Space3),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
                 ) {
                     OutlinedTextField(
                         value = text,
@@ -382,19 +385,19 @@ private fun ImportCard(
                             unfocusedContainerColor = Tokens.SurfaceInput,
                         ),
                         shape = RoundedCornerShape(Tokens.RadiusMd),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f),
                     )
                     Button(
                         onClick = onImport,
                         enabled = enabled && text.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Tokens.Accent, contentColor = Tokens.AccentContrast),
                         shape = RoundedCornerShape(Tokens.RadiusMd),
-                        modifier = Modifier.fillMaxWidth().heightIn(min = Tokens.TapMin),
+                        modifier = Modifier.heightIn(min = 56.dp),
                     ) {
                         if (busy) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Tokens.AccentContrast)
                         } else {
-                            Text("Import key", fontWeight = FontWeight.Medium)
+                            Text("Import", fontWeight = FontWeight.Medium)
                         }
                     }
                 }
