@@ -10,12 +10,14 @@
  *
  * Deliberate limits:
  *  - permission replies are allow/deny only — no "always"/pattern rules;
- *  - no usage or context numbers: OpenCode has no equivalent to ask, and a
- *    fabricated number would be worse than none;
+ *  - no subscription usage: OpenCode has no equivalent to ask, and a
+ *    fabricated number would be worse than none. Context usage is reported
+ *    only for models whose provider declares a context limit;
  *  - no effort levels; models are per prompt (`provider/model` ids).
  */
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import type {
+  AssistantMessage,
   Event,
   EventPermissionAsked,
   EventQuestionAsked,
@@ -99,6 +101,17 @@ function splitModelId(model: string | undefined): { providerID: string; modelID:
 export interface OpenCodeCatalog {
   models: ModelEntry[];
   defaultModel?: string;
+  /** Context window per model id, for the models whose provider declares
+   *  one. OpenCode reports an undeclared limit as 0 and then never compacts
+   *  on its own, so such a model has no entry rather than a guessed size. */
+  contextLimits?: Record<string, number>;
+}
+
+/** Tokens the conversation occupies after an assistant step: everything the
+ *  step read and wrote. The measure OpenCode's own context meter shows. */
+export function contextTokens(message: AssistantMessage): number {
+  const t = message.tokens;
+  return t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
 }
 
 /** The provider OpenCode Zen serves under — the one provider every OpenCode
@@ -248,6 +261,12 @@ export class OpenCodeSession implements DriverSession {
    *  theory refire; a second reply is rejected by the server anyway, but this
    *  avoids the wasted round trip and a second card. */
   private readonly answeredAsks = new Set<string>();
+  /** The providers' context limits, fetched on the first step that used
+   *  tokens; dropped again when the fetch came back empty, so a server that
+   *  was briefly unreachable is asked again. */
+  private contextLimits?: Promise<Record<string, number>>;
+  private contextWindow?: number;
+  private contextPercentage?: number;
 
   /** Resolves once the OpenCode session exists server-side. */
   private readonly ready: Promise<{ client: OpencodeClient; session: Session }>;
@@ -375,6 +394,7 @@ export class OpenCodeSession implements DriverSession {
           if (info.role === 'assistant' && info.error) {
             this.deliver({ type: 'error', content: formatOpenCodeError(info.error) });
           }
+          if (info.role === 'assistant') this.reportContext(info);
           break;
         }
         case 'message.part.updated': {
@@ -442,6 +462,33 @@ export class OpenCodeSession implements DriverSession {
           break;
       }
     }
+  }
+
+  /** Report how full the context is after an assistant step, over the
+   *  window of the model that ran it — only what changed, and nothing for a
+   *  model with no declared limit. */
+  private reportContext(message: AssistantMessage): void {
+    const used = contextTokens(message);
+    if (used <= 0) return;
+    this.contextLimits ??= this.catalog().then((c) => {
+      if (c.models.length === 0) this.contextLimits = undefined;
+      return c.contextLimits ?? {};
+    });
+    void this.contextLimits.then((limits) => {
+      const window = limits[`${message.providerID}/${message.modelID}`];
+      if (!window || this.ended) return;
+      const pct = Math.max(0, Math.min(100, Math.round((used / window) * 100)));
+      const changedPct = pct !== this.contextPercentage;
+      const changedCw = window !== this.contextWindow;
+      if (!changedPct && !changedCw) return;
+      this.contextPercentage = pct;
+      this.contextWindow = window;
+      this.ctx.emit({
+        type: 'info',
+        ...(changedPct ? { contextPercentage: pct } : {}),
+        ...(changedCw ? { contextWindow: window } : {}),
+      });
+    });
   }
 
   private pushPart(part: Part): void {
@@ -845,13 +892,17 @@ export class OpenCodeDriver implements Driver {
       const { data, error } = providers;
       if (error || !data) return { models: [] };
       const models: ModelEntry[] = [];
+      const contextLimits: Record<string, number> = {};
       for (const provider of data.providers) {
         for (const model of Object.values(provider.models)) {
-          models.push({ id: `${provider.id}/${model.id}`, label: model.name });
+          const id = `${provider.id}/${model.id}`;
+          models.push({ id, label: model.name });
+          const window = model.limit?.context ?? 0;
+          if (window > 0) contextLimits[id] = window;
         }
       }
       const defaultModel = pickDefaultModel(config?.data?.model, data.providers, data.default);
-      return { models, ...(defaultModel ? { defaultModel } : {}) };
+      return { models, contextLimits, ...(defaultModel ? { defaultModel } : {}) };
     } catch {
       return { models: [] };
     }
