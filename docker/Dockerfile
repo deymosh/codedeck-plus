@@ -120,6 +120,10 @@ RUN apt-get update \
 # container recreation instead of silently vanishing.
 ENV XDG_CONFIG_HOME=/data/.config
 ENV XDG_DATA_HOME=/data/.local/share
+# The bridge home, named directly rather than through the ~/.codedeck
+# symlink, so the paths the bridge reports (its default workspace root,
+# /data/workspaces, among them) are the volume's own.
+ENV CODEDECK_HOME=/data
 # The agents installed on demand, under their stable names (see the top).
 ENV PATH=$PATH:/data/agents/bin
 

@@ -79,7 +79,8 @@ fi
 # 4. Clone or update the repositories in GIT_REPO (comma-separated). Each
 # entry stands alone: one that is invalid, or fails to clone or update, is
 # skipped with a warning and the rest still are.
-WORKSPACES_DIR="/data/workspaces"
+# The bridge's default workspace root (`workspaces/` in its home, /data).
+WORKSPACES_DIR="${CODEDECK_HOME:-/data}/workspaces"
 mkdir -p "$WORKSPACES_DIR"
 # A repository that needs credentials nobody gave fails (and is warned
 # about) instead of waiting on a password prompt.
@@ -150,11 +151,6 @@ if [ -n "${GIT_REPO:-}" ]; then
     sync_repository "$repository" "$name"
   done
 fi
-
-# Start CodeDeck from the shared root so its default working-directory workspace
-# includes configured repositories, repositories cloned later by Claude, and
-# local folders created under /data/workspaces.
-cd "$WORKSPACES_DIR"
 
 # 5. Start the CodeDeck bridge
 info "starting the CodeDeck bridge"

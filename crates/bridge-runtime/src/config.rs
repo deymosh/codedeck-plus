@@ -280,20 +280,13 @@ fn default_agent_host() -> PathBuf {
     }
 }
 
-/// The workspace root when none is configured: the working directory, so
-/// `cd project && codedeck-bridge` serves that project — unless that
-/// directory is the one the binary itself sits in. That is an unpacked
-/// release started in place (a double-click on Windows), and its folder
-/// holds the bridge's own files (`agent-host/`, `node`), not projects; the
-/// root is then `workspaces/` in the bridge home, the same place the
-/// container image starts from.
-fn default_workspace(cwd: &Path, exe_dir: Option<&Path>, home: &Path) -> PathBuf {
-    let cwd = absolute(cwd);
-    let same = |dir: &Path| fs::canonicalize(dir).map(strip_verbatim).ok() == fs::canonicalize(&cwd).map(strip_verbatim).ok();
-    match exe_dir {
-        Some(dir) if same(dir) => home.join("workspaces"),
-        _ => cwd,
-    }
+/// The workspace root when none is configured: `workspaces/` in the bridge
+/// home. Not the working directory: that depends on how the bridge was
+/// started — `/` for a system service, the install folder (holding the
+/// bridge's own `agent-host/` and `node`) for a release started in place —
+/// and a project root has to be named to be served.
+fn default_workspace(home: &Path) -> PathBuf {
+    home.join("workspaces")
 }
 
 pub fn load(flags: &Flags) -> Result<Config, String> {
@@ -334,11 +327,8 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     let workspace_roots = match configured_roots {
         Some(roots) => roots.iter().map(|p| absolute(p)).collect(),
         None => {
-            let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
-            let root = default_workspace(&cwd, exe_dir().as_deref(), &home);
-            if root != cwd {
-                fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
-            }
+            let root = default_workspace(&home);
+            fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
             vec![root]
         }
     };
@@ -457,13 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn the_default_workspace_is_the_working_directory_unless_that_is_the_install_folder() {
-        let install = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let home = PathBuf::from("/home/me/.codedeck");
-        assert_eq!(default_workspace(project.path(), Some(install.path()), &home), absolute(project.path()));
-        assert_eq!(default_workspace(install.path(), Some(install.path()), &home), home.join("workspaces"));
-        assert_eq!(default_workspace(project.path(), None, &home), absolute(project.path()));
+    fn the_default_workspace_is_in_the_bridge_home() {
+        assert_eq!(default_workspace(Path::new("/home/me/.codedeck")), PathBuf::from("/home/me/.codedeck/workspaces"));
     }
 
     #[test]

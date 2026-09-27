@@ -115,7 +115,7 @@ Precedence: flags > environment > `<home>/config.json` > defaults. Home:
 |---|---|---|
 | `machineName` | `CODEDECK_MACHINE_NAME` / `--machine-name` | Name shown on the phone (default `<hostname> (cli)`) |
 | `relays` | `CODEDECK_RELAYS` / `--relay` | Relay URLs (default: the CodeDeck relays) |
-| `workspaceRoots` | `CODEDECK_WORKSPACE_ROOTS` / `--workspace` | Directories sessions may run in (default: the working directory; when that is the folder the binary is in, e.g. an unpacked release started in place, `workspaces/` in the bridge home instead) |
+| `workspaceRoots` | `CODEDECK_WORKSPACE_ROOTS` / `--workspace` | Directories sessions may run in (default: `workspaces/` in the bridge home, created on start; pass `--workspace .` to serve the working directory) |
 | `torProxyUrl` | `CODEDECK_TOR_PROXY_URL` / `--tor-proxy` | SOCKS5 proxy (e.g. `socks5h://127.0.0.1:9050`) for the relay connections |
 | `claudePath` | `CODEDECK_CLAUDE_PATH` / `--claude-path` | A specific `claude` binary instead of the bundled one |
 | `openCodeServerUrl`, `openCodeAutoStart`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_*` | The optional OpenCode agent — see [`OPENCODE.md`](OPENCODE.md) |

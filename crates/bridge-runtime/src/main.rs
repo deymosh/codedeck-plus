@@ -34,7 +34,7 @@ struct Cli {
     /// Relay URL, repeatable [env: CODEDECK_RELAYS, comma-separated]
     #[arg(long = "relay", global = true)]
     relays: Vec<String>,
-    /// Workspace root sessions may run in, repeatable [env: CODEDECK_WORKSPACE_ROOTS] [default: cwd, or <home>/workspaces when started from its own folder]
+    /// Workspace root sessions may run in, repeatable [env: CODEDECK_WORKSPACE_ROOTS] [default: <home>/workspaces]
     #[arg(long = "workspace", global = true)]
     workspaces: Vec<PathBuf>,
     /// Path to the claude executable [env: CODEDECK_CLAUDE_PATH]
