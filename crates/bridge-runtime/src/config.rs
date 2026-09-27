@@ -280,6 +280,15 @@ fn default_agent_host() -> PathBuf {
     }
 }
 
+/// The workspace root when none is configured: `workspaces/` in the bridge
+/// home. Not the working directory: that depends on how the bridge was
+/// started — `/` for a system service, the install folder (holding the
+/// bridge's own `agent-host/` and `node`) for a release started in place —
+/// and a project root has to be named to be served.
+fn default_workspace(home: &Path) -> PathBuf {
+    home.join("workspaces")
+}
+
 pub fn load(flags: &Flags) -> Result<Config, String> {
     let home = absolute(&home_dir(flags));
     let config_file = home.join("config.json");
@@ -312,14 +321,17 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         .or_else(|| split_list(env("CODEDECK_RELAYS")))
         .or(file.relays.and_then(non_empty))
         .unwrap_or_else(|| DEFAULT_RELAYS.iter().map(|r| r.to_string()).collect());
-    let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
-    let workspace_roots = non_empty(flags.workspaces.clone())
+    let configured_roots = non_empty(flags.workspaces.clone())
         .or_else(|| split_list(env("CODEDECK_WORKSPACE_ROOTS")).map(|v| v.into_iter().map(PathBuf::from).collect()))
-        .or_else(|| file.workspace_roots.and_then(non_empty).map(|v| v.into_iter().map(PathBuf::from).collect()))
-        .unwrap_or_else(|| vec![cwd.clone()])
-        .iter()
-        .map(|p| absolute(p))
-        .collect();
+        .or_else(|| file.workspace_roots.and_then(non_empty).map(|v| v.into_iter().map(PathBuf::from).collect()));
+    let workspace_roots = match configured_roots {
+        Some(roots) => roots.iter().map(|p| absolute(p)).collect(),
+        None => {
+            let root = default_workspace(&home);
+            fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+            vec![root]
+        }
+    };
     let register = |url: Option<String>, token: Option<String>| match (url, token) {
         (Some(url), Some(token)) => Some(RegisterEndpoint { url, token }),
         _ => None,
@@ -432,6 +444,11 @@ mod tests {
         std::fs::write(dir.path().join(NODE_BIN), "#!/bin/sh").unwrap();
         let bundled = bundled_node(Some(dir.path())).unwrap();
         assert!(bundled.ends_with(NODE_BIN));
+    }
+
+    #[test]
+    fn the_default_workspace_is_in_the_bridge_home() {
+        assert_eq!(default_workspace(Path::new("/home/me/.codedeck")), PathBuf::from("/home/me/.codedeck/workspaces"));
     }
 
     #[test]
