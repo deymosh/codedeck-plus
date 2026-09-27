@@ -25,6 +25,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -83,7 +84,13 @@ private fun preferenceOptions(choices: List<UniffiOptionChoice>, stored: String)
  * connection dots, and per-machine credentials/AI-provider blocks.
  */
 @Composable
-fun SettingsScreen(core: CoreHost, login: Login? = null, onLogOut: () -> Unit = {}, onClose: () -> Unit) {
+fun SettingsScreen(
+    core: CoreHost,
+    login: Login? = null,
+    onLogOut: () -> Unit = {},
+    onOpenLogs: () -> Unit = {},
+    onClose: () -> Unit,
+) {
     val settings by core.settings.collectAsState()
     val quickPrompts by core.quickPrompts.collectAsState()
     val connection by core.connection.collectAsState()
@@ -114,6 +121,7 @@ fun SettingsScreen(core: CoreHost, login: Login? = null, onLogOut: () -> Unit = 
             npub = remember { core.identityNpub() },
             login = login,
             onLogOut = onLogOut,
+            onOpenLogs = onOpenLogs,
             onClose = onClose,
         )
     }
@@ -130,6 +138,7 @@ private fun SettingsBody(
     npub: String,
     login: Login?,
     onLogOut: () -> Unit,
+    onOpenLogs: () -> Unit,
     onClose: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize()) {
@@ -554,7 +563,11 @@ private fun SettingsBody(
                     }
                 }
 
-                // --- Account ---
+                TextButton(onClick = onOpenLogs) {
+                    Text("Logs…")
+                }
+
+                // --- Account (last: logging out ends the list) ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Account")
                     AccountSection(npub = npub, login = login, onLogOut = onLogOut)

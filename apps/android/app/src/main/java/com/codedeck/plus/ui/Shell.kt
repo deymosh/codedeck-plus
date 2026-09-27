@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.screens.NewSessionScreen
 import com.codedeck.plus.platform.Login
+import com.codedeck.plus.ui.screens.LogsScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
@@ -37,6 +38,7 @@ private sealed interface Screen {
     data class Session(val machine: String, val sessionId: String) : Screen
     data class NewSession(val machine: String) : Screen
     data object Settings : Screen
+    data object Logs : Screen
     data object Pairing : Screen
 }
 
@@ -49,6 +51,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             is Screen.Session -> listOf("session", screen.machine, screen.sessionId)
             is Screen.NewSession -> listOf("new-session", screen.machine)
             Screen.Settings -> listOf("settings")
+            Screen.Logs -> listOf("logs")
             Screen.Pairing -> listOf("pairing")
         }
     },
@@ -57,6 +60,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "session" -> Screen.Session(saved[1], saved[2])
             "new-session" -> Screen.NewSession(saved[1])
             "settings" -> Screen.Settings
+            "logs" -> Screen.Logs
             "pairing" -> Screen.Pairing
             else -> Screen.Sessions
         }
@@ -197,9 +201,19 @@ fun Shell(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // System Back on any page returns to the sessions list, like each
             // page's own close/back control; Back on the list leaves the app.
-            if (screen != Screen.Sessions) BackHandler { screen = Screen.Sessions }
+            // The log is opened from Settings, so Back returns there.
+            if (screen != Screen.Sessions) {
+                BackHandler { screen = if (screen == Screen.Logs) Screen.Settings else Screen.Sessions }
+            }
             when (val current = screen) {
-                Screen.Settings -> SettingsScreen(core, login = login, onLogOut = onLogOut, onClose = { screen = Screen.Sessions })
+                Screen.Settings -> SettingsScreen(
+                    core,
+                    login = login,
+                    onLogOut = onLogOut,
+                    onOpenLogs = { screen = Screen.Logs },
+                    onClose = { screen = Screen.Sessions },
+                )
+                Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
                 Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
                 is Screen.NewSession -> NewSessionScreen(
                     core,

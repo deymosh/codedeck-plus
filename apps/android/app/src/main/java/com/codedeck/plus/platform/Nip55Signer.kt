@@ -30,7 +30,8 @@ private const val PROVIDER_RETRY_MS = 300L
 
 /** Logcat tag for why a request did or did not get a background answer.
  *  Payloads, keys and results are never logged. */
-private const val TAG = "CodeDeckSigner"
+internal const val SIGNER_LOG_TAG = "CodeDeckSigner"
+private const val TAG = SIGNER_LOG_TAG
 
 /** An installed app that answers `nostrsigner:` intents. */
 data class SignerAppInfo(val packageName: String, val label: String)
