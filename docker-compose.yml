@@ -28,6 +28,14 @@ services:
       - CODEDECK_OPENCODE_AUTO_START=${CODEDECK_OPENCODE_AUTO_START:-}
       - CODEDECK_OPENCODE_PORT=${CODEDECK_OPENCODE_PORT:-}
       - CODEDECK_GSD_AUTO_INSTALL=${CODEDECK_GSD_AUTO_INSTALL:-}
+      # The direct link (docs/BRIDGE.md): e.g. CODEDECK_DIRECT_LISTEN=0.0.0.0:7447
+      # and CODEDECK_DIRECT_ENDPOINTS=wss://192.168.1.20:7447 (the host's own
+      # address: inside the container the bridge cannot see it), plus the
+      # port below.
+      - CODEDECK_DIRECT_LISTEN=${CODEDECK_DIRECT_LISTEN:-}
+      - CODEDECK_DIRECT_ENDPOINTS=${CODEDECK_DIRECT_ENDPOINTS:-}
+    # ports:
+    #   - "7447:7447"
     secrets:
       - source: claude_code_oauth_token
         target: claude_code_oauth_token

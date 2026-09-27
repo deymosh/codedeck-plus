@@ -63,6 +63,8 @@
   "bridgeToPhone": {
     "valid": [
       { "type": "sessions", "machine": "m", "sessions": [], "agents": [], "protocolVersion": 11 },
+      { "type": "sessions", "machine": "m", "sessions": [], "agents": [], "protocolVersion": 11, "direct": { "endpoints": ["wss://192.168.1.20:7447", "ws://abc.onion:7448"], "certSha256": "00ff" } },
+      { "type": "sessions", "machine": "m", "sessions": [], "agents": [], "protocolVersion": 11, "direct": { "endpoints": ["ws://abc.onion:7448"] } },
       { "type": "sessions", "machine": "m", "host": "service", "sessions": [{ "id": "s", "agent": "opencode", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "mode": "build", "effort": "high", "state": "running", "seqHigh": 10 }], "agents": [{ "id": "claude-code", "displayName": "Claude Code", "modes": [{ "id": "default", "label": "Default" }, { "id": "plan", "label": "Plan", "description": "Read-only planning" }], "efforts": [{ "id": "high", "label": "High" }], "defaultMode": "default", "defaultEffort": "high", "supports": { "models": true, "usage": true, "providers": true, "gsd": true, "interrupt": true }, "credentials": [{ "id": "anthropic_api_key", "label": "Anthropic API key", "present": true, "fromEnv": true }] }, { "id": "opencode", "displayName": "OpenCode" }], "credentials": [{ "id": "github_pat", "label": "GitHub token", "present": false }], "protocolVersion": 11, "capabilities": ["sync/1", "images", "chunked"], "folders": ["a", "b"], "roots": ["/w"], "removedSessions": ["old"], "machineOffline": true },
       { "type": "output", "sessionId": "s", "seq": 1, "entry": { "timestamp": "2026-08-05T00:00:00.000Z", "entryType": "text", "role": "user", "text": "hello" } },
       { "type": "output", "sessionId": "s", "seq": 2, "entry": { "timestamp": "t", "entryType": "text", "role": "agent", "text": "Running the tests.", "collapsible": true } },
@@ -111,12 +113,38 @@
       { "type": "output", "sessionId": "s", "seq": 1, "entry": { "timestamp": "t", "entryType": "text", "content": "v10 shape" } },
       { "type": "output", "sessionId": "s", "seq": 1, "entry": { "timestamp": "t", "entryType": "tool_call", "callId": "c", "toolName": "X", "kind": "teleport", "title": "t" } },
       { "type": "sessions", "machine": "m", "sessions": [], "protocolVersion": 11 },
+      { "type": "sessions", "machine": "m", "sessions": [], "agents": [], "protocolVersion": 11, "direct": { "certSha256": "00ff" } },
       { "type": "sessions", "machine": "m", "sessions": [{ "id": "s", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p" }], "agents": [], "protocolVersion": 11 },
       { "type": "option-confirmed", "sessionId": "s", "option": "temperature", "value": "1" },
       { "type": "input-failed", "sessionId": "s", "reason": "unknown-reason" },
       { "type": "pair-ack", "machine": "m", "ok": true, "reason": "meltdown" },
       { "type": "mode-confirmed", "sessionId": "s", "mode": "plan" },
       { "type": "warp", "sessionId": "s" }
+    ]
+  },
+  "directFrames": {
+    "valid": [
+      ["CHALLENGE", "c1"],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1800000000, "kind": 22242, "tags": [["challenge", "c1"]], "content": "", "sig": "cc" }, 1799999000],
+      ["READY"],
+      ["CLOSED", "not paired"],
+      ["EVENT", { "id": "aa", "pubkey": "bb", "created_at": 1800000000, "kind": 4515, "tags": [["p", "dd"]], "content": "x", "sig": "cc" }],
+      ["OK", "aa", true, ""]
+    ],
+    "rejected": [
+      "not json",
+      {},
+      [],
+      ["NOTICE", "x"],
+      ["CHALLENGE"],
+      ["CHALLENGE", 1],
+      ["HELLO", { "id": "aa" }, 1],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }, -1],
+      ["READY", 1],
+      ["EVENT"],
+      ["OK", "aa", "yes", ""],
+      ["OK", "aa", true]
     ]
   },
   "forwardCompatible": [

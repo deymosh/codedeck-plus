@@ -123,9 +123,39 @@ Precedence: flags > environment > `<home>/config.json` > defaults. Home:
 | `blossomRegisterEndpoint` / `blossomRegisterToken` | `CODEDECK_BLOSSOM_REGISTER_ENDPOINT` / `..._TOKEN` | The same for the image server, so uploads do not fall back to relay chunking |
 | `transcriptKeepLast` | `CODEDECK_TRANSCRIPT_KEEP_LAST` | Entries kept per session transcript (default 5000; 0 keeps all) |
 | `agentHostPath`, `nodePath` | `CODEDECK_AGENT_HOST` / `--agent-host`, `CODEDECK_NODE_PATH` | Where the agent host and Node are (defaults: `agent-host/` beside the binary; the `node` beside the binary, else `node` on `PATH`) |
+| `direct.listen` | `CODEDECK_DIRECT_LISTEN` / `--direct-listen` | Serve phones directly over `wss://` on this `ip:port` (e.g. `0.0.0.0:7447`); off by default |
+| `direct.onionListen` | `CODEDECK_DIRECT_ONION_LISTEN` / `--direct-onion-listen` | A plain `ws://` listener for an onion service to forward to; loopback only (e.g. `127.0.0.1:7448`) |
+| `direct.endpoints` | `CODEDECK_DIRECT_ENDPOINTS` / `--direct-endpoint` | The URLs phones dial, in order: `wss://host:port`, or `ws://<name>.onion:port` (default: the `wss://` listener's LAN address) |
 
 The Tor proxy carries relay traffic only; the agents' own API calls and the
 bridge's HTTP checks go direct.
+
+### Direct link
+
+With `direct.listen` set, phones on the same network (or VPN) talk to the
+bridge over its own WebSocket instead of through a relay; the relays keep
+carrying everything, so a phone that cannot reach an endpoint simply stays
+on them. The listener serves a self-signed certificate made once in
+`<home>/direct/`; its SHA-256 rides the heartbeat and the phone pins it, so
+private addresses and VPN host names (Tailscale MagicDNS, WireGuard) work
+without a CA. Only paired phones get past the handshake. List every address
+a phone might use, in the order to try, e.g.
+`--direct-endpoint wss://192.168.1.20:7447 --direct-endpoint wss://laptop.tail1234.ts.net:7447`.
+
+For a phone on Orbot, run an onion service that forwards to
+`direct.onionListen` (Tor: `HiddenServicePort 7448 127.0.0.1:7448`) and add
+`ws://<name>.onion:7448` to the endpoints; the phone only uses `.onion`
+endpoints while Orbot is on. An onion service on another host or container
+(the Compose `codedeck-tor` one) cannot reach that loopback listener: point
+it at the `wss://` listener instead (`HiddenServicePort 7447
+codedeck-bridge:7447`) and advertise `wss://<name>.onion:7447`; the phone
+pins the certificate through Tor all the same. See
+[`PROTOCOL.md`](PROTOCOL.md#direct-link).
+
+Under Docker Compose, set `CODEDECK_DIRECT_LISTEN=0.0.0.0:7447`, publish the
+port (the commented `ports:` in `docker-compose.yml`), and set
+`CODEDECK_DIRECT_ENDPOINTS` to the host's addresses: inside the container the
+bridge only sees its container address.
 
 ## Files
 
@@ -138,6 +168,9 @@ In `<home>`:
 - `bridge.lock` — held while a bridge runs, so two never share one identity;
   `bridge.pid` beside it names the process holding it.
 - `config.json` — optional; tightened to 0600 when read (it may hold admin tokens).
+- `direct/cert.der`, `direct/key.der` — the direct link's certificate and its
+  key (0600). Deleting them makes a new one; phones pick up the new pin from
+  the next heartbeat.
 
 ## Build from source
 

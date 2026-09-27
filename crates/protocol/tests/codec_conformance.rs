@@ -152,3 +152,23 @@ fn forward_compatible_messages_still_decode() {
         assert!(ok, "forwardCompatible[{i}] ({dir}) {json} should decode (extra fields ignored)");
     }
 }
+
+#[test]
+fn direct_frames_decode_round_trip_and_rejections_stay_rejected() {
+    use protocol::direct::{decode_direct_frame, encode_direct_frame};
+    let corpus = corpus();
+    for (i, frame) in corpus["directFrames"]["valid"].as_array().unwrap().iter().enumerate() {
+        let text = frame.to_string();
+        let decoded = decode_direct_frame(&text).unwrap_or_else(|e| panic!("directFrames.valid[{i}] {text} -> {e}"));
+        assert_eq!(
+            decode_direct_frame(&encode_direct_frame(&decoded)),
+            Ok(decoded),
+            "directFrames.valid[{i}] not a round-trip"
+        );
+    }
+    for (i, frame) in corpus["directFrames"]["rejected"].as_array().unwrap().iter().enumerate() {
+        // A string fixture is the raw frame text, anything else its JSON.
+        let text = frame.as_str().map(str::to_string).unwrap_or_else(|| frame.to_string());
+        assert!(decode_direct_frame(&text).is_err(), "directFrames.rejected[{i}] {text} decoded but should not have");
+    }
+}

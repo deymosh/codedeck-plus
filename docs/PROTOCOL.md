@@ -252,6 +252,35 @@ readable). It keeps the previous key, and keeps encrypting to a bridge with
 it, until that bridge confirms the new one by encrypting to it; once every
 bridge has, or its grants lapsed, the previous key is deleted.
 
+### Direct link
+
+A bridge may also serve its phones directly, over its own WebSocket (LAN,
+VPN, or an onion service), besides the relays. It carries the SAME signed
+events, nothing else: no REQ/EOSE, a handshake and then events both ways.
+Pairing still happens over the relays, and the bridge keeps publishing
+everything there too, so a phone falls back to the relays whenever no direct
+endpoint answers. Both sides drop an event they have seen by its id, so one
+arriving both ways is handled once. `crates/protocol/src/direct.rs` is the
+spec.
+
+- **Discovery.** The heartbeat's `direct {endpoints, certSha256?}` lists
+  where to connect, in order. `wss://` endpoints serve a self-signed
+  certificate the phone pins by `certSha256` (no CA, any host name: private
+  addresses and VPN names work); `ws://` is allowed only for `.onion`. The
+  heartbeat is signed by the bridge and encrypted to the phone, so the pin
+  is as authentic as the pairing. While the phone routes through Orbot it
+  only uses `.onion` endpoints.
+- **Frames**, each a JSON array in one text message:
+  `["CHALLENGE", c]` (bridge, on connect) → `["HELLO", auth, since]` (phone,
+  within a minute:
+  `auth` a kind-22242 event signed by its identity, tagged
+  `["challenge", c]`, `created_at` within 10 minutes) → `["READY"]` or
+  `["CLOSED", reason]`. Then `["EVENT", event]` both ways, each phone event
+  answered with `["OK", id, accepted, message]`.
+- After `READY` the bridge sends what it published for that identity since
+  `since` (seconds; it keeps an hour of it), then everything new. It takes
+  only command events (4515) authored by the identity that said `HELLO`.
+
 ### Capabilities
 
 The heartbeat carries `protocolVersion` + `capabilities[]`; phones stamp
