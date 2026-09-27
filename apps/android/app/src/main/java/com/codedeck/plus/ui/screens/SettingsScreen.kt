@@ -563,14 +563,14 @@ private fun SettingsBody(
                     }
                 }
 
-                // --- Account ---
+                TextButton(onClick = onOpenLogs) {
+                    Text("Logs…")
+                }
+
+                // --- Account (last: logging out ends the list) ---
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SectionHeading("Account")
                     AccountSection(npub = npub, login = login, onLogOut = onLogOut)
-                }
-
-                TextButton(onClick = onOpenLogs) {
-                    Text("Logs…")
                 }
 
                 Text(
