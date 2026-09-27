@@ -427,6 +427,63 @@ mod tests {
         assert!(unknown_keys(&clean).is_empty());
     }
 
+    /// `config.example.json` at the repository root shows every key: this
+    /// destructures the file config without `..`, so a new key does not
+    /// compile until it is listed here, and then fails until the example
+    /// sets it; a key the bridge does not know fails too.
+    #[test]
+    fn the_example_config_sets_every_key_and_only_known_ones() {
+        let file: FileConfig = serde_json::from_str(include_str!("../../../config.example.json")).unwrap();
+        assert_eq!(unknown_keys(&file), Vec::<String>::new());
+        let FileConfig {
+            machine_name,
+            relays,
+            workspace_roots,
+            relay_register_endpoint,
+            relay_register_token,
+            blossom_register_endpoint,
+            blossom_register_token,
+            claude_path,
+            transcript_keep_last,
+            tor_proxy_url,
+            open_code_server_url,
+            open_code_auto_start,
+            open_code_path,
+            open_code_port,
+            agent_host_path,
+            node_path,
+            direct,
+            unknown: _,
+        } = file;
+        let set = [
+            ("machineName", machine_name.is_some()),
+            ("relays", relays.is_some()),
+            ("workspaceRoots", workspace_roots.is_some()),
+            ("relayRegisterEndpoint", relay_register_endpoint.is_some()),
+            ("relayRegisterToken", relay_register_token.is_some()),
+            ("blossomRegisterEndpoint", blossom_register_endpoint.is_some()),
+            ("blossomRegisterToken", blossom_register_token.is_some()),
+            ("claudePath", claude_path.is_some()),
+            ("transcriptKeepLast", transcript_keep_last.is_some()),
+            ("torProxyUrl", tor_proxy_url.is_some()),
+            ("openCodeServerUrl", open_code_server_url.is_some()),
+            ("openCodeAutoStart", open_code_auto_start.is_some()),
+            ("openCodePath", open_code_path.is_some()),
+            ("openCodePort", open_code_port.is_some()),
+            ("agentHostPath", agent_host_path.is_some()),
+            ("nodePath", node_path.is_some()),
+        ];
+        for (key, present) in set {
+            assert!(present, "config.example.json does not set {key}");
+        }
+        let FileDirect { listen, onion_listen, endpoints, unknown: _ } = direct.expect("config.example.json sets direct");
+        assert!(listen.is_some() && onion_listen.is_some() && endpoints.is_some(), "config.example.json sets every direct key");
+        // And the values it shows are ones the bridge accepts.
+        let direct = FileDirect { listen, onion_listen, endpoints, unknown: Default::default() };
+        direct_config(&Flags::default(), Some(direct)).expect("the example's direct section is valid");
+        proxy_host_port(&tor_proxy_url.unwrap()).expect("the example's proxy URL is valid");
+    }
+
     #[test]
     fn verbatim_windows_paths_are_made_ordinary() {
         let s = |p: &str| strip_verbatim(PathBuf::from(p)).to_string_lossy().into_owned();

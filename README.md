@@ -98,10 +98,10 @@ codedeck-plus/
   phone each answer a relay's `AUTH` challenge with their own existing identity
   keypair — no new secret to configure. Just allowlist the bridge's pairing
   npub (and the phone's, if your relay gates reads too) in your relay's ACL.
-- **Tor/SOCKS5 for the bridge** (`crates/nostr-transport`): set
-  `CODEDECK_TOR_PROXY_URL` and every relay connection routes through it (the
-  agents' own API traffic does not). See the optional `codedeck-tor` Compose
-  service below.
+- **Tor/SOCKS5 for the bridge** (`crates/nostr-transport`): set `torProxyUrl`
+  in its `config.json` (or `CODEDECK_TOR_PROXY_URL`) and every relay
+  connection routes through it (the agents' own API traffic does not). See
+  the optional `codedeck-tor` Compose service below.
 - **Orbot for the phone**: a settings toggle routes the app's relay and image
   traffic through Orbot's SOCKS5 proxy — off by default.
 
@@ -110,29 +110,47 @@ codedeck-plus/
 Other ways to run it (release archives, systemd, from source) are in
 [`docs/BRIDGE.md`](docs/BRIDGE.md).
 
-Create a `.env` file in the root directory:
+Two files configure it:
 
-```env
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
-GITHUB_TOKEN=ghp_...
-GIT_USER=your_username
-GIT_EMAIL=your_email@example.com
-# Comma-separated repositories; cloned under /data/workspaces/<repo-name>
-GIT_REPO=https://github.com/your-username/your-repo.git
+- **`.env`** (copy [`.env.example`](.env.example)) — what the container needs:
+  the Claude Code and GitHub tokens, the Git identity and repositories to
+  clone, and a few optional switches.
 
-# Optional — see .env.example for the full explanation of each:
-CODEDECK_RELAYS=
-CODEDECK_TOR_PROXY_URL=
+  ```env
+  CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
+  GITHUB_TOKEN=ghp_...
+  GIT_USER=your_username
+  GIT_EMAIL=your_email@example.com
+  # Comma-separated repositories; cloned under /data/workspaces/<repo-name>
+  GIT_REPO=https://github.com/your-username/your-repo.git
+  ```
 
-# Optional — OpenCode, a second agent alongside Claude Code. See docs/OPENCODE.md.
-CODEDECK_OPENCODE_SERVER_URL=
-CODEDECK_OPENCODE_AUTO_START=
-CODEDECK_OPENCODE_PORT=
+- **`data/config.json`** — the bridge's own settings: relays, Tor, OpenCode,
+  the direct link, the machine name. The first start creates it with the
+  direct link on and the defaults for everything else;
+  [`config.example.json`](config.example.json) shows every setting (keep only
+  the ones you need), and [`docs/BRIDGE.md`](docs/BRIDGE.md#configuration)
+  explains each. Restart the container after editing it.
 
-# Optional — installs gsd-core (github.com/open-gsd/gsd-core) globally on
-# startup. Off by default: see .env.example for why.
-CODEDECK_GSD_AUTO_INSTALL=
-```
+  ```json
+  {
+    "relays": ["wss://relay.example.com"],
+    "direct": { "listen": "0.0.0.0:7447" }
+  }
+  ```
+
+The direct link is on out of the box: Compose publishes port 7447, and phones
+on your network or VPN reach the bridge there without a relay (only paired
+phones get past its handshake). Inside a container the bridge cannot see the
+host's address, so add it once, either in `config.json`
+(`"endpoints": ["wss://192.168.1.20:7447"]` in `direct`) or on the phone, in
+the machine's settings. Either works over `wss://` with no certificate setup:
+the phone pins the certificate the bridge reports, not a host name.
+
+On a server with a public address, the published port is reachable from the
+internet too. Only paired phones get past the handshake, but if you would
+rather not expose it, drop the `ports:` entry or bind it to your VPN address
+(`"100.64.0.1:7447:7447"`).
 
 Docker Compose reads the root `.env` file as its environment configuration. It
 maps `CLAUDE_CODE_OAUTH_TOKEN` and `GITHUB_TOKEN` from that environment into
@@ -156,11 +174,10 @@ docker compose up -d --build
 ```
 
 2. **Optional** — also run the bundled Tor daemon (`lncm/tor`), instead of
-   pointing `CODEDECK_TOR_PROXY_URL` at a Tor daemon you already run
-   elsewhere:
+   pointing `torProxyUrl` at a Tor daemon you already run elsewhere:
 ```bash
 docker compose --profile tor up -d --build
-# then set CODEDECK_TOR_PROXY_URL=socks5h://codedeck-tor:9050 in .env
+# then set "torProxyUrl": "socks5h://codedeck-tor:9050" in data/config.json
 ```
 
 3. Check the logs to scan the pairing QR code with the CodeDeck+ Android app:
