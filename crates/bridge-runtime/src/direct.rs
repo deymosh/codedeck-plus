@@ -201,7 +201,7 @@ pub async fn start(
     }
     let hub = Hub::new(bridge_pubkey, inputs);
     let mut tasks = Vec::new();
-    let mut endpoints = config.endpoints.clone();
+    let mut bound_wss = None;
     let mut cert_sha256 = None;
 
     if let Some(addr) = config.listen {
@@ -210,9 +210,7 @@ pub async fn start(
         let acceptor = cert.acceptor()?;
         let listener = TcpListener::bind(addr).await.map_err(|e| format!("direct link: cannot listen on {addr}: {e}"))?;
         let bound = listener.local_addr().map_err(|e| e.to_string())?;
-        if !endpoints.iter().any(|e| e.starts_with("wss://")) {
-            endpoints.insert(0, format!("wss://{}", advertised(bound)));
-        }
+        bound_wss = Some(bound);
         log::info!("[Direct] Listening on wss://{bound} (certificate sha256 {})", cert.sha256_hex());
         let hub = Rc::clone(&hub);
         tasks.push(tokio::task::spawn_local(async move {
@@ -231,10 +229,38 @@ pub async fn start(
             accept_loop(listener, hub, |stream| async move { Some(stream) }).await
         }));
     }
+    let endpoints = advertised_endpoints(config, bound_wss);
     for endpoint in &endpoints {
         log::info!("[Direct] Advertising {endpoint}");
     }
     Ok(Some(Direct { hub, info: DirectInfo { endpoints, cert_sha256 }, tasks }))
+}
+
+/// The endpoints the heartbeat advertises: the configured ones, led by the
+/// `wss://` listener's LAN address when none of them is a `wss://` one.
+fn advertised_endpoints(config: &DirectConfig, wss_listener: Option<SocketAddr>) -> Vec<String> {
+    let mut endpoints = config.endpoints.clone();
+    if let Some(bound) = wss_listener {
+        if !endpoints.iter().any(|e| e.starts_with("wss://")) {
+            endpoints.insert(0, format!("wss://{}", advertised(bound)));
+        }
+    }
+    endpoints
+}
+
+/// One line for the start banner and `status`: what phones are told to
+/// dial and what the bridge listens on, or "off".
+pub fn summary(config: &DirectConfig) -> String {
+    if !config.enabled() {
+        return "off".into();
+    }
+    let listening: Vec<String> = config
+        .listen
+        .map(|a| format!("wss on {a}"))
+        .into_iter()
+        .chain(config.onion_listen.map(|a| format!("onion service on {a}")))
+        .collect();
+    format!("{} (listening: {})", advertised_endpoints(config, config.listen).join(", "), listening.join(", "))
 }
 
 /// The address phones on the LAN reach `bound` at: itself, or for a
@@ -421,6 +447,27 @@ mod tests {
     use super::*;
     use protocol::crypto::generate_keypair;
     use protocol::nip42::build_auth_event;
+
+    #[test]
+    fn the_summary_names_what_phones_dial_and_what_is_listening() {
+        assert_eq!(summary(&DirectConfig::default()), "off");
+        let lan = DirectConfig {
+            listen: Some("0.0.0.0:7447".parse().unwrap()),
+            onion_listen: None,
+            endpoints: vec!["wss://192.168.1.18:7447".into()],
+        };
+        assert_eq!(summary(&lan), "wss://192.168.1.18:7447 (listening: wss on 0.0.0.0:7447)");
+        // No wss:// endpoint configured: the listener's own address leads.
+        let both = DirectConfig {
+            listen: Some("127.0.0.1:7447".parse().unwrap()),
+            onion_listen: Some("127.0.0.1:7448".parse().unwrap()),
+            endpoints: vec!["ws://abc.onion:7448".into()],
+        };
+        assert_eq!(
+            summary(&both),
+            "wss://127.0.0.1:7447, ws://abc.onion:7448 (listening: wss on 127.0.0.1:7447, onion service on 127.0.0.1:7448)"
+        );
+    }
 
     fn command(from: &protocol::crypto::Keypair, to: &str) -> SignedEvent {
         let keys = nostr::Keys::new(from.secret_key.clone());
