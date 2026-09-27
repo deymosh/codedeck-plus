@@ -76,12 +76,16 @@ impl ConnectionView {
 #[serde(rename_all = "camelCase")]
 pub struct MachinesView {
     pub machines: BTreeMap<String, MachineView>,
+    /// The endpoint each machine's direct link is up on; a machine absent
+    /// here is reached through the relays.
+    pub direct_up: BTreeMap<String, String>,
 }
 
 impl MachinesView {
     pub fn from_stores(s: &CoreStores) -> Self {
         Self {
             machines: s.machines.machines.clone(),
+            direct_up: BTreeMap::new(),
         }
     }
 }

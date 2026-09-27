@@ -152,6 +152,12 @@ impl<T: Transport, H: NostrClientHost + 'static> NostrClient<T, H> {
         }
     }
 
+    /// An event that came another way (a bridge's direct link): dropped if
+    /// a relay already delivered it, else handled like a relay's.
+    pub fn deliver(&self, event: &NostrEvent) {
+        handle_event(&self.inner, self.host.as_ref(), event);
+    }
+
     pub fn is_connected(&self) -> bool {
         let i = self.inner.borrow();
         i.connected_epoch == Some(i.epoch) && !i.subs.is_empty()
