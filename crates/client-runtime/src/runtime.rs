@@ -53,6 +53,10 @@ use crate::view::{
     PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, UiView,
 };
 
+/// On a resume with the socket still up, a machine whose heartbeat (which
+/// carries its whole session list) arrived this recently is not asked for a
+/// fresh list. Bridges beat every 60 s.
+const RESUME_HEARD_WITHIN_MS: u64 = 90_000;
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
 /// Relay ping interval while the app is in the background. Every ping is a
@@ -639,8 +643,9 @@ enum Msg {
     },
     /// The delete-controller's 4 s undo window elapsed.
     UndoTimerFired,
-    /// The connection FSM asked for a post-(re)connect reconcile.
-    RefreshReconcile,
+    /// The connection FSM asked for a reconcile: after a (re)connect, or
+    /// (`reconnected: false`) on a resume with the socket still up.
+    RefreshReconcile { reconnected: bool },
     /// `LoopHost::note_stored_seen` advanced the cursor — persist it so a
     /// restart resumes the stored-response filter instead of replaying the
     /// relay's entire history for this identity. Deferred the same way every
@@ -951,7 +956,7 @@ impl Loop {
                 Msg::View(query) => self.answer_view(query).await,
                 Msg::PublishSettled { id, result } => self.on_publish_settled(id, result).await,
                 Msg::UndoTimerFired => self.on_undo_timer().await,
-                Msg::RefreshReconcile => self.on_refresh_reconcile().await,
+                Msg::RefreshReconcile { reconnected } => self.on_refresh_reconcile(reconnected).await,
                 Msg::IdentityDecrypted { event, plaintext } => {
                     let incoming = incoming_of(&event);
                     let now = self.clock.now_ms();
@@ -1050,7 +1055,10 @@ impl Loop {
             // fresh list, reconcile from what we know. Deferred to a message so
             // this sync `apply` can stay non-blocking.
             ConnectionEffect::RefreshAndReconcile => {
-                let _ = self.self_tx.send(Msg::RefreshReconcile);
+                let _ = self.self_tx.send(Msg::RefreshReconcile { reconnected: true });
+            }
+            ConnectionEffect::ResumeReconcile => {
+                let _ = self.self_tx.send(Msg::RefreshReconcile { reconnected: false });
             }
         }
     }
@@ -1533,22 +1541,37 @@ impl Loop {
     }
 
     /// Post-(re)connect reconcile. Port of `createPhoneCore`'s
-    /// `refreshAndReconcile` handler.
-    async fn on_refresh_reconcile(&mut self) {
+    /// `refreshAndReconcile` handler. On a resume (`reconnected: false`) a
+    /// machine heard from within [`RESUME_HEARD_WITHIN_MS`] is not asked for
+    /// its list again, and the answers held for the connection stay good.
+    async fn on_refresh_reconcile(&mut self, reconnected: bool) {
         // Reset any sync cycle a prior failure left stuck.
         self.stores.transcript.on_reconnect(None);
+        if reconnected {
+            // A push (provider profiles, say) may have been missed.
+            self.stores.machines.fetches.forget_all();
+        }
 
+        let now = self.clock.now_ms();
         let machines = self.stores.machines.machine_pubkeys();
         for machine in &machines {
-            // Ask for a fresh session list (the stored 30515's seqHigh goes
-            // stale — CDX-008).
-            self.on_send(
-                machine.clone(),
-                PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {
-                    version: Default::default(),
-                }),
-                None,
-            );
+            let heard_lately = self
+                .stores
+                .machines
+                .machine(machine)
+                .and_then(|m| m.last_heartbeat_at)
+                .is_some_and(|at| now.saturating_sub(at) < RESUME_HEARD_WITHIN_MS);
+            if reconnected || !heard_lately {
+                // Ask for a fresh session list (the stored 30515's seqHigh
+                // goes stale — CDX-008).
+                self.on_send(
+                    machine.clone(),
+                    PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {
+                        version: Default::default(),
+                    }),
+                    None,
+                );
+            }
             // Reconcile from what we already know while the answers travel.
             let targets: Vec<(String, u64)> = self
                 .stores
@@ -3840,6 +3863,64 @@ mod tests {
                 core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
                 let cmd = next_command_via(&mut mock, &phone, &new, &machine).await;
                 assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+            })
+            .await;
+    }
+
+    /// Coming back to the app with the socket still up asks a machine for
+    /// its session list only when its heartbeat has not kept it current.
+    #[tokio::test]
+    async fn a_resume_refreshes_only_machines_not_heard_from_lately() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None);
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let clock = Rc::new(FixedClock(RefCell::new(1_000_000)));
+                let core = Core::spawn(
+                    CoreConfig {
+                        relays: vec![mock.url.clone()],
+                        identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                        proxy: None,
+                        tor: false,
+                        reconnect: fast_reconnect(),
+                    },
+                    CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+                    Rc::new(Spy::default()),
+                    clock.clone(),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+                core.start();
+                eose_all(&mut mock).await;
+                let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "the connect refreshes: {refresh:?}");
+                push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat_with(&[]));
+                for _ in 0..100 {
+                    if core.machines_view().await.machines[&machine.pubkey_hex].last_heartbeat_at.is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+
+                // Heard just now: the resume sends nothing, so the next
+                // command out is the user's.
+                core.resume();
+                core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+                let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+
+                // Silent for longer than a couple of heartbeats: refreshed.
+                *clock.0.borrow_mut() += RESUME_HEARD_WITHIN_MS;
+                core.resume();
+                let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+                assert!(matches!(cmd, Some(PhoneToBridge::RefreshSessions(_))), "{cmd:?}");
             })
             .await;
     }

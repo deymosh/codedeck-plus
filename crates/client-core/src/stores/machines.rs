@@ -21,6 +21,7 @@ use protocol::common::{
 };
 use protocol::events::{ModelEntry, ModelsMsg, ProviderProfilesMsg, SessionListMsg};
 
+use super::fetches::Fetches;
 use super::session_key::SessionGrant;
 use protocol::direct::DirectInfo;
 
@@ -350,12 +351,15 @@ pub fn hydrate_machines(raw: Option<&str>) -> BTreeMap<String, MachineView> {
 
 /// The machines store as a pure state machine. Every method mutates
 /// only `self`; the runtime persists `serialize_machines(&self.machines)` after
-/// anything that changes `machines`. `dismissed_sessions` is in-memory only.
+/// anything that changes `machines`. `dismissed_sessions` and `fetches` are
+/// in-memory only.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MachinesState {
     pub machines: BTreeMap<String, MachineView>,
     pub dismissed_sessions: BTreeMap<String, u64>,
     pub merge_options: MergeOptions,
+    /// The model lists and provider profiles answered on this connection.
+    pub fetches: Fetches,
 }
 
 impl MachinesState {
@@ -364,6 +368,7 @@ impl MachinesState {
             machines,
             dismissed_sessions: BTreeMap::new(),
             merge_options,
+            fetches: Fetches::default(),
         }
     }
 

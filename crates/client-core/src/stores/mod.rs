@@ -2,6 +2,7 @@
 //! I/O; the runtime owns wiring + persistence.
 
 pub mod session_key;
+pub mod fetches;
 pub mod machines;
 pub mod outbox;
 pub mod pairing;
