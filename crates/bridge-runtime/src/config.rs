@@ -52,6 +52,9 @@ struct FileConfig {
     agent_host_path: Option<String>,
     node_path: Option<String>,
     direct: Option<FileDirect>,
+    /// Keys this bridge does not know, kept only to warn about them.
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -60,6 +63,16 @@ struct FileDirect {
     listen: Option<String>,
     onion_listen: Option<String>,
     endpoints: Option<Vec<String>>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
+}
+
+/// The keys in `config.json` this bridge does not know (a typo, or a flat
+/// `"direct.listen"` for the nested `"direct": {"listen": …}`), which it
+/// would otherwise ignore without a word.
+fn unknown_keys(file: &FileConfig) -> Vec<String> {
+    let nested = file.direct.iter().flat_map(|d| d.unknown.keys().map(|k| format!("direct.{k}")));
+    file.unknown.keys().cloned().chain(nested).collect()
 }
 
 /// The direct link (see `crate::direct`): where to listen, and what to
@@ -279,6 +292,14 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     } else {
         FileConfig::default()
     };
+    let unknown = unknown_keys(&file);
+    if !unknown.is_empty() {
+        log::warn!(
+            "[Config] {} has keys this bridge does not know, ignored: {} (nested settings go in an object, e.g. \"direct\": {{\"listen\": …}})",
+            config_file.display(),
+            unknown.join(", "),
+        );
+    }
 
     let host_kind = if flags.service || env("INVOCATION_ID").is_some() { BridgeHostKind::Service } else { BridgeHostKind::Cli };
     let machine = flags
@@ -380,6 +401,19 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_config_keys_are_named_nested_ones_included() {
+        let file: FileConfig = serde_json::from_str(
+            r#"{"machineName":"desktop","direct.listen":"0.0.0.0:7447","direct":{"listen":"0.0.0.0:7447","endpoint":"wss://x"}}"#,
+        )
+        .unwrap();
+        assert_eq!(unknown_keys(&file), vec!["direct.listen".to_string(), "direct.endpoint".to_string()]);
+        assert_eq!(file.direct.and_then(|d| d.listen).as_deref(), Some("0.0.0.0:7447"), "known keys still read");
+
+        let clean: FileConfig = serde_json::from_str(r#"{"machineName":"desktop","direct":{"listen":"0.0.0.0:7447"}}"#).unwrap();
+        assert!(unknown_keys(&clean).is_empty());
+    }
 
     #[test]
     fn verbatim_windows_paths_are_made_ordinary() {
