@@ -537,6 +537,7 @@ impl Engine {
             roots: Some(self.workspace.roots()),
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
+            direct: None,
         });
         self.publish_all(message);
     }

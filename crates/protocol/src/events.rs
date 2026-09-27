@@ -38,6 +38,10 @@ pub struct SessionListMsg {
     /// v10: set on clean shutdown — sessions stay listed (`state: offline`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_offline: Option<bool>,
+    /// Where the phone can reach this bridge without a relay (see
+    /// [`crate::direct`]). Absent when it serves no direct link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct: Option<crate::direct::DirectInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]

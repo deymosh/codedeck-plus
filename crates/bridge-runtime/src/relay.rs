@@ -279,6 +279,7 @@ mod tests {
             roots: None,
             removed_sessions: None,
             machine_offline: None,
+            direct: None,
         })
     }
 
