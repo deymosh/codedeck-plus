@@ -118,9 +118,11 @@ class Nip55Signer(
         return answer.event ?: withSignature(unsignedEventJson, answer.result)
     }
 
-    override fun nip44Encrypt(peerPubkeyHex: String, plaintext: String): String =
-        ask("NIP44_ENCRYPT", "", plaintext, peerPubkeyHex)?.result
-            ?: viaActivity("nip44_encrypt", plaintext, peerPubkeyHex).result
+    override fun nip44Encrypt(peerPubkeyHex: String, plaintext: String): String {
+        val text = signerPlaintext(plaintext)
+        return ask("NIP44_ENCRYPT", "", text, peerPubkeyHex)?.result
+            ?: viaActivity("nip44_encrypt", text, peerPubkeyHex).result
+    }
 
     override fun nip44Decrypt(peerPubkeyHex: String, ciphertext: String): String =
         ask("NIP44_DECRYPT", "", ciphertext, peerPubkeyHex)?.result
@@ -188,6 +190,19 @@ class Nip55Signer(
     private fun withSignature(unsigned: String, signature: String): String =
         JSONObject(unsigned).put("sig", signature).toString()
 }
+
+/**
+ * The plaintext to hand a signer for encryption. A signer may file an
+ * encryption under a permission that depends on what the plaintext looks
+ * like, and Amber does so inconsistently for JSON that is not a Nostr event
+ * (the core's messages): its content provider files anything starting with
+ * `{` as an event, while its approval activity, failing to parse one, files
+ * it as clear text — so an "always" given in the activity is never found in
+ * the background. A leading space makes both see clear text; JSON ignores it,
+ * so the bridge decodes the message unchanged.
+ */
+internal fun signerPlaintext(plaintext: String): String =
+    if (plaintext.startsWith("{")) " $plaintext" else plaintext
 
 /** Read a provider's cursor: a `rejected` column, a first row with `result`
  *  (and `event` for a signature), or nothing (only the user can answer). */
