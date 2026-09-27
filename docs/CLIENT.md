@@ -147,6 +147,33 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
 - `wss://` uses rustls (webpki roots), so the core cross-compiles for Android
   without OpenSSL.
 
+### Direct link
+
+A bridge can also be reached without the relays (the wire is in
+[`PROTOCOL.md`](PROTOCOL.md#direct-link), the bridge's side in
+[`BRIDGE.md`](BRIDGE.md#direct-link)). Pairing always goes over Nostr; the
+link is an extra path beside the relays, never a replacement.
+
+- Where to dial comes from the bridge's heartbeat (`direct`: endpoints and
+  the SHA-256 of its self-signed certificate), followed by any endpoints the
+  user added for that machine in Settings (a VPN or MagicDNS name the bridge
+  cannot know). Both live in the machines store.
+- The core keeps one link per machine that has endpoints, while it runs. It
+  tries them in order with the relay transport's backoff, and restarts the
+  link when the endpoints, the pin or the Orbot proxy change.
+- `wss://` endpoints are pinned to the advertised certificate (no CA, so
+  private addresses and VPN names work); without a pin they are skipped.
+  Cleartext `ws://` goes only to an onion service. While Orbot is on only
+  `.onion` endpoints are dialled, through it; LAN and VPN ones are skipped.
+- The HELLO is signed by the identity, like a relay's AUTH, and resumes from
+  the newest event the link has seen (two minutes back on the first
+  connection). Events that arrive go through the same dedup and ingest as a
+  relay's, so a copy the relays also deliver is dropped.
+- A command goes over the link while it is up and the bridge answers with an
+  `OK` within 5 s; otherwise it is published to the relays as usual.
+- The machines view reports the endpoint each link is up on; Settings shows
+  it per machine.
+
 ## Conventions
 
 - A UniFFI error variant must not have a field named `message` (it collides
