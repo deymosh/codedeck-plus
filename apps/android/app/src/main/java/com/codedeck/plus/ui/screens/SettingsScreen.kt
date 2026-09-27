@@ -71,6 +71,8 @@ private const val UI_SCALE_DEFAULT = 1f
 internal sealed interface SettingsPage {
     data object Hub : SettingsPage
     data class Machine(val pubkey: String) : SettingsPage
+    /** One agent's plugins on a machine, opened from the machine's page. */
+    data class Plugins(val pubkey: String, val agent: String) : SettingsPage
     data object Appearance : SettingsPage
     data object Notifications : SettingsPage
     data object Connection : SettingsPage
@@ -80,6 +82,7 @@ internal sealed interface SettingsPage {
     fun save(): String = when (this) {
         Hub -> "hub"
         is Machine -> "machine:$pubkey"
+        is Plugins -> "plugins:$pubkey:$agent"
         Appearance -> "appearance"
         Notifications -> "notifications"
         Connection -> "connection"
@@ -90,6 +93,7 @@ internal sealed interface SettingsPage {
     companion object {
         fun restore(saved: String): SettingsPage = when {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
+            saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
             saved == "appearance" -> Appearance
             saved == "notifications" -> Notifications
             saved == "connection" -> Connection
@@ -139,7 +143,9 @@ fun SettingsScreen(
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
-    if (page != SettingsPage.Hub) BackHandler(onBack = toHub)
+    // A plugins page goes back to its machine's page, every other to the hub.
+    val back = (page as? SettingsPage.Plugins)?.let { { open(SettingsPage.Machine(it.pubkey)) } } ?: toHub
+    if (page != SettingsPage.Hub) BackHandler(onBack = back)
 
     val view = settings
     if (view == null) {
@@ -176,9 +182,11 @@ fun SettingsScreen(
                     now = System.currentTimeMillis(),
                     dispatch = ::dispatch,
                     onBack = toHub,
+                    onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
                 )
             }
         }
+        is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
         SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
         SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)
         SettingsPage.Connection -> {
