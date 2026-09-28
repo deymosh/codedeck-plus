@@ -110,6 +110,20 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
+    "transcript_plan" to {
+        TranscriptList(
+            displayEntries = DesignFixtures.waitingCards.take(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
+            sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
+            dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+        )
+    },
+    "transcript_cards" to {
+        TranscriptList(
+            displayEntries = DesignFixtures.waitingCards.drop(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
+            sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
+            dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+        )
+    },
     "new_session" to {
         NewSessionBody(machine = workstation, events = MutableSharedFlow<CoreEvent>(), dispatch = {}, onClose = {}, onCreated = {})
     },
@@ -181,6 +195,8 @@ class DesignSnapshotTest {
     @Test fun session() = paparazzi.page("session")
     @Test fun session_commands() = paparazzi.page("session_commands")
     @Test fun transcript() = paparazzi.page("transcript")
+    @Test fun transcript_plan() = paparazzi.page("transcript_plan")
+    @Test fun transcript_cards() = paparazzi.page("transcript_cards")
     @Test fun new_session() = paparazzi.page("new_session")
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")

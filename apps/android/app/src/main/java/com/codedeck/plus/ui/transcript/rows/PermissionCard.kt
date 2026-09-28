@@ -1,6 +1,7 @@
 package com.codedeck.plus.ui.transcript.rows
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -59,13 +60,7 @@ fun PermissionCard(
         return
     }
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusLg))
-            .background(Tokens.SurfaceRaised)
-            .padding(Tokens.Space3),
-    ) {
+    Column(Modifier.interactionCard(waiting = true)) {
         Text("Permission: ${item.toolName}", color = Tokens.Text, fontSize = Tokens.TextMd)
         if (originNote != null) {
             Text(originNote, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
@@ -96,6 +91,22 @@ fun PermissionCard(
     }
 }
 
+/**
+ * The surface every interaction card sits on. While the agent waits on the
+ * user the card carries a warn-coloured edge — the same colour that marks a
+ * waiting session elsewhere — so a card that needs an answer stands apart
+ * from answered ones and from the tool activity around it.
+ */
+internal fun Modifier.interactionCard(waiting: Boolean): Modifier {
+    val shape = RoundedCornerShape(Tokens.RadiusLg)
+    return this
+        .fillMaxWidth()
+        .clip(shape)
+        .background(Tokens.SurfaceRaised)
+        .let { if (waiting) it.border(1.dp, Tokens.Warn.copy(alpha = 0.7f), shape) else it }
+        .padding(Tokens.Space3)
+}
+
 @Composable
 internal fun ActionChip(
     label: String,
@@ -119,13 +130,7 @@ internal fun ActionChip(
 
 @Composable
 internal fun ResolvedCard(title: String, description: String?, outcome: String, danger: Boolean) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusLg))
-            .background(Tokens.SurfaceRaised)
-            .padding(Tokens.Space3),
-    ) {
+    Column(Modifier.interactionCard(waiting = false)) {
         Text(title, color = Tokens.Text, fontSize = Tokens.TextMd)
         description?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextSm) }
         Text(outcome, color = if (danger) Tokens.Danger else Tokens.Success, fontSize = Tokens.TextXs)

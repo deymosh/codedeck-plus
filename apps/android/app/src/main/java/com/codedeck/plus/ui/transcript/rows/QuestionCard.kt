@@ -180,9 +180,7 @@ fun QuestionCard(
     val active = item.questions.firstOrNull { it.index !in answeredSet }
     val multi = item.questions.size > 1
 
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.RadiusLg)).background(Tokens.SurfaceRaised).padding(Tokens.Space3),
-    ) {
+    Column(Modifier.interactionCard(waiting = item.answered == null && active != null)) {
         if (item.answered != null || active == null) {
             item.questions.forEach { q ->
                 Text(
@@ -208,9 +206,16 @@ fun QuestionCard(
                 }
             }
         } else {
-            active.header?.let { Text(it, color = Tokens.Text, fontSize = Tokens.TextMd) }
+            // The header is the agent's short tag for the question; the
+            // question itself is what the user has to read and answer.
+            active.header?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextXs) }
         }
-        Text(active.question, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+        Text(
+            active.question,
+            color = Tokens.Text,
+            fontSize = Tokens.TextMd,
+            modifier = Modifier.padding(top = Tokens.Space1, bottom = Tokens.Space1),
+        )
         QuestionAnswerBody(
             question = active,
             onSelect = { indices ->
