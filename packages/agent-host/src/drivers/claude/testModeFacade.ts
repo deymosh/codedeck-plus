@@ -10,6 +10,7 @@
  */
 import type {
   SdkContextUsage,
+  SdkMcpServerStatus,
   SdkSlashCommand,
   SdkFacade,
   SdkMessage,
@@ -185,6 +186,10 @@ class TestModeSession implements SdkSessionHandle {
     return null;
   }
   async reloadPlugins(): Promise<void> {}
+  async mcpServerStatus(): Promise<SdkMcpServerStatus[] | null> {
+    return [];
+  }
+  async toggleMcpServer(): Promise<void> {}
   async supportedCommands(): Promise<SdkSlashCommand[] | null> {
     return [{ name: 'compact', description: 'Free up context by summarizing the conversation so far' }];
   }

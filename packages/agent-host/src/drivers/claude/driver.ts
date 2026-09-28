@@ -10,7 +10,8 @@
  * Claude Code's modes get their meaning — which calls run unasked, which
  * need the user, and how plan approval switches the mode.
  */
-import type { Driver, DriverSession, PluginManager, SessionContext } from '../../driver';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
+import { mcpStatus } from '../../mcp';
 import type { HttpPost } from '../../net';
 import { isBenignPlanDirWrite } from './policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
@@ -44,6 +45,7 @@ import {
   type SdkSessionOptions,
   type SdkSystemMessage,
 } from './facade';
+import { ClaudeMcp } from './mcp';
 import { ClaudePlugins, execCli, type CliRunner } from './plugins';
 import { normalizeUsage } from './usage';
 
@@ -151,6 +153,8 @@ export interface ClaudeDriverDeps {
   /** Manage plugins through the CLI (the `claude` binary sessions run, or
    *  `runCli` in tests). */
   managePlugins?: boolean;
+  /** Manage the user-scope MCP servers through the same CLI. */
+  manageMcp?: boolean;
   runCli?: CliRunner;
 }
 
@@ -588,6 +592,28 @@ export class ClaudeSession implements DriverSession {
       .map((c) => slashCommand(c.name, c.description, c.argumentHint));
   }
 
+  async mcpStatus(): Promise<SessionMcpState> {
+    if (!this.handle || this.ended) throw new Error('The session is not running.');
+    const servers = await this.handle.mcpServerStatus();
+    if (servers === null) throw new Error('This Claude Code cannot report its MCP servers.');
+    return {
+      servers: servers.map((s) => ({
+        name: s.name,
+        status: mcpStatus(s.status),
+        ...(s.error ? { error: s.error } : {}),
+        ...(s.tools !== undefined && s.status === 'connected' ? { tools: s.tools } : {}),
+      })),
+      toggles: true,
+      projectWide: false,
+    };
+  }
+
+  async toggleMcp(name: string, enabled: boolean): Promise<SessionMcpState> {
+    if (!this.handle || this.ended) throw new Error('The session is not running.');
+    await this.handle.toggleMcpServer(name, enabled);
+    return this.mcpStatus();
+  }
+
   async getUsage(): Promise<UsageData | null> {
     if (!this.handle || this.ended) return null;
     try {
@@ -615,6 +641,7 @@ export class ClaudeDriver implements Driver {
   /** Sessions a plugin change is announced to; ended ones are dropped. */
   private readonly sessions = new Set<ClaudeSession>();
   readonly plugins?: PluginManager;
+  readonly mcp?: McpManager;
 
   constructor(private readonly options: ClaudeDriverDeps) {
     // Start at once, so the binary is usually in place by the first session.
@@ -623,6 +650,10 @@ export class ClaudeDriver implements Driver {
     if (options.managePlugins) {
       const run = options.runCli ?? execCli(() => this.cliPath());
       this.plugins = new ClaudePlugins(run, () => this.reloadPlugins());
+    }
+    if (options.manageMcp) {
+      // Reloading plugins also reloads the MCP servers a session loads.
+      this.mcp = new ClaudeMcp(options.runCli ?? execCli(() => this.cliPath()), () => this.reloadPlugins());
     }
   }
 
@@ -670,6 +701,7 @@ export class ClaudeDriver implements Driver {
         interrupt: true,
         commands: true,
         plugins: this.plugins !== undefined,
+        mcp: this.mcp !== undefined,
       },
       credentials: [{ id: ANTHROPIC_API_KEY_CREDENTIAL, label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY' }],
     };

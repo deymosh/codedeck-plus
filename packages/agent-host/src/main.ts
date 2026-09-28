@@ -72,6 +72,7 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
             httpPost,
             discoverModels: !testMode,
             managePlugins: !testMode,
+            manageMcp: !testMode,
           }),
         );
         break;

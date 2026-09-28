@@ -31,11 +31,12 @@ import type {
   SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
 import { parseSlashCommand, slashCommand } from '../../commands';
-import type { Driver, DriverSession, PluginManager, SessionContext } from '../../driver';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
 import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
 import type { AgentInfo, ModelEntry, QuestionSpec, SessionOption, SlashCommand, StartSession, UsageData } from '../../types';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
+import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
 import { resolveOpenCodePath, startOpenCodeServer, type OpenCodeServerHandle } from './server';
 
@@ -769,6 +770,16 @@ export class OpenCodeSession implements DriverSession {
     return toSlashCommands(await this.fetchCommands(client));
   }
 
+  async mcpStatus(): Promise<SessionMcpState> {
+    const { client } = await this.ready;
+    return openCodeSessionMcp(client, this.cwd);
+  }
+
+  async toggleMcp(name: string, enabled: boolean): Promise<SessionMcpState> {
+    const { client } = await this.ready;
+    return toggleOpenCodeMcp(client, this.cwd, name, enabled);
+  }
+
   async setOption(option: SessionOption, value: string): Promise<void> {
     switch (option) {
       case 'mode':
@@ -847,6 +858,7 @@ export class OpenCodeDriver implements Driver {
   private installs = false;
   private stopped = false;
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
+  readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
 
@@ -934,7 +946,7 @@ export class OpenCodeDriver implements Driver {
       defaultMode: DEFAULT_MODE,
       // No subscription usage; sessions always use the providers configured
       // on the OpenCode server itself.
-      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true, plugins: true },
+      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };
