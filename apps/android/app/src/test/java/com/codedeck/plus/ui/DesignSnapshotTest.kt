@@ -15,8 +15,11 @@ import com.codedeck.plus.ui.DesignFixtures.claude
 import com.codedeck.plus.ui.DesignFixtures.quickPrompts
 import com.codedeck.plus.ui.DesignFixtures.settings
 import com.codedeck.plus.ui.DesignFixtures.workstation
+import com.codedeck.plus.ui.screens.AddView
 import com.codedeck.plus.ui.screens.AppearancePage
 import com.codedeck.plus.ui.screens.SessionsContent
+import com.codedeck.plus.ui.screens.McpContent
+import com.codedeck.plus.ui.session.SessionMcpList
 import com.codedeck.plus.ui.screens.ConnectionPage
 import com.codedeck.plus.ui.screens.LogsContent
 import com.codedeck.plus.ui.screens.MachineSettingsContent
@@ -154,6 +157,22 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
     "plugins_browse" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}, startOnBrowse = true) },
+    "mcp" to { McpContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
+    "mcp_add" to { McpContent(workstation, "claude-code", dispatch = {}, onBack = {}, startAdding = AddView.Form) },
+    "mcp_import" to {
+        McpContent(
+            workstation, "claude-code", dispatch = {}, onBack = {}, startAdding = AddView.Json,
+            pasted = """{"mcpServers": {
+  "sentry": {"type": "http", "url": "https://mcp.sentry.dev/mcp", "headers": {"Authorization": "Bearer sntrys_x"}},
+  "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/me/code"]},
+  "old-ws": {"type": "websocket", "url": "wss://x.example"}
+}}""",
+            parse = { DesignFixtures.mcpImport },
+        )
+    },
+    "session_mcp" to {
+        androidx.compose.foundation.layout.Box(Modifier.background(Tokens.SurfaceRaised)) { SessionMcpList(DesignFixtures.sessionMcp) { _, _ -> } }
+    },
     "plugins_opencode" to { PluginsContent(workstation, "opencode", dispatch = {}, onBack = {}) },
     "settings_appearance" to { AppearancePage(settings, {}, {}) },
     "settings_notifications" to { NotificationsPage(settings, {}, {}) },
@@ -204,6 +223,10 @@ class DesignSnapshotTest {
     @Test fun plugins() = paparazzi.page("plugins")
     @Test fun plugins_browse() = paparazzi.page("plugins_browse")
     @Test fun plugins_opencode() = paparazzi.page("plugins_opencode")
+    @Test fun mcp() = paparazzi.page("mcp")
+    @Test fun mcp_add() = paparazzi.page("mcp_add")
+    @Test fun mcp_import() = paparazzi.page("mcp_import")
+    @Test fun session_mcp() = paparazzi.page("session_mcp")
     @Test fun settings_appearance() = paparazzi.page("settings_appearance")
     @Test fun settings_notifications() = paparazzi.page("settings_notifications")
     @Test fun settings_connection() = paparazzi.page("settings_connection")

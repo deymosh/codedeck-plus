@@ -18,6 +18,13 @@ import uniffi.client_ffi.UniffiAgentModels
 import uniffi.client_ffi.UniffiAgentPlugins
 import uniffi.client_ffi.UniffiAvailablePlugin
 import uniffi.client_ffi.UniffiInstalledPlugin
+import uniffi.client_ffi.UniffiAgentMcp
+import uniffi.client_ffi.UniffiMcpImport
+import uniffi.client_ffi.UniffiMcpImportProblem
+import uniffi.client_ffi.UniffiMcpServer
+import uniffi.client_ffi.UniffiMcpServerSpec
+import uniffi.client_ffi.UniffiSessionMcp
+import uniffi.client_ffi.UniffiSessionMcpServer
 import uniffi.client_ffi.UniffiPluginFailure
 import uniffi.client_ffi.UniffiPluginMarketplace
 import uniffi.client_ffi.UniffiCredentialStatus
@@ -39,7 +46,7 @@ internal object DesignFixtures {
         UniffiSessionSummary(
             id = id, title = title, slug = id, cwd = "/home/me/code/$project", project = project, state = state,
             presence = "live", lastActivity = "2026-09-27T10:00:00Z", agent = agent, model = null, mode = null, effort = null,
-            contextPercentage = null, contextWindow = null, committed = committed, seqHigh = null, usage = null, gsd = null, commands = null,
+            contextPercentage = null, contextWindow = null, committed = committed, seqHigh = null, usage = null, gsd = null, commands = null, mcp = null,
         )
 
     /** A Claude Code session's commands, a plugin's among them. */
@@ -60,14 +67,14 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true,
         credentials = emptyList(),
     )
 
@@ -103,6 +110,39 @@ internal object DesignFixtures {
         marketplaces = null, toggles = false, available = null, error = null, busy = emptyList(), failure = null,
     )
 
+    /** Claude Code's MCP servers: remote ones with a token header, a local
+     *  command with an env variable, one being added. */
+    val claudeMcp = UniffiAgentMcp(
+        agent = "claude-code",
+        servers = listOf(
+            UniffiMcpServer("github", "http", "https://api.githubcopilot.com/mcp/", envKeys = emptyList(), headerKeys = listOf("Authorization"), enabled = true),
+            UniffiMcpServer("linear", "sse", "https://mcp.linear.app/sse", envKeys = emptyList(), headerKeys = emptyList(), enabled = true),
+            UniffiMcpServer("postgres", "stdio", "npx", envKeys = listOf("DATABASE_URL"), headerKeys = emptyList(), enabled = true),
+        ),
+        toggles = false, error = null, busy = listOf("postgres"), failure = null,
+    )
+
+    /** A running session's servers: connected, waiting on a sign-in, broken, and one switched off. */
+    val sessionMcp = UniffiSessionMcp(
+        servers = listOf(
+            UniffiSessionMcpServer("github", "connected", null, 41u),
+            UniffiSessionMcpServer("linear", "needs-auth", null, null),
+            UniffiSessionMcpServer("postgres", "failed", "connect ECONNREFUSED 127.0.0.1:5432", null),
+            UniffiSessionMcpServer("playwright", "disabled", null, null),
+        ),
+        toggles = true, projectWide = false, error = null, busy = emptyList(),
+    )
+
+    /** What the core finds in the pasted JSON of the import snapshot. */
+    val mcpImport = UniffiMcpImport(
+        servers = listOf(
+            UniffiMcpServerSpec("filesystem", "stdio", "npx", listOf("-y", "@modelcontextprotocol/server-filesystem", "/home/me/code"), emptyMap(), "", emptyMap()),
+            UniffiMcpServerSpec("sentry", "http", "", emptyList(), emptyMap(), "https://mcp.sentry.dev/mcp", mapOf("Authorization" to "Bearer sntrys_x")),
+        ),
+        problems = listOf(UniffiMcpImportProblem("old-ws", "old-ws: the transport \"websocket\" is not supported.")),
+        error = null,
+    )
+
     val workstation = UniffiMachineSummary(
         pubkeyHex = "a".repeat(64), name = "Workstation", host = "service",
         sessions = listOf(
@@ -114,7 +154,7 @@ internal object DesignFixtures {
         agents = listOf(claude, opencode),
         credentials = listOf(UniffiCredentialStatus("github", "GitHub token", present = false, fromEnv = false, valid = null)),
         models = listOf(UniffiAgentModels("claude-code", listOf(UniffiModelEntry("opus", "Opus"), UniffiModelEntry("fable", "Fable")), "opus", null)),
-        providerProfiles = emptyList(), plugins = listOf(claudePlugins, opencodePlugins),
+        providerProfiles = emptyList(), plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp),
         directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
         npub = "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvw",

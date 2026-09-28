@@ -98,7 +98,8 @@ internal fun shortKey(key: String): String = if (key.length <= 20) key else "${k
  * One machine's page: who it is and whether it is up, what its new sessions
  * start with, the relays it is reached over, its direct link, the
  * credentials and AI providers kept on it, its agents' plugins (each on a
- * page of its own, opened through [onOpenPlugins]), and forgetting it. Pure — the
+ * page of its own, opened through [onOpenPlugins]; MCP servers through
+ * [onOpenMcp]), and forgetting it. Pure — the
  * caller supplies the machine and a dispatcher — so it renders the same in
  * a snapshot.
  */
@@ -112,6 +113,7 @@ fun MachineSettingsContent(
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
+    onOpenMcp: (agent: String) -> Unit = {},
 ) {
     // The model pickers need each agent's list, and the plugin rows their
     // counts: ask for them on opening.
@@ -121,6 +123,7 @@ fun MachineSettingsContent(
         machine.agents.filter { it.supportsPlugins }.forEach {
             dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, it.id, available = false))
         }
+        machine.agents.filter { it.supportsMcp }.forEach { dispatch(UniffiIntent.RequestMcp(machine.pubkeyHex, it.id)) }
     }
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
 
@@ -153,6 +156,16 @@ fun MachineSettingsContent(
                     if (i > 0) Divider()
                     val count = machine.plugins.firstOrNull { it.agent == agent.id }?.installed?.size
                     NavRow(agent.displayName, onClick = { onOpenPlugins(agent.id) }, value = count?.let { "$it installed" })
+                }
+            }
+        }
+        val mcpAgents = machine.agents.filter { it.supportsMcp }
+        if (mcpAgents.isNotEmpty()) {
+            Group(title = "MCP servers", footer = "Tools every session of that agent can use, set up on the machine.") {
+                mcpAgents.forEachIndexed { i, agent ->
+                    if (i > 0) Divider()
+                    val count = machine.mcp.firstOrNull { it.agent == agent.id }?.servers?.size
+                    NavRow(agent.displayName, onClick = { onOpenMcp(agent.id) }, value = count?.let { if (it == 1) "1 server" else "$it servers" })
                 }
             }
         }
@@ -387,7 +400,13 @@ private fun MachineRelays(machine: UniffiMachineSummary, connectedRelays: Set<St
 
 /** [MachineSettingsContent] for the machine [pubkey], from the core; closes when the machine goes away. */
 @Composable
-fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit, onOpenPlugins: (agent: String) -> Unit) {
+fun MachineSettingsScreen(
+    core: CoreHost,
+    pubkey: String,
+    onBack: () -> Unit,
+    onOpenPlugins: (agent: String) -> Unit,
+    onOpenMcp: (agent: String) -> Unit,
+) {
     val machinesView by core.machines.collectAsState()
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -406,5 +425,6 @@ fun MachineSettingsScreen(core: CoreHost, pubkey: String, onBack: () -> Unit, on
         dispatch = { intent -> scope.launch { core.dispatch(intent) } },
         onBack = onBack,
         onOpenPlugins = onOpenPlugins,
+        onOpenMcp = onOpenMcp,
     )
 }
