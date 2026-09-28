@@ -34,7 +34,7 @@ pub fn alpha() -> AgentInfo {
         efforts: vec![choice("low"), choice("high")],
         default_mode: Some("ask".into()),
         default_effort: Some("high".into()),
-        supports: AgentSupports { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true, plugins: true },
+        supports: AgentSupports { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true },
         credentials: vec![CredentialSpec { id: "alpha_key".into(), label: "Alpha key".into(), env_var: Some("ALPHA_KEY".into()) }],
         unavailable_reason: None,
     }

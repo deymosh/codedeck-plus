@@ -139,6 +139,13 @@ pub struct McpServerSpec {
     pub transport: McpTransport,
 }
 
+/// An MCP server name: 1–64 letters, digits, `-`, `_` or `.`.
+pub fn is_valid_mcp_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+pub const MCP_NAME_ERROR: &str = "A server name is 1 to 64 letters, digits, dashes, underscores or dots.";
+
 impl McpServerSpec {
     /// Why this server cannot be added, if it cannot — the one rule set the
     /// phone checks before sending and the bridge checks on receipt. A name
@@ -146,11 +153,8 @@ impl McpServerSpec {
     /// agent's config and part of its tool names); a command must not look
     /// like a flag; a URL is `http(s)://`; env and header names are plain.
     pub fn problem(&self) -> Option<String> {
-        let name_ok = !self.name.is_empty()
-            && self.name.len() <= 64
-            && self.name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-        if !name_ok {
-            return Some("A server name is 1 to 64 letters, digits, dashes, underscores or dots.".into());
+        if !is_valid_mcp_name(&self.name) {
+            return Some(MCP_NAME_ERROR.into());
         }
         let plain = |k: &String| !k.is_empty() && !k.chars().any(|c| c.is_whitespace() || c.is_control() || c == ':' || c == '=');
         match &self.transport {
