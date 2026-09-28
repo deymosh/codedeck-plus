@@ -77,7 +77,12 @@ class ScriptedHandle implements SdkSessionHandle {
   probeReady(): Promise<void> {
     return this.probe;
   }
+  contextAsks = 0;
+  /** When set, a context ask waits for it — to hold one in flight. */
+  contextGate: Promise<void> | null = null;
   async getContextUsage(): Promise<SdkContextUsage | null> {
+    this.contextAsks++;
+    if (this.contextGate) await this.contextGate;
     return this.contextUsage;
   }
   async supportedCommands(): Promise<SdkSlashCommand[] | null> {
@@ -253,6 +258,46 @@ describe('Claude turn state and context', () => {
     handle.push({ type: 'result', subtype: 'success', num_turns: 1, total_cost_usd: 0, duration_ms: 1, modelUsage: { 'claude-sonnet-5': { contextWindow: 1_000_000 } } });
     await ctx.waitFor((e) => e.type === 'info' && e.contextPercentage === 37);
     expect(ctx.events).toContainEqual({ type: 'info', contextWindow: 1_000_000 });
+  });
+
+  const step = (parent: string | null = null) => ({
+    type: 'assistant', parent_tool_use_id: parent,
+    message: { content: [{ type: 'text', text: 'working' }] },
+  });
+
+  it('each main-agent step updates the context meter before the turn ends', async () => {
+    const { ctx, handle } = start();
+    handle.contextUsage = { percentage: 12 };
+    handle.push(step());
+    await ctx.waitFor((e) => e.type === 'info' && e.contextPercentage === 12);
+    handle.contextUsage = { percentage: 18 };
+    handle.push(step());
+    await ctx.waitFor((e) => e.type === 'info' && e.contextPercentage === 18);
+  });
+
+  it('a sub-agent step leaves the meter alone', async () => {
+    const { ctx, handle } = start();
+    handle.contextUsage = { percentage: 12 };
+    handle.push(step('task1'));
+    await ctx.waitFor((e) => e.type === 'entries');
+    expect(handle.contextAsks).toBe(0);
+  });
+
+  it('steps arriving while an ask is in flight fold into one follow-up', async () => {
+    const { ctx, handle } = start();
+    let open!: () => void;
+    handle.contextGate = new Promise((r) => (open = r));
+    handle.contextUsage = { percentage: 20 };
+    handle.push(step());
+    handle.push(step());
+    handle.push(step());
+    await ctx.waitFor((e) => e.type === 'entries' && ctx.entries().length >= 3);
+    expect(handle.contextAsks).toBe(1);
+    handle.contextGate = null;
+    open();
+    await ctx.waitFor((e) => e.type === 'info' && e.contextPercentage === 20);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handle.contextAsks).toBe(2);
   });
 });
 
