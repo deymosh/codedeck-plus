@@ -9,16 +9,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -30,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.codedeck.plus.ui.components.BusyToggle
 import com.codedeck.plus.ui.components.Dot
 import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiSessionMcp
@@ -165,19 +162,6 @@ private fun ServerStatusRow(s: UniffiSessionMcpServer, busy: Boolean, toggles: B
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        when {
-            busy -> CircularProgressIndicator(Modifier.padding(horizontal = Tokens.Space3).size(20.dp), color = Tokens.TextMuted, strokeWidth = 2.dp)
-            toggles -> Switch(
-                checked = on,
-                onCheckedChange = { onToggle(s.name, it) },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Tokens.AccentContrast,
-                    checkedTrackColor = Tokens.Accent,
-                    uncheckedThumbColor = Tokens.TextMuted,
-                    uncheckedTrackColor = Tokens.SurfaceInput,
-                    uncheckedBorderColor = Tokens.BorderStrong,
-                ),
-            )
-        }
+        BusyToggle(on, busy, toggles) { onToggle(s.name, it) }
     }
 }

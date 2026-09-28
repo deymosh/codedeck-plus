@@ -2,27 +2,19 @@ package com.codedeck.plus.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,17 +23,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.ui.components.BusyToggle
+import com.codedeck.plus.ui.components.ConfirmDialog
+import com.codedeck.plus.ui.components.ErrorNote
+import com.codedeck.plus.ui.components.ExpandableRow
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
 import com.codedeck.plus.ui.components.GroupScope
+import com.codedeck.plus.ui.components.Note
 import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.RowSpinner
 import com.codedeck.plus.ui.components.SecondaryButton
+import com.codedeck.plus.ui.components.Segmented
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
@@ -118,11 +116,17 @@ fun PluginsContent(
     // Browse scrolls its own (lazy) list; the rest scrolls as one page.
     val browsing = tab == PluginsTab.Browse && plugins?.marketplaces != null
     Page(title = "${agent?.displayName ?: agentId} plugins", subtitle = machineLabel(machine.name), onBack = onBack, scroll = !browsing) {
-        if (plugins?.marketplaces != null) TabSwitch(tab, installedCount = plugins.installed.size) { tab = it }
-        plugins?.failure?.let { ErrorLine(failureLine(it)) }
+        if (plugins?.marketplaces != null) {
+            Segmented(
+                PluginsTab.entries.map { if (it == PluginsTab.Installed) "Installed (${plugins.installed.size})" else it.name },
+                selected = tab.ordinal,
+                onSelect = { tab = PluginsTab.entries[it] },
+            )
+        }
+        plugins?.failure?.let { ErrorNote(failureLine(it)) }
         when {
             plugins == null -> Note("Asking the machine…")
-            plugins.error != null && plugins.installed.isEmpty() && plugins.marketplaces.isNullOrEmpty() -> ErrorLine(plugins.error!!)
+            plugins.error != null && plugins.installed.isEmpty() && plugins.marketplaces.isNullOrEmpty() -> ErrorNote(plugins.error!!)
             tab == PluginsTab.Browse -> BrowseView(plugins, ::act)
             else -> InstalledView(plugins, ::act, onBrowse = { tab = PluginsTab.Browse }, onConfirm = { confirm = it })
         }
@@ -130,53 +134,13 @@ fun PluginsContent(
 
     confirm?.let { (action, target) ->
         val removing = action == "uninstall"
-        AlertDialog(
-            onDismissRequest = { confirm = null },
-            containerColor = Tokens.SurfaceRaised,
-            title = { Text(if (removing) "Uninstall $target?" else "Remove the marketplace $target?", color = Tokens.Text) },
-            text = {
-                Text(
-                    if (removing) "Sessions on this machine stop loading it." else "Plugins installed from it stay until you uninstall them.",
-                    color = Tokens.TextMuted,
-                )
-            },
-            confirmButton = {
-                QuietButton(if (removing) "Uninstall" else "Remove", danger = true, onClick = {
-                    act(action, target)
-                    confirm = null
-                })
-            },
-            dismissButton = { QuietButton("Cancel", onClick = { confirm = null }) },
+        ConfirmDialog(
+            title = if (removing) "Uninstall $target?" else "Remove the marketplace $target?",
+            body = if (removing) "Sessions on this machine stop loading it." else "Plugins installed from it stay until you uninstall them.",
+            confirm = if (removing) "Uninstall" else "Remove",
+            onConfirm = { act(action, target) },
+            onDismiss = { confirm = null },
         )
-    }
-}
-
-@Composable
-private fun TabSwitch(tab: PluginsTab, installedCount: Int?, onSelect: (PluginsTab) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(Tokens.SurfaceRaised)
-            .padding(4.dp),
-    ) {
-        PluginsTab.entries.forEach { t ->
-            val selected = t == tab
-            val label = if (t == PluginsTab.Installed && installedCount != null) "Installed ($installedCount)" else t.name
-            Text(
-                label,
-                color = if (selected) Tokens.AccentContrast else Tokens.TextMuted,
-                fontSize = Tokens.TextMd,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(Tokens.RadiusPill))
-                    .background(if (selected) Tokens.Accent else Tokens.SurfaceRaised)
-                    .clickable { onSelect(t) }
-                    .padding(vertical = 10.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
-        }
     }
 }
 
@@ -220,40 +184,17 @@ private fun InstalledView(
 @Composable
 private fun InstalledRow(p: UniffiInstalledPlugin, busy: Boolean, toggles: Boolean, act: (String, String) -> Unit, onUninstall: () -> Unit) {
     var open by remember(p.id) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = Tokens.Space4, vertical = 10.dp)) {
-        Row(Modifier.heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    p.name,
-                    color = if (p.enabled) Tokens.Text else Tokens.TextMuted,
-                    fontSize = Tokens.TextLg,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                p.description?.let {
-                    Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextSm, maxLines = if (open) 6 else 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            when {
-                busy -> Spinner()
-                toggles -> Switch(
-                    checked = p.enabled,
-                    onCheckedChange = { on -> act(if (on) "enable" else "disable", p.id) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Tokens.AccentContrast,
-                        checkedTrackColor = Tokens.Accent,
-                        uncheckedThumbColor = Tokens.TextMuted,
-                        uncheckedTrackColor = Tokens.SurfaceInput,
-                        uncheckedBorderColor = Tokens.BorderStrong,
-                    ),
-                )
-            }
-        }
-        if (open) {
-            val origin = listOfNotNull(p.marketplace?.let { "From $it" }, p.version?.let { "version ${it.take(12)}" })
-            if (origin.isNotEmpty()) Text(origin.joinToString(", "), color = Tokens.TextDim, fontSize = Tokens.TextXs, modifier = Modifier.padding(top = 4.dp))
-            Row(Modifier.padding(top = 2.dp)) { QuietButton("Uninstall", onClick = onUninstall, danger = true, enabled = !busy) }
-        }
+    ExpandableRow(
+        p.name,
+        p.description,
+        enabled = p.enabled,
+        open = open,
+        onOpenChange = { open = it },
+        trailing = { BusyToggle(p.enabled, busy, toggles) { on -> act(if (on) "enable" else "disable", p.id) } },
+    ) {
+        val origin = listOfNotNull(p.marketplace?.let { "From $it" }, p.version?.let { "version ${it.take(12)}" })
+        if (origin.isNotEmpty()) Text(origin.joinToString(", "), color = Tokens.TextDim, fontSize = Tokens.TextXs, modifier = Modifier.padding(top = 4.dp))
+        Row(Modifier.padding(top = 2.dp)) { QuietButton("Uninstall", onClick = onUninstall, danger = true, enabled = !busy) }
     }
 }
 
@@ -295,19 +236,18 @@ private fun Marketplaces(marketplaces: List<UniffiPluginMarketplace>, busy: List
 @Composable
 private fun MarketplaceRow(m: UniffiPluginMarketplace, busy: Boolean, onUpdate: () -> Unit, onRemove: () -> Unit) {
     var open by remember(m.name) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = Tokens.Space4, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(m.name, color = Tokens.Text, fontSize = Tokens.TextLg, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(m.source, color = Tokens.TextMuted, fontSize = Tokens.TextSm, maxLines = if (open) 3 else 1, overflow = TextOverflow.Ellipsis)
-            }
-            if (busy) Spinner()
-        }
-        if (open) {
-            Row(Modifier.padding(top = 2.dp)) {
-                QuietButton("Update", onClick = onUpdate, enabled = !busy)
-                QuietButton("Remove", onClick = onRemove, danger = true, enabled = !busy)
-            }
+    ExpandableRow(
+        m.name,
+        m.source,
+        enabled = true,
+        open = open,
+        onOpenChange = { open = it },
+        openSubtitleLines = 3,
+        trailing = { if (busy) RowSpinner() },
+    ) {
+        Row(Modifier.padding(top = 2.dp)) {
+            QuietButton("Update", onClick = onUpdate, enabled = !busy)
+            QuietButton("Remove", onClick = onRemove, danger = true, enabled = !busy)
         }
     }
 }
@@ -385,33 +325,10 @@ private fun AvailableRow(p: UniffiAvailablePlugin, busy: Boolean, onInstall: () 
     }
 }
 
-@Composable
-private fun Spinner() = CircularProgressIndicator(Modifier.padding(horizontal = Tokens.Space3).size(20.dp), color = Tokens.TextMuted, strokeWidth = 2.dp)
-
-@Composable
-private fun Note(text: String) = Text(text, color = Tokens.TextMuted, fontSize = Tokens.TextMd, modifier = Modifier.padding(horizontal = Tokens.Space2))
-
-@Composable
-private fun ErrorLine(text: String) = Text(
-    text,
-    color = Tokens.Danger,
-    fontSize = Tokens.TextSm,
-    modifier = Modifier
-        .fillMaxWidth()
-        .clip(RoundedCornerShape(Tokens.RadiusMd))
-        .background(Tokens.Danger.copy(alpha = 0.12f))
-        .padding(Tokens.Space3),
-)
-
 /** [PluginsContent] for [agentId] on the machine [pubkey], from the core; closes when the machine goes away. */
 @Composable
 fun PluginsScreen(core: CoreHost, pubkey: String, agentId: String, onBack: () -> Unit) {
-    val machinesView by core.machines.collectAsState()
     val scope = rememberCoroutineScope()
-    val machine = machinesView?.machines?.find { it.pubkeyHex == pubkey }
-    if (machine == null) {
-        if (machinesView != null) LaunchedEffect(Unit) { onBack() }
-        return
-    }
+    val machine = machineOrLeave(core, pubkey, onGone = onBack) ?: return
     PluginsContent(machine, agentId, dispatch = { intent -> scope.launch { core.dispatch(intent) } }, onBack = onBack)
 }
