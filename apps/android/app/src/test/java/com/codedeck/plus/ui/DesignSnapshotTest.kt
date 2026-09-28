@@ -16,6 +16,7 @@ import com.codedeck.plus.ui.DesignFixtures.quickPrompts
 import com.codedeck.plus.ui.DesignFixtures.settings
 import com.codedeck.plus.ui.DesignFixtures.workstation
 import com.codedeck.plus.ui.screens.AppearancePage
+import com.codedeck.plus.ui.screens.SessionsContent
 import com.codedeck.plus.ui.screens.ConnectionPage
 import com.codedeck.plus.ui.screens.LogsContent
 import com.codedeck.plus.ui.screens.MachineSettingsContent
