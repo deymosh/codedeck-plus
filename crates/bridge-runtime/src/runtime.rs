@@ -93,7 +93,8 @@ struct Runtime {
     inputs: mpsc::UnboundedSender<Input>,
     timers: HashMap<TimerId, JoinHandle<()>>,
     http: reqwest::Client,
-    onion_http: Option<reqwest::Client>,
+    /// Blossom downloads' client when a Tor proxy is set.
+    tor_http: Option<reqwest::Client>,
     outcome: Outcome,
     uploads: Rc<RefCell<Uploads>>,
     gsd: Rc<Gsd>,
@@ -154,7 +155,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     }
 
     let gsd = Gsd::new(config.node_path.clone(), &user_home);
-    let onion_http = uploads::onion_http_client(config.tor_proxy.as_deref());
+    let tor_http = config.tor_proxy.as_deref().map(uploads::tor_http_client).transpose()?;
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
         config,
@@ -165,7 +166,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         inputs,
         timers: HashMap::new(),
         http: work::http_client(),
-        onion_http,
+        tor_http,
         outcome: Outcome::Stopped,
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
         gsd: Rc::new(gsd),
@@ -303,9 +304,9 @@ impl Runtime {
                 }
             }
             Effect::HandleFileUpload(UploadFileMsg::Blossom(msg)) => {
-                let (inputs, uploads, http, onion_http) = (self.inputs.clone(), Rc::clone(&self.uploads), self.http.clone(), self.onion_http.clone());
+                let (inputs, uploads, http, tor_http) = (self.inputs.clone(), Rc::clone(&self.uploads), self.http.clone(), self.tor_http.clone());
                 tokio::task::spawn_local(async move {
-                    match uploads::fetch_blossom(&http, onion_http.as_ref(), &msg).await {
+                    match uploads::fetch_blossom(&http, tor_http.as_ref(), &msg).await {
                         Ok(data) => {
                             let delivery = uploads.borrow_mut().finish(&msg.session_id, &msg.filename, &msg.mime_type, &msg.text, &data, &msg.hash);
                             if let Some((session_id, text)) = delivery {

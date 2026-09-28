@@ -1,7 +1,8 @@
 //! Files a phone attaches to a session — photos or anything else. Two forms:
 //! - Blossom: the phone uploaded an AES-256-GCM-encrypted blob and sends its
 //!   URL, sha256, key and iv; the bridge downloads it (https, or http to an
-//!   onion service through the Tor proxy; size capped), checks the hash,
+//!   onion service; through the Tor proxy when one is set; size capped),
+//!   checks the hash,
 //!   decrypts it (tag = last 16 bytes);
 //! - chunked: the file arrives as base64 pieces, reassembled here; a
 //!   partial upload idle for a minute is dropped.
@@ -83,23 +84,27 @@ fn blossom_target(url: &str) -> Option<bool> {
     }
 }
 
-/// The client for onion-service downloads: through the Tor proxy, the only
-/// way to reach one. None without a proxy.
-pub fn onion_http_client(tor_proxy: Option<&str>) -> Option<reqwest::Client> {
-    let proxy = reqwest::Proxy::all(format!("socks5h://{}", tor_proxy?)).ok()?;
-    reqwest::Client::builder().proxy(proxy).build().ok()
+/// The client for Blossom downloads through the Tor proxy (`host:port`),
+/// DNS resolved at the proxy. An error, never a silent fallback to direct.
+pub fn tor_http_client(tor_proxy: &str) -> Result<reqwest::Client, String> {
+    let proxy = reqwest::Proxy::all(format!("socks5h://{tor_proxy}")).map_err(|e| format!("Tor proxy {tor_proxy:?}: {e}"))?;
+    reqwest::Client::builder().proxy(proxy).build().map_err(|e| format!("Tor proxy {tor_proxy:?}: {e}"))
 }
 
-/// Download, verify and decrypt a Blossom upload. `onion` is the Tor-proxied
-/// client for an onion-service URL; every other URL goes direct.
-pub async fn fetch_blossom(http: &reqwest::Client, onion: Option<&reqwest::Client>, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
+/// Download, verify and decrypt a Blossom upload. With a Tor proxy set
+/// (`tor`), every download goes through it: the Blossom server then learns
+/// no more about the bridge than the relays do, and an onion service is
+/// reachable at all. Without one, downloads go direct and a `.onion` is
+/// refused.
+pub async fn fetch_blossom(direct: &reqwest::Client, tor: Option<&reqwest::Client>, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
     // The URL is phone-supplied: https (or http to an onion service) only,
     // and the body capped regardless of the size the message claims — the
     // bridge is not a general HTTP client.
-    let http = match blossom_target(&msg.url) {
-        None => return Err("download refused: https (or http to a .onion) required".into()),
-        Some(false) => http,
-        Some(true) => onion.ok_or("download refused: a .onion server needs the bridge's Tor proxy (CODEDECK_TOR_PROXY_URL)")?,
+    let http = match (blossom_target(&msg.url), tor) {
+        (None, _) => return Err("download refused: https (or http to a .onion) required".into()),
+        (Some(_), Some(tor)) => tor,
+        (Some(false), None) => direct,
+        (Some(true), None) => return Err("download refused: a .onion server needs the bridge's Tor proxy (CODEDECK_TOR_PROXY_URL)".into()),
     };
     if msg.size_bytes as usize > MAX_UPLOAD_BYTES {
         return Err(format!("download refused: {} bytes is over the {MAX_UPLOAD_BYTES}-byte cap", msg.size_bytes));
@@ -312,8 +317,7 @@ mod tests {
         for refused in ["http://blossom.example/abc", "http://evil.onion.example.com/abc", "http://.onion/abc", "https:///abc", "ftp://x/abc"] {
             assert_eq!(blossom_target(refused), None, "{refused}");
         }
-        assert!(onion_http_client(None).is_none());
-        assert!(onion_http_client(Some("127.0.0.1:9050")).is_some());
+        assert!(tor_http_client("127.0.0.1:9050").is_ok());
     }
 
     #[test]
