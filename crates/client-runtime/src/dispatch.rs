@@ -239,6 +239,13 @@ impl<'a> Router<'a> {
             }
 
             BridgeToPhone::Output(m) => {
+                // A deleted session's output is a replay (a direct link
+                // resuming re-sends the last hour), and its transcript is gone
+                // with the close-session-ack: storing it would bring the rows
+                // back and its final entry would notify as if new.
+                if self.stores.machines.is_dismissed(&m.session_id, self.now) {
+                    return r;
+                }
                 let entry = to_value(&m.entry);
                 let inserted = self
                     .apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
@@ -932,6 +939,38 @@ mod tests {
         r.visible = false;
         let out = r.route(MACHINE, &turn_end()).await;
         assert!(out.notifies.is_empty());
+        assert!(!s.ui.is_session_unread(MACHINE, "s1"));
+    }
+
+    #[tokio::test]
+    async fn a_deleted_sessions_replayed_output_is_dropped_after_a_restart() {
+        let kv = MemoryKv::new();
+        let ts = MemoryTranscriptStore::new();
+        let identity = protocol::crypto::generate_keypair();
+        let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
+        let kp = PhoneKeys::new(&identity.pubkey_hex, &ring.current);
+
+        // Deleted (and acked: no rows left), then the app was killed.
+        let mut before = hydrate(&kv, &ts, &StoresConfig::default()).await.stores;
+        before.machines.dismiss_session("s1", 1_000);
+        crate::stores::Persister::new(&kv).save_machines(&before.machines).await;
+
+        // A fresh start; the direct link resumes and re-sends the turn end.
+        let mut s = hydrate(&kv, &ts, &StoresConfig::default()).await.stores;
+        let mut r = Router::new(&mut s, &ts, &kp, 60_000);
+        r.visible = false;
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Output(OutputMsg {
+                    session_id: "s1".into(),
+                    seq: 7,
+                    entry: serde_json::from_value(json!({ "timestamp": "t", "entryType": "turn_complete" })).unwrap(),
+                }),
+            )
+            .await;
+        assert_eq!(out, RouteResult::default());
+        assert!(ts.seqs(MACHINE, "s1").await.is_empty());
         assert!(!s.ui.is_session_unread(MACHINE, "s1"));
     }
 

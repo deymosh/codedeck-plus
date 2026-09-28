@@ -845,7 +845,8 @@ fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: 
     for effect in effects {
         match effect {
             DeleteEffect::DismissSession { session_id, now } => {
-                stores.machines.dismiss_session(&session_id, now)
+                stores.machines.dismiss_session(&session_id, now);
+                r.persist(StoreId::Machines);
             }
             DeleteEffect::RemoveSession { machine, session_id } => {
                 stores.machines.user_remove_session(&machine, &session_id);

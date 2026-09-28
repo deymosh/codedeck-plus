@@ -9,7 +9,8 @@
 use client_core::delete_controller::DeleteController;
 use client_core::notifications::{NotificationContext, NotificationCoordinator};
 use client_core::stores::machines::{
-    hydrate_machines, serialize_machines, MachinesState, MergeOptions,
+    hydrate_dismissed, hydrate_machines, serialize_dismissed, serialize_machines, MachinesState,
+    MergeOptions,
 };
 use client_core::stores::outbox::{hydrate_outbox, serialize_outbox, OutboxState};
 use client_core::stores::pairing::PairingState;
@@ -25,6 +26,8 @@ use crate::ports::{Kv, TranscriptStore};
 
 /// KV keys (kept identical to the TS `apps/mobile/src/core` store layout).
 pub const MACHINES_KEY: &str = "machines";
+/// The user-deleted session ids and when each was deleted.
+pub const DISMISSED_SESSIONS_KEY: &str = "machines.dismissed";
 pub const OUTBOX_KEY: &str = "outbox";
 pub const SETTINGS_KEY: &str = "settings";
 pub const QUICK_PROMPTS_KEY: &str = QUICK_PROMPTS_STORAGE_KEY;
@@ -156,10 +159,11 @@ pub async fn hydrate(
     let settings = SettingsState::new(hydrate_settings(kv.get(SETTINGS_KEY).await.as_deref()));
     let quick_prompts =
         QuickPromptsState::from_hydrated(hydrate_quick_prompts(kv.get(QUICK_PROMPTS_KEY).await.as_deref()));
-    let machines = MachinesState::new(
+    let mut machines = MachinesState::new(
         hydrate_machines(kv.get(MACHINES_KEY).await.as_deref()),
         config.merge_options,
     );
+    machines.dismissed_sessions = hydrate_dismissed(kv.get(DISMISSED_SESSIONS_KEY).await.as_deref());
     let outbox = OutboxState::new(hydrate_outbox(kv.get(OUTBOX_KEY).await.as_deref()));
 
     let last_stored_seen = kv
@@ -210,6 +214,9 @@ impl<'a> Persister<'a> {
 
     pub async fn save_machines(&self, s: &MachinesState) {
         self.kv.set(MACHINES_KEY, &serialize_machines(&s.machines)).await;
+        self.kv
+            .set(DISMISSED_SESSIONS_KEY, &serialize_dismissed(&s.dismissed_sessions))
+            .await;
     }
 
     pub async fn save_outbox(&self, s: &OutboxState) {

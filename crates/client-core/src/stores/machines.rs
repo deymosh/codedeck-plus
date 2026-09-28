@@ -40,10 +40,13 @@ pub fn is_direct_endpoint(url: &str) -> bool {
     }
 }
 
-/// A user-dismissed session id keeps suppressing incoming lists for this long
-/// (then the bridge is trusted again — it has had ample time to process the
-/// close-session).
-pub const DISMISSED_TTL_MS: u64 = 60 * 60 * 1000;
+/// A user-dismissed session id keeps suppressing incoming lists and live
+/// output for this long (then the bridge is trusted again — it has had ample
+/// time to process the close-session). It must outlast the direct link's
+/// resume window: a reconnecting link re-sends what the bridge published in
+/// its last [`protocol::direct::OUTBOX_SECS`], including the deleted
+/// session's final output, which would otherwise read as news.
+pub const DISMISSED_TTL_MS: u64 = 2 * protocol::direct::OUTBOX_SECS * 1000;
 
 /// The three honest presence states for a listed session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -450,10 +453,21 @@ pub fn hydrate_machines(raw: Option<&str>) -> BTreeMap<String, MachineView> {
     out
 }
 
+/// `dismissed_sessions` for the KV. Kept apart from the machines so a
+/// deleted session stays shielded across an app restart.
+pub fn serialize_dismissed(dismissed: &BTreeMap<String, u64>) -> String {
+    serde_json::to_string(dismissed).expect("a string-to-number map always serializes")
+}
+
+/// Tolerant parse of [`serialize_dismissed`]: garbage yields an empty map.
+pub fn hydrate_dismissed(raw: Option<&str>) -> BTreeMap<String, u64> {
+    raw.and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default()
+}
+
 /// The machines store as a pure state machine. Every method mutates
-/// only `self`; the runtime persists `serialize_machines(&self.machines)` after
-/// anything that changes `machines`. `dismissed_sessions` and `fetches` are
-/// in-memory only.
+/// only `self`; the runtime persists `serialize_machines(&self.machines)` and
+/// `serialize_dismissed(&self.dismissed_sessions)` after anything that
+/// changes either. `fetches` is in-memory only.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MachinesState {
     pub machines: BTreeMap<String, MachineView>,
@@ -743,6 +757,13 @@ impl MachinesState {
     pub fn dismiss_session(&mut self, session_id: &str, at: u64) {
         self.dismissed_sessions = prune_dismissed(&self.dismissed_sessions, at);
         self.dismissed_sessions.insert(session_id.to_string(), at);
+    }
+
+    /// The user deleted `session_id` less than [`DISMISSED_TTL_MS`] ago.
+    pub fn is_dismissed(&self, session_id: &str, now: u64) -> bool {
+        self.dismissed_sessions
+            .get(session_id)
+            .is_some_and(|&at| now.saturating_sub(at) < DISMISSED_TTL_MS)
     }
 
     /// Undo a delete: un-dismiss and re-insert the exact snapshotted view.
@@ -1135,6 +1156,23 @@ mod tests {
         assert_eq!(pruned.keys().cloned().collect::<Vec<_>>(), vec!["fresh"]);
         // exactly at the TTL boundary the entry is dropped (`>=`)
         assert!(!prune_dismissed(&d, DISMISSED_TTL_MS).contains_key("old"));
+    }
+
+    #[test]
+    fn the_dismissal_outlasts_the_direct_links_resume_window() {
+        let mut st = MachinesState::default();
+        st.dismiss_session("s", 1_000);
+        assert!(st.is_dismissed("s", 1_000 + protocol::direct::OUTBOX_SECS * 1000));
+        assert!(!st.is_dismissed("s", 1_000 + DISMISSED_TTL_MS));
+        assert!(!st.is_dismissed("other", 1_000));
+    }
+
+    #[test]
+    fn dismissed_sessions_round_trip_and_garbage_is_empty() {
+        let d: BTreeMap<String, u64> = [("s".to_string(), 42u64)].into_iter().collect();
+        assert_eq!(hydrate_dismissed(Some(&serialize_dismissed(&d))), d);
+        assert!(hydrate_dismissed(Some("[not a map")).is_empty());
+        assert!(hydrate_dismissed(None).is_empty());
     }
 
     // --- property: sessions are lost ONLY to tombstones ---
