@@ -126,7 +126,7 @@ fun MachineSettingsContent(
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
-    onOpenMcp: (agent: String) -> Unit = {},
+    onOpenMcp: (agent: String) -> Unit,
 ) {
     // The model pickers need each agent's list, and the plugin rows their
     // counts: ask for them on opening.
