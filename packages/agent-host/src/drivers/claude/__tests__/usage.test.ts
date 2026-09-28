@@ -3,7 +3,7 @@
  * the defensive-shape cases the facade's `unknown` return demands.
  */
 import { describe, it, expect } from 'vitest';
-import { normalizeUsage } from '../drivers/claude/usage';
+import { normalizeUsage } from '../usage';
 
 const NOW = () => Date.parse('2026-08-05T12:00:00.000Z');
 

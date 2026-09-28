@@ -442,9 +442,11 @@ restart.
    driver — nothing agent-specific may reach the bridge.
 3. Register it in `src/main.ts` (it is enabled through
    `CODEDECK_AGENT_HOST_DRIVERS`).
-4. Test it like `src/__tests__/claudeDriver.test.ts` and
-   `opencodeDriver.test.ts` do, with the recording `SessionContext` in
-   `src/__tests__/context.ts`.
+4. Test it beside the driver, in `src/drivers/<agent>/__tests__/`, like
+   `drivers/claude/__tests__/claudeDriver.test.ts` and
+   `drivers/opencode/__tests__/opencodeDriver.test.ts` do, with the
+   recording `SessionContext` in `src/__tests__/context.ts`. Everything the
+   driver owns — its permission policy included — lives in that folder too.
 
 The bridge and the phone need no change: the new agent appears in the
 catalog, and its entries render through the typed vocabulary above. Only a

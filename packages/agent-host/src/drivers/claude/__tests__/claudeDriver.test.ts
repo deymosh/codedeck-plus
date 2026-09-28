@@ -5,7 +5,7 @@
  * Code's modes their meaning.
  */
 import { describe, it, expect } from 'vitest';
-import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../drivers/claude/driver';
+import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../driver';
 import type {
   ModelDiscoveryOptions,
   SdkCanUseTool,
@@ -17,9 +17,9 @@ import type {
   SdkPermissionResult,
   SdkSessionHandle,
   SdkSessionOptions,
-} from '../drivers/claude/facade';
-import type { StartSession } from '../types';
-import { recordingContext, type Handlers } from './context';
+} from '../facade';
+import type { StartSession } from '../../../types';
+import { recordingContext, type Handlers } from '../../../__tests__/context';
 
 class ScriptedHandle implements SdkSessionHandle {
   readonly pushed: string[] = [];
