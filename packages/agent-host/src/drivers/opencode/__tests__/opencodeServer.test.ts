@@ -4,7 +4,7 @@ import {
   resolveOpenCodePath,
   startOpenCodeServer,
   type SpawnFn,
-} from '../drivers/opencode/server';
+} from '../server';
 
 /** Minimal fake ChildProcess: an EventEmitter with stdout/stderr sub-emitters
  *  and a `kill()` that records signals and (optionally) fires 'exit'. */

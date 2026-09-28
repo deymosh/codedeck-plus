@@ -3,16 +3,16 @@
  * entries (ported from the old bridge's sdkAdapter.test.ts).
  */
 import { describe, it, expect } from 'vitest';
-import { extractDiff, sdkMessageToEntries } from '../drivers/claude/adapter';
-import { newTranslateContext, type TranslateContext } from '../transcript';
-import type { OutputEntry } from '../types';
+import { extractDiff, sdkMessageToEntries } from '../adapter';
+import { newTranslateContext, type TranslateContext } from '../../../transcript';
+import type { OutputEntry } from '../../../types';
 import type {
   SdkAssistantMessage,
   SdkMessage,
   SdkUserMessage,
   SdkResultMessage,
   SdkSystemMessage,
-} from '../drivers/claude/facade';
+} from '../facade';
 import type { UUID } from 'node:crypto';
 
 type EntryType = OutputEntry['entryType'];

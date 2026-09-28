@@ -8,8 +8,8 @@ import {
   buildClaudeEnv,
   PROVIDER_BASE_URL_ERROR,
   sanitizeProviderBaseEnv,
-} from '../drivers/claude/env';
-import type { ProviderBinding, StartSession } from '../types';
+} from '../env';
+import type { ProviderBinding, StartSession } from '../../../types';
 
 const KIMI_TOKEN = 'sk-kimi-TESTSECRET-000';
 

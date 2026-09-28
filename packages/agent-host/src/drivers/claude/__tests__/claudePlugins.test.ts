@@ -3,7 +3,7 @@
  * real CLI (2.1.283) prints.
  */
 import { describe, expect, it } from 'vitest';
-import { ClaudePlugins, failureMessage, type CliResult } from '../drivers/claude/plugins';
+import { ClaudePlugins, failureMessage, type CliResult } from '../plugins';
 
 const INSTALLED = [{
   id: 'commit-commands@claude-plugins-official',

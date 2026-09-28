@@ -12,7 +12,7 @@
  */
 import type { Driver, DriverSession, PluginManager, SessionContext } from '../../driver';
 import type { HttpPost } from '../../net';
-import { isBenignPlanDirWrite } from '../../policy';
+import { isBenignPlanDirWrite } from './policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
 import { slashCommand } from '../../commands';

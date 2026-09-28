@@ -1,4 +1,4 @@
-package com.codedeck.plus.ui
+package com.codedeck.plus.ui.screens
 
 import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.RepeatMode
@@ -66,9 +66,9 @@ import com.codedeck.plus.ui.components.MachineLabelTracking
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.components.ThinkingGlyph
 import com.codedeck.plus.ui.components.topGlow
-import com.codedeck.plus.ui.screens.MachinePresence
-import com.codedeck.plus.ui.screens.machinePresence
-import com.codedeck.plus.ui.screens.machineStatusText
+import com.codedeck.plus.ui.orderedMachines
+import com.codedeck.plus.ui.orderedSessions
+import com.codedeck.plus.ui.sessionKeyOf
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.theme.presenceColor
 import com.codedeck.plus.ui.theme.stateColor

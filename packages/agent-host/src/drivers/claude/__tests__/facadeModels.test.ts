@@ -12,7 +12,7 @@ import {
   firstSupportedModels,
   type ModelsQueryHandle,
   type SdkModelDescriptor,
-} from '../drivers/claude/facade';
+} from '../facade';
 
 const OPUS: SdkModelDescriptor[] = [{ id: 'claude-opus-4-8', label: 'Opus' }];
 
@@ -80,7 +80,7 @@ import {
   isProviderBoundSession,
   modelSupports1mContext,
   type SdkSessionOptions,
-} from '../drivers/claude/facade';
+} from '../facade';
 
 function baseOpts(over: Partial<SdkSessionOptions> = {}): SdkSessionOptions {
   return {
@@ -199,7 +199,7 @@ describe('isProviderBoundSession (CDX-071)', () => {
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { claudeProjectDirs, sdkConversationExists } from '../drivers/claude/facade';
+import { claudeProjectDirs, sdkConversationExists } from '../facade';
 
 /**
  * Measured on the real Claude CLI 2.1.220 (run-sheet check 43, 2026-08-09), via

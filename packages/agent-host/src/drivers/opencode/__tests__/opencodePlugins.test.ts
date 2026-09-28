@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
-import { OpenCodePlugins, toInstalledPlugin } from '../drivers/opencode/plugins';
+import { OpenCodePlugins, toInstalledPlugin } from '../plugins';
 
 /** A server whose global config lists `plugin`, and records every write. */
 function server(plugin: unknown[]) {

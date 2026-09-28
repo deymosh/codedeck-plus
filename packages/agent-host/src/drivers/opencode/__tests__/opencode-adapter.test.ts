@@ -3,7 +3,7 @@
  * OpenCode translator.
  */
 import { describe, it, expect } from 'vitest';
-import { opencodeEventToEntries } from '../drivers/opencode/adapter';
+import { opencodeEventToEntries } from '../adapter';
 import type {
   OpenCodeStarted,
   OpenCodeIdle,
@@ -14,9 +14,9 @@ import type {
   OpenCodeDiff,
   OpenCodeQuestion,
   LegacyFileDiff,
-} from '../drivers/opencode/adapter';
-import { newTranslateContext, type TranslateContext } from '../transcript';
-import type { OutputEntry } from '../types';
+} from '../adapter';
+import { newTranslateContext, type TranslateContext } from '../../../transcript';
+import type { OutputEntry } from '../../../types';
 import type { Part } from '@opencode-ai/sdk/v2/client';
 
 type EntryOf<T extends OutputEntry['entryType']> = Extract<OutputEntry, { entryType: T }>;

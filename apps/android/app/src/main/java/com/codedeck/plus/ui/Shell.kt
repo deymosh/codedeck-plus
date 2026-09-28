@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.screens.NewSessionScreen
+import com.codedeck.plus.ui.screens.SessionsScreen
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.screens.LogsScreen
 import com.codedeck.plus.ui.screens.MachineSettingsScreen
