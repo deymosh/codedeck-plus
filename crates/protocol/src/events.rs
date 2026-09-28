@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::capabilities::BridgeHostKind;
 use super::common::{
-    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, OutputEntry,
+    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo, OutputEntry,
+    SessionMcpServer,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     UsageData,
 };
@@ -270,6 +271,52 @@ pub struct PluginAckMsg {
     pub error: Option<String>,
 }
 
+/// An agent's MCP servers on the bridge's machine: the reply to
+/// `mcp-request`, and sent again after every `mcp-action`. When the list
+/// could not be read, `error` says why and `servers` is empty. `toggles`
+/// says whether a server can be switched off without removing it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServersMsg {
+    pub agent: String,
+    pub servers: Vec<McpServerInfo>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggles: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Reply to `mcp-action`: whether it was done for the servers it `names`,
+/// and why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAckMsg {
+    pub agent: String,
+    pub action: McpAction,
+    pub names: Vec<String>,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// A running session's MCP servers: the reply to `session-mcp-request` and
+/// to `session-mcp-toggle`. `toggles` says whether a server can be switched
+/// in this session; with `projectWide`, a switch applies to every session of
+/// the agent in the same project, not just this one. When the session could
+/// not answer, `error` says why and `servers` is empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMcpMsg {
+    pub session_id: String,
+    pub servers: Vec<SessionMcpServer>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggles: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub project_wide: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Reply to `set-credentials`: the resulting status of every credential in
 /// the written scope (`agent`, or the bridge's own when absent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -349,6 +396,9 @@ pub enum BridgeToPhone {
     Commands(CommandsMsg),
     Plugins(PluginsMsg),
     PluginAck(PluginAckMsg),
+    McpServers(McpServersMsg),
+    McpAck(McpAckMsg),
+    SessionMcp(SessionMcpMsg),
     CredentialsAck(CredentialsAckMsg),
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
@@ -453,6 +503,15 @@ mod tests {
         rt(&json!({"type":"plugins","agent":"opencode","installed":[{"id":"opencode-wakatime","name":"opencode-wakatime","enabled":true}]}));
         rt(&json!({"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
         rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
+        rt(&json!({"type":"mcp-servers","agent":"claude-code","servers":[
+            {"name":"github","transport":"http","target":"https://api.githubcopilot.com/mcp/","headerKeys":["Authorization"],"enabled":true},
+            {"name":"fs","transport":"stdio","target":"npx","envKeys":["K"],"enabled":false}],"toggles":true}));
+        rt(&json!({"type":"mcp-servers","agent":"claude-code","servers":[],"error":"no claude"}));
+        rt(&json!({"type":"mcp-ack","agent":"claude-code","action":"add","names":["github"],"success":false,"error":"bad url"}));
+        rt(&json!({"type":"session-mcp","sessionId":"s","servers":[
+            {"name":"github","status":"connected","tools":12},{"name":"x","status":"needs-auth"},
+            {"name":"y","status":"failed","error":"exit 1"}],"toggles":true,"projectWide":true}));
+        rt(&json!({"type":"session-mcp","sessionId":"s","servers":[],"error":"not running"}));
         rt(&json!({"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
         rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
