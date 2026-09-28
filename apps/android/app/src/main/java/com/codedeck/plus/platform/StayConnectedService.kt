@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -229,6 +230,11 @@ class StayConnectedService : Service() {
         // transitions; the first emission reconciles the state at startup.
         connectivity?.let { network ->
             scope.launch { network.online.collect { core.setOnline(it) } }
+            // Internet access came back without the network going down (or
+            // on another network): redial whatever is down now, rather than
+            // after a backoff that grew through the outage. The replayed
+            // initial value is not news.
+            scope.launch { network.regained.drop(1).collect { core.setOnline(true) } }
         }
         // The stay-connected setting drives THIS service's foreground state —
         // the settings screen only flips the stored value. Collecting here is

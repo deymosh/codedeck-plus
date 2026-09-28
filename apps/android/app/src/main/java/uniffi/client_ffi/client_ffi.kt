@@ -1252,7 +1252,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_client_ffi_checksum_method_core_resume() and 0xFFFF) != 24675) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_client_ffi_checksum_method_core_set_online() and 0xFFFF) != 17443) {
+    if ((lib.uniffi_client_ffi_checksum_method_core_set_online() and 0xFFFF) != 56913) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_client_ffi_checksum_method_core_settings_view() and 0xFFFF) != 48669) {
@@ -1914,6 +1914,8 @@ public interface CoreInterface {
      * Whether the device has a usable network. Offline parks the connection
      * (no retries against a dead radio); coming back online reconnects at
      * once with a fresh backoff instead of waiting out the current delay.
+     * Call it with `true` again when the network changed or regained
+     * internet access while staying up: whatever is down redials at once.
      */
     fun `setOnline`(`online`: kotlin.Boolean)
     
@@ -2302,6 +2304,8 @@ open class Core: Disposable, AutoCloseable, CoreInterface
      * Whether the device has a usable network. Offline parks the connection
      * (no retries against a dead radio); coming back online reconnects at
      * once with a fresh backoff instead of waiting out the current delay.
+     * Call it with `true` again when the network changed or regained
+     * internet access while staying up: whatever is down redials at once.
      */override fun `setOnline`(`online`: kotlin.Boolean)
         = 
     callWithHandle {

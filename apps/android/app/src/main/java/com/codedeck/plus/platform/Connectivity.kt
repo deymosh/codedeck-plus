@@ -20,6 +20,11 @@ import kotlinx.coroutines.flow.asStateFlow
  * VALIDATED: "offline" closes live sockets, and validation is known to fail
  * on networks that reach relays fine (captive-portal false negatives, some
  * VPNs), so requiring it would cut working connections.
+ *
+ * VALIDATED is still a useful "the internet is back" signal: an outage where
+ * the Wi-Fi stays associated never changes [online], so [regained] ticks each
+ * time a default network becomes validated that was not the last validated
+ * one — a switch to another network, or access coming back on the same one.
  */
 class Connectivity(context: Context) {
     private val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -27,15 +32,26 @@ class Connectivity(context: Context) {
     private val _online = MutableStateFlow(hasInternetNow())
     val online: StateFlow<Boolean> = _online.asStateFlow()
 
+    /** The default network validated while it was up; `null` when it is not. */
+    @Volatile private var lastValidated: Network? = validatedNow()
+
+    private val _regained = MutableStateFlow(0)
+    /** Ticks (its value is only a counter) when internet access was regained. */
+    val regained: StateFlow<Int> = _regained.asStateFlow()
+
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             // Refined by the onCapabilitiesChanged that always follows.
             _online.value = true
         }
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            if (validated && network != lastValidated) _regained.value += 1
+            lastValidated = if (validated) network else null
             _online.value = hasInternet(capabilities)
         }
         override fun onLost(network: Network) {
+            lastValidated = null
             _online.value = false
         }
     }
@@ -55,5 +71,11 @@ class Connectivity(context: Context) {
         val active = manager.activeNetwork ?: return false
         val capabilities = manager.getNetworkCapabilities(active) ?: return false
         return hasInternet(capabilities)
+    }
+
+    private fun validatedNow(): Network? {
+        val active = manager.activeNetwork ?: return null
+        val capabilities = manager.getNetworkCapabilities(active) ?: return null
+        return active.takeIf { capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }
     }
 }
