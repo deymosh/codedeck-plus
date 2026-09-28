@@ -16,6 +16,12 @@
 //!   still fires only when it is dead on every relay; the caller's own
 //!   backoff then calls `ensure_connected`, which dials every relay without
 //!   a socket at once. [`WsTransport::shutdown`] stops all of it.
+//! * **wall-clock catch-up** — these timers run on the monotonic clock, which
+//!   stops while a phone sleeps, so a dial deadline or a redial delay can
+//!   last many times longer in real time. A host that wakes the device
+//!   briefly calls [`WsTransport::catch_up`] to act on the ones that are due
+//!   by the wall clock, and [`WsTransport::retry_now`] when the network
+//!   changed or came back.
 //! * **ping liveness** — one pinger pings every relay together each
 //!   [`PING_EVERY`] (a host slows it while in the background, see
 //!   [`WsTransport::set_ping_interval`]), and a socket with no traffic for
@@ -41,7 +47,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasher;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::publish::{PublishResult, PublishVerdict};
 use protocol::nostr_event::SignedEvent;
@@ -217,6 +223,8 @@ struct Conn {
     /// that task's up/dead callbacks carry its own generation so they can
     /// never mark, replay onto, or remove the replacement connection.
     generation: u64,
+    /// When the dial began, by the wall clock (see [`WsTransport::catch_up`]).
+    dialed_at: SystemTime,
 }
 
 impl Conn {
@@ -293,6 +301,8 @@ struct PendingPublish {
 struct Retry {
     attempt: u32,
     timer: Option<AbortHandle>,
+    /// When `timer` is due, by the wall clock (see [`WsTransport::catch_up`]).
+    due_at: Option<SystemTime>,
 }
 
 impl Retry {
@@ -300,6 +310,7 @@ impl Retry {
         if let Some(timer) = self.timer.take() {
             timer.abort();
         }
+        self.due_at = None;
     }
 }
 
@@ -542,6 +553,77 @@ impl WsTransport {
         self.apply(actions, None);
     }
 
+    /// The network changed or came back: dial every relay without a live
+    /// socket now, its backoff started over — failures on the old network
+    /// say nothing about the new one. A dial still in flight is abandoned
+    /// too: it began on the old network (or through a proxy that lost it)
+    /// and could hang for its whole deadline. Live sockets are left alone.
+    /// A no-op on a transport that is not active.
+    pub fn retry_now(&self) {
+        let mut actions = Vec::new();
+        let dialing: Vec<Conn> = {
+            let mut st = self.state.borrow_mut();
+            if !st.active {
+                return;
+            }
+            for (_, mut retry) in st.retries.drain() {
+                retry.cancel_timer();
+            }
+            let relays: Vec<String> = st.conns.iter().filter(|(_, c)| !c.up).map(|(r, _)| r.clone()).collect();
+            relays.iter().filter_map(|r| st.detach(r, &mut actions)).collect()
+        };
+        for c in dialing {
+            c.close();
+        }
+        self.apply(actions, None);
+        self.ensure_connected();
+    }
+
+    /// Act on the deadlines the device slept through: a dial that has
+    /// outlived its deadline by the wall clock is abandoned and dialled
+    /// again, and a redial whose delay has passed by the wall clock is
+    /// dialled now. For a host that wakes the device briefly now and then —
+    /// in between, the monotonic timers here barely advance. A no-op on a
+    /// transport that is not active.
+    pub fn catch_up(&self) {
+        let now = SystemTime::now();
+        let mut actions = Vec::new();
+        let (stalled, due) = {
+            let mut st = self.state.borrow_mut();
+            if !st.active {
+                return;
+            }
+            let budget = if st.proxy.is_some() { st.timing.dial_proxied } else { st.timing.dial };
+            let overdue = |at: SystemTime| now.duration_since(at).is_ok();
+            let stalled_relays: Vec<String> = st
+                .conns
+                .iter()
+                .filter(|(_, c)| !c.up && overdue(c.dialed_at + budget))
+                .map(|(r, _)| r.clone())
+                .collect();
+            let stalled: Vec<Conn> = stalled_relays.iter().filter_map(|r| st.detach(r, &mut actions)).collect();
+            let st = &mut *st;
+            let mut due = stalled_relays;
+            for (relay, retry) in st.retries.iter_mut() {
+                if retry.due_at.is_some_and(overdue) && !st.conns.contains_key(relay) {
+                    retry.cancel_timer();
+                    due.push(relay.clone());
+                }
+            }
+            (stalled, due)
+        };
+        if !due.is_empty() {
+            log::info!("ws: catching up on {} dial(s) the device slept through: {due:?}", due.len());
+        }
+        for c in stalled {
+            c.close();
+        }
+        self.apply(actions, None);
+        for relay in due {
+            self.spawn_relay(relay);
+        }
+    }
+
     /// Publish one signed event and report the CDX-086 verdict, re-publishing
     /// the SAME event within `budget` (never rebuilding it — a rebuild changes
     /// `created_at` + the NIP-44 nonce + the id, defeats the bridge's id-dedup,
@@ -670,6 +752,7 @@ impl WsTransport {
                     up: false,
                     up_since: None,
                     generation,
+                    dialed_at: SystemTime::now(),
                 },
             );
             generation
@@ -834,6 +917,7 @@ impl WsTransport {
                     })
                     .abort_handle(),
                 );
+                retry.due_at = Some(SystemTime::now() + delay);
             } else {
                 log::info!("ws: {relay} disconnected ({reason})");
             }
@@ -853,6 +937,7 @@ impl WsTransport {
             }
             if let Some(retry) = st.retries.get_mut(relay) {
                 retry.timer = None;
+                retry.due_at = None;
             }
         }
         self.spawn_relay(relay.to_string());
@@ -1292,7 +1377,7 @@ mod tests {
             let mut st = t.state.borrow_mut();
             st.conns.insert(
                 url.clone(),
-                Conn { tx, stop: Rc::new(Stop::default()), heard: Rc::default(), up: true, up_since: None, generation: 7 },
+                Conn { tx, stop: Rc::new(Stop::default()), heard: Rc::default(), up: true, up_since: None, generation: 7, dialed_at: SystemTime::now() },
             );
             st.router.relay_connected(&url);
         }
@@ -1399,7 +1484,7 @@ mod tests {
     #[tokio::test]
     async fn a_full_outbound_queue_stops_the_connection_as_a_failure() {
         let (tx, _rx) = mpsc::channel::<Message>(1);
-        let conn = Conn { tx, stop: Rc::new(Stop::default()), heard: Rc::default(), up: true, up_since: None, generation: 1 };
+        let conn = Conn { tx, stop: Rc::new(Stop::default()), heard: Rc::default(), up: true, up_since: None, generation: 1, dialed_at: SystemTime::now() };
         conn.send("first".into());
         assert_eq!(conn.stop.reason.get(), None);
         conn.send("second".into());
@@ -1853,6 +1938,109 @@ mod tests {
                 assert!(t.state.borrow().retries.is_empty());
                 assert_eq!(mock.frame_within(Duration::from_millis(400)).await, None, "no redial after shutdown");
                 assert!(t.state.borrow().conns.is_empty());
+            })
+            .await;
+    }
+
+    /// A listener that accepts TCP and never answers the WS handshake,
+    /// counting the dials that reach it.
+    async fn hanging_relay() -> (String, Rc<Cell<u32>>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let accepted = Rc::new(Cell::new(0));
+        let count = Rc::clone(&accepted);
+        let held = tokio::task::spawn_local(async move {
+            let mut held = Vec::new();
+            while let Ok((tcp, _)) = listener.accept().await {
+                count.set(count.get() + 1);
+                held.push(tcp);
+            }
+        });
+        (url, accepted, held)
+    }
+
+    fn generation_of(t: &WsTransport, relay: &str) -> Option<u64> {
+        t.state.borrow().conns.get(relay).map(|c| c.generation)
+    }
+
+    #[tokio::test]
+    async fn retry_now_abandons_a_hanging_dial_and_restarts_the_backoff() {
+        LocalSet::new()
+            .run_until(async {
+                let (url, accepted, held) = hanging_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig { relays: vec![url.clone()], auth: Rc::new(phone), proxy: None });
+                // Not active yet: nothing to retry.
+                t.retry_now();
+                assert!(t.state.borrow().conns.is_empty());
+
+                t.ensure_connected();
+                wait_until(|| accepted.get() == 1).await;
+                let first = generation_of(&t, &url).unwrap();
+                t.state.borrow_mut().retries.insert(url.clone(), Retry { attempt: 9, ..Retry::default() });
+
+                t.retry_now();
+                wait_until(|| accepted.get() == 2).await;
+                assert!(generation_of(&t, &url).unwrap() > first);
+                assert!(t.state.borrow().retries.is_empty(), "the backoff starts over");
+                held.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn retry_now_leaves_a_live_socket_alone() {
+        LocalSet::new()
+            .run_until(async {
+                let mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.ensure_connected();
+                wait_until(|| !t.connected_relays().is_empty()).await;
+                let live = generation_of(&t, &mock.url);
+
+                t.retry_now();
+                assert_eq!(generation_of(&t, &mock.url), live);
+                assert!(!t.connected_relays().is_empty());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn catch_up_redials_what_is_overdue_by_the_wall_clock() {
+        LocalSet::new()
+            .run_until(async {
+                let (url, accepted, held) = hanging_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig { relays: vec![url.clone()], auth: Rc::new(phone), proxy: None });
+                t.ensure_connected();
+                wait_until(|| accepted.get() == 1).await;
+                let first = generation_of(&t, &url).unwrap();
+
+                // Still within its deadline: left to run.
+                t.catch_up();
+                assert_eq!(generation_of(&t, &url), Some(first));
+
+                // The device slept through the deadline.
+                t.state.borrow_mut().conns.get_mut(&url).unwrap().dialed_at -= DIAL_TIMEOUT;
+                t.catch_up();
+                wait_until(|| accepted.get() == 2).await;
+                let second = generation_of(&t, &url).unwrap();
+                assert!(second > first);
+
+                // A redial whose delay passed while asleep is dialled now; one
+                // still pending by the wall clock waits.
+                t.state.borrow_mut().conns.remove(&url);
+                let future = SystemTime::now() + Duration::from_secs(600);
+                t.state.borrow_mut().retries.insert(url.clone(), Retry { attempt: 3, timer: None, due_at: Some(future) });
+                t.catch_up();
+                assert!(generation_of(&t, &url).is_none());
+                t.state.borrow_mut().retries.get_mut(&url).unwrap().due_at = Some(SystemTime::now() - Duration::from_secs(1));
+                t.catch_up();
+                wait_until(|| accepted.get() == 3).await;
+                assert!(generation_of(&t, &url).unwrap() > second);
+                assert_eq!(t.state.borrow().retries[&url].attempt, 3, "a caught-up redial keeps its backoff");
+                held.abort();
             })
             .await;
     }

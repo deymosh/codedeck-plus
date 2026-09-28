@@ -408,6 +408,8 @@ impl Core {
     /// Whether the device has a usable network. Offline parks the connection
     /// (no retries against a dead radio); coming back online reconnects at
     /// once with a fresh backoff instead of waiting out the current delay.
+    /// Call it with `true` again when the network changed or regained
+    /// internet access while staying up: whatever is down redials at once.
     pub fn set_online(&self, online: bool) {
         self.handle.set_online(online);
     }

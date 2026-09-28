@@ -479,7 +479,9 @@ impl Core {
             let _ = done.await;
         }
     }
-    /// `ConnectivityManager` says the network came / went.
+    /// `ConnectivityManager` says the network came / went. Repeating `true`
+    /// says it changed or regained internet access: whatever is down is
+    /// dialled again at once.
     pub fn set_online(&self, online: bool) {
         let _ = self.tx.send(Msg::SetOnline(online));
     }
@@ -914,13 +916,22 @@ impl Loop {
                 }
                 Msg::KeepaliveProbed(reply) => {
                     // A retry timer that stalled while the device slept is
-                    // due by now; outside WaitingRetry this is a no-op.
+                    // due by now; outside WaitingRetry this is a no-op. The
+                    // transport's own dial deadlines and redials stalled the
+                    // same way.
                     self.dispatch(ConnectionEvent::RetryDue);
+                    self.ws.catch_up();
                     self.check_stale_heartbeats();
                     self.check_connected_relays_changed();
                     let _ = reply.send(());
                 }
                 Msg::SetOnline(true) => {
+                    // Also when already online (the network changed or its
+                    // internet access came back) and whatever the FSM's
+                    // state: every relay that is down is dialled now. First,
+                    // so the dials an Offline → Online reconnect starts
+                    // below are not the ones it abandons.
+                    self.ws.retry_now();
                     self.dispatch(ConnectionEvent::Online);
                     for (_, link) in self.links.values() {
                         link.retry_now();
