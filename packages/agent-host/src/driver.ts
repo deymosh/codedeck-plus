@@ -14,6 +14,9 @@ import type {
   AgentInfo,
   AvailablePlugin,
   InstalledPlugin,
+  McpAction,
+  McpServerAdd,
+  McpServerInfo,
   ModelEntry,
   OptionChoice,
   PermissionRequest,
@@ -23,6 +26,7 @@ import type {
   QuestionSpec,
   SelectOutcome,
   SessionEvent,
+  SessionMcpServer,
   SessionOption,
   SlashCommand,
   StartSession,
@@ -58,6 +62,12 @@ export interface DriverSession {
    *  catalog entry `supports.commands`. Asked every time the phone wants
    *  them, so a list that changes while the session runs is never stale. */
   listCommands?(): Promise<SlashCommand[]>;
+  /** The session's MCP servers and where each stands, for an agent whose
+   *  catalog entry `supports.mcp`. */
+  mcpStatus?(): Promise<SessionMcpState>;
+  /** Switch one MCP server on or off in this session and answer the new
+   *  status. Rejects with the agent's reason when it cannot. */
+  toggleMcp?(name: string, enabled: boolean): Promise<SessionMcpState>;
   /** Stop the agent. Idempotent; no events are expected afterwards. */
   end(): Promise<void>;
 }
@@ -81,6 +91,31 @@ export interface PluginManager {
   act(action: PluginAction, target: string): Promise<PluginState>;
 }
 
+/** An agent's MCP servers on this machine. `toggles`: a server can be
+ *  switched off without removing it. Never carries a secret's value. */
+export interface McpState {
+  servers: McpServerInfo[];
+  toggles: boolean;
+}
+
+/** For an agent whose catalog entry `supports.mcp`: its MCP servers, kept
+ *  in the agent's own configuration so they also apply outside CodeDeck. */
+export interface McpManager {
+  list(): Promise<McpState>;
+  /** Apply one change and answer the new state; running sessions pick it
+   *  up. Rejects with the agent's own reason when it was refused. */
+  act(action: McpAction, servers: McpServerAdd[], names: string[]): Promise<McpState>;
+}
+
+/** A session's MCP servers. `toggles`: they can be switched in the
+ *  session; `projectWide`: a switch applies to every session of the agent
+ *  in the same project. */
+export interface SessionMcpState {
+  servers: SessionMcpServer[];
+  toggles: boolean;
+  projectWide: boolean;
+}
+
 export interface Driver {
   /** How this agent is advertised. Read once, at `initialize`. */
   info(): AgentInfo;
@@ -96,6 +131,8 @@ export interface Driver {
   checkCredential?(credential: string, value: string): Promise<boolean | undefined>;
   /** Manages the agent's plugins, when it has any. */
   readonly plugins?: PluginManager;
+  /** Manages the agent's MCP servers, when it supports them. */
+  readonly mcp?: McpManager;
   /** Release driver-wide resources (servers it spawned). */
   shutdown?(): Promise<void>;
 }

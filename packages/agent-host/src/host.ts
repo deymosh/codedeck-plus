@@ -10,7 +10,7 @@
  * - a request the host sent is settled exactly once — by the bridge's reply,
  *   or with `cancelled` when the host shuts down.
  */
-import type { Driver, DriverSession, PluginManager, SessionContext } from './driver';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext } from './driver';
 import {
   DRIVER_PROTOCOL_VERSION,
   type BridgeFrame,
@@ -178,6 +178,23 @@ export class AgentHost {
         const { agent, action, target } = message.payload;
         return { kind: 'plugins', payload: await this.plugins(agent).act(action, target) };
       }
+      case 'list-mcp':
+        return { kind: 'mcp-servers', payload: await this.mcp(message.payload.agent).list() };
+      case 'mcp-action': {
+        const { agent, action, servers, names } = message.payload;
+        return { kind: 'mcp-servers', payload: await this.mcp(agent).act(action, servers ?? [], names ?? []) };
+      }
+      case 'session-mcp': {
+        const session = this.session(message.payload.sessionId);
+        if (!session.mcpStatus) throw new Error('this session has no MCP servers to show');
+        return { kind: 'session-mcp', payload: await session.mcpStatus() };
+      }
+      case 'session-mcp-toggle': {
+        const { sessionId, name, enabled } = message.payload;
+        const session = this.session(sessionId);
+        if (!session.toggleMcp) throw new Error('MCP servers cannot be switched in this session');
+        return { kind: 'session-mcp', payload: await session.toggleMcp(name, enabled) };
+      }
       case 'list-commands': {
         const commands = (await this.session(message.payload.sessionId).listCommands?.()) ?? [];
         return { kind: 'commands', payload: { commands } };
@@ -268,6 +285,12 @@ export class AgentHost {
     const driver = this.driver(agent);
     if (!driver.plugins) throw new Error(`${driver.info().displayName} has no plugins to manage`);
     return driver.plugins;
+  }
+
+  private mcp(agent: string): McpManager {
+    const driver = this.driver(agent);
+    if (!driver.mcp) throw new Error(`${driver.info().displayName} has no MCP servers to manage`);
+    return driver.mcp;
   }
 
   private session(sessionId: string): DriverSession {

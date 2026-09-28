@@ -56,6 +56,199 @@ pub struct AgentSupports {
     /// plugins and the marketplaces they come from, for the whole machine.
     #[serde(default)]
     pub plugins: bool,
+    /// `mcp-request` / `mcp-action` list and manage the agent's MCP servers
+    /// for the whole machine; `session-mcp-request` / `session-mcp-toggle`
+    /// show and switch them in one session.
+    #[serde(default)]
+    pub mcp: bool,
+}
+
+// --- MCP servers ---
+
+/// How an agent reaches an MCP server. The VALUES of `env` and `headers` are
+/// secrets (a bearer token, an API key): they ride phone→bridge only, and
+/// nothing the bridge sends back carries them — see [`McpServerInfo`]. Its
+/// `Debug` names the keys only, so a logged command cannot leak them.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpTransport {
+    /// A local process the agent starts and talks to over stdio.
+    Stdio {
+        command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        env: BTreeMap<String, String>,
+    },
+    /// A remote server over streamable HTTP.
+    Http {
+        url: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        headers: BTreeMap<String, String>,
+    },
+    /// A remote server over server-sent events (the older remote transport).
+    Sse {
+        url: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        headers: BTreeMap<String, String>,
+    },
+}
+
+impl std::fmt::Debug for McpTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys = |m: &BTreeMap<String, String>| m.keys().cloned().collect::<Vec<_>>();
+        match self {
+            // The arguments are left out too: a server may take its token there.
+            Self::Stdio { command, args, env } => f
+                .debug_struct("Stdio")
+                .field("command", command)
+                .field("args", &args.len())
+                .field("env", &keys(env))
+                .finish(),
+            Self::Http { url, headers } => {
+                f.debug_struct("Http").field("url", &redact_url(url)).field("headers", &keys(headers)).finish()
+            }
+            Self::Sse { url, headers } => {
+                f.debug_struct("Sse").field("url", &redact_url(url)).field("headers", &keys(headers)).finish()
+            }
+        }
+    }
+}
+
+/// `url` without its user info, query and fragment — the parts that may
+/// carry a credential. What is left names the server.
+pub fn redact_url(url: &str) -> String {
+    let cut = url.find(['?', '#']).map_or(url, |i| &url[..i]);
+    match cut.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = rest.split_once('/').map_or((rest, None), |(a, p)| (a, Some(p)));
+            let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+            match path {
+                Some(p) => format!("{scheme}://{host}/{p}"),
+                None => format!("{scheme}://{host}"),
+            }
+        }
+        None => cut.to_string(),
+    }
+}
+
+/// An MCP server to add, as the user entered or imported it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct McpServerSpec {
+    pub name: String,
+    pub transport: McpTransport,
+}
+
+/// An MCP server name: 1–64 letters, digits, `-`, `_` or `.`, starting with
+/// a letter or digit (an agent's CLI takes it as an argument, where a leading
+/// `-` would read as an option).
+pub fn is_valid_mcp_name(name: &str) -> bool {
+    name.len() <= 64
+        && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+pub const MCP_NAME_ERROR: &str =
+    "A server name is 1 to 64 letters, digits, dashes, underscores or dots, starting with a letter or digit.";
+
+impl McpServerSpec {
+    /// Why this server cannot be added, if it cannot — the one rule set the
+    /// phone checks before sending and the bridge checks on receipt. A name
+    /// is 1–64 letters, digits, `-`, `_` or `.` (it becomes a key in the
+    /// agent's config and part of its tool names); a command must not look
+    /// like a flag; a URL is `http(s)://`; env and header names are plain.
+    pub fn problem(&self) -> Option<String> {
+        if !is_valid_mcp_name(&self.name) {
+            return Some(MCP_NAME_ERROR.into());
+        }
+        let plain = |k: &String| !k.is_empty() && !k.chars().any(|c| c.is_whitespace() || c.is_control() || c == ':' || c == '=');
+        match &self.transport {
+            McpTransport::Stdio { command, args, env } => {
+                if command.trim().is_empty() || command.starts_with('-') {
+                    return Some(format!("{}: the command to run is missing.", self.name));
+                }
+                if args.iter().chain(env.values()).any(|s| s.contains('\0')) || !env.keys().all(plain) {
+                    return Some(format!("{}: an environment variable name is not valid.", self.name));
+                }
+            }
+            McpTransport::Http { url, headers } | McpTransport::Sse { url, headers } => {
+                let lower = url.to_ascii_lowercase();
+                let host = lower.split_once("://").map(|(_, r)| r).unwrap_or("");
+                if !(lower.starts_with("https://") || lower.starts_with("http://")) || host.is_empty() {
+                    return Some(format!("{}: the URL must start with https:// or http://.", self.name));
+                }
+                if !headers.keys().all(plain) || headers.values().any(|v| v.contains(['\r', '\n'])) {
+                    return Some(format!("{}: a header is not valid.", self.name));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Which [`McpTransport`] a server uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransportKind {
+    Stdio,
+    Http,
+    Sse,
+}
+
+/// An MCP server configured for an agent on the bridge's machine, as the
+/// bridge reports it: enough to recognise it, never its secrets. `target` is
+/// the program a stdio server runs (without its arguments, which may carry a
+/// token) or a remote server's URL without its query, fragment or user info;
+/// `env_keys` / `header_keys` name what is set, not the values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerInfo {
+    pub name: String,
+    pub transport: McpTransportKind,
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_keys: Vec<String>,
+    /// A disabled server stays configured but no session starts it.
+    pub enabled: bool,
+}
+
+/// A change to an agent's MCP servers. `add` takes `servers` (a server with
+/// the name of an existing one replaces it); the others take `names`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpAction {
+    Add,
+    Remove,
+    Enable,
+    Disable,
+}
+
+/// Where one MCP server stands in a running session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpStatus {
+    Connected,
+    /// Starting or connecting.
+    Pending,
+    Failed,
+    /// The server wants an OAuth sign-in, done on the machine itself.
+    NeedsAuth,
+    Disabled,
+}
+
+/// One MCP server of a running session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMcpServer {
+    pub name: String,
+    pub status: McpStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// How many tools it offers, once connected and when the agent says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<u32>,
 }
 
 // --- plugins ---
@@ -622,6 +815,30 @@ pub struct GsdState {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn redact_url_keeps_only_what_names_the_server() {
+        assert_eq!(redact_url("https://mcp.example.com/v1/sse?key=abc#x"), "https://mcp.example.com/v1/sse");
+        assert_eq!(redact_url("https://user:pw@mcp.example.com/@scope/x"), "https://mcp.example.com/@scope/x");
+        assert_eq!(redact_url("https://tok@mcp.example.com"), "https://mcp.example.com");
+        assert_eq!(redact_url("not a url?q"), "not a url");
+    }
+
+    #[test]
+    fn an_mcp_transport_never_debug_prints_its_secrets() {
+        let stdio = McpTransport::Stdio {
+            command: "npx".into(),
+            args: vec!["--token".into(), "sk-args".into()],
+            env: [("API_KEY".to_string(), "sk-env".to_string())].into(),
+        };
+        let http = McpTransport::Http {
+            url: "https://x.example/mcp?token=sk-query".into(),
+            headers: [("Authorization".to_string(), "Bearer sk-header".to_string())].into(),
+        };
+        let shown = format!("{stdio:?} {http:?}");
+        assert!(!shown.contains("sk-"), "{shown}");
+        assert!(shown.contains("API_KEY") && shown.contains("Authorization"), "{shown}");
+    }
 
     fn entry_rt(v: serde_json::Value) -> OutputEntry {
         let e: OutputEntry = serde_json::from_value(v.clone()).unwrap_or_else(|err| panic!("{v} -> {err}"));

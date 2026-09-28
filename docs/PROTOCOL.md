@@ -61,7 +61,7 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, gsd, interrupt, commands, plugins}` and `credentials[]` status. Phones build every
+providers, gsd, interrupt, commands, plugins, mcp}` and `credentials[]` status. Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -249,6 +249,52 @@ plugins on the bridge's machine (all its sessions share them):
   characters. A change reaches running sessions: Claude Code reloads its
   plugins in place; OpenCode reloads, restarting its running sessions.
 
+### `mcp`
+
+For agents with `supports.mcp`, a phone manages the agent's MCP servers on
+the bridge's machine and switches them in a running session. The agent's own
+configuration is the library — Claude Code's user scope, OpenCode's global
+config — so a server added here also works in that agent's terminal, and one
+added there shows here. The bridge keeps no MCP state.
+
+A server is `McpServerSpec {name, transport}`: `transport` is `{type:
+"stdio", command, args?, env?}`, `{type: "http", url, headers?}` or `{type:
+"sse", url, headers?}`. A name is 1–64 letters, digits, `-`, `_` or `.`,
+starting with a letter or digit; a command must not start with `-`; a URL is
+`http(s)://`. `McpServerSpec::problem` is that rule set, applied by the phone
+before sending and by the bridge on receipt.
+
+**Secrets flow one way.** Env and header values (a bearer token, an API key)
+ride phone → bridge only, cross the host link as `Secret` (with the args and
+the URL), and are written into the agent's config. Nothing sent back carries
+them: `McpServerInfo {name, transport, target, envKeys?, headerKeys?,
+enabled}` names a stdio server's program (not its args) or a remote server's
+URL without user info, query or fragment, and only the names of what is set.
+Changing a secret means adding the server again.
+
+- `mcp-request {agent}` → `mcp-servers {agent, servers[], toggles, error?}`.
+  `toggles`: a server can be switched off without removing it (OpenCode;
+  Claude Code has no such switch). A list that could not be read comes
+  empty, with `error`.
+- `mcp-action {agent, action, servers?, names?}` → `mcp-ack {agent, action,
+  names, success, error?}`, then (when done) the new `mcp-servers` to every
+  phone. `add` takes up to 50 `servers` (a name that exists is replaced);
+  `remove`, `enable`, `disable` take `names`. One bad server refuses the
+  whole action. Running sessions pick the change up (Claude Code reloads in
+  place; OpenCode reloads, restarting them).
+- `session-mcp-request {sessionId}` and `session-mcp-toggle {sessionId, name,
+  enabled}` → `session-mcp {sessionId, servers[], toggles, projectWide,
+  error?}`, each server `{name, status, error?, tools?}` with `status` one of
+  `connected`, `pending`, `failed`, `needs-auth`, `disabled`. With
+  `projectWide` (OpenCode) a switch applies to every session of the agent in
+  the same project. A server wanting an OAuth sign-in reports `needs-auth`;
+  the sign-in is done on the machine.
+
+Phones also import servers from the JSON other clients use (`{"mcpServers":
+…}`, VS Code's `servers`, OpenCode's `mcp`, or a bare name → config map):
+`client_core::mcp_import` turns it into specs, reporting each entry it
+cannot add.
+
 ### Pairing
 
 A pairing window is a time-boxed subscription with **no author filter** — the
@@ -393,6 +439,10 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `list-commands {sessionId}` | `commands {commands}` |
 | `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, available?}` |
 | `plugin-action {agent, action, target}` | `plugins {…}` once done, or `error` with the agent's reason |
+| `list-mcp {agent}` | `mcp-servers {servers, toggles}` |
+| `mcp-action {agent, action, servers?, names?}` | `mcp-servers {…}` once done, or `error` with the agent's reason |
+| `session-mcp {sessionId}` | `session-mcp {servers, toggles, projectWide}` |
+| `session-mcp-toggle {sessionId, name, enabled}` | `session-mcp {…}` once done, or `error` |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds

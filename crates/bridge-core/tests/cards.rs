@@ -338,6 +338,77 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.agent == "beta" && p.error.is_some())));
 }
 
+#[test]
+fn mcp_servers_are_managed_by_the_agent_host_and_never_echo_secrets() {
+    use protocol::common::{McpAction, McpServerInfo, McpStatus, McpTransportKind, SessionMcpServer};
+    let mut rig = Rig::new();
+    rig.host_up();
+    let listed = || HostMessage::McpServers {
+        servers: vec![McpServerInfo {
+            name: "github".into(),
+            transport: McpTransportKind::Http,
+            target: "https://api.githubcopilot.com/mcp/".into(),
+            env_keys: vec![],
+            header_keys: vec!["Authorization".into()],
+            enabled: true,
+        }],
+        toggles: false,
+    };
+
+    rig.send(json!({"type":"mcp-request","agent":"alpha"}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListMcp { agent } if agent == "alpha"));
+    rig.host_reply(&id, listed());
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::McpServers(s) if s.servers.len() == 1 && s.error.is_none())));
+
+    // Added: the host gets the values as secrets; the phones get an ack,
+    // then the list — which names the header, never its value.
+    rig.send(json!({"type":"mcp-action","agent":"alpha","action":"add","servers":[
+        {"name":"github","transport":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer ghp_secret"}}}]}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::McpAction { .. }));
+    assert!(!format!("{msg:?}").contains("ghp_secret"), "a logged host request hides the token");
+    match &msg {
+        BridgeMessage::McpAction { action: McpAction::Add, servers, .. } => match &servers[0].setup {
+            agent_protocol::McpServerSetup::Http { headers, .. } => assert_eq!(headers["Authorization"].expose(), "Bearer ghp_secret"),
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+    rig.host_reply(&id, listed());
+    let msgs = rig.messages();
+    let ack = msgs.iter().position(|m| matches!(m, BridgeToPhone::McpAck(a) if a.success && a.names == ["github"]));
+    let list = msgs.iter().position(|m| matches!(m, BridgeToPhone::McpServers(_)));
+    assert!(ack.is_some() && ack < list, "{msgs:?}");
+    assert!(!format!("{msgs:?}").contains("ghp_secret"));
+
+    // Refused before the host: a bad server, a bad name, an agent without MCP.
+    rig.send(json!({"type":"mcp-action","agent":"alpha","action":"add","servers":[
+        {"name":"x","transport":{"type":"http","url":"ftp://x"}}]}));
+    rig.send(json!({"type":"mcp-action","agent":"alpha","action":"remove","names":["../etc"]}));
+    rig.send(json!({"type":"mcp-request","agent":"beta"}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::McpAction { .. } | BridgeMessage::ListMcp { .. })));
+    let msgs = rig.messages();
+    assert_eq!(msgs.iter().filter(|m| matches!(m, BridgeToPhone::McpAck(a) if !a.success)).count(), 2, "{msgs:?}");
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::McpServers(s) if s.agent == "beta" && s.error.is_some())));
+
+    // A running session's servers, and a toggle answered by its new status.
+    let s = rig.ready_session("alpha");
+    rig.send(json!({"type":"session-mcp-toggle","sessionId":s,"name":"github","enabled":false}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::SessionMcpToggle { .. }));
+    assert!(matches!(msg, BridgeMessage::SessionMcpToggle { enabled: false, ref name, .. } if name == "github"));
+    rig.host_reply(&id, HostMessage::SessionMcp {
+        servers: vec![SessionMcpServer { name: "github".into(), status: McpStatus::Disabled, error: None, tools: None }],
+        toggles: true,
+        project_wide: false,
+    });
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::SessionMcp(x)
+        if x.session_id == s && x.toggles && x.servers[0].status == McpStatus::Disabled)));
+
+    // An unknown session is answered at once.
+    rig.send(json!({"type":"session-mcp-request","sessionId":"nope"}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::SessionMcp { .. })));
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::SessionMcp(x) if x.session_id == "nope" && x.error.is_some())));
+}
+
 fn models_error(rig: &mut Rig) -> Option<String> {
     rig.messages().into_iter().find_map(|m| match m {
         BridgeToPhone::Models(x) => Some(x.error.unwrap_or_default()),

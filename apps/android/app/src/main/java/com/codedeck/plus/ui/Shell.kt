@@ -25,6 +25,7 @@ import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.screens.LogsScreen
 import com.codedeck.plus.ui.screens.MachineSettingsScreen
 import com.codedeck.plus.ui.screens.PairingScreen
+import com.codedeck.plus.ui.screens.McpScreen
 import com.codedeck.plus.ui.screens.PluginsScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
@@ -47,6 +48,7 @@ private sealed interface Screen {
     data class Machine(val machine: String) : Screen
     /** One agent's plugins on a machine, opened from the machine's page. */
     data class Plugins(val machine: String, val agent: String) : Screen
+    data class Mcp(val machine: String, val agent: String) : Screen
 }
 
 /** Saves [Screen] as a flat string list, so the open page survives rotation
@@ -62,6 +64,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             Screen.Pairing -> listOf("pairing")
             is Screen.Machine -> listOf("machine", screen.machine)
             is Screen.Plugins -> listOf("plugins", screen.machine, screen.agent)
+            is Screen.Mcp -> listOf("mcp", screen.machine, screen.agent)
         }
     },
     restore = { saved ->
@@ -73,6 +76,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "pairing" -> Screen.Pairing
             "machine" -> Screen.Machine(saved[1])
             "plugins" -> Screen.Plugins(saved[1], saved[2])
+            "mcp" -> Screen.Mcp(saved[1], saved[2])
             else -> Screen.Sessions
         }
     },
@@ -212,6 +216,7 @@ fun Shell(
                 screen = when (val current = screen) {
                     Screen.Logs -> Screen.Settings
                     is Screen.Plugins -> Screen.Machine(current.machine)
+                    is Screen.Mcp -> Screen.Machine(current.machine)
                     else -> Screen.Sessions
                 }
             }
@@ -230,8 +235,10 @@ fun Shell(
                 current.machine,
                 onBack = { screen = Screen.Sessions },
                 onOpenPlugins = { agent -> screen = Screen.Plugins(current.machine, agent) },
+                onOpenMcp = { agent -> screen = Screen.Mcp(current.machine, agent) },
             )
             is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { screen = Screen.Machine(current.machine) })
+            is Screen.Mcp -> McpScreen(core, current.machine, current.agent, onBack = { screen = Screen.Machine(current.machine) })
             Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
             Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
             is Screen.NewSession -> NewSessionScreen(

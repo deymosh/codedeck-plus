@@ -93,6 +93,8 @@ impl HostMessage {
                 | Self::Usage { .. }
                 | Self::Commands { .. }
                 | Self::Plugins { .. }
+                | Self::McpServers { .. }
+                | Self::SessionMcp { .. }
                 | Self::CredentialChecked { .. }
         )
     }

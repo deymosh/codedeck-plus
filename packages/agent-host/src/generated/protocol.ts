@@ -75,6 +75,12 @@ export type AgentSupports = {
 	 *  plugins and the marketplaces they come from, for the whole machine.
 	 */
 	plugins?: boolean,
+	/**
+	 *  `mcp-request` / `mcp-action` list and manage the agent's MCP servers
+	 *  for the whole machine; `session-mcp-request` / `session-mcp-toggle`
+	 *  show and switch them in one session.
+	 */
+	mcp?: boolean,
 };
 
 /**  A plugin one of the known marketplaces offers and that is not installed. */
@@ -167,6 +173,37 @@ export type BridgeMessage_Deserialize =
 	action: PluginAction,
 	target: string,
 } } | 
+/**  The agent's MCP servers on this machine. Reply: `mcp-servers`. */
+{ kind: "list-mcp"; payload: {
+	agent: string,
+} } | 
+/**
+ *  Change the agent's MCP servers: `add` takes `servers`, the other
+ *  actions `names`. Running sessions pick the change up. Reply:
+ *  `mcp-servers` once done, or `error` saying why it was not.
+ */
+{ kind: "mcp-action"; payload: {
+	agent: string,
+	action: McpAction,
+	servers?: McpServerAdd[],
+	names?: string[],
+} } | 
+/**
+ *  A running session's MCP servers and where each stands. Reply:
+ *  `session-mcp`.
+ */
+{ kind: "session-mcp"; payload: {
+	sessionId: string,
+} } | 
+/**
+ *  Switch one MCP server on or off in a running session. Reply:
+ *  `session-mcp` once done, or `error`.
+ */
+{ kind: "session-mcp-toggle"; payload: {
+	sessionId: string,
+	name: string,
+	enabled: boolean,
+} } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
 { kind: "check-credential"; payload: {
 	agent: string,
@@ -241,6 +278,37 @@ export type BridgeMessage_Serialize =
 	agent: string,
 	action: PluginAction,
 	target: string,
+} } | 
+/**  The agent's MCP servers on this machine. Reply: `mcp-servers`. */
+{ kind: "list-mcp"; payload: {
+	agent: string,
+} } | 
+/**
+ *  Change the agent's MCP servers: `add` takes `servers`, the other
+ *  actions `names`. Running sessions pick the change up. Reply:
+ *  `mcp-servers` once done, or `error` saying why it was not.
+ */
+{ kind: "mcp-action"; payload: {
+	agent: string,
+	action: McpAction,
+	servers?: McpServerAdd[],
+	names?: string[],
+} } | 
+/**
+ *  A running session's MCP servers and where each stands. Reply:
+ *  `session-mcp`.
+ */
+{ kind: "session-mcp"; payload: {
+	sessionId: string,
+} } | 
+/**
+ *  Switch one MCP server on or off in a running session. Reply:
+ *  `session-mcp` once done, or `error`.
+ */
+{ kind: "session-mcp-toggle"; payload: {
+	sessionId: string,
+	name: string,
+	enabled: boolean,
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
 { kind: "check-credential"; payload: {
@@ -454,6 +522,23 @@ export type HostMessage_Deserialize =
 	toggles?: boolean,
 	available?: AvailablePlugin_Deserialize[] | null,
 } } | 
+/**
+ *  Reply to `list-mcp` and `mcp-action` (the fields mean what they mean
+ *  on the phone wire's `mcp-servers`; no value of a secret is in them).
+ */
+{ kind: "mcp-servers"; payload: {
+	servers: McpServerInfo_Deserialize[],
+	toggles?: boolean,
+} } | 
+/**
+ *  Reply to `session-mcp` and `session-mcp-toggle` (as the phone wire's
+ *  `session-mcp`).
+ */
+{ kind: "session-mcp"; payload: {
+	servers: SessionMcpServer_Deserialize[],
+	toggles?: boolean,
+	projectWide?: boolean,
+} } | 
 /**  Reply to `check-credential`; absent `valid` = it could not be checked. */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
@@ -504,6 +589,23 @@ export type HostMessage_Serialize =
 	toggles?: boolean,
 	available?: AvailablePlugin_Serialize[] | null,
 } } | 
+/**
+ *  Reply to `list-mcp` and `mcp-action` (the fields mean what they mean
+ *  on the phone wire's `mcp-servers`; no value of a secret is in them).
+ */
+{ kind: "mcp-servers"; payload: {
+	servers: McpServerInfo_Serialize[],
+	toggles?: boolean,
+} } | 
+/**
+ *  Reply to `session-mcp` and `session-mcp-toggle` (as the phone wire's
+ *  `session-mcp`).
+ */
+{ kind: "session-mcp"; payload: {
+	servers: SessionMcpServer_Serialize[],
+	toggles?: boolean,
+	projectWide?: boolean,
+} } | 
 /**  Reply to `check-credential`; absent `valid` = it could not be checked. */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
@@ -546,6 +648,78 @@ export type InstalledPlugin_Serialize = {
 	/**  A disabled plugin stays installed but no session loads it. */
 	enabled: boolean,
 };
+
+/**
+ *  A change to an agent's MCP servers. `add` takes `servers` (a server with
+ *  the name of an existing one replaces it); the others take `names`.
+ */
+export type McpAction = "add" | "remove" | "enable" | "disable";
+
+/**  An MCP server to add (or replace, by name). */
+export type McpServerAdd = {
+	name: string,
+	setup: McpServerSetup,
+};
+
+/**
+ *  An MCP server configured for an agent on the bridge's machine, as the
+ *  bridge reports it: enough to recognise it, never its secrets. `target` is
+ *  the program a stdio server runs (without its arguments, which may carry a
+ *  token) or a remote server's URL without its query, fragment or user info;
+ *  `env_keys` / `header_keys` name what is set, not the values.
+ */
+export type McpServerInfo = McpServerInfo_Serialize | McpServerInfo_Deserialize;
+
+/**
+ *  An MCP server configured for an agent on the bridge's machine, as the
+ *  bridge reports it: enough to recognise it, never its secrets. `target` is
+ *  the program a stdio server runs (without its arguments, which may carry a
+ *  token) or a remote server's URL without its query, fragment or user info;
+ *  `env_keys` / `header_keys` name what is set, not the values.
+ */
+export type McpServerInfo_Deserialize = {
+	name: string,
+	transport: McpTransportKind,
+	target: string,
+	envKeys?: string[],
+	headerKeys?: string[],
+	/**  A disabled server stays configured but no session starts it. */
+	enabled: boolean,
+};
+
+/**
+ *  An MCP server configured for an agent on the bridge's machine, as the
+ *  bridge reports it: enough to recognise it, never its secrets. `target` is
+ *  the program a stdio server runs (without its arguments, which may carry a
+ *  token) or a remote server's URL without its query, fragment or user info;
+ *  `env_keys` / `header_keys` name what is set, not the values.
+ */
+export type McpServerInfo_Serialize = {
+	name: string,
+	transport: McpTransportKind,
+	target: string,
+	envKeys?: string[],
+	headerKeys?: string[],
+	/**  A disabled server stays configured but no session starts it. */
+	enabled: boolean,
+};
+
+/**
+ *  How the agent reaches an MCP server being added: the phone's
+ *  `McpTransport` with every value that may hold a credential — arguments,
+ *  env values, header values — as a [`Secret`].
+ */
+export type McpServerSetup = { type: "stdio"; command: string; args?: Secret[]; env?: { [key in string]: Secret } } | { type: "http"; url: Secret; headers?: { [key in string]: Secret } } | { type: "sse"; url: Secret; headers?: { [key in string]: Secret } };
+
+/**  Where one MCP server stands in a running session. */
+export type McpStatus = "connected" | 
+/**  Starting or connecting. */
+"pending" | "failed" | 
+/**  The server wants an OAuth sign-in, done on the machine itself. */
+"needs-auth" | "disabled";
+
+/**  Which [`McpTransport`] a server uses. */
+export type McpTransportKind = "stdio" | "http" | "sse";
 
 export type ModelEntry = ModelEntry_Serialize | ModelEntry_Deserialize;
 
@@ -869,6 +1043,27 @@ contextPercentage?: number | null }) & { entries?: never; error?: never; resumeL
  *  it is impossible; a new start must be fresh.
  */
 resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never };
+
+/**  One MCP server of a running session. */
+export type SessionMcpServer = SessionMcpServer_Serialize | SessionMcpServer_Deserialize;
+
+/**  One MCP server of a running session. */
+export type SessionMcpServer_Deserialize = {
+	name: string,
+	status: McpStatus,
+	error?: string | null,
+	/**  How many tools it offers, once connected and when the agent says. */
+	tools?: number | null,
+};
+
+/**  One MCP server of a running session. */
+export type SessionMcpServer_Serialize = {
+	name: string,
+	status: McpStatus,
+	error?: string | null,
+	/**  How many tools it offers, once connected and when the agent says. */
+	tools?: number | null,
+};
 
 /**
  *  The per-session options `set-option` changes and `option-confirmed`

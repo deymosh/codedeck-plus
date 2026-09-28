@@ -71,6 +71,13 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"10","kind":"list-commands","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"11","kind":"list-plugins","payload":{"agent":"claude-code","available":true}}));
         bridge_rt(json!({"v":1,"id":"12","kind":"plugin-action","payload":{"agent":"claude-code","action":"remove-marketplace","target":"m"}}));
+        bridge_rt(json!({"v":1,"id":"13","kind":"list-mcp","payload":{"agent":"claude-code"}}));
+        bridge_rt(json!({"v":1,"id":"14","kind":"mcp-action","payload":{"agent":"claude-code","action":"add","servers":[
+            {"name":"gh","setup":{"type":"http","url":"https://x/mcp","headers":{"Authorization":"Bearer t"}}},
+            {"name":"fs","setup":{"type":"stdio","command":"npx","args":["srv"],"env":{"K":"v"}}}]}}));
+        bridge_rt(json!({"v":1,"id":"15","kind":"mcp-action","payload":{"agent":"opencode","action":"remove","names":["gh"]}}));
+        bridge_rt(json!({"v":1,"id":"16","kind":"session-mcp","payload":{"sessionId":"s"}}));
+        bridge_rt(json!({"v":1,"id":"17","kind":"session-mcp-toggle","payload":{"sessionId":"s","name":"gh","enabled":false}}));
         bridge_rt(json!({"v":1,"id":"10","kind":"check-credential","payload":{"agent":"claude-code","credential":"anthropic_api_key","value":"sk"}}));
         bridge_rt(json!({"v":1,"id":"h1","kind":"permission-outcome","payload":{"outcome":"selected","optionId":"allow"}}));
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
@@ -82,11 +89,11 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true},
+            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true,"mcp":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}]
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true,"commands":false,"plugins":false},
+            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true,"commands":false,"plugins":false,"mcp":false},
             "credentials":[],"unavailableReason":"opencode is not installed"
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
@@ -95,6 +102,8 @@ mod tests {
         host_rt(json!({"v":1,"id":"5","kind":"usage","payload":{}}));
         host_rt(json!({"v":1,"id":"7","kind":"commands","payload":{"commands":[{"name":"compact","argumentHint":"<focus>"}]}}));
         host_rt(json!({"v":1,"id":"8","kind":"plugins","payload":{"installed":[{"id":"c@m","name":"c","enabled":true}],"marketplaces":[{"name":"m","source":"o/r"}],"toggles":true}}));
+        host_rt(json!({"v":1,"id":"9","kind":"mcp-servers","payload":{"servers":[{"name":"gh","transport":"http","target":"https://x/mcp","headerKeys":["Authorization"],"enabled":true}],"toggles":true}}));
+        host_rt(json!({"v":1,"id":"10","kind":"session-mcp","payload":{"servers":[{"name":"gh","status":"needs-auth"}],"toggles":true,"projectWide":true}}));
         host_rt(json!({"v":1,"id":"6","kind":"usage","payload":{"usage":{"available":true,"windows":[{"label":"5h","utilization":12.5,"resetsAt":null}],"fetchedAt":"t"}}}));
         host_rt(json!({"v":1,"id":"7","kind":"credential-checked","payload":{"valid":false}}));
         host_rt(json!({"v":1,"id":"8","kind":"credential-checked","payload":{}}));

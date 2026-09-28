@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 
 use protocol::common::{
-    AgentSupports, AvailablePlugin, InstalledPlugin, OptionChoice, OutputEntry, PermissionOption,
-    PluginAction, PluginMarketplace, ProviderModel, QuestionOption, SessionOption, Subagent, ToolKind,
-    UsageData,
+    AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
+    OptionChoice, OutputEntry, PermissionOption, PluginAction, PluginMarketplace, ProviderModel,
+    QuestionOption, SessionMcpServer, SessionOption, Subagent, ToolKind, UsageData,
 };
 use protocol::events::{ModelEntry, SlashCommand};
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,56 @@ pub struct AgentInfo {
     /// missing binary); the bridge refuses sessions with this reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+}
+
+// --- MCP servers ---
+
+/// How the agent reaches an MCP server being added: the phone's
+/// `McpTransport` with every value that may hold a credential — arguments,
+/// env values, header values — as a [`Secret`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpServerSetup {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<Secret>,
+        #[serde(default)]
+        env: BTreeMap<String, Secret>,
+    },
+    Http {
+        url: Secret,
+        #[serde(default)]
+        headers: BTreeMap<String, Secret>,
+    },
+    Sse {
+        url: Secret,
+        #[serde(default)]
+        headers: BTreeMap<String, Secret>,
+    },
+}
+
+/// An MCP server to add (or replace, by name).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct McpServerAdd {
+    pub name: String,
+    pub setup: McpServerSetup,
+}
+
+impl From<McpServerSpec> for McpServerAdd {
+    fn from(spec: McpServerSpec) -> Self {
+        let secrets = |m: BTreeMap<String, String>| m.into_iter().map(|(k, v)| (k, Secret::new(v))).collect();
+        let setup = match spec.transport {
+            McpTransport::Stdio { command, args, env } => McpServerSetup::Stdio {
+                command,
+                args: args.into_iter().map(Secret::new).collect(),
+                env: secrets(env),
+            },
+            McpTransport::Http { url, headers } => McpServerSetup::Http { url: Secret::new(url), headers: secrets(headers) },
+            McpTransport::Sse { url, headers } => McpServerSetup::Sse { url: Secret::new(url), headers: secrets(headers) },
+        };
+        Self { name: spec.name, setup }
+    }
 }
 
 // --- starting a session ---
@@ -270,6 +320,29 @@ pub enum BridgeMessage {
         action: PluginAction,
         target: String,
     },
+    /// The agent's MCP servers on this machine. Reply: `mcp-servers`.
+    ListMcp { agent: String },
+    /// Change the agent's MCP servers: `add` takes `servers`, the other
+    /// actions `names`. Running sessions pick the change up. Reply:
+    /// `mcp-servers` once done, or `error` saying why it was not.
+    McpAction {
+        agent: String,
+        action: McpAction,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        servers: Vec<McpServerAdd>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        names: Vec<String>,
+    },
+    /// A running session's MCP servers and where each stands. Reply:
+    /// `session-mcp`.
+    SessionMcp { session_id: String },
+    /// Switch one MCP server on or off in a running session. Reply:
+    /// `session-mcp` once done, or `error`.
+    SessionMcpToggle {
+        session_id: String,
+        name: String,
+        enabled: bool,
+    },
     /// Check a credential value with its provider. Reply: `credential-checked`.
     CheckCredential {
         agent: String,
@@ -319,6 +392,22 @@ pub enum HostMessage {
         toggles: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         available: Option<Vec<AvailablePlugin>>,
+    },
+    /// Reply to `list-mcp` and `mcp-action` (the fields mean what they mean
+    /// on the phone wire's `mcp-servers`; no value of a secret is in them).
+    McpServers {
+        servers: Vec<McpServerInfo>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        toggles: bool,
+    },
+    /// Reply to `session-mcp` and `session-mcp-toggle` (as the phone wire's
+    /// `session-mcp`).
+    SessionMcp {
+        servers: Vec<SessionMcpServer>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        toggles: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        project_wide: bool,
     },
     /// Reply to `check-credential`; absent `valid` = it could not be checked.
     CredentialChecked {

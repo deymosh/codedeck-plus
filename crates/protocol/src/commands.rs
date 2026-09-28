@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{CredentialValues, PluginAction, ProviderModel, SessionOption};
+use super::common::{CredentialValues, McpAction, McpServerSpec, PluginAction, ProviderModel, SessionOption};
 use super::tristate::Tristate;
 use crate::ranges::SeqRange;
 
@@ -172,6 +172,43 @@ pub struct PluginActionMsg {
     pub agent: String,
     pub action: PluginAction,
     pub target: String,
+}
+
+/// Ask for an agent's MCP servers (agents with `supports.mcp`). Reply:
+/// `mcp-servers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct McpRequestMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub agent: String,
+}
+
+/// Change an agent's MCP servers. Reply: `mcp-ack`, then the new
+/// `mcp-servers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct McpActionMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub agent: String,
+    pub action: McpAction,
+    /// What `add` adds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<McpServerSpec>,
+    /// What `remove`, `enable` and `disable` act on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
+
+/// Switch one MCP server on or off in one running session. Reply: the
+/// session's new `session-mcp`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMcpToggleMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub session_id: String,
+    pub name: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -357,6 +394,12 @@ pub enum PhoneToBridge {
     CommandsRequest(SessionIdMsg),
     PluginsRequest(PluginsRequestMsg),
     PluginAction(PluginActionMsg),
+    McpRequest(McpRequestMsg),
+    McpAction(McpActionMsg),
+    /// A running session's MCP servers and where each stands. Reply:
+    /// `session-mcp`.
+    SessionMcpRequest(SessionIdMsg),
+    SessionMcpToggle(SessionMcpToggleMsg),
     SetCredentials(SetCredentialsMsg),
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
@@ -416,6 +459,14 @@ mod tests {
         rt(&json!({"type":"plugins-request","agent":"claude-code"}));
         rt(&json!({"type":"plugins-request","agent":"claude-code","available":true}));
         rt(&json!({"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));
+        rt(&json!({"type":"mcp-request","agent":"claude-code"}));
+        rt(&json!({"type":"mcp-action","agent":"claude-code","action":"add","servers":[
+            {"name":"github","transport":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer t"}}},
+            {"name":"fs","transport":{"type":"stdio","command":"npx","args":["-y","server-fs","/w"],"env":{"K":"v"}}},
+            {"name":"old","transport":{"type":"sse","url":"https://x/sse"}}]}));
+        rt(&json!({"type":"mcp-action","agent":"opencode","action":"disable","names":["github"]}));
+        rt(&json!({"type":"session-mcp-request","sessionId":"s"}));
+        rt(&json!({"type":"session-mcp-toggle","sessionId":"s","name":"github","enabled":false}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"type":"provider-profiles-request"}));

@@ -30,7 +30,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
-use client_runtime::client_core::stores::machines::AgentPlugins;
+use client_runtime::client_core::stores::machines::{AgentMcp, AgentPlugins, SessionMcp};
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
 };
@@ -90,6 +90,52 @@ pub struct UniffiSessionSummary {
     /// Slash commands — requested via `UniffiIntent::RequestCommands`,
     /// absent until the bridge answers.
     pub commands: Option<UniffiSessionCommands>,
+    /// MCP servers — requested via `UniffiIntent::RequestSessionMcp`,
+    /// absent until the bridge answers.
+    pub mcp: Option<UniffiSessionMcp>,
+}
+
+/// One MCP server of a running session. `status` is the wire's word:
+/// `connected`, `pending`, `failed`, `needs-auth` or `disabled`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiSessionMcpServer {
+    pub name: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub tools: Option<u32>,
+}
+
+/// A running session's MCP servers.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiSessionMcp {
+    pub servers: Vec<UniffiSessionMcpServer>,
+    /// A server can be switched in this session.
+    pub toggles: bool,
+    /// A switch applies to every session of the agent in the same project.
+    pub project_wide: bool,
+    /// Why the last request got no answer (the servers held are kept).
+    pub error: Option<String>,
+    /// Servers switched and not answered yet.
+    pub busy: Vec<String>,
+}
+
+fn to_uniffi_session_mcp(m: &SessionMcp) -> UniffiSessionMcp {
+    UniffiSessionMcp {
+        servers: m
+            .servers
+            .iter()
+            .map(|s| UniffiSessionMcpServer {
+                name: s.name.clone(),
+                status: wire_str(&s.status),
+                error: s.error.clone(),
+                tools: s.tools,
+            })
+            .collect(),
+        toggles: m.toggles,
+        project_wide: m.project_wide,
+        error: m.error.clone(),
+        busy: m.busy.clone(),
+    }
 }
 
 /// One slash command a session understands; typed as `/name` then its
@@ -332,6 +378,7 @@ pub struct UniffiAgent {
     pub supports_interrupt: bool,
     pub supports_commands: bool,
     pub supports_plugins: bool,
+    pub supports_mcp: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
 }
 
@@ -378,6 +425,7 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         supports_interrupt: a.supports.interrupt,
         supports_commands: a.supports.commands,
         supports_plugins: a.supports.plugins,
+        supports_mcp: a.supports.mcp,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
     }
 }
@@ -401,6 +449,8 @@ pub struct UniffiMachineSummary {
     pub provider_profiles: Vec<UniffiProviderProfileInfo>,
     /// Plugins, one entry per agent that has answered `RequestPlugins`.
     pub plugins: Vec<UniffiAgentPlugins>,
+    /// MCP servers, one entry per agent that has answered `RequestMcp`.
+    pub mcp: Vec<UniffiAgentMcp>,
     /// The direct endpoints the bridge advertises, in its order.
     pub direct_advertised: Vec<String>,
     /// Whether the bridge advertised a certificate pin (without one no
@@ -523,6 +573,69 @@ fn to_uniffi_agent_plugins(agent: &str, p: &AgentPlugins) -> UniffiAgentPlugins 
     }
 }
 
+/// An MCP server configured for an agent on a machine — never its secrets:
+/// `target` is a stdio server's program or a remote one's URL without its
+/// query or user info, and env variables and headers are named only.
+/// `transport` is `stdio`, `http` or `sse`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiMcpServer {
+    pub name: String,
+    pub transport: String,
+    pub target: String,
+    pub env_keys: Vec<String>,
+    pub header_keys: Vec<String>,
+    pub enabled: bool,
+}
+
+/// The last MCP change that failed: its action's wire name, the servers it
+/// named, and why.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiMcpFailure {
+    pub action: String,
+    pub names: Vec<String>,
+    pub error: String,
+}
+
+/// One agent's MCP servers on a machine.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentMcp {
+    pub agent: String,
+    pub servers: Vec<UniffiMcpServer>,
+    /// A server can be switched off without removing it.
+    pub toggles: bool,
+    /// Why the last list could not be read (the list held is kept).
+    pub error: Option<String>,
+    /// Names of servers changed and not acknowledged yet.
+    pub busy: Vec<String>,
+    pub failure: Option<UniffiMcpFailure>,
+}
+
+fn to_uniffi_agent_mcp(agent: &str, a: &AgentMcp) -> UniffiAgentMcp {
+    UniffiAgentMcp {
+        agent: agent.to_string(),
+        servers: a
+            .servers
+            .iter()
+            .map(|s| UniffiMcpServer {
+                name: s.name.clone(),
+                transport: wire_str(&s.transport),
+                target: s.target.clone(),
+                env_keys: s.env_keys.clone(),
+                header_keys: s.header_keys.clone(),
+                enabled: s.enabled,
+            })
+            .collect(),
+        toggles: a.toggles,
+        error: a.error.clone(),
+        busy: a.busy.clone(),
+        failure: a.failure.as_ref().map(|f| UniffiMcpFailure {
+            action: wire_str(&f.action),
+            names: f.names.clone(),
+            error: f.error.clone(),
+        }),
+    }
+}
+
 /// The mode / effort / model one agent's new sessions on a machine start
 /// with: agent ids, `""` = the agent's own default.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -583,6 +696,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                                     .collect(),
                                 error: c.error.clone(),
                             }),
+                            mcp: s.mcp.as_ref().map(to_uniffi_session_mcp),
                         }
                     })
                     .collect(),
@@ -620,6 +734,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                     })
                     .collect(),
                 plugins: m.plugins.iter().map(|(agent, p)| to_uniffi_agent_plugins(agent, p)).collect(),
+                mcp: m.mcp.iter().map(|(agent, a)| to_uniffi_agent_mcp(agent, a)).collect(),
                 direct_advertised: m.direct.as_ref().map(|d| d.endpoints.clone()).unwrap_or_default(),
                 direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
                 direct_endpoints: m.direct_endpoints.clone(),

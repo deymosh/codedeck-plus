@@ -17,12 +17,13 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, ModelsRequestMsg, PermissionResponseMsg,
+    BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
-    QuestionResponseMsg, SessionIdMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
+    QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     VersionFields,
 };
-use protocol::common::{CredentialValues, PluginAction, SessionOption};
+use protocol::common::{CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
+use protocol::events::McpAckMsg;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
@@ -303,6 +304,35 @@ pub enum Intent {
         agent: String,
         action: PluginAction,
         target: String,
+    },
+    /// Ask for an agent's MCP servers on a machine.
+    RequestMcp {
+        machine: String,
+        agent: String,
+    },
+    /// Change an agent's MCP servers: `Add` takes `servers` (checked here
+    /// with the protocol's rules; one that fails refuses the change without
+    /// sending it), the others `names`. What it names is busy until the
+    /// bridge acknowledges it. Env and header values are secrets: never
+    /// logged.
+    McpAction {
+        machine: String,
+        agent: String,
+        action: McpAction,
+        servers: Vec<McpServerSpec>,
+        names: Vec<String>,
+    },
+    /// Ask for a running session's MCP servers.
+    RequestSessionMcp {
+        machine: String,
+        session_id: String,
+    },
+    /// Switch one MCP server on or off in a running session.
+    ToggleSessionMcp {
+        machine: String,
+        session_id: String,
+        name: String,
+        enabled: bool,
     },
     /// Store credentials on the bridge host (CDX-011) for `agent`, or for the
     /// bridge itself when `None`: a string sets an id, `null` clears it, an
@@ -685,6 +715,36 @@ pub fn apply(
                 r.send(&machine, PhoneToBridge::PluginAction(PluginActionMsg { version: v(), agent, action, target }));
             }
         }
+        Intent::RequestMcp { machine, agent } => {
+            r.send(&machine, PhoneToBridge::McpRequest(McpRequestMsg { version: v(), agent }))
+        }
+        Intent::McpAction { machine, agent, action, servers, names } => {
+            let names = match action {
+                McpAction::Add => servers.iter().map(|s| s.name.clone()).collect(),
+                _ => names,
+            };
+            let refused = servers.iter().find_map(|s| s.problem());
+            if let Some(error) = refused {
+                let ack = McpAckMsg { agent, action, names, success: false, error: Some(error) };
+                stores.machines.apply_mcp_ack(&machine, &ack);
+            } else if !names.is_empty() {
+                stores.machines.mcp_action_sent(&machine, &agent, &names);
+                r.send(&machine, PhoneToBridge::McpAction(McpActionMsg { version: v(), agent, action, servers, names }));
+            }
+            r.persist(StoreId::Machines);
+        }
+        Intent::RequestSessionMcp { machine, session_id } => r.send(
+            &machine,
+            PhoneToBridge::SessionMcpRequest(SessionIdMsg { version: v(), session_id }),
+        ),
+        Intent::ToggleSessionMcp { machine, session_id, name, enabled } => {
+            stores.machines.session_mcp_toggle_sent(&machine, &session_id, &name);
+            r.persist(StoreId::Machines);
+            r.send(
+                &machine,
+                PhoneToBridge::SessionMcpToggle(SessionMcpToggleMsg { version: v(), session_id, name, enabled }),
+            );
+        }
         Intent::RequestGsd {
             machine,
             session_id,
@@ -995,6 +1055,32 @@ mod tests {
         );
         assert!(out.outbox_send.is_some());
         assert_eq!(s.outbox.items["in-1"].attempts, 2);
+    }
+
+    #[tokio::test]
+    async fn an_mcp_add_is_checked_before_it_is_sent() {
+        use protocol::common::McpTransport;
+        let (mut s, kp) = stores().await;
+        s.machines.register_machine("m", "laptop", None, None, &[]);
+        let add = |url: &str| Intent::McpAction {
+            machine: "m".into(),
+            agent: "claude-code".into(),
+            action: McpAction::Add,
+            servers: vec![McpServerSpec {
+                name: "gh".into(),
+                transport: McpTransport::Http { url: url.into(), headers: Default::default() },
+            }],
+            names: vec![],
+        };
+
+        let out = apply(&mut s, add("ftp://x"), &kp, ctx());
+        assert!(out.sends.is_empty(), "a bad server never leaves the phone");
+        let held = s.machines.machine("m").unwrap().mcp["claude-code"].clone();
+        assert!(held.busy.is_empty() && held.failure.is_some_and(|f| f.names == ["gh"]));
+
+        let out = apply(&mut s, add("https://x/mcp"), &kp, ctx());
+        assert!(matches!(&out.sends[..], [Send { msg: PhoneToBridge::McpAction(m), .. }] if m.names == ["gh"]));
+        assert_eq!(s.machines.machine("m").unwrap().mcp["claude-code"].busy, ["gh"]);
     }
 
     #[tokio::test]

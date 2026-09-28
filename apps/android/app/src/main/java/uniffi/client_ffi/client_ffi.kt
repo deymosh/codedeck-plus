@@ -859,6 +859,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_client_ffi_checksum_func_provider_base_url_error(
     ): Int
+    external fun uniffi_client_ffi_checksum_func_mcp_import(
+    ): Int
+    external fun uniffi_client_ffi_checksum_func_mcp_server_problem(
+    ): Int
     external fun uniffi_client_ffi_checksum_func_local_identity_signer(
     ): Int
     external fun uniffi_client_ffi_checksum_func_npub_of(
@@ -1065,6 +1069,10 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_client_ffi_fn_func_provider_base_url_error(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_client_ffi_fn_func_mcp_import(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_client_ffi_fn_func_mcp_server_problem(`spec`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_client_ffi_fn_func_local_identity_signer(`secretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_client_ffi_fn_func_npub_of(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1205,6 +1213,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_client_ffi_checksum_func_provider_base_url_error() and 0xFFFF) != 46212) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_client_ffi_checksum_func_mcp_import() and 0xFFFF) != 46770) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_client_ffi_checksum_func_mcp_server_problem() and 0xFFFF) != 49861) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_client_ffi_checksum_func_local_identity_signer() and 0xFFFF) != 9956) {
@@ -4445,6 +4459,8 @@ data class UniffiAgent (
     , 
     var `supportsPlugins`: kotlin.Boolean
     , 
+    var `supportsMcp`: kotlin.Boolean
+    , 
     var `credentials`: List<UniffiCredentialStatus>
     
 ){
@@ -4475,6 +4491,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeUniffiCredentialStatus.read(buf),
         )
     }
@@ -4493,6 +4510,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.allocationSize(value.`supportsInterrupt`) +
             FfiConverterBoolean.allocationSize(value.`supportsCommands`) +
             FfiConverterBoolean.allocationSize(value.`supportsPlugins`) +
+            FfiConverterBoolean.allocationSize(value.`supportsMcp`) +
             FfiConverterSequenceTypeUniffiCredentialStatus.allocationSize(value.`credentials`)
     )
 
@@ -4510,6 +4528,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.write(value.`supportsInterrupt`, buf)
             FfiConverterBoolean.write(value.`supportsCommands`, buf)
             FfiConverterBoolean.write(value.`supportsPlugins`, buf)
+            FfiConverterBoolean.write(value.`supportsMcp`, buf)
             FfiConverterSequenceTypeUniffiCredentialStatus.write(value.`credentials`, buf)
     }
 }
@@ -4563,6 +4582,76 @@ public object FfiConverterTypeUniffiAgentDefaults: FfiConverterRustBuffer<Uniffi
             FfiConverterString.write(value.`mode`, buf)
             FfiConverterString.write(value.`effort`, buf)
             FfiConverterString.write(value.`model`, buf)
+    }
+}
+
+
+
+/**
+ * One agent's MCP servers on a machine.
+ */
+data class UniffiAgentMcp (
+    var `agent`: kotlin.String
+    , 
+    var `servers`: List<UniffiMcpServer>
+    , 
+    /**
+     * A server can be switched off without removing it.
+     */
+    var `toggles`: kotlin.Boolean
+    , 
+    /**
+     * Why the last list could not be read (the list held is kept).
+     */
+    var `error`: kotlin.String?
+    , 
+    /**
+     * Names of servers changed and not acknowledged yet.
+     */
+    var `busy`: List<kotlin.String>
+    , 
+    var `failure`: UniffiMcpFailure?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiAgentMcp: FfiConverterRustBuffer<UniffiAgentMcp> {
+    override fun read(buf: ByteBuffer): UniffiAgentMcp {
+        return UniffiAgentMcp(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeUniffiMcpServer.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalTypeUniffiMcpFailure.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiAgentMcp) = (
+            FfiConverterString.allocationSize(value.`agent`) +
+            FfiConverterSequenceTypeUniffiMcpServer.allocationSize(value.`servers`) +
+            FfiConverterBoolean.allocationSize(value.`toggles`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterSequenceString.allocationSize(value.`busy`) +
+            FfiConverterOptionalTypeUniffiMcpFailure.allocationSize(value.`failure`)
+    )
+
+    override fun write(value: UniffiAgentMcp, buf: ByteBuffer) {
+            FfiConverterString.write(value.`agent`, buf)
+            FfiConverterSequenceTypeUniffiMcpServer.write(value.`servers`, buf)
+            FfiConverterBoolean.write(value.`toggles`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterSequenceString.write(value.`busy`, buf)
+            FfiConverterOptionalTypeUniffiMcpFailure.write(value.`failure`, buf)
     }
 }
 
@@ -5473,6 +5562,11 @@ data class UniffiMachineSummary (
     var `plugins`: List<UniffiAgentPlugins>
     , 
     /**
+     * MCP servers, one entry per agent that has answered `RequestMcp`.
+     */
+    var `mcp`: List<UniffiAgentMcp>
+    , 
+    /**
      * The direct endpoints the bridge advertises, in its order.
      */
     var `directAdvertised`: List<kotlin.String>
@@ -5551,6 +5645,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgentModels.read(buf),
             FfiConverterSequenceTypeUniffiProviderProfileInfo.read(buf),
             FfiConverterSequenceTypeUniffiAgentPlugins.read(buf),
+            FfiConverterSequenceTypeUniffiAgentMcp.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceString.read(buf),
@@ -5577,6 +5672,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgentModels.allocationSize(value.`models`) +
             FfiConverterSequenceTypeUniffiProviderProfileInfo.allocationSize(value.`providerProfiles`) +
             FfiConverterSequenceTypeUniffiAgentPlugins.allocationSize(value.`plugins`) +
+            FfiConverterSequenceTypeUniffiAgentMcp.allocationSize(value.`mcp`) +
             FfiConverterSequenceString.allocationSize(value.`directAdvertised`) +
             FfiConverterBoolean.allocationSize(value.`directPinned`) +
             FfiConverterSequenceString.allocationSize(value.`directEndpoints`) +
@@ -5602,6 +5698,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgentModels.write(value.`models`, buf)
             FfiConverterSequenceTypeUniffiProviderProfileInfo.write(value.`providerProfiles`, buf)
             FfiConverterSequenceTypeUniffiAgentPlugins.write(value.`plugins`, buf)
+            FfiConverterSequenceTypeUniffiAgentMcp.write(value.`mcp`, buf)
             FfiConverterSequenceString.write(value.`directAdvertised`, buf)
             FfiConverterBoolean.write(value.`directPinned`, buf)
             FfiConverterSequenceString.write(value.`directEndpoints`, buf)
@@ -5645,6 +5742,273 @@ public object FfiConverterTypeUniffiMachinesView: FfiConverterRustBuffer<UniffiM
 
     override fun write(value: UniffiMachinesView, buf: ByteBuffer) {
             FfiConverterSequenceTypeUniffiMachineSummary.write(value.`machines`, buf)
+    }
+}
+
+
+
+/**
+ * The last MCP change that failed: its action's wire name, the servers it
+ * named, and why.
+ */
+data class UniffiMcpFailure (
+    var `action`: kotlin.String
+    , 
+    var `names`: List<kotlin.String>
+    , 
+    var `error`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMcpFailure: FfiConverterRustBuffer<UniffiMcpFailure> {
+    override fun read(buf: ByteBuffer): UniffiMcpFailure {
+        return UniffiMcpFailure(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMcpFailure) = (
+            FfiConverterString.allocationSize(value.`action`) +
+            FfiConverterSequenceString.allocationSize(value.`names`) +
+            FfiConverterString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: UniffiMcpFailure, buf: ByteBuffer) {
+            FfiConverterString.write(value.`action`, buf)
+            FfiConverterSequenceString.write(value.`names`, buf)
+            FfiConverterString.write(value.`error`, buf)
+    }
+}
+
+
+
+/**
+ * What pasted JSON holds: the servers that can be added and the entries
+ * that cannot; `error` when it is not a server list at all.
+ */
+data class UniffiMcpImport (
+    var `servers`: List<UniffiMcpServerSpec>
+    , 
+    var `problems`: List<UniffiMcpImportProblem>
+    , 
+    var `error`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMcpImport: FfiConverterRustBuffer<UniffiMcpImport> {
+    override fun read(buf: ByteBuffer): UniffiMcpImport {
+        return UniffiMcpImport(
+            FfiConverterSequenceTypeUniffiMcpServerSpec.read(buf),
+            FfiConverterSequenceTypeUniffiMcpImportProblem.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMcpImport) = (
+            FfiConverterSequenceTypeUniffiMcpServerSpec.allocationSize(value.`servers`) +
+            FfiConverterSequenceTypeUniffiMcpImportProblem.allocationSize(value.`problems`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
+    )
+
+    override fun write(value: UniffiMcpImport, buf: ByteBuffer) {
+            FfiConverterSequenceTypeUniffiMcpServerSpec.write(value.`servers`, buf)
+            FfiConverterSequenceTypeUniffiMcpImportProblem.write(value.`problems`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+    }
+}
+
+
+
+/**
+ * One entry of an import that cannot be added, and why.
+ */
+data class UniffiMcpImportProblem (
+    var `name`: kotlin.String
+    , 
+    var `reason`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMcpImportProblem: FfiConverterRustBuffer<UniffiMcpImportProblem> {
+    override fun read(buf: ByteBuffer): UniffiMcpImportProblem {
+        return UniffiMcpImportProblem(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMcpImportProblem) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`reason`)
+    )
+
+    override fun write(value: UniffiMcpImportProblem, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`reason`, buf)
+    }
+}
+
+
+
+/**
+ * An MCP server configured for an agent on a machine — never its secrets:
+ * `target` is a stdio server's program or a remote one's URL without its
+ * query or user info, and env variables and headers are named only.
+ * `transport` is `stdio`, `http` or `sse`.
+ */
+data class UniffiMcpServer (
+    var `name`: kotlin.String
+    , 
+    var `transport`: kotlin.String
+    , 
+    var `target`: kotlin.String
+    , 
+    var `envKeys`: List<kotlin.String>
+    , 
+    var `headerKeys`: List<kotlin.String>
+    , 
+    var `enabled`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMcpServer: FfiConverterRustBuffer<UniffiMcpServer> {
+    override fun read(buf: ByteBuffer): UniffiMcpServer {
+        return UniffiMcpServer(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMcpServer) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`transport`) +
+            FfiConverterString.allocationSize(value.`target`) +
+            FfiConverterSequenceString.allocationSize(value.`envKeys`) +
+            FfiConverterSequenceString.allocationSize(value.`headerKeys`) +
+            FfiConverterBoolean.allocationSize(value.`enabled`)
+    )
+
+    override fun write(value: UniffiMcpServer, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`transport`, buf)
+            FfiConverterString.write(value.`target`, buf)
+            FfiConverterSequenceString.write(value.`envKeys`, buf)
+            FfiConverterSequenceString.write(value.`headerKeys`, buf)
+            FfiConverterBoolean.write(value.`enabled`, buf)
+    }
+}
+
+
+
+/**
+ * One MCP server to add. `transport`: `stdio` (uses `command`, `args`,
+ * `env`) or `http` / `sse` (use `url`, `headers`). The env and header
+ * values are secrets: `Debug` names only their keys.
+ */
+data class UniffiMcpServerSpec (
+    var `name`: kotlin.String
+    , 
+    var `transport`: kotlin.String
+    , 
+    var `command`: kotlin.String
+    , 
+    var `args`: List<kotlin.String>
+    , 
+    var `env`: Map<kotlin.String, kotlin.String>
+    , 
+    var `url`: kotlin.String
+    , 
+    var `headers`: Map<kotlin.String, kotlin.String>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiMcpServerSpec: FfiConverterRustBuffer<UniffiMcpServerSpec> {
+    override fun read(buf: ByteBuffer): UniffiMcpServerSpec {
+        return UniffiMcpServerSpec(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterMapStringString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterMapStringString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiMcpServerSpec) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`transport`) +
+            FfiConverterString.allocationSize(value.`command`) +
+            FfiConverterSequenceString.allocationSize(value.`args`) +
+            FfiConverterMapStringString.allocationSize(value.`env`) +
+            FfiConverterString.allocationSize(value.`url`) +
+            FfiConverterMapStringString.allocationSize(value.`headers`)
+    )
+
+    override fun write(value: UniffiMcpServerSpec, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`transport`, buf)
+            FfiConverterString.write(value.`command`, buf)
+            FfiConverterSequenceString.write(value.`args`, buf)
+            FfiConverterMapStringString.write(value.`env`, buf)
+            FfiConverterString.write(value.`url`, buf)
+            FfiConverterMapStringString.write(value.`headers`, buf)
     }
 }
 
@@ -6508,6 +6872,126 @@ public object FfiConverterTypeUniffiSessionCommands: FfiConverterRustBuffer<Unif
 
 
 
+/**
+ * A running session's MCP servers.
+ */
+data class UniffiSessionMcp (
+    var `servers`: List<UniffiSessionMcpServer>
+    , 
+    /**
+     * A server can be switched in this session.
+     */
+    var `toggles`: kotlin.Boolean
+    , 
+    /**
+     * A switch applies to every session of the agent in the same project.
+     */
+    var `projectWide`: kotlin.Boolean
+    , 
+    /**
+     * Why the last request got no answer (the servers held are kept).
+     */
+    var `error`: kotlin.String?
+    , 
+    /**
+     * Servers switched and not answered yet.
+     */
+    var `busy`: List<kotlin.String>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiSessionMcp: FfiConverterRustBuffer<UniffiSessionMcp> {
+    override fun read(buf: ByteBuffer): UniffiSessionMcp {
+        return UniffiSessionMcp(
+            FfiConverterSequenceTypeUniffiSessionMcpServer.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiSessionMcp) = (
+            FfiConverterSequenceTypeUniffiSessionMcpServer.allocationSize(value.`servers`) +
+            FfiConverterBoolean.allocationSize(value.`toggles`) +
+            FfiConverterBoolean.allocationSize(value.`projectWide`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterSequenceString.allocationSize(value.`busy`)
+    )
+
+    override fun write(value: UniffiSessionMcp, buf: ByteBuffer) {
+            FfiConverterSequenceTypeUniffiSessionMcpServer.write(value.`servers`, buf)
+            FfiConverterBoolean.write(value.`toggles`, buf)
+            FfiConverterBoolean.write(value.`projectWide`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterSequenceString.write(value.`busy`, buf)
+    }
+}
+
+
+
+/**
+ * One MCP server of a running session. `status` is the wire's word:
+ * `connected`, `pending`, `failed`, `needs-auth` or `disabled`.
+ */
+data class UniffiSessionMcpServer (
+    var `name`: kotlin.String
+    , 
+    var `status`: kotlin.String
+    , 
+    var `error`: kotlin.String?
+    , 
+    var `tools`: kotlin.UInt?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiSessionMcpServer: FfiConverterRustBuffer<UniffiSessionMcpServer> {
+    override fun read(buf: ByteBuffer): UniffiSessionMcpServer {
+        return UniffiSessionMcpServer(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiSessionMcpServer) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterOptionalUInt.allocationSize(value.`tools`)
+    )
+
+    override fun write(value: UniffiSessionMcpServer, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`status`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterOptionalUInt.write(value.`tools`, buf)
+    }
+}
+
+
+
 data class UniffiSessionSummary (
     var `id`: kotlin.String
     , 
@@ -6572,6 +7056,12 @@ data class UniffiSessionSummary (
      * absent until the bridge answers.
      */
     var `commands`: UniffiSessionCommands?
+    , 
+    /**
+     * MCP servers — requested via `UniffiIntent::RequestSessionMcp`,
+     * absent until the bridge answers.
+     */
+    var `mcp`: UniffiSessionMcp?
     
 ){
     
@@ -6607,6 +7097,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalTypeUniffiUsageData.read(buf),
             FfiConverterOptionalTypeUniffiGsdState.read(buf),
             FfiConverterOptionalTypeUniffiSessionCommands.read(buf),
+            FfiConverterOptionalTypeUniffiSessionMcp.read(buf),
         )
     }
 
@@ -6629,7 +7120,8 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalULong.allocationSize(value.`seqHigh`) +
             FfiConverterOptionalTypeUniffiUsageData.allocationSize(value.`usage`) +
             FfiConverterOptionalTypeUniffiGsdState.allocationSize(value.`gsd`) +
-            FfiConverterOptionalTypeUniffiSessionCommands.allocationSize(value.`commands`)
+            FfiConverterOptionalTypeUniffiSessionCommands.allocationSize(value.`commands`) +
+            FfiConverterOptionalTypeUniffiSessionMcp.allocationSize(value.`mcp`)
     )
 
     override fun write(value: UniffiSessionSummary, buf: ByteBuffer) {
@@ -6652,6 +7144,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalTypeUniffiUsageData.write(value.`usage`, buf)
             FfiConverterOptionalTypeUniffiGsdState.write(value.`gsd`, buf)
             FfiConverterOptionalTypeUniffiSessionCommands.write(value.`commands`, buf)
+            FfiConverterOptionalTypeUniffiSessionMcp.write(value.`mcp`, buf)
     }
 }
 
@@ -7467,6 +7960,67 @@ sealed class UniffiIntent {
     }
     
     /**
+     * Ask for an agent's MCP servers on a machine; the answer lands in
+     * `UniffiMachineSummary.mcp`.
+     */
+    data class RequestMcp(
+        val `machine`: kotlin.String, 
+        val `agent`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Change an agent's MCP servers. `action`: `add` (uses `servers`),
+     * `remove`, `enable`, `disable` (use `names`). A server that fails the
+     * core's checks refuses the change without sending it.
+     */
+    data class McpAction(
+        val `machine`: kotlin.String, 
+        val `agent`: kotlin.String, 
+        val `action`: kotlin.String, 
+        val `servers`: List<uniffi.client_ffi.UniffiMcpServerSpec>, 
+        val `names`: List<kotlin.String>) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Ask for a running session's MCP servers; the answer lands in
+     * `UniffiSessionSummary.mcp`.
+     */
+    data class RequestSessionMcp(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Switch one MCP server on or off in a running session.
+     */
+    data class ToggleSessionMcp(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String, 
+        val `name`: kotlin.String, 
+        val `enabled`: kotlin.Boolean) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * Ask the bridge for this session's GSD workflow state; the answer
      * lands in `UniffiSessionSummary.gsd`.
      */
@@ -7959,30 +8513,51 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            12 -> UniffiIntent.RequestGsd(
+            12 -> UniffiIntent.RequestMcp(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            13 -> UniffiIntent.RequestProviderProfiles(
+            13 -> UniffiIntent.McpAction(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterSequenceTypeUniffiMcpServerSpec.read(buf),
+                FfiConverterSequenceString.read(buf),
+                )
+            14 -> UniffiIntent.RequestSessionMcp(
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            14 -> UniffiIntent.SetCredentials(
+            15 -> UniffiIntent.ToggleSessionMcp(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterBoolean.read(buf),
+                )
+            16 -> UniffiIntent.RequestGsd(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            17 -> UniffiIntent.RequestProviderProfiles(
+                FfiConverterString.read(buf),
+                )
+            18 -> UniffiIntent.SetCredentials(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterSequenceTypeUniffiCredentialWrite.read(buf),
                 )
-            15 -> UniffiIntent.SetProviderProfile(
+            19 -> UniffiIntent.SetProviderProfile(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalTypeUniffiProviderProfileWrite.read(buf),
                 )
-            16 -> UniffiIntent.RespondPermission(
+            20 -> UniffiIntent.RespondPermission(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            17 -> UniffiIntent.AnswerQuestion(
+            21 -> UniffiIntent.AnswerQuestion(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
@@ -7990,113 +8565,113 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterSequenceUInt.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            18 -> UniffiIntent.RespondPlan(
+            22 -> UniffiIntent.RespondPlan(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            19 -> UniffiIntent.SetOption(
+            23 -> UniffiIntent.SetOption(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            20 -> UniffiIntent.SelectSession(
+            24 -> UniffiIntent.SelectSession(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            21 -> UniffiIntent.SetPlanApprovalChoice(
+            25 -> UniffiIntent.SetPlanApprovalChoice(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            22 -> UniffiIntent.RetryOutboxItem(
+            26 -> UniffiIntent.RetryOutboxItem(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            23 -> UniffiIntent.DeleteSession(
+            27 -> UniffiIntent.DeleteSession(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            24 -> UniffiIntent.UndoDelete
-            25 -> UniffiIntent.SetTorEnabled(
+            28 -> UniffiIntent.UndoDelete
+            29 -> UniffiIntent.SetTorEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            26 -> UniffiIntent.SetStayConnected(
+            30 -> UniffiIntent.SetStayConnected(
                 FfiConverterBoolean.read(buf),
                 )
-            27 -> UniffiIntent.SetBlossomServer(
+            31 -> UniffiIntent.SetBlossomServer(
                 FfiConverterString.read(buf),
                 )
-            28 -> UniffiIntent.SetNotificationsEnabled(
+            32 -> UniffiIntent.SetNotificationsEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            29 -> UniffiIntent.SetUiScale(
+            33 -> UniffiIntent.SetUiScale(
                 FfiConverterDouble.read(buf),
                 )
-            30 -> UniffiIntent.SetShowUsageBadge(
+            34 -> UniffiIntent.SetShowUsageBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            31 -> UniffiIntent.SetShowCommitBadge(
+            35 -> UniffiIntent.SetShowCommitBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            32 -> UniffiIntent.AddQuickPrompt(
+            36 -> UniffiIntent.AddQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            33 -> UniffiIntent.UpdateQuickPrompt(
+            37 -> UniffiIntent.UpdateQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            34 -> UniffiIntent.RemoveQuickPrompt(
+            38 -> UniffiIntent.RemoveQuickPrompt(
                 FfiConverterString.read(buf),
                 )
-            35 -> UniffiIntent.DismissPendingSession(
+            39 -> UniffiIntent.DismissPendingSession(
                 FfiConverterString.read(buf),
                 )
-            36 -> UniffiIntent.RemoveMachine(
+            40 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
-            37 -> UniffiIntent.SetDirectEndpoints(
+            41 -> UniffiIntent.SetDirectEndpoints(
                 FfiConverterString.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            38 -> UniffiIntent.SetMachineRelays(
+            42 -> UniffiIntent.SetMachineRelays(
                 FfiConverterString.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            39 -> UniffiIntent.SetDefaultAgent(
+            43 -> UniffiIntent.SetDefaultAgent(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            40 -> UniffiIntent.SetAgentDefaults(
+            44 -> UniffiIntent.SetAgentDefaults(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            41 -> UniffiIntent.BeginPairing(
+            45 -> UniffiIntent.BeginPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            42 -> UniffiIntent.BeginManualPairing(
+            46 -> UniffiIntent.BeginManualPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            43 -> UniffiIntent.StagePairing(
+            47 -> UniffiIntent.StagePairing(
                 FfiConverterString.read(buf),
                 )
-            44 -> UniffiIntent.ConfirmStagedPairing(
+            48 -> UniffiIntent.ConfirmStagedPairing(
                 FfiConverterString.read(buf),
                 )
-            45 -> UniffiIntent.DismissStagedPairing
-            46 -> UniffiIntent.ResetPairing
+            49 -> UniffiIntent.DismissStagedPairing
+            50 -> UniffiIntent.ResetPairing
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -8202,6 +8777,43 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`agent`)
                 + FfiConverterString.allocationSize(value.`action`)
                 + FfiConverterString.allocationSize(value.`target`)
+            )
+        }
+        is UniffiIntent.RequestMcp -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`agent`)
+            )
+        }
+        is UniffiIntent.McpAction -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`agent`)
+                + FfiConverterString.allocationSize(value.`action`)
+                + FfiConverterSequenceTypeUniffiMcpServerSpec.allocationSize(value.`servers`)
+                + FfiConverterSequenceString.allocationSize(value.`names`)
+            )
+        }
+        is UniffiIntent.RequestSessionMcp -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`sessionId`)
+            )
+        }
+        is UniffiIntent.ToggleSessionMcp -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`sessionId`)
+                + FfiConverterString.allocationSize(value.`name`)
+                + FfiConverterBoolean.allocationSize(value.`enabled`)
             )
         }
         is UniffiIntent.RequestGsd -> {
@@ -8569,33 +9181,62 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`target`, buf)
                 Unit
             }
-            is UniffiIntent.RequestGsd -> {
+            is UniffiIntent.RequestMcp -> {
                 buf.putInt(12)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`agent`, buf)
+                Unit
+            }
+            is UniffiIntent.McpAction -> {
+                buf.putInt(13)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`agent`, buf)
+                FfiConverterString.write(value.`action`, buf)
+                FfiConverterSequenceTypeUniffiMcpServerSpec.write(value.`servers`, buf)
+                FfiConverterSequenceString.write(value.`names`, buf)
+                Unit
+            }
+            is UniffiIntent.RequestSessionMcp -> {
+                buf.putInt(14)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`sessionId`, buf)
+                Unit
+            }
+            is UniffiIntent.ToggleSessionMcp -> {
+                buf.putInt(15)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`sessionId`, buf)
+                FfiConverterString.write(value.`name`, buf)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.RequestGsd -> {
+                buf.putInt(16)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.RequestProviderProfiles -> {
-                buf.putInt(13)
+                buf.putInt(17)
                 FfiConverterString.write(value.`machine`, buf)
                 Unit
             }
             is UniffiIntent.SetCredentials -> {
-                buf.putInt(14)
+                buf.putInt(18)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`agent`, buf)
                 FfiConverterSequenceTypeUniffiCredentialWrite.write(value.`values`, buf)
                 Unit
             }
             is UniffiIntent.SetProviderProfile -> {
-                buf.putInt(15)
+                buf.putInt(19)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`profileId`, buf)
                 FfiConverterOptionalTypeUniffiProviderProfileWrite.write(value.`profile`, buf)
                 Unit
             }
             is UniffiIntent.RespondPermission -> {
-                buf.putInt(16)
+                buf.putInt(20)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -8603,7 +9244,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.AnswerQuestion -> {
-                buf.putInt(17)
+                buf.putInt(21)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -8613,7 +9254,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.RespondPlan -> {
-                buf.putInt(18)
+                buf.putInt(22)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -8621,7 +9262,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.SetOption -> {
-                buf.putInt(19)
+                buf.putInt(23)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`option`, buf)
@@ -8629,118 +9270,118 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.SelectSession -> {
-                buf.putInt(20)
+                buf.putInt(24)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.SetPlanApprovalChoice -> {
-                buf.putInt(21)
+                buf.putInt(25)
                 FfiConverterString.write(value.`cardId`, buf)
                 FfiConverterString.write(value.`key`, buf)
                 Unit
             }
             is UniffiIntent.RetryOutboxItem -> {
-                buf.putInt(22)
+                buf.putInt(26)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DeleteSession -> {
-                buf.putInt(23)
+                buf.putInt(27)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterOptionalString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.UndoDelete -> {
-                buf.putInt(24)
+                buf.putInt(28)
                 Unit
             }
             is UniffiIntent.SetTorEnabled -> {
-                buf.putInt(25)
+                buf.putInt(29)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetStayConnected -> {
-                buf.putInt(26)
-                FfiConverterBoolean.write(value.`enabled`, buf)
-                Unit
-            }
-            is UniffiIntent.SetBlossomServer -> {
-                buf.putInt(27)
-                FfiConverterString.write(value.`url`, buf)
-                Unit
-            }
-            is UniffiIntent.SetNotificationsEnabled -> {
-                buf.putInt(28)
-                FfiConverterBoolean.write(value.`enabled`, buf)
-                Unit
-            }
-            is UniffiIntent.SetUiScale -> {
-                buf.putInt(29)
-                FfiConverterDouble.write(value.`scale`, buf)
-                Unit
-            }
-            is UniffiIntent.SetShowUsageBadge -> {
                 buf.putInt(30)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.SetShowCommitBadge -> {
+            is UniffiIntent.SetBlossomServer -> {
                 buf.putInt(31)
+                FfiConverterString.write(value.`url`, buf)
+                Unit
+            }
+            is UniffiIntent.SetNotificationsEnabled -> {
+                buf.putInt(32)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetUiScale -> {
+                buf.putInt(33)
+                FfiConverterDouble.write(value.`scale`, buf)
+                Unit
+            }
+            is UniffiIntent.SetShowUsageBadge -> {
+                buf.putInt(34)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetShowCommitBadge -> {
+                buf.putInt(35)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.AddQuickPrompt -> {
-                buf.putInt(32)
+                buf.putInt(36)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is UniffiIntent.UpdateQuickPrompt -> {
-                buf.putInt(33)
+                buf.putInt(37)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is UniffiIntent.RemoveQuickPrompt -> {
-                buf.putInt(34)
+                buf.putInt(38)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DismissPendingSession -> {
-                buf.putInt(35)
+                buf.putInt(39)
                 FfiConverterString.write(value.`pendingId`, buf)
                 Unit
             }
             is UniffiIntent.RemoveMachine -> {
-                buf.putInt(36)
+                buf.putInt(40)
                 FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
             is UniffiIntent.SetDirectEndpoints -> {
-                buf.putInt(37)
+                buf.putInt(41)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterSequenceString.write(value.`endpoints`, buf)
                 Unit
             }
             is UniffiIntent.SetMachineRelays -> {
-                buf.putInt(38)
+                buf.putInt(42)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterSequenceString.write(value.`relays`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultAgent -> {
-                buf.putInt(39)
+                buf.putInt(43)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`agent`, buf)
                 Unit
             }
             is UniffiIntent.SetAgentDefaults -> {
-                buf.putInt(40)
+                buf.putInt(44)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`agent`, buf)
                 FfiConverterString.write(value.`mode`, buf)
@@ -8749,13 +9390,13 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.BeginPairing -> {
-                buf.putInt(41)
+                buf.putInt(45)
                 FfiConverterString.write(value.`url`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.BeginManualPairing -> {
-                buf.putInt(42)
+                buf.putInt(46)
                 FfiConverterString.write(value.`npub`, buf)
                 FfiConverterString.write(value.`token`, buf)
                 FfiConverterString.write(value.`relays`, buf)
@@ -8763,21 +9404,21 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.StagePairing -> {
-                buf.putInt(43)
+                buf.putInt(47)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ConfirmStagedPairing -> {
-                buf.putInt(44)
+                buf.putInt(48)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.DismissStagedPairing -> {
-                buf.putInt(45)
+                buf.putInt(49)
                 Unit
             }
             is UniffiIntent.ResetPairing -> {
-                buf.putInt(46)
+                buf.putInt(50)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -9008,6 +9649,38 @@ public object FfiConverterTypeUniffiTristate : FfiConverterRustBuffer<UniffiTris
 }
 
 
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
+    override fun read(buf: ByteBuffer): kotlin.UInt? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UInt?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUInt.write(value, buf)
+        }
+    }
+}
 
 
 
@@ -9303,6 +9976,38 @@ public object FfiConverterOptionalTypeUniffiGsdState: FfiConverterRustBuffer<Uni
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeUniffiMcpFailure: FfiConverterRustBuffer<UniffiMcpFailure?> {
+    override fun read(buf: ByteBuffer): UniffiMcpFailure? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiMcpFailure.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiMcpFailure?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiMcpFailure.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiMcpFailure?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiMcpFailure.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeUniffiPairingCandidateView: FfiConverterRustBuffer<UniffiPairingCandidateView?> {
     override fun read(buf: ByteBuffer): UniffiPairingCandidateView? {
         if (buf.get().toInt() == 0) {
@@ -9453,6 +10158,38 @@ public object FfiConverterOptionalTypeUniffiSessionCommands: FfiConverterRustBuf
         } else {
             buf.put(1)
             FfiConverterTypeUniffiSessionCommands.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiSessionMcp: FfiConverterRustBuffer<UniffiSessionMcp?> {
+    override fun read(buf: ByteBuffer): UniffiSessionMcp? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiSessionMcp.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiSessionMcp?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiSessionMcp.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiSessionMcp?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiSessionMcp.write(value, buf)
         }
     }
 }
@@ -9795,6 +10532,34 @@ public object FfiConverterSequenceTypeUniffiAgentDefaults: FfiConverterRustBuffe
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeUniffiAgentMcp: FfiConverterRustBuffer<List<UniffiAgentMcp>> {
+    override fun read(buf: ByteBuffer): List<UniffiAgentMcp> {
+        val len = buf.getInt()
+        return List<UniffiAgentMcp>(len) {
+            FfiConverterTypeUniffiAgentMcp.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiAgentMcp>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiAgentMcp.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiAgentMcp>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiAgentMcp.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeUniffiAgentModels: FfiConverterRustBuffer<List<UniffiAgentModels>> {
     override fun read(buf: ByteBuffer): List<UniffiAgentModels> {
         val len = buf.getInt()
@@ -10103,6 +10868,90 @@ public object FfiConverterSequenceTypeUniffiMachineSummary: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeUniffiMcpImportProblem: FfiConverterRustBuffer<List<UniffiMcpImportProblem>> {
+    override fun read(buf: ByteBuffer): List<UniffiMcpImportProblem> {
+        val len = buf.getInt()
+        return List<UniffiMcpImportProblem>(len) {
+            FfiConverterTypeUniffiMcpImportProblem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiMcpImportProblem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiMcpImportProblem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiMcpImportProblem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiMcpImportProblem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiMcpServer: FfiConverterRustBuffer<List<UniffiMcpServer>> {
+    override fun read(buf: ByteBuffer): List<UniffiMcpServer> {
+        val len = buf.getInt()
+        return List<UniffiMcpServer>(len) {
+            FfiConverterTypeUniffiMcpServer.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiMcpServer>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiMcpServer.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiMcpServer>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiMcpServer.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiMcpServerSpec: FfiConverterRustBuffer<List<UniffiMcpServerSpec>> {
+    override fun read(buf: ByteBuffer): List<UniffiMcpServerSpec> {
+        val len = buf.getInt()
+        return List<UniffiMcpServerSpec>(len) {
+            FfiConverterTypeUniffiMcpServerSpec.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiMcpServerSpec>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiMcpServerSpec.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiMcpServerSpec>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiMcpServerSpec.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeUniffiModelEntry: FfiConverterRustBuffer<List<UniffiModelEntry>> {
     override fun read(buf: ByteBuffer): List<UniffiModelEntry> {
         val len = buf.getInt()
@@ -10317,6 +11166,34 @@ public object FfiConverterSequenceTypeUniffiQuickPrompt: FfiConverterRustBuffer<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiQuickPrompt.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiSessionMcpServer: FfiConverterRustBuffer<List<UniffiSessionMcpServer>> {
+    override fun read(buf: ByteBuffer): List<UniffiSessionMcpServer> {
+        val len = buf.getInt()
+        return List<UniffiSessionMcpServer>(len) {
+            FfiConverterTypeUniffiSessionMcpServer.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiSessionMcpServer>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiSessionMcpServer.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiSessionMcpServer>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiSessionMcpServer.write(it, buf)
         }
     }
 }
@@ -10648,6 +11525,35 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     UniffiLib.uniffi_client_ffi_fn_func_provider_base_url_error(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Parse MCP server JSON as other clients write it (`{"mcpServers": …}`,
+         * VS Code's `servers`, OpenCode's `mcp`, or a bare name → config map).
+         */ fun `mcpImport`(`text`: kotlin.String): UniffiMcpImport {
+            return FfiConverterTypeUniffiMcpImport.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_client_ffi_fn_func_mcp_import(
+    
+        
+        FfiConverterString.lower(`text`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Why `spec` cannot be added, if it cannot — the rule the bridge applies.
+         */ fun `mcpServerProblem`(`spec`: UniffiMcpServerSpec): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_client_ffi_fn_func_mcp_server_problem(
+    
+        
+        FfiConverterTypeUniffiMcpServerSpec.lower(`spec`),_status)
 }
     )
     }

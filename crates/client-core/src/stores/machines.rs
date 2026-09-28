@@ -17,11 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::BridgeHostKind;
 use protocol::common::{
-    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, PluginAction,
-    PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, UsageData,
+    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo,
+    PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
-    CommandsMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg, SessionListMsg, SlashCommand,
+    CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg,
+    SessionListMsg, SessionMcpMsg, SlashCommand,
 };
 
 use super::fetches::Fetches;
@@ -76,6 +77,29 @@ pub struct SessionView {
     /// while the session runs, and the phone asks again when it needs it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands: Option<SessionCommands>,
+    /// Never persisted, like `commands`: the session's MCP servers as its
+    /// agent last reported them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<SessionMcp>,
+}
+
+/// A running session's MCP servers, and the switches sent and not answered.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMcp {
+    pub servers: Vec<SessionMcpServer>,
+    /// A server can be switched in the session.
+    #[serde(default)]
+    pub toggles: bool,
+    /// A switch applies to every session of the agent in the same project.
+    #[serde(default)]
+    pub project_wide: bool,
+    /// Why the last request got no answer. The servers held are kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Servers switched and not answered yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub busy: Vec<String>,
 }
 
 /// A session's slash commands as its agent last listed them.
@@ -98,6 +122,7 @@ impl SessionView {
             usage: None,
             gsd: None,
             commands: None,
+            mcp: None,
         }
     }
 }
@@ -155,6 +180,7 @@ pub fn merge_session_list(
                 usage: prior.and_then(|p| p.usage.clone()),
                 gsd: prior.and_then(|p| p.gsd.clone()),
                 commands: prior.and_then(|p| p.commands.clone()),
+                mcp: prior.and_then(|p| p.mcp.clone()),
             },
         );
     }
@@ -265,6 +291,9 @@ pub struct MachineView {
     /// they live on the bridge's machine and are asked for when shown.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, AgentPlugins>,
+    /// MCP servers, by agent id. Never persisted, like `plugins`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp: BTreeMap<String, AgentMcp>,
     /// The session-key grant this bridge last confirmed. See
     /// `stores::session_key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -356,6 +385,34 @@ pub struct AgentPlugins {
     pub failure: Option<PluginFailure>,
 }
 
+/// One agent's MCP servers on a machine, as the bridge last reported them,
+/// and the changes asked for and not answered yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMcp {
+    pub servers: Vec<McpServerInfo>,
+    /// A server can be switched off without removing it.
+    #[serde(default)]
+    pub toggles: bool,
+    /// Why the last list could not be read. The list held is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Names of the servers changed and not acknowledged yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub busy: Vec<String>,
+    /// The last change that failed, until the next one succeeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<McpFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpFailure {
+    pub action: McpAction,
+    pub names: Vec<String>,
+    pub error: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginFailure {
@@ -388,6 +445,7 @@ impl MachineView {
             models: BTreeMap::new(),
             provider_profiles: None,
             plugins: BTreeMap::new(),
+            mcp: BTreeMap::new(),
             session_grant: None,
             session_grant_sent: None,
             direct: None,
@@ -413,8 +471,10 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
         .map(|mut m| {
             m.provider_profiles = None;
             m.plugins.clear();
+            m.mcp.clear();
             for s in m.sessions.values_mut() {
                 s.commands = None;
+                s.mcp = None;
             }
             m
         })
@@ -679,6 +739,7 @@ impl MachinesState {
                 usage: prior.and_then(|p| p.usage.clone()),
                 gsd: prior.and_then(|p| p.gsd.clone()),
                 commands: prior.and_then(|p| p.commands.clone()),
+                mcp: prior.and_then(|p| p.mcp.clone()),
             };
             m.sessions.insert(info.id.clone(), view);
         });
@@ -708,6 +769,7 @@ impl MachinesState {
                     last_listed_at: at,
                     usage: prev.as_ref().and_then(|p| p.usage.clone()),
                     commands: prev.as_ref().and_then(|p| p.commands.clone()),
+                    mcp: prev.as_ref().and_then(|p| p.mcp.clone()),
                     gsd: prev.and_then(|p| p.gsd),
                 },
             );
@@ -842,6 +904,78 @@ impl MachinesState {
         });
     }
 
+    /// A list replaces the held one; a failed read keeps it and records why.
+    pub fn apply_mcp(&mut self, machine_pubkey: &str, msg: &McpServersMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.mcp.entry(msg.agent.clone()).or_default();
+            match &msg.error {
+                Some(error) => a.error = Some(error.clone()),
+                None => {
+                    a.error = None;
+                    a.servers = msg.servers.clone();
+                    a.toggles = msg.toggles;
+                }
+            }
+        });
+    }
+
+    /// A change was sent: the servers it names are busy until acknowledged.
+    pub fn mcp_action_sent(&mut self, machine_pubkey: &str, agent: &str, names: &[String]) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.mcp.entry(agent.to_string()).or_default();
+            for n in names {
+                if !a.busy.contains(n) {
+                    a.busy.push(n.clone());
+                }
+            }
+        });
+    }
+
+    pub fn apply_mcp_ack(&mut self, machine_pubkey: &str, msg: &McpAckMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.mcp.entry(msg.agent.clone()).or_default();
+            a.busy.retain(|n| !msg.names.contains(n));
+            a.failure = (!msg.success).then(|| McpFailure {
+                action: msg.action,
+                names: msg.names.clone(),
+                error: msg.error.clone().unwrap_or_else(|| "It could not be done.".into()),
+            });
+        });
+    }
+
+    /// A session's servers replace the held ones and settle every switch in
+    /// flight; a failed answer keeps them and records why.
+    pub fn apply_session_mcp(&mut self, machine_pubkey: &str, msg: &SessionMcpMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let Some(s) = m.sessions.get_mut(&msg.session_id) else { return };
+            let held = s.mcp.get_or_insert_with(SessionMcp::default);
+            held.busy.clear();
+            match &msg.error {
+                Some(error) => held.error = Some(error.clone()),
+                None => {
+                    *held = SessionMcp {
+                        servers: msg.servers.clone(),
+                        toggles: msg.toggles,
+                        project_wide: msg.project_wide,
+                        error: None,
+                        busy: vec![],
+                    }
+                }
+            }
+        });
+    }
+
+    /// A switch was sent: that server is busy until the session answers.
+    pub fn session_mcp_toggle_sent(&mut self, machine_pubkey: &str, session_id: &str, name: &str) {
+        self.with_machine(machine_pubkey, |m| {
+            let Some(s) = m.sessions.get_mut(session_id) else { return };
+            let held = s.mcp.get_or_insert_with(SessionMcp::default);
+            if !held.busy.iter().any(|n| n == name) {
+                held.busy.push(name.to_string());
+            }
+        });
+    }
+
     pub fn apply_gsd(&mut self, machine_pubkey: &str, session_id: &str, gsd: GsdState) {
         self.with_machine(machine_pubkey, |m| {
             if let Some(s) = m.sessions.get_mut(session_id) {
@@ -964,6 +1098,7 @@ mod tests {
             usage: None,
             gsd: None,
             commands: None,
+            mcp: None,
         }
     }
 
@@ -1295,6 +1430,63 @@ mod tests {
         assert_eq!(held(&st).commands, vec![cmd("init")]);
         let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
         assert_eq!(back["pk"].sessions["s1"].commands, None);
+    }
+
+    #[test]
+    fn mcp_servers_track_changes_in_flight_keep_their_list_on_errors_and_are_never_persisted() {
+        use protocol::common::{McpStatus, McpTransportKind};
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        st.apply_session_upsert("pk", &info("s1"), 0);
+        let server = |name: &str| McpServerInfo {
+            name: name.into(),
+            transport: McpTransportKind::Http,
+            target: "https://x".into(),
+            env_keys: vec![],
+            header_keys: vec!["Authorization".into()],
+            enabled: true,
+        };
+        let list = |servers: Vec<McpServerInfo>, error: Option<&str>| McpServersMsg {
+            agent: "claude-code".into(),
+            servers,
+            toggles: false,
+            error: error.map(str::to_string),
+        };
+        let held = |st: &MachinesState| st.machine("pk").unwrap().mcp["claude-code"].clone();
+
+        st.apply_mcp("pk", &list(vec![server("gh")], None));
+        st.mcp_action_sent("pk", "claude-code", &["fs".to_string()]);
+        assert_eq!(held(&st).busy, ["fs"]);
+        st.apply_mcp_ack("pk", &McpAckMsg {
+            agent: "claude-code".into(),
+            action: McpAction::Add,
+            names: vec!["fs".into()],
+            success: false,
+            error: Some("bad".into()),
+        });
+        assert!(held(&st).busy.is_empty());
+        assert_eq!(held(&st).failure.unwrap().error, "bad");
+        st.apply_mcp("pk", &list(vec![], Some("no claude")));
+        assert_eq!(held(&st).servers, vec![server("gh")], "the held list stays");
+
+        let status = |status: McpStatus, error: Option<&str>| SessionMcpMsg {
+            session_id: "s1".into(),
+            servers: if error.is_some() { vec![] } else { vec![SessionMcpServer { name: "gh".into(), status, error: None, tools: None }] },
+            toggles: true,
+            project_wide: false,
+            error: error.map(str::to_string),
+        };
+        st.apply_session_mcp("pk", &status(McpStatus::Connected, None));
+        st.session_mcp_toggle_sent("pk", "s1", "gh");
+        let session = |st: &MachinesState| st.machine("pk").unwrap().sessions["s1"].mcp.clone().unwrap();
+        assert_eq!(session(&st).busy, ["gh"]);
+        st.apply_session_mcp("pk", &status(McpStatus::Disabled, Some("refused")));
+        assert!(session(&st).busy.is_empty());
+        assert_eq!(session(&st).servers[0].status, McpStatus::Connected, "kept on an error");
+
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert!(back["pk"].mcp.is_empty());
+        assert_eq!(back["pk"].sessions["s1"].mcp, None);
     }
 
     #[test]

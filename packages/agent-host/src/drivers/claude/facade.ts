@@ -153,6 +153,14 @@ export interface SdkSlashCommand {
   argumentHint?: string;
 }
 
+/** One MCP server as `query.mcpServerStatus()` reports it. */
+export interface SdkMcpServerStatus {
+  name: string;
+  status: string;
+  error?: string;
+  tools?: number;
+}
+
 export interface SdkSessionHandle {
   /** The session's message stream. Iterate exactly once. */
   messages(): AsyncIterable<SDKMessage>;
@@ -183,6 +191,11 @@ export interface SdkSessionHandle {
   /** Feature-detected `query.reloadPlugins()`: load the plugins as they are
    *  on disk now, so an install or a toggle reaches a running session. */
   reloadPlugins(): Promise<void>;
+  /** Feature-detected `query.mcpServerStatus()`: every MCP server the
+   *  session has and where it stands. Null when unsupported/failed. */
+  mcpServerStatus(): Promise<SdkMcpServerStatus[] | null>;
+  /** `query.toggleMcpServer()`. Rejects with the CLI's reason. */
+  toggleMcpServer(name: string, enabled: boolean): Promise<void>;
   /** Feature-detected experimental `/usage` snapshot (rate-limit windows).
    *  Raw SDK shape — normalization is the caller's job. Null when unsupported. */
   getUsageSnapshot(): Promise<unknown | null>;
@@ -828,6 +841,30 @@ class RealSdkSessionHandle implements SdkSessionHandle {
     } catch {
       // Best effort: the next session loads them anyway.
     }
+  }
+
+  async mcpServerStatus(): Promise<SdkMcpServerStatus[] | null> {
+    const fn = (this.q as Partial<Pick<Query, 'mcpServerStatus'>>).mcpServerStatus;
+    if (typeof fn !== 'function') return null;
+    try {
+      const servers = await fn.call(this.q);
+      return servers
+        .filter((s) => typeof s?.name === 'string')
+        .map((s) => ({
+          name: s.name,
+          status: s.status,
+          ...(s.error ? { error: s.error } : {}),
+          ...(Array.isArray(s.tools) ? { tools: s.tools.length } : {}),
+        }));
+    } catch {
+      return null;
+    }
+  }
+
+  async toggleMcpServer(name: string, enabled: boolean): Promise<void> {
+    const fn = (this.q as Partial<Pick<Query, 'toggleMcpServer'>>).toggleMcpServer;
+    if (typeof fn !== 'function') throw new Error('This Claude Code cannot switch MCP servers in a session.');
+    await fn.call(this.q, name, enabled);
   }
 
   async getUsageSnapshot(): Promise<unknown | null> {

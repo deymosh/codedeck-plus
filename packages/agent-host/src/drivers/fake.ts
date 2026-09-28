@@ -13,9 +13,22 @@
  * Starting with `resume: "lost"` ends at once with `resumeLost`, like an
  * agent whose conversation is gone.
  */
-import type { Driver, DriverSession, PluginManager, PluginState, SessionContext } from '../driver';
+import type { Driver, DriverSession, McpManager, McpState, PluginManager, PluginState, SessionContext, SessionMcpState } from '../driver';
+import { serverInfo } from '../mcp';
 import { now, PERMISSION_ALLOW, PERMISSION_DENY } from '../tools';
-import type { AgentInfo, InstalledPlugin, OutputEntry, PluginAction, SessionOption, SlashCommand, StartSession, UsageData } from '../types';
+import type {
+  AgentInfo,
+  InstalledPlugin,
+  McpAction,
+  McpServerAdd,
+  McpServerInfo,
+  OutputEntry,
+  PluginAction,
+  SessionOption,
+  SlashCommand,
+  StartSession,
+  UsageData,
+} from '../types';
 
 export const FAKE_AGENT_ID = 'fake';
 
@@ -30,7 +43,14 @@ class FakeSession implements DriverSession {
   private ended = false;
   private mode: string;
 
-  constructor(private readonly ctx: SessionContext, params: StartSession) {
+  /** Servers switched off in this session. */
+  private readonly mcpOff = new Set<string>();
+
+  constructor(
+    private readonly ctx: SessionContext,
+    params: StartSession,
+    private readonly mcp: FakeMcp,
+  ) {
     this.mode = params.mode ?? 'default';
     if (params.resume === 'lost') {
       queueMicrotask(() => this.finish('the conversation to resume is gone', true));
@@ -136,6 +156,23 @@ class FakeSession implements DriverSession {
     ];
   }
 
+  async mcpStatus(): Promise<SessionMcpState> {
+    return {
+      servers: this.mcp.servers
+        .filter((s) => s.enabled)
+        .map((s) => ({ name: s.name, status: this.mcpOff.has(s.name) ? 'disabled' : 'connected', ...(this.mcpOff.has(s.name) ? {} : { tools: 1 }) })),
+      toggles: true,
+      projectWide: false,
+    };
+  }
+
+  async toggleMcp(name: string, enabled: boolean): Promise<SessionMcpState> {
+    if (!this.mcp.servers.some((s) => s.name === name)) throw new Error(`no MCP server '${name}'`);
+    if (enabled) this.mcpOff.delete(name);
+    else this.mcpOff.add(name);
+    return this.mcpStatus();
+  }
+
   async end(): Promise<void> {
     this.ended = true;
   }
@@ -164,8 +201,40 @@ class FakePlugins implements PluginManager {
   }
 }
 
+/** An in-memory MCP library: what was added, never a secret's value. */
+class FakeMcp implements McpManager {
+  servers: McpServerInfo[] = [];
+
+  async list(): Promise<McpState> {
+    return { servers: this.servers, toggles: true };
+  }
+
+  async act(action: McpAction, servers: McpServerAdd[], names: string[]): Promise<McpState> {
+    if (action === 'add') {
+      const added = servers.map((s) =>
+        serverInfo({
+          name: s.name,
+          transport: s.setup.type,
+          ...(s.setup.type === 'stdio' ? { command: s.setup.command, envKeys: Object.keys(s.setup.env ?? {}) } : { url: s.setup.url, headerKeys: Object.keys(s.setup.headers ?? {}) }),
+          enabled: true,
+        }),
+      );
+      this.servers = [...this.servers.filter((s) => !added.some((a) => a.name === s.name)), ...added];
+    } else {
+      const missing = names.find((n) => !this.servers.some((s) => s.name === n));
+      if (missing) throw new Error(`no MCP server '${missing}'`);
+      this.servers =
+        action === 'remove'
+          ? this.servers.filter((s) => !names.includes(s.name))
+          : this.servers.map((s) => (names.includes(s.name) ? { ...s, enabled: action === 'enable' } : s));
+    }
+    return this.list();
+  }
+}
+
 export class FakeDriver implements Driver {
   readonly plugins = new FakePlugins();
+  readonly mcp = new FakeMcp();
 
   info(): AgentInfo {
     return {
@@ -177,14 +246,14 @@ export class FakeDriver implements Driver {
         { id: 'high', label: 'High' },
       ],
       defaultMode: 'default',
-      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true, commands: true, plugins: true },
+      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true, commands: true, plugins: true, mcp: true },
       credentials: [{ id: 'fake_token', label: 'Fake token', envVar: 'FAKE_AGENT_TOKEN' }],
     };
   }
 
   startSession(params: StartSession, ctx: SessionContext): DriverSession {
     if (params.cwd === '') throw new Error('the fake agent needs a working directory');
-    return new FakeSession(ctx, params);
+    return new FakeSession(ctx, params, this.mcp);
   }
 
   async listModels() {

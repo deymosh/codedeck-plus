@@ -20,7 +20,7 @@ use agent_protocol::{
     BridgeMessage, HostFrame, HostMessage, QuestionOutcome, SelectOutcome, SessionEvent, StartSession,
 };
 use protocol::common::{EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
-use protocol::common::PluginAction;
+use protocol::common::{McpAction, PluginAction};
 use protocol::events::{
     BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
     SessionReadyMsg, UsageMsg,
@@ -49,6 +49,10 @@ pub(crate) enum HostCall {
     ListCommands { session_id: String },
     ListPlugins { agent: String },
     PluginAction { agent: String, action: PluginAction, target: String },
+    ListMcp { agent: String },
+    McpAction { agent: String, action: McpAction, names: Vec<String> },
+    /// A session's MCP status, asked for or answering a toggle.
+    SessionMcp { session_id: String },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
 }
 
@@ -200,6 +204,9 @@ impl Engine {
             HostCall::ListCommands { session_id } => self.on_commands_reply(session_id, result),
             HostCall::ListPlugins { agent } => self.on_plugins_reply(agent, result),
             HostCall::PluginAction { agent, action, target } => self.on_plugin_action_reply(agent, action, target, result),
+            HostCall::ListMcp { agent } => self.on_mcp_reply(agent, result),
+            HostCall::McpAction { agent, action, names } => self.on_mcp_action_reply(agent, action, names, result),
+            HostCall::SessionMcp { session_id } => self.on_session_mcp_reply(session_id, result),
             HostCall::CheckCredential { ticket, agent, credential, value } => {
                 let valid = match result {
                     Ok(HostMessage::CredentialChecked { valid }) => valid,

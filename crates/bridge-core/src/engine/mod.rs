@@ -20,6 +20,7 @@
 //! - secrets are never logged and never sent to a phone.
 
 mod host;
+mod mcp;
 mod pairing;
 mod phone;
 mod session_keys;

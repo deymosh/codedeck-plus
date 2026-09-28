@@ -15,6 +15,9 @@ export type ProviderBinding = G.ProviderBinding_Serialize;
 export type SelectOutcome = G.SelectOutcome;
 export type QuestionOutcome = G.QuestionOutcome;
 export type SessionOption = G.SessionOption;
+export type McpAction = G.McpAction;
+export type McpServerAdd = G.McpServerAdd;
+export type McpServerSetup = G.McpServerSetup;
 
 // What the host sends.
 export type HostFrame = G.Frame_Deserialize<G.HostMessage_Deserialize>;
@@ -34,6 +37,9 @@ export type InstalledPlugin = G.InstalledPlugin_Deserialize;
 export type AvailablePlugin = G.AvailablePlugin_Deserialize;
 export type PluginMarketplace = G.PluginMarketplace;
 export type PluginAction = G.PluginAction;
+export type McpServerInfo = G.McpServerInfo_Deserialize;
+export type SessionMcpServer = G.SessionMcpServer_Deserialize;
+export type McpStatus = G.McpStatus;
 export type UsageData = G.UsageData_Deserialize;
 export type UsageWindow = G.UsageWindow;
 export type PermissionRequest = G.PermissionRequest_Deserialize;

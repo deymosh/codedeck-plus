@@ -24,6 +24,8 @@ use protocol::commands::{ProviderProfileWrite, QuestionAnswer};
 use protocol::common::{CredentialValues, ProviderModel, SessionOption};
 use protocol::tristate::Tristate;
 
+use crate::mcp::UniffiMcpServerSpec;
+
 /// A UniFFI-crossable mirror of [`protocol::tristate::Tristate`] — see that
 /// type's own doc comment for the keep/clear/set semantics this preserves.
 /// `uniffi::Enum` needs a concrete Rust type (no generics), hence the `String`
@@ -181,6 +183,35 @@ pub enum UniffiIntent {
         agent: String,
         action: String,
         target: String,
+    },
+    /// Ask for an agent's MCP servers on a machine; the answer lands in
+    /// `UniffiMachineSummary.mcp`.
+    RequestMcp {
+        machine: String,
+        agent: String,
+    },
+    /// Change an agent's MCP servers. `action`: `add` (uses `servers`),
+    /// `remove`, `enable`, `disable` (use `names`). A server that fails the
+    /// core's checks refuses the change without sending it.
+    McpAction {
+        machine: String,
+        agent: String,
+        action: String,
+        servers: Vec<UniffiMcpServerSpec>,
+        names: Vec<String>,
+    },
+    /// Ask for a running session's MCP servers; the answer lands in
+    /// `UniffiSessionSummary.mcp`.
+    RequestSessionMcp {
+        machine: String,
+        session_id: String,
+    },
+    /// Switch one MCP server on or off in a running session.
+    ToggleSessionMcp {
+        machine: String,
+        session_id: String,
+        name: String,
+        enabled: bool,
     },
     /// Ask the bridge for this session's GSD workflow state; the answer
     /// lands in `UniffiSessionSummary.gsd`.
@@ -435,6 +466,22 @@ impl TryFrom<UniffiIntent> for Intent {
             }
             UniffiIntent::RequestGsd { machine, session_id } => {
                 Intent::RequestGsd { machine, session_id }
+            }
+            UniffiIntent::RequestMcp { machine, agent } => Intent::RequestMcp { machine, agent },
+            UniffiIntent::McpAction { machine, agent, action, servers, names } => Intent::McpAction {
+                machine,
+                agent,
+                action: parse_enum("action", &action)?,
+                servers: servers
+                    .iter()
+                    .map(UniffiMcpServerSpec::to_spec)
+                    .collect::<Result<_, _>>()
+                    .map_err(|detail| UniffiIntentError::BadEnumValue { detail })?,
+                names,
+            },
+            UniffiIntent::RequestSessionMcp { machine, session_id } => Intent::RequestSessionMcp { machine, session_id },
+            UniffiIntent::ToggleSessionMcp { machine, session_id, name, enabled } => {
+                Intent::ToggleSessionMcp { machine, session_id, name, enabled }
             }
             UniffiIntent::RequestProviderProfiles { machine } => Intent::RequestProviderProfiles { machine },
             UniffiIntent::SetCredentials { machine, agent, values } => Intent::SetCredentials {

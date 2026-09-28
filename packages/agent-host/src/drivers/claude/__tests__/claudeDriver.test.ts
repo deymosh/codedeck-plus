@@ -4,12 +4,17 @@
  * resume-lost discriminator, and the canUseTool policy that gives Claude
  * Code's modes their meaning.
  */
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { describe, it, expect } from 'vitest';
+import { ClaudeMcp } from '../mcp';
 import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../driver';
 import type {
   ModelDiscoveryOptions,
   SdkCanUseTool,
   SdkContextUsage,
+  SdkMcpServerStatus,
   SdkSlashCommand,
   SdkFacade,
   SdkMessage,
@@ -77,6 +82,16 @@ class ScriptedHandle implements SdkSessionHandle {
   }
   async supportedCommands(): Promise<SdkSlashCommand[] | null> {
     return this.commands;
+  }
+  mcp: SdkMcpServerStatus[] | null = null;
+  readonly toggled: [string, boolean][] = [];
+  async mcpServerStatus(): Promise<SdkMcpServerStatus[] | null> {
+    return this.mcp;
+  }
+  async toggleMcpServer(name: string, enabled: boolean): Promise<void> {
+    this.toggled.push([name, enabled]);
+    const server = this.mcp?.find((s) => s.name === name);
+    if (server) server.status = enabled ? 'connected' : 'disabled';
   }
   reloads = 0;
   async reloadPlugins(): Promise<void> {
@@ -408,6 +423,66 @@ describe('Claude plugins in the driver', () => {
     await session.end();
     await driver.plugins!.act('disable', 'a@m');
     expect(facade.last.handle.reloads).toBe(1);
+  });
+});
+
+describe('Claude MCP servers', () => {
+  it('are added through the CLI with the secret in place, listed without it, and reload the sessions', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'cc-mcp-'));
+    const file = path.join(dir, '.claude.json');
+    const calls: string[][] = [];
+    const runCli = async (args: string[]) => {
+      calls.push(args);
+      if (args[1] === 'add-json') {
+        const config = { mcpServers: { [args[5]!]: JSON.parse(args[6]!) } };
+        await writeFile(file, JSON.stringify(config));
+      }
+      return { code: args[1] === 'remove' ? 1 : 0, stdout: '', stderr: 'No MCP server named x' };
+    };
+    const facade = new ScriptedFacade();
+    const driver = new ClaudeDriver({ facade, manageMcp: true, runCli });
+    expect(driver.info().supports?.mcp).toBe(true);
+    const mcp = new ClaudeMcp(runCli, async () => {}, () => file);
+    expect(await mcp.list()).toEqual({ servers: [], toggles: false });
+
+    const state = await mcp.act(
+      'add',
+      [{ name: 'github', setup: { type: 'http', url: 'https://tok@api.example/mcp?key=k', headers: { Authorization: 'Bearer ghp_x' } } }],
+      [],
+    );
+    const add = calls.find((c) => c[1] === 'add-json')!;
+    expect(add.slice(0, 6)).toEqual(['mcp', 'add-json', '-s', 'user', '--', 'github']);
+    expect(JSON.parse(add[6]!).headers).toEqual({ Authorization: 'Bearer ghp_x' });
+    expect(state.servers).toEqual([
+      { name: 'github', transport: 'http', target: 'https://api.example/mcp', headerKeys: ['Authorization'], enabled: true },
+    ]);
+    expect(JSON.stringify(state)).not.toContain('ghp_x');
+    await expect(mcp.act('disable', [], ['github'])).rejects.toThrow(/switch it off in a session/i);
+    await rm(dir, { recursive: true });
+  });
+
+  it('show a session its servers and switch one off in it', async () => {
+    const facade = new ScriptedFacade();
+    const driver = new ClaudeDriver({ facade });
+    const ctx = recordingContext();
+    const session = driver.startSession({ sessionId: 's1', agent: 'claude-code', cwd: '/w' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    facade.last.handle.mcp = [
+      { name: 'github', status: 'connected', tools: 41 },
+      { name: 'linear', status: 'needs-auth' },
+    ];
+    expect(await session.mcpStatus!()).toEqual({
+      servers: [
+        { name: 'github', status: 'connected', tools: 41 },
+        { name: 'linear', status: 'needs-auth' },
+      ],
+      toggles: true,
+      projectWide: false,
+    });
+    const after = await session.toggleMcp!('github', false);
+    expect(facade.last.handle.toggled).toEqual([['github', false]]);
+    expect(after.servers[0]).toEqual({ name: 'github', status: 'disabled' });
+    await session.end();
   });
 });
 

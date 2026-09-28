@@ -163,6 +163,22 @@ describe('AgentHost', () => {
     expect(h.reply('p3')).toMatchObject({ kind: 'error', payload: { message: expect.stringMatching(/not found/) } });
   });
 
+  it("MCP servers are managed through the agent's driver and switched in a session", async () => {
+    const h = harness();
+    await h.send('mcp-action', { agent: 'fake', action: 'add', servers: [
+      { name: 'gh', setup: { type: 'http', url: 'https://x/mcp', headers: { Authorization: 'Bearer secret' } } },
+    ] }, 'm1');
+    await h.send('list-mcp', { agent: 'fake' }, 'm2');
+    expect(h.reply('m1')).toMatchObject({ kind: 'mcp-servers', payload: { servers: [{ name: 'gh', headerKeys: ['Authorization'] }] } });
+    expect(JSON.stringify(h.reply('m2'))).not.toContain('secret');
+
+    await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });
+    await h.send('session-mcp-toggle', { sessionId: 's1', name: 'gh', enabled: false }, 'm3');
+    await h.send('session-mcp-toggle', { sessionId: 's1', name: 'nope', enabled: false }, 'm4');
+    expect(h.reply('m3')).toMatchObject({ kind: 'session-mcp', payload: { servers: [{ name: 'gh', status: 'disabled' }] } });
+    expect(h.reply('m4')).toMatchObject({ kind: 'error' });
+  });
+
   it('shutdown cancels what the host is still waiting on', async () => {
     const h = harness();
     await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });

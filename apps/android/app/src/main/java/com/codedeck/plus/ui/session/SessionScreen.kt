@@ -101,6 +101,7 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiOptionChoice
+import uniffi.client_ffi.UniffiSessionMcp
 import uniffi.client_ffi.UniffiTranscriptDelta
 import uniffi.client_ffi.UniffiUsageData
 
@@ -487,6 +488,15 @@ fun SessionScreen(
         if (commandMenuOpen) core.dispatch(UniffiIntent.RequestCommands(machine = machine, sessionId = sessionId))
     }
 
+    // MCP servers: the agent reports them once the session runs, so they
+    // are asked for then, and again whenever the sheet opens.
+    val supportsMcp = agent?.supportsMcp == true
+    val sessionLive = session?.state in setOf("running", "idle", "waiting_permission", "waiting_question")
+    var mcpSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+    LaunchedEffect(machine, sessionId, supportsMcp, sessionLive, mcpSheetOpen) {
+        if (supportsMcp && sessionLive) core.dispatch(UniffiIntent.RequestSessionMcp(machine = machine, sessionId = sessionId))
+    }
+
     // --- Outbox: the "send failed" bar shows this session's oldest failed
     // item; Retry re-publishes it (the transcript's per-row Retry covers the
     // rest).
@@ -647,9 +657,21 @@ fun SessionScreen(
                 }
             },
             onModeTap = ::tapMode,
+            mcp = session?.mcp?.takeIf { supportsMcp && it.servers.isNotEmpty() },
+            onMcpTap = { mcpSheetOpen = true },
             showUsageBadge = settings?.showUsageBadge ?: false,
             usage = session?.usage,
         )
+        val sessionMcp = session?.mcp
+        if (mcpSheetOpen && sessionMcp != null) {
+            SessionMcpSheet(
+                sessionMcp,
+                onToggle = { name, enabled ->
+                    dispatch(UniffiIntent.ToggleSessionMcp(machine = machine, sessionId = sessionId, name = name, enabled = enabled))
+                },
+                onDismiss = { mcpSheetOpen = false },
+            )
+        }
 
         Composer(
             draft = draft,
@@ -803,6 +825,9 @@ internal fun SessionControlsBar(
     onModeTap: () -> Unit,
     showUsageBadge: Boolean,
     usage: UniffiUsageData?,
+    /** `null` hides the MCP pill (no servers, or an agent without MCP). */
+    mcp: UniffiSessionMcp? = null,
+    onMcpTap: () -> Unit = {},
 ) {
     Row(
         Modifier
@@ -820,6 +845,9 @@ internal fun SessionControlsBar(
         }
         if (efforts.isNotEmpty()) {
             EffortSelector(effort, efforts, onEffortSelect)
+        }
+        if (mcp != null) {
+            McpChip(mcp, onMcpTap)
         }
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {
