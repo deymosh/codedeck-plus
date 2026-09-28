@@ -1,7 +1,9 @@
 //! Files a phone attaches to a session — photos or anything else. Two forms:
 //! - Blossom: the phone uploaded an AES-256-GCM-encrypted blob and sends its
-//!   URL, sha256, key and iv; the bridge downloads it (https only, size
-//!   capped), checks the hash, decrypts it (tag = last 16 bytes);
+//!   URL, sha256, key and iv; the bridge downloads it (https, or http to an
+//!   onion service; through the Tor proxy when one is set; size capped),
+//!   checks the hash,
+//!   decrypts it (tag = last 16 bytes);
 //! - chunked: the file arrives as base64 pieces, reassembled here; a
 //!   partial upload idle for a minute is dropped.
 //!
@@ -19,6 +21,8 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
 use protocol::commands::{UploadFileBlossomMsg, UploadFileChunkMsg};
 use sha2::{Digest, Sha256};
+
+use crate::work::{is_onion_http, NostrHttp};
 
 /// Enough for photos and ordinary documents; the cap keeps a hostile
 /// message from making the bridge buffer arbitrarily much.
@@ -69,13 +73,22 @@ fn has_extension(name: &str) -> bool {
     })
 }
 
-/// Download, verify and decrypt a Blossom upload.
-pub async fn fetch_blossom(http: &reqwest::Client, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
-    // The URL is phone-supplied: https only, and the body capped regardless
-    // of the size the message claims — the bridge is not a general HTTP client.
-    if !msg.url.starts_with("https://") {
-        return Err("download refused: https required".into());
+/// Whether the bridge downloads from `url`: `https://` to a host, or
+/// `http://` to an onion service.
+fn is_blossom_url(url: &str) -> bool {
+    url.strip_prefix("https://").is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/')) || is_onion_http(url)
+}
+
+/// Download, verify and decrypt a Blossom upload — through the Tor proxy
+/// when one is set (see [`NostrHttp`]).
+pub async fn fetch_blossom(http: &NostrHttp, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
+    // The URL is phone-supplied: https (or http to an onion service) only,
+    // and the body capped regardless of the size the message claims — the
+    // bridge is not a general HTTP client.
+    if !is_blossom_url(&msg.url) {
+        return Err("download refused: https (or http to a .onion) required".into());
     }
+    let http = http.for_url(&msg.url).map_err(|e| format!("download refused: {e}"))?;
     if msg.size_bytes as usize > MAX_UPLOAD_BYTES {
         return Err(format!("download refused: {} bytes is over the {MAX_UPLOAD_BYTES}-byte cap", msg.size_bytes));
     }
@@ -277,6 +290,16 @@ mod tests {
         let mut uploads = Uploads::new(dir.path());
         assert!(uploads.chunk(chunk("u", 3, 2, "AA", "")).is_none());
         assert!(uploads.uploads.is_empty());
+    }
+
+    #[test]
+    fn blossom_urls_are_https_or_http_to_an_onion() {
+        for ok in ["https://blossom.example/abc", "https://abcdef.onion/abc", "http://abcdef.onion:3000/abc"] {
+            assert!(is_blossom_url(ok), "{ok}");
+        }
+        for refused in ["http://blossom.example/abc", "http://evil.onion.example.com/abc", "http://.onion/abc", "https:///abc", "ftp://x/abc"] {
+            assert!(!is_blossom_url(refused), "{refused}");
+        }
     }
 
     #[test]

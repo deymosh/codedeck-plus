@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext HTTP is refused everywhere except to onion services: Tor
+     encrypts the whole path to one, so a .onion Blossom server may be
+     plain http:// (relay and direct-link sockets do not go through this
+     policy; their own code enforces the same rule). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">onion</domain>
+    </domain-config>
+</network-security-config>

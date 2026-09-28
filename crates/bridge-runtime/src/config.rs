@@ -166,7 +166,8 @@ pub struct Config {
     pub workspace_roots: Vec<PathBuf>,
     pub relay_register: Option<RegisterEndpoint>,
     pub blossom_register: Option<RegisterEndpoint>,
-    /// SOCKS5 proxy for relay connections only, as `host:port`.
+    /// SOCKS5 proxy for all Nostr traffic (relays, Blossom, pubkey
+    /// registration), as `host:port`.
     pub tor_proxy: Option<String>,
     pub transcript_keep_last: Option<usize>,
     /// How the agent host is started.

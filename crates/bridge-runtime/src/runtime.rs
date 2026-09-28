@@ -93,6 +93,7 @@ struct Runtime {
     inputs: mpsc::UnboundedSender<Input>,
     timers: HashMap<TimerId, JoinHandle<()>>,
     http: reqwest::Client,
+    nostr_http: work::NostrHttp,
     outcome: Outcome,
     uploads: Rc<RefCell<Uploads>>,
     gsd: Rc<Gsd>,
@@ -153,6 +154,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     }
 
     let gsd = Gsd::new(config.node_path.clone(), &user_home);
+    let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
         config,
@@ -163,6 +165,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         inputs,
         timers: HashMap::new(),
         http: work::http_client(),
+        nostr_http,
         outcome: Outcome::Stopped,
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
         gsd: Rc::new(gsd),
@@ -300,7 +303,7 @@ impl Runtime {
                 }
             }
             Effect::HandleFileUpload(UploadFileMsg::Blossom(msg)) => {
-                let (inputs, uploads, http) = (self.inputs.clone(), Rc::clone(&self.uploads), self.http.clone());
+                let (inputs, uploads, http) = (self.inputs.clone(), Rc::clone(&self.uploads), self.nostr_http.clone());
                 tokio::task::spawn_local(async move {
                     match uploads::fetch_blossom(&http, &msg).await {
                         Ok(data) => {
@@ -344,7 +347,7 @@ impl Runtime {
         let endpoints = [("relay", self.config.relay_register.clone()), ("image server", self.config.blossom_register.clone())];
         for (service, endpoint) in endpoints {
             let Some(endpoint) = endpoint else { continue };
-            let (http, pubkey, label) = (self.http.clone(), pubkey_hex.clone(), label.clone());
+            let (http, pubkey, label) = (self.nostr_http.clone(), pubkey_hex.clone(), label.clone());
             tokio::task::spawn_local(async move {
                 match work::register_pubkey(&http, &endpoint, &pubkey).await {
                     Ok(status) => log::info!("[Runtime] Phone {}... {status} on the {service}", &pubkey[..8]),

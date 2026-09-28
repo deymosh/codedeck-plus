@@ -40,7 +40,7 @@ struct Cli {
     /// Path to the claude executable [env: CODEDECK_CLAUDE_PATH]
     #[arg(long, global = true)]
     claude_path: Option<String>,
-    /// SOCKS5 proxy for relay connections, e.g. socks5h://127.0.0.1:9050 [env: CODEDECK_TOR_PROXY_URL]
+    /// SOCKS5 proxy for all Nostr traffic (relays, Blossom), e.g. socks5h://127.0.0.1:9050 [env: CODEDECK_TOR_PROXY_URL]
     #[arg(long, global = true)]
     tor_proxy: Option<String>,
     /// External OpenCode server [env: CODEDECK_OPENCODE_SERVER_URL]

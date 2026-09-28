@@ -195,16 +195,18 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 - Every phone-wire change starts in `crates/protocol` (with a corpus fixture);
   every driver-protocol change in `crates/agent-protocol` (then regenerate the
   host's types). Keep the decoders total.
-- **The Tor/SOCKS proxy is for Nostr relay traffic only.** When one is set,
-  every bridge relay connection goes through it; other outbound calls (HTTP
-  checks, image downloads, the agents' own API traffic) do not use it and are
-  not a proxy bypass. On the phone, the Orbot setting covers relay and Blossom
-  image traffic alike: no path to a public relay or Blossom server may bypass
-  it while it is on. A machine's direct link is not such a path — it goes to
-  the user's own bridge on a network they set up (LAN, VPN) and is dialled
-  directly either way; only its `.onion` endpoints go through Orbot. Cleartext
-  `ws://` is allowed only for `.onion` relays and endpoints (and loopback, for
-  tests).
+- **When a Tor/SOCKS proxy is set, ALL Nostr traffic goes through it — on the
+  bridge and on the phone alike.** Nostr traffic is anything to a relay or a
+  Blossom server: relay connections, Blossom uploads and downloads, and the
+  bridge's pubkey registration on a relay's or Blossom server's admin
+  endpoint. No path to one may bypass the proxy while it is set (loopback,
+  which never leaves the machine, excepted). Other outbound calls (provider
+  token checks, the agents' own API traffic) do not use it and are not a
+  proxy bypass. A machine's direct link is not Nostr traffic either — it goes
+  to the user's own bridge on a network they set up (LAN, VPN) and is dialled
+  directly either way; only its `.onion` endpoints go through Orbot.
+  Cleartext `ws://` / `http://` is allowed only to `.onion` hosts (and
+  loopback, for tests).
 - Secrets — API keys, GitHub PATs, custom-provider tokens, Android keystore
   material — are never logged, never echoed back over the wire, and are wiped
   from component state immediately after send. In Rust they travel as
