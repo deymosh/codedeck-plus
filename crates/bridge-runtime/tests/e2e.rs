@@ -207,6 +207,42 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
             })
             .await;
 
+            // --- MCP: a server added from the phone comes back without its
+            // token, and is switched off in the session ---
+            {
+                use client_runtime::protocol::common::{McpAction, McpServerSpec, McpStatus, McpTransport};
+                core.dispatch(Intent::McpAction {
+                    machine: machine.clone(),
+                    agent: "fake".into(),
+                    action: McpAction::Add,
+                    servers: vec![McpServerSpec {
+                        name: "gh".into(),
+                        transport: McpTransport::Http {
+                            url: "https://mcp.example/mcp?key=e2e-query".into(),
+                            headers: [("Authorization".to_string(), "Bearer e2e-secret".to_string())].into(),
+                        },
+                    }],
+                    names: vec![],
+                })
+                .await;
+                let listed = until("the MCP server list", || async {
+                    let view = core.machines_view().await;
+                    view.machines.get(&machine)?.mcp.get("fake").filter(|a| !a.servers.is_empty() && a.busy.is_empty()).cloned()
+                })
+                .await;
+                assert_eq!(listed.servers[0].target, "https://mcp.example/mcp");
+                assert_eq!(listed.servers[0].header_keys, ["Authorization"]);
+                assert!(!format!("{:?}", core.machines_view().await).contains("e2e-"), "no secret reaches the phone");
+
+                core.dispatch(Intent::ToggleSessionMcp { machine: machine.clone(), session_id: session.clone(), name: "gh".into(), enabled: false }).await;
+                until("the session to switch the server off", || async {
+                    let view = core.machines_view().await;
+                    let mcp = view.machines.get(&machine)?.sessions.get(&session)?.mcp.clone()?;
+                    mcp.servers.iter().any(|s| s.name == "gh" && s.status == McpStatus::Disabled).then_some(())
+                })
+                .await;
+            }
+
             // --- restart: the session resumes, the phone catches up ---
             bridge.stop().await;
             let bridge = start_bridge(&relay, home.path(), workspace.path());
