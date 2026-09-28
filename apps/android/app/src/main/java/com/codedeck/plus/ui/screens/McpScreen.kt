@@ -1,7 +1,5 @@
 package com.codedeck.plus.ui.screens
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -10,16 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -28,21 +19,24 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.ui.components.BusyToggle
 import com.codedeck.plus.ui.components.Chip
+import com.codedeck.plus.ui.components.ConfirmDialog
+import com.codedeck.plus.ui.components.ErrorNote
+import com.codedeck.plus.ui.components.ExpandableRow
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
 import com.codedeck.plus.ui.components.GroupScope
+import com.codedeck.plus.ui.components.Note
 import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.Segmented
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
@@ -121,10 +115,10 @@ fun McpContent(
         onBack = onBack,
         bottomBar = { PrimaryButton("Add a server", onClick = { adding = AddView.Form }, modifier = Modifier.fillMaxWidth()) },
     ) {
-        mcp?.failure?.let { McpErrorLine(mcpFailureLine(it)) }
+        mcp?.failure?.let { ErrorNote(mcpFailureLine(it)) }
         when {
-            mcp == null -> McpNote("Asking the machine…")
-            mcp.error != null && mcp.servers.isEmpty() -> McpErrorLine(mcp.error!!)
+            mcp == null -> Note("Asking the machine…")
+            mcp.error != null && mcp.servers.isEmpty() -> ErrorNote(mcp.error!!)
             mcp.servers.isEmpty() -> Group {
                 GroupBody {
                     Text("No MCP servers yet", color = Tokens.Text, fontSize = Tokens.TextLg)
@@ -151,18 +145,12 @@ fun McpContent(
     }
 
     confirmRemove?.let { name ->
-        AlertDialog(
-            onDismissRequest = { confirmRemove = null },
-            containerColor = Tokens.SurfaceRaised,
-            title = { Text("Remove $name?", color = Tokens.Text) },
-            text = { Text("Its settings, and any token in them, are deleted from the machine.", color = Tokens.TextMuted) },
-            confirmButton = {
-                QuietButton("Remove", danger = true, onClick = {
-                    act("remove", names = listOf(name))
-                    confirmRemove = null
-                })
-            },
-            dismissButton = { QuietButton("Cancel", onClick = { confirmRemove = null }) },
+        ConfirmDialog(
+            title = "Remove $name?",
+            body = "Its settings, and any token in them, are deleted from the machine.",
+            confirm = "Remove",
+            onConfirm = { act("remove", names = listOf(name)) },
+            onDismiss = { confirmRemove = null },
         )
     }
 }
@@ -184,42 +172,22 @@ private fun ServerList(mcp: UniffiAgentMcp, act: (String, String) -> Unit, onRem
 @Composable
 private fun ServerRow(s: UniffiMcpServer, busy: Boolean, toggles: Boolean, act: (String, String) -> Unit, onRemove: () -> Unit) {
     var open by remember(s.name) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = Tokens.Space4, vertical = 10.dp)) {
-        Row(Modifier.heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(s.name, color = if (s.enabled) Tokens.Text else Tokens.TextMuted, fontSize = Tokens.TextLg, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    s.target,
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextSm,
-                    fontFamily = Tokens.FontMono,
-                    maxLines = if (open) 3 else 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            when {
-                busy -> McpSpinner()
-                toggles -> Switch(
-                    checked = s.enabled,
-                    onCheckedChange = { on -> act(if (on) "enable" else "disable", s.name) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Tokens.AccentContrast,
-                        checkedTrackColor = Tokens.Accent,
-                        uncheckedThumbColor = Tokens.TextMuted,
-                        uncheckedTrackColor = Tokens.SurfaceInput,
-                        uncheckedBorderColor = Tokens.BorderStrong,
-                    ),
-                )
-            }
+    ExpandableRow(
+        s.name,
+        s.target,
+        enabled = s.enabled,
+        open = open,
+        onOpenChange = { open = it },
+        subtitleMono = true,
+        openSubtitleLines = 3,
+        trailing = { BusyToggle(s.enabled, busy, toggles) { on -> act(if (on) "enable" else "disable", s.name) } },
+    ) {
+        FlowRow(Modifier.padding(top = Tokens.Space2), horizontalArrangement = Arrangement.spacedBy(Tokens.Space1), verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+            Chip(transportLabel(s.transport))
+            s.headerKeys.forEach { Chip("Header $it") }
+            s.envKeys.forEach { Chip(it) }
         }
-        if (open) {
-            FlowRow(Modifier.padding(top = Tokens.Space2), horizontalArrangement = Arrangement.spacedBy(Tokens.Space1), verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
-                Chip(transportLabel(s.transport))
-                s.headerKeys.forEach { Chip("Header $it") }
-                s.envKeys.forEach { Chip(it) }
-            }
-            Row(Modifier.padding(top = 2.dp)) { QuietButton("Remove", onClick = onRemove, danger = true, enabled = !busy) }
-        }
+        Row(Modifier.padding(top = 2.dp)) { QuietButton("Remove", onClick = onRemove, danger = true, enabled = !busy) }
     }
 }
 
@@ -291,14 +259,17 @@ private fun AddServer(
             }, enabled = canAdd, modifier = Modifier.fillMaxWidth())
         },
     ) {
-        Segmented(listOf("Fill in", "Paste JSON"), selected = mode.ordinal) { mode = AddView.entries[it] }
+        Segmented(listOf("Fill in", "Paste JSON"), selected = mode.ordinal, onSelect = { mode = AddView.entries[it] }, track = Tokens.SurfaceInput)
         if (mode == AddView.Form) {
             Group {
                 GroupBody {
                     Field(name, { name = it }, label = "Name", placeholder = "github", mono = true)
-                    Segmented(listOf("HTTP", "SSE", "Command"), selected = listOf("http", "sse", "stdio").indexOf(transport)) {
-                        transport = listOf("http", "sse", "stdio")[it]
-                    }
+                    Segmented(
+                        listOf("HTTP", "SSE", "Command"),
+                        selected = listOf("http", "sse", "stdio").indexOf(transport),
+                        onSelect = { transport = listOf("http", "sse", "stdio")[it] },
+                        track = Tokens.SurfaceInput,
+                    )
                     if (transport == "stdio") {
                         Field(command, { command = it }, label = "Command", placeholder = "npx", mono = true)
                         Field(args, { args = it }, label = "Arguments, one per line", placeholder = "-y\n@modelcontextprotocol/server-filesystem", mono = true, singleLine = false)
@@ -320,7 +291,7 @@ private fun AddServer(
             } else {
                 SecretPairs("Other headers", "X-Api-Key", headers)
             }
-            formProblem?.let { McpErrorLine(it) }
+            formProblem?.let { ErrorNote(it) }
         } else {
             Field(
                 json,
@@ -345,7 +316,7 @@ private fun AddServer(
 @Composable
 private fun ImportPreview(found: UniffiMcpImport) {
     found.error?.let {
-        McpErrorLine(it)
+        ErrorNote(it)
         return
     }
     if (found.servers.isNotEmpty()) {
@@ -392,62 +363,10 @@ private fun SecretPairs(title: String, keyHint: String, pairs: MutableList<Secre
     }
 }
 
-/** A row of mutually exclusive choices, the chosen one inverted. */
-@Composable
-private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(Tokens.SurfaceInput)
-            .padding(4.dp),
-    ) {
-        options.forEachIndexed { i, label ->
-            val on = i == selected
-            Text(
-                label,
-                color = if (on) Tokens.AccentContrast else Tokens.TextMuted,
-                fontSize = Tokens.TextMd,
-                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(Tokens.RadiusPill))
-                    .background(if (on) Tokens.Accent else Tokens.SurfaceInput)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = 10.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun McpSpinner() = CircularProgressIndicator(Modifier.padding(horizontal = Tokens.Space3).size(20.dp), color = Tokens.TextMuted, strokeWidth = 2.dp)
-
-@Composable
-private fun McpNote(text: String) = Text(text, color = Tokens.TextMuted, fontSize = Tokens.TextMd, modifier = Modifier.padding(horizontal = Tokens.Space2))
-
-@Composable
-internal fun McpErrorLine(text: String) = Text(
-    text,
-    color = Tokens.Danger,
-    fontSize = Tokens.TextSm,
-    modifier = Modifier
-        .fillMaxWidth()
-        .clip(RoundedCornerShape(Tokens.RadiusMd))
-        .background(Tokens.Danger.copy(alpha = 0.12f))
-        .padding(Tokens.Space3),
-)
-
 /** [McpContent] for [agentId] on the machine [pubkey], from the core; closes when the machine goes away. */
 @Composable
 fun McpScreen(core: CoreHost, pubkey: String, agentId: String, onBack: () -> Unit) {
-    val machinesView by core.machines.collectAsState()
     val scope = rememberCoroutineScope()
-    val machine = machinesView?.machines?.find { it.pubkeyHex == pubkey }
-    if (machine == null) {
-        if (machinesView != null) LaunchedEffect(Unit) { onBack() }
-        return
-    }
+    val machine = machineOrLeave(core, pubkey, onGone = onBack) ?: return
     McpContent(machine, agentId, dispatch = { intent -> scope.launch { core.dispatch(intent) } }, onBack = onBack)
 }

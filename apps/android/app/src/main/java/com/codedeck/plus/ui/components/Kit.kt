@@ -25,8 +25,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
@@ -48,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -275,17 +278,84 @@ fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, subt
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
     ) {
         RowText(title, subtitle)
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Tokens.AccentContrast,
-                checkedTrackColor = Tokens.Accent,
-                uncheckedThumbColor = Tokens.TextMuted,
-                uncheckedTrackColor = Tokens.SurfaceInput,
-                uncheckedBorderColor = Tokens.BorderStrong,
-            ),
-        )
+        Toggle(checked, onChange)
+    }
+}
+
+/** The on/off switch, in the app's white-on-black colours. */
+@Composable
+fun Toggle(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onChange,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = Tokens.AccentContrast,
+            checkedTrackColor = Tokens.Accent,
+            uncheckedThumbColor = Tokens.TextMuted,
+            uncheckedTrackColor = Tokens.SurfaceInput,
+            uncheckedBorderColor = Tokens.BorderStrong,
+        ),
+    )
+}
+
+/**
+ * The end of a row whose thing can be switched on and off: a spinner while
+ * the machine is applying a change, the switch when [toggles] says it can be
+ * switched here, nothing otherwise.
+ */
+@Composable
+fun BusyToggle(checked: Boolean, busy: Boolean, toggles: Boolean, onChange: (Boolean) -> Unit) {
+    when {
+        busy -> RowSpinner()
+        toggles -> Toggle(checked, onChange)
+    }
+}
+
+/** A small spinner at the end of a row, sized to stand where its switch or button would. */
+@Composable
+fun RowSpinner() = CircularProgressIndicator(Modifier.padding(horizontal = Tokens.Space3).size(20.dp), color = Tokens.TextMuted, strokeWidth = 2.dp)
+
+/** A page with nothing to show until its data arrives. */
+@Composable
+fun PageLoading() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+}
+
+/**
+ * A group's row that opens in place: its title (muted when [enabled] is
+ * off) and a line under it that shows more once open, [trailing] at the
+ * end, and [details] below while it is open.
+ */
+@Composable
+fun ExpandableRow(
+    title: String,
+    subtitle: String?,
+    enabled: Boolean,
+    open: Boolean,
+    onOpenChange: (Boolean) -> Unit,
+    subtitleMono: Boolean = false,
+    openSubtitleLines: Int = 6,
+    trailing: @Composable () -> Unit = {},
+    details: @Composable ColumnScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().clickable { onOpenChange(!open) }.padding(horizontal = Tokens.Space4, vertical = 10.dp)) {
+        Row(Modifier.heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, color = if (enabled) Tokens.Text else Tokens.TextMuted, fontSize = Tokens.TextLg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle != null) {
+                    Text(
+                        subtitle,
+                        color = Tokens.TextMuted,
+                        fontSize = Tokens.TextSm,
+                        fontFamily = if (subtitleMono) Tokens.FontMono else FontFamily.Default,
+                        maxLines = if (open) openSubtitleLines else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            trailing()
+        }
+        if (open) details()
     }
 }
 
@@ -441,6 +511,84 @@ fun Field(
         shape = RoundedCornerShape(Tokens.RadiusLg),
         modifier = modifier.fillMaxWidth(),
     )
+}
+
+/** A line of muted text between a page's groups: what the page is waiting for, or why it is empty. */
+@Composable
+fun Note(text: String) = Text(text, color = Tokens.TextMuted, fontSize = Tokens.TextMd, modifier = Modifier.padding(horizontal = Tokens.Space2))
+
+/** A failure, in red on a faint red box, between a page's groups. */
+@Composable
+fun ErrorNote(text: String) = Text(
+    text,
+    color = Tokens.Danger,
+    fontSize = Tokens.TextSm,
+    modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(Tokens.RadiusMd))
+        .background(Tokens.Danger.copy(alpha = 0.12f))
+        .padding(Tokens.Space3),
+)
+
+/**
+ * Asks before an action that cannot be undone. [confirm] names the action
+ * (in red when [danger]); it runs [onConfirm], and either button or a tap
+ * outside closes the dialog through [onDismiss].
+ */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    body: String,
+    confirm: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    danger: Boolean = true,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Tokens.SurfaceRaised,
+        title = { Text(title, color = Tokens.Text) },
+        text = { Text(body, color = Tokens.TextMuted) },
+        confirmButton = {
+            QuietButton(confirm, danger = danger, onClick = {
+                onDismiss()
+                onConfirm()
+            })
+        },
+        dismissButton = { QuietButton("Cancel", onClick = onDismiss) },
+    )
+}
+
+/**
+ * One choice of a few, as a pill of equal segments with the chosen one
+ * filled. [track] is the pill's colour: one step above what it sits on.
+ */
+@Composable
+fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, track: Color = Tokens.SurfaceRaised) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .background(track)
+            .padding(4.dp),
+    ) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Text(
+                label,
+                color = if (on) Tokens.AccentContrast else Tokens.TextMuted,
+                fontSize = Tokens.TextMd,
+                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(Tokens.RadiusPill))
+                    .background(if (on) Tokens.Accent else track)
+                    .clickable { onSelect(i) }
+                    .padding(vertical = 10.dp),
+            )
+        }
+    }
 }
 
 /** A centred invitation for an empty page: a large icon, what to do, and the button to do it. */

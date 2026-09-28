@@ -16,7 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,18 +38,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.ActionRow
-import com.codedeck.plus.ui.components.GroupScope
-import com.codedeck.plus.ui.components.IconAction
-import com.codedeck.plus.ui.components.NavRow
 import com.codedeck.plus.ui.components.Chip
+import com.codedeck.plus.ui.components.ConfirmDialog
 import com.codedeck.plus.ui.components.DeckIcons
 import com.codedeck.plus.ui.components.Dot
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
+import com.codedeck.plus.ui.components.GroupScope
+import com.codedeck.plus.ui.components.IconAction
+import com.codedeck.plus.ui.components.NavRow
 import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.PickerOption
-import com.codedeck.plus.ui.components.QuietButton
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.ValueRow
@@ -91,6 +90,20 @@ internal fun machineStatusText(machine: UniffiMachineSummary, now: Long): String
     }
 }
 
+/**
+ * The machine [pubkey] as the core knows it, for a page about that machine.
+ * Null until the machines arrive, and once they have when it is not among
+ * them (removed, perhaps from another device); then [onGone] runs once, to
+ * close the page.
+ */
+@Composable
+internal fun machineOrLeave(core: CoreHost, pubkey: String, onGone: () -> Unit): UniffiMachineSummary? {
+    val machinesView by core.machines.collectAsState()
+    val machine = machinesView?.machines?.find { it.pubkeyHex == pubkey }
+    if (machine == null && machinesView != null) LaunchedEffect(Unit) { onGone() }
+    return machine
+}
+
 /** `npub1abcdef…uvwxyz`: enough of both ends to tell two keys apart. */
 internal fun shortKey(key: String): String = if (key.length <= 20) key else "${key.take(12)}…${key.takeLast(6)}"
 
@@ -113,7 +126,7 @@ fun MachineSettingsContent(
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
-    onOpenMcp: (agent: String) -> Unit = {},
+    onOpenMcp: (agent: String) -> Unit,
 ) {
     // The model pickers need each agent's list, and the plugin rows their
     // counts: ask for them on opening.
@@ -175,25 +188,16 @@ fun MachineSettingsContent(
     }
 
     if (confirmRemove) {
-        AlertDialog(
-            onDismissRequest = { confirmRemove = false },
-            containerColor = Tokens.SurfaceRaised,
-            title = { Text("Remove ${machineLabel(machine.name)}?", color = Tokens.Text) },
-            text = {
-                Text(
-                    "Its sessions keep running on the machine. This phone forgets the pairing and the " +
-                        "transcripts it kept; pair again to come back.",
-                    color = Tokens.TextMuted,
-                )
+        ConfirmDialog(
+            title = "Remove ${machineLabel(machine.name)}?",
+            body = "Its sessions keep running on the machine. This phone forgets the pairing and the " +
+                "transcripts it kept; pair again to come back.",
+            confirm = "Remove",
+            onConfirm = {
+                dispatch(UniffiIntent.RemoveMachine(machine.pubkeyHex))
+                onBack()
             },
-            confirmButton = {
-                QuietButton("Remove", onClick = {
-                    confirmRemove = false
-                    dispatch(UniffiIntent.RemoveMachine(machine.pubkeyHex))
-                    onBack()
-                }, danger = true)
-            },
-            dismissButton = { QuietButton("Cancel", onClick = { confirmRemove = false }) },
+            onDismiss = { confirmRemove = false },
         )
     }
 }
@@ -407,15 +411,10 @@ fun MachineSettingsScreen(
     onOpenPlugins: (agent: String) -> Unit,
     onOpenMcp: (agent: String) -> Unit,
 ) {
-    val machinesView by core.machines.collectAsState()
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
     val scope = rememberCoroutineScope()
-    val machine = machinesView?.machines?.find { it.pubkeyHex == pubkey }
-    if (machine == null) {
-        if (machinesView != null) LaunchedEffect(Unit) { onBack() }
-        return
-    }
+    val machine = machineOrLeave(core, pubkey, onGone = onBack) ?: return
     MachineSettingsContent(
         machine = machine,
         connectedRelays = connection?.connectedRelays?.toSet().orEmpty(),

@@ -41,6 +41,7 @@ import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
 import com.codedeck.plus.ui.components.IconAction
 import com.codedeck.plus.ui.components.Page
+import com.codedeck.plus.ui.components.PageLoading
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.QuietButton
 import com.codedeck.plus.ui.components.SecondaryButton
@@ -106,9 +107,7 @@ fun PairingScreen(core: CoreHost, onClose: () -> Unit) {
 
     val view = pairing
     if (view == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
+        PageLoading()
     } else {
         PairingBody(view = view, selfNpub = selfNpub, dispatch = ::dispatch, onClose = onClose)
     }

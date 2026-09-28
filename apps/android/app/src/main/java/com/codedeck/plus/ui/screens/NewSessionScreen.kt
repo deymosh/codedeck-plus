@@ -2,22 +2,18 @@ package com.codedeck.plus.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +30,7 @@ import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
 import com.codedeck.plus.ui.components.GroupScope
 import com.codedeck.plus.ui.components.Page
+import com.codedeck.plus.ui.components.PageLoading
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.SelectField
@@ -46,13 +43,13 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import uniffi.client_runtime.CoreEvent
-import uniffi.client_runtime.SliceId
-import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiAgent
+import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiProviderProfileInfo
+import uniffi.client_runtime.CoreEvent
+import uniffi.client_runtime.SliceId
 
 /** Radio value for the free-text "new folder" branch — same sentinel `NewSessionModal.tsx` uses. */
 private const val NEW_FOLDER = "__new__"
@@ -88,24 +85,15 @@ fun NewSessionScreen(
     onClose: () -> Unit,
     onCreated: (knownSessionIds: Set<String>) -> Unit,
 ) {
-    val machinesView by core.machines.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun dispatch(intent: UniffiIntent) {
         scope.launch { core.dispatch(intent) }
     }
 
-    val machine = machinesView?.machines?.find { it.pubkeyHex == machinePubkey }
-    if (machinesView != null && machine == null) {
-        // The machine vanished (e.g. removed on another device) while this
-        // screen was open — nothing sane to create against, so back out.
-        LaunchedEffect(Unit) { onClose() }
-        return
-    }
+    val machine = machineOrLeave(core, machinePubkey, onGone = onClose)
     if (machine == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
+        PageLoading()
         return
     }
 

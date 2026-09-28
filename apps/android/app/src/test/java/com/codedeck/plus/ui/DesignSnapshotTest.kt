@@ -152,7 +152,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "settings_machine" to {
         MachineSettingsContent(
             machine = workstation, connectedRelays = setOf("wss://relay.example.org"), credentialsStatus = null,
-            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenPlugins = {},
+            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenPlugins = {}, onOpenMcp = {},
         )
     },
     "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },

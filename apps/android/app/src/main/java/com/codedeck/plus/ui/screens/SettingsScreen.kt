@@ -7,7 +7,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -18,7 +17,6 @@ import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.SettingsEthernet
 import androidx.compose.material.icons.outlined.TextFields
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -47,6 +45,7 @@ import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
 import com.codedeck.plus.ui.components.NavRow
 import com.codedeck.plus.ui.components.Page
+import com.codedeck.plus.ui.components.PageLoading
 import com.codedeck.plus.ui.components.QuietButton
 import com.codedeck.plus.ui.components.RowIcon
 import com.codedeck.plus.ui.components.SecondaryButton
@@ -73,6 +72,8 @@ internal sealed interface SettingsPage {
     data class Machine(val pubkey: String) : SettingsPage
     /** One agent's plugins on a machine, opened from the machine's page. */
     data class Plugins(val pubkey: String, val agent: String) : SettingsPage
+    /** One agent's MCP servers on a machine, opened from the machine's page. */
+    data class Mcp(val pubkey: String, val agent: String) : SettingsPage
     data object Appearance : SettingsPage
     data object Notifications : SettingsPage
     data object Connection : SettingsPage
@@ -84,6 +85,7 @@ internal sealed interface SettingsPage {
         Hub -> "hub"
         is Machine -> "machine:$pubkey"
         is Plugins -> "plugins:$pubkey:$agent"
+        is Mcp -> "mcp:$pubkey:$agent"
         Appearance -> "appearance"
         Notifications -> "notifications"
         Connection -> "connection"
@@ -96,6 +98,7 @@ internal sealed interface SettingsPage {
         fun restore(saved: String): SettingsPage = when {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
             saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
+            saved.startsWith("mcp:") -> saved.split(':').let { Mcp(it[1], it.drop(2).joinToString(":")) }
             saved == "appearance" -> Appearance
             saved == "notifications" -> Notifications
             saved == "connection" -> Connection
@@ -146,13 +149,17 @@ fun SettingsScreen(
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
-    // A plugins page goes back to its machine's page, every other to the hub.
-    val back = (page as? SettingsPage.Plugins)?.let { { open(SettingsPage.Machine(it.pubkey)) } } ?: toHub
+    // A plugins or MCP page goes back to its machine's page, every other to the hub.
+    val back = when (page) {
+        is SettingsPage.Plugins -> { { open(SettingsPage.Machine(page.pubkey)) } }
+        is SettingsPage.Mcp -> { { open(SettingsPage.Machine(page.pubkey)) } }
+        else -> toHub
+    }
     if (page != SettingsPage.Hub) BackHandler(onBack = back)
 
     val view = settings
     if (view == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        PageLoading()
         return
     }
     val machines = machinesView?.machines.orEmpty().sortedBy { it.name.lowercase() }
@@ -186,10 +193,12 @@ fun SettingsScreen(
                     dispatch = ::dispatch,
                     onBack = toHub,
                     onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
+                    onOpenMcp = { agent -> open(SettingsPage.Mcp(machine.pubkeyHex, agent)) },
                 )
             }
         }
         is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
+        is SettingsPage.Mcp -> McpScreen(core, page.pubkey, page.agent, onBack = back)
         SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
         SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)
         SettingsPage.Connection -> {
