@@ -19,6 +19,7 @@
 mod android_log;
 pub mod db;
 pub mod intent;
+pub mod mcp;
 pub mod notifier;
 pub mod observer;
 pub mod signer;

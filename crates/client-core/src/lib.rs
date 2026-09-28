@@ -16,6 +16,7 @@ pub mod bridge_api;
 pub mod connection;
 pub mod delete_controller;
 pub mod image_chunks;
+pub mod mcp_import;
 pub mod notifications;
 pub mod presentation;
 pub mod selection_persistence;

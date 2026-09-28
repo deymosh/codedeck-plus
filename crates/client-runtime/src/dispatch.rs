@@ -361,6 +361,18 @@ impl<'a> Router<'a> {
                 self.stores.machines.apply_plugin_ack(machine, m);
                 r.persist(StoreId::Machines);
             }
+            BridgeToPhone::McpServers(m) => {
+                self.stores.machines.apply_mcp(machine, m);
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::McpAck(m) => {
+                self.stores.machines.apply_mcp_ack(machine, m);
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::SessionMcp(m) => {
+                self.stores.machines.apply_session_mcp(machine, m);
+                r.persist(StoreId::Machines);
+            }
             BridgeToPhone::Commands(m) => {
                 self.stores.machines.apply_commands(machine, m);
                 r.persist(StoreId::Machines);
