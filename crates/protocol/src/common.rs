@@ -139,12 +139,17 @@ pub struct McpServerSpec {
     pub transport: McpTransport,
 }
 
-/// An MCP server name: 1–64 letters, digits, `-`, `_` or `.`.
+/// An MCP server name: 1–64 letters, digits, `-`, `_` or `.`, starting with
+/// a letter or digit (an agent's CLI takes it as an argument, where a leading
+/// `-` would read as an option).
 pub fn is_valid_mcp_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    name.len() <= 64
+        && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-pub const MCP_NAME_ERROR: &str = "A server name is 1 to 64 letters, digits, dashes, underscores or dots.";
+pub const MCP_NAME_ERROR: &str =
+    "A server name is 1 to 64 letters, digits, dashes, underscores or dots, starting with a letter or digit.";
 
 impl McpServerSpec {
     /// Why this server cannot be added, if it cannot — the one rule set the
