@@ -5,7 +5,7 @@
  * A `ClaudeSession` turns one SDK query into session events: the SDK's
  * `init` becomes `info` (conversation id, resolved model, actual mode) and
  * confirms the session, `session_state_changed` becomes the turn state,
- * `result` refreshes the context-window numbers, and every message is
+ * each main-agent step and `result` refresh the context numbers, and every message is
  * translated into entries by adapter.ts. Its `canUseTool` callback is where
  * Claude Code's modes get their meaning — which calls run unasked, which
  * need the user, and how plan approval switches the mode.
@@ -34,6 +34,7 @@ import {
   DEFAULT_MODEL,
   modelSupports1mContext,
   type ModelDiscoveryOptions,
+  type SdkAssistantMessage,
   type SdkAuthStatusMessage,
   type SdkCanUseTool,
   type SdkFacade,
@@ -190,6 +191,7 @@ export class ClaudeSession implements DriverSession {
   private sawStateEvents = false;
   private contextWindow: number | undefined;
   private contextPercentage: number | undefined;
+  private contextRefresh: 'idle' | 'running' | 'again' = 'idle';
   private loggedContextMismatch = false;
   /** Most recent Task/Agent subagent_type — a best-effort label for a
    *  sub-agent's permission card (the SDK only exposes an opaque agent id). */
@@ -361,6 +363,10 @@ export class ClaudeSession implements DriverSession {
     }
 
     if (msg.type === 'result') this.onResult(msg as { modelUsage?: Record<string, { contextWindow?: number }> });
+    // Each step of a turn grows the context, so the meter follows the steps
+    // rather than waiting for the turn's end. A sub-agent's messages live in
+    // its own context and leave this one as it was.
+    if (msg.type === 'assistant' && !(msg as SdkAssistantMessage).parent_tool_use_id) this.refreshContext();
 
     const entries = sdkMessageToEntries(msg, this.translate);
     for (const entry of entries) {
@@ -396,7 +402,23 @@ export class ClaudeSession implements DriverSession {
         );
       }
     }
-    void this.refreshContextUsage();
+    this.refreshContext();
+  }
+
+  /** Asks for the context meter, one request at a time: the SDK sends a
+   *  step's content blocks as separate messages, so asks arriving while one
+   *  is in flight fold into a single follow-up that reads the latest. */
+  private refreshContext(): void {
+    if (this.contextRefresh !== 'idle') {
+      this.contextRefresh = 'again';
+      return;
+    }
+    this.contextRefresh = 'running';
+    void this.refreshContextUsage().finally(() => {
+      const again = this.contextRefresh === 'again';
+      this.contextRefresh = 'idle';
+      if (again && !this.ended) this.refreshContext();
+    });
   }
 
   private async refreshContextUsage(): Promise<void> {
