@@ -3,9 +3,13 @@ package com.codedeck.plus.ui.transcript.rows
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,6 +34,13 @@ private fun lineColor(type: String): Color = when (type) {
     "add" -> Tokens.Success
     "del" -> Tokens.Danger
     else -> Tokens.TextMuted
+}
+
+/** A faint wash behind added / removed lines, so a change scans as a block. */
+private fun lineTint(type: String): Color = when (type) {
+    "add" -> Tokens.Success.copy(alpha = 0.10f)
+    "del" -> Tokens.Danger.copy(alpha = 0.10f)
+    else -> Color.Transparent
 }
 
 private fun linePrefix(type: String): String = when (type) {
@@ -75,15 +86,28 @@ fun DiffRow(path: String, lines: List<DiffLine>, truncated: Boolean, expanded: B
         }
         // Lines never wrap — a wrapped code line breaks the +/- column and the
         // indentation — so the block scrolls sideways instead, as one unit.
-        Column(Modifier.horizontalScroll(rememberScrollState())) {
-            visible.forEach { line: DiffLine ->
-                Text(
-                    linePrefix(line.type) + line.text,
-                    color = lineColor(line.type),
-                    fontFamily = Tokens.FontMono,
-                    fontSize = Tokens.TextXs,
-                    softWrap = false,
-                )
+        // It is as wide as its widest line (at least the card), so an added
+        // or removed line's tint runs the full width of the block.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .widthIn(min = maxWidth)
+                    .width(IntrinsicSize.Max),
+            ) {
+                visible.forEach { line: DiffLine ->
+                    Text(
+                        linePrefix(line.type) + line.text,
+                        color = lineColor(line.type),
+                        fontFamily = Tokens.FontMono,
+                        fontSize = Tokens.TextXs,
+                        softWrap = false,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(lineTint(line.type))
+                            .padding(horizontal = Tokens.Space1),
+                    )
+                }
             }
         }
         if (overflow > 0) {

@@ -5,6 +5,10 @@ import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.core.app.ActivityOptionsCompat
 import com.codedeck.plus.ui.transcript.DisplayEntry
+import com.codedeck.plus.ui.transcript.OptionChoice
+import com.codedeck.plus.ui.transcript.PermissionOption
+import com.codedeck.plus.ui.transcript.QuestionOption
+import com.codedeck.plus.ui.transcript.QuestionView
 import com.codedeck.plus.ui.transcript.displayEntriesJson
 import com.codedeck.plus.ui.transcript.parseDisplayEntries
 import kotlinx.serialization.json.jsonObject
@@ -142,6 +146,48 @@ internal object DesignFixtures {
         val raw = javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText()
         return parseDisplayEntries(displayEntriesJson.parseToJsonElement(raw).jsonObject.getValue("displayEntries").toString())
     }
+
+    /** A plan document and the cards that wait on the user, unanswered. */
+    val waitingCards: List<DisplayEntry> = listOf(
+        DisplayEntry.AgentMessage(
+            seq = 1,
+            isPlan = true,
+            text = "1. Move the reducer into `client-core`.\n2. Port its tests.\n3. Delete the TypeScript copy.",
+        ),
+        DisplayEntry.PlanApproval(
+            seq = 2,
+            requestId = "p1",
+            options = listOf(
+                OptionChoice("accept", "Yes, and auto-accept edits", "Edits apply without asking"),
+                OptionChoice("default", "Yes, and ask before each edit"),
+                OptionChoice("plan", "No, keep planning", "Stay in plan mode and send feedback"),
+            ),
+        ),
+        DisplayEntry.Question(
+            seq = 3,
+            requestId = "q1",
+            questions = listOf(
+                QuestionView(
+                    index = 0,
+                    header = "Tests",
+                    question = "Should the ported tests keep their TypeScript names?",
+                    options = listOf(QuestionOption("Keep them", "Easier to compare"), QuestionOption("Rename to Rust style")),
+                ),
+            ),
+        ),
+        DisplayEntry.PermissionRequest(
+            seq = 4,
+            requestId = "r1",
+            toolName = "Bash",
+            toolKind = "execute",
+            title = "cargo test -p client-core",
+            options = listOf(
+                PermissionOption("allow", "Allow", "allow_once"),
+                PermissionOption("always", "Always allow", "allow_always"),
+                PermissionOption("deny", "Deny", "reject_once"),
+            ),
+        ),
+    )
 
     /** The QR scanner's permission launcher needs an owner; nothing launches in a snapshot. */
     val noResults = object : ActivityResultRegistryOwner {

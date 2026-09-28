@@ -1,6 +1,7 @@
 package com.codedeck.plus.ui.transcript.rows
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
@@ -36,17 +38,25 @@ fun UserMessageRow(text: String) {
 }
 
 /** Agent text (markdown). `isPlan` frames it as a plan document, which stays
- *  readable after the plan is approved. */
+ *  readable after the plan is approved: outlined in the accent rather than
+ *  filled, so it reads as a document and not as one more card. */
 @Composable
 fun AgentTextRow(text: String, isPlan: Boolean = false) {
+    val planShape = RoundedCornerShape(Tokens.RadiusLg)
     Column(
         Modifier
             .fillMaxWidth()
-            .let { if (isPlan) it.background(Tokens.SurfaceRaised, RoundedCornerShape(Tokens.RadiusLg)) else it }
-            .padding(if (isPlan) Tokens.Space3 else Tokens.Space1),
+            .let { if (isPlan) it.border(1.dp, Tokens.Accent.copy(alpha = 0.55f), planShape) else it }
+            .padding(if (isPlan) Tokens.Space4 else Tokens.Space1),
     ) {
         if (isPlan) {
-            Text("Plan", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+            Text(
+                "Plan",
+                color = Tokens.Text,
+                fontSize = Tokens.TextSm,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = Tokens.Space2),
+            )
         }
         TranscriptMarkdown(text)
     }
