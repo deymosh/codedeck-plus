@@ -33,11 +33,16 @@ class AttachmentTest {
     }
 
     @Test
-    fun aServerAddressIsHttpsWithAHost() {
+    fun aServerAddressIsHttpsWithAHostOrHttpToAnOnion() {
         assertTrue(isBlossomUrl(" https://blossom.example.com/ "))
+        assertTrue(isBlossomUrl("http://abcdef.onion:3000"))
         assertFalse(isBlossomUrl("http://blossom.example.com"))
+        assertFalse(isBlossomUrl("http://evil.onion.example.com"))
+        assertFalse(isBlossomUrl("http://.onion"))
         assertFalse(isBlossomUrl("blossom.example.com"))
         assertFalse(isBlossomUrl("https://"))
+        assertFalse(isBlossomUrl("https:///x"))
         assertEquals("blossom.example.com", blossomHost("https://blossom.example.com/upload"))
+        assertEquals("abcdef.onion:3000", blossomHost("http://abcdef.onion:3000/"))
     }
 }

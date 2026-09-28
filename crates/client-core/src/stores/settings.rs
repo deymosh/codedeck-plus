@@ -120,13 +120,13 @@ impl SettingsState {
     pub fn set_tor_proxy_enabled(&mut self, on: bool) {
         self.data.tor_proxy_enabled = on;
     }
-    /// `""` clears it. Anything else must be an https address: an upload
-    /// carries an auth event the phone's identity signed, which no
-    /// cleartext hop may see. Answers whether the value was taken.
+    /// `""` clears it. Anything else must be an https address, or http to an
+    /// onion service: an upload carries an auth event the phone's identity
+    /// signed, which no cleartext hop may see, and Tor encrypts the whole
+    /// path to an onion service. Answers whether the value was taken.
     pub fn set_blossom_server(&mut self, url: &str) -> bool {
         let url = url.trim();
-        let https_host = url.strip_prefix("https://").is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'));
-        if !url.is_empty() && (!https_host || url.chars().any(char::is_whitespace)) {
+        if !url.is_empty() && (!is_blossom_url(url) || url.chars().any(char::is_whitespace)) {
             return false;
         }
         self.data.blossom_server = url.to_string();
@@ -140,6 +140,16 @@ impl SettingsState {
     }
     pub fn set_show_commit_badge(&mut self, on: bool) {
         self.data.show_commit_badge = on;
+    }
+}
+
+/// `https://<host>…`, or `http://<name>.onion…`.
+fn is_blossom_url(url: &str) -> bool {
+    let host = |rest: &str| rest.split(['/', ':', '?', '#']).next().unwrap_or("").to_ascii_lowercase();
+    match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+        (Some(rest), _) => !host(rest).is_empty(),
+        (None, Some(rest)) => host(rest).strip_suffix(".onion").is_some_and(|name| !name.is_empty() && !name.ends_with('.')),
+        _ => false,
     }
 }
 
@@ -185,10 +195,20 @@ mod tests {
     }
 
     #[test]
-    fn a_blossom_server_is_https_or_nothing() {
+    fn a_blossom_server_is_https_onion_http_or_nothing() {
         let mut st = SettingsState::default();
+        assert!(st.set_blossom_server("http://abcdef.onion:3000"));
+        assert_eq!(st.data.blossom_server, "http://abcdef.onion:3000");
         assert!(st.set_blossom_server("https://blossom.example"));
-        for refused in ["http://blossom.example", "blossom.example", "https://", "https:///x", "https://a b"] {
+        for refused in [
+            "http://blossom.example",
+            "http://evil.onion.example.com",
+            "http://.onion",
+            "blossom.example",
+            "https://",
+            "https:///x",
+            "https://a b",
+        ] {
             assert!(!st.set_blossom_server(refused), "{refused}");
             assert_eq!(st.data.blossom_server, "https://blossom.example");
         }

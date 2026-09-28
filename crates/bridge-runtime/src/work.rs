@@ -3,7 +3,7 @@
 //! bridge down.
 //!
 //! HTTP here goes direct, never through the Tor proxy: that proxy carries
-//! relay traffic only.
+//! relay traffic and onion-service downloads only.
 
 use std::path::Path;
 use std::time::Duration;

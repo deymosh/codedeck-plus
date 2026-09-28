@@ -110,10 +110,10 @@ commands, Blossom upload auth — follows a user action.
 
 **Orbot.** A settings toggle routes the relay connections *and* Blossom
 traffic through Orbot's SOCKS5 proxy (`127.0.0.1:9050`); DNS resolves at the
-proxy, so `.onion` relays work. The app does not launch or manage Orbot, and
-the toggle is fully applied on the next app start (while running it affects
-new connections only). Cleartext `ws://` is refused except to `.onion` hosts
-(and loopback, for tests).
+proxy, so `.onion` relays and Blossom servers work. The app does not launch
+or manage Orbot, and the toggle is fully applied on the next app start (while
+running it affects new connections only). Cleartext `ws://` and `http://` are
+refused except to `.onion` hosts (and `ws://` to loopback, for tests).
 
 The release APK is signed and built for aarch64; `minSdk` is 26 (the JNA
 runtime the UniFFI bindings use needs it).

@@ -130,8 +130,10 @@ you need.
 | `direct.onionListen` | `CODEDECK_DIRECT_ONION_LISTEN` / `--direct-onion-listen` | A plain `ws://` listener for an onion service to forward to; loopback only (e.g. `127.0.0.1:7448`) |
 | `direct.endpoints` | `CODEDECK_DIRECT_ENDPOINTS` / `--direct-endpoint` | The URLs phones dial, in order: `wss://host:port`, or `ws://<name>.onion:port` (default: the `wss://` listener's LAN address; none in a container, which only sees its own) |
 
-The Tor proxy carries relay traffic only; the agents' own API calls and the
-bridge's HTTP checks go direct.
+The Tor proxy carries relay traffic, and file downloads from a `.onion`
+Blossom server (Tor is the only way to reach one; `http://` is accepted for
+those); the agents' own API calls, the bridge's HTTP checks and downloads from
+a public Blossom server go direct.
 
 ### Direct link
 

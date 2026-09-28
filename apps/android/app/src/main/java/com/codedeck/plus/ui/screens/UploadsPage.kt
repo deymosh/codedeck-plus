@@ -22,14 +22,24 @@ import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiSettingsView
 
-/** A Blossom server address the phone will upload to: https, with a host. */
+/**
+ * A Blossom server address the phone will upload to: https with a host, or
+ * http to an onion service (Tor encrypts the whole path to one).
+ */
 internal fun isBlossomUrl(url: String): Boolean {
-    val rest = url.trim().removePrefix("https://")
-    return rest != url.trim() && rest.isNotEmpty() && rest.none { it.isWhitespace() } && !rest.startsWith("/")
+    val trimmed = url.trim()
+    if (trimmed.any { it.isWhitespace() }) return false
+    val host = blossomHost(trimmed).substringBefore(':').lowercase()
+    return when {
+        trimmed.startsWith("https://") -> host.isNotEmpty()
+        trimmed.startsWith("http://") -> host.endsWith(".onion") && host.removeSuffix(".onion").let { it.isNotEmpty() && !it.endsWith('.') }
+        else -> false
+    }
 }
 
 /** The host of a server address, for saying where uploads go. */
-internal fun blossomHost(url: String): String = url.trim().removePrefix("https://").substringBefore('/')
+internal fun blossomHost(url: String): String =
+    url.trim().removePrefix("https://").removePrefix("http://").substringBefore('/').substringBefore('?').substringBefore('#')
 
 /**
  * Where the files attached to sessions go: the user's Blossom server, or —
@@ -67,7 +77,7 @@ internal fun UploadsPage(view: UniffiSettingsView, dispatch: (UniffiIntent) -> U
                     placeholder = "https://blossom.example.com",
                     mono = true,
                     isError = draft.isNotBlank() && !valid,
-                    supporting = if (draft.isNotBlank() && !valid) "Use an https:// address." else null,
+                    supporting = if (draft.isNotBlank() && !valid) "Use an https:// address, or http:// for a .onion." else null,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     SecondaryButton(

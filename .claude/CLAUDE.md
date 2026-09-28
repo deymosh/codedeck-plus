@@ -196,9 +196,10 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   every driver-protocol change in `crates/agent-protocol` (then regenerate the
   host's types). Keep the decoders total.
 - **The Tor/SOCKS proxy is for Nostr relay traffic only.** When one is set,
-  every bridge relay connection goes through it; other outbound calls (HTTP
-  checks, image downloads, the agents' own API traffic) do not use it and are
-  not a proxy bypass. On the phone, the Orbot setting covers relay and Blossom
+  every bridge relay connection goes through it, and so do file downloads from
+  a `.onion` Blossom server (unreachable any other way); other outbound calls
+  (HTTP checks, downloads from a public Blossom server, the agents' own API
+  traffic) do not use it and are not a proxy bypass. On the phone, the Orbot setting covers relay and Blossom
   image traffic alike: no path to a public relay or Blossom server may bypass
   it while it is on. A machine's direct link is not such a path — it goes to
   the user's own bridge on a network they set up (LAN, VPN) and is dialled
