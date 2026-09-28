@@ -22,6 +22,8 @@ use base64::Engine as _;
 use protocol::commands::{UploadFileBlossomMsg, UploadFileChunkMsg};
 use sha2::{Digest, Sha256};
 
+use crate::work::{is_onion_http, NostrHttp};
+
 /// Enough for photos and ordinary documents; the cap keeps a hostile
 /// message from making the bridge buffer arbitrarily much.
 pub const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
@@ -71,41 +73,22 @@ fn has_extension(name: &str) -> bool {
     })
 }
 
-/// Whether a Blossom URL is one the bridge downloads, and whether it is an
-/// onion service: `https://` to any host, `http://` only to a `.onion` —
-/// Tor encrypts the whole path to one.
-fn blossom_target(url: &str) -> Option<bool> {
-    let host = |rest: &str| rest.split(['/', ':', '?', '#']).next().unwrap_or("").to_ascii_lowercase();
-    let onion = |h: &str| h.strip_suffix(".onion").is_some_and(|name| !name.is_empty() && !name.ends_with('.'));
-    match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
-        (Some(rest), _) => Some(host(rest)).filter(|h| !h.is_empty()).map(|h| onion(&h)),
-        (None, Some(rest)) => onion(&host(rest)).then_some(true),
-        _ => None,
-    }
+/// Whether the bridge downloads from `url`: `https://` to a host, or
+/// `http://` to an onion service.
+fn is_blossom_url(url: &str) -> bool {
+    url.strip_prefix("https://").is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/')) || is_onion_http(url)
 }
 
-/// The client for Blossom downloads through the Tor proxy (`host:port`),
-/// DNS resolved at the proxy. An error, never a silent fallback to direct.
-pub fn tor_http_client(tor_proxy: &str) -> Result<reqwest::Client, String> {
-    let proxy = reqwest::Proxy::all(format!("socks5h://{tor_proxy}")).map_err(|e| format!("Tor proxy {tor_proxy:?}: {e}"))?;
-    reqwest::Client::builder().proxy(proxy).build().map_err(|e| format!("Tor proxy {tor_proxy:?}: {e}"))
-}
-
-/// Download, verify and decrypt a Blossom upload. With a Tor proxy set
-/// (`tor`), every download goes through it: the Blossom server then learns
-/// no more about the bridge than the relays do, and an onion service is
-/// reachable at all. Without one, downloads go direct and a `.onion` is
-/// refused.
-pub async fn fetch_blossom(direct: &reqwest::Client, tor: Option<&reqwest::Client>, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
+/// Download, verify and decrypt a Blossom upload — through the Tor proxy
+/// when one is set (see [`NostrHttp`]).
+pub async fn fetch_blossom(http: &NostrHttp, msg: &UploadFileBlossomMsg) -> Result<Vec<u8>, String> {
     // The URL is phone-supplied: https (or http to an onion service) only,
     // and the body capped regardless of the size the message claims — the
     // bridge is not a general HTTP client.
-    let http = match (blossom_target(&msg.url), tor) {
-        (None, _) => return Err("download refused: https (or http to a .onion) required".into()),
-        (Some(_), Some(tor)) => tor,
-        (Some(false), None) => direct,
-        (Some(true), None) => return Err("download refused: a .onion server needs the bridge's Tor proxy (CODEDECK_TOR_PROXY_URL)".into()),
-    };
+    if !is_blossom_url(&msg.url) {
+        return Err("download refused: https (or http to a .onion) required".into());
+    }
+    let http = http.for_url(&msg.url).map_err(|e| format!("download refused: {e}"))?;
     if msg.size_bytes as usize > MAX_UPLOAD_BYTES {
         return Err(format!("download refused: {} bytes is over the {MAX_UPLOAD_BYTES}-byte cap", msg.size_bytes));
     }
@@ -311,13 +294,12 @@ mod tests {
 
     #[test]
     fn blossom_urls_are_https_or_http_to_an_onion() {
-        assert_eq!(blossom_target("https://blossom.example/abc"), Some(false));
-        assert_eq!(blossom_target("https://abcdef.onion/abc"), Some(true));
-        assert_eq!(blossom_target("http://abcdef.onion:3000/abc"), Some(true));
-        for refused in ["http://blossom.example/abc", "http://evil.onion.example.com/abc", "http://.onion/abc", "https:///abc", "ftp://x/abc"] {
-            assert_eq!(blossom_target(refused), None, "{refused}");
+        for ok in ["https://blossom.example/abc", "https://abcdef.onion/abc", "http://abcdef.onion:3000/abc"] {
+            assert!(is_blossom_url(ok), "{ok}");
         }
-        assert!(tor_http_client("127.0.0.1:9050").is_ok());
+        for refused in ["http://blossom.example/abc", "http://evil.onion.example.com/abc", "http://.onion/abc", "https:///abc", "ftp://x/abc"] {
+            assert!(!is_blossom_url(refused), "{refused}");
+        }
     }
 
     #[test]
