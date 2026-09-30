@@ -513,6 +513,15 @@ pub struct UniffiPluginFailure {
     pub error: String,
 }
 
+/// What the last plugin change that succeeded reported: its action's wire
+/// name, its target, and the agent's words.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPluginNotice {
+    pub action: String,
+    pub target: String,
+    pub message: String,
+}
+
 /// One agent's plugins on a machine.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiAgentPlugins {
@@ -528,6 +537,10 @@ pub struct UniffiAgentPlugins {
     pub error: Option<String>,
     /// Targets of changes sent and not acknowledged yet.
     pub busy: Vec<String>,
+    /// What the last change that succeeded reported, in the agent's words
+    /// (e.g. an update's from/to versions); cleared when the next change is
+    /// sent.
+    pub notice: Option<UniffiPluginNotice>,
     pub failure: Option<UniffiPluginFailure>,
 }
 
@@ -565,6 +578,11 @@ fn to_uniffi_agent_plugins(agent: &str, p: &AgentPlugins) -> UniffiAgentPlugins 
         }),
         error: p.error.clone(),
         busy: p.busy.clone(),
+        notice: p.notice.as_ref().map(|n| UniffiPluginNotice {
+            action: wire_str(&n.action),
+            target: n.target.clone(),
+            message: n.message.clone(),
+        }),
         failure: p.failure.as_ref().map(|f| UniffiPluginFailure {
             action: wire_str(&f.action),
             target: f.target.clone(),

@@ -175,9 +175,9 @@ pub enum UniffiIntent {
         available: bool,
     },
     /// Change an agent's plugins. `action`: `install`, `uninstall`,
-    /// `enable`, `disable` (target: a plugin id), `add-marketplace` (target:
-    /// `owner/repo` or a URL), `remove-marketplace`, `update-marketplace`
-    /// (target: its name).
+    /// `enable`, `disable`, `update` (target: a plugin id), `add-marketplace`
+    /// (target: `owner/repo` or a URL), `remove-marketplace`,
+    /// `update-marketplace` (target: its name).
     PluginAction {
         machine: String,
         agent: String,

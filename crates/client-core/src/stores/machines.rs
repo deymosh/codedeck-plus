@@ -380,6 +380,11 @@ pub struct AgentPlugins {
     /// Targets of the changes sent and not acknowledged yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub busy: Vec<String>,
+    /// What the last change that succeeded reported, in the agent's words
+    /// (e.g. an update's from/to versions); cleared when the next change is
+    /// sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<PluginNotice>,
     /// The last change that failed, until the next one succeeds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<PluginFailure>,
@@ -411,6 +416,15 @@ pub struct McpFailure {
     pub action: McpAction,
     pub names: Vec<String>,
     pub error: String,
+}
+
+/// What a change that succeeded reported, and which change it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginNotice {
+    pub action: PluginAction,
+    pub target: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -882,13 +896,15 @@ impl MachinesState {
         });
     }
 
-    /// A change was sent: its target is busy until acknowledged.
+    /// A change was sent: its target is busy until acknowledged, and the
+    /// previous change's report gives way to it.
     pub fn plugin_action_sent(&mut self, machine_pubkey: &str, agent: &str, target: &str) {
         self.with_machine(machine_pubkey, |m| {
             let p = m.plugins.entry(agent.to_string()).or_default();
             if !p.busy.iter().any(|t| t == target) {
                 p.busy.push(target.to_string());
             }
+            p.notice = None;
         });
     }
 
@@ -896,6 +912,11 @@ impl MachinesState {
         self.with_machine(machine_pubkey, |m| {
             let p = m.plugins.entry(msg.agent.clone()).or_default();
             p.busy.retain(|t| *t != msg.target);
+            p.notice = msg.success.then(|| msg.message.clone()).flatten().map(|message| PluginNotice {
+                action: msg.action,
+                target: msg.target.clone(),
+                message,
+            });
             p.failure = (!msg.success).then(|| PluginFailure {
                 action: msg.action,
                 target: msg.target.clone(),
@@ -1529,12 +1550,24 @@ mod tests {
             target: "b@m".into(),
             success,
             error: (!success).then(|| "not found".into()),
+            message: None,
         };
         st.apply_plugin_ack("pk", &ack(true));
         st.apply_plugins("pk", &msg(vec![installed("a@m"), installed("b@m")], None, None));
         let p = held(&st);
         assert!(p.busy.is_empty() && p.failure.is_none());
         assert_eq!(p.available.unwrap().iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["c@m"]);
+
+        // A success with something to say keeps it; the next change sent
+        // clears it, and a failure leaves nothing.
+        let mut said = ack(true);
+        said.message = Some("Updated from 0.1.0 to 0.2.0.".into());
+        st.apply_plugin_ack("pk", &said);
+        assert_eq!(held(&st).notice.as_ref().map(|n| n.message.as_str()), Some("Updated from 0.1.0 to 0.2.0."));
+        st.plugin_action_sent("pk", "claude-code", "b@m");
+        assert_eq!(held(&st).notice, None);
+        st.apply_plugin_ack("pk", &ack(false));
+        assert_eq!(held(&st).notice, None);
 
         st.plugin_action_sent("pk", "claude-code", "b@m");
         st.apply_plugin_ack("pk", &ack(false));
