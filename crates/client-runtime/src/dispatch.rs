@@ -857,7 +857,6 @@ mod tests {
             EntryBody::Text {
                 role: protocol::common::Role::Agent,
                 text: content.to_string(),
-                collapsible: false,
             },
         )
     }

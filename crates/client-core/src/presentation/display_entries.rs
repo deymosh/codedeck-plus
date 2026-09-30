@@ -805,7 +805,7 @@ mod tests {
         let d = build_display_entries(&seq(&[
             json!({"entryType":"text","role":"user","text":"fix it"}),
             json!({"entryType":"thinking","text":"hmm"}),
-            json!({"entryType":"text","role":"agent","text":"Checking.","collapsible":true}),
+            json!({"entryType":"text","role":"agent","text":"Checking."}),
             call("c1"),
             result("c1", "ok"),
             json!({"entryType":"text","role":"agent","text":"Done."}),

@@ -143,12 +143,12 @@ describe('sdkMessageToEntries', () => {
       expect(ctx.hiddenCallIds.has('tool_q')).toBe(true);
     });
 
-    it('text written alongside tool calls is collapsible', () => {
+    it('text written alongside a tool call is an entry of its own', () => {
       const entries = translate(assistant([
         { type: 'text', text: 'Let me explore the codebase.' },
         { type: 'tool_use', id: 'tool_agent', name: 'Agent', input: { description: 'Explore', prompt: 'Search for files...' } },
       ]));
-      expect(find(entries, 'text')).toMatchObject({ role: 'agent', collapsible: true });
+      expect(find(entries, 'text')).toMatchObject({ role: 'agent', text: 'Let me explore the codebase.' });
       expect(find(entries, 'tool_call')).toMatchObject({ kind: 'agent', title: 'Explore', input: 'Search for files...' });
     });
 
@@ -157,7 +157,7 @@ describe('sdkMessageToEntries', () => {
         { type: 'text', text: 'Searching for files...' },
         { type: 'tool_use', id: 'tool_read', name: 'Read', input: { file_path: '/src/main.ts' } },
       ], 'parent_agent_tool'));
-      expect(find(entries, 'text')).toMatchObject({ subagent: {}, collapsible: true });
+      expect(find(entries, 'text')).toMatchObject({ subagent: {} });
       expect(find(entries, 'tool_call')).toMatchObject({ subagent: {} });
     });
 
@@ -182,9 +182,8 @@ describe('sdkMessageToEntries', () => {
       });
     });
 
-    it('a text-only answer is not collapsible and not a sub-agent', () => {
+    it('a text-only answer is not a sub-agent', () => {
       const text = find(translate(assistant([{ type: 'text', text: 'Here is the answer.' }])), 'text')!;
-      expect(text.collapsible).toBeUndefined();
       expect(text.subagent).toBeUndefined();
     });
   });
@@ -306,7 +305,6 @@ describe('thinking blocks', () => {
     expect(thinking.redacted).toBeUndefined();
     // The visible text still comes through as its own entry, not collapsed.
     expect(find(entries, 'text')).toMatchObject({ text: 'Here is the answer.' });
-    expect(find(entries, 'text')!.collapsible).toBeUndefined();
   });
 
   it('marks redacted_thinking as redacted with empty text', () => {

@@ -121,7 +121,7 @@ mod tests {
         };
         assert_eq!(
             entries[0],
-            OutputEntry::new("t", EntryBody::Text { role: Role::Agent, text: "hello".into(), collapsible: false })
+            OutputEntry::new("t", EntryBody::Text { role: Role::Agent, text: "hello".into() })
         );
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"turn","state":"running"}}}));
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"ended"}}}));
@@ -185,7 +185,7 @@ mod tests {
             event: SessionEvent::Entries {
                 entries: vec![OutputEntry::new(
                     "t",
-                    EntryBody::Text { role: Role::Agent, text: "two\nlines".into(), collapsible: false },
+                    EntryBody::Text { role: Role::Agent, text: "two\nlines".into() },
                 )],
             },
         });

@@ -107,7 +107,7 @@ tagged by `entryType`:
 
 | `entryType` | What |
 |---|---|
-| `text` | conversation text; `role: user|agent`; `collapsible` folds it into a tool group |
+| `text` | conversation text; `role: user|agent` |
 | `plan` | a proposed plan (markdown) |
 | `thinking` | model reasoning; `redacted` when the provider withheld it |
 | `tool_call` | `callId`, `toolName` (display only), `kind` (read, edit, delete, move, search, execute, think, fetch, switch_mode, agent — a sub-agent launch —, other), `title`, `locations`, `input` (the whole input as text, bounded; absent for a file change, whose `diff` carries it) |
