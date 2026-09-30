@@ -38,9 +38,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.components.CodeBlock
 import com.codedeck.plus.ui.components.DiffStat
@@ -53,25 +55,28 @@ import com.codedeck.plus.ui.transcript.ToolStep
 /**
  * A tool group's details, over the conversation. A group of several steps
  * opens on their timeline, and a tap on a step shows it whole; a lone call
- * opens straight on its own page. [live] says the turn still runs, so a
- * call without a result is running rather than cut short.
+ * opens straight on its own page. A sub-agent's call shows the steps it took
+ * on its page, and those open the same way. [live] says the turn still
+ * runs, so a call without a result is running rather than cut short.
+ * [openAt] opens it on a step instead: the seqs from the group's step down
+ * to the one to show.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, onDismiss: () -> Unit) {
+fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, openAt: List<Long>?, onDismiss: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
         containerColor = Tokens.SurfaceRaised,
         contentColor = Tokens.Text,
     ) {
-        var openStep by remember(group.seq) { mutableStateOf(loneStep(group)?.seq) }
+        var path by remember(group.seq, openAt) { mutableStateOf(openAt ?: listOfNotNull(loneStep(group)?.seq)) }
         Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding()) {
             ToolSheetContent(
                 group = group,
                 live = live,
-                openStep = openStep,
-                onOpenStep = { openStep = it },
+                openPath = path,
+                onOpenPath = { path = it },
                 onClose = onDismiss,
             )
         }
@@ -82,17 +87,29 @@ fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, onDismiss: () -
 private fun loneStep(group: DisplayEntry.ToolGroup): ToolStep? =
     if (group.subject != null) group.steps.singleOrNull { it is ToolStep.Call } else null
 
+/** The step [path] leads to: each seq names a step among the previous
+ *  one's sub-agent steps, starting from the group's. */
+private fun resolve(group: DisplayEntry.ToolGroup, path: List<Long>): ToolStep? {
+    var steps = group.steps
+    var step: ToolStep? = null
+    for (seq in path) {
+        step = steps.firstOrNull { it.seq == seq } ?: return null
+        steps = (step as? ToolStep.Call)?.children.orEmpty()
+    }
+    return step
+}
+
 /** The sheet's content, apart so a snapshot can show it without a window:
- *  the timeline, or the page of step [openStep]. */
+ *  the timeline, or the page of the step [openPath] leads to. */
 @Composable
 fun ToolSheetContent(
     group: DisplayEntry.ToolGroup,
     live: Boolean,
-    openStep: Long?,
-    onOpenStep: (Long?) -> Unit,
+    openPath: List<Long>,
+    onOpenPath: (List<Long>) -> Unit,
     onClose: () -> Unit,
 ) {
-    val step = group.steps.firstOrNull { it.seq == openStep }
+    val step = resolve(group, openPath)
     Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space5)) {
         if (step == null) {
             SheetHeader(
@@ -100,25 +117,32 @@ fun ToolSheetContent(
                 subtitle = null,
                 leading = Icons.Outlined.Close to onClose,
             )
-            group.steps.forEachIndexed { i, s ->
-                TimelineRow(s, live, first = i == 0, last = i == group.steps.lastIndex) { onOpenStep(s.seq) }
-            }
+            Timeline(group.steps, live, showAgent = true) { onOpenPath(listOf(it)) }
         } else {
             // A lone call's page is the whole sheet: nothing to go back to.
-            val lone = loneStep(group) != null
+            val lone = openPath.size == 1 && loneStep(group) != null
             SheetHeader(
                 title = stepTitle(step),
                 subtitle = stepStatus(step, live),
                 subtitleColor = if ((step as? ToolStep.Call)?.failed == true) Tokens.Danger else Tokens.TextMuted,
-                leading = if (lone) Icons.Outlined.Close to onClose else Icons.AutoMirrored.Outlined.ArrowBack to { onOpenStep(null) },
+                leading = if (lone) Icons.Outlined.Close to onClose else Icons.AutoMirrored.Outlined.ArrowBack to { onOpenPath(openPath.dropLast(1)) },
             )
-            StepPage(step)
+            StepPage(step, live) { onOpenPath(openPath + it) }
         }
     }
 }
 
+/** Steps on the line joining them; a tap opens one by its seq. */
 @Composable
-private fun SheetHeader(
+private fun Timeline(steps: List<ToolStep>, live: Boolean, showAgent: Boolean, inset: Dp = Tokens.Space5, onOpen: (Long) -> Unit) {
+    steps.forEachIndexed { i, s ->
+        TimelineRow(s, live, first = i == 0, last = i == steps.lastIndex, showAgent = showAgent, inset = inset) { onOpen(s.seq) }
+    }
+}
+
+/** A sheet's top line: Close or Back, and its title centred. */
+@Composable
+internal fun SheetHeader(
     title: String,
     subtitle: String?,
     leading: Pair<androidx.compose.ui.graphics.vector.ImageVector, () -> Unit>,
@@ -149,7 +173,7 @@ private fun SheetHeader(
 }
 
 private fun stepTitle(step: ToolStep): String = when (step) {
-    is ToolStep.Call -> step.toolName
+    is ToolStep.Call -> if (step.todos.isNotEmpty()) "Plan" else step.toolName
     is ToolStep.Thinking -> "Thinking"
     is ToolStep.Text -> "Sub-agent"
     is ToolStep.Result -> "Result"
@@ -157,6 +181,7 @@ private fun stepTitle(step: ToolStep): String = when (step) {
 
 private fun stepStatus(step: ToolStep, live: Boolean): String? = when (step) {
     is ToolStep.Call -> when {
+        step.background != null && step.result?.isError != true -> backgroundStatus(step.background)
         step.result == null -> if (live) "Running" else "No result"
         step.failed -> "Failed"
         else -> "Completed"
@@ -164,10 +189,27 @@ private fun stepStatus(step: ToolStep, live: Boolean): String? = when (step) {
     else -> null
 }
 
+/** Where a background task stands, as a call's status says it. */
+internal fun backgroundStatus(status: String): String = when (status) {
+    "running" -> "Running in the background"
+    "completed" -> "Finished in the background"
+    "failed" -> "Failed in the background"
+    "stopped" -> "Stopped"
+    else -> status
+}
+
+/** "3 tool uses": how much a sub-agent did. */
+internal fun toolUses(steps: List<ToolStep>): String? {
+    val n = steps.count { it is ToolStep.Call }
+    return if (n == 0) null else if (n == 1) "1 tool use" else "$n tool uses"
+}
+
 /** One step on the timeline: its icon on the line joining the steps, what
- *  it did, and — for a call that failed — the first line of why. */
+ *  it did, and — for a call that failed — the first line of why. A step
+ *  taken by a sub-agent names it when [showAgent]; on that agent's own page
+ *  it goes without saying. */
 @Composable
-private fun TimelineRow(step: ToolStep, live: Boolean, first: Boolean, last: Boolean, onOpen: () -> Unit) {
+private fun TimelineRow(step: ToolStep, live: Boolean, first: Boolean, last: Boolean, showAgent: Boolean, inset: Dp, onOpen: () -> Unit) {
     val call = step as? ToolStep.Call
     val running = call != null && call.result == null && live
     Row(
@@ -175,7 +217,7 @@ private fun TimelineRow(step: ToolStep, live: Boolean, first: Boolean, last: Boo
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .clickable(onClick = onOpen)
-            .padding(horizontal = Tokens.Space5),
+            .padding(horizontal = inset),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
     ) {
         Column(Modifier.width(24.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -213,8 +255,13 @@ private fun TimelineRow(step: ToolStep, live: Boolean, first: Boolean, last: Boo
             if (why != null) {
                 Text(why, color = Tokens.Danger, fontSize = Tokens.TextSm, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (call?.isSubAgent == true) {
-                Text("by ${call.subagent ?: "a sub-agent"}", color = Tokens.TextDim, fontSize = Tokens.TextXs)
+            val aside = listOfNotNull(
+                call?.takeIf { it.isSubAgent && showAgent }?.let { "by ${it.subagent ?: "a sub-agent"}" },
+                call?.children?.let(::toolUses),
+                call?.background?.takeIf { it == "running" }?.let(::backgroundStatus),
+            )
+            if (aside.isNotEmpty()) {
+                Text(aside.joinToString(", "), color = Tokens.TextDim, fontSize = Tokens.TextXs)
             }
         }
     }
@@ -226,7 +273,12 @@ private fun Connector(visible: Boolean, modifier: Modifier) {
 }
 
 private fun stepLine(step: ToolStep, running: Boolean) = when (step) {
-    is ToolStep.Call -> verbAndSubject(if (running) step.activeVerb else step.verb, step.title)
+    // A plan's title only repeats what writing one does.
+    is ToolStep.Call -> if (step.todos.isNotEmpty()) {
+        AnnotatedString(if (running) "Updating the plan" else "Updated the plan")
+    } else {
+        verbAndSubject(if (running) step.activeVerb else step.verb, step.title, mono = !step.proseTitle)
+    }
     is ToolStep.Thinking -> verbAndSubject("Thought", null, step.text.firstLine()?.let { " · $it" }.orEmpty())
     is ToolStep.Text -> verbAndSubject(step.text, null)
     is ToolStep.Result -> verbAndSubject("Result", step.text.firstLine())
@@ -234,12 +286,13 @@ private fun stepLine(step: ToolStep, running: Boolean) = when (step) {
 
 private fun String.firstLine(): String? = lineSequence().firstOrNull { it.isNotBlank() }?.trim()
 
-/** A step shown whole: what it was given, what it changed, what came back. */
+/** A step shown whole: what it was given, what it changed, what came back.
+ *  A sub-agent's steps open by their seq through [onOpenChild]. */
 @Composable
-private fun StepPage(step: ToolStep) {
+private fun StepPage(step: ToolStep, live: Boolean, onOpenChild: (Long) -> Unit) {
     Column(Modifier.padding(horizontal = Tokens.Space4), verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
         when (step) {
-            is ToolStep.Call -> CallPage(step)
+            is ToolStep.Call -> CallPage(step, live, onOpenChild)
             is ToolStep.Thinking -> Section(null) {
                 Prose(if (step.redacted) "The model's reasoning for this step was withheld by its provider." else step.text)
             }
@@ -250,21 +303,31 @@ private fun StepPage(step: ToolStep) {
 }
 
 @Composable
-private fun CallPage(call: ToolStep.Call) {
+private fun CallPage(call: ToolStep.Call, live: Boolean, onOpenChild: (Long) -> Unit) {
     val given = call.input ?: call.title
-    when (call.toolKind) {
-        "execute" -> Section("Command") { CodeBlock(given) }
-        "agent" -> {
+    when {
+        call.todos.isNotEmpty() -> Section("Plan") { TodoList(call.todos, live) }
+        call.toolKind == "execute" -> Section("Command") { CodeBlock(given) }
+        call.toolKind == "agent" -> {
             Section("Task") { Prose(call.title) }
             call.input?.let { Section("Instructions") { Prose(it) } }
+            if (call.children.isNotEmpty()) {
+                Section(toolUses(call.children)?.let { "Steps, $it" } ?: "Steps") {
+                    Column {
+                        // Its steps run while it has not reported back.
+                        Timeline(call.children, live && call.result == null, showAgent = false, inset = 0.dp, onOpen = onOpenChild)
+                    }
+                }
+            }
         }
-        "edit", "delete", "move" -> if (call.diffs.isEmpty()) Section("File") { CodeBlock(call.title) }
-        "read" -> Section("File") { CodeBlock(given) }
+        call.toolKind in setOf("edit", "delete", "move") -> if (call.diffs.isEmpty()) Section("File") { CodeBlock(call.title) }
+        call.toolKind == "read" -> Section("File") { CodeBlock(given) }
         else -> if (given.isNotBlank()) Section("Input") { CodeBlock(given) }
     }
     call.diffs.forEach { FileChange(it) }
     call.result?.let { result ->
-        if (result.text.isNotBlank()) {
+        // A plan's result only acknowledges it.
+        if (result.text.isNotBlank() && (call.todos.isEmpty() || result.isError)) {
             val label = when {
                 result.isError -> "Error"
                 call.toolKind == "agent" -> "Report"

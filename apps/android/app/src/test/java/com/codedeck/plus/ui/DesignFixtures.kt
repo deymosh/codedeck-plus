@@ -4,12 +4,14 @@ import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.core.app.ActivityOptionsCompat
+import com.codedeck.plus.ui.transcript.ActivityView
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.OptionChoice
 import com.codedeck.plus.ui.transcript.PermissionOption
 import com.codedeck.plus.ui.transcript.QuestionOption
 import com.codedeck.plus.ui.transcript.QuestionView
 import com.codedeck.plus.ui.transcript.displayEntriesJson
+import com.codedeck.plus.ui.transcript.parseActivity
 import com.codedeck.plus.ui.transcript.parseDisplayEntries
 import kotlinx.serialization.json.jsonObject
 import uniffi.client_ffi.UniffiAgent
@@ -68,14 +70,14 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = emptyList(),
     )
 
@@ -197,6 +199,13 @@ internal object DesignFixtures {
     fun transcript(): List<DisplayEntry> {
         val raw = javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText()
         return parseDisplayEntries(displayEntriesJson.parseToJsonElement(raw).jsonObject.getValue("displayEntries").toString())
+    }
+
+    /** The corpus's activity: a plan under way, a sub-agent at work and a
+     *  background command running beside one that failed. */
+    fun activity(): ActivityView {
+        val raw = javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText()
+        return parseActivity(displayEntriesJson.parseToJsonElement(raw).jsonObject.getValue("activity").toString())
     }
 
     /** A plan document and the cards that wait on the user, unanswered. */

@@ -70,8 +70,10 @@ import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.pulsingAlpha
 import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.theme.Tokens
+import com.codedeck.plus.ui.transcript.ActivityView
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.PendingPermissionSummary
+import com.codedeck.plus.ui.transcript.parseActivity
 import com.codedeck.plus.ui.transcript.TranscriptList
 import com.codedeck.plus.ui.transcript.TranscriptRows
 import com.codedeck.plus.ui.transcript.parsePendingPermission
@@ -109,6 +111,7 @@ private class ParsedTranscript(
     val view: UniffiTranscriptDelta,
     val rows: TranscriptRows,
     val pendingPermission: PendingPermissionSummary?,
+    val activity: ActivityView?,
 ) {
     val displayEntries: List<DisplayEntry> get() = rows.entries
 
@@ -125,6 +128,11 @@ private class ParsedTranscript(
                 previous.pendingPermission
             } else {
                 view.pendingPermissionJson?.let(::parsePendingPermission)
+            },
+            activity = if (previous != null && previous.view.activityJson == view.activityJson) {
+                previous.activity
+            } else {
+                view.activityJson?.let(::parseActivity)
             },
         )
     }
@@ -535,6 +543,8 @@ fun SessionScreen(
             respondedCards = respondedCards,
             planApprovalChoices = planChoices,
             running = session?.state == "running",
+            activity = transcript?.activity,
+            canStopTasks = agent?.supportsTasks == true,
             dispatch = ::dispatch,
             modifier = Modifier.weight(1f),
         )

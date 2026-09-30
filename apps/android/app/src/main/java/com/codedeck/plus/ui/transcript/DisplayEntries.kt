@@ -55,6 +55,12 @@ data class QuestionView(
     val multiSelect: Boolean = false,
 )
 
+/** One item of the agent's checklist. `status` is `pending` /
+ *  `in_progress` / `completed` / `cancelled`; `activeText` is how the agent
+ *  says it while working on it, when it gives one. */
+@Serializable
+data class TodoItem(val text: String, val status: String, val activeText: String? = null)
+
 @Serializable
 data class ToolResultView(val text: String, val isError: Boolean = false)
 
@@ -95,6 +101,15 @@ sealed class ToolStep {
         val isSubAgent: Boolean = false,
         val result: ToolResultView? = null,
         val diffs: List<FileDiffView> = emptyList(),
+        /** What the sub-agent this call started did: an `agent` call's own
+         *  timeline. */
+        val children: List<ToolStep> = emptyList(),
+        /** The checklist this call wrote, when it wrote one. */
+        val todos: List<TodoItem> = emptyList(),
+        /** Where the background task this call started stands
+         *  (`running` / `completed` / `failed` / `stopped`), when it started
+         *  one. */
+        val background: String? = null,
     ) : ToolStep() {
         val added: Int get() = diffs.sumOf { it.added }
         val removed: Int get() = diffs.sumOf { it.removed }
@@ -215,6 +230,20 @@ sealed class DisplayEntry {
         val answered: String? = null,
     ) : DisplayEntry()
 
+    /** A background task no visible call started, or one that ended.
+     *  `taskKind` is `shell` / `agent` / `other`; `status` as on
+     *  [ToolStep.Call.background]. */
+    @Serializable
+    @SerialName("task")
+    data class Task(
+        override val seq: Long,
+        val taskId: String,
+        val taskKind: String,
+        val title: String,
+        val status: String,
+        val summary: String? = null,
+    ) : DisplayEntry()
+
     @Serializable
     @SerialName("permissionRequest")
     data class PermissionRequest(
@@ -253,4 +282,47 @@ fun parseDisplayEntry(json: String): DisplayEntry =
     displayEntriesJson.decodeFromString(json)
 
 fun parsePendingPermission(json: String): PendingPermissionSummary =
+    displayEntriesJson.decodeFromString(json)
+
+/** One sub-agent, as the `agent` call that started it — mirrors
+ *  `crates/client-core/src/presentation/activity.rs`'s `AgentView`.
+ *  [groupSeq] / [callSeq] say where its call is, to open it. */
+@Serializable
+data class AgentActivity(
+    val groupSeq: Long,
+    val callSeq: Long,
+    val title: String,
+    val label: String? = null,
+    val finished: Boolean = false,
+    val failed: Boolean = false,
+    val toolUses: Int = 0,
+    /** What it is doing, or did last: "Reading a.rs". */
+    val current: String? = null,
+)
+
+/** One background task as its latest entry says — `TaskView`. */
+@Serializable
+data class TaskActivity(
+    val taskId: String,
+    val taskKind: String,
+    val title: String,
+    val status: String,
+    val summary: String? = null,
+    val callId: String? = null,
+) {
+    val running: Boolean get() = status == "running"
+}
+
+/** What a session has going on beside the conversation — `ActivityView`,
+ *  crossing as `UniffiTranscriptDelta.activityJson`: the latest checklist,
+ *  the running sub-agents then the last few that finished, and the
+ *  background tasks likewise. */
+@Serializable
+data class ActivityView(
+    val todos: List<TodoItem> = emptyList(),
+    val agents: List<AgentActivity> = emptyList(),
+    val tasks: List<TaskActivity> = emptyList(),
+)
+
+fun parseActivity(json: String): ActivityView =
     displayEntriesJson.decodeFromString(json)

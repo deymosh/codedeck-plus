@@ -2,6 +2,7 @@ package com.codedeck.plus.ui.transcript.rows
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -65,16 +66,19 @@ internal fun stepIcon(step: ToolStep): ImageVector = when (step) {
     is ToolStep.Result -> Icons.Outlined.SubdirectoryArrowRight
 }
 
-/** A verb followed by what it acted on in the monospace face: "Ran" +
- *  "npm test". */
-internal fun verbAndSubject(verb: String, subject: String?, suffix: String = ""): AnnotatedString = buildAnnotatedString {
+/** A verb followed by what it acted on, in the monospace face when that is
+ *  code ([mono]): "Ran" + "npm test". */
+internal fun verbAndSubject(verb: String, subject: String?, suffix: String = "", mono: Boolean = true): AnnotatedString = buildAnnotatedString {
     append(verb)
     if (!subject.isNullOrBlank()) {
         append(" ")
-        withStyle(SpanStyle(fontFamily = Tokens.FontMono, fontSize = Tokens.TextSm)) { append(subject) }
+        if (mono) withStyle(SpanStyle(fontFamily = Tokens.FontMono, fontSize = Tokens.TextSm)) { append(subject) } else append(subject)
     }
     append(suffix)
 }
+
+/** A call's title is prose, not code, for a sub-agent's task or a plan. */
+internal val ToolStep.Call.proseTitle: Boolean get() = toolKind == "agent" || toolKind == "think"
 
 /**
  * A run of tool activity as one quiet line of the conversation: what it
@@ -134,12 +138,52 @@ fun activityOf(entries: List<DisplayEntry>): ToolStep.Call? =
 
 /**
  * The running turn's line at the end of the transcript: the spinner glyph
- * and what the agent is doing. Tapping it opens the activity it names,
- * when [onOpen] is given.
+ * and what the agent is doing. While it waits on a sub-agent, the line says
+ * what that agent was asked, and under it what the agent is doing now.
+ * Tapping it opens the activity it names, when [onOpen] is given.
  */
 @Composable
 fun ActivityRow(call: ToolStep.Call?, onOpen: (() -> Unit)?) {
     val alpha = pulsingAlpha(min = 0.55f, max = 1f, halfPeriodMs = 900)
+    if (call != null && call.toolKind == "agent") {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 36.dp)
+                .then(if (onOpen != null) Modifier.clickable(onClick = onOpen) else Modifier)
+                .padding(horizontal = Tokens.Space1, vertical = Tokens.Space1),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ThinkingGlyph(fontSize = Tokens.TextMd)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${call.activeVerb} ${call.title}",
+                    color = Tokens.Text,
+                    fontSize = Tokens.TextMd,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.graphicsLayer { this.alpha = alpha },
+                )
+                Text(
+                    agentCurrent(call.children) ?: "Starting",
+                    color = Tokens.TextMuted,
+                    fontSize = Tokens.TextSm,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (onOpen != null) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                    contentDescription = "Show details",
+                    tint = Tokens.TextDim,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        return
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -152,7 +196,7 @@ fun ActivityRow(call: ToolStep.Call?, onOpen: (() -> Unit)?) {
         ThinkingGlyph(fontSize = Tokens.TextMd)
         Text(
             // A title cut short already ends in an ellipsis.
-            if (call != null) verbAndSubject(call.activeVerb, call.title, if (call.title.endsWith("…")) "" else "…") else AnnotatedString("Thinking…"),
+            if (call != null) verbAndSubject(call.activeVerb, call.title, if (call.title.endsWith("…")) "" else "…", mono = !call.proseTitle) else AnnotatedString("Thinking…"),
             color = Tokens.Text,
             fontSize = Tokens.TextMd,
             maxLines = 1,
