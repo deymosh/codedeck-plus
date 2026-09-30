@@ -9,7 +9,7 @@
  * hides the tool calls behind those cards so they do not also render as
  * ordinary tool actions.
  */
-import { toolKindOf, toolLocations, toolTitle } from '../../tools';
+import { toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { MAX_DIFF_LINES, toDiffLines, truncateToolResult, type DiffPayload, type TranslateContext } from '../../transcript';
 import type { DiffLine, OutputEntry, Subagent } from '../../types';
 import type {
@@ -92,6 +92,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
       } else if (block.name === 'AskUserQuestion') {
         ctx.hiddenCallIds.add(block.id);
       } else {
+        const full = toolInput(block.name, input);
         entries.push({
           entryType: 'tool_call',
           callId: block.id,
@@ -99,7 +100,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
           kind: toolKindOf(block.name),
           title: toolTitle(block.name, input),
           ...withLocations(toolLocations(input)),
-          rawInput: block.input,
+          ...(full !== undefined ? { input: full } : {}),
           timestamp: ts,
           ...subagentField(isSubAgent),
         });

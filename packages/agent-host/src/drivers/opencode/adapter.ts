@@ -7,7 +7,7 @@
  * is pure: one event in, zero or more entries out.
  */
 import type { Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
-import { toolKindOf, toolLocations, toolTitle } from '../../tools';
+import { toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import {
   MAX_DIFF_LINE_CHARS,
   MAX_DIFF_LINES,
@@ -162,6 +162,7 @@ function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, ctx: Trans
   if (state.status === 'running') {
     const input = (state.input ?? {}) as Record<string, unknown>;
     const locations = toolLocations(input);
+    const full = toolInput(part.tool, input);
     return [{
       entryType: 'tool_call',
       callId: part.callID,
@@ -169,7 +170,7 @@ function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, ctx: Trans
       kind: toolKindOf(part.tool),
       title: toolTitle(part.tool, input),
       ...(locations.length > 0 ? { locations } : {}),
-      rawInput: state.input,
+      ...(full !== undefined ? { input: full } : {}),
       timestamp: ts,
     }];
   }

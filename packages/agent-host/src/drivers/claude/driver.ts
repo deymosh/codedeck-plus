@@ -380,14 +380,14 @@ export class ClaudeSession implements DriverSession {
     // its own context and leave this one as it was.
     if (msg.type === 'assistant' && !(msg as SdkAssistantMessage).parent_tool_use_id) this.refreshContext();
 
-    const entries = sdkMessageToEntries(msg, this.translate);
-    for (const entry of entries) {
-      if (entry.entryType === 'tool_call' && (entry.toolName === 'Task' || entry.toolName === 'Agent')) {
-        const sub = (entry.rawInput as Record<string, unknown> | undefined)?.subagent_type;
+    if (msg.type === 'assistant') {
+      for (const block of (msg as SdkAssistantMessage).message.content) {
+        if (block.type !== 'tool_use' || (block.name !== 'Task' && block.name !== 'Agent')) continue;
+        const sub = (block.input as Record<string, unknown> | undefined)?.subagent_type;
         if (typeof sub === 'string' && sub) this.lastSubagentType = sub;
       }
     }
-    this.entries(entries);
+    this.entries(sdkMessageToEntries(msg, this.translate));
   }
 
   /** The API's own context window for this session (`modelUsage` is keyed

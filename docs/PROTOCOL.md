@@ -105,7 +105,7 @@ tagged by `entryType`:
 | `text` | conversation text; `role: user|agent`; `collapsible` folds it into a tool group |
 | `plan` | a proposed plan (markdown) |
 | `thinking` | model reasoning; `redacted` when the provider withheld it |
-| `tool_call` | `callId`, `toolName` (display only), `kind` (read, edit, delete, move, search, execute, think, fetch, switch_mode, other), `title`, `locations`, `rawInput` |
+| `tool_call` | `callId`, `toolName` (display only), `kind` (read, edit, delete, move, search, execute, think, fetch, switch_mode, agent — a sub-agent launch —, other), `title`, `locations`, `input` (the whole input as text, bounded; absent for a file change, whose `diff` carries it) |
 | `tool_result` | `callId`, `text`, `isError` |
 | `diff` | `path`, add/del/context `lines`, `truncated` |
 | `permission_request` | a card: `requestId`, the tool, and `options[] {id, label, kind: allow_once|allow_always|reject_once|reject_always}`; optional `reason` (why the agent asks, in its words) `hook` (the hook that asked, e.g. `PreToolUse:Bash` — it asks every time, so no "always" option) and `hookPlugin` (the plugin that hook comes from, when exactly one loaded plugin and no settings file declares a matching hook) |
