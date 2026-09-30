@@ -6,23 +6,24 @@ import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import { OpenCodeMcp, openCodeSessionMcp, openCodeServerConfig, toggleOpenCodeMcp } from '../mcp';
 import { redactUrl } from '../../../mcp';
 
-/** A server whose global config is `config`; an update merges into it the
- *  way OpenCode's does (a `null` field is cleared). */
-function server(mcp: Record<string, Record<string, unknown>>) {
+/** A server whose global config is `config`; an update first re-reads the
+ *  global config file when `reload` is given, then merges into it the way
+ *  OpenCode's does (a `null` field is cleared). */
+function server(mcp: Record<string, Record<string, unknown>>, reload?: () => Promise<Record<string, Record<string, unknown>>>) {
   const config: { mcp: Record<string, Record<string, unknown>> } = { mcp };
-  const update = vi.fn(async ({ config: next }: { config: { mcp: Record<string, Record<string, unknown>> } }) => {
-    for (const [name, entry] of Object.entries(next.mcp)) {
+  const update = vi.fn(async ({ config: next }: { config: { mcp?: Record<string, Record<string, unknown>> } }) => {
+    if (reload) config.mcp = await reload();
+    for (const [name, entry] of Object.entries(next.mcp ?? {})) {
       const merged: Record<string, unknown> = { ...(config.mcp[name] ?? {}), ...entry };
       for (const [k, v] of Object.entries(merged)) if (v === null) delete merged[k];
       config.mcp[name] = merged;
     }
     return { data: config, error: undefined };
   });
-  const dispose = vi.fn(async () => ({ data: true, error: undefined }));
   const client = {
-    global: { config: { get: vi.fn(async () => ({ data: config, error: undefined })), update }, dispose },
+    global: { config: { get: vi.fn(async () => ({ data: config, error: undefined })), update } },
   } as unknown as OpencodeClient;
-  return { client, update, dispose, config };
+  return { client, update, config };
 }
 
 describe('OpenCode MCP servers', () => {
@@ -64,11 +65,12 @@ describe('OpenCode MCP servers', () => {
     const json = path.join(dir, 'opencode.json');
     const jsonc = path.join(dir, 'opencode.jsonc');
     await writeFile(json, JSON.stringify({ model: 'a/b', mcp: { gh: { type: 'remote', url: 'https://x' }, fs: { type: 'local', command: ['x'] } } }));
-    const { client, dispose } = server({});
+    const fromFile = async () => (JSON.parse(await readFile(json, 'utf8')) as { mcp: Record<string, Record<string, unknown>> }).mcp;
+    const { client } = server(await fromFile(), fromFile);
     const mcp = new OpenCodeMcp(async () => client, () => [json, jsonc]);
-    await mcp.act('remove', [], ['gh']);
+    // The list after a removal is the reloaded config, without the server.
+    expect((await mcp.act('remove', [], ['gh'])).servers.map((s) => s.name)).toEqual(['fs']);
     expect(JSON.parse(await readFile(json, 'utf8'))).toEqual({ model: 'a/b', mcp: { fs: { type: 'local', command: ['x'] } } });
-    expect(dispose).toHaveBeenCalledTimes(1);
 
     await writeFile(jsonc, '{\n  // mine\n  "mcp": { "fs": { "type": "local", "command": ["x"] } }\n}\n');
     await expect(mcp.act('remove', [], ['fs'])).rejects.toThrow(/has comments/);

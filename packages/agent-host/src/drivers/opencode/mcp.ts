@@ -7,7 +7,9 @@
  * out stays, and a field left out keeps its old value — so an added server
  * is written whole, with the env or headers it no longer has cleared by
  * `null`. Its API cannot delete a server at all, so removing one edits the
- * global config file itself and has the server reload: only a file that is
+ * global config file itself and has the server reload it — through a no-op
+ * config update, since the server caches its global config and disposing its
+ * instances does not re-read it: only a file that is
  * plain JSON (what OpenCode itself writes), so no comment of the user's is
  * lost; a hand-edited file with comments is left alone, with the reason.
  * Every config change reloads the projects OpenCode has open, which restarts
@@ -80,8 +82,13 @@ export class OpenCodeMcp implements McpManager {
       const client = await this.client();
       if (action === 'remove') {
         await this.remove(names);
-        await client.global.dispose().catch(() => {});
-        return this.state(await this.mcp(client));
+        // An update re-reads the global config file before merging into it.
+        const { error } = await client.global.config.update({ config: { $schema: 'https://opencode.ai/config.json' } });
+        if (error) throw new Error(`OpenCode did not reload its config: ${JSON.stringify(error)}`);
+        const current = await this.mcp(client);
+        const stale = names.find((n) => current[n]);
+        if (stale) throw new Error(`OpenCode still has the MCP server '${stale}' from another config file.`);
+        return this.state(current);
       }
       const current = await this.mcp(client);
       let patch: Record<string, RawConfig>;
