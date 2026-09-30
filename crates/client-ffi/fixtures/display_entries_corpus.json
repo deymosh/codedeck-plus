@@ -61,6 +61,7 @@
       "agentLabel": null,
       "answered": "Allowed",
       "description": "Read packages/core/src/nostr/pool.ts",
+      "hook": null,
       "isSubAgent": false,
       "kind": "permissionRequest",
       "locations": [],
@@ -81,6 +82,7 @@
           "label": "Deny"
         }
       ],
+      "reason": null,
       "requestId": "tu-read",
       "seq": 8,
       "title": "pool.ts",
@@ -212,6 +214,7 @@
       "agentLabel": null,
       "answered": null,
       "description": null,
+      "hook": "PreToolUse:Bash",
       "isSubAgent": false,
       "kind": "permissionRequest",
       "locations": [],
@@ -227,6 +230,7 @@
           "label": "Deny"
         }
       ],
+      "reason": "Tests need a human while CI is red",
       "requestId": "tu-permission",
       "seq": 20,
       "title": "cargo test",
@@ -237,6 +241,7 @@
   "pendingPermission": {
     "agentLabel": null,
     "description": null,
+    "hook": "PreToolUse:Bash",
     "isSubAgent": false,
     "options": [
       {
@@ -250,6 +255,7 @@
         "label": "Deny"
       }
     ],
+    "reason": "Tests need a human while CI is red",
     "requestId": "tu-permission",
     "title": "cargo test",
     "toolName": "Bash"

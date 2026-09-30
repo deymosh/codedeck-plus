@@ -144,6 +144,10 @@ pub enum DisplayEntry {
         description: Option<String>,
         locations: Vec<String>,
         options: Vec<PermissionOption>,
+        /// Why the agent asks, when it says.
+        reason: Option<String>,
+        /// The hook that asked, when one did.
+        hook: Option<String>,
         is_sub_agent: bool,
         agent_label: Option<String>,
         answered: Option<String>,
@@ -397,6 +401,8 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 description,
                 locations,
                 options,
+                reason,
+                hook,
                 ..
             } => {
                 b.flush_all();
@@ -410,6 +416,8 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     description: description.clone(),
                     locations: locations.clone(),
                     options: options.clone(),
+                    reason: reason.clone(),
+                    hook: hook.clone(),
                     is_sub_agent: entry.subagent.is_some(),
                     agent_label: subagent_label(entry),
                 });
@@ -456,6 +464,8 @@ pub struct PendingPermissionSummary {
     pub title: String,
     pub description: Option<String>,
     pub options: Vec<PermissionOption>,
+    pub reason: Option<String>,
+    pub hook: Option<String>,
     pub is_sub_agent: bool,
     pub agent_label: Option<String>,
 }
@@ -476,6 +486,8 @@ pub fn find_pending_permission(
             title,
             description,
             options,
+            reason,
+            hook,
             ..
         } = &item.entry.body
         else {
@@ -490,6 +502,8 @@ pub fn find_pending_permission(
             title: title.clone(),
             description: description.clone(),
             options: options.clone(),
+            reason: reason.clone(),
+            hook: hook.clone(),
             is_sub_agent: item.entry.subagent.is_some(),
             agent_label: subagent_label(&item.entry),
         })
