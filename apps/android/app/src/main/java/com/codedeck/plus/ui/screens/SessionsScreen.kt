@@ -65,7 +65,6 @@ import com.codedeck.plus.ui.components.IconAction
 import com.codedeck.plus.ui.components.MachineLabelTracking
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.components.ThinkingGlyph
-import com.codedeck.plus.ui.components.topGlow
 import com.codedeck.plus.ui.orderedMachines
 import com.codedeck.plus.ui.orderedSessions
 import com.codedeck.plus.ui.sessionKeyOf
@@ -199,7 +198,7 @@ fun SessionsContent(
     onOpenPairing: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier.fillMaxSize().background(Tokens.Bg).topGlow()) {
+    Box(modifier.fillMaxSize().background(Tokens.Bg)) {
         Column(Modifier.fillMaxSize()) {
             Row(
                 Modifier.fillMaxWidth().padding(start = Tokens.Space5, end = Tokens.Space2, top = Tokens.Space3, bottom = Tokens.Space2),

@@ -52,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.codedeck.plus.platform.SignerAppInfo
 import com.codedeck.plus.ui.components.AppLogo
-import com.codedeck.plus.ui.components.topGlow
 import com.codedeck.plus.ui.theme.Tokens
 
 /** What the welcome screen is waiting on, if anything. */
@@ -90,8 +89,7 @@ fun WelcomeScreen(
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
-            .background(Tokens.Bg)
-            .topGlow(),
+            .background(Tokens.Bg),
         contentAlignment = Alignment.TopCenter,
     ) {
         val viewport = maxHeight
