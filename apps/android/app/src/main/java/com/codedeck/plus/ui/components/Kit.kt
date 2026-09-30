@@ -43,7 +43,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -64,15 +63,6 @@ import com.codedeck.plus.ui.theme.Tokens
  * (one surface per group, hairlines between its rows), the row kinds
  * settings need, and the buttons and fields. Everything here is stateless.
  */
-
-/** The soft white light the welcome screen and the home page open under. */
-fun Modifier.topGlow(): Modifier = background(
-    Brush.radialGradient(
-        colors = listOf(Color.White.copy(alpha = 0.09f), Color.Transparent),
-        center = Offset(540f, -120f),
-        radius = 900f,
-    ),
-)
 
 /**
  * A full page: a back arrow and the page's title (with an optional line
