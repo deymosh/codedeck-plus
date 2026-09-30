@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,22 +52,34 @@ private sealed interface Screen {
     data class Mcp(val machine: String, val agent: String) : Screen
 }
 
+/** [Screen] as a flat string list: what [ScreenSaver] stores, and (joined)
+ *  the key the page's own saved state is kept under. */
+private fun Screen.parts(): List<String> = when (this) {
+    Screen.Sessions -> listOf("sessions")
+    is Screen.Session -> listOf("session", machine, sessionId)
+    is Screen.NewSession -> listOf("new-session", machine)
+    Screen.Settings -> listOf("settings")
+    Screen.Logs -> listOf("logs")
+    Screen.Pairing -> listOf("pairing")
+    is Screen.Machine -> listOf("machine", machine)
+    is Screen.Plugins -> listOf("plugins", machine, agent)
+    is Screen.Mcp -> listOf("mcp", machine, agent)
+}
+
+private fun Screen.stateKey(): String = parts().joinToString("/")
+
+/** How far below the sessions list a page sits: Back from a page goes to a
+ *  shallower one. */
+private fun Screen.depth(): Int = when (this) {
+    Screen.Sessions -> 0
+    Screen.Logs, is Screen.Plugins, is Screen.Mcp -> 2
+    else -> 1
+}
+
 /** Saves [Screen] as a flat string list, so the open page survives rotation
  *  and process recreation. */
 private val ScreenSaver = listSaver<Screen, String>(
-    save = { screen ->
-        when (screen) {
-            Screen.Sessions -> listOf("sessions")
-            is Screen.Session -> listOf("session", screen.machine, screen.sessionId)
-            is Screen.NewSession -> listOf("new-session", screen.machine)
-            Screen.Settings -> listOf("settings")
-            Screen.Logs -> listOf("logs")
-            Screen.Pairing -> listOf("pairing")
-            is Screen.Machine -> listOf("machine", screen.machine)
-            is Screen.Plugins -> listOf("plugins", screen.machine, screen.agent)
-            is Screen.Mcp -> listOf("mcp", screen.machine, screen.agent)
-        }
-    },
+    save = { it.parts() },
     restore = { saved ->
         when (saved.firstOrNull()) {
             "session" -> Screen.Session(saved[1], saved[2])
@@ -136,9 +149,20 @@ fun Shell(
     var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen>(Screen.Sessions) }
     var awaited by remember { mutableStateOf<AwaitedSession?>(null) }
 
+    // Each page's saved UI state (scroll position, expanded rows, a half-typed
+    // field) is kept while a deeper page is open over it, so Back returns to
+    // the page as it was left. A page left for one no deeper than itself is
+    // forgotten: opening it again later starts at the top.
+    val pages = rememberSaveableStateHolder()
+    fun go(next: Screen) {
+        val left = screen
+        if (left != next && next.depth() <= left.depth()) pages.removeState(left.stateKey())
+        screen = next
+    }
+
     fun openSession(machine: String, sessionId: String) {
         awaited = null
-        screen = Screen.Session(machine, sessionId)
+        go(Screen.Session(machine, sessionId))
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
@@ -155,7 +179,7 @@ fun Shell(
     // reopened, and must not pull the user back to pairing.
     LaunchedEffect(pairing?.phase, pairing?.staged) {
         val p = pairing
-        if (p != null && (p.phase == "awaiting-ack" || p.staged != null)) screen = Screen.Pairing
+        if (p != null && (p.phase == "awaiting-ack" || p.staged != null)) go(Screen.Pairing)
     }
 
     LaunchedEffect(openRequest) {
@@ -185,7 +209,7 @@ fun Shell(
     var previousSelection by remember { mutableStateOf(selectedSession) }
     LaunchedEffect(selectedSession) {
         if (previousSelection != null && selectedSession == null && screen is Screen.Session) {
-            screen = Screen.Sessions
+            go(Screen.Sessions)
         }
         previousSelection = selectedSession
     }
@@ -213,67 +237,72 @@ fun Shell(
         // page, so Back returns there.
         if (screen != Screen.Sessions) {
             BackHandler {
-                screen = when (val current = screen) {
-                    Screen.Logs -> Screen.Settings
-                    is Screen.Plugins -> Screen.Machine(current.machine)
-                    is Screen.Mcp -> Screen.Machine(current.machine)
-                    else -> Screen.Sessions
-                }
+                go(
+                    when (val current = screen) {
+                        Screen.Logs -> Screen.Settings
+                        is Screen.Plugins -> Screen.Machine(current.machine)
+                        is Screen.Mcp -> Screen.Machine(current.machine)
+                        else -> Screen.Sessions
+                    },
+                )
             }
         }
-        when (val current = screen) {
-            Screen.Settings -> SettingsScreen(
-                core,
-                login = login,
-                onLogOut = onLogOut,
-                onOpenLogs = { screen = Screen.Logs },
-                onPairMachine = { screen = Screen.Pairing },
-                onClose = { screen = Screen.Sessions },
-            )
-            is Screen.Machine -> MachineSettingsScreen(
-                core,
-                current.machine,
-                onBack = { screen = Screen.Sessions },
-                onOpenPlugins = { agent -> screen = Screen.Plugins(current.machine, agent) },
-                onOpenMcp = { agent -> screen = Screen.Mcp(current.machine, agent) },
-            )
-            is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { screen = Screen.Machine(current.machine) })
-            is Screen.Mcp -> McpScreen(core, current.machine, current.agent, onBack = { screen = Screen.Machine(current.machine) })
-            Screen.Logs -> LogsScreen(onBack = { screen = Screen.Settings })
-            Screen.Pairing -> PairingScreen(core, onClose = { screen = Screen.Sessions })
-            is Screen.NewSession -> NewSessionScreen(
-                core,
-                machinePubkey = current.machine,
-                onClose = { screen = Screen.Sessions },
-                onCreated = { knownIds ->
-                    awaited = AwaitedSession(current.machine, knownIds)
-                    screen = Screen.Sessions
-                },
-            )
-            is Screen.Session -> SessionScreen(
-                core,
-                current.machine,
-                current.sessionId,
-                onBack = { screen = Screen.Sessions },
-                modifier = Modifier.fillMaxSize().background(Tokens.Bg),
-            )
-            Screen.Sessions -> SessionsScreen(
-                core = core,
-                machines = machines,
-                pendingSessions = pendingSessions?.pending.orEmpty(),
-                connectionStatus = connection?.status,
-                needsPairingCheck = connection?.needsPairingCheck ?: false,
-                showCommitBadge = settings?.showCommitBadge ?: false,
-                unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
-                selectedMachine = selectedMachine,
-                selectedSession = selectedSession,
-                onSelectSession = ::openSession,
-                onNewSession = { screen = Screen.NewSession(it) },
-                onOpenMachine = { screen = Screen.Machine(it) },
-                onOpenSettings = { screen = Screen.Settings },
-                onOpenPairing = { screen = Screen.Pairing },
-                modifier = Modifier.fillMaxSize(),
-            )
+        val current = screen
+        pages.SaveableStateProvider(current.stateKey()) {
+            when (current) {
+                Screen.Settings -> SettingsScreen(
+                    core,
+                    login = login,
+                    onLogOut = onLogOut,
+                    onOpenLogs = { go(Screen.Logs) },
+                    onPairMachine = { go(Screen.Pairing) },
+                    onClose = { go(Screen.Sessions) },
+                )
+                is Screen.Machine -> MachineSettingsScreen(
+                    core,
+                    current.machine,
+                    onBack = { go(Screen.Sessions) },
+                    onOpenPlugins = { agent -> go(Screen.Plugins(current.machine, agent)) },
+                    onOpenMcp = { agent -> go(Screen.Mcp(current.machine, agent)) },
+                )
+                is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
+                is Screen.Mcp -> McpScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
+                Screen.Logs -> LogsScreen(onBack = { go(Screen.Settings) })
+                Screen.Pairing -> PairingScreen(core, onClose = { go(Screen.Sessions) })
+                is Screen.NewSession -> NewSessionScreen(
+                    core,
+                    machinePubkey = current.machine,
+                    onClose = { go(Screen.Sessions) },
+                    onCreated = { knownIds ->
+                        awaited = AwaitedSession(current.machine, knownIds)
+                        go(Screen.Sessions)
+                    },
+                )
+                is Screen.Session -> SessionScreen(
+                    core,
+                    current.machine,
+                    current.sessionId,
+                    onBack = { go(Screen.Sessions) },
+                    modifier = Modifier.fillMaxSize().background(Tokens.Bg),
+                )
+                Screen.Sessions -> SessionsScreen(
+                    core = core,
+                    machines = machines,
+                    pendingSessions = pendingSessions?.pending.orEmpty(),
+                    connectionStatus = connection?.status,
+                    needsPairingCheck = connection?.needsPairingCheck ?: false,
+                    showCommitBadge = settings?.showCommitBadge ?: false,
+                    unreadSessions = ui?.unreadSessions.orEmpty().toSet(),
+                    selectedMachine = selectedMachine,
+                    selectedSession = selectedSession,
+                    onSelectSession = ::openSession,
+                    onNewSession = { go(Screen.NewSession(it)) },
+                    onOpenMachine = { go(Screen.Machine(it)) },
+                    onOpenSettings = { go(Screen.Settings) },
+                    onOpenPairing = { go(Screen.Pairing) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         ActionFailedBanner(core, Modifier.align(Alignment.TopCenter))
         // Undo toast for an optimistic session delete — at the shell's root so it
