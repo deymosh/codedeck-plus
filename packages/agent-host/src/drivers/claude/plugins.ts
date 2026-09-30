@@ -107,7 +107,7 @@ function pluginHookConfigs(plugin: LoadedPlugin, readJson: (file: string) => unk
   const configs = [readJson(path.join(plugin.path, 'hooks', 'hooks.json'))];
   const declared = (readJson(path.join(plugin.path, '.claude-plugin', 'plugin.json')) as { hooks?: unknown } | undefined)?.hooks;
   for (const entry of Array.isArray(declared) ? declared : [declared]) {
-    configs.push(typeof entry === 'string' ? readJson(path.resolve(plugin.path, entry)) : entry);
+    configs.push(typeof entry === 'string' ? readJson(path.join(plugin.path, entry)) : entry);
   }
   return configs;
 }
