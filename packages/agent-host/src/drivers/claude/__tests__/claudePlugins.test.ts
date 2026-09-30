@@ -3,7 +3,8 @@
  * real CLI (2.1.283) prints.
  */
 import { describe, expect, it } from 'vitest';
-import { actionArgs, ClaudePlugins, failureMessage, updateMessage, type CliResult } from '../plugins';
+import * as path from 'node:path';
+import { actionArgs, ClaudePlugins, failureMessage, hookPluginOf, updateMessage, type CliResult } from '../plugins';
 
 const INSTALLED = [{
   id: 'commit-commands@claude-plugins-official',
@@ -154,5 +155,41 @@ describe('Claude plugins', () => {
     await Promise.all([plugins.act('install', 'a@m'), plugins.list(true), plugins.act('install', 'b@m')]);
     expect(collided).toBe(false);
     expect(calls.filter((c) => c[1] === 'install').map((c) => c[2])).toEqual(['a@m', 'b@m']);
+  });
+});
+
+describe('hookPluginOf', () => {
+  const guard = { hooks: { PreToolUse: [{ matcher: 'Agent|Task', hooks: [{ type: 'command', command: 'guard' }] }] } };
+  const files = (map: Record<string, unknown>) => (file: string) => map[path.normalize(file)];
+  const at = (...parts: string[]) => path.normalize(path.join(...parts));
+  const routing = { name: 'ccr-subagent-routing', path: at('/plugins', 'routing') };
+  const lint = { name: 'lint', path: at('/plugins', 'lint') };
+
+  it('names the one plugin whose hooks file matches the tool', () => {
+    const read = files({ [at(routing.path, 'hooks', 'hooks.json')]: guard });
+    expect(hookPluginOf('Agent', [lint, routing], [], read)).toBe('ccr-subagent-routing');
+    expect(hookPluginOf('Bash', [lint, routing], [], read)).toBeUndefined();
+  });
+
+  it('reads the hooks a manifest names or inlines', () => {
+    const read = files({
+      [at(routing.path, '.claude-plugin', 'plugin.json')]: { hooks: './config/guard.json' },
+      [at(routing.path, 'config', 'guard.json')]: guard,
+      [at(lint.path, '.claude-plugin', 'plugin.json')]: { hooks: { PreToolUse: [{ matcher: 'Bash' }] } },
+    });
+    expect(hookPluginOf('Task', [lint, routing], [], read)).toBe('ccr-subagent-routing');
+    expect(hookPluginOf('Bash', [lint, routing], [], read)).toBe('lint');
+  });
+
+  it('names no plugin when two could have asked, or a settings file holds a matching hook too', () => {
+    const everything = { hooks: { PreToolUse: [{ hooks: [] }] } };
+    const read = files({
+      [at(routing.path, 'hooks', 'hooks.json')]: guard,
+      [at(lint.path, 'hooks', 'hooks.json')]: everything,
+      [at('/home', 'settings.json')]: { hooks: { PreToolUse: [{ matcher: 'Agent' }] } },
+    });
+    expect(hookPluginOf('Agent', [lint, routing], [], read)).toBeUndefined();
+    expect(hookPluginOf('Agent', [routing], [at('/home', 'settings.json')], read)).toBeUndefined();
+    expect(hookPluginOf('Agent', [routing], [at('/missing.json')], read)).toBe('ccr-subagent-routing');
   });
 });

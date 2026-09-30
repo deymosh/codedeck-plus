@@ -10,6 +10,8 @@
  * Claude Code's modes get their meaning — which calls run unasked, which
  * need the user, and how plan approval switches the mode.
  */
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
 import { mcpStatus } from '../../mcp';
 import type { HttpPost } from '../../net';
@@ -47,7 +49,7 @@ import {
   type SdkSystemMessage,
 } from './facade';
 import { ClaudeMcp } from './mcp';
-import { ClaudePlugins, execCli, type CliRunner } from './plugins';
+import { ClaudePlugins, execCli, hookPluginOf, type CliRunner, type LoadedPlugin } from './plugins';
 import { normalizeUsage } from './usage';
 
 export const CLAUDE_CODE_AGENT_ID = 'claude-code';
@@ -199,6 +201,9 @@ export class ClaudeSession implements DriverSession {
   /** PreToolUse hooks that answered "ask", oldest first, until their ask
    *  arrives: `canUseTool` is not told a hook asked, only why. */
   private hookAsks: HookAsk[] = [];
+  /** The plugins this session loaded, as `init` names them: a hook's ask
+   *  names the plugin it comes from when exactly one declares it. */
+  private plugins: LoadedPlugin[] = [];
   /** Commands whose UX is bound to Claude Code's own terminal (its status
    *  line, colours, …), as `init` names them — never offered on the phone. */
   private readonly terminalCommands = new Set<string>();
@@ -349,6 +354,7 @@ export class ClaudeSession implements DriverSession {
       // The model the SDK actually RESOLVED — a session started on the
       // default model otherwise reports none at all.
       for (const name of init.terminal_slash_commands ?? []) this.terminalCommands.add(name);
+      this.plugins = (init.plugins ?? []).filter((p) => typeof p?.name === 'string' && typeof p.path === 'string');
       const modelChanged = typeof init.model === 'string' && init.model !== '' && init.model !== this.model;
       if (modelChanged) this.model = init.model;
       this.ctx.emit({
@@ -494,6 +500,7 @@ export class ClaudeSession implements DriverSession {
     if (toolName === 'ExitPlanMode') return this.approvePlan(requestId);
 
     const locations = toolLocations(input);
+    const hookPlugin = hook ? hookPluginOf(toolName, this.plugins, this.settingsFiles()) : undefined;
     // The SDK's own prompt sentence, when it sent one, describes the call.
     const description = options.description ?? options.title;
     const outcome = await this.ctx.requestPermission({
@@ -507,6 +514,7 @@ export class ClaudeSession implements DriverSession {
       options: hook ? [PERMISSION_ALLOW, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],
       ...(reason ? { reason } : {}),
       ...(hook ? { hook: hook.name } : {}),
+      ...(hookPlugin ? { hookPlugin } : {}),
       ...(options.agentID ? { subagent: this.lastSubagentType ? { label: this.lastSubagentType } : {} } : {}),
     });
     if (outcome.outcome === 'cancelled') return { behavior: 'deny', message: outcome.reason };
@@ -523,6 +531,14 @@ export class ClaudeSession implements DriverSession {
     }
     return { behavior: 'deny', message: USER_DENIED };
   };
+
+  /** The settings files whose hooks this session runs besides its
+   *  plugins': the user's, the project's and the project's local ones. */
+  private settingsFiles(): string[] {
+    const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude');
+    const project = path.join(this.params.cwd, '.claude');
+    return [path.join(configDir, 'settings.json'), path.join(project, 'settings.json'), path.join(project, 'settings.local.json')];
+  }
 
   /** The hook ask `reason` belongs to, removed from those waiting. */
   private takeHookAsk(reason: string | undefined): HookAsk | undefined {

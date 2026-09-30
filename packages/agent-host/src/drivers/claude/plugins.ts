@@ -64,6 +64,72 @@ export function readPluginDescription(installPath: string): string | undefined {
   }
 }
 
+/** A plugin a session loaded, as its `init` message names it. */
+export interface LoadedPlugin {
+  name: string;
+  path: string;
+}
+
+/** A JSON file's contents, or undefined when it is missing or unreadable. */
+function readJsonFile(file: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Does a hook matcher select `toolName`? Claude Code reads it as a regular
+ *  expression over the whole name; none, `""` and `*` select every tool. */
+function matcherSelects(matcher: unknown, toolName: string): boolean {
+  if (typeof matcher !== 'string' || matcher === '' || matcher === '*') return true;
+  try {
+    return new RegExp(`^(?:${matcher})$`).test(toolName);
+  } catch {
+    return matcher === toolName;
+  }
+}
+
+/** Does a hooks configuration (a settings file, a plugin's hooks file, or
+ *  the object a plugin's manifest inlines) hold a PreToolUse hook for
+ *  `toolName`? */
+function hasPreToolUseHook(config: unknown, toolName: string): boolean {
+  if (!config || typeof config !== 'object') return false;
+  const events = (config as { hooks?: unknown }).hooks ?? config;
+  const groups = (events as { PreToolUse?: unknown }).PreToolUse;
+  return Array.isArray(groups) && groups.some((g) => matcherSelects((g as { matcher?: unknown } | null)?.matcher, toolName));
+}
+
+/** The hooks configurations a plugin declares: its `hooks/hooks.json`, and
+ *  whatever its manifest's `hooks` names (files relative to the plugin, or
+ *  the configuration itself). */
+function pluginHookConfigs(plugin: LoadedPlugin, readJson: (file: string) => unknown): unknown[] {
+  const configs = [readJson(path.join(plugin.path, 'hooks', 'hooks.json'))];
+  const declared = (readJson(path.join(plugin.path, '.claude-plugin', 'plugin.json')) as { hooks?: unknown } | undefined)?.hooks;
+  for (const entry of Array.isArray(declared) ? declared : [declared]) {
+    configs.push(typeof entry === 'string' ? readJson(path.resolve(plugin.path, entry)) : entry);
+  }
+  return configs;
+}
+
+/**
+ * The plugin a PreToolUse hook that asked about `toolName` comes from. Claude
+ * Code names a hook only by its event and tool, so this is told from the
+ * configuration: the answer is the one loaded plugin that declares such a
+ * hook, and only when none of `settingsFiles` declares one as well —
+ * otherwise which of them asked cannot be told, and there is no answer.
+ */
+export function hookPluginOf(
+  toolName: string,
+  plugins: LoadedPlugin[],
+  settingsFiles: string[],
+  readJson: (file: string) => unknown = readJsonFile,
+): string | undefined {
+  if (settingsFiles.some((file) => hasPreToolUseHook(readJson(file), toolName))) return undefined;
+  const declaring = plugins.filter((p) => pluginHookConfigs(p, readJson).some((c) => hasPreToolUseHook(c, toolName)));
+  return declaring.length === 1 ? declaring[0]!.name : undefined;
+}
+
 /** The CLI's own words for a failure: its `--json` message, else the last
  *  line of its error output (its progress lines go to stdout), else of its
  *  output — without the status glyph. */
