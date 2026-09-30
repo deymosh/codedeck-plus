@@ -43,6 +43,8 @@ pub struct Filter {
     pub authors: Vec<String>,
     /// the `#p` tag filter.
     pub p_tags: Vec<String>,
+    /// the `#d` tag filter (an addressable event's identifier).
+    pub d_tags: Vec<String>,
     pub since: Option<i64>,
 }
 
