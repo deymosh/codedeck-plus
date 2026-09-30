@@ -3,7 +3,7 @@
  * real CLI (2.1.283) prints.
  */
 import { describe, expect, it } from 'vitest';
-import { ClaudePlugins, failureMessage, type CliResult } from '../plugins';
+import { actionArgs, ClaudePlugins, failureMessage, updateMessage, type CliResult } from '../plugins';
 
 const INSTALLED = [{
   id: 'commit-commands@claude-plugins-official',
@@ -79,6 +79,43 @@ describe('Claude plugins', () => {
 
     await plugins.act('add-marketplace', 'me/skills');
     expect(calls).toContainEqual(['plugin', 'marketplace', 'add', 'me/skills']);
+  });
+
+  it('an update reports the versions, and a marketplace change brings the catalog', async () => {
+    expect(actionArgs('update', 'commit-commands@claude-plugins-official')).toEqual([
+      'plugin',
+      'update',
+      'commit-commands@claude-plugins-official',
+      '--json',
+    ]);
+
+    const { run } = cli(() =>
+      ok({ command: 'update', outcome: 'ok', updateOutcome: 'up_to_date', oldVersion: '0.2.0', newVersion: '0.2.0' }),
+    );
+    const plugins = new ClaudePlugins(run, async () => {});
+    const state = await plugins.act('update', 'commit-commands@claude-plugins-official');
+    expect(state.message).toBe('Already at the latest version (0.2.0).');
+    expect(state.available).toBeUndefined();
+
+    const shaOld = 'fa59bc903774aaaa000000000000000000000001';
+    const shaNew = 'fa59bc903779bbbb000000000000000000000002';
+    const moved = cli(() => ok({ command: 'update', outcome: 'ok', updateOutcome: 'updated', oldVersion: shaOld, newVersion: shaNew }));
+    const plugins2 = new ClaudePlugins(moved.run, async () => {});
+    const state2 = await plugins2.act('update', 'commit-commands@claude-plugins-official');
+    expect(state2.message).toBe('Updated from fa59bc903774 to fa59bc903779.');
+
+    const catalog = cli();
+    const plugins3 = new ClaudePlugins(catalog.run, async () => {});
+    const state3 = await plugins3.act('update-marketplace', 'claude-plugins-official');
+    expect(catalog.calls).toContainEqual(['plugin', 'marketplace', 'update', 'claude-plugins-official']);
+    expect(state3.available).toBeDefined();
+    expect(state3.message).toBeUndefined();
+  });
+
+  it('an update without versions falls back to the CLI message, or says nothing', () => {
+    expect(updateMessage({ command: 'update', outcome: 'ok', message: 'Done.' })).toBe('Done.');
+    expect(updateMessage({ command: 'update', outcome: 'ok' })).toBeUndefined();
+    expect(updateMessage(undefined)).toBeUndefined();
   });
 
   it("a refused change rejects with the CLI's reason and tells no session", async () => {

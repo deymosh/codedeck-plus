@@ -167,6 +167,7 @@ export function actionArgs(action: PluginAction, target: string): string[] {
     case 'uninstall':
     case 'enable':
     case 'disable':
+    case 'update':
       return ['plugin', action, target, '--json'];
     case 'add-marketplace':
       return ['plugin', 'marketplace', 'add', target];
@@ -176,6 +177,33 @@ export function actionArgs(action: PluginAction, target: string): string[] {
       return ['plugin', 'marketplace', 'update', target];
   }
 }
+
+/** A version the CLI prints as a full commit sha is shown short. */
+const shortVersion = (version: string): string => (/^[0-9a-f]{40}$/i.test(version) ? version.slice(0, 12) : version);
+
+/** What an update did, from the CLI's JSON line, in the phone's own words:
+ *  whether it was already current, or moved from one version to another. */
+export function updateMessage(json: Record<string, unknown> | undefined): string | undefined {
+  if (!json) return undefined;
+  const version = (v: unknown) => (typeof v === 'string' && v !== '' ? shortVersion(v) : undefined);
+  const oldVersion = version(json.oldVersion);
+  const newVersion = version(json.newVersion);
+  if (json.updateOutcome === 'up_to_date') {
+    return newVersion ? `Already at the latest version (${newVersion}).` : undefined;
+  }
+  if (oldVersion && newVersion && oldVersion !== newVersion) {
+    return `Updated from ${oldVersion} to ${newVersion}.`;
+  }
+  return typeof json.message === 'string' && json.message ? json.message : undefined;
+}
+
+/** Actions that change what the marketplaces offer, so the fresh catalog is
+ *  read back with the state. */
+const touchesCatalog: Partial<Record<PluginAction, boolean>> = {
+  'add-marketplace': true,
+  'remove-marketplace': true,
+  'update-marketplace': true,
+};
 
 export class ClaudePlugins implements PluginManager {
   /** One CLI invocation at a time: they all write the same settings and
@@ -201,7 +229,9 @@ export class ClaudePlugins implements PluginManager {
       const ok = json && typeof json.outcome === 'string' ? json.outcome === 'ok' : result.code === 0;
       if (!ok) throw new Error(failureMessage(result));
       await this.onChanged().catch(() => {});
-      return this.read(false);
+      const state = await this.read(touchesCatalog[action] === true);
+      const message = action === 'update' ? updateMessage(json) : undefined;
+      return { ...state, ...(message ? { message } : {}) };
     });
   }
 
