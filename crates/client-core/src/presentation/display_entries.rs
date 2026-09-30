@@ -122,7 +122,7 @@ fn phrase(kind: ToolKind) -> Phrase {
         ToolKind::Edit => p("Edited", "Editing", "edited a file", "edited {n} files"),
         ToolKind::Delete => p("Deleted", "Deleting", "deleted a file", "deleted {n} files"),
         ToolKind::Move => p("Moved", "Moving", "moved a file", "moved {n} files"),
-        ToolKind::Search => p("Searched", "Searching", "searched once", "searched {n} times"),
+        ToolKind::Search => p("Searched", "Searching", "searched for a pattern", "searched for {n} patterns"),
         ToolKind::Execute => p("Ran", "Running", "ran a command", "ran {n} commands"),
         ToolKind::Think => p("Planned", "Planning", "updated the plan", "updated the plan {n} times"),
         ToolKind::Fetch => p("Fetched", "Fetching", "fetched a page", "fetched {n} pages"),
@@ -146,8 +146,9 @@ struct GroupSummary {
     failed: u32,
 }
 
-/// "Ran 3 commands, read a file (1 failed)": each kind of call in the order
-/// it first appears. A lone call is its verb and `subject` its title (an
+/// "Ran 3 commands, read a file": each kind of call in the order it first
+/// appears; how many failed is counted apart, for the row to show as it
+/// shows failure. A lone call is its verb and `subject` its title (an
 /// `other` tool, whose title is raw arguments, shows its name). Thinking
 /// alone is "Thought".
 fn summarize(steps: &[ToolStep]) -> GroupSummary {
@@ -195,7 +196,6 @@ fn summarize(steps: &[ToolStep]) -> GroupSummary {
             (capitalized(&parts.join(", ")), None)
         }
     };
-    let summary = if failed > 0 && subject.is_none() { format!("{summary} ({failed} failed)") } else { summary };
     GroupSummary { summary, subject, added, removed, failed }
 }
 
@@ -227,8 +227,8 @@ pub enum DisplayEntry {
     ToolGroup {
         seq: u64,
         steps: Vec<ToolStep>,
-        /// "Ran 3 commands, read a file (1 failed)"; for a lone call, its
-        /// verb ("Ran"), with `subject` what it acted on ("npm test").
+        /// "Ran 3 commands, read a file"; for a lone call, its verb ("Ran"),
+        /// with `subject` what it acted on ("npm test").
         summary: String,
         subject: Option<String>,
         /// Lines the group's calls added and removed, over every file.
@@ -757,7 +757,7 @@ mod tests {
             json!({"entryType":"tool_result","callId":"c2","text":"boom","isError":true}),
             call("c3"),
         ]));
-        assert_eq!(summary_of(&d[0]), ("Ran 3 commands, read a file (1 failed)".into(), None));
+        assert_eq!(summary_of(&d[0]), ("Ran 3 commands, read a file".into(), None));
         let DisplayEntry::ToolGroup { failed, .. } = &d[0] else { panic!() };
         assert_eq!(*failed, 1);
 

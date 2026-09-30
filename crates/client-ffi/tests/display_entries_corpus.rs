@@ -20,11 +20,13 @@ use protocol::common::OutputEntry;
 use serde_json::json;
 
 /// One flat transcript, as v11 wire entries, exercising every `DisplayEntry`
-/// kind: a user message, agent text, a tool group (thinking, folded agent
-/// text, a call whose result lands after a permission card, a sub-agent
-/// call), a diff card, an error, a status line, a notice, a plan, a plan
-/// approval, a single question, a two-question ask, a resolved permission
-/// and a pending one a hook asked for.
+/// kind: a user message, agent text, tool groups (thinking alone, split from
+/// the next by the agent's narration; a call whose result lands after a
+/// permission card beside a sub-agent call; an edit carrying its diff and a
+/// failed multi-line command), a diff card no call claims, an error, a
+/// status line, a notice, a plan, a plan approval, a single question, a
+/// two-question ask, a resolved permission and a pending one a hook asked
+/// for.
 fn corpus() -> Vec<SeqEntry> {
     let wire = [
         json!({"entryType":"text","role":"user","text":"port the connection reducer to rust"}),
@@ -39,10 +41,20 @@ fn corpus() -> Vec<SeqEntry> {
             "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"allow_always","label":"Always allow","kind":"allow_always"},{"id":"deny","label":"Deny","kind":"reject_once"}]}),
         json!({"entryType":"resolved","requestId":"tu-read","summary":"Allowed"}),
         json!({"entryType":"tool_result","callId":"tu-read","text":"42 lines"}),
-        json!({"entryType":"diff","path":"packages/core/src/nostr/pool.ts","lines":[
+        json!({"entryType":"tool_call","callId":"tu-edit","toolName":"Edit","kind":"edit","title":"packages/core/src/nostr/pool.ts",
+            "locations":["packages/core/src/nostr/pool.ts"]}),
+        json!({"entryType":"diff","path":"packages/core/src/nostr/pool.ts","callId":"tu-edit","lines":[
             {"type":"context","text":"  const pool = new SimplePool();"},
             {"type":"del","text":"  pool.trackRelays = true;"},
             {"type":"add","text":"  pool.idleTimeout = 0x7fffffff; // CDX-020"}
+        ]}),
+        json!({"entryType":"tool_result","callId":"tu-edit","text":"The file has been updated."}),
+        json!({"entryType":"tool_call","callId":"tu-test","toolName":"Bash","kind":"execute","title":"cargo test -p core \\…",
+            "input":"cargo test -p core \\\n  -- reconnect"}),
+        json!({"entryType":"tool_result","callId":"tu-test","text":"test reconnect ... FAILED\n\nfailures:\n    reconnect","isError":true}),
+        json!({"entryType":"diff","path":"Cargo.lock","lines":[
+            {"type":"del","text":"version = \"0.1.0\""},
+            {"type":"add","text":"version = \"0.2.0\""}
         ]}),
         json!({"entryType":"error","text":"bridge disconnected"}),
         json!({"entryType":"status","text":"status: idle"}),
