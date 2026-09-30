@@ -55,7 +55,8 @@ import uniffi.client_ffi.UniffiQuickPrompt
 
 /**
  * The message input: attach (a photo or any file), the text, dictation,
- * and a round Send that lights up once there is something to send. One rounded surface, so the
+ * and a round Send that lights up once there is something to send — or,
+ * while a turn runs and nothing is typed, Stop. One rounded surface, so the
  * controls read as parts of the input rather than a row of buttons. With
  * `onSlash`, an empty input also offers `/`, which starts a command — the
  * key sits on a phone keyboard's second page.
@@ -68,6 +69,8 @@ internal fun Composer(
     canAttach: Boolean,
     uploading: Boolean,
     canSend: Boolean,
+    /** Stops the running turn; `null` when none runs. */
+    onStop: (() -> Unit)?,
     onAttachPhoto: () -> Unit,
     onAttachFile: () -> Unit,
     onDictate: () -> Unit,
@@ -154,20 +157,28 @@ internal fun Composer(
         IconButton(onClick = onDictate) {
             Icon(Icons.Outlined.Mic, contentDescription = "Dictate with voice", tint = Tokens.TextMuted)
         }
+        // While a turn runs the button stops it — until something is typed:
+        // then it sends, and the agent reads the message when it can.
+        val stop = onStop != null && !canSend
         Box(
             Modifier
                 .size(44.dp)
                 .clip(CircleShape)
-                .background(if (canSend) Tokens.Accent else Tokens.SurfaceHover)
-                .clickable(enabled = canSend, onClick = onSend),
+                .background(if (canSend || stop) Tokens.Accent else Tokens.SurfaceHover)
+                .clickable(enabled = canSend || stop, onClick = if (stop) onStop!! else onSend)
+                .semantics { contentDescription = if (stop) "Stop" else "Send" },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                Icons.AutoMirrored.Outlined.ArrowForward,
-                contentDescription = "Send",
-                tint = if (canSend) Tokens.AccentContrast else Tokens.TextDim,
-                modifier = Modifier.size(22.dp),
-            )
+            if (stop) {
+                Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).background(Tokens.AccentContrast))
+            } else {
+                Icon(
+                    Icons.AutoMirrored.Outlined.ArrowForward,
+                    contentDescription = null,
+                    tint = if (canSend) Tokens.AccentContrast else Tokens.TextDim,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
     }
 }

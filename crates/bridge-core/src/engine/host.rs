@@ -547,8 +547,8 @@ impl Engine {
                         }
                     }
                 }
-                EntryBody::ToolCall { kind: ToolKind::Execute, raw_input: Some(input), .. } => {
-                    let command = input.get("command").and_then(|c| c.as_str()).unwrap_or_default();
+                EntryBody::ToolCall { kind: ToolKind::Execute, title, input, .. } => {
+                    let command = input.as_deref().unwrap_or(title);
                     commit_check |= !session.rec.committed && runs_git_commit(command);
                 }
                 _ => {}

@@ -2,14 +2,19 @@
 //! typed [`OutputEntry`]) to grouped, render-ready rows. Clients render these
 //! rows; they never interpret wire entries themselves.
 //!
-//! - `text` role=user → user message bubble; role=agent → agent markdown, or
-//!   folded into the surrounding tool group when `collapsible`.
+//! - `text` role=user → user message bubble; role=agent → agent markdown,
+//!   which splits the tool activity around it into separate groups — the
+//!   agent narrating what it does next reads between the steps. A
+//!   sub-agent's text is not the conversation: it folds into the group.
 //! - `plan` → plan markdown (stays visible).
-//! - `tool_call` / `tool_result` / `thinking` → one collapsed "N actions"
-//!   group per run. A call carries its result wherever the result landed in
-//!   the transcript (a permission card between the two does not split them);
-//!   a result whose call is unknown stays a step of its own.
-//! - `diff` → a standalone diff card (the point of a diff card is to be seen).
+//! - `tool_call` / `tool_result` / `thinking` → one collapsed group per run,
+//!   summarized the way a person would say it ("Ran 3 commands, read a
+//!   file"). A call carries its result wherever the result landed in the
+//!   transcript (a permission card between the two does not split them); a
+//!   result whose call is unknown stays a step of its own.
+//! - `diff` → folded into the call that made it (its lines and +/− counts
+//!   ride the call, and the counts add up on the group); a diff no known
+//!   call claims is a standalone card.
 //! - `permission_request` / `plan_approval` → a card each; consecutive
 //!   `question` entries sharing a `request_id` → one question card.
 //! - `resolved` marks the card with that `request_id` answered (its summary is
@@ -20,8 +25,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use protocol::common::{
-    DiffLine, EntryBody, NoticeKind, OptionChoice, OutputEntry, PermissionOption, QuestionOption,
-    Role, ToolKind,
+    DiffLine, DiffLineType, EntryBody, NoticeKind, OptionChoice, OutputEntry, PermissionOption,
+    QuestionOption, Role, ToolKind,
 };
 use serde::Serialize;
 
@@ -43,7 +48,34 @@ pub struct ToolResultView {
     pub is_error: bool,
 }
 
-/// One step inside a collapsed tool group.
+/// One file a call changed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiffView {
+    pub path: String,
+    pub lines: Vec<DiffLine>,
+    pub truncated: bool,
+    pub added: u32,
+    pub removed: u32,
+}
+
+impl FileDiffView {
+    fn new(path: &str, lines: &[DiffLine], truncated: bool) -> Self {
+        let count = |k: DiffLineType| lines.iter().filter(|l| l.kind == k).count() as u32;
+        Self {
+            path: path.to_string(),
+            lines: lines.to_vec(),
+            truncated,
+            added: count(DiffLineType::Add),
+            removed: count(DiffLineType::Del),
+        }
+    }
+}
+
+/// One step inside a collapsed tool group. A call is most of the steps, so
+/// boxing it to shrink the rarer variants would cost an allocation on the
+/// common one for nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "step", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ToolStep {
@@ -53,23 +85,118 @@ pub enum ToolStep {
         tool_name: String,
         tool_kind: ToolKind,
         title: String,
+        /// The call's whole input, when it says more than `title`.
+        input: Option<String>,
+        /// What the call did, for a line naming it: `Ran`, `Read`, `Edited`.
+        verb: String,
+        /// The same while it runs: `Running`, `Reading`, `Editing`.
+        active_verb: String,
         /// Label of the sub-agent that made the call, if one did.
         subagent: Option<String>,
         is_sub_agent: bool,
         result: Option<ToolResultView>,
+        /// The files the call changed, in the order their diffs arrived.
+        diffs: Vec<FileDiffView>,
     },
     /// A result whose call is not in the transcript.
     Result { seq: u64, text: String, is_error: bool },
     Thinking { seq: u64, text: String, redacted: bool },
-    /// Agent text written alongside tool calls (`collapsible`).
+    /// Text a sub-agent wrote while it worked.
     Text { seq: u64, text: String },
 }
 
-impl ToolStep {
-    /// Every step but folded-in text is one action of the "N actions" count.
-    fn is_action(&self) -> bool {
-        !matches!(self, ToolStep::Text { .. })
+/// How a group names one kind of call: the verb of a lone call (`Ran` +
+/// its command), the verb while it runs, and the clause for one or `{n}` of
+/// them in a summary ("ran 3 commands").
+struct Phrase {
+    verb: &'static str,
+    active: &'static str,
+    one: &'static str,
+    many: &'static str,
+}
+
+fn phrase(kind: ToolKind) -> Phrase {
+    let p = |verb, active, one, many| Phrase { verb, active, one, many };
+    match kind {
+        ToolKind::Read => p("Read", "Reading", "read a file", "read {n} files"),
+        ToolKind::Edit => p("Edited", "Editing", "edited a file", "edited {n} files"),
+        ToolKind::Delete => p("Deleted", "Deleting", "deleted a file", "deleted {n} files"),
+        ToolKind::Move => p("Moved", "Moving", "moved a file", "moved {n} files"),
+        ToolKind::Search => p("Searched", "Searching", "searched for a pattern", "searched for {n} patterns"),
+        ToolKind::Execute => p("Ran", "Running", "ran a command", "ran {n} commands"),
+        ToolKind::Think => p("Planned", "Planning", "updated the plan", "updated the plan {n} times"),
+        ToolKind::Fetch => p("Fetched", "Fetching", "fetched a page", "fetched {n} pages"),
+        ToolKind::SwitchMode => p("Switched mode", "Switching mode", "switched mode", "switched mode {n} times"),
+        ToolKind::Agent => p("Agent", "Agent working on", "ran an agent", "ran {n} agents"),
+        ToolKind::Other => p("Used", "Using", "used a tool", "used {n} tools"),
     }
+}
+
+fn capitalized(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+}
+
+/// A group's headline and the totals its row shows.
+struct GroupSummary {
+    summary: String,
+    subject: Option<String>,
+    added: u32,
+    removed: u32,
+    failed: u32,
+}
+
+/// "Ran 3 commands, read a file": each kind of call in the order it first
+/// appears; how many failed is counted apart, for the row to show as it
+/// shows failure. A lone call is its verb and `subject` its title (an
+/// `other` tool, whose title is raw arguments, shows its name). Thinking
+/// alone is "Thought".
+fn summarize(steps: &[ToolStep]) -> GroupSummary {
+    let mut counts: Vec<(ToolKind, usize)> = Vec::new();
+    let (mut added, mut removed, mut failed, mut results, mut thinking) = (0, 0, 0, 0, false);
+    let mut lone: Option<&ToolStep> = None;
+    for step in steps {
+        match step {
+            ToolStep::Call { tool_kind, result, diffs, .. } => {
+                match counts.iter_mut().find(|(k, _)| k == tool_kind) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((*tool_kind, 1)),
+                }
+                failed += u32::from(result.as_ref().is_some_and(|r| r.is_error));
+                added += diffs.iter().map(|d| d.added).sum::<u32>();
+                removed += diffs.iter().map(|d| d.removed).sum::<u32>();
+                lone = Some(step);
+            }
+            ToolStep::Result { is_error, .. } => {
+                results += 1;
+                failed += u32::from(*is_error);
+            }
+            ToolStep::Thinking { .. } => thinking = true,
+            ToolStep::Text { .. } => {}
+        }
+    }
+    let calls: usize = counts.iter().map(|(_, n)| n).sum();
+    let (summary, subject) = match (calls, lone) {
+        (1, Some(ToolStep::Call { tool_kind, title, tool_name, .. })) if results == 0 => {
+            let subject = if *tool_kind == ToolKind::Other { tool_name } else { title };
+            (phrase(*tool_kind).verb.to_string(), Some(subject.clone()))
+        }
+        (0, _) if results == 0 => ((if thinking { "Thought" } else { "Worked" }).to_string(), None),
+        _ => {
+            let mut parts: Vec<String> = counts
+                .iter()
+                .map(|(kind, n)| {
+                    let p = phrase(*kind);
+                    if *n == 1 { p.one.to_string() } else { p.many.replace("{n}", &n.to_string()) }
+                })
+                .collect();
+            if results > 0 {
+                parts.push(if results == 1 { "got a result".into() } else { format!("got {results} results") });
+            }
+            (capitalized(&parts.join(", ")), None)
+        }
+    };
+    GroupSummary { summary, subject, added, removed, failed }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -100,7 +227,15 @@ pub enum DisplayEntry {
     ToolGroup {
         seq: u64,
         steps: Vec<ToolStep>,
+        /// "Ran 3 commands, read a file"; for a lone call, its verb ("Ran"),
+        /// with `subject` what it acted on ("npm test").
         summary: String,
+        subject: Option<String>,
+        /// Lines the group's calls added and removed, over every file.
+        added: u32,
+        removed: u32,
+        /// Calls whose result is an error.
+        failed: u32,
     },
     Diff {
         seq: u64,
@@ -200,11 +335,6 @@ fn subagent_label(entry: &OutputEntry) -> Option<String> {
     entry.subagent.as_ref().and_then(|s| s.label.clone())
 }
 
-fn build_tool_summary(steps: &[ToolStep]) -> String {
-    let count = steps.iter().filter(|s| s.is_action()).count();
-    format!("{count} action{}", if count == 1 { "" } else { "s" })
-}
-
 struct Builder {
     display: Vec<DisplayEntry>,
     resolved: HashMap<String, String>,
@@ -229,11 +359,15 @@ impl Builder {
             return;
         }
         let steps = std::mem::take(&mut self.steps);
-        let summary = build_tool_summary(&steps);
+        let GroupSummary { summary, subject, added, removed, failed } = summarize(&steps);
         self.display.push(DisplayEntry::ToolGroup {
             seq: self.group_seq,
             steps,
             summary,
+            subject,
+            added,
+            removed,
+            failed,
         });
     }
 
@@ -263,6 +397,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
     // result wherever it landed and a paired result never renders twice.
     let mut results: HashMap<&str, ToolResultView> = HashMap::new();
     let mut calls: HashSet<&str> = HashSet::new();
+    let mut diffs: HashMap<&str, Vec<FileDiffView>> = HashMap::new();
     for item in source {
         match &item.entry.body {
             EntryBody::ToolResult { call_id, text, is_error } => {
@@ -278,6 +413,14 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 calls.insert(call_id);
             }
             _ => {}
+        }
+    }
+    // Only diffs whose call is known fold into it; the rest stay cards.
+    for item in source {
+        if let EntryBody::Diff { path, lines, truncated, call_id: Some(call_id) } = &item.entry.body {
+            if calls.contains(call_id.as_str()) {
+                diffs.entry(call_id).or_default().push(FileDiffView::new(path, lines, *truncated));
+            }
         }
     }
 
@@ -300,9 +443,11 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 tool_name,
                 kind,
                 title,
+                input,
                 ..
             } => {
                 let subagent = subagent_label(entry);
+                let p = phrase(*kind);
                 b.push_step(
                     seq,
                     ToolStep::Call {
@@ -311,9 +456,13 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                         tool_name: tool_name.clone(),
                         tool_kind: *kind,
                         title: title.clone(),
+                        input: input.clone(),
+                        verb: p.verb.to_string(),
+                        active_verb: p.active.to_string(),
                         is_sub_agent: entry.subagent.is_some(),
                         subagent,
                         result: results.get(call_id.as_str()).cloned(),
+                        diffs: diffs.remove(call_id.as_str()).unwrap_or_default(),
                     },
                 );
             }
@@ -337,11 +486,9 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     redacted: *redacted,
                 },
             ),
-            EntryBody::Text {
-                role: Role::Agent,
-                text,
-                collapsible: true,
-            } => b.push_step(seq, ToolStep::Text { seq, text: text.clone() }),
+            EntryBody::Text { role: Role::Agent, text, .. } if entry.subagent.is_some() => {
+                b.push_step(seq, ToolStep::Text { seq, text: text.clone() })
+            }
             EntryBody::Question {
                 request_id,
                 index,
@@ -384,6 +531,8 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     is_plan: true,
                 });
             }
+            // Folded into its call above.
+            EntryBody::Diff { call_id: Some(call_id), .. } if calls.contains(call_id.as_str()) => {}
             EntryBody::Diff {
                 path, lines, truncated, ..
             } => {
@@ -569,8 +718,13 @@ mod tests {
             "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}]})
     }
 
+    fn summary_of(d: &DisplayEntry) -> (String, Option<String>) {
+        let DisplayEntry::ToolGroup { summary, subject, .. } = d else { panic!("{d:?}") };
+        (summary.clone(), subject.clone())
+    }
+
     #[test]
-    fn a_turn_groups_its_actions_and_keeps_the_conversation_visible() {
+    fn the_agents_narration_splits_its_actions_into_groups() {
         let d = build_display_entries(&seq(&[
             json!({"entryType":"text","role":"user","text":"fix it"}),
             json!({"entryType":"thinking","text":"hmm"}),
@@ -580,13 +734,61 @@ mod tests {
             json!({"entryType":"text","role":"agent","text":"Done."}),
             json!({"entryType":"turn_complete"}),
         ]));
-        assert_eq!(kinds(&d), ["user", "tools", "agent"]);
-        let DisplayEntry::ToolGroup { steps, summary, seq } = &d[1] else { panic!() };
-        assert_eq!(*seq, 2);
-        // thinking + call count; folded text does not; the result rides its call
-        assert_eq!(summary, "2 actions");
-        assert_eq!(steps.len(), 3);
-        assert!(matches!(&steps[2], ToolStep::Call { result: Some(r), .. } if r.text == "ok"));
+        assert_eq!(kinds(&d), ["user", "tools", "agent", "tools", "agent"]);
+        assert_eq!(summary_of(&d[1]), ("Thought".into(), None));
+        let DisplayEntry::ToolGroup { steps, seq, .. } = &d[3] else { panic!() };
+        assert_eq!(*seq, 4);
+        // the result rides its call
+        assert_eq!(steps.len(), 1);
+        assert!(matches!(&steps[0], ToolStep::Call { result: Some(r), verb, active_verb, .. }
+            if r.text == "ok" && verb == "Ran" && active_verb == "Running"));
+    }
+
+    #[test]
+    fn a_group_is_summarized_by_what_its_calls_did() {
+        let read = |id: &str| json!({"entryType":"tool_call","callId":id,"toolName":"Read","kind":"read","title":"a.rs"});
+        let d = build_display_entries(&seq(&[call("c1")]));
+        assert_eq!(summary_of(&d[0]), ("Ran".into(), Some("run c1".into())));
+
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            read("r1"),
+            call("c2"),
+            json!({"entryType":"tool_result","callId":"c2","text":"boom","isError":true}),
+            call("c3"),
+        ]));
+        assert_eq!(summary_of(&d[0]), ("Ran 3 commands, read a file".into(), None));
+        let DisplayEntry::ToolGroup { failed, .. } = &d[0] else { panic!() };
+        assert_eq!(*failed, 1);
+
+        // an `other` tool alone is named by its tool, not its raw arguments
+        let d = build_display_entries(&seq(&[json!({"entryType":"tool_call","callId":"m","toolName":"mcp__gh__issue","kind":"other","title":"{\"n\":1}"})]));
+        assert_eq!(summary_of(&d[0]), ("Used".into(), Some("mcp__gh__issue".into())));
+    }
+
+    #[test]
+    fn a_diff_folds_into_its_call_and_counts_on_the_group() {
+        let edit = json!({"entryType":"tool_call","callId":"e1","toolName":"Edit","kind":"edit","title":"a.rs"});
+        let diff = |call: &str| json!({"entryType":"diff","path":"a.rs","callId":call,"lines":[
+            {"type":"del","text":"x"},{"type":"add","text":"y"},{"type":"add","text":"z"},{"type":"context","text":"w"}]});
+        let d = build_display_entries(&seq(&[edit, diff("e1"), result("e1", "ok"), diff("nobody")]));
+        assert_eq!(kinds(&d), ["tools", "diff"]);
+        let DisplayEntry::ToolGroup { steps, added, removed, .. } = &d[0] else { panic!() };
+        assert_eq!((*added, *removed), (2, 1));
+        let ToolStep::Call { diffs, .. } = &steps[0] else { panic!() };
+        assert_eq!(diffs.len(), 1);
+        assert_eq!((diffs[0].added, diffs[0].removed, diffs[0].lines.len()), (2, 1, 4));
+    }
+
+    #[test]
+    fn a_sub_agents_text_folds_into_the_group() {
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            json!({"entryType":"text","role":"agent","text":"looking","subagent":{}}),
+            call("c2"),
+        ]));
+        assert_eq!(kinds(&d), ["tools"]);
+        assert_eq!(summary_of(&d[0]).0, "Ran 2 commands");
     }
 
     #[test]
@@ -611,7 +813,7 @@ mod tests {
         let d = build_display_entries(&seq(&[result("ghost", "orphan")]));
         let DisplayEntry::ToolGroup { steps, summary, .. } = &d[0] else { panic!() };
         assert!(matches!(&steps[0], ToolStep::Result { text, .. } if text == "orphan"));
-        assert_eq!(summary, "1 action");
+        assert_eq!(summary, "Got a result");
     }
 
     #[test]

@@ -522,9 +522,9 @@ pub enum Role {
 }
 
 /// What a tool call does, normalized across agents (the Agent Client
-/// Protocol's tool kinds). Clients pick icons and summaries from this rather
-/// than from agent-specific tool names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+/// Protocol's tool kinds, plus `agent`). Clients pick icons and summaries
+/// from this rather than from agent-specific tool names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     Read,
@@ -536,6 +536,8 @@ pub enum ToolKind {
     Think,
     Fetch,
     SwitchMode,
+    /// Hands a task to a sub-agent, which works on its own and reports back.
+    Agent,
     Other,
 }
 
@@ -612,10 +614,13 @@ pub enum EntryBody {
         /// Files or paths the call touches.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         locations: Vec<String>,
-        /// The agent's raw tool input, for detailed rendering.
+        /// The call's whole input as a person reads it, when it says more
+        /// than `title`: the full command of an `execute` call, a search's
+        /// pattern and scope, a tool's arguments as indented JSON. Absent for
+        /// a file change, whose `diff` entry already carries the content. The
+        /// host bounds its size.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[specta(type = Option<specta_typescript::Unknown>)]
-        raw_input: Option<serde_json::Value>,
+        input: Option<String>,
     },
     ToolResult {
         call_id: String,
@@ -943,7 +948,8 @@ mod tests {
         entry_rt(json!({"timestamp":"t","entryType":"text","role":"agent","text":"on it","collapsible":true}));
         entry_rt(json!({"timestamp":"t","entryType":"plan","text":"1. do x"}));
         entry_rt(json!({"timestamp":"t","entryType":"thinking","text":"","redacted":true}));
-        entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c1","toolName":"Bash","kind":"execute","title":"npm test","rawInput":{"command":"npm test"}}));
+        entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c1","toolName":"Bash","kind":"execute","title":"cat <<EOF…","input":"cat <<EOF\nhi\nEOF"}));
+        entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c2","toolName":"Agent","kind":"agent","title":"Explore auth"}));
         entry_rt(json!({"timestamp":"t","entryType":"tool_result","callId":"c1","text":"ok","isError":true}));
         entry_rt(json!({"timestamp":"t","entryType":"diff","path":"/w/a.rs","lines":[{"type":"add","text":"x"}],"truncated":true,"callId":"c1"}));
         entry_rt(json!({"timestamp":"t","entryType":"permission_request","requestId":"r","toolName":"Bash","kind":"execute","title":"rm -rf build","locations":["/w/build"],

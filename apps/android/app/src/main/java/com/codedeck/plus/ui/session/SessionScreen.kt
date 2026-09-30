@@ -8,12 +8,6 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.EaseInOut
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -73,7 +67,7 @@ import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
-import com.codedeck.plus.ui.components.ThinkingGlyph
+import com.codedeck.plus.ui.components.pulsingAlpha
 import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
@@ -146,11 +140,12 @@ private const val SESSION_FILE_SEND_BACKSTOP_MS = SESSION_FILE_SEND_BUDGET_MS + 
 
 /**
  * The session screen, top to bottom: [SessionTopBar] (back, title,
- * workspace), the GSD strip, the transcript, the [ThinkingIndicator] with
- * Stop while a turn runs, the always-visible pending-permission bar, the
+ * workspace), the GSD strip, the transcript (whose last line says what a
+ * running turn is doing), the always-visible pending-permission bar, the
  * staged image-attachment strip, quick prompts, the [SendFailedBar] with
  * Retry, [SessionControlsBar] (model/context, mode, effort, usage) and the
- * input bar (attach / text field / mic / Send). Port of `SessionScreen.tsx`,
+ * input bar (attach / text field / mic / Send, which is Stop while a turn
+ * runs and nothing is typed). Port of `SessionScreen.tsx`,
  * including the image flow.
  *
  * While the session waits on a question, text sent from the input bar is
@@ -539,17 +534,10 @@ fun SessionScreen(
             contiguous = transcriptView?.contiguous ?: true,
             respondedCards = respondedCards,
             planApprovalChoices = planChoices,
+            running = session?.state == "running",
             dispatch = ::dispatch,
             modifier = Modifier.weight(1f),
         )
-
-        // The session's activity, where Claude Code shows it: the last line.
-        // The waiting states have their own surfaces (the permission bar
-        // below, question cards in the transcript), so only a running turn
-        // gets a line here, with the Stop that belongs to it.
-        if (session?.state == "running") {
-            ThinkingIndicator(onStop = { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) })
-        }
 
         pendingPermission?.let { pending ->
             PendingPermissionBar(pending) { optionId ->
@@ -685,6 +673,11 @@ fun SessionScreen(
             canAttach = canAttachFiles,
             uploading = uploading,
             canSend = (draft.isNotBlank() || pendingFile != null) && !uploading,
+            onStop = if (session?.state == "running") {
+                { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) }
+            } else {
+                null
+            },
             onAttachPhoto = ::pickPhoto,
             onAttachFile = ::pickFile,
             onDictate = ::dictate,
@@ -752,7 +745,7 @@ internal fun appendToDraft(draft: String, fragment: String): String =
 /**
  * The session's single top bar: back, and what this session is and where it
  * works (title over the workspace path). The session's own state is not
- * repeated here: a running turn has the [ThinkingIndicator] line, waiting
+ * repeated here: a running turn has the transcript's activity line, waiting
  * sessions have the permission bar or a question card, and a failed send
  * has the [SendFailedBar], each with the control that answers it. The relay
  * link state lives on the sessions list.
@@ -856,31 +849,7 @@ internal fun SessionControlsBar(
     }
 }
 
-/** The running turn's last line: the spinner, "Thinking…", and its Stop. */
-@Composable
-internal fun ThinkingIndicator(onStop: () -> Unit) {
-    val alpha = pulsingAlpha(min = 0.55f, max = 1f, halfPeriodMs = 900)
-    Row(
-        Modifier.fillMaxWidth().padding(start = Tokens.Space2, end = Tokens.Space1),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ThinkingGlyph()
-        Text(
-            "Thinking…",
-            color = Tokens.Accent,
-            fontSize = Tokens.TextSm,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = Tokens.Space1)
-                .graphicsLayer { this.alpha = alpha },
-        )
-        TextButton(onClick = onStop) {
-            Text("Stop", color = Tokens.Danger, fontSize = Tokens.TextSm)
-        }
-    }
-}
-
-/** The oldest failed send's line, laid out like [ThinkingIndicator]: what
+/** The oldest failed send's line, right above the controls: what
  *  failed to go out (plus how many more are waiting behind it) and its
  *  Retry. */
 @Composable
@@ -988,21 +957,6 @@ private fun UsageBox(usage: UniffiUsageData?, badges: List<UsageBadgeData>) {
             )
         }
     }
-}
-
-@Composable
-private fun pulsingAlpha(min: Float, max: Float, halfPeriodMs: Int): Float {
-    val transition = rememberInfiniteTransition(label = "pulse")
-    val alpha by transition.animateFloat(
-        initialValue = min,
-        targetValue = max,
-        animationSpec = infiniteRepeatable(
-            animation = tween(halfPeriodMs, easing = EaseInOut),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseAlpha",
-    )
-    return alpha
 }
 
 @Composable

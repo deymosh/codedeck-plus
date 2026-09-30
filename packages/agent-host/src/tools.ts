@@ -28,6 +28,8 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   todoread: 'think',
   exitplanmode: 'switch_mode',
   enterplanmode: 'switch_mode',
+  task: 'agent',
+  agent: 'agent',
 };
 
 /** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `bash`)
@@ -40,11 +42,21 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
+/** A title is one line: a multi-line command (a heredoc, a script) shows its
+ *  first line, and the whole command travels as the call's `input`. */
+const MAX_TITLE_CHARS = 200;
+
+function oneLine(text: string): string {
+  const first = text.split('\n', 1)[0]!.trimEnd();
+  const cut = first.length > MAX_TITLE_CHARS ? first.slice(0, MAX_TITLE_CHARS) : first;
+  return cut.length < text.trimEnd().length ? `${cut}…` : cut;
+}
+
 /** One-line human summary of a tool call, e.g. `npm test` or `src/main.rs`. */
 export function toolTitle(toolName: string, input: Record<string, unknown>): string {
   switch (toolName.toLowerCase()) {
     case 'bash':
-      return str(input.command) || str(input.description);
+      return oneLine(str(input.command) || str(input.description));
     case 'read':
     case 'write':
     case 'edit':
@@ -66,8 +78,49 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
     case 'webfetch':
       return str(input.url);
     default:
-      return JSON.stringify(input ?? {}).slice(0, 200);
+      return JSON.stringify(input ?? {}).slice(0, MAX_TITLE_CHARS);
   }
+}
+
+/** A call's `input` is capped like a tool result: enough to read, well
+ *  inside a relay event. */
+export const MAX_TOOL_INPUT_CHARS = 4000;
+
+/**
+ * The call's whole input as a person reads it, when it says more than its
+ * title: the full command, a sub-agent's instructions, any other tool's
+ * arguments as indented JSON. `undefined` for a file change — its diff
+ * entry already carries the content — and when the title says it all.
+ */
+export function toolInput(toolName: string, input: Record<string, unknown>): string | undefined {
+  const title = toolTitle(toolName, input);
+  let text: string;
+  switch (toolName.toLowerCase()) {
+    case 'bash':
+      text = str(input.command);
+      break;
+    case 'task':
+    case 'agent':
+      text = str(input.prompt);
+      break;
+    case 'write':
+    case 'edit':
+    case 'multiedit':
+    case 'notebookedit':
+    case 'patch':
+    case 'apply_patch':
+    case 'todowrite':
+    case 'todoread':
+      return undefined;
+    default: {
+      const keys = Object.keys(input ?? {});
+      // A lone argument is the title already (a path, a pattern, a URL).
+      if (keys.length <= 1) return undefined;
+      text = JSON.stringify(input, null, 2);
+    }
+  }
+  if (!text || text === title) return undefined;
+  return text.length > MAX_TOOL_INPUT_CHARS ? text.slice(0, MAX_TOOL_INPUT_CHARS) + '…' : text;
 }
 
 /** The files a tool call touches, when its input names them. */

@@ -474,9 +474,9 @@ fn git_commits_mark_the_session() {
             call_id: "c".into(),
             tool_name: "Bash".into(),
             kind: ToolKind::Execute,
-            title: "commit".into(),
+            title: "git status && \\".into(),
             locations: vec![],
-            raw_input: Some(json!({"command":"git commit -m x"})),
+            input: Some("git status && \\\n  git commit -m x".into()),
         },
     );
     rig.host_event(&s, SessionEvent::Entries { entries: vec![call] });

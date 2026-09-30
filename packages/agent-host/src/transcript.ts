@@ -17,10 +17,17 @@ export function newTranslateContext(): TranslateContext {
 }
 
 /** A tool result's text is capped so one entry stays well inside a relay event. */
-export const MAX_TOOL_RESULT_CHARS = 2000;
+export const MAX_TOOL_RESULT_CHARS = 4000;
+/** Of a capped result, how much of its start is kept; the rest of the budget
+ *  goes to its end, where a command reports how it finished (the failing
+ *  test, the error, the summary line). */
+const RESULT_HEAD_CHARS = 1000;
 
 export function truncateToolResult(text: string): string {
-  return text.length > MAX_TOOL_RESULT_CHARS ? text.slice(0, MAX_TOOL_RESULT_CHARS) + '...[truncated]' : text;
+  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
+  const tail = MAX_TOOL_RESULT_CHARS - RESULT_HEAD_CHARS;
+  const omitted = text.length - MAX_TOOL_RESULT_CHARS;
+  return `${text.slice(0, RESULT_HEAD_CHARS)}\n…[${omitted} characters omitted]…\n${text.slice(-tail)}`;
 }
 
 /** Wire caps for a diff entry (a whole-file write can be long). */

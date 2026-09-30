@@ -25,7 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import com.codedeck.plus.ui.theme.Tokens
+import com.codedeck.plus.ui.transcript.rows.ActivityRow
 import com.codedeck.plus.ui.transcript.rows.AgentTextRow
+import com.codedeck.plus.ui.transcript.rows.activityOf
 import com.codedeck.plus.ui.transcript.rows.DiffRow
 import com.codedeck.plus.ui.transcript.rows.ErrorRow
 import com.codedeck.plus.ui.transcript.rows.NoticeRow
@@ -36,6 +38,7 @@ import com.codedeck.plus.ui.transcript.rows.QuestionCard
 import com.codedeck.plus.ui.transcript.rows.SyncGapRow
 import com.codedeck.plus.ui.transcript.rows.StatusRow
 import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
+import com.codedeck.plus.ui.transcript.rows.ToolGroupSheet
 import com.codedeck.plus.ui.transcript.rows.UserMessageRow
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiOutboxItem
@@ -67,12 +70,15 @@ fun TranscriptList(
     contiguous: Boolean,
     respondedCards: Set<String>,
     planApprovalChoices: Map<String, String>,
+    /** A turn is running: the list ends on what the agent is doing, and a
+     *  call still waiting on its result is running, not cut short. */
+    running: Boolean,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) = key(sessionId) {
     TranscriptListContent(
         displayEntries, outboxItems, machine, sessionId, syncState, contiguous,
-        respondedCards, planApprovalChoices, dispatch, modifier,
+        respondedCards, planApprovalChoices, running, dispatch, modifier,
     )
 }
 
@@ -86,16 +92,20 @@ private fun TranscriptListContent(
     contiguous: Boolean,
     respondedCards: Set<String>,
     planApprovalChoices: Map<String, String>,
+    running: Boolean,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expandedGroups by remember(sessionId) { mutableStateOf(setOf<Long>()) }
+    // The tool group whose sheet is open, by seq: the sheet reads the group
+    // from the live rows, so results landing while it is open show up in it.
+    var openGroup by remember(sessionId) { mutableStateOf<Long?>(null) }
 
     val visibleOutbox = remember(outboxItems, displayEntries, machine, sessionId) {
         visibleOutboxItems(outboxItems, machine, sessionId, displayEntries)
     }
     val showSyncGap = !contiguous && (syncState == "requested" || syncState == "syncing" || syncState == "failed")
-    val itemCount = displayEntries.size + visibleOutbox.size + (if (showSyncGap) 1 else 0)
+    val itemCount = displayEntries.size + visibleOutbox.size + (if (showSyncGap) 1 else 0) + (if (running) 1 else 0)
 
     if (itemCount == 0) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -136,6 +146,8 @@ private fun TranscriptListContent(
                     item = entry,
                     machine = machine,
                     sessionId = sessionId,
+                    live = running,
+                    onOpenGroup = { openGroup = entry.seq },
                     expanded = expandedGroups.contains(entry.seq),
                     onToggle = {
                         expandedGroups = if (expandedGroups.contains(entry.seq)) {
@@ -149,8 +161,19 @@ private fun TranscriptListContent(
                     actions = dispatch,
                 )
             }
+            if (running) {
+                item(key = "activity", contentType = "activity") {
+                    val last = displayEntries.lastOrNull() as? DisplayEntry.ToolGroup
+                    ActivityRow(activityOf(displayEntries), onOpen = last?.let { { openGroup = it.seq } })
+                }
+            }
             items(visibleOutbox, key = { "o${it.id}" }, contentType = { "outbox" }) { item ->
                 OutboxRow(item) { id -> dispatch(UniffiIntent.RetryOutboxItem(machine = machine, id = id)) }
+            }
+        }
+        openGroup?.let { seq ->
+            (displayEntries.firstOrNull { it.seq == seq } as? DisplayEntry.ToolGroup)?.let { group ->
+                ToolGroupSheet(group, live = running, onDismiss = { openGroup = null })
             }
         }
         if (!pin.pinned) {
@@ -179,6 +202,8 @@ private fun TranscriptRow(
     item: DisplayEntry,
     machine: String,
     sessionId: String,
+    live: Boolean,
+    onOpenGroup: () -> Unit,
     expanded: Boolean,
     onToggle: () -> Unit,
     respondedCards: Set<String>,
@@ -188,7 +213,7 @@ private fun TranscriptRow(
     when (item) {
         is DisplayEntry.UserMessage -> UserMessageRow(item.text)
         is DisplayEntry.AgentMessage -> AgentTextRow(item.text, item.isPlan)
-        is DisplayEntry.ToolGroup -> ToolGroupRow(item.steps, item.summary, expanded, onToggle)
+        is DisplayEntry.ToolGroup -> ToolGroupRow(item, live, onOpenGroup)
         is DisplayEntry.Diff -> DiffRow(item.path, item.lines, item.truncated, expanded, onToggle)
         is DisplayEntry.Error -> ErrorRow(item.text)
         is DisplayEntry.Status -> StatusRow(item.text)

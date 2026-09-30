@@ -65,15 +65,36 @@ describe('sdkMessageToEntries', () => {
       const entries = translate(assistant([
         { type: 'tool_use', id: 'tool_01', name: 'Bash', input: { command: 'ls -la' } },
       ]));
+      // The title is the whole command, so no separate input travels.
       expect(find(entries, 'tool_call')).toEqual({
         entryType: 'tool_call',
         callId: 'tool_01',
         toolName: 'Bash',
         kind: 'execute',
         title: 'ls -la',
-        rawInput: { command: 'ls -la' },
         timestamp: expect.any(String),
       });
+    });
+
+    it('titles a multi-line command by its first line and sends the whole command as input', () => {
+      const command = "python3 - <<'EOF'\nprint(1)\nEOF";
+      const entries = translate(assistant([{ type: 'tool_use', id: 't', name: 'Bash', input: { command } }]));
+      expect(find(entries, 'tool_call')).toMatchObject({ title: "python3 - <<'EOF'…", input: command });
+    });
+
+    it("sends another tool's arguments as indented JSON, unless one argument says it all", () => {
+      const mcp = translate(assistant([{ type: 'tool_use', id: 't', name: 'mcp__gh__issue', input: { repo: 'a/b', n: 1 } }]));
+      expect(find(mcp, 'tool_call')).toMatchObject({ kind: 'other', input: '{\n  "repo": "a/b",\n  "n": 1\n}' });
+      const grep = translate(assistant([{ type: 'tool_use', id: 't', name: 'Grep', input: { pattern: 'TODO' } }]));
+      expect(find(grep, 'tool_call')!.input).toBeUndefined();
+    });
+
+    it('sends a file change without input: its diff carries the content', () => {
+      const entries = translate(assistant([
+        { type: 'tool_use', id: 't', name: 'Write', input: { file_path: '/a.ts', content: 'x'.repeat(5000) } },
+      ]));
+      expect(find(entries, 'tool_call')!.input).toBeUndefined();
+      expect(find(entries, 'diff')).toMatchObject({ path: '/a.ts', callId: 't' });
     });
 
     it('names the files a tool call touches', () => {
@@ -128,7 +149,7 @@ describe('sdkMessageToEntries', () => {
         { type: 'tool_use', id: 'tool_agent', name: 'Agent', input: { description: 'Explore', prompt: 'Search for files...' } },
       ]));
       expect(find(entries, 'text')).toMatchObject({ role: 'agent', collapsible: true });
-      expect(find(entries, 'tool_call')).toMatchObject({ kind: 'other', title: 'Explore' });
+      expect(find(entries, 'tool_call')).toMatchObject({ kind: 'agent', title: 'Explore', input: 'Search for files...' });
     });
 
     it('marks sub-agent output with a subagent envelope field', () => {
@@ -165,10 +186,13 @@ describe('sdkMessageToEntries', () => {
       ]);
     });
 
-    it('truncates long tool results', () => {
-      const result = find(translate(user([{ type: 'tool_result', tool_use_id: 'tool_01', content: 'x'.repeat(3000) }])), 'tool_result')!;
-      expect(result.text.length).toBeLessThan(2100);
-      expect(result.text).toContain('...[truncated]');
+    it('truncates long tool results, keeping their start and their end', () => {
+      const content = `HEAD${'x'.repeat(9000)}TAIL`;
+      const result = find(translate(user([{ type: 'tool_result', tool_use_id: 'tool_01', content }])), 'tool_result')!;
+      expect(result.text.length).toBeLessThan(4100);
+      expect(result.text.startsWith('HEAD')).toBe(true);
+      expect(result.text.endsWith('TAIL')).toBe(true);
+      expect(result.text).toContain('characters omitted');
     });
 
     it('a sub-agent prompt folds into the tool group as agent text', () => {

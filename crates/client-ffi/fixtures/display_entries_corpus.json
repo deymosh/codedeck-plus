@@ -12,7 +12,10 @@
       "text": "## Refactor plan\n\nHere's what I'll do, in order."
     },
     {
+      "added": 0,
+      "failed": 0,
       "kind": "toolGroup",
+      "removed": 0,
       "seq": 3,
       "steps": [
         {
@@ -20,14 +23,29 @@
           "seq": 3,
           "step": "thinking",
           "text": "Start with the pool."
-        },
+        }
+      ],
+      "subject": null,
+      "summary": "Thought"
+    },
+    {
+      "isPlan": false,
+      "kind": "agentMessage",
+      "seq": 4,
+      "text": "Reading the pool first."
+    },
+    {
+      "added": 0,
+      "failed": 0,
+      "kind": "toolGroup",
+      "removed": 0,
+      "seq": 5,
+      "steps": [
         {
-          "seq": 4,
-          "step": "text",
-          "text": "Reading the pool first."
-        },
-        {
+          "activeVerb": "Reading",
           "callId": "tu-read",
+          "diffs": [],
+          "input": null,
           "isSubAgent": false,
           "result": {
             "isError": false,
@@ -38,10 +56,14 @@
           "subagent": null,
           "title": "pool.ts",
           "toolKind": "read",
-          "toolName": "Read"
+          "toolName": "Read",
+          "verb": "Read"
         },
         {
+          "activeVerb": "Searching",
           "callId": "tu-grep",
+          "diffs": [],
+          "input": null,
           "isSubAgent": true,
           "result": {
             "isError": false,
@@ -52,10 +74,12 @@
           "subagent": "explorer",
           "title": "SimplePool",
           "toolKind": "search",
-          "toolName": "Grep"
+          "toolName": "Grep",
+          "verb": "Searched"
         }
       ],
-      "summary": "3 actions"
+      "subject": null,
+      "summary": "Read a file, searched for a pattern"
     },
     {
       "agentLabel": null,
@@ -91,45 +115,109 @@
       "toolName": "Read"
     },
     {
+      "added": 1,
+      "failed": 1,
+      "kind": "toolGroup",
+      "removed": 1,
+      "seq": 11,
+      "steps": [
+        {
+          "activeVerb": "Editing",
+          "callId": "tu-edit",
+          "diffs": [
+            {
+              "added": 1,
+              "lines": [
+                {
+                  "text": "  const pool = new SimplePool();",
+                  "type": "context"
+                },
+                {
+                  "text": "  pool.trackRelays = true;",
+                  "type": "del"
+                },
+                {
+                  "text": "  pool.idleTimeout = 0x7fffffff; // CDX-020",
+                  "type": "add"
+                }
+              ],
+              "path": "packages/core/src/nostr/pool.ts",
+              "removed": 1,
+              "truncated": false
+            }
+          ],
+          "input": null,
+          "isSubAgent": false,
+          "result": {
+            "isError": false,
+            "text": "The file has been updated."
+          },
+          "seq": 11,
+          "step": "call",
+          "subagent": null,
+          "title": "packages/core/src/nostr/pool.ts",
+          "toolKind": "edit",
+          "toolName": "Edit",
+          "verb": "Edited"
+        },
+        {
+          "activeVerb": "Running",
+          "callId": "tu-test",
+          "diffs": [],
+          "input": "cargo test -p core \\\n  -- reconnect",
+          "isSubAgent": false,
+          "result": {
+            "isError": true,
+            "text": "test reconnect ... FAILED\n\nfailures:\n    reconnect"
+          },
+          "seq": 14,
+          "step": "call",
+          "subagent": null,
+          "title": "cargo test -p core \\…",
+          "toolKind": "execute",
+          "toolName": "Bash",
+          "verb": "Ran"
+        }
+      ],
+      "subject": null,
+      "summary": "Edited a file, ran a command"
+    },
+    {
       "kind": "diff",
       "lines": [
         {
-          "text": "  const pool = new SimplePool();",
-          "type": "context"
-        },
-        {
-          "text": "  pool.trackRelays = true;",
+          "text": "version = \"0.1.0\"",
           "type": "del"
         },
         {
-          "text": "  pool.idleTimeout = 0x7fffffff; // CDX-020",
+          "text": "version = \"0.2.0\"",
           "type": "add"
         }
       ],
-      "path": "packages/core/src/nostr/pool.ts",
-      "seq": 11,
+      "path": "Cargo.lock",
+      "seq": 16,
       "truncated": false
     },
     {
       "kind": "error",
-      "seq": 12,
+      "seq": 17,
       "text": "bridge disconnected"
     },
     {
       "kind": "status",
-      "seq": 13,
+      "seq": 18,
       "text": "status: idle"
     },
     {
       "kind": "notice",
       "notice": "session_restart",
-      "seq": 14,
+      "seq": 19,
       "text": "restarted"
     },
     {
       "isPlan": true,
       "kind": "agentMessage",
-      "seq": 15,
+      "seq": 20,
       "text": "1. Extract the reducer\n2. Wire the effects interpreter"
     },
     {
@@ -151,7 +239,7 @@
         }
       ],
       "requestId": "tu-plan",
-      "seq": 16
+      "seq": 21
     },
     {
       "answered": null,
@@ -173,7 +261,7 @@
         }
       ],
       "requestId": "tu-solo-question",
-      "seq": 17
+      "seq": 22
     },
     {
       "answered": null,
@@ -209,7 +297,7 @@
         }
       ],
       "requestId": "tu-question-group",
-      "seq": 18
+      "seq": 23
     },
     {
       "agentLabel": null,
@@ -234,7 +322,7 @@
       ],
       "reason": "Tests need a human while CI is red",
       "requestId": "tu-permission",
-      "seq": 20,
+      "seq": 25,
       "title": "cargo test",
       "toolKind": "execute",
       "toolName": "Bash"

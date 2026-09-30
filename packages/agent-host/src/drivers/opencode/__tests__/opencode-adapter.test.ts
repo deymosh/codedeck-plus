@@ -83,14 +83,13 @@ describe('opencodeEventToEntries', () => {
     });
 
     it('converts a running tool part into a typed tool call', () => {
-      const entries = translate(toolPart({ status: 'running', input: { command: 'ls -la' }, time: { start: 0 } }));
+      const entries = translate(toolPart({ status: 'running', input: { command: 'ls -la', timeout: 5 }, time: { start: 0 } }));
       expect(entries).toEqual([{
         entryType: 'tool_call',
         callId: 'call_1',
         toolName: 'bash',
         kind: 'execute',
         title: 'ls -la',
-        rawInput: { command: 'ls -la' },
         timestamp: expect.any(String),
       }]);
     });
@@ -106,12 +105,12 @@ describe('opencodeEventToEntries', () => {
     });
 
     it('truncates a long completed tool output', () => {
-      const longOutput = 'x'.repeat(3000);
+      const longOutput = 'x'.repeat(9000);
       const [result] = translate(toolPart({
         status: 'completed', input: {}, output: longOutput, title: 'bash', metadata: {}, time: { start: 0, end: 1 },
       })) as EntryOf<'tool_result'>[];
       expect(result!.text.length).toBeLessThan(longOutput.length);
-      expect(result!.text).toContain('[truncated]');
+      expect(result!.text).toContain('characters omitted');
     });
 
     it('converts an errored tool part into an error tool_result', () => {
