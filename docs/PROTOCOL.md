@@ -61,7 +61,7 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, gsd, interrupt, commands, plugins, mcp}` and `credentials[]` status. Phones build every
+providers, gsd, interrupt, commands, plugins, mcp, tasks}` and `credentials[]` status. Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -96,7 +96,8 @@ advertised; creating a session on it fails with the reason.
 ### Transcript entries
 
 `output {sessionId, seq, entry}` carries one typed `OutputEntry`: a
-`timestamp`, optional `subagent {label}`, optional `agentExtras` (the one
+`timestamp`, optional `subagent {label?, parentCallId?}` (`parentCallId`: the
+`agent` call that started it, so a client can nest its steps under that call), optional `agentExtras` (the one
 sanctioned escape hatch — agent-specific data no client depends on) and a body
 tagged by `entryType`:
 
@@ -108,6 +109,8 @@ tagged by `entryType`:
 | `tool_call` | `callId`, `toolName` (display only), `kind` (read, edit, delete, move, search, execute, think, fetch, switch_mode, agent — a sub-agent launch —, other), `title`, `locations`, `input` (the whole input as text, bounded; absent for a file change, whose `diff` carries it) |
 | `tool_result` | `callId`, `text`, `isError` |
 | `diff` | `path`, add/del/context `lines`, `truncated` |
+| `todos` | the agent's plan, whole each time: `items[] {text, status: pending|in_progress|completed|cancelled, activeText?}` and the `callId?` that wrote it; the latest one is the plan |
+| `background_task` | work left running beside the turn: `taskId`, `kind: shell|agent|other`, `title`, `status: running|completed|failed|stopped`, `callId?` (the call that started it), `summary?`; the latest entry for a `taskId` is where it stands |
 | `permission_request` | a card: `requestId`, the tool, and `options[] {id, label, kind: allow_once|allow_always|reject_once|reject_always}`; optional `reason` (why the agent asks, in its words) `hook` (the hook that asked, e.g. `PreToolUse:Bash` — it asks every time, so no "always" option) and `hookPlugin` (the plugin that hook comes from, when exactly one loaded plugin and no settings file declares a matching hook) |
 | `question` | one question of an ask: `requestId`, `index`/`count`, `options`, `multiSelect` |
 | `plan_approval` | a card: `requestId`, `options[]` |
@@ -162,6 +165,10 @@ question.
 
 The bridge writes the user's transcript entry itself (agents do not reliably
 echo input) and drops an agent's echo of it.
+
+`interrupt {sessionId}` stops the running turn. `stop-task {sessionId,
+taskId}` stops one background task, for agents with `supports.tasks`; the
+task's next `background_task` entry says it stopped.
 
 ### Attachments
 
@@ -440,6 +447,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `end-session {sessionId}` | `ack`; no `ended` follows |
 | `prompt {sessionId, text}` | `ack` |
 | `interrupt {sessionId}` | `ack` |
+| `stop-task {sessionId, taskId}` | `ack` once asked (the task's next `background_task` entry says it stopped), or `error` |
 | `set-option {sessionId, option, value}` | `ack` when applied, else `error` |
 | `list-models {agent}` | `models {models, defaultModel?}` |
 | `get-usage {sessionId}` | `usage {usage?}` |
