@@ -61,7 +61,7 @@ fn corpus() -> Vec<SeqEntry> {
             "options":[{"label":"This week"},{"label":"Next sprint"}],"multiSelect":true}),
         json!({"entryType":"permission_request","requestId":"tu-permission","toolName":"Bash","kind":"execute","title":"cargo test",
             "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}],
-            "reason":"Tests need a human while CI is red","hook":"PreToolUse:Bash"}),
+            "reason":"Tests need a human while CI is red","hook":"PreToolUse:Bash","hookPlugin":"guard-rails"}),
         json!({"entryType":"turn_complete"}),
     ];
     wire.into_iter()
