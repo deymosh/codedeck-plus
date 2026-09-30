@@ -247,6 +247,7 @@ internal object DesignFixtures {
             title = "git push --force origin release",
             reason = "Force-pushing a release branch needs a second look.",
             hook = "PreToolUse:Bash",
+            hookPlugin = "guard-rails",
             options = listOf(
                 PermissionOption("allow", "Allow", "allow_once"),
                 PermissionOption("deny", "Deny", "reject_once"),

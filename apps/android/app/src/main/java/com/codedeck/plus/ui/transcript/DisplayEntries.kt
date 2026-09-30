@@ -108,6 +108,7 @@ data class PendingPermissionSummary(
     val options: List<PermissionOption> = emptyList(),
     val reason: String? = null,
     val hook: String? = null,
+    val hookPlugin: String? = null,
     val isSubAgent: Boolean = false,
     val agentLabel: String? = null,
 )
@@ -197,6 +198,8 @@ sealed class DisplayEntry {
         val reason: String? = null,
         /** The hook that asked (`PreToolUse:Bash`), when one did. */
         val hook: String? = null,
+        /** The plugin that hook comes from, when known. */
+        val hookPlugin: String? = null,
         val isSubAgent: Boolean = false,
         val agentLabel: String? = null,
         val answered: String? = null,

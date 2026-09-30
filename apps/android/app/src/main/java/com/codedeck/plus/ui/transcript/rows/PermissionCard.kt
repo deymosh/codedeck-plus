@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -62,7 +63,7 @@ fun PermissionCard(
     if (item.answered != null || responded) {
         ResolvedCard(
             title = "${item.toolName} ${item.title}".trim(),
-            description = listOfNotNull(description, item.hook?.let { "Asked by your $it hook" }).joinToString("\n").ifEmpty { null },
+            description = listOfNotNull(description, item.hook?.let { askedBy(item.hookPlugin) }).joinToString("\n").ifEmpty { null },
             outcome = item.answered ?: "Response sent…",
             danger = item.answered != null && Regex("den|reject", RegexOption.IGNORE_CASE).containsMatchIn(item.answered),
         )
@@ -80,7 +81,7 @@ fun PermissionCard(
         if (description != null && description != item.title) {
             Text(description, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
         }
-        AskedBecause(item.reason, item.hook)
+        AskedBecause(item.reason, item.hook, item.hookPlugin)
         FlowRow(
             Modifier.fillMaxWidth().padding(top = Tokens.Space2),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
@@ -101,25 +102,34 @@ fun PermissionCard(
     }
 }
 
+/** Who asked, when a hook did: the plugin it comes from when that is known.
+ *  The hook's own name (`PreToolUse:Bash`) would only repeat the card's tool. */
+internal fun askedBy(hookPlugin: String?): String =
+    if (hookPlugin != null) "Asked by your $hookPlugin plugin" else "Asked by one of your hooks"
+
 /**
  * Why the agent stopped to ask: the reason in its own words beside a
- * warn-coloured rule, and, when a hook asked, which one. A hook asks every
- * time, so its card offers no "always" choice; naming it says why.
+ * warn-coloured rule, and, when a hook asked, who it belongs to. A hook asks
+ * every time, so its card offers no "always" choice; naming it says why.
  */
 @Composable
-internal fun AskedBecause(reason: String?, hook: String?) {
+internal fun AskedBecause(reason: String?, hook: String?, hookPlugin: String?) {
     val text = reason?.takeIf { it.isNotBlank() }
     if (text == null && hook == null) return
     Row(Modifier.padding(top = Tokens.Space2).height(IntrinsicSize.Min)) {
         Box(Modifier.width(2.dp).fillMaxHeight().clip(RoundedCornerShape(1.dp)).background(Tokens.Warn.copy(alpha = 0.7f)))
         Column(Modifier.padding(start = Tokens.Space3), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             text?.let { Text(it, color = Tokens.Text, fontSize = Tokens.TextSm) }
-            hook?.let {
+            if (hook != null) {
                 Text(
-                    buildAnnotatedString {
-                        append("Asked by your ")
-                        withStyle(SpanStyle(fontFamily = Tokens.FontMono, color = Tokens.TextMuted)) { append(it) }
-                        append(" hook")
+                    if (hookPlugin == null) {
+                        AnnotatedString(askedBy(null))
+                    } else {
+                        buildAnnotatedString {
+                            append("Asked by your ")
+                            withStyle(SpanStyle(fontFamily = Tokens.FontMono, color = Tokens.TextMuted)) { append(hookPlugin) }
+                            append(" plugin")
+                        }
                     },
                     color = Tokens.TextDim,
                     fontSize = Tokens.TextXs,
