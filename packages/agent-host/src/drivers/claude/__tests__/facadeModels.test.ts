@@ -79,6 +79,7 @@ import {
   fetchGatewayModels,
   isProviderBoundSession,
   modelSupports1mContext,
+  parseGatewayModels,
   type SdkSessionOptions,
 } from '../facade';
 
@@ -361,11 +362,8 @@ describe('modelSupports1mContext', () => {
     expect(modelSupports1mContext(undefined)).toBe(false);
   });
 
-  it('matches glm-5.3 and glm-5.3-flash (Z.ai\'s own 1M-tier docs), not glm-4.7-flash', () => {
-    // Real gateway shape (claude-code-router fronting Z.ai): "<provider>/<model>".
-    expect(modelSupports1mContext('Z.ai (Global) - Coding Plan/glm-5.3')).toBe(true);
-    expect(modelSupports1mContext('Z.ai (Global) - Coding Plan/glm-5.3-flash')).toBe(true);
-    expect(modelSupports1mContext('Z.ai (Global) - Coding Plan/glm-4.7-flash')).toBe(false);
+  it('does not guess for a third-party model the gateway has not described', () => {
+    expect(modelSupports1mContext('Undescribed Channel/glm-5.3-flash')).toBe(false);
   });
 });
 
@@ -469,6 +467,34 @@ describe('fetchGatewayModels', () => {
     ]);
   });
 
+  it('asks as a Claude Code client and keeps what the gateway says about the 1M window', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'http://router.example';
+    process.env.ANTHROPIC_API_KEY = 'k';
+    let userAgent: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      userAgent = (init?.headers as Record<string, string>)['User-Agent'];
+      return {
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: `anthropic/claude-ccr-h${hex('Gateway Test/glm-9-flash')}[1m]`, display_name: 'Gateway Test/GLM-9-Flash (1M context)', max_input_tokens: 1_310_720 },
+            { id: `anthropic/claude-ccr-h${hex('Gateway Test/claude-opus-9')}`, display_name: 'Gateway Test/Claude Opus 9', max_input_tokens: 200_000 },
+          ],
+        }),
+      };
+    }) as unknown as typeof fetch;
+
+    expect(modelSupports1mContext('Gateway Test/glm-9-flash')).toBe(false);
+    expect(modelSupports1mContext('Gateway Test/claude-opus-9')).toBe(true);
+    await fetchGatewayModels();
+    expect(userAgent).toMatch(/^claude-code\//);
+    // The gateway's word replaces the family fallback, both ways.
+    expect(modelSupports1mContext('Gateway Test/glm-9-flash')).toBe(true);
+    expect(modelSupports1mContext('Gateway Test/glm-9-flash[1m]')).toBe(true);
+    expect(modelSupports1mContext('Gateway Test/claude-opus-9')).toBe(false);
+    expect(buildQueryOptions(baseOpts({ model: 'Gateway Test/glm-9-flash' })).model).toBe('Gateway Test/glm-9-flash[1m]');
+  });
+
   it('prefers CLAUDE_CODE_OAUTH_TOKEN over ANTHROPIC_API_KEY when both are set', async () => {
     process.env.ANTHROPIC_BASE_URL = 'http://router.example';
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-token';
@@ -505,5 +531,57 @@ describe('fetchGatewayModels', () => {
     global.fetch = (async () => ({ ok: true, json: async () => ({ unexpected: 'shape' }) })) as unknown as typeof fetch;
 
     expect(await fetchGatewayModels()).toEqual([]);
+  });
+});
+
+const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex');
+
+describe('parseGatewayModels', () => {
+  it('decodes claude-code-router ids, drops the provider from labels, and reads each context window', () => {
+    // The Anthropic-shaped list claude-code-router sends a Claude Code client.
+    const parsed = parseGatewayModels({
+      data: [
+        {
+          id: `anthropic/claude-ccr-h${hex('Z.ai (Global) - Coding Plan/glm-5.3-flash')}[1m]`,
+          display_name: 'Z.ai (Global) - Coding Plan/GLM-5.3-Flash (1M context)',
+          max_input_tokens: 1_310_720,
+          capabilities: { context_window: { max_input_tokens: 1_310_720, supports_1m_context: true } },
+        },
+        {
+          id: `anthropic/claude-ccr-h${hex('Z.ai (Global) - Coding Plan/glm-4.7-flash')}`,
+          display_name: 'Z.ai (Global) - Coding Plan/GLM-4.7-Flash',
+          max_input_tokens: 203_000,
+          capabilities: { context_window: { max_input_tokens: 203_000, supports_1m_context: false } },
+        },
+        // A size the router does not know: nothing said either way.
+        { id: `anthropic/claude-ccr-h${hex('Golem/local-model')}`, display_name: 'Golem/local-model', max_input_tokens: 0 },
+      ],
+    });
+    expect(parsed?.models).toEqual([
+      { id: 'Z.ai (Global) - Coding Plan/glm-5.3-flash', label: 'GLM-5.3-Flash (1M context)', provider: 'Z.ai (Global) - Coding Plan' },
+      { id: 'Z.ai (Global) - Coding Plan/glm-4.7-flash', label: 'GLM-4.7-Flash', provider: 'Z.ai (Global) - Coding Plan' },
+      { id: 'Golem/local-model', label: 'local-model', provider: 'Golem' },
+    ]);
+    expect([...parsed!.oneMillion]).toEqual([
+      ['Z.ai (Global) - Coding Plan/glm-5.3-flash', true],
+      ['Z.ai (Global) - Coding Plan/glm-4.7-flash', false],
+    ]);
+  });
+
+  it('takes a plain list as it is, saying nothing about context', () => {
+    const parsed = parseGatewayModels({ data: [{ id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5' }, { id: 7 }] });
+    expect(parsed?.models).toEqual([{ id: 'claude-sonnet-5', label: 'Claude Sonnet 5' }]);
+    expect(parsed?.oneMillion.size).toBe(0);
+  });
+
+  it('lists a model once when it comes both with and without the [1m] marker', () => {
+    const parsed = parseGatewayModels({ data: [{ id: 'claude-opus-5[1m]' }, { id: 'claude-opus-5' }] });
+    expect(parsed?.models).toEqual([{ id: 'claude-opus-5', label: 'claude-opus-5' }]);
+    expect(parsed?.oneMillion.get('claude-opus-5')).toBe(true);
+  });
+
+  it('is null without a data list', () => {
+    expect(parseGatewayModels({ unexpected: 'shape' })).toBeNull();
+    expect(parseGatewayModels(null)).toBeNull();
   });
 });

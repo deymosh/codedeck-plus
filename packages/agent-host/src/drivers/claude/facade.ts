@@ -269,12 +269,18 @@ export const DISCOVERY_CACHE_MS = 10 * 60_000;
  * recently" silently deciding which token authenticates a gateway call that
  * has nothing to do with that machine.
  *
- * A router's `/v1/models` entry is commonly `<provider>/<model>` (seen
- * verbatim from a real claude-code-router instance: `"Claude Code
- * API/claude-sonnet-5"`, `"Z.ai (Global) - Coding Plan/glm-5.2"`) — the
- * prefix is the router's OWN channel-selection key, required verbatim as
- * `Options.model` on a later request so the router knows which upstream to
- * use. Keep `id` exactly as the gateway sent it; only `label` is cosmetic.
+ * A router's model id is commonly `<provider>/<model>` (seen verbatim from a
+ * real claude-code-router instance: `"Claude Code API/claude-sonnet-5"`,
+ * `"Z.ai (Global) - Coding Plan/glm-5.2"`) — the prefix is the router's OWN
+ * channel-selection key, required verbatim as `Options.model` on a later
+ * request so the router knows which upstream to use. Only `label` is
+ * cosmetic.
+ *
+ * The request carries a Claude Code User-Agent: claude-code-router answers
+ * such a client in Anthropic's own `/v1/models` shape, which says how large
+ * each model's context window is (when the router knows), and anyone else
+ * with a plain list that does not. What it says about the 1M window is kept
+ * for `modelSupports1mContext`; see `parseGatewayModels` for both shapes.
  */
 export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
   const baseUrl = process.env.ANTHROPIC_BASE_URL;
@@ -290,6 +296,7 @@ export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
       headers: {
         Authorization: `Bearer ${token}`,
         'anthropic-version': '2023-06-01',
+        'User-Agent': GATEWAY_USER_AGENT,
       },
       // Generous relative to SUPPORTED_MODELS_TIMEOUT_MS: a cold gateway
       // enumerating several upstream providers is slower than one live CLI
@@ -301,32 +308,103 @@ export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
       return [];
     }
 
-    const body: unknown = await response.json();
-    const list = (body as { data?: unknown } | null)?.data;
-    if (!Array.isArray(list)) {
+    const parsed = parseGatewayModels(await response.json());
+    if (!parsed) {
       console.error('[SdkFacade] fetchGatewayModels: response has no "data" array');
       return [];
     }
-    return list
-      .filter((m): m is { id: string; display_name?: string } => typeof (m as { id?: unknown })?.id === 'string')
-      .map((m) => {
-        // A router-prefixed id ("Claude Code API/claude-sonnet-5") names its
-        // channel before the first "/"; the model after it may hold a "/" of
-        // its own. The same model can come through several channels, so the
-        // channel is kept as the provider, and a label without display_name
-        // is the model part rather than the raw id.
-        const slash = m.id.indexOf('/');
-        const provider = slash > 0 ? m.id.slice(0, slash) : undefined;
-        return {
-          id: m.id,
-          label: m.display_name || (provider ? m.id.slice(slash + 1) : m.id),
-          ...(provider ? { provider } : {}),
-        };
-      });
+    for (const [id, oneMillion] of parsed.oneMillion) gatewayOneMillion.set(contextKey(id), oneMillion);
+    return parsed.models;
   } catch (err) {
     console.error('[SdkFacade] fetchGatewayModels: request failed:', err);
     return [];
   }
+}
+
+/** Any `claude-code/…` agent gets claude-code-router's Anthropic-shaped
+ *  model list, the one that carries context-window sizes. */
+const GATEWAY_USER_AGENT = 'claude-code/1.0 (codedeck)';
+
+/** A model id compared without its `[1m]` marker or case. */
+const contextKey = (id: string): string => id.replace(/\[1m\]$/i, '').toLowerCase();
+
+/** Whether each gateway model has the 1M context window, as the gateway
+ *  itself last said (by `contextKey`). Filled by `fetchGatewayModels`. */
+const gatewayOneMillion = new Map<string, boolean>();
+
+/** claude-code-router's id for a model as it lists it to Claude Code:
+ *  `anthropic/claude-ccr-h<hex>`, the hex being the router's own
+ *  `<provider>/<model>` id in UTF-8. */
+const CCR_ENCODED_ID = /^(?:anthropic\/)?claude-ccr-h((?:[0-9a-f]{2})+)$/i;
+
+/** A window at least this large is the 1M tier (a provider's "1M" is not
+ *  always exactly a million: 1 048 576, 1 050 000 and 1 310 720 all occur). */
+const ONE_MILLION_CONTEXT = 1_000_000;
+
+interface GatewayModelEntry {
+  id: string;
+  display_name?: unknown;
+  max_input_tokens?: unknown;
+  capabilities?: { context_window?: { supports_1m_context?: unknown; max_input_tokens?: unknown } };
+}
+
+/** Whether a gateway entry says it has the 1M window: its explicit flag,
+ *  else a `[1m]` id, else its input-token limit. Undefined when it says
+ *  nothing (a plain list, or a size the gateway does not know, sent as 0). */
+function entryOneMillion(m: GatewayModelEntry): boolean | undefined {
+  const window = m.capabilities?.context_window;
+  if (typeof window?.supports_1m_context === 'boolean') return window.supports_1m_context;
+  if (/\[1m\]$/i.test(m.id)) return true;
+  const max = [m.max_input_tokens, window?.max_input_tokens].find((n): n is number => typeof n === 'number' && n > 0);
+  return max === undefined ? undefined : max >= ONE_MILLION_CONTEXT;
+}
+
+/**
+ * A gateway's `/v1/models` body as the phone's model list, plus what each
+ * model's entry says about the 1M window. Null when there is no `data` list.
+ *
+ * Two shapes arrive. claude-code-router's plain list has the router's ids
+ * (`Z.ai (Global) - Coding Plan/glm-5.3-flash`) and nothing on context. Its
+ * Anthropic-shaped list, sent to a Claude Code client, encodes each id
+ * (`CCR_ENCODED_ID`), marks a 1M model's id with `[1m]` and its
+ * `display_name` with "(1M context)", and gives the window's size. The listed
+ * id is always the router's own, decoded and without the marker: it is what
+ * a session sends, and what the phone keeps as a machine's default. The label
+ * drops the provider prefix, which the phone shows on its own.
+ */
+export function parseGatewayModels(
+  body: unknown,
+): { models: SdkModelDescriptor[]; oneMillion: Map<string, boolean> } | null {
+  const list = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(list)) return null;
+  const models: SdkModelDescriptor[] = [];
+  const oneMillion = new Map<string, boolean>();
+  for (const m of list) {
+    if (typeof (m as { id?: unknown })?.id !== 'string') continue;
+    const entry = m as GatewayModelEntry;
+    const bare = entry.id.replace(/\[1m\]$/i, '');
+    const hex = CCR_ENCODED_ID.exec(bare)?.[1];
+    const id = (hex && Buffer.from(hex, 'hex').toString('utf8')) || bare;
+    if (models.some((known) => known.id === id)) continue;
+    // A router-prefixed id ("Claude Code API/claude-sonnet-5") names its
+    // channel before the first "/"; the model after it may hold a "/" of
+    // its own. The same model can come through several channels, so the
+    // channel is kept as the provider, and a label without display_name
+    // is the model part rather than the raw id.
+    const slash = id.indexOf('/');
+    const provider = slash > 0 ? id.slice(0, slash) : undefined;
+    const named = typeof entry.display_name === 'string' && provider && entry.display_name.startsWith(`${provider}/`)
+      ? entry.display_name.slice(provider.length + 1)
+      : entry.display_name;
+    models.push({
+      id,
+      label: (typeof named === 'string' && named) || (provider ? id.slice(slash + 1) : id),
+      ...(provider ? { provider } : {}),
+    });
+    const said = entryOneMillion(entry);
+    if (said !== undefined) oneMillion.set(id, said);
+  }
+  return { models, oneMillion };
 }
 
 /**
@@ -584,38 +662,30 @@ export const ENABLE_GATEWAY_MODEL_DISCOVERY = process.env.CLAUDE_CODE_ENABLE_GAT
  * in review, not silently in the field.
  */
 
-/** Model families the 1M context window is documented for (sdk.d.ts says
- *  "Sonnet 4/4.5 only" for the beta; Anthropic's own docs also list Opus,
- *  and Sonnet 5 is 1M-native — matched broadly by family name rather than an
- *  exact, fast-drifting model id list, since a router's id is often
- *  `<provider>/<model>` — see `fetchGatewayModels`). Haiku is deliberately
- *  excluded: nothing in Anthropic's own documentation lists a Haiku tier for
- *  this.
+/** Whether to ask for the 1M context window for `model`.
  *
- *  `glm-5.3` (matches both the flagship and `glm-5.3-flash`, from Z.ai's own
- *  model cards: the GLM family's 1M window started at GLM-5.2, up from
- *  GLM-5.1's 200K, and 5.3/5.3-Flash inherit it) is included on the same
- *  provider-documentation basis — NOT because a live gateway call reports it.
- *  Verified live against this project's own test gateway (Claude Code Router
- *  fronting Z.ai) that `modelUsage[model].contextWindow` reads back 1000000
- *  for ANY model id carrying the `[1m]` suffix, including `glm-4.7-flash[1m]`
- *  — a model with no 1M tier on Z.ai's side. That is Claude Code itself
- *  self-reporting its own client-side assumption (CCR's `/v1/models` carries
- *  no context-length field, so Claude Code treats every non-`claude-*` id as
- *  a third-party model and simply believes the literal `[1m]` marker,
- *  correct or not — see code.claude.com/docs/en/model-config and
- *  github.com/musistudio/claude-code-router/issues/1597); it is not a
- *  capability negotiated with the gateway or the upstream provider. This
- *  function's return value therefore cannot be verified by calling the SDK
- *  live — only by checking each family's actually-published spec, the same
- *  way this entry was added. Do not add another family here on the strength
- *  of a live 1000000 readback alone; that reading is a foregone conclusion
- *  for any suffixed id and proves nothing about real provider support.
- *  `glm-4.7-flash` is deliberately excluded for exactly that reason. */
+ *  Behind a gateway, what the gateway's own model list said decides
+ *  (`fetchGatewayModels`, with gateway model discovery on): claude-code-router
+ *  knows each upstream model's window and says so to a Claude Code client.
+ *  That list is the only trustworthy source for a third-party model: Claude
+ *  Code believes the `[1m]` marker on any non-`claude-*` id — verified live
+ *  that `modelUsage[model].contextWindow` reads back 1000000 for
+ *  `glm-4.7-flash[1m]`, a model with no 1M tier — so a live readback proves
+ *  nothing.
+ *
+ *  A model the gateway has not described (discovery off, the list not
+ *  fetched yet, or a size the router does not know) falls back to the
+ *  families Anthropic documents the window for: Sonnet and Opus (sdk.d.ts
+ *  says "Sonnet 4/4.5 only" for the beta; Anthropic's docs also list Opus,
+ *  and Sonnet 5 is 1M-native), matched by family name since a router's id is
+ *  often `<provider>/<model>`. Haiku is excluded: nothing documents a Haiku
+ *  tier for it. */
 export function modelSupports1mContext(model: string | undefined): boolean {
   if (!model) return false;
+  const reported = gatewayOneMillion.get(contextKey(model));
+  if (reported !== undefined) return reported;
   const m = model.toLowerCase();
-  return m.includes('sonnet') || m.includes('opus') || m.includes('glm-5.3');
+  return m.includes('sonnet') || m.includes('opus');
 }
 
 /** Append the CLI's `[1m]` model-id marker (case-insensitive, never doubled
@@ -936,6 +1006,14 @@ export class RealSdkFacade implements SdkFacade {
   /** The discovery session in flight — concurrent askers share it. */
   private discovering: Promise<SdkModelDescriptor[]> | null = null;
   private discovered: { models: SdkModelDescriptor[]; at: number } | null = null;
+
+  constructor() {
+    // A session's context window is decided when it spawns, from what the
+    // gateway said about its model: ask once up front, so a session resumed
+    // right after a restart, before any phone asked for the list, does not
+    // fall back to the family rule.
+    if (ENABLE_GATEWAY_MODEL_DISCOVERY) void fetchGatewayModels();
+  }
 
   createSession(opts: SdkSessionOptions): SdkSessionHandle {
     const handle = new RealSdkSessionHandle(opts);
