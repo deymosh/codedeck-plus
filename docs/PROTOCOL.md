@@ -415,6 +415,16 @@ cap (65535 B) is split into N independently encrypted `chunk` events
 and every semantic field are identical to the unfragmented form. `chunk` is
 not a message type (`crates/protocol/src/chunking.rs`).
 
+### Packed payloads
+
+Before it is fragmented and encrypted, a bridge→phone message of 1 KiB or
+more is packed when that makes it smaller: `~` followed by the base64 of
+its raw deflate stream (`crates/protocol/src/packing.rs`). Wire JSON repeats
+itself, so a packed message is typically several times smaller and takes
+fewer fragments. A plain message is a JSON object and starts with `{`, so the
+decoders tell the two apart and accept either, in both directions; inflating
+is capped at 32 MiB.
+
 ### Session-list truthfulness
 
 - Absence from `sessions[]` NEVER deletes on the phone — it marks `stale`.

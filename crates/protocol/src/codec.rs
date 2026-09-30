@@ -40,14 +40,16 @@ fn loggable(text: &str, max_chars: usize) -> String {
     out
 }
 
-/// Bridge-side ingest: decode a message sent by a phone.
+/// Bridge-side ingest: decode a message sent by a phone, packed or not
+/// (see `packing.rs`).
 pub fn decode_phone_to_bridge(json: &str) -> DecodeResult<PhoneToBridge> {
-    decode(json)
+    decode(&super::packing::unpack(json)?)
 }
 
-/// Phone-side ingest: decode a message sent by a bridge.
+/// Phone-side ingest: decode a message sent by a bridge, packed or not
+/// (see `packing.rs`).
 pub fn decode_bridge_to_phone(json: &str) -> DecodeResult<BridgeToPhone> {
-    decode(json)
+    decode(&super::packing::unpack(json)?)
 }
 
 fn encode<T: Serialize>(msg: &T) -> String {
