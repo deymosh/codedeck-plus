@@ -211,7 +211,9 @@ wrong provider).
 ### `models`
 
 `models-request {agent}` → `models {agent, models[], defaultModel?, error?}`.
-An empty list always comes with an `error` saying why, so the phone can tell
+Each model is `{id, label?, provider?}`: `provider` names who serves it (an
+OpenCode provider, a router's channel such as `OpenCode Go`), since the same
+model can be offered by more than one. An empty list always comes with an `error` saying why, so the phone can tell
 "no answer yet" from a lost message. Models are correlated by the machine that
 sent them (the event author), never by a payload field.
 

@@ -155,7 +155,17 @@ internal object DesignFixtures {
         capabilities = emptyList(), folders = listOf("codedeck-plus", "website", "dotfiles"), roots = emptyList(),
         agents = listOf(claude, opencode),
         credentials = listOf(UniffiCredentialStatus("github", "GitHub token", present = false, fromEnv = false, valid = null)),
-        models = listOf(UniffiAgentModels("claude-code", listOf(UniffiModelEntry("opus", "Opus"), UniffiModelEntry("fable", "Fable")), "opus", null)),
+        models = listOf(UniffiAgentModels(
+            "claude-code",
+            listOf(
+                UniffiModelEntry("opus", "Opus", "Anthropic"),
+                UniffiModelEntry("fable", "Fable", "Anthropic"),
+                UniffiModelEntry("OpenCode Go/glm-5.3-flash", "glm-5.3-flash", "OpenCode Go"),
+                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Z.ai"),
+            ),
+            "opus",
+            null,
+        )),
         providerProfiles = emptyList(), plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp),
         directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
@@ -163,7 +173,7 @@ internal object DesignFixtures {
         relays = listOf("wss://relay.example.org", "wss://nostr.home.lan:4869"),
         lastHeartbeatAt = (NOW - 20_000).toULong(), machineOffline = false,
         defaultAgent = "claude-code",
-        agentDefaults = listOf(UniffiAgentDefaults("claude-code", mode = "acceptEdits", effort = "", model = "opus")),
+        agentDefaults = listOf(UniffiAgentDefaults("claude-code", mode = "acceptEdits", effort = "", model = "Z.ai/glm-5.3-flash")),
     )
     val buildBox = workstation.copy(
         pubkeyHex = "b".repeat(64), name = "Build box", host = "cli",

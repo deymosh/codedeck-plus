@@ -194,6 +194,10 @@ pub struct ModelEntry {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Who serves the model (`OpenCode Go`, `Anthropic`), when the agent
+    /// says: the same model can be offered by more than one provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

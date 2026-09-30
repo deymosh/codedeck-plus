@@ -324,10 +324,12 @@ fn to_uniffi_gsd_state(g: &GsdState) -> UniffiGsdState {
 pub struct UniffiModelEntry {
     pub id: String,
     pub label: Option<String>,
+    /// Who serves the model, when the agent says.
+    pub provider: Option<String>,
 }
 
 fn to_uniffi_model_entries(models: &[protocol::events::ModelEntry]) -> Vec<UniffiModelEntry> {
-    models.iter().map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone() }).collect()
+    models.iter().map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: m.provider.clone() }).collect()
 }
 
 /// A custom AI provider profile the bridge has stored — gated on the
@@ -745,7 +747,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         models: p
                             .models
                             .iter()
-                            .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone() })
+                            .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: Some(p.label.clone()) })
                             .collect(),
                         default_model: p.default_model.clone(),
                         has_token: p.has_token,

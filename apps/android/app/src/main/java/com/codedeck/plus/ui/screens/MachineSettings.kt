@@ -52,6 +52,7 @@ import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.SelectField
+import com.codedeck.plus.ui.components.modelPickerOptions
 import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
@@ -303,7 +304,7 @@ private fun GroupScope.AgentDefaultsRows(
             SelectField(
                 options = buildList {
                     add(PickerOption("", models?.defaultModel?.let { d -> "Default (${modelList.firstOrNull { it.id == d }?.label ?: d})" } ?: "Default"))
-                    modelList.forEach { add(PickerOption(it.id, it.label ?: it.id)) }
+                    addAll(modelPickerOptions(modelList))
                     // A kept choice the bridge no longer lists stays visible, to see or clear.
                     if (model.isNotEmpty() && modelList.none { it.id == model }) add(PickerOption(model, model))
                 },

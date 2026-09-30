@@ -464,8 +464,8 @@ describe('fetchGatewayModels', () => {
     expect(url).toBe('http://router.example:3458/v1/models'); // trailing slash on the base URL stripped
     expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
     expect(models).toEqual([
-      { id: 'Claude Code API/claude-sonnet-5', label: 'Claude Sonnet 5' },
-      { id: 'Z.ai (Global) - Coding Plan/glm-5.2', label: 'glm-5.2' },
+      { id: 'Claude Code API/claude-sonnet-5', label: 'Claude Sonnet 5', provider: 'Claude Code API' },
+      { id: 'Z.ai (Global) - Coding Plan/glm-5.2', label: 'glm-5.2', provider: 'Z.ai (Global) - Coding Plan' },
     ]);
   });
 

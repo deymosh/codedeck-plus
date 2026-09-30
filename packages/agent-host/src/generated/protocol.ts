@@ -760,11 +760,21 @@ export type ModelEntry = ModelEntry_Serialize | ModelEntry_Deserialize;
 export type ModelEntry_Deserialize = {
 	id: string,
 	label?: string | null,
+	/**
+	 *  Who serves the model (`OpenCode Go`, `Anthropic`), when the agent
+	 *  says: the same model can be offered by more than one provider.
+	 */
+	provider?: string | null,
 };
 
 export type ModelEntry_Serialize = {
 	id: string,
 	label?: string | null,
+	/**
+	 *  Who serves the model (`OpenCode Go`, `Anthropic`), when the agent
+	 *  says: the same model can be offered by more than one provider.
+	 */
+	provider?: string | null,
 };
 
 /**  Session lifecycle notices a client shows as a marker line. */
