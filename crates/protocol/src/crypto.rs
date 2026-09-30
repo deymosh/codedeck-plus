@@ -173,10 +173,10 @@ mod tests {
         // shared conversation key => b decrypts what a sent, and vice versa
         assert_eq!(decrypt_from(&b.secret_key, &a.pubkey_hex, &ct).unwrap(), "a");
 
-        let ct2 = encrypt_to(&b.secret_key, &a.pubkey_hex, "hola \u{2708} mundo").unwrap();
+        let ct2 = encrypt_to(&b.secret_key, &a.pubkey_hex, "hello \u{2708} world").unwrap();
         assert_eq!(
             decrypt_from(&a.secret_key, &b.pubkey_hex, &ct2).unwrap(),
-            "hola \u{2708} mundo"
+            "hello \u{2708} world"
         );
     }
 
