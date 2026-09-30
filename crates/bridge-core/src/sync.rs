@@ -3,7 +3,10 @@
 //! For a `sync-request { sessionId, haveRanges }` from one phone:
 //! 1. `missing` = the seqs in `1..=seqHigh` the phone does not have;
 //! 2. `sync-begin { syncId, seqHigh, ranges: missing }`;
-//! 3. one `sync-chunk` per [`SyncConfig::chunk_size`] seqs of `missing`;
+//! 3. `missing` cut into `sync-chunk`s of at most [`SyncConfig::chunk_bytes`]
+//!    of entries (what one event holds unfragmented) and at most
+//!    [`SyncConfig::chunk_size`] seqs — many short entries share an event, a
+//!    few long ones take one each;
 //! 4. the phone acks each chunk; chunks still unacked after
 //!    [`SyncConfig::ack_timeout_ms`] are resent, up to
 //!    [`SyncConfig::max_retries`] times with the wait doubling each pass;
@@ -25,7 +28,11 @@ use crate::ports::Transcripts;
 
 #[derive(Debug, Clone, Copy)]
 pub struct SyncConfig {
+    /// The most seqs one chunk covers.
     pub chunk_size: NonZeroU64,
+    /// The most bytes of entries one chunk carries; one entry larger than
+    /// that still goes, alone.
+    pub chunk_bytes: usize,
     pub ack_timeout_ms: u64,
     pub idle_timeout_ms: u64,
     pub max_retries: u32,
@@ -34,7 +41,8 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            chunk_size: NonZeroU64::new(50).expect("nonzero"),
+            chunk_size: NonZeroU64::new(250).expect("nonzero"),
+            chunk_bytes: protocol::chunking::NIP44_SAFE_PLAINTEXT_BYTES - 1024,
             ack_timeout_ms: 10_000,
             idle_timeout_ms: 60_000,
             max_retries: 2,
@@ -99,8 +107,9 @@ impl SyncServer {
             self.abort(out, &old);
         }
         let missing = missing_ranges(have, 1, seq_high);
-        let chunks = chunk_ranges(&missing, self.config.chunk_size)
-            .into_iter()
+        let chunks = missing
+            .iter()
+            .flat_map(|&range| self.cut(transcripts, session_id, range))
             .map(|range| Chunk { range, acked: false })
             .collect();
         self.by_key.insert(key, sync_id.clone());
@@ -125,6 +134,29 @@ impl SyncServer {
             }),
         );
         self.send_pass(out, transcripts, &sync_id);
+    }
+
+    /// `range` cut into chunks by the size of its entries. Seqs the store no
+    /// longer has ride the chunk around them. A range that cannot be read is
+    /// cut by count alone; sending it reports the failure.
+    fn cut(&self, transcripts: &dyn Transcripts, session_id: &str, range: SeqRange) -> Vec<SeqRange> {
+        let Ok(entries) = transcripts.read(session_id, range) else {
+            return chunk_ranges(&[range], self.config.chunk_size);
+        };
+        let mut chunks = Vec::new();
+        let (mut start, mut bytes) = (range.0, 0usize);
+        for e in &entries {
+            let size = serde_json::to_string(e).map_or(0, |j| j.len() + 1);
+            let full = e.seq - start >= self.config.chunk_size.get() || bytes + size > self.config.chunk_bytes;
+            if bytes > 0 && full {
+                chunks.push((start, e.seq - 1));
+                (start, bytes) = (e.seq, 0);
+            }
+            bytes += size;
+        }
+        // The tail, cut by count too: the seqs past the last entry held.
+        chunks.extend(chunk_ranges(&[(start, range.1)], self.config.chunk_size));
+        chunks
     }
 
     /// A phone acked one or more chunks.
@@ -288,7 +320,8 @@ mod tests {
                 let entry = OutputEntry::new("t", EntryBody::Status { text: format!("e{seq}") });
                 transcripts.append("s", seq, &entry).unwrap();
             }
-            Self { out: Out::default(), server: SyncServer::new(SyncConfig::default()), transcripts, n: 0 }
+            let config = SyncConfig { chunk_size: NonZeroU64::new(50).expect("nonzero"), ..SyncConfig::default() };
+            Self { out: Out::default(), server: SyncServer::new(config), transcripts, n: 0 }
         }
 
         fn request(&mut self, phone: &str, have: &[SeqRange], seq_high: u64) -> String {
@@ -348,6 +381,25 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn chunks_are_cut_by_the_size_of_their_entries() {
+        let mut transcripts = MemoryTranscripts::default();
+        for seq in 1..=6 {
+            // Seqs 3 and 4 are long; the store no longer has seq 6.
+            let text = if seq == 3 || seq == 4 { "x".repeat(950) } else { "short".to_string() };
+            if seq != 6 {
+                transcripts.append("s", seq, &OutputEntry::new("t", EntryBody::Status { text })).unwrap();
+            }
+        }
+        let config = SyncConfig { chunk_bytes: 1000, ..SyncConfig::default() };
+        let mut t = T { out: Out::default(), server: SyncServer::new(config), transcripts, n: 0 };
+        t.request("phone", &[], 7);
+        // The short ones share, each long one (over the budget on its own)
+        // goes alone, and the seqs past the last stored one ride the last
+        // chunk.
+        assert_eq!(chunk_ranges_of(&t.messages()), [(1, 2), (3, 3), (4, 4), (5, 7)]);
     }
 
     #[test]

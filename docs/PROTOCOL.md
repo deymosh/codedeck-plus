@@ -139,6 +139,10 @@ question.
 → `sync-chunk {range, entries}` (acked with `sync-ack {syncId, ranges}`)
 → `sync-end {deliveredRanges}`.
 
+- The bridge cuts the missing seqs into chunks by the size of their entries,
+  up to what one event holds unfragmented: many short entries share a chunk,
+  a long one may take one alone. A chunk's `range` may cover seqs it has no
+  entry for (pruned), which the phone then has as far as sync goes.
 - Each range in a `sync-ack` is exactly one chunk's `range`. One ack may
   cover several chunks: every command is signed by the phone's identity,
   possibly in an external signer, so a phone batches the acks for chunks
