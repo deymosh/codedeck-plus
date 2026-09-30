@@ -75,19 +75,22 @@ export interface DriverSession {
 /** An agent's plugins on this machine. `marketplaces` is absent for an
  *  agent that installs plugins by package name; `toggles`: a plugin can be
  *  switched off without uninstalling it; `available` is present only when
- *  asked for. */
+ *  asked for (or when the change touched a marketplace); `message` says what
+ *  the last change did, in the agent's words, when it says. */
 export interface PluginState {
   installed: InstalledPlugin[];
   marketplaces?: PluginMarketplace[];
   toggles: boolean;
   available?: AvailablePlugin[];
+  message?: string;
 }
 
 /** For an agent whose catalog entry `supports.plugins`. */
 export interface PluginManager {
   list(available: boolean): Promise<PluginState>;
-  /** Apply one change and answer the new state (without `available`).
-   *  Rejects with the agent's own reason when the change was refused. */
+  /** Apply one change and answer the new state — with `available` when the
+   *  change was to a marketplace, since that alters the catalog. Rejects
+   *  with the agent's own reason when the change was refused. */
   act(action: PluginAction, target: string): Promise<PluginState>;
 }
 

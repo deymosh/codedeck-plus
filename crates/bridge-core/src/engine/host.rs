@@ -288,7 +288,7 @@ impl Engine {
 
     fn on_plugins_reply(&mut self, agent: String, result: Result<HostMessage, String>) {
         let msg = match result {
-            Ok(HostMessage::Plugins { installed, marketplaces, toggles, available }) => {
+            Ok(HostMessage::Plugins { installed, marketplaces, toggles, available, .. }) => {
                 PluginsMsg { agent, installed, marketplaces, toggles, available, error: None }
             }
             Ok(_) => Self::plugins_error(agent, "The agent gave no plugin list.".into()),
@@ -305,7 +305,11 @@ impl Engine {
     }
 
     /// A done action is acknowledged, then the new list goes out, so every
-    /// phone showing the plugins sees the change.
+    /// phone showing the plugins sees the change. The resent list keeps the
+    /// host's `available`: a marketplace change alters the catalog, and the
+    /// phone would otherwise keep showing the old one. The host's `message`
+    /// rides the ack, so the phone can show what was done (an update's
+    /// versions) where it was asked.
     fn on_plugin_action_reply(
         &mut self,
         agent: String,
@@ -313,19 +317,28 @@ impl Engine {
         target: String,
         result: Result<HostMessage, String>,
     ) {
-        let (plugins, error) = match result {
-            Ok(HostMessage::Plugins { installed, marketplaces, toggles, .. }) => {
-                let plugins = PluginsMsg { agent: agent.clone(), installed, marketplaces, toggles, available: None, error: None };
-                (Some(plugins), None)
+        let (plugins, ack_message, error) = match result {
+            Ok(HostMessage::Plugins { installed, marketplaces, toggles, available, message }) => {
+                let plugins =
+                    PluginsMsg { agent: agent.clone(), installed, marketplaces, toggles, available, error: None };
+                (Some(plugins), message, None)
             }
-            Ok(_) => (None, Some("The agent gave no answer to the change.".to_string())),
-            Err(err) => (None, Some(err)),
+            Ok(_) => (None, None, Some("The agent gave no answer to the change.".to_string())),
+            Err(err) => (None, None, Some(err)),
         };
         match &error {
             Some(error) => log::info!("[Engine] plugin-action {action:?} {target}: {error}"),
             None => log::info!("[Engine] plugin-action {action:?} {target}: done"),
         }
-        self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg { agent, action, target, success: error.is_none(), error }));
+        let success = error.is_none();
+        self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg {
+            agent,
+            action,
+            target,
+            success,
+            error,
+            message: ack_message.filter(|_| success),
+        }));
         if let Some(plugins) = plugins {
             self.publish_all(BridgeToPhone::Plugins(plugins));
         }

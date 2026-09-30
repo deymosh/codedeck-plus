@@ -240,14 +240,19 @@ plugins on the bridge's machine (all its sessions share them):
   `marketplaces`; `toggles` says whether a plugin can be switched off without
   uninstalling it. A list that could not be read comes empty, with `error`.
 - `plugin-action {agent, action, target}` → `plugin-ack {agent, action,
-  target, success, error?}`, then (when done) the new `plugins`, without
-  `available`, to every phone. `action` is `install`, `uninstall`, `enable`,
-  `disable` (target: a plugin `id`, or a package name to install where there
-  are no marketplaces) or `add-marketplace` (target: `owner/repo` or a URL),
+  target, success, error?, message?}`, then (when done) the new `plugins`, to
+  every phone — with the fresh `available` when the change was to a
+  marketplace (add, remove or update), since that alters the catalog.
+  `action` is `install`, `uninstall`, `enable`, `disable`, `update` (target:
+  a plugin `id` — update brings an installed plugin to its marketplace's
+  latest version; `install` takes a package name where there are no
+  marketplaces) or `add-marketplace` (target: `owner/repo` or a URL),
   `remove-marketplace`, `update-marketplace` (target: its name). The bridge
   refuses a target that is empty, starts with `-` or holds control
-  characters. A change reaches running sessions: Claude Code reloads its
-  plugins in place; OpenCode reloads, restarting its running sessions.
+  characters. `message` is what was done, in the agent's words, when it says
+  (e.g. an update's from/to versions). A change reaches running sessions:
+  Claude Code reloads its plugins in place; OpenCode reloads, restarting its
+  running sessions.
 
 ### `mcp`
 
@@ -438,7 +443,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `get-usage {sessionId}` | `usage {usage?}` |
 | `list-commands {sessionId}` | `commands {commands}` |
 | `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, available?}` |
-| `plugin-action {agent, action, target}` | `plugins {…}` once done, or `error` with the agent's reason |
+| `plugin-action {agent, action, target}` | `plugins {…}` once done (`available?` after a marketplace change, `message?` saying what was done), or `error` with the agent's reason |
 | `list-mcp {agent}` | `mcp-servers {servers, toggles}` |
 | `mcp-action {agent, action, servers?, names?}` | `mcp-servers {…}` once done, or `error` with the agent's reason |
 | `session-mcp {sessionId}` | `session-mcp {servers, toggles, projectWide}` |

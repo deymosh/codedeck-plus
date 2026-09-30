@@ -297,10 +297,11 @@ pub struct PluginMarketplace {
 }
 
 /// A change to an agent's plugins; `target` names a plugin (`install`,
-/// `uninstall`, `enable`, `disable`) or a marketplace (`add-marketplace`
-/// takes its source: `owner/repo`, a git URL or a marketplace.json URL;
-/// `remove-marketplace` and `update-marketplace` its name). For an agent
-/// without marketplaces, `install` takes a package name.
+/// `uninstall`, `enable`, `disable`, `update` — update brings an installed
+/// plugin to its marketplace's latest version) or a marketplace
+/// (`add-marketplace` takes its source: `owner/repo`, a git URL or a
+/// marketplace.json URL; `remove-marketplace` and `update-marketplace` its
+/// name). For an agent without marketplaces, `install` takes a package name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginAction {
@@ -308,6 +309,7 @@ pub enum PluginAction {
     Uninstall,
     Enable,
     Disable,
+    Update,
     AddMarketplace,
     RemoveMarketplace,
     UpdateMarketplace,

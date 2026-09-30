@@ -459,6 +459,7 @@ mod tests {
         rt(&json!({"type":"plugins-request","agent":"claude-code"}));
         rt(&json!({"type":"plugins-request","agent":"claude-code","available":true}));
         rt(&json!({"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));
+        rt(&json!({"type":"plugin-action","agent":"claude-code","action":"update","target":"c@m"}));
         rt(&json!({"type":"mcp-request","agent":"claude-code"}));
         rt(&json!({"type":"mcp-action","agent":"claude-code","action":"add","servers":[
             {"name":"github","transport":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer t"}}},

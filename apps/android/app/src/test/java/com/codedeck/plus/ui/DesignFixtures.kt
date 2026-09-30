@@ -27,6 +27,7 @@ import uniffi.client_ffi.UniffiSessionMcp
 import uniffi.client_ffi.UniffiSessionMcpServer
 import uniffi.client_ffi.UniffiPluginFailure
 import uniffi.client_ffi.UniffiPluginMarketplace
+import uniffi.client_ffi.UniffiPluginNotice
 import uniffi.client_ffi.UniffiCredentialStatus
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
@@ -101,13 +102,14 @@ internal object DesignFixtures {
         ),
         error = null,
         busy = listOf("frontend-design@$OFFICIAL"),
+        notice = UniffiPluginNotice("update", "commit-commands@$OFFICIAL", "Updated from 2a8ad9f74633 to fa59bc903774."),
         failure = UniffiPluginFailure("install", "nope@$OFFICIAL", "Plugin \"nope\" not found in marketplace \"$OFFICIAL\""),
     )
 
     val opencodePlugins = UniffiAgentPlugins(
         agent = "opencode",
         installed = listOf(UniffiInstalledPlugin("opencode-wakatime", "opencode-wakatime", null, null, null, enabled = true)),
-        marketplaces = null, toggles = false, available = null, error = null, busy = emptyList(), failure = null,
+        marketplaces = null, toggles = false, available = null, error = null, busy = emptyList(), notice = null, failure = null,
     )
 
     /** Claude Code's MCP servers: remote ones with a token header, a local

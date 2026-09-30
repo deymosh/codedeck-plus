@@ -170,7 +170,14 @@ private fun InstalledView(
         Group(title = if (marketplaces == null) "Installed" else null) {
             plugins.installed.forEachIndexed { i, p ->
                 if (i > 0) Divider()
-                InstalledRow(p, busy = p.id in plugins.busy, toggles = plugins.toggles, act = act, onUninstall = { onConfirm("uninstall" to p.id) })
+                InstalledRow(
+                    p,
+                    busy = p.id in plugins.busy,
+                    toggles = plugins.toggles,
+                    notice = plugins.notice?.takeIf { it.target == p.id }?.message,
+                    act = act,
+                    onUninstall = { onConfirm("uninstall" to p.id) },
+                )
             }
         }
     }
@@ -181,9 +188,19 @@ private fun InstalledView(
     }
 }
 
+/** An installed plugin; opened, where it came from and what to do with it.
+ *  One from a marketplace can be updated, and what the update did shows
+ *  here, where it was asked for. */
 @Composable
-private fun InstalledRow(p: UniffiInstalledPlugin, busy: Boolean, toggles: Boolean, act: (String, String) -> Unit, onUninstall: () -> Unit) {
-    var open by remember(p.id) { mutableStateOf(false) }
+private fun InstalledRow(
+    p: UniffiInstalledPlugin,
+    busy: Boolean,
+    toggles: Boolean,
+    notice: String?,
+    act: (String, String) -> Unit,
+    onUninstall: () -> Unit,
+) {
+    var open by remember(p.id) { mutableStateOf(notice != null) }
     ExpandableRow(
         p.name,
         p.description,
@@ -194,7 +211,11 @@ private fun InstalledRow(p: UniffiInstalledPlugin, busy: Boolean, toggles: Boole
     ) {
         val origin = listOfNotNull(p.marketplace?.let { "From $it" }, p.version?.let { "version ${it.take(12)}" })
         if (origin.isNotEmpty()) Text(origin.joinToString(", "), color = Tokens.TextDim, fontSize = Tokens.TextXs, modifier = Modifier.padding(top = 4.dp))
-        Row(Modifier.padding(top = 2.dp)) { QuietButton("Uninstall", onClick = onUninstall, danger = true, enabled = !busy) }
+        notice?.let { Text(it, color = Tokens.Success, fontSize = Tokens.TextXs, modifier = Modifier.padding(top = 2.dp)) }
+        Row(Modifier.padding(top = 2.dp)) {
+            if (p.marketplace != null) QuietButton(if (busy) "Updating…" else "Update", onClick = { act("update", p.id) }, enabled = !busy)
+            QuietButton("Uninstall", onClick = onUninstall, danger = true, enabled = !busy)
+        }
     }
 }
 

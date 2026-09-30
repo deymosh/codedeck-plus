@@ -49,7 +49,9 @@ export class OpenCodePlugins implements PluginManager {
         throw new Error(
           action === 'enable' || action === 'disable'
             ? 'OpenCode cannot switch a plugin off; uninstall it instead.'
-            : 'OpenCode has no plugin marketplaces; install a plugin by its npm package name.',
+            : action === 'update'
+              ? 'OpenCode updates its plugins itself when it loads.'
+              : 'OpenCode has no plugin marketplaces; install a plugin by its npm package name.',
         );
       }
       if (action === 'install' && !PACKAGE_SPEC.test(target)) {

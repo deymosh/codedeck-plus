@@ -4744,6 +4744,13 @@ data class UniffiAgentPlugins (
      */
     var `busy`: List<kotlin.String>
     , 
+    /**
+     * What the last change that succeeded reported, in the agent's words
+     * (e.g. an update's from/to versions); cleared when the next change is
+     * sent.
+     */
+    var `notice`: UniffiPluginNotice?
+    , 
     var `failure`: UniffiPluginFailure?
     
 ){
@@ -4768,6 +4775,7 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterOptionalSequenceTypeUniffiAvailablePlugin.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalTypeUniffiPluginNotice.read(buf),
             FfiConverterOptionalTypeUniffiPluginFailure.read(buf),
         )
     }
@@ -4780,6 +4788,7 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterOptionalSequenceTypeUniffiAvailablePlugin.allocationSize(value.`available`) +
             FfiConverterOptionalString.allocationSize(value.`error`) +
             FfiConverterSequenceString.allocationSize(value.`busy`) +
+            FfiConverterOptionalTypeUniffiPluginNotice.allocationSize(value.`notice`) +
             FfiConverterOptionalTypeUniffiPluginFailure.allocationSize(value.`failure`)
     )
 
@@ -4791,6 +4800,7 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterOptionalSequenceTypeUniffiAvailablePlugin.write(value.`available`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
             FfiConverterSequenceString.write(value.`busy`, buf)
+            FfiConverterOptionalTypeUniffiPluginNotice.write(value.`notice`, buf)
             FfiConverterOptionalTypeUniffiPluginFailure.write(value.`failure`, buf)
     }
 }
@@ -6537,6 +6547,53 @@ public object FfiConverterTypeUniffiPluginMarketplace: FfiConverterRustBuffer<Un
 
 
 /**
+ * What the last plugin change that succeeded reported: its action's wire
+ * name, its target, and the agent's words.
+ */
+data class UniffiPluginNotice (
+    var `action`: kotlin.String
+    , 
+    var `target`: kotlin.String
+    , 
+    var `message`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiPluginNotice: FfiConverterRustBuffer<UniffiPluginNotice> {
+    override fun read(buf: ByteBuffer): UniffiPluginNotice {
+        return UniffiPluginNotice(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiPluginNotice) = (
+            FfiConverterString.allocationSize(value.`action`) +
+            FfiConverterString.allocationSize(value.`target`) +
+            FfiConverterString.allocationSize(value.`message`)
+    )
+
+    override fun write(value: UniffiPluginNotice, buf: ByteBuffer) {
+            FfiConverterString.write(value.`action`, buf)
+            FfiConverterString.write(value.`target`, buf)
+            FfiConverterString.write(value.`message`, buf)
+    }
+}
+
+
+
+/**
  * UniFFI-crossable mirror of [`protocol::common::ProviderModel`] — a plain
  * data record, so this is a straight field-for-field copy rather than a
  * narrowing.
@@ -7943,9 +8000,9 @@ sealed class UniffiIntent {
     
     /**
      * Change an agent's plugins. `action`: `install`, `uninstall`,
-     * `enable`, `disable` (target: a plugin id), `add-marketplace` (target:
-     * `owner/repo` or a URL), `remove-marketplace`, `update-marketplace`
-     * (target: its name).
+     * `enable`, `disable`, `update` (target: a plugin id), `add-marketplace`
+     * (target: `owner/repo` or a URL), `remove-marketplace`,
+     * `update-marketplace` (target: its name).
      */
     data class PluginAction(
         val `machine`: kotlin.String, 
@@ -10094,6 +10151,38 @@ public object FfiConverterOptionalTypeUniffiPluginFailure: FfiConverterRustBuffe
         } else {
             buf.put(1)
             FfiConverterTypeUniffiPluginFailure.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiPluginNotice: FfiConverterRustBuffer<UniffiPluginNotice?> {
+    override fun read(buf: ByteBuffer): UniffiPluginNotice? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiPluginNotice.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiPluginNotice?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiPluginNotice.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiPluginNotice?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiPluginNotice.write(value, buf)
         }
     }
 }

@@ -319,8 +319,10 @@ pub enum BridgeMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         available: bool,
     },
-    /// Change the agent's plugins. Reply: `plugins` once done (without
-    /// `available`), or `error` saying why it was not.
+    /// Change the agent's plugins. Reply: `plugins` once done — with
+    /// `available` when the change was to a marketplace (add, remove or
+    /// update), since that changes what the marketplaces offer — or `error`
+    /// saying why it was not.
     PluginAction {
         agent: String,
         action: PluginAction,
@@ -398,6 +400,10 @@ pub enum HostMessage {
         toggles: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         available: Option<Vec<AvailablePlugin>>,
+        /// After a `plugin-action`, what was done in the agent's own words,
+        /// when it says (e.g. an update's from/to versions).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     /// Reply to `list-mcp` and `mcp-action` (the fields mean what they mean
     /// on the phone wire's `mcp-servers`; no value of a secret is in them).

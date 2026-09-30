@@ -236,8 +236,10 @@ pub struct CommandsMsg {
 }
 
 /// An agent's plugins on the bridge's machine: the reply to
-/// `plugins-request`, and sent again after every `plugin-action`. `available`
-/// is present only when asked for. When the list could not be read, `error`
+/// `plugins-request`, and sent again after every `plugin-action` — after a
+/// change to a marketplace (add/remove/update) it carries the fresh
+/// `available` catalog. Otherwise `available` is present only when asked
+/// for. When the list could not be read, `error`
 /// says why and the lists are empty.
 ///
 /// Agents manage plugins differently: `marketplaces` is absent for one that
@@ -269,6 +271,10 @@ pub struct PluginAckMsg {
     pub success: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What was done, in the agent's own words, when it says (e.g. an
+    /// update's from/to versions); absent otherwise and on failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// An agent's MCP servers on the bridge's machine: the reply to
@@ -503,6 +509,7 @@ mod tests {
         rt(&json!({"type":"plugins","agent":"opencode","installed":[{"id":"opencode-wakatime","name":"opencode-wakatime","enabled":true}]}));
         rt(&json!({"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
         rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
+        rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"update","target":"c@m","success":true,"message":"Updated from 0.1.0 to 0.2.0."}));
         rt(&json!({"type":"mcp-servers","agent":"claude-code","servers":[
             {"name":"github","transport":"http","target":"https://api.githubcopilot.com/mcp/","headerKeys":["Authorization"],"enabled":true},
             {"name":"fs","transport":"stdio","target":"npx","envKeys":["K"],"enabled":false}],"toggles":true}));
