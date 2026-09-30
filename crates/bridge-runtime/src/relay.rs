@@ -25,6 +25,8 @@ use protocol::events::BridgeToPhone;
 use protocol::kinds::{COMMAND_KIND, LIVE_KIND, RESPONSE_EXPIRY_SECONDS, RESPONSE_KIND, SESSION_LIST_KIND};
 use protocol::nostr_event::SignedEvent;
 use protocol::events::OutputMsg;
+use futures_util::future::LocalBoxFuture;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
@@ -104,15 +106,56 @@ impl EventFactory {
     }
 }
 
-/// Publish `event` and wait for a relay's word; whether one took it.
-async fn publish(transport: &WsTransport, event: &SignedEvent) -> bool {
-    let result = transport
-        .publish_confirmed(event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
-        .await;
-    if !result.verdict.is_delivered() {
-        log::warn!("[Relays] Publish of kind {} not delivered: {:?} {:?}", event.kind, result.verdict, result.detail);
+/// The first wait after a relay says `rate-limited:`; it doubles each time
+/// one says so again, up to [`RATE_LIMIT_MAX_WAIT`].
+const RATE_LIMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const RATE_LIMIT_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How many times an event every relay refused as too many is sent again.
+const RATE_LIMIT_RETRIES: u32 = 3;
+
+/// Until when the relays asked the bridge to slow down. Shared by every
+/// publish, whatever its lane: a relay that limits the rate limits this
+/// bridge's connection, not one session's messages.
+#[derive(Clone, Default)]
+struct Quiet(Rc<std::cell::Cell<Option<tokio::time::Instant>>>);
+
+impl Quiet {
+    async fn wait(&self) {
+        if let Some(until) = self.0.get() {
+            if until > tokio::time::Instant::now() {
+                tokio::time::sleep_until(until).await;
+            }
+        }
     }
-    result.verdict.is_delivered()
+}
+
+/// Whether every relay refused because it gets too much from this bridge.
+fn rate_limited(result: &nostr_transport::PublishResult) -> bool {
+    result.verdict == nostr_transport::PublishVerdict::Rejected
+        && result.detail.as_deref().is_some_and(|d| d.starts_with("rate-limited:"))
+}
+
+/// Publish `event` and wait for a relay's word; whether one took it. When
+/// every relay refused it as too many, every publish holds off for a while
+/// (longer each time) and this one is sent again after.
+async fn publish(transport: &WsTransport, event: &SignedEvent, quiet: &Quiet) -> bool {
+    let mut wait = RATE_LIMIT_WAIT;
+    for attempt in 0..=RATE_LIMIT_RETRIES {
+        quiet.wait().await;
+        let result = transport
+            .publish_confirmed(event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
+            .await;
+        if !rate_limited(&result) || attempt == RATE_LIMIT_RETRIES {
+            if !result.verdict.is_delivered() {
+                log::warn!("[Relays] Publish of kind {} not delivered: {:?} {:?}", event.kind, result.verdict, result.detail);
+            }
+            return result.verdict.is_delivered();
+        }
+        log::warn!("[Relays] Rate-limited; holding publishes for {}s", wait.as_secs());
+        quiet.0.set(Some(tokio::time::Instant::now() + wait));
+        wait = (wait * 2).min(RATE_LIMIT_MAX_WAIT);
+    }
+    false
 }
 
 fn now_secs() -> u64 {
@@ -154,6 +197,114 @@ fn superseded(to: &[Addressee], backlog: &VecDeque<Job>) -> bool {
         matches!(job, Job::Publish { to: next_to, message }
             if next_to.as_slice() == to && matches!(message.as_ref(), BridgeToPhone::Sessions(_)))
     })
+}
+
+/// How many publishes may wait on the relays at once. Kept low: public
+/// relays limit how fast one connection may publish, and overlapping only
+/// has to hide the round trips, not add to what is sent.
+const IN_FLIGHT: usize = 3;
+
+/// The lane a message travels in, if it may overlap others: a session's
+/// outputs go one after another (the phone acts on each entry as it lands,
+/// and a later one may undo what an earlier one did, so they must land in
+/// order), heartbeats in a lane of their own; different lanes overlap. Every
+/// other message — a sync's begin, chunks and end, acks, pairing — goes out
+/// alone once everything before it has.
+fn lane_of(message: &BridgeToPhone) -> Option<String> {
+    match message {
+        BridgeToPhone::Output(o) => Some(format!("output {}", o.session_id)),
+        BridgeToPhone::Sessions(_) => Some("heartbeat".to_string()),
+        _ => None,
+    }
+}
+
+/// A publish that finished: its lane, and for a heartbeat, which one it was
+/// for its phone and its events, to send again if no relay took it.
+struct Sent {
+    lane: Option<String>,
+    phone: String,
+    beat: Option<u64>,
+    events: Vec<SignedEvent>,
+    delivered: bool,
+}
+
+/// Publish `events` in order and report how it went.
+fn send(
+    transport: WsTransport,
+    quiet: Quiet,
+    lane: Option<String>,
+    phone: String,
+    beat: Option<u64>,
+    events: Vec<SignedEvent>,
+) -> LocalBoxFuture<'static, Sent> {
+    Box::pin(async move {
+        let mut delivered = true;
+        for event in &events {
+            delivered &= publish(&transport, event, &quiet).await;
+        }
+        Sent { lane, phone, beat, events, delivered }
+    })
+}
+
+/// The publishes waiting on the relays, by lane.
+#[derive(Default)]
+struct Flight {
+    running: FuturesUnordered<LocalBoxFuture<'static, Sent>>,
+    lanes: HashMap<String, usize>,
+    /// Per phone, the latest heartbeat no relay took (the first one goes out
+    /// before any relay is up, over Tor by seconds): sent again once a relay
+    /// is, instead of at the next beat a minute on.
+    unsent_beats: HashMap<String, Vec<SignedEvent>>,
+    /// Per phone, the number of its latest heartbeat: an older one finishing
+    /// after a newer says nothing about what the phone has.
+    beats: HashMap<String, u64>,
+    quiet: Quiet,
+}
+
+impl Flight {
+    fn next_beat(&mut self, phone: &str) -> u64 {
+        let n = self.beats.entry(phone.to_string()).or_default();
+        *n += 1;
+        *n
+    }
+
+    fn start(&mut self, lane: &str, sending: LocalBoxFuture<'static, Sent>) {
+        *self.lanes.entry(lane.to_string()).or_default() += 1;
+        self.running.push(sending);
+    }
+
+    fn settle(&mut self, sent: Sent) {
+        if let Some(lane) = &sent.lane {
+            if let Some(n) = self.lanes.get_mut(lane) {
+                *n -= 1;
+                if *n == 0 {
+                    self.lanes.remove(lane);
+                }
+            }
+        }
+        if sent.beat.is_some() && sent.beat == self.beats.get(&sent.phone).copied() {
+            if sent.delivered {
+                self.unsent_beats.remove(&sent.phone);
+            } else {
+                self.unsent_beats.insert(sent.phone, sent.events);
+            }
+        }
+    }
+
+    /// Wait until `lane` is free and there is room for one more.
+    async fn room_in(&mut self, lane: &str) {
+        while self.lanes.contains_key(lane) || self.running.len() >= IN_FLIGHT {
+            let Some(sent) = self.running.next().await else { break };
+            self.settle(sent);
+        }
+    }
+
+    /// Wait until nothing is in flight.
+    async fn land_all(&mut self) {
+        while let Some(sent) = self.running.next().await {
+            self.settle(sent);
+        }
+    }
 }
 
 enum Job {
@@ -198,27 +349,35 @@ impl Relays {
         let publisher = transport.clone();
         tokio::task::spawn_local(async move {
             let mut factory = EventFactory::new(keys, machine);
-            // Per phone, the latest heartbeat no relay took (the first one
-            // goes out before any relay is up, over Tor by seconds): sent
-            // again once a relay is, instead of at the next beat a minute on.
-            let mut unsent_beats: HashMap<String, Vec<SignedEvent>> = HashMap::new();
-            // Jobs taken off the queue but not yet done. Each publish waits
-            // on a relay's word (seconds over Tor), and the outputs that
-            // queue meanwhile go out together with the next one.
+            let mut flight = Flight::default();
+            // Jobs taken off the queue but not yet done: the outputs queued
+            // behind a publish go out together with it.
             let mut backlog: VecDeque<Job> = VecDeque::new();
             loop {
                 let job = match backlog.pop_front() {
                     Some(job) => job,
-                    None => match queue.recv().await {
-                        Some(job) => job,
-                        None => break,
+                    None => tokio::select! {
+                        job = queue.recv() => match job {
+                            Some(job) => job,
+                            None => break,
+                        },
+                        Some(sent) = flight.running.next(), if !flight.running.is_empty() => {
+                            flight.settle(sent);
+                            continue;
+                        }
                     },
                 };
                 match job {
                     Job::Flush(done) => {
+                        flight.land_all().await;
                         let _ = done.send(());
                     }
                     Job::Publish { to, mut message } => {
+                        let lane = lane_of(&message);
+                        match &lane {
+                            Some(lane) => flight.room_in(lane).await,
+                            None => flight.land_all().await,
+                        }
                         while let Ok(next) = queue.try_recv() {
                             backlog.push_back(next);
                         }
@@ -238,33 +397,32 @@ impl Relays {
                                     continue;
                                 }
                             };
-                            let mut delivered = true;
-                            for event in &events {
-                                if let Some(direct) = &direct {
+                            if let Some(direct) = &direct {
+                                for event in &events {
                                     direct.deliver(&addressee.phone, event);
                                 }
-                                delivered &= publish(&publisher, event).await;
                             }
-                            if beat {
-                                if delivered {
-                                    unsent_beats.remove(&addressee.phone);
-                                } else {
-                                    unsent_beats.insert(addressee.phone.clone(), events);
-                                }
+                            let beat = beat.then(|| flight.next_beat(&addressee.phone));
+                            let sending = send(publisher.clone(), flight.quiet.clone(), lane.clone(), addressee.phone, beat, events);
+                            match &lane {
+                                Some(lane) => flight.start(lane, sending),
+                                // Out of any lane: nothing overlaps it.
+                                None => flight.settle(sending.await),
                             }
                         }
                     }
                     Job::RelaysChanged => {
-                        if unsent_beats.is_empty() || publisher.connected_relays().is_empty() {
+                        flight.land_all().await;
+                        if flight.unsent_beats.is_empty() || publisher.connected_relays().is_empty() {
                             continue;
                         }
-                        for (phone, events) in std::mem::take(&mut unsent_beats) {
+                        for (phone, events) in std::mem::take(&mut flight.unsent_beats) {
                             let mut delivered = true;
                             for event in &events {
-                                delivered &= publish(&publisher, event).await;
+                                delivered &= publish(&publisher, event, &flight.quiet).await;
                             }
                             if !delivered {
-                                unsent_beats.insert(phone, events);
+                                flight.unsent_beats.insert(phone, events);
                             }
                         }
                     }
@@ -525,6 +683,45 @@ mod tests {
         // Only by a heartbeat to the same phones.
         assert!(!superseded(&phone, &VecDeque::from([beat(&[to("q")])])));
         assert!(!superseded(&phone, &VecDeque::from([job(&phone, output("s", 1, &["a"]))])));
+    }
+
+    #[test]
+    fn a_session_s_outputs_share_a_lane_and_only_they_and_heartbeats_overlap() {
+        assert_eq!(lane_of(&BridgeToPhone::Output(output("s", 1, &["a"]))), lane_of(&BridgeToPhone::Output(output("s", 9, &["b"]))));
+        assert_ne!(lane_of(&BridgeToPhone::Output(output("s", 1, &["a"]))), lane_of(&BridgeToPhone::Output(output("t", 1, &["a"]))));
+        assert!(lane_of(&heartbeat()).is_some());
+        let end = BridgeToPhone::SyncEnd(protocol::events::SyncEndMsg { session_id: "s".into(), sync_id: "y".into(), delivered_ranges: vec![] });
+        assert_eq!(lane_of(&end), None);
+    }
+
+    fn sent(lane: &str, phone: &str, beat: Option<u64>, delivered: bool) -> Sent {
+        Sent { lane: Some(lane.into()), phone: phone.into(), beat, events: Vec::new(), delivered }
+    }
+
+    #[test]
+    fn only_the_latest_heartbeat_decides_whether_one_is_owed() {
+        let mut f = Flight::default();
+        let (older, newer) = (f.next_beat("p"), f.next_beat("p"));
+        f.lanes.insert("heartbeat".into(), 2);
+        // The newer one lands first; the older failing after says nothing.
+        f.settle(sent("heartbeat", "p", Some(newer), true));
+        f.settle(sent("heartbeat", "p", Some(older), false));
+        assert!(f.unsent_beats.is_empty());
+        assert!(f.lanes.is_empty());
+        // The latest failing is owed.
+        let latest = f.next_beat("p");
+        f.lanes.insert("heartbeat".into(), 1);
+        f.settle(sent("heartbeat", "p", Some(latest), false));
+        assert!(f.unsent_beats.contains_key("p"));
+    }
+
+    #[test]
+    fn only_a_refusal_for_too_many_holds_publishes_off() {
+        use nostr_transport::{PublishResult, PublishVerdict};
+        let refused = |detail: &str| PublishResult { verdict: PublishVerdict::Rejected, detail: Some(detail.into()) };
+        assert!(rate_limited(&refused("rate-limited: slow down")));
+        assert!(!rate_limited(&refused("blocked: not on the list")));
+        assert!(!rate_limited(&PublishResult { verdict: PublishVerdict::Accepted, detail: None }));
     }
 
     #[test]
