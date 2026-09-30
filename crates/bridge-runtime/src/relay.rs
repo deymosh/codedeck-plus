@@ -106,15 +106,56 @@ impl EventFactory {
     }
 }
 
-/// Publish `event` and wait for a relay's word; whether one took it.
-async fn publish(transport: &WsTransport, event: &SignedEvent) -> bool {
-    let result = transport
-        .publish_confirmed(event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
-        .await;
-    if !result.verdict.is_delivered() {
-        log::warn!("[Relays] Publish of kind {} not delivered: {:?} {:?}", event.kind, result.verdict, result.detail);
+/// The first wait after a relay says `rate-limited:`; it doubles each time
+/// one says so again, up to [`RATE_LIMIT_MAX_WAIT`].
+const RATE_LIMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const RATE_LIMIT_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How many times an event every relay refused as too many is sent again.
+const RATE_LIMIT_RETRIES: u32 = 3;
+
+/// Until when the relays asked the bridge to slow down. Shared by every
+/// publish, whatever its lane: a relay that limits the rate limits this
+/// bridge's connection, not one session's messages.
+#[derive(Clone, Default)]
+struct Quiet(Rc<std::cell::Cell<Option<tokio::time::Instant>>>);
+
+impl Quiet {
+    async fn wait(&self) {
+        if let Some(until) = self.0.get() {
+            if until > tokio::time::Instant::now() {
+                tokio::time::sleep_until(until).await;
+            }
+        }
     }
-    result.verdict.is_delivered()
+}
+
+/// Whether every relay refused because it gets too much from this bridge.
+fn rate_limited(result: &nostr_transport::PublishResult) -> bool {
+    result.verdict == nostr_transport::PublishVerdict::Rejected
+        && result.detail.as_deref().is_some_and(|d| d.starts_with("rate-limited:"))
+}
+
+/// Publish `event` and wait for a relay's word; whether one took it. When
+/// every relay refused it as too many, every publish holds off for a while
+/// (longer each time) and this one is sent again after.
+async fn publish(transport: &WsTransport, event: &SignedEvent, quiet: &Quiet) -> bool {
+    let mut wait = RATE_LIMIT_WAIT;
+    for attempt in 0..=RATE_LIMIT_RETRIES {
+        quiet.wait().await;
+        let result = transport
+            .publish_confirmed(event, nostr_transport::ws::PUBLISH_CONFIRM_BUDGET, nostr_transport::ws::PUBLISH_CONFIRM_ATTEMPTS)
+            .await;
+        if !rate_limited(&result) || attempt == RATE_LIMIT_RETRIES {
+            if !result.verdict.is_delivered() {
+                log::warn!("[Relays] Publish of kind {} not delivered: {:?} {:?}", event.kind, result.verdict, result.detail);
+            }
+            return result.verdict.is_delivered();
+        }
+        log::warn!("[Relays] Rate-limited; holding publishes for {}s", wait.as_secs());
+        quiet.0.set(Some(tokio::time::Instant::now() + wait));
+        wait = (wait * 2).min(RATE_LIMIT_MAX_WAIT);
+    }
+    false
 }
 
 fn now_secs() -> u64 {
@@ -158,8 +199,10 @@ fn superseded(to: &[Addressee], backlog: &VecDeque<Job>) -> bool {
     })
 }
 
-/// How many events may wait on the relays at once.
-const IN_FLIGHT: usize = 4;
+/// How many publishes may wait on the relays at once. Kept low: public
+/// relays limit how fast one connection may publish, and overlapping only
+/// has to hide the round trips, not add to what is sent.
+const IN_FLIGHT: usize = 3;
 
 /// The lane a message travels in, if it may overlap others: a session's
 /// outputs go one after another (the phone acts on each entry as it lands,
@@ -188,6 +231,7 @@ struct Sent {
 /// Publish `events` in order and report how it went.
 fn send(
     transport: WsTransport,
+    quiet: Quiet,
     lane: Option<String>,
     phone: String,
     beat: Option<u64>,
@@ -196,7 +240,7 @@ fn send(
     Box::pin(async move {
         let mut delivered = true;
         for event in &events {
-            delivered &= publish(&transport, event).await;
+            delivered &= publish(&transport, event, &quiet).await;
         }
         Sent { lane, phone, beat, events, delivered }
     })
@@ -214,6 +258,7 @@ struct Flight {
     /// Per phone, the number of its latest heartbeat: an older one finishing
     /// after a newer says nothing about what the phone has.
     beats: HashMap<String, u64>,
+    quiet: Quiet,
 }
 
 impl Flight {
@@ -358,7 +403,7 @@ impl Relays {
                                 }
                             }
                             let beat = beat.then(|| flight.next_beat(&addressee.phone));
-                            let sending = send(publisher.clone(), lane.clone(), addressee.phone, beat, events);
+                            let sending = send(publisher.clone(), flight.quiet.clone(), lane.clone(), addressee.phone, beat, events);
                             match &lane {
                                 Some(lane) => flight.start(lane, sending),
                                 // Out of any lane: nothing overlaps it.
@@ -374,7 +419,7 @@ impl Relays {
                         for (phone, events) in std::mem::take(&mut flight.unsent_beats) {
                             let mut delivered = true;
                             for event in &events {
-                                delivered &= publish(&publisher, event).await;
+                                delivered &= publish(&publisher, event, &flight.quiet).await;
                             }
                             if !delivered {
                                 flight.unsent_beats.insert(phone, events);
@@ -668,6 +713,15 @@ mod tests {
         f.lanes.insert("heartbeat".into(), 1);
         f.settle(sent("heartbeat", "p", Some(latest), false));
         assert!(f.unsent_beats.contains_key("p"));
+    }
+
+    #[test]
+    fn only_a_refusal_for_too_many_holds_publishes_off() {
+        use nostr_transport::{PublishResult, PublishVerdict};
+        let refused = |detail: &str| PublishResult { verdict: PublishVerdict::Rejected, detail: Some(detail.into()) };
+        assert!(rate_limited(&refused("rate-limited: slow down")));
+        assert!(!rate_limited(&refused("blocked: not on the list")));
+        assert!(!rate_limited(&PublishResult { verdict: PublishVerdict::Accepted, detail: None }));
     }
 
     #[test]
