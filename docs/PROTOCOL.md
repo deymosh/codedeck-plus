@@ -108,7 +108,7 @@ tagged by `entryType`:
 | `tool_call` | `callId`, `toolName` (display only), `kind` (read, edit, delete, move, search, execute, think, fetch, switch_mode, other), `title`, `locations`, `rawInput` |
 | `tool_result` | `callId`, `text`, `isError` |
 | `diff` | `path`, add/del/context `lines`, `truncated` |
-| `permission_request` | a card: `requestId`, the tool, and `options[] {id, label, kind: allow_once|allow_always|reject_once|reject_always}` |
+| `permission_request` | a card: `requestId`, the tool, and `options[] {id, label, kind: allow_once|allow_always|reject_once|reject_always}`; optional `reason` (why the agent asks, in its words) and `hook` (the hook that asked, e.g. `PreToolUse:Bash` — it asks every time, so no "always" option) |
 | `question` | one question of an ask: `requestId`, `index`/`count`, `options`, `multiSelect` |
 | `plan_approval` | a card: `requestId`, `options[]` |
 | `resolved` | a card was answered or cancelled: `requestId`, `summary` |
@@ -465,7 +465,7 @@ Requests the host makes (the bridge answers each exactly once):
 
 | Request | Reply |
 |---|---|
-| `request-permission {sessionId, requestId, toolName, kind, title, …, options}` | `permission-outcome {outcome: selected {optionId} \| cancelled {reason}}` |
+| `request-permission {sessionId, requestId, toolName, kind, title, …, options, reason?, hook?}` | `permission-outcome {outcome: selected {optionId} \| cancelled {reason}}` |
 | `ask-question {sessionId, requestId, questions}` | `question-outcome {outcome: answered {answers} \| cancelled {reason}}` |
 | `request-plan-approval {sessionId, requestId, options}` | `plan-outcome` (as permission) |
 
