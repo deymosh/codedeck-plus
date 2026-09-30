@@ -330,9 +330,9 @@ impl Default for Rig {
 
 pub fn outputs(msgs: &[BridgeToPhone]) -> Vec<(u64, OutputEntry)> {
     msgs.iter()
-        .filter_map(|m| match m {
-            BridgeToPhone::Output(o) => Some((o.seq, o.entry.clone())),
-            _ => None,
+        .flat_map(|m| match m {
+            BridgeToPhone::Output(o) => o.numbered().map(|(seq, e)| (seq, e.clone())).collect(),
+            _ => Vec::new(),
         })
         .collect()
 }

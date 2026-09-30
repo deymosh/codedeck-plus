@@ -1399,7 +1399,7 @@ async fn an_output_message_populates_the_transcript_view_and_emits_transcript_ap
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}}"#,
+                r#"{"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1614,7 +1614,7 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
             settle().await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"output","sessionId":"s1","seq":1,"entry":{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}}"#,
+                r#"{"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &msg);

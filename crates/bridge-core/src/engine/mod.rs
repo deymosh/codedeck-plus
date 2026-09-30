@@ -449,14 +449,16 @@ impl Engine {
         if entries.is_empty() {
             return;
         }
-        for entry in entries {
-            let seq = self.seq_highs.get(session_id).copied().unwrap_or(0) + 1;
-            self.seq_highs.insert(session_id.to_string(), seq);
-            if let Err(err) = self.transcripts.append(session_id, seq, &entry) {
+        // Consecutive seqs, stored one by one and sent as one run.
+        let first = self.seq_highs.get(session_id).copied().unwrap_or(0) + 1;
+        for (i, entry) in entries.iter().enumerate() {
+            let seq = first + i as u64;
+            if let Err(err) = self.transcripts.append(session_id, seq, entry) {
                 log::error!("[Engine] Transcript append failed for {session_id} (seq {seq}): {err}");
             }
-            self.publish_all(BridgeToPhone::Output(OutputMsg { session_id: session_id.to_string(), seq, entry }));
         }
+        self.seq_highs.insert(session_id.to_string(), first + entries.len() as u64 - 1);
+        self.publish_all(BridgeToPhone::Output(OutputMsg { session_id: session_id.to_string(), seq: first, entries }));
         let now = self.now_iso();
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.rec.last_activity = now;

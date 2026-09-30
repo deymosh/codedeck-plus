@@ -48,11 +48,22 @@ pub struct SessionListMsg {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
+/// A run of a session's transcript entries: `entries[i]` is seq `seq + i`.
+/// Entries the bridge wrote while the relay was still taking the previous
+/// event travel together, so a burst costs one event, not one per entry.
 pub struct OutputMsg {
     pub session_id: String,
+    /// The first entry's seq.
     #[specta(type = specta_typescript::Number)]
     pub seq: u64,
-    pub entry: OutputEntry,
+    pub entries: Vec<OutputEntry>,
+}
+
+impl OutputMsg {
+    /// Each entry with its seq.
+    pub fn numbered(&self) -> impl Iterator<Item = (u64, &OutputEntry)> {
+        self.entries.iter().enumerate().map(move |(i, e)| (self.seq + i as u64, e))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -482,7 +493,7 @@ mod tests {
 
     #[test]
     fn every_variant_decodes_from_a_representative_fixture() {
-        rt(&json!({"type":"output","sessionId":"s","seq":7,"entry":entry()}));
+        rt(&json!({"type":"output","sessionId":"s","seq":7,"entries":[entry(),entry()]}));
         rt(&json!({"type":"input-ack","sessionId":"s","inputId":"i"}));
         rt(&json!({"type":"sync-begin","sessionId":"s","syncId":"y","seqHigh":100,"ranges":[[1,50]]}));
         rt(&json!({"type":"sync-chunk","sessionId":"s","syncId":"y","range":[1,2],"entries":[{"seq":1,"entry":entry()},{"seq":2,"entry":entry()}]}));
@@ -538,13 +549,13 @@ mod tests {
 
     #[test]
     fn a_typed_entry_survives_the_full_message() {
-        let m = rt(&json!({"type":"output","sessionId":"s","seq":1,"entry":{
+        let m = rt(&json!({"type":"output","sessionId":"s","seq":1,"entries":[{
             "timestamp":"t","entryType":"diff","path":"f","lines":[{"type":"add","text":"a"}],"truncated":true
-        }}));
+        }]}));
         match m {
-            BridgeToPhone::Output(o) => match o.entry.body {
-                EntryBody::Diff { truncated, ref lines, .. } => {
-                    assert!(truncated);
+            BridgeToPhone::Output(o) => match &o.entries[0].body {
+                EntryBody::Diff { truncated, lines, .. } => {
+                    assert!(*truncated);
                     assert_eq!(lines.len(), 1);
                 }
                 other => panic!("{other:?}"),
