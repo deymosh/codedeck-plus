@@ -40,6 +40,7 @@ import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.ActionRow
+import com.codedeck.plus.ui.components.ConfirmDialog
 import com.codedeck.plus.ui.components.DeckIcons
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
@@ -459,6 +460,16 @@ internal fun MessagesPage(
 @Composable
 private fun QuickPromptRow(prompt: UniffiQuickPrompt, dispatch: (UniffiIntent) -> Unit) {
     var editing by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    if (confirmDelete) {
+        ConfirmDialog(
+            title = "Delete “${prompt.label}”?",
+            body = "It no longer appears above the message field.",
+            confirm = "Delete",
+            onConfirm = { dispatch(UniffiIntent.RemoveQuickPrompt(prompt.id)) },
+            onDismiss = { confirmDelete = false },
+        )
+    }
     if (editing) {
         var label by remember { mutableStateOf(prompt.label) }
         var text by remember { mutableStateOf(prompt.text) }
@@ -470,7 +481,7 @@ private fun QuickPromptRow(prompt: UniffiQuickPrompt, dispatch: (UniffiIntent) -
                     dispatch(UniffiIntent.UpdateQuickPrompt(id = prompt.id, label = label, text = text))
                     editing = false
                 }, enabled = label.isNotBlank() && text.isNotBlank())
-                QuietButton("Delete", onClick = { dispatch(UniffiIntent.RemoveQuickPrompt(prompt.id)) }, danger = true)
+                QuietButton("Delete", onClick = { confirmDelete = true }, danger = true)
                 Box(Modifier.weight(1f))
                 QuietButton("Cancel", onClick = { editing = false })
             }

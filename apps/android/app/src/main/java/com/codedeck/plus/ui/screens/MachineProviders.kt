@@ -310,8 +310,10 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                         IconAction(
                             Icons.Outlined.Close,
                             "Remove model",
-                            onClick = { if (models.size > 1) models = models.filterIndexed { j, _ -> j != i } },
+                            onClick = { models = models.filterIndexed { j, _ -> j != i } },
                             tint = if (models.size > 1) Tokens.TextMuted else Tokens.TextDim,
+                            // A provider keeps at least one model.
+                            enabled = models.size > 1,
                         )
                     }
                 }
