@@ -59,7 +59,8 @@ pub use views::{
 use views::{
     build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_pairing_view,
     build_uniffi_pending_sessions_view, build_uniffi_quick_prompts_view, build_uniffi_settings_view,
-    build_uniffi_transcript_delta, build_uniffi_ui_view, responded_cards_for, TranscriptDeltaBase,
+    build_uniffi_transcript_delta, build_uniffi_ui_view, responded_cards_for, TranscriptCache,
+    TranscriptDeltaBase,
 };
 
 uniffi::setup_scaffolding!();
@@ -237,6 +238,9 @@ pub struct Core {
     join: Mutex<Option<JoinHandle<()>>>,
     /// The transcript rows last handed out, for the next delta.
     transcript_base: Mutex<Option<TranscriptDeltaBase>>,
+    /// The last read session's entries, decoded, so the next delta reads
+    /// only the rows stored since.
+    transcript_cache: Mutex<Option<TranscriptCache>>,
 }
 
 // TEMPORARY (see `diag.rs`) — proves/disproves a premature Kotlin-side GC of
@@ -368,6 +372,7 @@ impl Core {
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             join: Mutex::new(Some(join)),
             transcript_base: Mutex::new(None),
+            transcript_cache: Mutex::new(None),
         }))
     }
 
@@ -463,11 +468,23 @@ impl Core {
     /// for why this crosses the `presentation::display_entries` grouping
     /// rather than raw rows.
     pub async fn transcript_delta(&self, machine: String, session_id: String, since: u64) -> UniffiTranscriptDelta {
-        let raw = self.handle.transcript_view(machine.clone(), session_id.clone()).await;
         let ui = self.handle.ui_view().await;
         let responded = responded_cards_for(&ui, &machine, &session_id);
-        let mut base = self.transcript_base.lock().unwrap();
-        build_uniffi_transcript_delta(&raw, responded, &mut base, &machine, &session_id, since)
+        let mut after = TranscriptCache::resume_after(&self.transcript_cache.lock().unwrap(), &machine, &session_id);
+        // No lock is held across a read. A read that no longer continues the
+        // cache (another delta moved it on meanwhile, or the coverage below
+        // it changed) is redone in full, which is always taken in; the cache
+        // stays locked from the read it takes in to the delta built from it.
+        loop {
+            let raw = self.handle.transcript_view_after(machine.clone(), session_id.clone(), after).await;
+            let mut cache = self.transcript_cache.lock().unwrap();
+            if TranscriptCache::absorb(&mut cache, &raw, &machine, &session_id, after) {
+                let entries = cache.as_ref().map_or(&[][..], TranscriptCache::entries);
+                let mut base = self.transcript_base.lock().unwrap();
+                return build_uniffi_transcript_delta(entries, &raw.sync, responded, &mut base, &machine, &session_id, since);
+            }
+            after = 0;
+        }
     }
 
     /// Stops the loop and joins the dedicated thread — used by this crate's

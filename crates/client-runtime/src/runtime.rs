@@ -600,7 +600,12 @@ impl Core {
     /// backed by I/O (`TranscriptStore`, SQLite on device), so it alone
     /// takes an extra loop round trip beyond the in-memory snapshot views.
     pub async fn transcript_view(&self, machine: String, session_id: String) -> TranscriptRowsView {
-        self.query(|reply| ViewQuery::Transcript { machine, session_id, reply })
+        self.transcript_view_after(machine, session_id, 0).await
+    }
+    /// [`Self::transcript_view`] with only the rows past `after` — for a
+    /// caller that keeps the ones up to it (see `TranscriptRowsView::load`).
+    pub async fn transcript_view_after(&self, machine: String, session_id: String, after: u64) -> TranscriptRowsView {
+        self.query(|reply| ViewQuery::Transcript { machine, session_id, after, reply })
             .await
             .unwrap_or_else(TranscriptRowsView::empty)
     }
@@ -755,6 +760,7 @@ enum ViewQuery {
     Transcript {
         machine: String,
         session_id: String,
+        after: u64,
         reply: oneshot::Sender<TranscriptRowsView>,
     },
 }
@@ -1735,12 +1741,13 @@ impl Loop {
             ViewQuery::Ui(reply) => {
                 let _ = reply.send(UiView::from_stores(&self.stores));
             }
-            ViewQuery::Transcript { machine, session_id, reply } => {
+            ViewQuery::Transcript { machine, session_id, after, reply } => {
                 let view = TranscriptRowsView::load(
                     &self.stores.transcript,
                     self.transcript_store.as_ref(),
                     &machine,
                     &session_id,
+                    after,
                 )
                 .await;
                 let _ = reply.send(view);

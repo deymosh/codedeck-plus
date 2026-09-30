@@ -284,7 +284,7 @@ impl TranscriptSyncView {
     /// A session `TranscriptState` has never heard of yet (no `Output`/
     /// `SyncBegin` has landed) — the honest "nothing here yet" reading,
     /// contiguous vacuously.
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             state: SyncState::Idle,
             attempts: 0,
@@ -335,19 +335,24 @@ impl TranscriptRowsView {
         }
     }
 
-    /// Reads `1..=local_high` from `transcript_store` (the row content) and
-    /// combines it with the in-memory sync/coverage state. `transcript_store`
-    /// is a port (SQLite on device), so this is the one view that needs I/O —
-    /// every other `*View::from_stores` is a synchronous, in-memory snapshot.
+    /// Reads `after + 1..=local_high` from `transcript_store` (the row
+    /// content; `after = 0` for all of it) and combines it with the in-memory
+    /// sync/coverage state. A stored row never changes (rows are inserted
+    /// once, ignoring seqs already present), so a caller holding the rows up
+    /// to `after` reads only what came since — as long as the coverage up to
+    /// `after` is still what it was. `transcript_store` is a port (SQLite on
+    /// device), so this is the one view that needs I/O — every other
+    /// `*View::from_stores` is a synchronous, in-memory snapshot.
     pub async fn load(
         transcript: &TranscriptState,
         transcript_store: &dyn TranscriptStore,
         machine: &str,
         session_id: &str,
+        after: u64,
     ) -> Self {
         let sync = TranscriptSyncView::for_session(transcript, machine, session_id)
             .unwrap_or_else(TranscriptSyncView::empty);
-        if sync.local_high == 0 {
+        if sync.local_high <= after {
             return Self {
                 rows: Vec::new(),
                 have_ranges: transcript.have_ranges_of(machine, session_id),
@@ -355,7 +360,7 @@ impl TranscriptRowsView {
             };
         }
         let rows = transcript_store
-            .read_range(machine, session_id, 1, sync.local_high)
+            .read_range(machine, session_id, after + 1, sync.local_high)
             .await
             .into_iter()
             .map(|r| TranscriptRowView { seq: r.seq, entry: r.entry })
