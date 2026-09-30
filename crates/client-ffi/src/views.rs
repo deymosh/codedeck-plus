@@ -39,6 +39,7 @@ use client_runtime::{
     MachinesView, OutboxView, PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
     TranscriptRowsView, UiView,
 };
+use client_runtime::view::TranscriptSyncView;
 use protocol::common::{
     AgentDescriptor, CredentialStatus, GsdAction, GsdExecution, GsdPhase, GsdState, OptionChoice,
     UsageData, UsageWindow,
@@ -1123,6 +1124,90 @@ pub struct UniffiTranscriptDelta {
     pub contiguous: bool,
 }
 
+/// One session's transcript entries, decoded, up to `high` — kept between
+/// deltas so each one reads and decodes only the rows stored since. A stored
+/// row never changes (the store inserts a seq once and ignores it after), so
+/// the kept entries stay right as long as the coverage up to `high` is what
+/// it was when they were read: a gap filled below `high`, or rows removed,
+/// changes that coverage and the next read starts over.
+pub struct TranscriptCache {
+    machine: String,
+    session_id: String,
+    high: u64,
+    /// `have_ranges` as they were, cut at `high`.
+    coverage: Vec<(u64, u64)>,
+    entries: Vec<SeqEntry>,
+}
+
+/// `ranges` cut at `high`: what of them lies at or below it.
+fn ranges_upto(ranges: &[(u64, u64)], high: u64) -> Vec<(u64, u64)> {
+    ranges.iter().filter(|(from, _)| *from <= high).map(|&(from, to)| (from, to.min(high))).collect()
+}
+
+fn decode(rows: &[client_runtime::view::TranscriptRowView]) -> impl Iterator<Item = SeqEntry> + '_ {
+    rows.iter().filter_map(|r| {
+        // Deserialized straight from the borrowed `Value`: `from_value`
+        // would need a deep clone of each row's JSON tree first.
+        protocol::common::OutputEntry::deserialize(&r.entry)
+            .ok()
+            .map(|entry| SeqEntry { seq: r.seq, entry })
+    })
+}
+
+impl TranscriptCache {
+    /// Where a read for this session may start: past the rows `cache`
+    /// already holds for it, or `0` for all of them.
+    pub fn resume_after(cache: &Option<TranscriptCache>, machine: &str, session_id: &str) -> u64 {
+        cache
+            .as_ref()
+            .filter(|c| c.machine == machine && c.session_id == session_id)
+            .map_or(0, |c| c.high)
+    }
+
+    /// Take in `view`, read past `after` (a [`Self::resume_after`] answer).
+    /// Returns `false`, leaving `cache` as it was, when those rows do not
+    /// continue what it holds — another read moved it on, or the coverage
+    /// up to `after` changed — and the caller must read everything
+    /// (`after = 0`, which is always taken in).
+    pub fn absorb(
+        cache: &mut Option<TranscriptCache>,
+        view: &TranscriptRowsView,
+        machine: &str,
+        session_id: &str,
+        after: u64,
+    ) -> bool {
+        let high = view.sync.local_high.max(after);
+        let coverage = ranges_upto(&view.have_ranges, high);
+        if after == 0 {
+            *cache = Some(TranscriptCache {
+                machine: machine.to_string(),
+                session_id: session_id.to_string(),
+                high,
+                coverage,
+                entries: decode(&view.rows).collect(),
+            });
+            return true;
+        }
+        let Some(c) = cache
+            .as_mut()
+            .filter(|c| c.machine == machine && c.session_id == session_id && c.high == after)
+        else {
+            return false;
+        };
+        if ranges_upto(&view.have_ranges, after) != c.coverage {
+            return false;
+        }
+        c.entries.extend(decode(&view.rows).filter(|e| e.seq > after));
+        c.high = high;
+        c.coverage = coverage;
+        true
+    }
+
+    pub fn entries(&self) -> &[SeqEntry] {
+        &self.entries
+    }
+}
+
 /// The rows last handed out, which the next delta is taken against.
 pub struct TranscriptDeltaBase {
     machine: String,
@@ -1143,29 +1228,21 @@ pub fn responded_cards_for<'a>(
     ui.responded_cards.get(&session_key_of(machine, session_id))
 }
 
+/// The delta of the session's transcript, `seq_entries` (a
+/// [`TranscriptCache`]'s), against revision `since` of `base`; `sync` is the
+/// session's sync status as the last read saw it.
 pub fn build_uniffi_transcript_delta(
-    view: &TranscriptRowsView,
+    seq_entries: &[SeqEntry],
+    sync: &TranscriptSyncView,
     responded_cards: Option<&BTreeSet<String>>,
     base: &mut Option<TranscriptDeltaBase>,
     machine: &str,
     session_id: &str,
     since: u64,
 ) -> UniffiTranscriptDelta {
-    let seq_entries: Vec<SeqEntry> = view
-        .rows
-        .iter()
-        // Deserialized straight from the borrowed `Value` — this runs over
-        // every row on every transcript append, and `from_value` would need
-        // a deep clone of each row's JSON tree first.
-        .filter_map(|r| {
-            protocol::common::OutputEntry::deserialize(&r.entry)
-                .ok()
-                .map(|entry| SeqEntry { seq: r.seq, entry })
-        })
-        .collect();
-    let rows = build_display_entries(&seq_entries);
-    let pending = find_pending_permission(&seq_entries, responded_cards);
-    let activity = build_activity(&seq_entries, &rows);
+    let rows = build_display_entries(seq_entries);
+    let pending = find_pending_permission(seq_entries, responded_cards);
+    let activity = build_activity(seq_entries, &rows);
     let order: Vec<u64> = rows.iter().map(DisplayEntry::seq).collect();
     let unique = order.iter().collect::<BTreeSet<_>>().len() == order.len();
 
@@ -1201,8 +1278,8 @@ pub fn build_uniffi_transcript_delta(
         changed,
         pending_permission_json: pending.and_then(|p| serde_json::to_string(&p).ok()),
         activity_json: activity.and_then(|a| serde_json::to_string(&a).ok()),
-        sync_state: wire_str(&view.sync.state),
-        contiguous: view.sync.contiguous,
+        sync_state: wire_str(&sync.state),
+        contiguous: sync.contiguous,
     }
 }
 
@@ -1217,6 +1294,12 @@ mod tests {
         v.rows = rows.iter().map(|(seq, entry)| TranscriptRowView { seq: *seq, entry: entry.clone() }).collect();
         v
     }
+    fn entries(rows: &[(u64, serde_json::Value)]) -> Vec<SeqEntry> {
+        decode(&view(rows).rows).collect()
+    }
+    fn sync() -> TranscriptSyncView {
+        TranscriptSyncView::empty()
+    }
     fn text(role: &str, text: &str) -> serde_json::Value {
         json!({"timestamp": "t", "entryType": "text", "role": role, "text": text})
     }
@@ -1230,22 +1313,73 @@ mod tests {
         d.changed.iter().map(|e| e.key).collect()
     }
 
+    /// A read of `rows` (those past some seq), with the session stored up to
+    /// `high` over `ranges`.
+    fn read(rows: &[(u64, serde_json::Value)], high: u64, ranges: &[(u64, u64)]) -> TranscriptRowsView {
+        let mut v = view(rows);
+        v.sync.local_high = high;
+        v.have_ranges = ranges.to_vec();
+        v
+    }
+    fn cached_seqs(cache: &Option<TranscriptCache>) -> Vec<u64> {
+        cache.as_ref().map(|c| c.entries().iter().map(|e| e.seq).collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_cache_takes_in_only_what_was_stored_since() {
+        let mut cache = None;
+        assert_eq!(TranscriptCache::resume_after(&cache, "m", "s"), 0);
+        let first = [(1, text("user", "hi")), (2, call("c1"))];
+        assert!(TranscriptCache::absorb(&mut cache, &read(&first, 2, &[(1, 2)]), "m", "s", 0));
+        assert_eq!(TranscriptCache::resume_after(&cache, "m", "s"), 2);
+        // Another session starts from nothing.
+        assert_eq!(TranscriptCache::resume_after(&cache, "m", "other"), 0);
+
+        assert!(TranscriptCache::absorb(&mut cache, &read(&[(3, result("c1"))], 3, &[(1, 3)]), "m", "s", 2));
+        assert_eq!(cached_seqs(&cache), [1, 2, 3]);
+        // Nothing new is still a read that continues it.
+        assert!(TranscriptCache::absorb(&mut cache, &read(&[], 3, &[(1, 3)]), "m", "s", 3));
+        assert_eq!(cached_seqs(&cache), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_read_that_does_not_continue_the_cache_is_refused() {
+        let mut cache = None;
+        // Seqs 1-2 and 5 are stored; 3-4 are a gap.
+        let rows = [(1, text("user", "hi")), (2, call("c1")), (5, text("agent", "late"))];
+        assert!(TranscriptCache::absorb(&mut cache, &read(&rows, 5, &[(1, 2), (5, 5)]), "m", "s", 0));
+
+        // The gap filled below where the cache ends: its rows are not in the
+        // cache, so it must be read again from the start.
+        assert!(!TranscriptCache::absorb(&mut cache, &read(&[], 5, &[(1, 5)]), "m", "s", 5));
+        // A read from before where the cache ends (another delta moved it
+        // on), or for another session, is refused too.
+        assert!(!TranscriptCache::absorb(&mut cache, &read(&[], 5, &[(1, 2), (5, 5)]), "m", "s", 2));
+        assert!(!TranscriptCache::absorb(&mut cache, &read(&[], 5, &[(1, 2), (5, 5)]), "m", "other", 5));
+        assert_eq!(cached_seqs(&cache), [1, 2, 5]);
+
+        // A full read is always taken in.
+        let all = [(1, text("user", "hi")), (2, call("c1")), (3, result("c1")), (4, text("agent", "ok")), (5, text("agent", "late"))];
+        assert!(TranscriptCache::absorb(&mut cache, &read(&all, 5, &[(1, 5)]), "m", "s", 0));
+        assert_eq!(cached_seqs(&cache), [1, 2, 3, 4, 5]);
+    }
+
     #[test]
     fn a_delta_carries_only_the_rows_that_changed() {
         let mut base = None;
         let mut rows = vec![(1, text("user", "hi")), (2, call("c1")), (3, text("agent", "done"))];
-        let first = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", 0);
+        let first = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", 0);
         assert!(first.full);
         assert_eq!((keys(&first), first.order.clone()), (vec![1, 2, 3], vec![1, 2, 3]));
 
         // Nothing new: nothing sent, the revision stays.
-        let same = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", first.revision);
+        let same = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", first.revision);
         assert!(!same.full && same.changed.is_empty());
         assert_eq!(same.revision, first.revision);
 
         // An appended row is the only one sent.
         rows.push((4, text("user", "again")));
-        let appended = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", same.revision);
+        let appended = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", same.revision);
         assert!(!appended.full);
         assert_eq!((keys(&appended), appended.order.clone()), (vec![4], vec![1, 2, 3, 4]));
         assert!(appended.revision > same.revision);
@@ -1253,7 +1387,7 @@ mod tests {
         // A result lands on the call in an earlier row: that row is sent,
         // not just the last.
         rows.push((5, result("c1")));
-        let earlier = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", appended.revision);
+        let earlier = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", appended.revision);
         assert_eq!(keys(&earlier), vec![2]);
         assert!(earlier.changed[0].json.contains("\"ok\""), "{}", earlier.changed[0].json);
     }
@@ -1262,13 +1396,13 @@ mod tests {
     fn a_caller_off_the_base_gets_everything() {
         let mut base = None;
         let rows = vec![(1, text("user", "hi"))];
-        let first = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", 0);
-        let _ = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "other", first.revision);
+        let first = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", 0);
+        let _ = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "other", first.revision);
         // `base` now holds another session: this caller is off it.
-        let back = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", first.revision);
+        let back = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", first.revision);
         assert!(back.full);
         assert_eq!(keys(&back), vec![1]);
-        let stale = build_uniffi_transcript_delta(&view(&rows), None, &mut base, "m", "s", back.revision - 1);
+        let stale = build_uniffi_transcript_delta(&entries(&rows), &sync(), None, &mut base, "m", "s", back.revision - 1);
         assert!(stale.full, "a stale revision is not the base");
     }
 }
