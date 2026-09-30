@@ -173,6 +173,8 @@ export interface SdkSessionHandle {
   setEffort(level: EffortLevel): Promise<void>;
   /** Interrupt the current turn (Ctrl+C equivalent). */
   interrupt(): Promise<void>;
+  /** `query.stopTask()`: stop one background task by its id. */
+  stopTask(taskId: string): Promise<void>;
   /**
    * Cheap control-channel round-trip proving the CLI subprocess spawned and
    * responds, usable BEFORE any input. SDK 0.3.222 emits the `init` message
@@ -873,6 +875,10 @@ class RealSdkSessionHandle implements SdkSessionHandle {
 
   async interrupt(): Promise<void> {
     await this.q.interrupt();
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    await this.q.stopTask(taskId);
   }
 
   async probeReady(): Promise<void> {

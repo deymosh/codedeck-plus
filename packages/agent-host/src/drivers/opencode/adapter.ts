@@ -7,7 +7,7 @@
  * is pure: one event in, zero or more entries out.
  */
 import type { Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
-import { toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
+import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import {
   MAX_DIFF_LINE_CHARS,
   MAX_DIFF_LINES,
@@ -16,7 +16,7 @@ import {
   type DiffPayload,
   type TranslateContext,
 } from '../../transcript';
-import type { DiffLine, OutputEntry } from '../../types';
+import type { DiffLine, OutputEntry, Subagent, TaskStatus } from '../../types';
 
 /** The OpenCode session exists server-side and accepts prompts. */
 export interface OpenCodeStarted {
@@ -39,6 +39,18 @@ export interface OpenCodePart {
   part: Part;
   /** `Part` itself carries no role; the session tracks whose turn produced it. */
   role: 'user' | 'assistant';
+  /** Set when a sub-agent's child session produced it. */
+  subagent?: Subagent;
+}
+
+/** A sub-agent left running in the background changed state; its task id
+ *  is its child session's id. */
+export interface OpenCodeTask {
+  type: 'task';
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  callId: string;
 }
 
 /** A provider/session-level failure reported outside any Part
@@ -92,7 +104,8 @@ export type OpenCodeEvent =
   | OpenCodeError
   | OpenCodeResumeLost
   | OpenCodeDiff
-  | OpenCodeQuestion;
+  | OpenCodeQuestion
+  | OpenCodeTask;
 
 /** OpenCode's own question tool: its call renders as the question card. */
 const QUESTION_TOOL = 'question';
@@ -126,12 +139,31 @@ export function opencodeEventToEntries(event: OpenCodeEvent, ctx: TranslateConte
     case 'question':
       ctx.hiddenCallIds.add(event.toolUseId);
       return [];
+    case 'task':
+      return [{
+        entryType: 'background_task',
+        taskId: event.taskId,
+        kind: 'agent',
+        title: event.title,
+        status: event.status,
+        callId: event.callId,
+        timestamp: ts,
+      }];
     default:
       return [];
   }
 }
 
 function parsePart(msg: OpenCodePart, ctx: TranslateContext): OutputEntry[] {
+  const { subagent } = msg;
+  // A sub-agent's prompt comes from the main agent, and its `task` call
+  // already carries it as input: it is not shown again.
+  if (subagent && msg.role === 'user') return [];
+  const entries = partEntries(msg, ctx);
+  return subagent ? entries.map((e) => ({ ...e, subagent })) : entries;
+}
+
+function partEntries(msg: OpenCodePart, ctx: TranslateContext): OutputEntry[] {
   const { part, role } = msg;
   const ts = new Date().toISOString();
 
@@ -163,16 +195,20 @@ function parseTool(part: Extract<Part, { type: 'tool' }>, ts: string, ctx: Trans
     const input = (state.input ?? {}) as Record<string, unknown>;
     const locations = toolLocations(input);
     const full = toolInput(part.tool, input);
-    return [{
-      entryType: 'tool_call',
-      callId: part.callID,
-      toolName: part.tool,
-      kind: toolKindOf(part.tool),
-      title: toolTitle(part.tool, input),
-      ...(locations.length > 0 ? { locations } : {}),
-      ...(full !== undefined ? { input: full } : {}),
-      timestamp: ts,
-    }];
+    const todos = todosOf(input);
+    return [
+      {
+        entryType: 'tool_call',
+        callId: part.callID,
+        toolName: part.tool,
+        kind: toolKindOf(part.tool),
+        title: toolTitle(part.tool, input),
+        ...(locations.length > 0 ? { locations } : {}),
+        ...(full !== undefined ? { input: full } : {}),
+        timestamp: ts,
+      },
+      ...(todos ? [{ entryType: 'todos' as const, items: todos, callId: part.callID, timestamp: ts }] : []),
+    ];
   }
 
   if (state.status === 'completed') {

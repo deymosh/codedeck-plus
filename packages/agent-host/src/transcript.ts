@@ -3,17 +3,31 @@
  * translation state, and the size caps that keep one entry comfortably
  * inside a relay event.
  */
-import type { DiffLine } from './types';
+import type { DiffLine, TaskKind } from './types';
+
+/** A background task as first reported, for its later changes (which may
+ *  name only its id). */
+export interface KnownTask {
+  kind: TaskKind;
+  title: string;
+  callId?: string;
+  /** Its `background_task` entries have started: it runs in the background. */
+  announced: boolean;
+}
 
 /** Per-session state a translator keeps across messages. */
 export interface TranslateContext {
   /** Tool-call ids whose call and result are not shown as tool actions
    *  (questions and plan approval render as their own cards). */
   hiddenCallIds: Set<string>;
+  /** A sub-agent's kind, by the id of the call that started it. */
+  subagentLabels: Map<string, string>;
+  /** The agent's tasks, by id. */
+  tasks: Map<string, KnownTask>;
 }
 
 export function newTranslateContext(): TranslateContext {
-  return { hiddenCallIds: new Set() };
+  return { hiddenCallIds: new Set(), subagentLabels: new Map(), tasks: new Map() };
 }
 
 /** A tool result's text is capped so one entry stays well inside a relay event. */

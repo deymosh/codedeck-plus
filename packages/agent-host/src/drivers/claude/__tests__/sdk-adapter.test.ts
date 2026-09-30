@@ -161,6 +161,27 @@ describe('sdkMessageToEntries', () => {
       expect(find(entries, 'tool_call')).toMatchObject({ subagent: {} });
     });
 
+    it("names the call that started a sub-agent, and the sub-agent's kind", () => {
+      const ctx = newTranslateContext();
+      translate(assistant([{ type: 'tool_use', id: 'agent_1', name: 'Agent', input: { description: 'Explore', prompt: 'x', subagent_type: 'Explore' } }]), ctx);
+      const entries = translate(assistant([{ type: 'tool_use', id: 'r', name: 'Read', input: { file_path: '/a.ts' } }], 'agent_1'), ctx);
+      expect(find(entries, 'tool_call')!.subagent).toEqual({ label: 'Explore', parentCallId: 'agent_1' });
+    });
+
+    it('sends the checklist a todo call writes, tied to the call', () => {
+      const entries = translate(assistant([{ type: 'tool_use', id: 'todo_1', name: 'TodoWrite', input: { todos: [
+        { content: 'Run the tests', status: 'in_progress', activeForm: 'Running the tests' },
+        { content: 'Ship', status: 'weird' },
+      ] } }]));
+      expect(find(entries, 'todos')).toMatchObject({
+        callId: 'todo_1',
+        items: [
+          { text: 'Run the tests', status: 'in_progress', activeText: 'Running the tests' },
+          { text: 'Ship', status: 'pending' },
+        ],
+      });
+    });
+
     it('a text-only answer is not collapsible and not a sub-agent', () => {
       const text = find(translate(assistant([{ type: 'text', text: 'Here is the answer.' }])), 'text')!;
       expect(text.collapsible).toBeUndefined();
@@ -195,11 +216,9 @@ describe('sdkMessageToEntries', () => {
       expect(result.text).toContain('characters omitted');
     });
 
-    it('a sub-agent prompt folds into the tool group as agent text', () => {
+    it("a sub-agent's prompt is not shown again: its call carries it as input", () => {
       for (const content of ['Search the codebase for...', [{ type: 'text', text: 'Explore the src/ directory' }]]) {
-        const entries = translate(user(content, 'tool_abc123'));
-        expect(entries).toHaveLength(1);
-        expect(entries[0]).toMatchObject({ entryType: 'text', role: 'agent', collapsible: true, subagent: {} });
+        expect(translate(user(content, 'tool_abc123'))).toEqual([]);
       }
     });
   });
@@ -368,5 +387,38 @@ describe('diff entries (CDX-050)', () => {
     const diff = extractDiff('Write', { file_path: 'big.txt', content: big });
     expect(diff?.lines).toHaveLength(200);
     expect(diff?.truncated).toBe(true);
+  });
+});
+
+describe('background tasks', () => {
+  const sys = (fields: Record<string, unknown>) =>
+    ({ type: 'system', uuid: MSG_UUID, session_id: SESSION_ID, ...fields }) as unknown as SdkMessage;
+
+  it('reports a task started in the background, and its end with how it went', () => {
+    const ctx = newTranslateContext();
+    const started = translate(sys({ subtype: 'task_started', task_id: 't1', tool_use_id: 'c1', description: 'npm run dev', task_type: 'local_bash', is_backgrounded: true }), ctx);
+    expect(started).toEqual([{ entryType: 'background_task', taskId: 't1', kind: 'shell', title: 'npm run dev', status: 'running', callId: 'c1', timestamp: expect.any(String) }]);
+    const ended = translate(sys({ subtype: 'task_notification', task_id: 't1', status: 'failed', summary: 'exit 1', output_file: '/tmp/o' }), ctx);
+    expect(ended).toMatchObject([{ taskId: 't1', status: 'failed', summary: 'exit 1' }]);
+  });
+
+  it('a foreground task is reported only once it moves to the background', () => {
+    const ctx = newTranslateContext();
+    expect(translate(sys({ subtype: 'task_started', task_id: 't2', description: 'Audit', task_type: 'local_agent', is_backgrounded: false }), ctx)).toEqual([]);
+    expect(translate(sys({ subtype: 'task_updated', task_id: 't2', patch: { is_backgrounded: true } }), ctx)).toMatchObject([{ kind: 'agent', status: 'running' }]);
+    // A task that never ran in the background ends silently.
+    translate(sys({ subtype: 'task_started', task_id: 't3', description: 'x', task_type: 'local_agent' }), ctx);
+    expect(translate(sys({ subtype: 'task_notification', task_id: 't3', status: 'completed', summary: '', output_file: '' }), ctx)).toEqual([]);
+  });
+
+  it('housekeeping tasks are never reported; a snapshot reports the running ones it finds', () => {
+    const ctx = newTranslateContext();
+    expect(translate(sys({ subtype: 'task_started', task_id: 'a', description: 'watch', is_backgrounded: true, ambient: true }), ctx)).toEqual([]);
+    const snap = translate(sys({ subtype: 'background_tasks_changed', tasks: [
+      { task_id: 'b', task_type: 'local_bash', description: 'tail -f log' },
+      { task_id: 'c', task_type: 'x', description: 'h', ambient: true },
+    ] }), ctx);
+    expect(snap).toMatchObject([{ taskId: 'b', kind: 'shell', status: 'running' }]);
+    expect(translate(sys({ subtype: 'background_tasks_changed', tasks: [{ task_id: 'b', task_type: 'local_bash', description: 'tail -f log' }] }), ctx)).toEqual([]);
   });
 });

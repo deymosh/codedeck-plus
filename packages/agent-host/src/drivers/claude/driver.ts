@@ -609,6 +609,11 @@ export class ClaudeSession implements DriverSession {
     await this.handle?.interrupt();
   }
 
+  async stopTask(taskId: string): Promise<void> {
+    if (!this.handle || this.ended) throw new Error('the session is not running');
+    await this.handle.stopTask(taskId);
+  }
+
   /** Before the query is spawned (the binary still installing), a change is
    *  kept and applied at the spawn. */
   async setOption(option: SessionOption, value: string): Promise<void> {
@@ -759,6 +764,7 @@ export class ClaudeDriver implements Driver {
         commands: true,
         plugins: this.plugins !== undefined,
         mcp: this.mcp !== undefined,
+        tasks: true,
       },
       credentials: [{ id: ANTHROPIC_API_KEY_CREDENTIAL, label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY' }],
     };

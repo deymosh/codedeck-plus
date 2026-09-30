@@ -180,6 +180,7 @@ class TestModeSession implements SdkSessionHandle {
   async setModel(): Promise<void> {}
   async setEffort(): Promise<void> {}
   async interrupt(): Promise<void> {}
+  async stopTask(): Promise<void> {}
   /** No real subprocess to probe — always "ready" immediately. */
   async probeReady(): Promise<void> {}
   async getContextUsage(): Promise<SdkContextUsage | null> {

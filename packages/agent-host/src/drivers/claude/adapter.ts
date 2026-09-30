@@ -9,9 +9,16 @@
  * hides the tool calls behind those cards so they do not also render as
  * ordinary tool actions.
  */
-import { toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
-import { MAX_DIFF_LINES, toDiffLines, truncateToolResult, type DiffPayload, type TranslateContext } from '../../transcript';
-import type { DiffLine, OutputEntry, Subagent } from '../../types';
+import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
+import {
+  MAX_DIFF_LINES,
+  toDiffLines,
+  truncateToolResult,
+  type DiffPayload,
+  type KnownTask,
+  type TranslateContext,
+} from '../../transcript';
+import type { DiffLine, OutputEntry, Subagent, TaskKind, TaskStatus } from '../../types';
 import type {
   SdkMessage,
   SdkAssistantMessage,
@@ -37,16 +44,25 @@ export function sdkMessageToEntries(msg: SdkMessage, ctx: TranslateContext): Out
       return parseUser(msg as SdkUserMessage, ctx);
     case 'result':
       return parseResult(msg as SdkResultMessage);
-    case 'system':
+    case 'system': {
+      const subtype = (msg as { subtype?: string }).subtype ?? '';
+      if (subtype.startsWith('task_') || subtype === 'background_tasks_changed') {
+        return parseTask(msg as unknown as Record<string, unknown>, ctx);
+      }
       return parseSystem(msg as SdkSystemMessage | SdkSessionStateChangedMessage);
+    }
     default:
       // stream_event, auth_status, task_notification, etc. — skip
       return [];
   }
 }
 
-function subagentField(isSubAgent: boolean): { subagent?: Subagent } {
-  return isSubAgent ? { subagent: {} } : {};
+/** A sub-agent's entries name the call that started it (the SDK's
+ *  `parent_tool_use_id`) and, when that call said, the sub-agent's kind. */
+function subagentField(parent: string | null | undefined, ctx: TranslateContext): { subagent?: Subagent } {
+  if (!parent) return {};
+  const label = ctx.subagentLabels.get(parent);
+  return { subagent: { ...(label ? { label } : {}), parentCallId: parent } };
 }
 
 function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): OutputEntry[] {
@@ -61,6 +77,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
   // Sub-agent messages have a non-null parent_tool_use_id.
   const isSubAgent = !!msg.parent_tool_use_id;
   const collapsible = hasToolUse || isSubAgent;
+  const sub = subagentField(msg.parent_tool_use_id, ctx);
 
   for (const block of msg.message.content) {
     if (block.type === 'text') {
@@ -70,7 +87,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
         text: block.text,
         timestamp: ts,
         ...(collapsible ? { collapsible: true } : {}),
-        ...subagentField(isSubAgent),
+        ...sub,
       });
     } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {
       // Redacted thinking has no readable text; the flag lets the phone show a
@@ -81,7 +98,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
         text: redacted ? '' : (block as { thinking?: string }).thinking ?? '',
         timestamp: ts,
         ...(redacted ? { redacted: true } : {}),
-        ...subagentField(isSubAgent),
+        ...sub,
       });
     } else if (block.type === 'tool_use') {
       const input = (block.input ?? {}) as Record<string, unknown>;
@@ -92,6 +109,9 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
       } else if (block.name === 'AskUserQuestion') {
         ctx.hiddenCallIds.add(block.id);
       } else {
+        if (toolKindOf(block.name) === 'agent' && typeof input.subagent_type === 'string' && input.subagent_type) {
+          ctx.subagentLabels.set(block.id, input.subagent_type);
+        }
         const full = toolInput(block.name, input);
         entries.push({
           entryType: 'tool_call',
@@ -102,8 +122,10 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
           ...withLocations(toolLocations(input)),
           ...(full !== undefined ? { input: full } : {}),
           timestamp: ts,
-          ...subagentField(isSubAgent),
+          ...sub,
         });
+        const todos = todosOf(input);
+        if (todos) entries.push({ entryType: 'todos', items: todos, callId: block.id, timestamp: ts, ...sub });
         // A colored diff card for file edits, alongside the tool call (the
         // tool group keeps its action; the diff renders as its own card).
         const diff = extractDiff(block.name, input);
@@ -113,7 +135,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
             ...diff,
             callId: block.id,
             timestamp: ts,
-            ...subagentField(isSubAgent),
+            ...sub,
           });
         }
       }
@@ -131,20 +153,18 @@ function parseUser(msg: SdkUserMessage, ctx: TranslateContext): OutputEntry[] {
   const entries: OutputEntry[] = [];
   const ts = new Date().toISOString();
   const content = msg.message.content;
-  // A sub-agent's prompt comes from the main agent, not the user: it folds
-  // into the tool group as agent text.
+  // A sub-agent's prompt comes from the main agent, not the user, and its
+  // call already carries it as input: it is not shown again.
   const isSubAgent = !!msg.parent_tool_use_id;
-  const text = (t: string): OutputEntry =>
-    isSubAgent
-      ? { entryType: 'text', role: 'agent', text: t, collapsible: true, subagent: {}, timestamp: ts }
-      : { entryType: 'text', role: 'user', text: t, timestamp: ts };
+  const text = (t: string): OutputEntry[] =>
+    isSubAgent ? [] : [{ entryType: 'text', role: 'user', text: t, timestamp: ts }];
 
   if (typeof content === 'string') {
-    entries.push(text(content));
+    entries.push(...text(content));
   } else if (Array.isArray(content)) {
     for (const block of content) {
       if (block.type === 'text') {
-        entries.push(text(block.text));
+        entries.push(...text(block.text));
       } else if (block.type === 'tool_result') {
         if (ctx.hiddenCallIds.has(block.tool_use_id)) continue;
         const resultText = typeof block.content === 'string'
@@ -230,6 +250,91 @@ function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): Out
   }
 
   return [];
+}
+
+// --- Background tasks ---
+
+function taskKindOf(taskType: unknown): TaskKind {
+  if (taskType === 'local_bash') return 'shell';
+  if (taskType === 'local_agent' || taskType === 'remote_agent') return 'agent';
+  return 'other';
+}
+
+function taskEntry(taskId: string, task: KnownTask, status: TaskStatus, summary?: string): OutputEntry {
+  return {
+    entryType: 'background_task',
+    taskId,
+    kind: task.kind,
+    title: task.title,
+    status,
+    ...(task.callId ? { callId: task.callId } : {}),
+    ...(summary ? { summary } : {}),
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function announce(taskId: string, task: KnownTask): OutputEntry[] {
+  if (task.announced) return [];
+  task.announced = true;
+  return [taskEntry(taskId, task, 'running')];
+}
+
+/**
+ * The SDK's task messages as `background_task` entries. Every task is
+ * remembered from `task_started`, but only one running in the background
+ * is reported: started there, or moved there later (`task_updated`), or
+ * found running by a `background_tasks_changed` snapshot (after a resume).
+ * Its end comes from `task_notification`, which carries how it went. A task
+ * the SDK marks ambient (housekeeping) is never reported.
+ */
+function parseTask(msg: Record<string, unknown>, ctx: TranslateContext): OutputEntry[] {
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const taskId = str(msg.task_id);
+  switch (msg.subtype) {
+    case 'task_started': {
+      if (!taskId || msg.ambient || msg.skip_transcript) return [];
+      const callId = str(msg.tool_use_id);
+      const task: KnownTask = {
+        kind: taskKindOf(msg.task_type),
+        title: str(msg.description) || 'Background task',
+        ...(callId ? { callId } : {}),
+        announced: false,
+      };
+      ctx.tasks.set(taskId, task);
+      return msg.is_backgrounded === true ? announce(taskId, task) : [];
+    }
+    case 'task_updated': {
+      const task = ctx.tasks.get(taskId);
+      const patch = (msg.patch ?? {}) as Record<string, unknown>;
+      if (!task) return [];
+      if (str(patch.description)) task.title = str(patch.description);
+      return patch.is_backgrounded === true ? announce(taskId, task) : [];
+    }
+    case 'task_notification': {
+      const task = ctx.tasks.get(taskId);
+      ctx.tasks.delete(taskId);
+      if (!task?.announced) return [];
+      const status: TaskStatus = msg.status === 'completed' ? 'completed' : msg.status === 'failed' ? 'failed' : 'stopped';
+      return [taskEntry(taskId, task, status, str(msg.summary) || undefined)];
+    }
+    case 'background_tasks_changed': {
+      const out: OutputEntry[] = [];
+      for (const raw of Array.isArray(msg.tasks) ? msg.tasks : []) {
+        const t = raw as Record<string, unknown>;
+        const id = str(t.task_id);
+        if (!id || t.ambient) continue;
+        let task = ctx.tasks.get(id);
+        if (!task) {
+          task = { kind: taskKindOf(t.task_type), title: str(t.description) || 'Background task', announced: false };
+          ctx.tasks.set(id, task);
+        }
+        out.push(...announce(id, task));
+      }
+      return out;
+    }
+    default:
+      return [];
+  }
 }
 
 // --- Diff extraction (CDX-050) ---

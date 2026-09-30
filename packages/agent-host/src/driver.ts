@@ -54,6 +54,10 @@ export interface DriverSession {
   prompt(text: string): void;
   /** Stop the running turn. Best effort. */
   interrupt(): Promise<void>;
+  /** Stop one background task (a `background_task` entry's `taskId`), for
+   *  an agent whose catalog entry `supports.tasks`. Its next entry says it
+   *  stopped. Rejects with the agent's reason when it cannot. */
+  stopTask?(taskId: string): Promise<void>;
   /** Apply a mode / effort / model change. Rejects when the agent refuses. */
   setOption(option: SessionOption, value: string): Promise<void>;
   /** Subscription usage for this session's account, if the agent has any. */
