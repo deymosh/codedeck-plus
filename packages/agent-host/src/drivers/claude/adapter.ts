@@ -208,6 +208,16 @@ function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): Out
     }];
   }
 
+  // What a hook says to the user (its `systemMessage`): "PreToolUse:Bash
+  // says: …".
+  if ((msg as { subtype?: string }).subtype === 'informational') {
+    const content = (msg as unknown as { content?: unknown }).content;
+    if (typeof content === 'string' && content.trim()) {
+      return [{ entryType: 'status', text: content.trim(), timestamp: new Date().toISOString() }];
+    }
+    return [];
+  }
+
   // The SDK reporting the session idle is the authoritative "turn over,
   // waiting for input" signal (the phone's unread dot / notification).
   if (msg.subtype === 'session_state_changed') {
