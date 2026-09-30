@@ -132,13 +132,13 @@ fun Page(
 
 /** A round, touch-sized icon button for a title bar. */
 @Composable
-fun IconAction(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color = Tokens.Text) {
+fun IconAction(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color = Tokens.Text, enabled: Boolean = true) {
     Box(
         Modifier
             .minimumInteractiveComponentSize()
             .size(44.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
