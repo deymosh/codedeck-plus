@@ -12,7 +12,10 @@
       "text": "## Refactor plan\n\nHere's what I'll do, in order."
     },
     {
+      "added": 0,
+      "failed": 0,
       "kind": "toolGroup",
+      "removed": 0,
       "seq": 3,
       "steps": [
         {
@@ -20,14 +23,29 @@
           "seq": 3,
           "step": "thinking",
           "text": "Start with the pool."
-        },
+        }
+      ],
+      "subject": null,
+      "summary": "Thought"
+    },
+    {
+      "isPlan": false,
+      "kind": "agentMessage",
+      "seq": 4,
+      "text": "Reading the pool first."
+    },
+    {
+      "added": 0,
+      "failed": 0,
+      "kind": "toolGroup",
+      "removed": 0,
+      "seq": 5,
+      "steps": [
         {
-          "seq": 4,
-          "step": "text",
-          "text": "Reading the pool first."
-        },
-        {
+          "activeVerb": "Reading",
           "callId": "tu-read",
+          "diffs": [],
+          "input": null,
           "isSubAgent": false,
           "result": {
             "isError": false,
@@ -38,10 +56,14 @@
           "subagent": null,
           "title": "pool.ts",
           "toolKind": "read",
-          "toolName": "Read"
+          "toolName": "Read",
+          "verb": "Read"
         },
         {
+          "activeVerb": "Searching",
           "callId": "tu-grep",
+          "diffs": [],
+          "input": null,
           "isSubAgent": true,
           "result": {
             "isError": false,
@@ -52,10 +74,12 @@
           "subagent": "explorer",
           "title": "SimplePool",
           "toolKind": "search",
-          "toolName": "Grep"
+          "toolName": "Grep",
+          "verb": "Searched"
         }
       ],
-      "summary": "3 actions"
+      "subject": null,
+      "summary": "Read a file, searched once"
     },
     {
       "agentLabel": null,

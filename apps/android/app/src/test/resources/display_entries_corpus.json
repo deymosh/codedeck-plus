@@ -12,7 +12,10 @@
       "text": "## Refactor plan\n\nHere's what I'll do, in order."
     },
     {
+      "added": 0,
+      "failed": 0,
       "kind": "toolGroup",
+      "removed": 0,
       "seq": 3,
       "steps": [
         {
@@ -20,14 +23,29 @@
           "seq": 3,
           "step": "thinking",
           "text": "Start with the pool."
-        },
+        }
+      ],
+      "subject": null,
+      "summary": "Thought"
+    },
+    {
+      "isPlan": false,
+      "kind": "agentMessage",
+      "seq": 4,
+      "text": "Reading the pool first."
+    },
+    {
+      "added": 0,
+      "failed": 0,
+      "kind": "toolGroup",
+      "removed": 0,
+      "seq": 5,
+      "steps": [
         {
-          "seq": 4,
-          "step": "text",
-          "text": "Reading the pool first."
-        },
-        {
+          "activeVerb": "Reading",
           "callId": "tu-read",
+          "diffs": [],
+          "input": null,
           "isSubAgent": false,
           "result": {
             "isError": false,
@@ -38,10 +56,14 @@
           "subagent": null,
           "title": "pool.ts",
           "toolKind": "read",
-          "toolName": "Read"
+          "toolName": "Read",
+          "verb": "Read"
         },
         {
+          "activeVerb": "Searching",
           "callId": "tu-grep",
+          "diffs": [],
+          "input": null,
           "isSubAgent": true,
           "result": {
             "isError": false,
@@ -52,15 +74,19 @@
           "subagent": "explorer",
           "title": "SimplePool",
           "toolKind": "search",
-          "toolName": "Grep"
+          "toolName": "Grep",
+          "verb": "Searched"
         }
       ],
-      "summary": "3 actions"
+      "subject": null,
+      "summary": "Read a file, searched once"
     },
     {
       "agentLabel": null,
       "answered": "Allowed",
       "description": "Read packages/core/src/nostr/pool.ts",
+      "hook": null,
+      "hookPlugin": null,
       "isSubAgent": false,
       "kind": "permissionRequest",
       "locations": [],
@@ -81,6 +107,7 @@
           "label": "Deny"
         }
       ],
+      "reason": null,
       "requestId": "tu-read",
       "seq": 8,
       "title": "pool.ts",
@@ -212,6 +239,8 @@
       "agentLabel": null,
       "answered": null,
       "description": null,
+      "hook": "PreToolUse:Bash",
+      "hookPlugin": "guard-rails",
       "isSubAgent": false,
       "kind": "permissionRequest",
       "locations": [],
@@ -227,6 +256,7 @@
           "label": "Deny"
         }
       ],
+      "reason": "Tests need a human while CI is red",
       "requestId": "tu-permission",
       "seq": 20,
       "title": "cargo test",
@@ -237,6 +267,8 @@
   "pendingPermission": {
     "agentLabel": null,
     "description": null,
+    "hook": "PreToolUse:Bash",
+    "hookPlugin": "guard-rails",
     "isSubAgent": false,
     "options": [
       {
@@ -250,6 +282,7 @@
         "label": "Deny"
       }
     ],
+    "reason": "Tests need a human while CI is red",
     "requestId": "tu-permission",
     "title": "cargo test",
     "toolName": "Bash"
