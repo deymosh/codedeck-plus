@@ -232,7 +232,9 @@ pub struct PermissionRequest {
     pub reason: Option<String>,
     /// As on the phone wire's `permission_request` entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook: Option<String>,
+    pub hook: Option<String>,    /// As on the phone wire's `permission_request` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_plugin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

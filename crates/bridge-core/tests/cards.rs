@@ -37,6 +37,7 @@ fn permission(session: &str, request: &str) -> HostMessage {
         subagent: None,
         reason: None,
         hook: None,
+        hook_plugin: None,
     })
 }
 
