@@ -301,6 +301,10 @@ pub enum BridgeMessage {
     Prompt { session_id: String, text: String },
     /// Stop the running turn. Reply: `ack`.
     Interrupt { session_id: String },
+    /// Stop one background task of the session (agents with
+    /// `supports.tasks`). Reply: `ack` once asked — the task's next
+    /// `background_task` entry says it stopped — or `error`.
+    StopTask { session_id: String, task_id: String },
     /// Reply: `ack` when the agent applied it, else `error`.
     SetOption {
         session_id: String,

@@ -13,7 +13,10 @@ import app.cash.paparazzi.Paparazzi
 import com.android.ide.common.rendering.api.SessionParams
 import com.codedeck.plus.ui.theme.CodeDeckTheme
 import com.codedeck.plus.ui.theme.Tokens
+import com.codedeck.plus.ui.transcript.rows.ActivityBar
 import com.codedeck.plus.ui.transcript.rows.ActivityRow
+import com.codedeck.plus.ui.transcript.rows.ActivitySheetContent
+import com.codedeck.plus.ui.transcript.rows.TaskRow
 import com.codedeck.plus.ui.transcript.rows.DiffRow
 import com.codedeck.plus.ui.transcript.rows.ToolSheetContent
 import com.codedeck.plus.ui.transcript.rows.PermissionCard
@@ -63,7 +66,7 @@ class TranscriptRowsParityTest {
     @Test
     fun tool_group_rows() {
         val groups = corpus().filterIsInstance<DisplayEntry.ToolGroup>()
-        val work = groups.last()
+        val work = editGroup()
         // A lone running command, as the transcript shows it mid-turn.
         val lone = work.copy(
             steps = listOf((work.steps[1] as ToolStep.Call).copy(result = null)),
@@ -78,6 +81,10 @@ class TranscriptRowsParityTest {
                     ToolGroupRow(lone, live = true, onOpen = {})
                     ActivityRow(lone.runningCall, onOpen = {})
                     ActivityRow(null, onOpen = null)
+                    // A sub-agent at work, and background tasks as rows.
+                    ActivityRow(agentGroup().steps[0] as ToolStep.Call, onOpen = {})
+                    corpus().filterIsInstance<DisplayEntry.Task>().forEach { TaskRow(it) }
+                    TaskRow(DisplayEntry.Task(0, "bg-2", "shell", "npm run dev", "stopped"))
                 }
             }
         }
@@ -95,19 +102,74 @@ class TranscriptRowsParityTest {
     @Test
     fun tool_sheet_timeline() {
         val work = corpus().filterIsInstance<DisplayEntry.ToolGroup>()[1]
-        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openStep = null, onOpenStep = {}, onClose = {}) } }
+        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
     }
 
     @Test
     fun tool_sheet_edit_page() {
-        val work = corpus().filterIsInstance<DisplayEntry.ToolGroup>().last()
-        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openStep = work.steps[0].seq, onOpenStep = {}, onClose = {}) } }
+        val work = editGroup()
+        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openPath = listOf(work.steps[0].seq), onOpenPath = {}, onClose = {}) } }
     }
 
     @Test
     fun tool_sheet_failed_command_page() {
-        val work = corpus().filterIsInstance<DisplayEntry.ToolGroup>().last()
-        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openStep = work.steps[1].seq, onOpenStep = {}, onClose = {}) } }
+        val work = editGroup()
+        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openPath = listOf(work.steps[1].seq), onOpenPath = {}, onClose = {}) } }
+    }
+
+    /** The group with an edit and a failed command. */
+    private fun editGroup(): DisplayEntry.ToolGroup =
+        corpus().filterIsInstance<DisplayEntry.ToolGroup>().first { it.added > 0 }
+
+    /** The group holding the corpus's sub-agent, checklist and background
+     *  command. */
+    private fun agentGroup(): DisplayEntry.ToolGroup =
+        corpus().filterIsInstance<DisplayEntry.ToolGroup>().first { g -> g.steps.any { (it as? ToolStep.Call)?.toolKind == "agent" } }
+
+    @Test
+    fun tool_sheet_agent_page() {
+        val group = agentGroup()
+        paparazzi.snapshot { sheet { ToolSheetContent(group, live = true, openPath = listOf(group.steps[0].seq), onOpenPath = {}, onClose = {}) } }
+    }
+
+    @Test
+    fun tool_sheet_agent_timeline() {
+        val group = agentGroup()
+        paparazzi.snapshot { sheet { ToolSheetContent(group, live = true, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
+    }
+
+    @Test
+    fun tool_sheet_plan_page() {
+        val group = agentGroup()
+        paparazzi.snapshot { sheet { ToolSheetContent(group, live = false, openPath = listOf(group.steps[1].seq), onOpenPath = {}, onClose = {}) } }
+    }
+
+    private fun activity(): ActivityView {
+        val root = displayEntriesJson.parseToJsonElement(
+            javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText(),
+        ).jsonObject
+        return parseActivity(root.getValue("activity").toString())
+    }
+
+    @Test
+    fun activity_sheet() {
+        paparazzi.snapshot {
+            sheet { ActivitySheetContent(activity(), live = false, canStop = true, onOpenAgent = {}, onStopTask = {}, onClose = {}) }
+        }
+    }
+
+    @Test
+    fun activity_bar() {
+        val a = activity()
+        paparazzi.snapshot {
+            dark {
+                Column {
+                    ActivityBar(a, live = false, onOpen = {})
+                    // No plan: what the sub-agent does leads.
+                    ActivityBar(a.copy(todos = emptyList()), live = false, onOpen = {})
+                }
+            }
+        }
     }
 
     @Test

@@ -15,6 +15,14 @@
 //! - `diff` → folded into the call that made it (its lines and +/− counts
 //!   ride the call, and the counts add up on the group); a diff no known
 //!   call claims is a standalone card.
+//! - A sub-agent's entries (`subagent.parentCallId` naming a known call)
+//!   nest under the call that started it, as that call's own timeline,
+//!   instead of mixing into the conversation's groups.
+//! - `todos` → rides the call that wrote it; the latest list is also part
+//!   of the session's activity (`activity.rs`).
+//! - `background_task` → the call that started the task shows where it
+//!   stands; a task no visible call started, and every task that ended, is
+//!   a quiet line of its own.
 //! - `permission_request` / `plan_approval` → a card each; consecutive
 //!   `question` entries sharing a `request_id` → one question card.
 //! - `resolved` marks the card with that `request_id` answered (its summary is
@@ -26,7 +34,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use protocol::common::{
     DiffLine, DiffLineType, EntryBody, NoticeKind, OptionChoice, OutputEntry, PermissionOption,
-    QuestionOption, Role, ToolKind,
+    QuestionOption, Role, TaskKind, TaskStatus, TodoItem, ToolKind,
 };
 use serde::Serialize;
 
@@ -97,6 +105,14 @@ pub enum ToolStep {
         result: Option<ToolResultView>,
         /// The files the call changed, in the order their diffs arrived.
         diffs: Vec<FileDiffView>,
+        /// What the sub-agent this call started did, in order: an `agent`
+        /// call's own timeline.
+        children: Vec<ToolStep>,
+        /// The checklist this call wrote, when it wrote one.
+        todos: Vec<TodoItem>,
+        /// Where the background task this call started stands, when it
+        /// started one.
+        background: Option<TaskStatus>,
     },
     /// A result whose call is not in the transcript.
     Result { seq: u64, text: String, is_error: bool },
@@ -270,6 +286,15 @@ pub enum DisplayEntry {
         questions: Vec<QuestionView>,
         answered: Option<String>,
     },
+    /// A background task that started with no call to show it, or ended.
+    Task {
+        seq: u64,
+        task_id: String,
+        task_kind: TaskKind,
+        title: String,
+        status: TaskStatus,
+        summary: Option<String>,
+    },
     PermissionRequest {
         seq: u64,
         request_id: String,
@@ -306,6 +331,7 @@ impl DisplayEntry {
             | DisplayEntry::Notice { seq, .. }
             | DisplayEntry::PlanApproval { seq, .. }
             | DisplayEntry::Question { seq, .. }
+            | DisplayEntry::Task { seq, .. }
             | DisplayEntry::PermissionRequest { seq, .. } => *seq,
         }
     }
@@ -415,14 +441,26 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
             _ => {}
         }
     }
-    // Only diffs whose call is known fold into it; the rest stay cards.
+    // Only diffs, checklists and tasks whose call is known ride it; a diff
+    // no call claims stays a card.
+    let mut todos: HashMap<&str, Vec<TodoItem>> = HashMap::new();
+    let mut background: HashMap<&str, TaskStatus> = HashMap::new();
     for item in source {
-        if let EntryBody::Diff { path, lines, truncated, call_id: Some(call_id) } = &item.entry.body {
-            if calls.contains(call_id.as_str()) {
+        match &item.entry.body {
+            EntryBody::Diff { path, lines, truncated, call_id: Some(call_id) } if calls.contains(call_id.as_str()) => {
                 diffs.entry(call_id).or_default().push(FileDiffView::new(path, lines, *truncated));
             }
+            EntryBody::Todos { items, call_id: Some(call_id) } if calls.contains(call_id.as_str()) => {
+                todos.insert(call_id, items.clone());
+            }
+            EntryBody::BackgroundTask { status, call_id: Some(call_id), .. } if calls.contains(call_id.as_str()) => {
+                background.insert(call_id, *status);
+            }
+            _ => {}
         }
     }
+    // A sub-agent's steps, by the call that started it.
+    let mut children: HashMap<String, Vec<ToolStep>> = HashMap::new();
 
     let mut b = Builder {
         display: Vec::new(),
@@ -437,7 +475,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
     for item in source.iter().filter(|e| !is_hidden_entry(&e.entry)) {
         let seq = item.seq;
         let entry = &item.entry;
-        match &entry.body {
+        let step = match &entry.body {
             EntryBody::ToolCall {
                 call_id,
                 tool_name,
@@ -446,49 +484,53 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 input,
                 ..
             } => {
-                let subagent = subagent_label(entry);
                 let p = phrase(*kind);
-                b.push_step(
+                Some(ToolStep::Call {
                     seq,
-                    ToolStep::Call {
-                        seq,
-                        call_id: call_id.clone(),
-                        tool_name: tool_name.clone(),
-                        tool_kind: *kind,
-                        title: title.clone(),
-                        input: input.clone(),
-                        verb: p.verb.to_string(),
-                        active_verb: p.active.to_string(),
-                        is_sub_agent: entry.subagent.is_some(),
-                        subagent,
-                        result: results.get(call_id.as_str()).cloned(),
-                        diffs: diffs.remove(call_id.as_str()).unwrap_or_default(),
-                    },
-                );
+                    call_id: call_id.clone(),
+                    tool_name: tool_name.clone(),
+                    tool_kind: *kind,
+                    title: title.clone(),
+                    input: input.clone(),
+                    verb: p.verb.to_string(),
+                    active_verb: p.active.to_string(),
+                    is_sub_agent: entry.subagent.is_some(),
+                    subagent: subagent_label(entry),
+                    result: results.get(call_id.as_str()).cloned(),
+                    diffs: diffs.remove(call_id.as_str()).unwrap_or_default(),
+                    children: Vec::new(),
+                    todos: todos.remove(call_id.as_str()).unwrap_or_default(),
+                    background: background.get(call_id.as_str()).copied(),
+                })
             }
-            EntryBody::ToolResult { call_id, text, is_error } => {
-                if !calls.contains(call_id.as_str()) {
-                    b.push_step(
-                        seq,
-                        ToolStep::Result {
-                            seq,
-                            text: text.clone(),
-                            is_error: *is_error,
-                        },
-                    );
-                }
-            }
-            EntryBody::Thinking { text, redacted } => b.push_step(
+            // A paired result rides its call.
+            EntryBody::ToolResult { call_id, .. } if calls.contains(call_id.as_str()) => continue,
+            EntryBody::ToolResult { text, is_error, .. } => Some(ToolStep::Result {
                 seq,
-                ToolStep::Thinking {
-                    seq,
-                    text: text.clone(),
-                    redacted: *redacted,
-                },
-            ),
+                text: text.clone(),
+                is_error: *is_error,
+            }),
+            EntryBody::Thinking { text, redacted } => Some(ToolStep::Thinking {
+                seq,
+                text: text.clone(),
+                redacted: *redacted,
+            }),
             EntryBody::Text { role: Role::Agent, text, .. } if entry.subagent.is_some() => {
-                b.push_step(seq, ToolStep::Text { seq, text: text.clone() })
+                Some(ToolStep::Text { seq, text: text.clone() })
             }
+            _ => None,
+        };
+        if let Some(step) = step {
+            let parent = entry.subagent.as_ref().and_then(|s| s.parent_call_id.as_deref());
+            match parent.filter(|p| calls.contains(p)) {
+                Some(parent) => children.entry(parent.to_string()).or_default().push(step),
+                None => b.push_step(seq, step),
+            }
+            continue;
+        }
+        match &entry.body {
+            // Made into steps above.
+            EntryBody::ToolCall { .. } | EntryBody::ToolResult { .. } | EntryBody::Thinking { .. } => {}
             EntryBody::Question {
                 request_id,
                 index,
@@ -600,13 +642,47 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 b.flush_all();
                 b.display.push(DisplayEntry::Error { seq, text: text.clone() });
             }
+            // A checklist rides its call, and the latest is the activity's.
+            EntryBody::Todos { .. } => {}
+            // A running task a visible call started shows on that call.
+            EntryBody::BackgroundTask { status: TaskStatus::Running, call_id: Some(call_id), .. }
+                if calls.contains(call_id.as_str()) => {}
+            EntryBody::BackgroundTask { task_id, kind, title, status, summary, .. } => {
+                b.flush_all();
+                b.display.push(DisplayEntry::Task {
+                    seq,
+                    task_id: task_id.clone(),
+                    task_kind: *kind,
+                    title: title.clone(),
+                    status: *status,
+                    summary: summary.clone(),
+                });
+            }
             // Filtered above; listed so a new entry kind is a compile error here.
             EntryBody::Resolved { .. } | EntryBody::TurnComplete {} => {}
         }
     }
 
     b.flush_all();
+    for row in &mut b.display {
+        if let DisplayEntry::ToolGroup { steps, .. } = row {
+            adopt(steps, &mut children);
+        }
+    }
     b.display
+}
+
+/// Give each call the steps of the sub-agent it started — theirs too, for a
+/// sub-agent that started one of its own.
+fn adopt(steps: &mut [ToolStep], children: &mut HashMap<String, Vec<ToolStep>>) {
+    for step in steps {
+        if let ToolStep::Call { call_id, children: mine, .. } = step {
+            if let Some(mut kids) = children.remove(call_id.as_str()) {
+                adopt(&mut kids, children);
+                *mine = kids;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -703,6 +779,7 @@ mod tests {
                 DisplayEntry::PlanApproval { .. } => "plan_approval",
                 DisplayEntry::Question { .. } => "question",
                 DisplayEntry::PermissionRequest { .. } => "permission",
+                DisplayEntry::Task { .. } => "task",
             })
             .collect()
     }
@@ -778,6 +855,66 @@ mod tests {
         let ToolStep::Call { diffs, .. } = &steps[0] else { panic!() };
         assert_eq!(diffs.len(), 1);
         assert_eq!((diffs[0].added, diffs[0].removed, diffs[0].lines.len()), (2, 1, 4));
+    }
+
+    #[test]
+    fn a_sub_agents_work_nests_under_the_call_that_started_it() {
+        let agent = json!({"entryType":"tool_call","callId":"a1","toolName":"Agent","kind":"agent","title":"Explore"});
+        let sub = |v: serde_json::Value| {
+            let mut v = v;
+            v["subagent"] = json!({"label":"Explore","parentCallId":"a1"});
+            v
+        };
+        let nested = json!({"entryType":"tool_call","callId":"a2","toolName":"Agent","kind":"agent","title":"Deeper",
+            "subagent":{"parentCallId":"a1"}});
+        let d = build_display_entries(&seq(&[
+            agent,
+            sub(json!({"entryType":"thinking","text":"hmm"})),
+            sub(call("c1")),
+            nested,
+            json!({"entryType":"tool_call","callId":"c2","toolName":"Read","kind":"read","title":"x","subagent":{"parentCallId":"a2"}}),
+            sub(result("c1", "ok")),
+            // The main agent keeps working meanwhile: its call stays in the group.
+            call("m1"),
+            result("a1", "report"),
+        ]));
+        assert_eq!(kinds(&d), ["tools"]);
+        let DisplayEntry::ToolGroup { steps, summary, .. } = &d[0] else { panic!() };
+        assert_eq!(summary, "Ran an agent, ran a command");
+        let ToolStep::Call { children, result: Some(r), .. } = &steps[0] else { panic!() };
+        assert_eq!(r.text, "report");
+        assert!(matches!(&children[0], ToolStep::Thinking { .. }));
+        assert!(matches!(&children[1], ToolStep::Call { call_id, result: Some(_), .. } if call_id == "c1"));
+        let ToolStep::Call { children: grand, .. } = &children[2] else { panic!() };
+        assert!(matches!(&grand[0], ToolStep::Call { call_id, .. } if call_id == "c2"));
+    }
+
+    #[test]
+    fn a_background_task_shows_on_its_call_and_its_end_is_a_line() {
+        let bash = json!({"entryType":"tool_call","callId":"b","toolName":"Bash","kind":"execute","title":"npm run dev"});
+        let task = |status: &str, call: Option<&str>| {
+            let mut v = json!({"entryType":"background_task","taskId":"t1","kind":"shell","title":"npm run dev","status":status});
+            if let Some(c) = call {
+                v["callId"] = json!(c);
+            }
+            v
+        };
+        let d = build_display_entries(&seq(&[bash, task("running", Some("b")), result("b", "started"), task("stopped", Some("b")), task("running", None)]));
+        assert_eq!(kinds(&d), ["tools", "task", "task"]);
+        let DisplayEntry::ToolGroup { steps, .. } = &d[0] else { panic!() };
+        assert!(matches!(&steps[0], ToolStep::Call { background: Some(TaskStatus::Stopped), .. }));
+    }
+
+    #[test]
+    fn a_checklist_rides_the_call_that_wrote_it() {
+        let d = build_display_entries(&seq(&[
+            json!({"entryType":"tool_call","callId":"t","toolName":"TodoWrite","kind":"think","title":"plan"}),
+            json!({"entryType":"todos","callId":"t","items":[{"text":"a","status":"pending"}]}),
+            json!({"entryType":"todos","items":[{"text":"b","status":"pending"}]}),
+        ]));
+        assert_eq!(kinds(&d), ["tools"]);
+        let DisplayEntry::ToolGroup { steps, .. } = &d[0] else { panic!() };
+        assert!(matches!(&steps[0], ToolStep::Call { todos, .. } if todos.len() == 1 && todos[0].text == "a"));
     }
 
     #[test]
@@ -864,7 +1001,7 @@ mod tests {
     fn sub_agent_calls_and_requests_are_labelled() {
         let mut entries = seq(&[call("c1"), perm("r1")]);
         for e in &mut entries {
-            e.entry.subagent = Some(Subagent { label: Some("explorer".into()) });
+            e.entry.subagent = Some(Subagent { label: Some("explorer".into()), parent_call_id: None });
         }
         let d = build_display_entries(&entries);
         let DisplayEntry::ToolGroup { steps, .. } = &d[0] else { panic!() };

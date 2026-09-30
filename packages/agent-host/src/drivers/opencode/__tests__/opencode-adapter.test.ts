@@ -296,3 +296,25 @@ describe('opencodeEventToEntries', () => {
     expect(translate({ type: 'something-else' })).toEqual([]);
   });
 });
+
+describe('sub-agents, checklists and background tasks', () => {
+  const sub = { label: 'explore', parentCallId: 'task_1' };
+
+  it("tags a sub-agent's entries with the call that started it, and drops its prompt", () => {
+    const call = translate({ ...toolPart({ status: 'running', input: { filePath: '/a.ts' }, time: { start: 0 } }, 'read'), subagent: sub });
+    expect(call).toMatchObject([{ entryType: 'tool_call', subagent: sub }]);
+    const prompt = translate({ ...partMsg({ type: 'text', id: 't', sessionID: 'c', messageID: 'm', text: 'Go look' }, 'user'), subagent: sub });
+    expect(prompt).toEqual([]);
+  });
+
+  it('sends the checklist a todowrite call writes', () => {
+    const entries = translate(toolPart({ status: 'running', input: { todos: [{ content: 'Test', status: 'completed', priority: 'high', id: '1' }] }, time: { start: 0 } }, 'todowrite', 'td'));
+    expect(entries[1]).toMatchObject({ entryType: 'todos', callId: 'td', items: [{ text: 'Test', status: 'completed' }] });
+  });
+
+  it('reports a background sub-agent as a task', () => {
+    expect(translate({ type: 'task', taskId: 'child', title: 'Audit', status: 'stopped', callId: 'task_1' })).toMatchObject([
+      { entryType: 'background_task', taskId: 'child', kind: 'agent', title: 'Audit', status: 'stopped', callId: 'task_1' },
+    ]);
+  });
+});

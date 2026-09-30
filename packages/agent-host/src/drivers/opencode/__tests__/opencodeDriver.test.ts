@@ -201,6 +201,52 @@ describe('OpenCode permission asks', () => {
     expect(ctx.permissions).toEqual([]);
   });
 
+  describe("a sub-agent's child session", () => {
+    const taskPart = (status: string, metadata: Record<string, unknown>) => ({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_t', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_task', tool: 'task',
+          state: {
+            status, input: { description: 'Audit', prompt: 'look', subagent_type: 'explore' }, metadata,
+            time: { start: 1, ...(status === 'completed' ? { end: 2 } : {}) }, ...(status === 'completed' ? { output: 'ok', title: 'Audit' } : {}),
+          },
+        },
+      },
+    });
+    const childRead = {
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_c', sessionID: 'ses_child', messageID: 'msg_c', type: 'tool', callID: 'call_c', tool: 'read',
+          state: { status: 'running', input: { filePath: '/a.ts' }, time: { start: 1 } },
+        },
+      },
+    };
+    const childAsk = { ...ask, properties: { ...ask.properties, id: 'per_c', sessionID: 'ses_child', tool: { messageID: 'msg_c', callID: 'call_c' } } };
+
+    it('shows its work under the task call and has its asks answered', async () => {
+      const client = clientWith([taskPart('running', { sessionId: 'ses_child' }), childRead, childAsk]);
+      const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await ctx.ended();
+      const read = ctx.entries().find((e) => e.entryType === 'tool_call' && e.callId === 'call_c');
+      expect(read).toMatchObject({ subagent: { label: 'explore', parentCallId: 'call_task' } });
+      expect(ctx.permissions).toEqual([expect.objectContaining({ requestId: 'call_c', subagent: { label: 'explore', parentCallId: 'call_task' } })]);
+      expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_c', directory: '/tmp', reply: 'once' });
+    });
+
+    it('a sub-agent left in the background is a task until its session goes idle, and can be stopped', async () => {
+      const idle = { type: 'session.idle', properties: { sessionID: 'ses_child' } };
+      const ctx = start(clientWith([taskPart('running', { sessionId: 'ses_child' }), taskPart('completed', { sessionId: 'ses_child', background: true }), idle]));
+      await ctx.ended();
+      const tasks = ctx.entries().filter((e) => e.entryType === 'background_task');
+      expect(tasks).toMatchObject([
+        { taskId: 'ses_child', kind: 'agent', title: 'Audit', status: 'running', callId: 'call_task' },
+        { taskId: 'ses_child', status: 'completed' },
+      ]);
+    });
+  });
+
   it('a legacy permission.updated is answered on the per-session endpoint', async () => {
     const client = clientWith([{
       type: 'permission.updated',

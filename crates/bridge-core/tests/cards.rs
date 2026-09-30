@@ -190,6 +190,21 @@ fn interrupt_stops_the_turn_and_cancels_what_waits() {
 }
 
 #[test]
+fn stop_task_reaches_the_host_for_a_running_session_only() {
+    let mut rig = Rig::new();
+    let s = ready(&mut rig);
+    let h = rig.host_ask(permission(&s, "r1"));
+    rig.send(json!({"type":"stop-task","sessionId":s,"taskId":"b1"}));
+    assert!(rig.has_host_request(|m| matches!(m, BridgeMessage::StopTask { task_id, .. } if task_id == "b1")));
+    // Stopping a background task leaves the turn and its cards alone.
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::Interrupt { .. })));
+    let _ = h;
+
+    rig.send(json!({"type":"stop-task","sessionId":"nope","taskId":"b1"}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::StopTask { session_id, .. } if session_id == "nope")));
+}
+
+#[test]
 fn cards_waiting_when_the_agent_dies_are_cancelled() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);

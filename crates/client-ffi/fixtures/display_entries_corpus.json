@@ -1,4 +1,51 @@
 {
+  "activity": {
+    "agents": [
+      {
+        "callSeq": 17,
+        "current": "Reading relay.rs",
+        "failed": false,
+        "finished": false,
+        "groupSeq": 17,
+        "label": "Explore",
+        "title": "Audit the reconnect path",
+        "toolUses": 2
+      }
+    ],
+    "tasks": [
+      {
+        "callId": "tu-bg",
+        "status": "running",
+        "summary": null,
+        "taskId": "bg-1",
+        "taskKind": "shell",
+        "title": "npm run dev"
+      },
+      {
+        "callId": null,
+        "status": "failed",
+        "summary": "exit code 101",
+        "taskId": "bg-0",
+        "taskKind": "shell",
+        "title": "cargo watch"
+      }
+    ],
+    "todos": [
+      {
+        "activeText": "Auditing reconnects",
+        "status": "in_progress",
+        "text": "Audit reconnects"
+      },
+      {
+        "status": "pending",
+        "text": "Fix the backoff"
+      },
+      {
+        "status": "completed",
+        "text": "Read the pool"
+      }
+    ]
+  },
   "displayEntries": [
     {
       "kind": "userMessage",
@@ -43,7 +90,9 @@
       "steps": [
         {
           "activeVerb": "Reading",
+          "background": null,
           "callId": "tu-read",
+          "children": [],
           "diffs": [],
           "input": null,
           "isSubAgent": false,
@@ -55,13 +104,16 @@
           "step": "call",
           "subagent": null,
           "title": "pool.ts",
+          "todos": [],
           "toolKind": "read",
           "toolName": "Read",
           "verb": "Read"
         },
         {
           "activeVerb": "Searching",
+          "background": null,
           "callId": "tu-grep",
+          "children": [],
           "diffs": [],
           "input": null,
           "isSubAgent": true,
@@ -73,6 +125,7 @@
           "step": "call",
           "subagent": "explorer",
           "title": "SimplePool",
+          "todos": [],
           "toolKind": "search",
           "toolName": "Grep",
           "verb": "Searched"
@@ -123,7 +176,9 @@
       "steps": [
         {
           "activeVerb": "Editing",
+          "background": null,
           "callId": "tu-edit",
+          "children": [],
           "diffs": [
             {
               "added": 1,
@@ -156,13 +211,16 @@
           "step": "call",
           "subagent": null,
           "title": "packages/core/src/nostr/pool.ts",
+          "todos": [],
           "toolKind": "edit",
           "toolName": "Edit",
           "verb": "Edited"
         },
         {
           "activeVerb": "Running",
+          "background": null,
           "callId": "tu-test",
+          "children": [],
           "diffs": [],
           "input": "cargo test -p core \\\n  -- reconnect",
           "isSubAgent": false,
@@ -174,6 +232,7 @@
           "step": "call",
           "subagent": null,
           "title": "cargo test -p core \\…",
+          "todos": [],
           "toolKind": "execute",
           "toolName": "Bash",
           "verb": "Ran"
@@ -199,25 +258,159 @@
       "truncated": false
     },
     {
-      "kind": "error",
+      "added": 0,
+      "failed": 0,
+      "kind": "toolGroup",
+      "removed": 0,
       "seq": 17,
+      "steps": [
+        {
+          "activeVerb": "Agent working on",
+          "background": null,
+          "callId": "tu-agent",
+          "children": [
+            {
+              "activeVerb": "Searching",
+              "background": null,
+              "callId": "tu-sub-grep",
+              "children": [],
+              "diffs": [],
+              "input": null,
+              "isSubAgent": true,
+              "result": {
+                "isError": false,
+                "text": "7 matches"
+              },
+              "seq": 18,
+              "step": "call",
+              "subagent": "Explore",
+              "title": "reconnect",
+              "todos": [],
+              "toolKind": "search",
+              "toolName": "Grep",
+              "verb": "Searched"
+            },
+            {
+              "activeVerb": "Reading",
+              "background": null,
+              "callId": "tu-sub-read",
+              "children": [],
+              "diffs": [],
+              "input": null,
+              "isSubAgent": true,
+              "result": null,
+              "seq": 20,
+              "step": "call",
+              "subagent": "Explore",
+              "title": "relay.rs",
+              "todos": [],
+              "toolKind": "read",
+              "toolName": "Read",
+              "verb": "Read"
+            }
+          ],
+          "diffs": [],
+          "input": "Find every place a socket reconnects and report which ones reset the backoff.",
+          "isSubAgent": false,
+          "result": null,
+          "seq": 17,
+          "step": "call",
+          "subagent": null,
+          "title": "Audit the reconnect path",
+          "todos": [],
+          "toolKind": "agent",
+          "toolName": "Agent",
+          "verb": "Agent"
+        },
+        {
+          "activeVerb": "Planning",
+          "background": null,
+          "callId": "tu-todo",
+          "children": [],
+          "diffs": [],
+          "input": null,
+          "isSubAgent": false,
+          "result": {
+            "isError": false,
+            "text": "Todos updated"
+          },
+          "seq": 21,
+          "step": "call",
+          "subagent": null,
+          "title": "Update the plan",
+          "todos": [
+            {
+              "activeText": "Auditing reconnects",
+              "status": "in_progress",
+              "text": "Audit reconnects"
+            },
+            {
+              "status": "pending",
+              "text": "Fix the backoff"
+            },
+            {
+              "status": "completed",
+              "text": "Read the pool"
+            }
+          ],
+          "toolKind": "think",
+          "toolName": "TodoWrite",
+          "verb": "Planned"
+        },
+        {
+          "activeVerb": "Running",
+          "background": "running",
+          "callId": "tu-bg",
+          "children": [],
+          "diffs": [],
+          "input": null,
+          "isSubAgent": false,
+          "result": {
+            "isError": false,
+            "text": "Command running in background with ID: bg-1"
+          },
+          "seq": 24,
+          "step": "call",
+          "subagent": null,
+          "title": "npm run dev",
+          "todos": [],
+          "toolKind": "execute",
+          "toolName": "Bash",
+          "verb": "Ran"
+        }
+      ],
+      "subject": null,
+      "summary": "Ran an agent, updated the plan, ran a command"
+    },
+    {
+      "kind": "task",
+      "seq": 27,
+      "status": "failed",
+      "summary": "exit code 101",
+      "taskId": "bg-0",
+      "taskKind": "shell",
+      "title": "cargo watch"
+    },
+    {
+      "kind": "error",
+      "seq": 28,
       "text": "bridge disconnected"
     },
     {
       "kind": "status",
-      "seq": 18,
+      "seq": 29,
       "text": "status: idle"
     },
     {
       "kind": "notice",
       "notice": "session_restart",
-      "seq": 19,
+      "seq": 30,
       "text": "restarted"
     },
     {
       "isPlan": true,
       "kind": "agentMessage",
-      "seq": 20,
+      "seq": 31,
       "text": "1. Extract the reducer\n2. Wire the effects interpreter"
     },
     {
@@ -239,7 +432,7 @@
         }
       ],
       "requestId": "tu-plan",
-      "seq": 21
+      "seq": 32
     },
     {
       "answered": null,
@@ -261,7 +454,7 @@
         }
       ],
       "requestId": "tu-solo-question",
-      "seq": 22
+      "seq": 33
     },
     {
       "answered": null,
@@ -297,7 +490,7 @@
         }
       ],
       "requestId": "tu-question-group",
-      "seq": 23
+      "seq": 34
     },
     {
       "agentLabel": null,
@@ -322,7 +515,7 @@
       ],
       "reason": "Tests need a human while CI is red",
       "requestId": "tu-permission",
-      "seq": 25,
+      "seq": 36,
       "title": "cargo test",
       "toolKind": "execute",
       "toolName": "Bash"

@@ -158,6 +158,12 @@ export class AgentHost {
       case 'interrupt':
         await this.session(message.payload.sessionId).interrupt();
         return ack();
+      case 'stop-task': {
+        const session = this.session(message.payload.sessionId);
+        if (!session.stopTask) throw new Error('This agent cannot stop background tasks');
+        await session.stopTask(message.payload.taskId);
+        return ack();
+      }
       case 'set-option':
         await this.session(message.payload.sessionId).setOption(message.payload.option, message.payload.value);
         return ack();

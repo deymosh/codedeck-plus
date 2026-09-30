@@ -74,6 +74,10 @@ class ScriptedHandle implements SdkSessionHandle {
     this.efforts.push(level);
   }
   async interrupt(): Promise<void> {}
+  stopped: string[] = [];
+  async stopTask(taskId: string): Promise<void> {
+    this.stopped.push(taskId);
+  }
   probeReady(): Promise<void> {
     return this.probe;
   }

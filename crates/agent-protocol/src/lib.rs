@@ -64,6 +64,7 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"4","kind":"end-session","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"5","kind":"prompt","payload":{"sessionId":"s","text":"hi"}}));
         bridge_rt(json!({"v":1,"id":"6","kind":"interrupt","payload":{"sessionId":"s"}}));
+        bridge_rt(json!({"v":1,"id":"6b","kind":"stop-task","payload":{"sessionId":"s","taskId":"b1"}}));
         let set = bridge_rt(json!({"v":1,"id":"7","kind":"set-option","payload":{"sessionId":"s","option":"effort","value":"max"}}));
         assert!(matches!(set.message, BridgeMessage::SetOption { option: SessionOption::Effort, .. }));
         bridge_rt(json!({"v":1,"id":"8","kind":"list-models","payload":{"agent":"opencode"}}));
@@ -89,11 +90,11 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true,"mcp":true},
+            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}]
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true,"commands":false,"plugins":false,"mcp":false},
+            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false},
             "credentials":[],"unavailableReason":"opencode is not installed"
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));

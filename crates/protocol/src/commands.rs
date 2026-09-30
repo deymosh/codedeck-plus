@@ -219,6 +219,17 @@ pub struct SessionIdMsg {
     pub session_id: String,
 }
 
+/// Stop one of a session's background tasks (a `background_task` entry's
+/// `taskId`). No reply: the task's next entry says it stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StopTaskMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub session_id: String,
+    pub task_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFolderMsg {
@@ -384,6 +395,8 @@ pub enum PhoneToBridge {
     RefreshSessions(BareMsg),
     CloseSession(SessionIdMsg),
     Interrupt(SessionIdMsg),
+    /// Agents with `supports.tasks`.
+    StopTask(StopTaskMsg),
     CreateFolder(CreateFolderMsg),
     UploadFile(UploadFileMsg),
     UsageRequest(SessionIdMsg),

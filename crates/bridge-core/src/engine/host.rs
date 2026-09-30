@@ -43,6 +43,7 @@ pub(crate) enum HostCall {
     EndSession,
     Prompt { session_id: String },
     Interrupt,
+    StopTask,
     SetOption { session_id: String, option: SessionOption, value: String },
     ListModels { agent: String },
     GetUsage { session_id: String },
@@ -121,6 +122,7 @@ impl Engine {
                     | HostCall::StartSession { .. }
                     | HostCall::Prompt { .. }
                     | HostCall::Interrupt
+                    | HostCall::StopTask
                     | HostCall::EndSession
             ) {
                 self.on_reply(call, Err("the agent host stopped".into()));
@@ -187,7 +189,7 @@ impl Engine {
                     log::warn!("[Engine] Input for {session_id} was refused: {err}");
                 }
             }
-            HostCall::Interrupt | HostCall::EndSession => {
+            HostCall::Interrupt | HostCall::StopTask | HostCall::EndSession => {
                 if let Err(err) = result {
                     log::warn!("[Engine] The agent host refused a request: {err}");
                 }
@@ -743,6 +745,18 @@ impl Engine {
         }
         self.cancel_cards(session_id, "Interrupted by user");
         self.list_dirty = true;
+    }
+
+    /// Stop one background task; the agent's next entry for it says so.
+    pub(super) fn stop_task(&mut self, session_id: &str, task_id: &str) {
+        if !self.is_running(session_id) {
+            return;
+        }
+        log::info!("[Engine] Stopping task {task_id} of session {session_id}");
+        self.call(
+            HostCall::StopTask,
+            BridgeMessage::StopTask { session_id: session_id.to_string(), task_id: task_id.to_string() },
+        );
     }
 
     // --- cards ---

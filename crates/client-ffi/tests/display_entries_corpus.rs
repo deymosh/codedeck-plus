@@ -13,6 +13,7 @@
 //! then copy the file to the Android test resources path above and re-run
 //! both sides' tests.
 
+use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, SeqEntry,
 };
@@ -23,7 +24,9 @@ use serde_json::json;
 /// kind: a user message, agent text, tool groups (thinking alone, split from
 /// the next by the agent's narration; a call whose result lands after a
 /// permission card beside a sub-agent call; an edit carrying its diff and a
-/// failed multi-line command), a diff card no call claims, an error, a
+/// failed multi-line command; a sub-agent with one finished and one running
+/// step, a checklist and a background command), a diff card no call claims,
+/// a background task that failed, an error, a
 /// status line, a notice, a plan, a plan approval, a single question, a
 /// two-question ask, a resolved permission and a pending one a hook asked
 /// for.
@@ -56,6 +59,24 @@ fn corpus() -> Vec<SeqEntry> {
             {"type":"del","text":"version = \"0.1.0\""},
             {"type":"add","text":"version = \"0.2.0\""}
         ]}),
+        json!({"entryType":"tool_call","callId":"tu-agent","toolName":"Agent","kind":"agent","title":"Audit the reconnect path",
+            "input":"Find every place a socket reconnects and report which ones reset the backoff."}),
+        json!({"entryType":"tool_call","callId":"tu-sub-grep","toolName":"Grep","kind":"search","title":"reconnect",
+            "subagent":{"label":"Explore","parentCallId":"tu-agent"}}),
+        json!({"entryType":"tool_result","callId":"tu-sub-grep","text":"7 matches"}),
+        json!({"entryType":"tool_call","callId":"tu-sub-read","toolName":"Read","kind":"read","title":"relay.rs",
+            "subagent":{"label":"Explore","parentCallId":"tu-agent"}}),
+        json!({"entryType":"tool_call","callId":"tu-todo","toolName":"TodoWrite","kind":"think","title":"Update the plan"}),
+        json!({"entryType":"todos","callId":"tu-todo","items":[
+            {"text":"Audit reconnects","status":"in_progress","activeText":"Auditing reconnects"},
+            {"text":"Fix the backoff","status":"pending"},
+            {"text":"Read the pool","status":"completed"}
+        ]}),
+        json!({"entryType":"tool_result","callId":"tu-todo","text":"Todos updated"}),
+        json!({"entryType":"tool_call","callId":"tu-bg","toolName":"Bash","kind":"execute","title":"npm run dev"}),
+        json!({"entryType":"background_task","taskId":"bg-1","kind":"shell","title":"npm run dev","status":"running","callId":"tu-bg"}),
+        json!({"entryType":"tool_result","callId":"tu-bg","text":"Command running in background with ID: bg-1"}),
+        json!({"entryType":"background_task","taskId":"bg-0","kind":"shell","title":"cargo watch","status":"failed","summary":"exit code 101"}),
         json!({"entryType":"error","text":"bridge disconnected"}),
         json!({"entryType":"status","text":"status: idle"}),
         json!({"entryType":"notice","kind":"session_restart","text":"restarted"}),
@@ -92,9 +113,11 @@ fn corpus_json() -> String {
     let entries = corpus();
     let display = build_display_entries(&entries);
     let pending = find_pending_permission(&entries, None);
+    let activity = build_activity(&entries, &display);
     let combined = json!({
         "displayEntries": display,
         "pendingPermission": pending,
+        "activity": activity,
     });
     serde_json::to_string_pretty(&combined).unwrap()
 }

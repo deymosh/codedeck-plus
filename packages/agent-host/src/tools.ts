@@ -3,7 +3,7 @@
  * agent-neutral terms: a tool kind, a one-line title, the files touched, and
  * the standard permission choices.
  */
-import type { PermissionOption, ToolKind } from './types';
+import type { PermissionOption, TodoItem, ToolKind } from './types';
 
 const TOOL_KINDS: Record<string, ToolKind> = {
   read: 'read',
@@ -121,6 +121,32 @@ export function toolInput(toolName: string, input: Record<string, unknown>): str
   }
   if (!text || text === title) return undefined;
   return text.length > MAX_TOOL_INPUT_CHARS ? text.slice(0, MAX_TOOL_INPUT_CHARS) + '…' : text;
+}
+
+const TODO_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed', 'cancelled']);
+
+/**
+ * The checklist a todo tool writes (Claude Code's `TodoWrite`, OpenCode's
+ * `todowrite`: `todos: [{content, status, activeForm?}]`), or `null` when
+ * the input holds none. An item with an unknown status counts as pending.
+ */
+export function todosOf(input: Record<string, unknown>): TodoItem[] | null {
+  if (!Array.isArray(input.todos)) return null;
+  const items: TodoItem[] = [];
+  for (const raw of input.todos as unknown[]) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const todo = raw as Record<string, unknown>;
+    const text = str(todo.content);
+    if (!text) continue;
+    const status = str(todo.status);
+    const active = str(todo.activeForm);
+    items.push({
+      text,
+      status: (TODO_STATUSES.has(status) ? status : 'pending') as TodoItem['status'],
+      ...(active && active !== text ? { activeText: active } : {}),
+    });
+  }
+  return items;
 }
 
 /** The files a tool call touches, when its input names them. */

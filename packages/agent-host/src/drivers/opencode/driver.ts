@@ -34,7 +34,16 @@ import { parseSlashCommand, slashCommand } from '../../commands';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
 import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import { newTranslateContext } from '../../transcript';
-import type { AgentInfo, ModelEntry, QuestionSpec, SessionOption, SlashCommand, StartSession, UsageData } from '../../types';
+import type {
+  AgentInfo,
+  ModelEntry,
+  QuestionSpec,
+  SessionOption,
+  SlashCommand,
+  StartSession,
+  Subagent,
+  UsageData,
+} from '../../types';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
@@ -83,6 +92,21 @@ interface NormalizedPermission {
   title: string;
   description?: string;
   reply: (response: 'once' | 'reject') => Promise<void>;
+}
+
+/** A sub-agent's child session, as its `task` call described it. */
+interface ChildSession {
+  callId: string;
+  title: string;
+  label?: string;
+  /** The sub-agent was left running in the background, and has not ended. */
+  background: boolean;
+  /** The user asked it to stop: its end is a stop, not a completion. */
+  stopping: boolean;
+}
+
+function subagentOf(child: ChildSession): Subagent {
+  return { ...(child.label ? { label: child.label } : {}), parentCallId: child.callId };
 }
 
 /** The tool OpenCode uses to ask the user questions. Its own call is not
@@ -277,6 +301,11 @@ export class OpenCodeSession implements DriverSession {
    *  theory refire; a second reply is rejected by the server anyway, but this
    *  avoids the wasted round trip and a second card. */
   private readonly answeredAsks = new Set<string>();
+  /** Sub-agent sessions this session started (OpenCode's `task` tool runs
+   *  each in a child session), by session id: the call that started it, the
+   *  sub-agent's kind, and — for one left running in the background — that
+   *  it is a task, and whether the user asked it to stop. */
+  private readonly children = new Map<string, ChildSession>();
   /** The providers' context limits, fetched on the first step that used
    *  tokens; dropped again when the fetch came back empty, so a server that
    *  was briefly unreachable is asked again. */
@@ -409,7 +438,12 @@ export class OpenCodeSession implements DriverSession {
       switch (event.type) {
         case 'message.updated': {
           const info = event.properties.info;
-          if (info.sessionID !== sessionId) continue;
+          if (info.sessionID !== sessionId) {
+            // A sub-agent's messages: their roles, for its parts; its
+            // errors and context are its own.
+            if (this.children.has(info.sessionID)) this.roles.set(info.id, info.role);
+            continue;
+          }
           this.roles.set(info.id, info.role);
           if (info.role === 'assistant' && info.error) {
             this.deliver({ type: 'error', content: formatOpenCodeError(info.error) });
@@ -419,19 +453,26 @@ export class OpenCodeSession implements DriverSession {
         }
         case 'message.part.updated': {
           const part = event.properties.part;
-          if (part.sessionID !== sessionId) continue;
-          if (part.type === 'tool') this.toolParts.set(part.callID, part);
+          const child = this.children.get(part.sessionID);
+          if (part.sessionID !== sessionId && !child) continue;
+          if (part.type === 'tool') {
+            this.toolParts.set(part.callID, part);
+            this.noteSubagent(part);
+          }
           if (!this.shouldEmitPart(part)) continue;
           if (part.type === 'tool' && part.state.status === 'completed') {
             for (const diff of toolCallDiffs(part.tool, part.state.input, part.state.metadata)) {
               this.toolDiffedFiles.add(diff.path);
             }
           }
-          this.pushPart(part);
+          this.pushPart(part, child);
           break;
         }
         case 'session.idle': {
-          if (event.properties.sessionID !== sessionId) continue;
+          if (event.properties.sessionID !== sessionId) {
+            this.childEnded(event.properties.sessionID, 'completed');
+            continue;
+          }
           this.deliver({ type: 'idle' });
           if (!this.ended) this.ctx.emit({ type: 'turn', state: 'idle' });
           break;
@@ -439,7 +480,10 @@ export class OpenCodeSession implements DriverSession {
         // Turn-boundary signal: `busy` starts a turn. `idle` overlaps with
         // 'session.idle' above; reporting the same state twice is harmless.
         case 'session.status': {
-          if (event.properties.sessionID !== sessionId) continue;
+          if (event.properties.sessionID !== sessionId) {
+            if (event.properties.status.type === 'idle') this.childEnded(event.properties.sessionID, 'completed');
+            continue;
+          }
           const status = event.properties.status.type;
           if (status !== 'busy' && status !== 'idle') break;
           if (!this.ended) this.ctx.emit({ type: 'turn', state: status === 'busy' ? 'running' : 'idle' });
@@ -452,7 +496,10 @@ export class OpenCodeSession implements DriverSession {
           break;
         }
         case 'session.error': {
-          if (event.properties.sessionID && event.properties.sessionID !== sessionId) continue;
+          if (event.properties.sessionID && event.properties.sessionID !== sessionId) {
+            this.childEnded(event.properties.sessionID, 'failed');
+            continue;
+          }
           if (event.properties.error) {
             this.deliver({ type: 'error', content: formatOpenCodeError(event.properties.error) });
           }
@@ -460,21 +507,21 @@ export class OpenCodeSession implements DriverSession {
         }
         case 'permission.asked': {
           const ask = event.properties;
-          if (ask.sessionID !== sessionId) continue;
+          if (ask.sessionID !== sessionId && !this.children.has(ask.sessionID)) continue;
           this.showCall(ask.tool?.callID);
-          this.handlePermission(this.fromAsk(client, ask));
+          this.handlePermission(this.fromAsk(client, ask), this.children.get(ask.sessionID));
           break;
         }
         case 'permission.updated': {
           const permission = event.properties;
-          if (permission.sessionID !== sessionId) continue;
+          if (permission.sessionID !== sessionId && !this.children.has(permission.sessionID)) continue;
           this.showCall(permission.callID);
-          this.handlePermission(this.fromLegacyPermission(client, permission));
+          this.handlePermission(this.fromLegacyPermission(client, permission), this.children.get(permission.sessionID));
           break;
         }
         case 'question.asked': {
           const ask = event.properties;
-          if (ask.sessionID !== sessionId) continue;
+          if (ask.sessionID !== sessionId && !this.children.has(ask.sessionID)) continue;
           this.handleQuestion(client, ask);
           break;
         }
@@ -511,9 +558,50 @@ export class OpenCodeSession implements DriverSession {
     });
   }
 
-  private pushPart(part: Part): void {
+  private pushPart(part: Part, child?: ChildSession): void {
     const role = this.roles.get(part.messageID) ?? 'assistant';
-    this.deliver({ type: 'part', part, role });
+    this.deliver({ type: 'part', part, role, ...(child ? { subagent: subagentOf(child) } : {}) });
+  }
+
+  /**
+   * A `task` call names the child session its sub-agent runs in
+   * (`metadata.sessionId`) as soon as it starts, before the sub-agent does
+   * anything: from then on that session's events are this one's. A call
+   * that completes with `metadata.background` left the sub-agent running on
+   * its own — a background task, until the child goes idle.
+   */
+  private noteSubagent(part: ToolPart): void {
+    if (part.tool !== 'task' || part.state.status === 'pending') return;
+    const metadata = (part.state as { metadata?: Record<string, unknown> }).metadata;
+    const childId = typeof metadata?.sessionId === 'string' ? metadata.sessionId : '';
+    if (!childId) return;
+    let child = this.children.get(childId);
+    if (!child) {
+      const input = (part.state.input ?? {}) as Record<string, unknown>;
+      const label = typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : undefined;
+      const title = typeof input.description === 'string' && input.description ? input.description : 'Sub-agent';
+      child = { callId: part.callID, title, ...(label ? { label } : {}), background: false, stopping: false };
+      this.children.set(childId, child);
+    }
+    if (part.state.status === 'completed' && metadata?.background === true && !child.background) {
+      child.background = true;
+      this.deliver({ type: 'task', taskId: childId, title: child.title, status: 'running', callId: child.callId });
+    }
+  }
+
+  /** A child session went idle or failed: a background sub-agent's task
+   *  ended (stopped, when the user asked for that). */
+  private childEnded(childId: string, status: 'completed' | 'failed'): void {
+    const child = this.children.get(childId);
+    if (!child?.background) return;
+    child.background = false;
+    this.deliver({
+      type: 'task',
+      taskId: childId,
+      title: child.title,
+      status: child.stopping ? 'stopped' : status,
+      callId: child.callId,
+    });
   }
 
   /**
@@ -599,7 +687,7 @@ export class OpenCodeSession implements DriverSession {
    * mode, otherwise sent to the phone. Always answered — OpenCode must never
    * wait on a reply that is not coming.
    */
-  private handlePermission(permission: NormalizedPermission): void {
+  private handlePermission(permission: NormalizedPermission, child?: ChildSession): void {
     if (this.answeredAsks.has(permission.id)) return;
     this.answeredAsks.add(permission.id);
     const reply = (response: 'once' | 'reject'): void => {
@@ -622,6 +710,7 @@ export class OpenCodeSession implements DriverSession {
         locations: toolLocations(permission.input),
         rawInput: permission.input,
         options: [PERMISSION_ALLOW, PERMISSION_DENY],
+        ...(child ? { subagent: subagentOf(child) } : {}),
       })
       .then((outcome) => reply(outcome.outcome === 'selected' && outcome.optionId === PERMISSION_ALLOW.id ? 'once' : 'reject'))
       .catch(() => reply('reject'));
@@ -667,9 +756,8 @@ export class OpenCodeSession implements DriverSession {
       toolUseID: permission.callID ?? permission.id,
       title: permission.title,
       reply: async (response) => {
-        const { session } = await this.ready;
         await client.permission.respond({
-          sessionID: session.id,
+          sessionID: permission.sessionID,
           permissionID: permission.id,
           directory: this.cwd,
           response,
@@ -810,6 +898,17 @@ export class OpenCodeSession implements DriverSession {
     }
   }
 
+  /** Stop a sub-agent left running in the background (its task id is its
+   *  child session's id). */
+  async stopTask(taskId: string): Promise<void> {
+    const child = this.children.get(taskId);
+    if (!child?.background) throw new Error('No such task is running');
+    child.stopping = true;
+    const { client } = await this.ready;
+    const { error } = await client.session.abort({ sessionID: taskId, directory: this.cwd });
+    if (error) throw new Error(`OpenCode could not stop the task: ${JSON.stringify(error)}`);
+  }
+
   async getUsage(): Promise<UsageData | null> {
     return null;
   }
@@ -946,7 +1045,7 @@ export class OpenCodeDriver implements Driver {
       defaultMode: DEFAULT_MODE,
       // No subscription usage; sessions always use the providers configured
       // on the OpenCode server itself.
-      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true },
+      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true, tasks: true },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };

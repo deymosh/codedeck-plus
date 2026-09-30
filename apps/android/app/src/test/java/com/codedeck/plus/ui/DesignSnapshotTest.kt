@@ -72,7 +72,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             TranscriptList(
                 displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
                 syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = true,
-                dispatch = {}, modifier = Modifier.weight(1f),
+                activity = DesignFixtures.activity(), canStopTasks = true, dispatch = {}, modifier = Modifier.weight(1f),
             )
             QuickPromptStrip(quickPrompts) {}
             SessionControlsBar(
@@ -91,7 +91,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             TranscriptList(
                 displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
                 syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = false,
-                dispatch = {}, modifier = Modifier.weight(1f),
+                activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.weight(1f),
             )
             SlashCommandMenu(DesignFixtures.commands, "co") {}
             SessionControlsBar(
@@ -109,21 +109,21 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         TranscriptList(
             displayEntries = DesignFixtures.transcript().take(7), outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
-            running = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            running = false, activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
     "transcript_plan" to {
         TranscriptList(
             displayEntries = DesignFixtures.waitingCards.take(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
-            running = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            running = false, activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
     "transcript_cards" to {
         TranscriptList(
             displayEntries = DesignFixtures.waitingCards.drop(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
-            running = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            running = false, activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
     "new_session" to {
