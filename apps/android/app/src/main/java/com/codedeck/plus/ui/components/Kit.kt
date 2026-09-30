@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -408,6 +410,76 @@ fun Chip(text: String, color: Color = Tokens.TextMuted, border: Color = Tokens.B
             .border(1.dp, border, RoundedCornerShape(Tokens.RadiusPill))
             .padding(horizontal = Tokens.Space2, vertical = 2.dp),
     )
+}
+
+/**
+ * Lines a change added and removed, as one small pill: the green half says
+ * `+added`, the red half `−removed`. Shown wherever a change is summed up
+ * (a tool group, one of its calls, a changed file).
+ */
+@Composable
+fun DiffStat(added: Int, removed: Int, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(Tokens.RadiusSm)
+    Row(modifier.clip(shape)) {
+        Text(
+            "+$added",
+            color = Tokens.Success,
+            fontSize = Tokens.TextXs,
+            fontFamily = Tokens.FontMono,
+            maxLines = 1,
+            modifier = Modifier.background(Tokens.Success.copy(alpha = 0.14f)).padding(horizontal = 5.dp, vertical = 1.dp),
+        )
+        Text(
+            "−$removed",
+            color = Tokens.Danger,
+            fontSize = Tokens.TextXs,
+            fontFamily = Tokens.FontMono,
+            maxLines = 1,
+            modifier = Modifier.background(Tokens.Danger.copy(alpha = 0.14f)).padding(horizontal = 5.dp, vertical = 1.dp),
+        )
+    }
+}
+
+/**
+ * Text as a program printed it — a command, its output, a file — on the
+ * input surface in the monospace face. Lines never wrap (a wrapped line
+ * breaks indentation and columns); the block scrolls sideways as one.
+ * [lineNumbers] adds a gutter counting from [firstLine].
+ */
+@Composable
+fun CodeBlock(text: String, modifier: Modifier = Modifier, lineNumbers: Boolean = false, firstLine: Int = 1, color: Color = Tokens.Text) {
+    val lines = text.trimEnd('\n').split('\n')
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Tokens.RadiusMd))
+            .background(Tokens.SurfaceInput)
+            .padding(vertical = Tokens.Space3),
+    ) {
+        if (lineNumbers) {
+            Text(
+                lines.indices.joinToString("\n") { (it + firstLine).toString() },
+                color = Tokens.TextDim,
+                fontSize = Tokens.TextSm,
+                fontFamily = Tokens.FontMono,
+                textAlign = TextAlign.End,
+                softWrap = false,
+                modifier = Modifier.padding(start = Tokens.Space3, end = Tokens.Space2),
+            )
+        }
+        SelectionContainer {
+            Text(
+                lines.joinToString("\n"),
+                color = color,
+                fontSize = Tokens.TextSm,
+                fontFamily = Tokens.FontMono,
+                softWrap = false,
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(start = if (lineNumbers) 0.dp else Tokens.Space4, end = Tokens.Space4),
+            )
+        }
+    }
 }
 
 /** The one filled, white button a page's main action gets. */

@@ -25,6 +25,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DiffLine
 
@@ -47,6 +48,39 @@ private fun linePrefix(type: String): String = when (type) {
     "add" -> "+"
     "del" -> "-"
     else -> " "
+}
+
+/**
+ * A change's lines, coloured and prefixed `+` / `-`. Lines never wrap — a
+ * wrapped code line breaks the +/- column and the indentation — so the
+ * block scrolls sideways instead, as one unit. It is as wide as its widest
+ * line (at least its container), so an added or removed line's tint runs
+ * the full width of the block.
+ */
+@Composable
+fun DiffLines(lines: List<DiffLine>, modifier: Modifier = Modifier, fontSize: TextUnit = Tokens.TextXs) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .horizontalScroll(rememberScrollState())
+                .widthIn(min = maxWidth)
+                .width(IntrinsicSize.Max),
+        ) {
+            lines.forEach { line: DiffLine ->
+                Text(
+                    linePrefix(line.type) + line.text,
+                    color = lineColor(line.type),
+                    fontFamily = Tokens.FontMono,
+                    fontSize = fontSize,
+                    softWrap = false,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(lineTint(line.type))
+                        .padding(horizontal = Tokens.Space1),
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -84,32 +118,7 @@ fun DiffRow(path: String, lines: List<DiffLine>, truncated: Boolean, expanded: B
             )
             HorizontalDivider(Modifier.padding(vertical = Tokens.Space1), color = Tokens.Border)
         }
-        // Lines never wrap — a wrapped code line breaks the +/- column and the
-        // indentation — so the block scrolls sideways instead, as one unit.
-        // It is as wide as its widest line (at least the card), so an added
-        // or removed line's tint runs the full width of the block.
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            Column(
-                Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .widthIn(min = maxWidth)
-                    .width(IntrinsicSize.Max),
-            ) {
-                visible.forEach { line: DiffLine ->
-                    Text(
-                        linePrefix(line.type) + line.text,
-                        color = lineColor(line.type),
-                        fontFamily = Tokens.FontMono,
-                        fontSize = Tokens.TextXs,
-                        softWrap = false,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(lineTint(line.type))
-                            .padding(horizontal = Tokens.Space1),
-                    )
-                }
-            }
-        }
+        DiffLines(visible)
         if (overflow > 0) {
             HorizontalDivider(Modifier.padding(top = Tokens.Space1), color = Tokens.Border)
             // The whole full-width strip is the tap target, label centered.

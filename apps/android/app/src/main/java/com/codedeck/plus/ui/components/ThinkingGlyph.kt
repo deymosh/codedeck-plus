@@ -1,5 +1,11 @@
 package com.codedeck.plus.ui.components
 
+import androidx.compose.animation.core.EaseInOut
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,4 +53,21 @@ fun ThinkingGlyph(
         textAlign = TextAlign.Center,
         modifier = modifier.width(18.dp),
     )
+}
+
+/** An alpha that breathes between [min] and [max], for a line that is
+ *  alive (the running turn's activity, a request still in flight). */
+@Composable
+fun pulsingAlpha(min: Float, max: Float, halfPeriodMs: Int): Float {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val alpha by transition.animateFloat(
+        initialValue = min,
+        targetValue = max,
+        animationSpec = infiniteRepeatable(
+            animation = tween(halfPeriodMs, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulseAlpha",
+    )
+    return alpha
 }

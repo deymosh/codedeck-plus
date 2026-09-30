@@ -32,49 +32,63 @@ class DisplayEntriesFixtureTest {
         val entries = parseDisplayEntries(root.getValue("displayEntries").toString())
         val pending = parsePendingPermission(root.getValue("pendingPermission").toString())
 
-        assertEquals(13, entries.size)
+        assertEquals(16, entries.size)
         assertTrue(entries[0] is DisplayEntry.UserMessage)
         assertEquals(false, (entries[1] as DisplayEntry.AgentMessage).isPlan)
 
-        val toolGroup = entries[2] as DisplayEntry.ToolGroup
-        assertEquals(4, toolGroup.steps.size)
-        assertEquals("3 actions", toolGroup.summary)
-        assertTrue(toolGroup.steps[0] is ToolStep.Thinking)
-        assertTrue(toolGroup.steps[1] is ToolStep.Text)
-        val grep = toolGroup.steps[3] as ToolStep.Call
+        // Thinking alone, then the agent's narration splits it from the calls.
+        val thought = entries[2] as DisplayEntry.ToolGroup
+        assertEquals("Thought", thought.summary)
+        assertTrue(thought.steps.single() is ToolStep.Thinking)
+        assertEquals("Reading the pool first.", (entries[3] as DisplayEntry.AgentMessage).text)
+
+        val toolGroup = entries[4] as DisplayEntry.ToolGroup
+        assertEquals("Read a file, searched for a pattern", toolGroup.summary)
+        val grep = toolGroup.steps[1] as ToolStep.Call
         assertEquals("search", grep.toolKind)
+        assertEquals("Searched", grep.verb)
         assertEquals("explorer", grep.subagent)
         assertEquals("3 matches", grep.result?.text)
 
-        val resolved = entries[3] as DisplayEntry.PermissionRequest
+        val resolved = entries[5] as DisplayEntry.PermissionRequest
         assertEquals("Allowed", resolved.answered)
         assertEquals(listOf(false, false, true), resolved.options.map { it.isReject })
 
-        val diff = entries[4] as DisplayEntry.Diff
-        assertEquals("packages/core/src/nostr/pool.ts", diff.path)
-        assertEquals(3, diff.lines.size)
-        assertEquals("del", diff.lines[1].type)
+        // An edit carries its diff; a failed command its whole input.
+        val work = entries[6] as DisplayEntry.ToolGroup
+        assertEquals("Edited a file, ran a command", work.summary)
+        assertEquals(Triple(1, 1, 1), Triple(work.added, work.removed, work.failed))
+        val edit = work.steps[0] as ToolStep.Call
+        assertEquals("packages/core/src/nostr/pool.ts", edit.diffs.single().path)
+        assertEquals("del", edit.diffs.single().lines[1].type)
+        val test = work.steps[1] as ToolStep.Call
+        assertEquals("cargo test -p core \\\n  -- reconnect", test.input)
+        assertTrue(test.failed)
 
-        assertTrue(entries[5] is DisplayEntry.Error)
-        assertTrue(entries[6] is DisplayEntry.Status)
-        assertEquals("session_restart", (entries[7] as DisplayEntry.Notice).notice)
-        assertEquals(true, (entries[8] as DisplayEntry.AgentMessage).isPlan)
+        val diff = entries[7] as DisplayEntry.Diff
+        assertEquals("Cargo.lock", diff.path)
+        assertEquals(2, diff.lines.size)
 
-        val planApproval = entries[9] as DisplayEntry.PlanApproval
+        assertTrue(entries[8] is DisplayEntry.Error)
+        assertTrue(entries[9] is DisplayEntry.Status)
+        assertEquals("session_restart", (entries[10] as DisplayEntry.Notice).notice)
+        assertEquals(true, (entries[11] as DisplayEntry.AgentMessage).isPlan)
+
+        val planApproval = entries[12] as DisplayEntry.PlanApproval
         assertEquals("tu-plan", planApproval.requestId)
         assertEquals(3, planApproval.options.size)
         assertEquals("Stay in plan mode and send feedback", planApproval.options[2].description)
 
-        val question = entries[10] as DisplayEntry.Question
+        val question = entries[13] as DisplayEntry.Question
         assertEquals(1, question.questions.size)
         assertEquals("Direction", question.questions[0].header)
         assertEquals(2, question.questions[0].options.size)
 
-        val questionGroup = entries[11] as DisplayEntry.Question
+        val questionGroup = entries[14] as DisplayEntry.Question
         assertEquals(listOf("Scope", "Timeline"), questionGroup.questions.map { it.header })
         assertEquals(true, questionGroup.questions[1].multiSelect)
 
-        val permission = entries[12] as DisplayEntry.PermissionRequest
+        val permission = entries[15] as DisplayEntry.PermissionRequest
         assertEquals("Bash", permission.toolName)
         assertEquals("execute", permission.toolKind)
         assertEquals("tu-permission", permission.requestId)

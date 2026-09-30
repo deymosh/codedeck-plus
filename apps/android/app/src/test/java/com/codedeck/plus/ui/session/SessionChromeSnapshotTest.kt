@@ -22,8 +22,8 @@ import uniffi.client_ffi.UniffiUsageWindow
 
 /**
  * The session screen's chrome on a narrow (360dp) phone, where it has to
- * fit: the top bar with a long title, the running-turn line, the failed-send
- * line, and the controls bar above the composer.
+ * fit: the top bar with a long title, the failed-send line, the controls
+ * bar, and the composer while a turn runs (its button is Stop).
  */
 class SessionChromeSnapshotTest {
 
@@ -48,7 +48,6 @@ class SessionChromeSnapshotTest {
                             onBack = {},
                         )
                         Spacer(Modifier.height(120.dp))
-                        ThinkingIndicator(onStop = {})
                         SendFailedBar(
                             text = "Also make sure the reconnect backoff resets after a clean close",
                             failedCount = 2,
@@ -78,6 +77,10 @@ class SessionChromeSnapshotTest {
                                 sessionCostUsd = null,
                                 fetchedAt = "2026-09-23T10:00:00Z",
                             ),
+                        )
+                        Composer(
+                            draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
+                            canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
                         )
                     }
                 }

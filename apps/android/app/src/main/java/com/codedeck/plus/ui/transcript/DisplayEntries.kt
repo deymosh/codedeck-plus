@@ -58,6 +58,17 @@ data class QuestionView(
 @Serializable
 data class ToolResultView(val text: String, val isError: Boolean = false)
 
+/** One file a call changed, with its lines and how many it added and
+ *  removed. */
+@Serializable
+data class FileDiffView(
+    val path: String,
+    val lines: List<DiffLine>,
+    val truncated: Boolean = false,
+    val added: Int = 0,
+    val removed: Int = 0,
+)
+
 /** One step inside a collapsed tool group. Tagged by its own `step` field,
  *  since `kind` is the row's discriminant. */
 @OptIn(ExperimentalSerializationApi::class)
@@ -67,7 +78,8 @@ sealed class ToolStep {
     abstract val seq: Long
 
     /** A tool call and, once it landed, its result. `toolKind` is the
-     *  normalized kind (`read`, `edit`, `execute`, …). */
+     *  normalized kind (`read`, `edit`, `execute`, `agent`, …); `verb` /
+     *  `activeVerb` name what it did / is doing (`Ran` / `Running`). */
     @Serializable
     @SerialName("call")
     data class Call(
@@ -76,10 +88,18 @@ sealed class ToolStep {
         val toolName: String,
         val toolKind: String,
         val title: String,
+        val input: String? = null,
+        val verb: String,
+        val activeVerb: String,
         val subagent: String? = null,
         val isSubAgent: Boolean = false,
         val result: ToolResultView? = null,
-    ) : ToolStep()
+        val diffs: List<FileDiffView> = emptyList(),
+    ) : ToolStep() {
+        val added: Int get() = diffs.sumOf { it.added }
+        val removed: Int get() = diffs.sumOf { it.removed }
+        val failed: Boolean get() = result?.isError == true
+    }
 
     /** A result whose call is not in the transcript. */
     @Serializable
@@ -90,7 +110,7 @@ sealed class ToolStep {
     @SerialName("thinking")
     data class Thinking(override val seq: Long, val text: String, val redacted: Boolean = false) : ToolStep()
 
-    /** Agent text written alongside tool calls. */
+    /** Text a sub-agent wrote while it worked. */
     @Serializable
     @SerialName("text")
     data class Text(override val seq: Long, val text: String) : ToolStep()
@@ -130,13 +150,25 @@ sealed class DisplayEntry {
     @SerialName("agentMessage")
     data class AgentMessage(override val seq: Long, val text: String, val isPlan: Boolean = false) : DisplayEntry()
 
+    /** A run of tool activity. `summary` says what it did ("Ran 3
+     *  commands, read a file"); a lone call is its verb, with `subject`
+     *  what it acted on. `added` / `removed` total its changes, `failed`
+     *  counts calls whose result is an error. */
     @Serializable
     @SerialName("toolGroup")
     data class ToolGroup(
         override val seq: Long,
         val steps: List<ToolStep>,
         val summary: String,
-    ) : DisplayEntry()
+        val subject: String? = null,
+        val added: Int = 0,
+        val removed: Int = 0,
+        val failed: Int = 0,
+    ) : DisplayEntry() {
+        /** The call still waiting for its result, latest first. */
+        val runningCall: ToolStep.Call?
+            get() = steps.lastOrNull { it is ToolStep.Call && it.result == null } as ToolStep.Call?
+    }
 
     /** Standalone — never absorbed into a tool group; the point of a diff
      *  card is to be seen. */

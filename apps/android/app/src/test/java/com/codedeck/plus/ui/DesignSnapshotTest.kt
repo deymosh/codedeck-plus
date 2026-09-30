@@ -35,7 +35,6 @@ import com.codedeck.plus.ui.session.QuickPromptStrip
 import com.codedeck.plus.ui.session.SessionControlsBar
 import com.codedeck.plus.ui.session.SessionTopBar
 import com.codedeck.plus.ui.session.SlashCommandMenu
-import com.codedeck.plus.ui.session.ThinkingIndicator
 import com.codedeck.plus.ui.theme.CodeDeckTheme
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.TranscriptList
@@ -72,10 +71,9 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             SessionTopBar(title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "running", onBack = {})
             TranscriptList(
                 displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
-                syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), dispatch = {},
-                modifier = Modifier.weight(1f),
+                syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = true,
+                dispatch = {}, modifier = Modifier.weight(1f),
             )
-            ThinkingIndicator(onStop = {})
             QuickPromptStrip(quickPrompts) {}
             SessionControlsBar(
                 effort = "high", efforts = claude.efforts, modeLabel = "Accept edits", modePending = false, model = "claude-opus-5-5",
@@ -83,7 +81,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             )
             Composer(
                 draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
-                canSend = false, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
+                canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
             )
         }
     },
@@ -92,8 +90,8 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             SessionTopBar(title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "idle", onBack = {})
             TranscriptList(
                 displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
-                syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), dispatch = {},
-                modifier = Modifier.weight(1f),
+                syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = false,
+                dispatch = {}, modifier = Modifier.weight(1f),
             )
             SlashCommandMenu(DesignFixtures.commands, "co") {}
             SessionControlsBar(
@@ -102,7 +100,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             )
             Composer(
                 draft = "/co", onDraftChange = {}, placeholder = "Message the session…", canAttach = true, uploading = false,
-                canSend = true, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
+                canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
             )
         }
     },
@@ -111,21 +109,21 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         TranscriptList(
             displayEntries = DesignFixtures.transcript().take(7), outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
-            dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            running = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
     "transcript_plan" to {
         TranscriptList(
             displayEntries = DesignFixtures.waitingCards.take(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
-            dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            running = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
     "transcript_cards" to {
         TranscriptList(
             displayEntries = DesignFixtures.waitingCards.drop(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
-            dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            running = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
     },
     "new_session" to {
