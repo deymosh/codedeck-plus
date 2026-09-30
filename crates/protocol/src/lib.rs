@@ -23,6 +23,7 @@ pub mod events;
 pub mod kinds;
 pub mod nip42;
 pub mod nostr_event;
+pub mod packing;
 pub mod ranges;
 pub mod relays;
 pub mod tristate;
