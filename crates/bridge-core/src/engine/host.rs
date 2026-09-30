@@ -721,7 +721,7 @@ impl Engine {
             run.queued.push(text.clone());
         }
         self.registry_dirty |= session.listed;
-        let entry = OutputEntry::new(now, EntryBody::Text { role: Role::User, text: typed, collapsible: false });
+        let entry = OutputEntry::new(now, EntryBody::Text { role: Role::User, text: typed });
         // Before the prompt, so the user's entry precedes the reply.
         self.append(session_id, vec![entry]);
         if started {

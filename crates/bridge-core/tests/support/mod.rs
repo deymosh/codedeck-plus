@@ -315,7 +315,7 @@ impl Rig {
     pub fn say(&mut self, session_id: &str, text: &str) {
         self.host_event(
             session_id,
-            SessionEvent::Entries { entries: vec![OutputEntry::new("t", EntryBody::Text { role: Role::Agent, text: text.into(), collapsible: false })] },
+            SessionEvent::Entries { entries: vec![OutputEntry::new("t", EntryBody::Text { role: Role::Agent, text: text.into() })] },
         );
     }
 }

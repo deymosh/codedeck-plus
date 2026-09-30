@@ -592,14 +592,8 @@ pub enum NoticeKind {
     rename_all_fields = "camelCase"
 )]
 pub enum EntryBody {
-    /// Conversation text. Agent text written alongside tool calls may set
-    /// `collapsible`, letting a client fold it into the tool group.
-    Text {
-        role: Role,
-        text: String,
-        #[serde(default, skip_serializing_if = "is_false")]
-        collapsible: bool,
-    },
+    /// Conversation text.
+    Text { role: Role, text: String },
     /// A plan the agent proposes (rendered as markdown, never collapsed).
     Plan { text: String },
     /// Model reasoning. `redacted` = the provider withheld the content.
@@ -1019,7 +1013,6 @@ mod tests {
     #[test]
     fn every_entry_body_round_trips_its_exact_wire_shape() {
         entry_rt(json!({"timestamp":"t","entryType":"text","role":"user","text":"hi"}));
-        entry_rt(json!({"timestamp":"t","entryType":"text","role":"agent","text":"on it","collapsible":true}));
         entry_rt(json!({"timestamp":"t","entryType":"plan","text":"1. do x"}));
         entry_rt(json!({"timestamp":"t","entryType":"thinking","text":"","redacted":true}));
         entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c1","toolName":"Bash","kind":"execute","title":"cat <<EOF…","input":"cat <<EOF\nhi\nEOF"}));

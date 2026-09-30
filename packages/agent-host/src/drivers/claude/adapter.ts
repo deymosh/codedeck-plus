@@ -29,9 +29,6 @@ import type {
   SdkSessionStateChangedMessage,
 } from './facade';
 
-/** Tools whose call renders as a dedicated card instead of a tool action. */
-const CARD_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
-
 /**
  * Convert a single SDKMessage into zero or more OutputEntry objects.
  * Returns an empty array for message types we don't relay (stream_event, …).
@@ -69,14 +66,6 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
   const entries: OutputEntry[] = [];
   const ts = new Date().toISOString();
 
-  // Text written alongside tool calls (or by a sub-agent) folds into the tool
-  // group; a message that is only text is the agent's answer and stands alone.
-  const hasToolUse = msg.message.content.some(
-    (b: { type: string; name?: string }) => b.type === 'tool_use' && !CARD_TOOLS.has(b.name ?? ''),
-  );
-  // Sub-agent messages have a non-null parent_tool_use_id.
-  const isSubAgent = !!msg.parent_tool_use_id;
-  const collapsible = hasToolUse || isSubAgent;
   const sub = subagentField(msg.parent_tool_use_id, ctx);
 
   for (const block of msg.message.content) {
@@ -86,7 +75,6 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
         role: 'agent',
         text: block.text,
         timestamp: ts,
-        ...(collapsible ? { collapsible: true } : {}),
         ...sub,
       });
     } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {

@@ -35,7 +35,7 @@ fn corpus() -> Vec<SeqEntry> {
         json!({"entryType":"text","role":"user","text":"port the connection reducer to rust"}),
         json!({"entryType":"text","role":"agent","text":"## Refactor plan\n\nHere's what I'll do, in order."}),
         json!({"entryType":"thinking","text":"Start with the pool."}),
-        json!({"entryType":"text","role":"agent","text":"Reading the pool first.","collapsible":true}),
+        json!({"entryType":"text","role":"agent","text":"Reading the pool first."}),
         json!({"entryType":"tool_call","callId":"tu-read","toolName":"Read","kind":"read","title":"pool.ts","locations":["packages/core/src/nostr/pool.ts"]}),
         json!({"entryType":"tool_call","callId":"tu-grep","toolName":"Grep","kind":"search","title":"SimplePool","subagent":{"label":"explorer"}}),
         json!({"entryType":"tool_result","callId":"tu-grep","text":"3 matches"}),

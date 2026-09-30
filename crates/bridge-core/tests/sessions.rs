@@ -251,7 +251,7 @@ fn an_echo_of_sent_input_is_dropped() {
     rig.send(json!({"type":"input","sessionId":s,"text":"hi"}));
     let sent = prompt_text(&mut rig);
     rig.take();
-    let echo = protocol::common::OutputEntry::new("t", EntryBody::Text { role: Role::User, text: sent, collapsible: false });
+    let echo = protocol::common::OutputEntry::new("t", EntryBody::Text { role: Role::User, text: sent });
     rig.host_event(&s, SessionEvent::Entries { entries: vec![echo] });
     assert!(outputs(&rig.messages()).is_empty());
 }
