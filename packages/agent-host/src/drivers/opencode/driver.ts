@@ -979,7 +979,7 @@ export class OpenCodeDriver implements Driver {
       for (const provider of data.providers) {
         for (const model of Object.values(provider.models)) {
           const id = `${provider.id}/${model.id}`;
-          models.push({ id, label: model.name });
+          models.push({ id, label: model.name, provider: provider.name || provider.id });
           const window = model.limit?.context ?? 0;
           if (window > 0) contextLimits[id] = window;
         }

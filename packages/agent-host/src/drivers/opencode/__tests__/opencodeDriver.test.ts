@@ -305,7 +305,7 @@ describe('OpenCode options', () => {
 describe('OpenCode default model', () => {
   const model = (id: string, cost: number, status = 'active') => ({ id, name: id.toUpperCase(), cost: { input: cost, output: cost }, status });
   const provider = (id: string, ...models: ReturnType<typeof model>[]) =>
-    ({ id, models: Object.fromEntries(models.map((m) => [m.id, m])) }) as unknown as Provider;
+    ({ id, name: id === 'anthropic' ? 'Anthropic' : '', models: Object.fromEntries(models.map((m) => [m.id, m])) }) as unknown as Provider;
   const zen = provider('opencode', model('big-pickle', 1), model('old-free', 0, 'deprecated'), model('nemotron-free', 0));
   const anthropic = provider('anthropic', model('claude-sonnet-5', 3));
 
@@ -334,7 +334,9 @@ describe('OpenCode default model', () => {
   it('is listed with the models', async () => {
     const catalog = await OpenCodeDriver.withClient(withCatalog(clientWith([]))).listModels();
     expect(catalog.defaultModel).toBe('opencode/nemotron-free');
-    expect(catalog.models).toContainEqual({ id: 'anthropic/claude-sonnet-5', label: 'CLAUDE-SONNET-5' });
+    expect(catalog.models).toContainEqual({ id: 'anthropic/claude-sonnet-5', label: 'CLAUDE-SONNET-5', provider: 'Anthropic' });
+    // A provider without a display name is named by its id.
+    expect(catalog.models).toContainEqual({ id: 'opencode/big-pickle', label: 'BIG-PICKLE', provider: 'opencode' });
   });
 
   it('a session started with no model runs, and reports, the default', async () => {

@@ -206,6 +206,8 @@ export interface SdkSessionHandle {
 export interface SdkModelDescriptor {
   id: string;
   label?: string;
+  /** Who serves it: a router's channel (`OpenCode Go`), when the id names one. */
+  provider?: string;
   /** The canonical model id an alias row resolves to (`opus` →
    *  `claude-opus-5-5`), when the CLI says. */
   resolvedModel?: string;
@@ -307,13 +309,20 @@ export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
     }
     return list
       .filter((m): m is { id: string; display_name?: string } => typeof (m as { id?: unknown })?.id === 'string')
-      .map((m) => ({
-        id: m.id,
-        // A router-prefixed id ("Claude Code API/claude-sonnet-5") with no
-        // display_name still deserves a readable fallback label — strip
-        // everything up to the last "/" rather than showing the raw id.
-        label: m.display_name || m.id.split('/').pop() || m.id,
-      }));
+      .map((m) => {
+        // A router-prefixed id ("Claude Code API/claude-sonnet-5") names its
+        // channel before the first "/"; the model after it may hold a "/" of
+        // its own. The same model can come through several channels, so the
+        // channel is kept as the provider, and a label without display_name
+        // is the model part rather than the raw id.
+        const slash = m.id.indexOf('/');
+        const provider = slash > 0 ? m.id.slice(0, slash) : undefined;
+        return {
+          id: m.id,
+          label: m.display_name || (provider ? m.id.slice(slash + 1) : m.id),
+          ...(provider ? { provider } : {}),
+        };
+      });
   } catch (err) {
     console.error('[SdkFacade] fetchGatewayModels: request failed:', err);
     return [];

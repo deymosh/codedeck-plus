@@ -775,7 +775,7 @@ export class ClaudeDriver implements Driver {
     const models = await this.options.facade.supportedModels(this.options.discoverModels ? await this.discovery() : undefined);
     if (models.length > 0) this.knownModels = models;
     return {
-      models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })),
+      models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}), ...(m.provider ? { provider: m.provider } : {}) })),
       defaultModel: DEFAULT_MODEL,
     };
   }
