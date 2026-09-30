@@ -145,6 +145,17 @@ fn absorb_run(run: &mut OutputMsg, to: &[Addressee], backlog: &mut VecDeque<Job>
     }
 }
 
+/// Whether a heartbeat to `to` has a newer one queued behind it. A relay
+/// keeps only a machine's latest heartbeat (it is replaceable), so the older
+/// one need not take a relay's round trip: a turn starting, a card opening
+/// and the context filling each mark the list, one right after another.
+fn superseded(to: &[Addressee], backlog: &VecDeque<Job>) -> bool {
+    backlog.iter().any(|job| {
+        matches!(job, Job::Publish { to: next_to, message }
+            if next_to.as_slice() == to && matches!(message.as_ref(), BridgeToPhone::Sessions(_)))
+    })
+}
+
 enum Job {
     Publish { to: Vec<Addressee>, message: Box<BridgeToPhone> },
     /// Resolves once every job queued before it is done.
@@ -208,13 +219,16 @@ impl Relays {
                         let _ = done.send(());
                     }
                     Job::Publish { to, mut message } => {
+                        while let Ok(next) = queue.try_recv() {
+                            backlog.push_back(next);
+                        }
                         if let BridgeToPhone::Output(run) = message.as_mut() {
-                            while let Ok(next) = queue.try_recv() {
-                                backlog.push_back(next);
-                            }
                             absorb_run(run, &to, &mut backlog);
                         }
                         let beat = matches!(*message, BridgeToPhone::Sessions(_));
+                        if beat && superseded(&to, &backlog) {
+                            continue;
+                        }
                         for addressee in to {
                             let events = match factory.events(&message, &addressee, now_secs()) {
                                 Ok(events) => events,
@@ -497,6 +511,20 @@ mod tests {
         let mut backlog = VecDeque::from([job(&phone, output("s", 2, &[&big])), job(&phone, output("s", 3, &["y"]))]);
         absorb_run(&mut run, &phone, &mut backlog);
         assert_eq!((run.entries.len(), backlog.len()), (1, 2));
+    }
+
+    fn beat(to: &[Addressee]) -> Job {
+        Job::Publish { to: to.to_vec(), message: Box::new(heartbeat()) }
+    }
+
+    #[test]
+    fn a_heartbeat_with_a_newer_one_queued_behind_it_is_superseded() {
+        let phone = [to("p")];
+        let backlog = VecDeque::from([job(&phone, output("s", 1, &["a"])), beat(&phone)]);
+        assert!(superseded(&phone, &backlog));
+        // Only by a heartbeat to the same phones.
+        assert!(!superseded(&phone, &VecDeque::from([beat(&[to("q")])])));
+        assert!(!superseded(&phone, &VecDeque::from([job(&phone, output("s", 1, &["a"]))])));
     }
 
     #[test]
