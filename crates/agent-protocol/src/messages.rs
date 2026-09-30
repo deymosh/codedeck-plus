@@ -227,6 +227,12 @@ pub struct PermissionRequest {
     pub options: Vec<PermissionOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<Subagent>,
+    /// As on the phone wire's `permission_request` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// As on the phone wire's `permission_request` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
