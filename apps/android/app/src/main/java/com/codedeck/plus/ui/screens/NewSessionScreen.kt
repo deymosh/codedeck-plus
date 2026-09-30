@@ -34,6 +34,7 @@ import com.codedeck.plus.ui.components.PageLoading
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.SelectField
+import com.codedeck.plus.ui.components.modelPickerOptions
 import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
@@ -198,11 +199,14 @@ internal fun NewSessionBody(
         val name = choices.firstOrNull { it.first == id }?.second ?: id
         return "Default $kind ($name)"
     }
+    // The same model can come from more than one provider; then the
+    // default names its provider too.
+    val manyProviders = modelOptions.mapNotNull { it.provider }.distinct().size > 1
     val defaultModelLabel = defaultLabel(
         "model",
         // A profile with no default of its own runs its first model.
         if (activeProfile != null) activeProfile.defaultModel ?: activeProfile.models.firstOrNull()?.id else agentModels?.defaultModel,
-        modelOptions.map { it.id to (it.label ?: it.id) },
+        modelOptions.map { m -> m.id to (m.label ?: m.id) + (m.provider?.takeIf { manyProviders }?.let { " from $it" } ?: "") },
     )
 
     fun create() {
@@ -292,9 +296,7 @@ internal fun NewSessionBody(
                     SelectField(
                         options = buildList {
                             add(PickerOption("", defaultModelLabel))
-                            modelOptions.forEach { m ->
-                                add(PickerOption(m.id, m.label ?: m.id))
-                            }
+                            addAll(modelPickerOptions(modelOptions))
                             // A picked model the list does not (yet) carry stays
                             // visible instead of the picker silently showing
                             // nothing.

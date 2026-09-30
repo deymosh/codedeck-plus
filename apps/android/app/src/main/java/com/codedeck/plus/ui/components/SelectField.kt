@@ -40,8 +40,18 @@ import com.codedeck.plus.ui.theme.Tokens
 
 /** One choice in a [SelectField] dropdown — value is what gets dispatched,
  *  label is what the user reads (they differ for the model union, where the
- *  label is the entry's human name and the value its wire id). */
-data class PickerOption(val value: String, val label: String)
+ *  label is the entry's human name and the value its wire id). [group] is
+ *  who offers it — a model's provider — for lists where the same label can
+ *  come from more than one place. */
+data class PickerOption(val value: String, val label: String, val group: String? = null)
+
+/** The options of a model list, one per model, grouped by provider in the
+ *  order providers first appear. */
+fun modelPickerOptions(models: List<uniffi.client_ffi.UniffiModelEntry>): List<PickerOption> =
+    models.map { PickerOption(it.id, it.label ?: it.id, it.provider) }
+        .groupBy { it.group }
+        .values
+        .flatten()
 
 /**
  * The shared `<select>`-style dropdown — bordered trigger text that opens the
@@ -83,8 +93,11 @@ fun SelectField(
     onSelect: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    val currentLabel = options.firstOrNull { it.value == selected }?.label
+    val current = options.firstOrNull { it.value == selected }
+    val currentLabel = current?.label
         ?: if (selected.isEmpty()) placeholder else selected
+    // Groups are named only when there is more than one to tell apart.
+    val grouped = options.mapNotNull { it.group }.distinct().size > 1
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -109,6 +122,9 @@ fun SelectField(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
+            current?.group?.takeIf { grouped }?.let {
+                Text(it, color = Tokens.TextDim, fontSize = Tokens.TextXs, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
             // Says the value is a choice, not plain text.
             Icon(
                 Icons.Outlined.UnfoldMore,
@@ -135,8 +151,17 @@ fun SelectField(
                             .padding(vertical = Tokens.Space2),
                     ) {
                         Column(Modifier.verticalScroll(rememberScrollState())) {
-                            options.forEach { option ->
+                            options.forEachIndexed { i, option ->
                                 val isSelected = option.value == selected
+                                if (grouped && option.group != null && option.group != options.getOrNull(i - 1)?.group) {
+                                    Text(
+                                        option.group,
+                                        color = Tokens.TextMuted,
+                                        fontSize = Tokens.TextXs,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(start = Tokens.Space4, end = Tokens.Space4, top = if (i == 0) Tokens.Space2 else Tokens.Space4, bottom = Tokens.Space1),
+                                    )
+                                }
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier

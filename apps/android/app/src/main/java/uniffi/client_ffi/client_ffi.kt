@@ -6034,6 +6034,11 @@ data class UniffiModelEntry (
     var `id`: kotlin.String
     , 
     var `label`: kotlin.String?
+    , 
+    /**
+     * Who serves the model, when the agent says.
+     */
+    var `provider`: kotlin.String?
     
 ){
     
@@ -6052,17 +6057,20 @@ public object FfiConverterTypeUniffiModelEntry: FfiConverterRustBuffer<UniffiMod
         return UniffiModelEntry(
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: UniffiModelEntry) = (
             FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterOptionalString.allocationSize(value.`label`)
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterOptionalString.allocationSize(value.`provider`)
     )
 
     override fun write(value: UniffiModelEntry, buf: ByteBuffer) {
             FfiConverterString.write(value.`id`, buf)
             FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterOptionalString.write(value.`provider`, buf)
     }
 }
 
