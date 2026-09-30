@@ -246,40 +246,38 @@ impl<'a> Router<'a> {
                 if self.stores.machines.is_dismissed(&m.session_id, self.now) {
                     return r;
                 }
-                let entry = to_value(&m.entry);
-                let inserted = self
-                    .apply_rows(machine, &m.session_id, vec![(m.seq, entry)])
-                    .await;
+                let rows = m.numbered().map(|(seq, e)| (seq, to_value(e))).collect();
+                let inserted = self.apply_rows(machine, &m.session_id, rows).await;
                 r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                 // An entry already in the transcript is a replay, not news: a
                 // direct link resuming from an older cursor after the app was
                 // killed re-sends output the phone stored (and notified about)
                 // before, and a second copy over another path is the same
                 // entry. Neither may notify or mark the session again.
-                if !inserted.contains(&m.seq) {
-                    return r;
-                }
-                // Unread + notify on LIVE entries only (sync catch-up takes the
-                // SyncChunk path, so replayed history never marks dots or fires
-                // a notification storm). A card / stream_end / failure marks the
-                // session unless the user is watching it; a live entry showing
-                // the agent actively WORKING clears the dot. CDX-053: the clear
-                // is gated on is_agent_activity_entry so the trailing
-                // system/result/usage entries after stream_end can't wipe a
-                // just-set dot.
-                match classify_output_entry(machine, &m.session_id, &m.entry) {
-                    Some(event) => {
-                        if !self.viewing_session(machine, &m.session_id) {
-                            self.stores.ui.mark_session_unread(machine, &m.session_id);
-                            r.ui_changed = true;
+                for (_, entry) in m.numbered().filter(|(seq, _)| inserted.contains(seq)) {
+                    // Unread + notify on LIVE entries only (sync catch-up takes
+                    // the SyncChunk path, so replayed history never marks dots
+                    // or fires a notification storm). A card / stream_end /
+                    // failure marks the session unless the user is watching
+                    // it; a live entry showing the agent actively WORKING
+                    // clears the dot. CDX-053: the clear is gated on
+                    // is_agent_activity_entry so the trailing
+                    // system/result/usage entries after stream_end can't wipe
+                    // a just-set dot.
+                    match classify_output_entry(machine, &m.session_id, entry) {
+                        Some(event) => {
+                            if !self.viewing_session(machine, &m.session_id) {
+                                self.stores.ui.mark_session_unread(machine, &m.session_id);
+                                r.ui_changed = true;
+                            }
+                            let fx = self.emit_notify(&event);
+                            r.notifies.extend(fx);
                         }
-                        let fx = self.emit_notify(&event);
-                        r.notifies.extend(fx);
+                        None if is_agent_activity_entry(entry) => {
+                            self.stores.ui.clear_session_unread(machine, &m.session_id);
+                        }
+                        None => {}
                     }
-                    None if is_agent_activity_entry(&m.entry) => {
-                        self.stores.ui.clear_session_unread(machine, &m.session_id);
-                    }
-                    None => {}
                 }
             }
             BridgeToPhone::SyncBegin(m) => {
@@ -874,7 +872,7 @@ mod tests {
                 &BridgeToPhone::Output(OutputMsg {
                     session_id: "s1".into(),
                     seq: 1,
-                    entry: text_entry("hello"),
+                    entries: vec![text_entry("hello")],
                 }),
             )
             .await;
@@ -906,7 +904,7 @@ mod tests {
                     &BridgeToPhone::Output(OutputMsg {
                         session_id: "s1".into(),
                         seq: 1,
-                        entry: card,
+                        entries: vec![card],
                     }),
                 )
                 .await;
@@ -921,7 +919,7 @@ mod tests {
             &BridgeToPhone::Output(OutputMsg {
                 session_id: "s1".into(),
                 seq: 2,
-                entry: text_entry("working on it"),
+                entries: vec![text_entry("working on it")],
             }),
         )
         .await;
@@ -934,7 +932,7 @@ mod tests {
         let turn_end = || BridgeToPhone::Output(OutputMsg {
             session_id: "s1".into(),
             seq: 7,
-            entry: serde_json::from_value(json!({ "timestamp": "t", "entryType": "turn_complete" })).unwrap(),
+            entries: vec![serde_json::from_value(json!({ "timestamp": "t", "entryType": "turn_complete" })).unwrap()],
         });
         {
             let mut r = Router::new(&mut s, &ts, &kp, 1_000);
@@ -977,7 +975,7 @@ mod tests {
                 &BridgeToPhone::Output(OutputMsg {
                     session_id: "s1".into(),
                     seq: 7,
-                    entry: serde_json::from_value(json!({ "timestamp": "t", "entryType": "turn_complete" })).unwrap(),
+                    entries: vec![serde_json::from_value(json!({ "timestamp": "t", "entryType": "turn_complete" })).unwrap()],
                 }),
             )
             .await;
@@ -996,7 +994,7 @@ mod tests {
                 &BridgeToPhone::Output(OutputMsg {
                     session_id: "s1".into(),
                     seq: 1,
-                    entry: text_entry("first"),
+                    entries: vec![text_entry("first")],
                 }),
             )
             .await;
@@ -1008,7 +1006,7 @@ mod tests {
                 &BridgeToPhone::Output(OutputMsg {
                     session_id: "s1".into(),
                     seq: 1,
-                    entry: text_entry("REWRITTEN"),
+                    entries: vec![text_entry("REWRITTEN")],
                 }),
             )
             .await;

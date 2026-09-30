@@ -372,7 +372,7 @@ mod tests {
         assert_eq!((hb.kind, tag(&hb, "d"), tag(&hb, "p")), (SESSION_LIST_KIND, Some("laptop"), Some(phone.pubkey_hex.as_str())));
         assert_eq!(tag(&hb, "expiration"), None);
 
-        let out = BridgeToPhone::Output(OutputMsg { session_id: "s".into(), seq: 7, entry: OutputEntry::new("t", EntryBody::Status { text: "x".into() }) });
+        let out = BridgeToPhone::Output(OutputMsg { session_id: "s".into(), seq: 7, entries: vec![OutputEntry::new("t", EntryBody::Status { text: "x".into() })] });
         let ev = f.events(&out, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!((ev.kind, tag(&ev, "s"), tag(&ev, "seq")), (LIVE_KIND, Some("s"), Some("7")));
         let plain = decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).unwrap();
@@ -416,7 +416,7 @@ mod tests {
         let big = BridgeToPhone::Output(OutputMsg {
             session_id: "s".into(),
             seq: 1,
-            entry: OutputEntry::new("t", EntryBody::Status { text: "x".repeat(100_000) }),
+            entries: vec![OutputEntry::new("t", EntryBody::Status { text: "x".repeat(100_000) })],
         });
         let events = f.events(&big, &to(&phone.pubkey_hex), 1000).unwrap();
         assert!(events.len() >= 3);

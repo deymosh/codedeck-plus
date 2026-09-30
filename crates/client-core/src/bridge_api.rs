@@ -365,12 +365,12 @@ mod tests {
                 "type": "output",
                 "sessionId": "s1",
                 "seq": seq,
-                "entry": {
+                "entries": [{
                     "entryType": "text",
                     "role": "agent",
                     "text": "Z".repeat(bytes),
                     "timestamp": "2026-08-05T00:00:00.000Z",
-                },
+                }],
             })
             .to_string(),
         )
@@ -554,7 +554,7 @@ mod tests {
             "type": "output",
             "sessionId": "s1",
             "seq": 1,
-            "entry": { "entryType": "text", "role": "agent", "text": "hi", "timestamp": "2026-08-05T00:00:00Z" },
+            "entries": [{ "entryType": "text", "role": "agent", "text": "hi", "timestamp": "2026-08-05T00:00:00Z" }],
         });
         let want = decode_bridge_to_phone(&src.to_string()).unwrap();
         let content = event_content(&encode_bridge_to_phone(&want), &mac, &id);
@@ -568,7 +568,7 @@ mod tests {
     fn ingest_records_a_decode_failure_for_invalid_plaintext() {
         let mut api = BridgeApi::new();
         let (id, mac) = (phone(), machine());
-        let content = event_content(r#"{"type":"output","sessionId":"s"}"#, &mac, &id); // no seq/entry
+        let content = event_content(r#"{"type":"output","sessionId":"s"}"#, &mac, &id); // no seq/entries
         assert_eq!(deliver(&mut api, &id, &mac, &content), Ingested::DecodeFailed);
         assert_eq!(api.diagnostics().decode_failures, 1);
         assert_eq!(api.diagnostics().decrypt_failures, 0);
@@ -673,7 +673,7 @@ mod tests {
                 "type": "output",
                 "sessionId": "s1",
                 "seq": 101,
-                "entry": { "entryType": "text", "role": "agent", "text": "quick follow-up", "timestamp": "2026-08-05T00:00:00Z" },
+                "entries": [{ "entryType": "text", "role": "agent", "text": "quick follow-up", "timestamp": "2026-08-05T00:00:00Z" }],
             })
             .to_string(),
         )

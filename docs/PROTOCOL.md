@@ -95,8 +95,12 @@ advertised; creating a session on it fails with the reason.
 
 ### Transcript entries
 
-`output {sessionId, seq, entry}` carries one typed `OutputEntry`: a
-`timestamp`, optional `subagent {label?, parentCallId?}` (`parentCallId`: the
+`output {sessionId, seq, entries}` carries a run of consecutive typed
+`OutputEntry`s, `entries[i]` being seq `seq + i`. The bridge sends what the
+agent wrote in one go as one run, and the entries written while the relay
+was still taking the previous event join the next one, up to what one event
+holds unfragmented; a quiet session still sends each entry as it comes. Each
+entry has a `timestamp`, optional `subagent {label?, parentCallId?}` (`parentCallId`: the
 `agent` call that started it, so a client can nest its steps under that call), optional `agentExtras` (the one
 sanctioned escape hatch — agent-specific data no client depends on) and a body
 tagged by `entryType`:
