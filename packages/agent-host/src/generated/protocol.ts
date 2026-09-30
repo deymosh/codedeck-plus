@@ -81,6 +81,11 @@ export type AgentSupports = {
 	 *  show and switch them in one session.
 	 */
 	mcp?: boolean,
+	/**
+	 *  Sessions report the work they run in the background
+	 *  (`background_task` entries), and `stop-task` stops it.
+	 */
+	tasks?: boolean,
 };
 
 /**  A plugin one of the known marketplaces offers and that is not installed. */
@@ -134,6 +139,15 @@ export type BridgeMessage_Deserialize =
 /**  Stop the running turn. Reply: `ack`. */
 { kind: "interrupt"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  Stop one background task of the session (agents with
+ *  `supports.tasks`). Reply: `ack` once asked — the task's next
+ *  `background_task` entry says it stopped — or `error`.
+ */
+{ kind: "stop-task"; payload: {
+	sessionId: string,
+	taskId: string,
 } } | 
 /**  Reply: `ack` when the agent applied it, else `error`. */
 { kind: "set-option"; payload: {
@@ -242,6 +256,15 @@ export type BridgeMessage_Serialize =
 /**  Stop the running turn. Reply: `ack`. */
 { kind: "interrupt"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  Stop one background task of the session (agents with
+ *  `supports.tasks`). Reply: `ack` once asked — the task's next
+ *  `background_task` entry says it stopped — or `error`.
+ */
+{ kind: "stop-task"; payload: {
+	sessionId: string,
+	taskId: string,
 } } | 
 /**  Reply: `ack` when the agent applied it, else `error`. */
 { kind: "set-option"; payload: {
@@ -379,11 +402,11 @@ export type EntryBody_Deserialize =
  *  Conversation text. Agent text written alongside tool calls may set
  *  `collapsible`, letting a client fold it into the tool group.
  */
-({ entryType: "text"; role: Role; text: string; collapsible?: boolean }) & { callId?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "text"; role: Role; text: string; collapsible?: boolean }) & { callId?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  A plan the agent proposes (rendered as markdown, never collapsed). */
-({ entryType: "plan"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "plan"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  Model reasoning. `redacted` = the provider withheld the content. */
-({ entryType: "thinking"; text: string; redacted?: boolean }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "tool_call"; callId: string; 
+({ entryType: "thinking"; text: string; redacted?: boolean }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "tool_call"; callId: string; 
 /**  The agent's own tool name (display only — clients branch on `kind`). */
 toolName: string; kind: ToolKind; 
 /**  One-line human summary, e.g. `npm test` or `src/main.rs`. */
@@ -397,9 +420,9 @@ locations?: string[];
  *  a file change, whose `diff` entry already carries the content. The
  *  host bounds its size.
  */
-input?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; isError?: never; lines?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; text?: never; truncated?: never } | ({ entryType: "tool_result"; callId: string; text: string; isError?: boolean }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+input?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; isError?: never; items?: never; lines?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; truncated?: never } | ({ entryType: "tool_result"; callId: string; text: string; isError?: boolean }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  A file change, as add/del/context lines. */
-({ entryType: "diff"; path: string; lines: DiffLine[]; truncated?: boolean; callId?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; locations?: never; multiSelect?: never; options?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never } | 
+({ entryType: "diff"; path: string; lines: DiffLine[]; truncated?: boolean; callId?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; locations?: never; multiSelect?: never; options?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never } | 
 /**
  *  The agent is waiting for the user to allow or deny a tool call.
  *  Answered with `permission-response` using one of `options`.
@@ -419,26 +442,43 @@ hook?: string | null;
  *  The plugin that hook comes from, when it is known to be one
  *  plugin's: the name the user installed it under.
  */
-hookPlugin?: string | null }) & { callId?: never; collapsible?: never; count?: never; header?: never; index?: never; input?: never; isError?: never; lines?: never; multiSelect?: never; path?: never; question?: never; redacted?: never; role?: never; summary?: never; text?: never; truncated?: never } | 
+hookPlugin?: string | null }) & { callId?: never; collapsible?: never; count?: never; header?: never; index?: never; input?: never; isError?: never; items?: never; lines?: never; multiSelect?: never; path?: never; question?: never; redacted?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; truncated?: never } | 
 /**
  *  One question of a (possibly multi-question) ask, all sharing
  *  `request_id`. Answered with `question-response`.
  */
-({ entryType: "question"; requestId: string; index: number; count: number; header?: string | null; question: string; options?: QuestionOption_Deserialize[]; multiSelect?: boolean }) & { callId?: never; collapsible?: never; description?: never; hook?: never; hookPlugin?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; path?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "question"; requestId: string; index: number; count: number; header?: string | null; question: string; options?: QuestionOption_Deserialize[]; multiSelect?: boolean }) & { callId?: never; collapsible?: never; description?: never; hook?: never; hookPlugin?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; path?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
 /**
  *  The agent finished planning and asks how to proceed. Answered with
  *  `plan-response` using one of `options`.
  */
-({ entryType: "plan_approval"; requestId: string; options: OptionChoice_Deserialize[] }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "plan_approval"; requestId: string; options: OptionChoice_Deserialize[] }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
 /**
  *  A permission request, question or plan approval was answered (or
  *  cancelled); `summary` is a short human description of the outcome.
  */
-({ entryType: "resolved"; requestId: string; summary: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; text?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "notice"; kind: NoticeKind; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "resolved"; requestId: string; summary: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; status?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "notice"; kind: NoticeKind; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  A one-line status message from the bridge or agent. */
-({ entryType: "status"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "error"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "status"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "error"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  The agent's turn ended; it is waiting for input. */
-({ entryType: "turn_complete" }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never; truncated?: never };
+({ entryType: "turn_complete" }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
+/**
+ *  Work the agent left running in the background (a command, a
+ *  sub-agent) changed state. One entry per change, all sharing
+ *  `task_id`; the latest says where the task stands.
+ */
+({ entryType: "background_task"; taskId: string; kind: TaskKind; 
+/**  What the task does, in a line (`npm run dev`, `Audit the API`). */
+title: string; status: TaskStatus; 
+/**  The tool call that started it, when one did. */
+callId?: string | null; 
+/**  How it went, once it ended, in the agent's words. */
+summary?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; text?: never; toolName?: never; truncated?: never } | 
+/**
+ *  The agent's checklist for the work at hand, whole each time it
+ *  changes. `call_id` is the tool call that wrote it, when one did.
+ */
+({ entryType: "todos"; items: TodoItem_Deserialize[]; callId?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never };
 
 /**  What a transcript entry is. Tagged by `entryType`. */
 export type EntryBody_Serialize = 
@@ -446,11 +486,11 @@ export type EntryBody_Serialize =
  *  Conversation text. Agent text written alongside tool calls may set
  *  `collapsible`, letting a client fold it into the tool group.
  */
-({ entryType: "text"; role: Role; text: string; collapsible?: boolean }) & { callId?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "text"; role: Role; text: string; collapsible?: boolean }) & { callId?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  A plan the agent proposes (rendered as markdown, never collapsed). */
-({ entryType: "plan"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "plan"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  Model reasoning. `redacted` = the provider withheld the content. */
-({ entryType: "thinking"; text: string; redacted?: boolean }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "tool_call"; callId: string; 
+({ entryType: "thinking"; text: string; redacted?: boolean }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "tool_call"; callId: string; 
 /**  The agent's own tool name (display only — clients branch on `kind`). */
 toolName: string; kind: ToolKind; 
 /**  One-line human summary, e.g. `npm test` or `src/main.rs`. */
@@ -464,9 +504,9 @@ locations?: string[];
  *  a file change, whose `diff` entry already carries the content. The
  *  host bounds its size.
  */
-input?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; isError?: never; lines?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; text?: never; truncated?: never } | ({ entryType: "tool_result"; callId: string; text: string; isError?: boolean }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+input?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; isError?: never; items?: never; lines?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; truncated?: never } | ({ entryType: "tool_result"; callId: string; text: string; isError?: boolean }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  A file change, as add/del/context lines. */
-({ entryType: "diff"; path: string; lines: DiffLine[]; truncated?: boolean; callId?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; locations?: never; multiSelect?: never; options?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never } | 
+({ entryType: "diff"; path: string; lines: DiffLine[]; truncated?: boolean; callId?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; locations?: never; multiSelect?: never; options?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never } | 
 /**
  *  The agent is waiting for the user to allow or deny a tool call.
  *  Answered with `permission-response` using one of `options`.
@@ -486,26 +526,43 @@ hook?: string | null;
  *  The plugin that hook comes from, when it is known to be one
  *  plugin's: the name the user installed it under.
  */
-hookPlugin?: string | null }) & { callId?: never; collapsible?: never; count?: never; header?: never; index?: never; input?: never; isError?: never; lines?: never; multiSelect?: never; path?: never; question?: never; redacted?: never; role?: never; summary?: never; text?: never; truncated?: never } | 
+hookPlugin?: string | null }) & { callId?: never; collapsible?: never; count?: never; header?: never; index?: never; input?: never; isError?: never; items?: never; lines?: never; multiSelect?: never; path?: never; question?: never; redacted?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; truncated?: never } | 
 /**
  *  One question of a (possibly multi-question) ask, all sharing
  *  `request_id`. Answered with `question-response`.
  */
-({ entryType: "question"; requestId: string; index: number; count: number; header?: string | null; question: string; options: QuestionOption_Serialize[]; multiSelect?: boolean }) & { callId?: never; collapsible?: never; description?: never; hook?: never; hookPlugin?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; path?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "question"; requestId: string; index: number; count: number; header?: string | null; question: string; options: QuestionOption_Serialize[]; multiSelect?: boolean }) & { callId?: never; collapsible?: never; description?: never; hook?: never; hookPlugin?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; path?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
 /**
  *  The agent finished planning and asks how to proceed. Answered with
  *  `plan-response` using one of `options`.
  */
-({ entryType: "plan_approval"; requestId: string; options: OptionChoice_Serialize[] }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "plan_approval"; requestId: string; options: OptionChoice_Serialize[] }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
 /**
  *  A permission request, question or plan approval was answered (or
  *  cancelled); `summary` is a short human description of the outcome.
  */
-({ entryType: "resolved"; requestId: string; summary: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; text?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "notice"; kind: NoticeKind; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "resolved"; requestId: string; summary: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; role?: never; status?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "notice"; kind: NoticeKind; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  A one-line status message from the bridge or agent. */
-({ entryType: "status"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "error"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; title?: never; toolName?: never; truncated?: never } | 
+({ entryType: "status"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | ({ entryType: "error"; text: string }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; title?: never; toolName?: never; truncated?: never } | 
 /**  The agent's turn ended; it is waiting for input. */
-({ entryType: "turn_complete" }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; summary?: never; text?: never; title?: never; toolName?: never; truncated?: never };
+({ entryType: "turn_complete" }) & { callId?: never; collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never } | 
+/**
+ *  Work the agent left running in the background (a command, a
+ *  sub-agent) changed state. One entry per change, all sharing
+ *  `task_id`; the latest says where the task stands.
+ */
+({ entryType: "background_task"; taskId: string; kind: TaskKind; 
+/**  What the task does, in a line (`npm run dev`, `Audit the API`). */
+title: string; status: TaskStatus; 
+/**  The tool call that started it, when one did. */
+callId?: string | null; 
+/**  How it went, once it ended, in the agent's words. */
+summary?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; items?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; text?: never; toolName?: never; truncated?: never } | 
+/**
+ *  The agent's checklist for the work at hand, whole each time it
+ *  changes. `call_id` is the tool call that wrote it, when one did.
+ */
+({ entryType: "todos"; items: TodoItem_Serialize[]; callId?: string | null }) & { collapsible?: never; count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; rawInput?: never; reason?: never; redacted?: never; requestId?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never };
 
 /**
  *  One line on the pipe: `{ "v": 1, "id"?: string, "kind": …, "payload": … }`.
@@ -1239,13 +1296,62 @@ export type Subagent = Subagent_Serialize | Subagent_Deserialize;
 
 /**  Identifies the sub-agent that produced an entry. */
 export type Subagent_Deserialize = {
+	/**  What kind of sub-agent it is (`Explore`, `general`), when known. */
 	label?: string | null,
+	/**
+	 *  The `agent` tool call that started it, when known: its entries
+	 *  belong under that call.
+	 */
+	parentCallId?: string | null,
 };
 
 /**  Identifies the sub-agent that produced an entry. */
 export type Subagent_Serialize = {
+	/**  What kind of sub-agent it is (`Explore`, `general`), when known. */
 	label?: string | null,
+	/**
+	 *  The `agent` tool call that started it, when known: its entries
+	 *  belong under that call.
+	 */
+	parentCallId?: string | null,
 };
+
+export type TaskKind = 
+/**  A shell command. */
+"shell" | 
+/**  A sub-agent. */
+"agent" | "other";
+
+export type TaskStatus = "running" | "completed" | "failed" | 
+/**  Stopped before it finished (by the user, or by the agent). */
+"stopped";
+
+/**  One item of the agent's checklist. */
+export type TodoItem = TodoItem_Serialize | TodoItem_Deserialize;
+
+/**  One item of the agent's checklist. */
+export type TodoItem_Deserialize = {
+	text: string,
+	status: TodoStatus,
+	/**
+	 *  The item as the agent says it while working on it ("Running the
+	 *  tests" for "Run the tests"), when it gives one.
+	 */
+	activeText?: string | null,
+};
+
+/**  One item of the agent's checklist. */
+export type TodoItem_Serialize = {
+	text: string,
+	status: TodoStatus,
+	/**
+	 *  The item as the agent says it while working on it ("Running the
+	 *  tests" for "Run the tests"), when it gives one.
+	 */
+	activeText?: string | null,
+};
+
+export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
 /**
  *  What a tool call does, normalized across agents (the Agent Client

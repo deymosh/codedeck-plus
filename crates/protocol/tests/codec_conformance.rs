@@ -78,6 +78,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::RefreshSessions(_) => "refresh-sessions",
         PhoneToBridge::CloseSession(_) => "close-session",
         PhoneToBridge::Interrupt(_) => "interrupt",
+        PhoneToBridge::StopTask(_) => "stop-task",
         PhoneToBridge::CreateFolder(_) => "create-folder",
         PhoneToBridge::UploadFile(_) => "upload-file",
         PhoneToBridge::UsageRequest(_) => "usage-request",
@@ -97,7 +98,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::SessionKey(_) => "session-key",
     }
 }
-const P2B_TYPES: usize = 28;
+const P2B_TYPES: usize = 29;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {

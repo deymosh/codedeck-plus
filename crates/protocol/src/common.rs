@@ -61,6 +61,10 @@ pub struct AgentSupports {
     /// show and switch them in one session.
     #[serde(default)]
     pub mcp: bool,
+    /// Sessions report the work they run in the background
+    /// (`background_task` entries), and `stop-task` stops it.
+    #[serde(default)]
+    pub tasks: bool,
 }
 
 // --- MCP servers ---
@@ -696,13 +700,83 @@ pub enum EntryBody {
     Error { text: String },
     /// The agent's turn ended; it is waiting for input.
     TurnComplete {},
+    /// Work the agent left running in the background (a command, a
+    /// sub-agent) changed state. One entry per change, all sharing
+    /// `task_id`; the latest says where the task stands.
+    BackgroundTask {
+        task_id: String,
+        kind: TaskKind,
+        /// What the task does, in a line (`npm run dev`, `Audit the API`).
+        title: String,
+        status: TaskStatus,
+        /// The tool call that started it, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        /// How it went, once it ended, in the agent's words.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+    /// The agent's checklist for the work at hand, whole each time it
+    /// changes. `call_id` is the tool call that wrote it, when one did.
+    Todos {
+        items: Vec<TodoItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    /// A shell command.
+    Shell,
+    /// A sub-agent.
+    Agent,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Running,
+    Completed,
+    Failed,
+    /// Stopped before it finished (by the user, or by the agent).
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+/// One item of the agent's checklist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoItem {
+    pub text: String,
+    pub status: TodoStatus,
+    /// The item as the agent says it while working on it ("Running the
+    /// tests" for "Run the tests"), when it gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_text: Option<String>,
 }
 
 /// Identifies the sub-agent that produced an entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub struct Subagent {
+    /// What kind of sub-agent it is (`Explore`, `general`), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The `agent` tool call that started it, when known: its entries
+    /// belong under that call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_call_id: Option<String>,
 }
 
 /// One transcript entry.
@@ -950,6 +1024,13 @@ mod tests {
         entry_rt(json!({"timestamp":"t","entryType":"thinking","text":"","redacted":true}));
         entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c1","toolName":"Bash","kind":"execute","title":"cat <<EOF…","input":"cat <<EOF\nhi\nEOF"}));
         entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c2","toolName":"Agent","kind":"agent","title":"Explore auth"}));
+        entry_rt(json!({"timestamp":"t","entryType":"tool_call","callId":"c3","toolName":"Read","kind":"read","title":"a.rs",
+            "subagent":{"label":"Explore","parentCallId":"c2"}}));
+        entry_rt(json!({"timestamp":"t","entryType":"background_task","taskId":"b1","kind":"shell","title":"npm run dev","status":"running","callId":"c4"}));
+        entry_rt(json!({"timestamp":"t","entryType":"background_task","taskId":"b1","kind":"shell","title":"npm run dev","status":"failed","summary":"exit 1"}));
+        entry_rt(json!({"timestamp":"t","entryType":"todos","callId":"c5","items":[
+            {"text":"Run the tests","status":"in_progress","activeText":"Running the tests"},
+            {"text":"Fix it","status":"pending"},{"text":"Old idea","status":"cancelled"},{"text":"Read","status":"completed"}]}));
         entry_rt(json!({"timestamp":"t","entryType":"tool_result","callId":"c1","text":"ok","isError":true}));
         entry_rt(json!({"timestamp":"t","entryType":"diff","path":"/w/a.rs","lines":[{"type":"add","text":"x"}],"truncated":true,"callId":"c1"}));
         entry_rt(json!({"timestamp":"t","entryType":"permission_request","requestId":"r","toolName":"Bash","kind":"execute","title":"rm -rf build","locations":["/w/build"],
@@ -969,7 +1050,7 @@ mod tests {
             "timestamp":"t","entryType":"tool_call","callId":"c","toolName":"Read","kind":"read","title":"a.rs",
             "subagent":{"label":"explorer"},"agentExtras":{"parentToolUseId":"x"}
         }));
-        assert_eq!(e.subagent, Some(Subagent { label: Some("explorer".into()) }));
+        assert_eq!(e.subagent, Some(Subagent { label: Some("explorer".into()), parent_call_id: None }));
         assert!(e.agent_extras.is_some());
     }
 
