@@ -1351,6 +1351,7 @@ mod tests {
                 .map(|id| ModelEntry {
                     id: (*id).to_string(),
                     label: Some(id.to_uppercase()),
+                    provider: None,
                 })
                 .collect(),
             default_model: default.map(str::to_string),
@@ -1590,7 +1591,7 @@ mod tests {
             "pk",
             &ModelsMsg {
                 agent: "opencode".into(),
-                models: vec![ModelEntry { id: "gpt".into(), label: None }],
+                models: vec![ModelEntry { id: "gpt".into(), label: None, provider: None }],
                 default_model: None,
                 error: None,
             },

@@ -440,7 +440,7 @@ fn models_are_listed_or_the_phone_is_told_why_not() {
     rig.host_up();
     rig.send(json!({"type":"models-request","agent":"alpha"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListModels { .. }));
-    rig.host_reply(&id, HostMessage::Models { models: vec![protocol::events::ModelEntry { id: "m1".into(), label: None }], default_model: Some("m1".into()) });
+    rig.host_reply(&id, HostMessage::Models { models: vec![protocol::events::ModelEntry { id: "m1".into(), label: None, provider: None }], default_model: Some("m1".into()) });
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Models(x) if x.models.len() == 1 && x.error.is_none() && x.default_model.as_deref() == Some("m1"))));
 
