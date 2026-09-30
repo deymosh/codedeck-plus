@@ -645,6 +645,14 @@ pub enum EntryBody {
         #[specta(type = Option<specta_typescript::Unknown>)]
         raw_input: Option<serde_json::Value>,
         options: Vec<PermissionOption>,
+        /// Why the agent asks rather than deciding itself, in its words
+        /// (a hook's reason, a safety check's warning), when it says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// The hook that asked for this approval (`PreToolUse:Bash`), when
+        /// one did: it asks every time, so no "always" choice is offered.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hook: Option<String>,
     },
     /// One question of a (possibly multi-question) ask, all sharing
     /// `request_id`. Answered with `question-response`.

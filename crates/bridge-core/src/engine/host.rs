@@ -750,6 +750,8 @@ impl Engine {
                     locations: req.locations,
                     raw_input: req.raw_input,
                     options: req.options.clone(),
+                    reason: req.reason,
+                    hook: req.hook,
                 });
                 entry.subagent = req.subagent;
                 let kind = CardKind::Permission { options: req.options };

@@ -196,6 +196,9 @@ export class ClaudeSession implements DriverSession {
   /** Most recent Task/Agent subagent_type — a best-effort label for a
    *  sub-agent's permission card (the SDK only exposes an opaque agent id). */
   private lastSubagentType: string | undefined;
+  /** PreToolUse hooks that answered "ask", oldest first, until their ask
+   *  arrives: `canUseTool` is not told a hook asked, only why. */
+  private hookAsks: HookAsk[] = [];
   /** Commands whose UX is bound to Claude Code's own terminal (its status
    *  line, colours, …), as `init` names them — never offered on the phone. */
   private readonly terminalCommands = new Set<string>();
@@ -321,6 +324,9 @@ export class ClaudeSession implements DriverSession {
   }
 
   private async handleMessage(msg: SdkMessage): Promise<void> {
+    const hookAsk = hookAskOf(msg);
+    if (hookAsk) this.hookAsks = [...this.hookAsks.slice(-7), hookAsk];
+
     if (msg.type === 'auth_status') {
       const auth = msg as SdkAuthStatusMessage;
       if (!auth.error) return;
@@ -455,10 +461,12 @@ export class ClaudeSession implements DriverSession {
    * The SDK's permission callback. Order:
    *  1. AskUserQuestion → the user's answers
    *  2. EnterPlanMode → allowed; the session is now planning
-   *  3. auto-approve mode → allowed
-   *  4. a narrow benign write into Claude Code's plan directory → allowed
-   *  5. ExitPlanMode → plan approval
-   *  6. anything else → the user decides
+   *  3. a PreToolUse hook asked → the user decides, whatever the mode: the
+   *     hook asks every time, so there is no "always" choice
+   *  4. auto-approve mode → allowed
+   *  5. a narrow benign write into Claude Code's plan directory → allowed
+   *  6. ExitPlanMode → plan approval
+   *  7. anything else → the user decides
    */
   private readonly canUseTool: SdkCanUseTool = async (toolName, rawInput, options) => {
     const input = (rawInput ?? {}) as Record<string, unknown>;
@@ -471,11 +479,14 @@ export class ClaudeSession implements DriverSession {
       return { behavior: 'allow', updatedInput: {} };
     }
 
-    if (this.mode === AUTO_APPROVE_MODE) return { behavior: 'allow', updatedInput: {} };
+    const reason = options.decisionReason ? plainText(options.decisionReason) : undefined;
+    const hook = this.takeHookAsk(reason);
+
+    if (!hook && this.mode === AUTO_APPROVE_MODE) return { behavior: 'allow', updatedInput: {} };
 
     // A plan sub-agent's `mkdir -p ~/.claude/plans` would otherwise block on
     // the phone and can deadlock the whole session.
-    if (isBenignPlanDirWrite(toolName, input)) {
+    if (!hook && isBenignPlanDirWrite(toolName, input)) {
       this.ctx.log(`[claude] auto-allowed benign plans-dir write in ${this.ctx.sessionId}: ${toolName}`);
       return { behavior: 'allow', updatedInput: {} };
     }
@@ -493,7 +504,9 @@ export class ClaudeSession implements DriverSession {
       ...(description ? { description } : {}),
       locations,
       rawInput: input,
-      options: [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],
+      options: hook ? [PERMISSION_ALLOW, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],
+      ...(reason ? { reason } : {}),
+      ...(hook ? { hook: hook.name } : {}),
       ...(options.agentID ? { subagent: this.lastSubagentType ? { label: this.lastSubagentType } : {} } : {}),
     });
     if (outcome.outcome === 'cancelled') return { behavior: 'deny', message: outcome.reason };
@@ -510,6 +523,12 @@ export class ClaudeSession implements DriverSession {
     }
     return { behavior: 'deny', message: USER_DENIED };
   };
+
+  /** The hook ask `reason` belongs to, removed from those waiting. */
+  private takeHookAsk(reason: string | undefined): HookAsk | undefined {
+    const i = this.hookAsks.findIndex((h) => h.reason === reason);
+    return i < 0 ? undefined : this.hookAsks.splice(i, 1)[0];
+  }
 
   /**
    * AskUserQuestion answers go back in `updatedInput.answers`, keyed by the
@@ -783,4 +802,35 @@ export class ClaudeDriver implements Driver {
       return undefined;
     }
   }
+}
+
+interface HookAsk {
+  /** As Claude Code names it: `PreToolUse:Bash`. */
+  name: string;
+  reason?: string;
+}
+
+/** A PreToolUse hook's "ask", from its `hook_response` message. */
+export function hookAskOf(msg: SdkMessage): HookAsk | undefined {
+  const m = msg as { type?: string; subtype?: string; hook_event?: string; hook_name?: string; output?: string; outcome?: string };
+  if (m.type !== 'system' || m.subtype !== 'hook_response' || m.hook_event !== 'PreToolUse' || m.outcome !== 'success') return undefined;
+  for (const line of (m.output ?? '').trim().split('\n').reverse()) {
+    try {
+      const out = (JSON.parse(line) as { hookSpecificOutput?: { permissionDecision?: unknown; permissionDecisionReason?: unknown } })
+        .hookSpecificOutput;
+      if (out?.permissionDecision !== 'ask') return undefined;
+      const reason = typeof out.permissionDecisionReason === 'string' && out.permissionDecisionReason.trim()
+        ? plainText(out.permissionDecisionReason)
+        : undefined;
+      return { name: m.hook_name || 'PreToolUse', ...(reason ? { reason } : {}) };
+    } catch {
+      // not the hook's JSON line
+    }
+  }
+  return undefined;
+}
+
+/** `text` without terminal escapes, trimmed. */
+function plainText(text: string): string {
+  return text.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '').trim();
 }

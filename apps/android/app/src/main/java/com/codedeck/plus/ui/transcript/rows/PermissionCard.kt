@@ -6,7 +6,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,7 +21,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
@@ -53,7 +62,7 @@ fun PermissionCard(
     if (item.answered != null || responded) {
         ResolvedCard(
             title = "${item.toolName} ${item.title}".trim(),
-            description = description,
+            description = listOfNotNull(description, item.hook?.let { "Asked by your $it hook" }).joinToString("\n").ifEmpty { null },
             outcome = item.answered ?: "Response sent…",
             danger = item.answered != null && Regex("den|reject", RegexOption.IGNORE_CASE).containsMatchIn(item.answered),
         )
@@ -71,6 +80,7 @@ fun PermissionCard(
         if (description != null && description != item.title) {
             Text(description, color = Tokens.TextMuted, fontSize = Tokens.TextSm)
         }
+        AskedBecause(item.reason, item.hook)
         FlowRow(
             Modifier.fillMaxWidth().padding(top = Tokens.Space2),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
@@ -86,6 +96,34 @@ fun PermissionCard(
                         ),
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Why the agent stopped to ask: the reason in its own words beside a
+ * warn-coloured rule, and, when a hook asked, which one. A hook asks every
+ * time, so its card offers no "always" choice; naming it says why.
+ */
+@Composable
+internal fun AskedBecause(reason: String?, hook: String?) {
+    val text = reason?.takeIf { it.isNotBlank() }
+    if (text == null && hook == null) return
+    Row(Modifier.padding(top = Tokens.Space2).height(IntrinsicSize.Min)) {
+        Box(Modifier.width(2.dp).fillMaxHeight().clip(RoundedCornerShape(1.dp)).background(Tokens.Warn.copy(alpha = 0.7f)))
+        Column(Modifier.padding(start = Tokens.Space3), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            text?.let { Text(it, color = Tokens.Text, fontSize = Tokens.TextSm) }
+            hook?.let {
+                Text(
+                    buildAnnotatedString {
+                        append("Asked by your ")
+                        withStyle(SpanStyle(fontFamily = Tokens.FontMono, color = Tokens.TextMuted)) { append(it) }
+                        append(" hook")
+                    },
+                    color = Tokens.TextDim,
+                    fontSize = Tokens.TextXs,
+                )
             }
         }
     }

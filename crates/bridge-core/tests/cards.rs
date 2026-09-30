@@ -35,6 +35,8 @@ fn permission(session: &str, request: &str) -> HostMessage {
             option("deny", PermissionOptionKind::RejectOnce),
         ],
         subagent: None,
+        reason: None,
+        hook: None,
     })
 }
 

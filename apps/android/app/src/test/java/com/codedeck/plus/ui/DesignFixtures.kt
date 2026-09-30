@@ -227,6 +227,19 @@ internal object DesignFixtures {
                 PermissionOption("deny", "Deny", "reject_once"),
             ),
         ),
+        DisplayEntry.PermissionRequest(
+            seq = 5,
+            requestId = "r2",
+            toolName = "Bash",
+            toolKind = "execute",
+            title = "git push --force origin release",
+            reason = "Force-pushing a release branch needs a second look.",
+            hook = "PreToolUse:Bash",
+            options = listOf(
+                PermissionOption("allow", "Allow", "allow_once"),
+                PermissionOption("deny", "Deny", "reject_once"),
+            ),
+        ),
     )
 
     /** The QR scanner's permission launcher needs an owner; nothing launches in a snapshot. */

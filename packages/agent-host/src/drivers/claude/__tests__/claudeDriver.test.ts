@@ -351,6 +351,32 @@ describe('Claude permission policy', () => {
     expect(ctx.permissions[0]?.subagent).toEqual({ label: 'Explore' });
   });
 
+  it("a hook's ask reaches the user even in the auto-approve mode, without an always choice", async () => {
+    const { ctx, handle, canUseTool } = start({ mode: 'default' }, { permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+    const answer = (decision: string, reason: string) => ({
+      type: 'system', subtype: 'hook_response', hook_event: 'PreToolUse', hook_name: 'PreToolUse:Bash', outcome: 'success',
+      output: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"${decision}","permissionDecisionReason":"${reason}"}}\n`,
+    });
+    handle.push(answer('allow', 'fine'));
+    handle.push(answer('ask', 'Deploys need a human'));
+    handle.push({ type: 'system', subtype: 'informational', content: 'PreToolUse:Bash says: deploys are logged' });
+    await ctx.waitFor((e) => e.type === 'entries');
+    expect(ctx.events).toContainEqual(expect.objectContaining({
+      type: 'entries', entries: [expect.objectContaining({ entryType: 'status', text: 'PreToolUse:Bash says: deploys are logged' })],
+    }));
+
+    const deploy = { command: 'make deploy' };
+    expect(await ask(canUseTool, 'Bash', deploy, { decisionReason: '\u001b[1mDeploys need a human\u001b[0m' })).toMatchObject({ behavior: 'allow' });
+    expect(ctx.permissions[0]).toMatchObject({
+      reason: 'Deploys need a human',
+      hook: 'PreToolUse:Bash',
+      options: [{ id: 'allow', label: 'Allow', kind: 'allow_once' }, { id: 'deny', label: 'Deny', kind: 'reject_once' }],
+    });
+    // Claude Code's own ask, with no hook behind it, is still auto-approved.
+    expect(await ask(canUseTool, 'Bash', deploy, { decisionReason: 'Deploys need a human' })).toMatchObject({ behavior: 'allow' });
+    expect(ctx.permissions).toHaveLength(1);
+  });
+
   it('EnterPlanMode is allowed and switches the session to planning', async () => {
     const { ctx, canUseTool } = start({ mode: 'default' });
     expect(await ask(canUseTool, 'EnterPlanMode', {})).toMatchObject({ behavior: 'allow' });

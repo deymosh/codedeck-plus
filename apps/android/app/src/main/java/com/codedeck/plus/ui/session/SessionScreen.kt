@@ -1015,14 +1015,16 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
     ) {
-        val label = if (pending.isSubAgent) {
-            "${pending.agentLabel ?: "Sub-agent"}: ${pending.toolName} needs permission"
-        } else {
-            "${pending.toolName} needs permission"
+        val label = when {
+            pending.hook != null -> "A hook asks before ${pending.toolName} runs"
+            pending.isSubAgent -> "${pending.agentLabel ?: "Sub-agent"}: ${pending.toolName} needs permission"
+            else -> "${pending.toolName} needs permission"
         }
-        // What the approval is actually for: the call's own title (the
-        // command, the path), else the agent's description of the rule.
-        val detail = pending.title.takeIf { it.isNotBlank() } ?: pending.description.orEmpty()
+        // What the approval is actually for: a hook's own reason, else the
+        // call's title (the command, the path), else the agent's description.
+        val detail = pending.reason?.takeIf { pending.hook != null && it.isNotBlank() }
+            ?: pending.title.takeIf { it.isNotBlank() }
+            ?: pending.description.orEmpty()
         Column(Modifier.weight(1f)) {
             Text(label, color = Tokens.Text, fontSize = Tokens.TextSm, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (detail.isNotBlank() && detail != label) {

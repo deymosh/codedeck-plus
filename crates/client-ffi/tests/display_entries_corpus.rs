@@ -24,7 +24,7 @@ use serde_json::json;
 /// text, a call whose result lands after a permission card, a sub-agent
 /// call), a diff card, an error, a status line, a notice, a plan, a plan
 /// approval, a single question, a two-question ask, a resolved permission
-/// and a pending one.
+/// and a pending one a hook asked for.
 fn corpus() -> Vec<SeqEntry> {
     let wire = [
         json!({"entryType":"text","role":"user","text":"port the connection reducer to rust"}),
@@ -60,7 +60,8 @@ fn corpus() -> Vec<SeqEntry> {
         json!({"entryType":"question","requestId":"tu-question-group","index":1,"count":2,"header":"Timeline","question":"When?",
             "options":[{"label":"This week"},{"label":"Next sprint"}],"multiSelect":true}),
         json!({"entryType":"permission_request","requestId":"tu-permission","toolName":"Bash","kind":"execute","title":"cargo test",
-            "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}]}),
+            "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}],
+            "reason":"Tests need a human while CI is red","hook":"PreToolUse:Bash"}),
         json!({"entryType":"turn_complete"}),
     ];
     wire.into_iter()
