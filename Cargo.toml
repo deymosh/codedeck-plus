@@ -54,3 +54,14 @@ publish = false
 [workspace.lints.clippy]
 # keep the pure core honest
 all = { level = "warn", priority = -1 }
+
+# Release builds (the phone's native library, the bridge) optimise across
+# crates in one unit: measured on the arm64 phone library, a seventh
+# smaller once stripped (10.5 MB to 9.0 MB) for half again the build time,
+# and `fat` LTO gains nothing more over `thin`. Not `strip` (the Android
+# build strips the library itself, and the bridge keeps readable panic
+# backtraces) and not `panic = "abort"`: the FFI catches a panic unwinding
+# out of a foreign callback instead of letting it kill the app.
+[profile.release]
+lto = "thin"
+codegen-units = 1
