@@ -31,6 +31,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
 use client_runtime::client_core::stores::machines::{AgentMcp, AgentPlugins, SessionMcp};
+use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
 };
@@ -381,6 +382,8 @@ pub struct UniffiAgent {
     pub supports_commands: bool,
     pub supports_plugins: bool,
     pub supports_mcp: bool,
+    /// Sessions report background tasks, and `StopTask` stops one.
+    pub supports_tasks: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
 }
 
@@ -428,6 +431,7 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         supports_commands: a.supports.commands,
         supports_plugins: a.supports.plugins,
         supports_mcp: a.supports.mcp,
+        supports_tasks: a.supports.tasks,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
     }
 }
@@ -1111,6 +1115,9 @@ pub struct UniffiTranscriptDelta {
     /// `serde_json::to_string` of a `PendingPermissionSummary`, present iff a
     /// permission request is still unanswered and unresolved.
     pub pending_permission_json: Option<String>,
+    /// `serde_json::to_string` of an `ActivityView` (the checklist,
+    /// sub-agents and background tasks), present iff there is any.
+    pub activity_json: Option<String>,
     /// `idle` / `requested` / `syncing` / `complete` / `failed`.
     pub sync_state: String,
     pub contiguous: bool,
@@ -1158,6 +1165,7 @@ pub fn build_uniffi_transcript_delta(
         .collect();
     let rows = build_display_entries(&seq_entries);
     let pending = find_pending_permission(&seq_entries, responded_cards);
+    let activity = build_activity(&seq_entries, &rows);
     let order: Vec<u64> = rows.iter().map(DisplayEntry::seq).collect();
     let unique = order.iter().collect::<BTreeSet<_>>().len() == order.len();
 
@@ -1192,6 +1200,7 @@ pub fn build_uniffi_transcript_delta(
         order,
         changed,
         pending_permission_json: pending.and_then(|p| serde_json::to_string(&p).ok()),
+        activity_json: activity.and_then(|a| serde_json::to_string(&a).ok()),
         sync_state: wire_str(&view.sync.state),
         contiguous: view.sync.contiguous,
     }

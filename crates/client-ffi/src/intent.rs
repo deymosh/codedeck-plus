@@ -129,6 +129,13 @@ pub enum UniffiIntent {
         machine: String,
         session_id: String,
     },
+    /// Stop one of the session's background tasks (agents with
+    /// `supportsTasks`).
+    StopTask {
+        machine: String,
+        session_id: String,
+        task_id: String,
+    },
     CloseSession {
         machine: String,
         session_id: String,
@@ -427,6 +434,7 @@ impl TryFrom<UniffiIntent> for Intent {
                 })
             }
             UniffiIntent::Interrupt { machine, session_id } => Intent::Interrupt { machine, session_id },
+            UniffiIntent::StopTask { machine, session_id, task_id } => Intent::StopTask { machine, session_id, task_id },
             UniffiIntent::CloseSession { machine, session_id } => Intent::CloseSession { machine, session_id },
             UniffiIntent::RefreshSessions { machine } => Intent::RefreshSessions { machine },
             UniffiIntent::CreateSession {

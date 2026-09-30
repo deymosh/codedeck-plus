@@ -20,7 +20,7 @@ use protocol::commands::{
     BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
-    VersionFields,
+    StopTaskMsg, VersionFields,
 };
 use protocol::common::{CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
@@ -253,6 +253,12 @@ pub enum Intent {
     Interrupt {
         machine: String,
         session_id: String,
+    },
+    /// Stop one of the session's background tasks.
+    StopTask {
+        machine: String,
+        session_id: String,
+        task_id: String,
     },
     CloseSession {
         machine: String,
@@ -635,6 +641,18 @@ pub fn apply(
             PhoneToBridge::Interrupt(SessionIdMsg {
                 version: v(),
                 session_id,
+            }),
+        ),
+        Intent::StopTask {
+            machine,
+            session_id,
+            task_id,
+        } => r.send(
+            &machine,
+            PhoneToBridge::StopTask(StopTaskMsg {
+                version: v(),
+                session_id,
+                task_id,
             }),
         ),
         Intent::CloseSession {
