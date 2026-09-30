@@ -319,6 +319,20 @@ private fun SessionList(
     onDeleteSession: (machine: String, sessionId: String, label: String) -> Unit,
     onDismissPending: (pendingId: String) -> Unit,
 ) {
+    // Worked out once per change of the lists, not on every recomposition
+    // (the presence clock ticks the list every half minute).
+    val orphanFailed = remember(pendingSessions) {
+        pendingSessions.filter { it.machine.isBlank() && it.state == "failed" }.sortedBy { it.seenAt }
+    }
+    val groups = remember(machines, pendingSessions) {
+        orderedMachines(machines).map { machine ->
+            MachineGroup(
+                machine = machine,
+                pending = pendingSessions.filter { it.machine == machine.pubkeyHex }.sortedBy { it.seenAt },
+                sessions = orderedSessions(machine.sessions),
+            )
+        }
+    }
     LazyColumn(
         Modifier.fillMaxSize(),
         // Room under the last card for the pairing button.
@@ -326,12 +340,11 @@ private fun SessionList(
         verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
         // Failed creates that never reached a machine, once at the top.
-        val orphanFailed = pendingSessions.filter { it.machine.isBlank() && it.state == "failed" }.sortedBy { it.seenAt }
-        items(orphanFailed, key = { "orphan-${it.pendingId}" }) { pending ->
+        items(orphanFailed, key = { "orphan-${it.pendingId}" }, contentType = { "pending" }) { pending ->
             PendingSessionCard(pending, onDismissPending)
         }
 
-        orderedMachines(machines).forEachIndexed { index, machine ->
+        groups.forEachIndexed { index, (machine, machinePending, sessions) ->
             item(key = "${machine.pubkeyHex}-header", contentType = "header") {
                 MachineHeader(
                     machine = machine,
@@ -341,13 +354,11 @@ private fun SessionList(
                     onNewSession = { onNewSession(machine.pubkeyHex) },
                 )
             }
-            val machinePending = pendingSessions.filter { it.machine == machine.pubkeyHex }.sortedBy { it.seenAt }
-            items(machinePending, key = { "pend-${it.pendingId}" }) { pending ->
+            items(machinePending, key = { "pend-${it.pendingId}" }, contentType = { "pending" }) { pending ->
                 PendingSessionCard(pending, onDismissPending)
             }
-            val sessions = orderedSessions(machine.sessions)
             if (sessions.isEmpty() && machinePending.isEmpty()) {
-                item(key = "${machine.pubkeyHex}-empty") {
+                item(key = "${machine.pubkeyHex}-empty", contentType = "empty") {
                     Text(
                         "No sessions yet.",
                         color = Tokens.TextDim,
@@ -356,7 +367,7 @@ private fun SessionList(
                     )
                 }
             }
-            items(sessions, key = { "${machine.pubkeyHex}-${it.id}" }) { session ->
+            items(sessions, key = { "${machine.pubkeyHex}-${it.id}" }, contentType = { "session" }) { session ->
                 SwipeToDeleteSessionCard(
                     machine = machine.pubkeyHex,
                     session = session,
@@ -371,6 +382,13 @@ private fun SessionList(
         }
     }
 }
+
+/** One machine's part of the list, in the order it shows. */
+private data class MachineGroup(
+    val machine: UniffiMachineSummary,
+    val pending: List<UniffiPendingSession>,
+    val sessions: List<UniffiSessionSummary>,
+)
 
 /** A machine's name (opens its settings), whether it is up, and starting a session on it. */
 @Composable
