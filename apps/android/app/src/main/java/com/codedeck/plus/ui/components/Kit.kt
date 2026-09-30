@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -448,7 +449,12 @@ fun DiffStat(added: Int, removed: Int, modifier: Modifier = Modifier) {
  */
 @Composable
 fun CodeBlock(text: String, modifier: Modifier = Modifier, lineNumbers: Boolean = false, firstLine: Int = 1, color: Color = Tokens.Text) {
-    val lines = text.trimEnd('\n').split('\n')
+    // Once per text: a tool's output can run to thousands of lines, and the
+    // sheet showing it recomposes with every update of the transcript.
+    val body = remember(text) { text.trimEnd('\n') }
+    val gutter = remember(body, firstLine, lineNumbers) {
+        if (lineNumbers) (0..body.count { it == '\n' }).joinToString("\n") { (it + firstLine).toString() } else ""
+    }
     Row(
         modifier
             .fillMaxWidth()
@@ -458,7 +464,7 @@ fun CodeBlock(text: String, modifier: Modifier = Modifier, lineNumbers: Boolean 
     ) {
         if (lineNumbers) {
             Text(
-                lines.indices.joinToString("\n") { (it + firstLine).toString() },
+                gutter,
                 color = Tokens.TextDim,
                 fontSize = Tokens.TextSm,
                 fontFamily = Tokens.FontMono,
@@ -469,7 +475,7 @@ fun CodeBlock(text: String, modifier: Modifier = Modifier, lineNumbers: Boolean 
         }
         SelectionContainer {
             Text(
-                lines.joinToString("\n"),
+                body,
                 color = color,
                 fontSize = Tokens.TextSm,
                 fontFamily = Tokens.FontMono,
