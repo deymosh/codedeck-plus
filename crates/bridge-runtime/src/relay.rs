@@ -77,7 +77,7 @@ impl EventFactory {
     /// The signed events carrying `message` to `to`: `p`-tagged to the
     /// phone's identity, the payload encrypted to `to.key`.
     pub fn events(&mut self, message: &BridgeToPhone, to: &Addressee, now_secs: u64) -> Result<Vec<SignedEvent>, String> {
-        let json = protocol::encode_bridge_to_phone(message);
+        let json = protocol::packing::pack(protocol::encode_bridge_to_phone(message));
         let (kind, expiry) = kind_for(message);
         let frames = frame_encoded_message(&json, || hex::encode(rand::random::<[u8; 16]>()));
         let chunked = frames.len() > 1;
@@ -685,6 +685,23 @@ mod tests {
         assert!(!superseded(&phone, &VecDeque::from([job(&phone, output("s", 1, &["a"]))])));
     }
 
+    fn status(text: String) -> BridgeToPhone {
+        BridgeToPhone::Output(OutputMsg { session_id: "s".into(), seq: 1, entries: vec![OutputEntry::new("t", EntryBody::Status { text })] })
+    }
+
+    #[test]
+    fn a_long_message_that_packs_small_goes_whole() {
+        let phone = generate_keypair();
+        let bridge = generate_keypair();
+        let mut f = EventFactory::new(bridge.clone(), "m".into());
+        let message = status("x".repeat(100_000));
+        let events = f.events(&message, &to(&phone.pubkey_hex), 1000).unwrap();
+        assert_eq!(events.len(), 1);
+        let plain = decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &events[0].content).unwrap();
+        assert!(plain.starts_with(protocol::packing::PACKED_PREFIX));
+        assert_eq!(protocol::decode_bridge_to_phone(&plain).unwrap(), message);
+    }
+
     #[test]
     fn a_session_s_outputs_share_a_lane_and_only_they_and_heartbeats_overlap() {
         assert_eq!(lane_of(&BridgeToPhone::Output(output("s", 1, &["a"]))), lane_of(&BridgeToPhone::Output(output("s", 9, &["b"]))));
@@ -728,12 +745,17 @@ mod tests {
     fn an_oversize_message_is_split_into_untagged_fragments() {
         let phone = generate_keypair();
         let mut f = EventFactory::new(generate_keypair(), "m".into());
-        let big = BridgeToPhone::Output(OutputMsg {
-            session_id: "s".into(),
-            seq: 1,
-            entries: vec![OutputEntry::new("t", EntryBody::Status { text: "x".repeat(100_000) })],
-        });
-        let events = f.events(&big, &to(&phone.pubkey_hex), 1000).unwrap();
+        // Text that does not compress: it stays past what one event holds.
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let noise: String = (0..100_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                char::from(b'a' + (x % 26) as u8)
+            })
+            .collect();
+        let events = f.events(&status(noise), &to(&phone.pubkey_hex), 1000).unwrap();
         assert!(events.len() >= 3);
         assert!(events.iter().all(|e| tag(e, "seq").is_none() && e.content.len() <= 65_535));
         assert!(events.iter().all(|e| e.created_at == events[0].created_at));
