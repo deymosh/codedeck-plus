@@ -24,6 +24,8 @@ use protocol::crypto::{encrypt_to, Keypair};
 use protocol::events::BridgeToPhone;
 use protocol::kinds::{COMMAND_KIND, LIVE_KIND, RESPONSE_EXPIRY_SECONDS, RESPONSE_KIND, SESSION_LIST_KIND};
 use protocol::nostr_event::SignedEvent;
+use protocol::events::OutputMsg;
+use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
 /// Which kind a message rides, and whether it expires.
@@ -117,6 +119,32 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// The most a run of outputs grows to by taking in the ones queued after it:
+/// what one event carries without being split into fragments.
+const RUN_MAX_BYTES: usize = protocol::chunking::NIP44_SAFE_PLAINTEXT_BYTES;
+
+/// Take the outputs queued right behind `run` into it, while they continue
+/// it — the same session to the same phones, seqs straight on — and it still
+/// fits one event. Only the front of `backlog` is looked at, so what goes out
+/// keeps its order.
+fn absorb_run(run: &mut OutputMsg, to: &[Addressee], backlog: &mut VecDeque<Job>) {
+    let mut size = protocol::encode_bridge_to_phone(&BridgeToPhone::Output(run.clone())).len();
+    while let Some(Job::Publish { to: next_to, message }) = backlog.front() {
+        let BridgeToPhone::Output(next) = message.as_ref() else { break };
+        let continues = next_to.as_slice() == to
+            && next.session_id == run.session_id
+            && next.seq == run.seq + run.entries.len() as u64;
+        let adds: usize = next.entries.iter().map(|e| serde_json::to_string(e).map_or(0, |j| j.len() + 1)).sum();
+        if !continues || size + adds > RUN_MAX_BYTES {
+            break;
+        }
+        let Some(Job::Publish { message, .. }) = backlog.pop_front() else { break };
+        let BridgeToPhone::Output(next) = *message else { break };
+        run.entries.extend(next.entries);
+        size += adds;
+    }
+}
+
 enum Job {
     Publish { to: Vec<Addressee>, message: Box<BridgeToPhone> },
     /// Resolves once every job queued before it is done.
@@ -163,12 +191,29 @@ impl Relays {
             // goes out before any relay is up, over Tor by seconds): sent
             // again once a relay is, instead of at the next beat a minute on.
             let mut unsent_beats: HashMap<String, Vec<SignedEvent>> = HashMap::new();
-            while let Some(job) = queue.recv().await {
+            // Jobs taken off the queue but not yet done. Each publish waits
+            // on a relay's word (seconds over Tor), and the outputs that
+            // queue meanwhile go out together with the next one.
+            let mut backlog: VecDeque<Job> = VecDeque::new();
+            loop {
+                let job = match backlog.pop_front() {
+                    Some(job) => job,
+                    None => match queue.recv().await {
+                        Some(job) => job,
+                        None => break,
+                    },
+                };
                 match job {
                     Job::Flush(done) => {
                         let _ = done.send(());
                     }
-                    Job::Publish { to, message } => {
+                    Job::Publish { to, mut message } => {
+                        if let BridgeToPhone::Output(run) = message.as_mut() {
+                            while let Ok(next) = queue.try_recv() {
+                                backlog.push_back(next);
+                            }
+                            absorb_run(run, &to, &mut backlog);
+                        }
                         let beat = matches!(*message, BridgeToPhone::Sessions(_));
                         for addressee in to {
                             let events = match factory.events(&message, &addressee, now_secs()) {
@@ -304,7 +349,7 @@ impl Relays {
 mod tests {
     use super::*;
     use protocol::crypto::{decrypt_from, generate_keypair};
-    use protocol::events::{OutputMsg, SessionListMsg};
+    use protocol::events::SessionListMsg;
     use protocol::common::{EntryBody, OutputEntry};
 
     fn tag<'a>(e: &'a SignedEvent, name: &str) -> Option<&'a str> {
@@ -407,6 +452,51 @@ mod tests {
         let a = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap()[0].created_at;
         let b = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap()[0].created_at;
         assert!(b > a);
+    }
+
+    fn output(session: &str, seq: u64, texts: &[&str]) -> OutputMsg {
+        OutputMsg {
+            session_id: session.into(),
+            seq,
+            entries: texts.iter().map(|t| OutputEntry::new("t", EntryBody::Status { text: t.to_string() })).collect(),
+        }
+    }
+    fn job(to: &[Addressee], m: OutputMsg) -> Job {
+        Job::Publish { to: to.to_vec(), message: Box::new(BridgeToPhone::Output(m)) }
+    }
+
+    #[test]
+    fn outputs_queued_behind_a_run_join_it_while_they_continue_it() {
+        let phone = [to("p")];
+        let mut run = output("s", 1, &["a"]);
+        let mut backlog: VecDeque<Job> = VecDeque::from([
+            job(&phone, output("s", 2, &["b", "c"])),
+            job(&phone, output("s", 4, &["d"])),
+            // Another session: it and everything after it wait their turn.
+            job(&phone, output("other", 1, &["x"])),
+            job(&phone, output("s", 5, &["e"])),
+        ]);
+        absorb_run(&mut run, &phone, &mut backlog);
+        assert_eq!((run.seq, run.entries.len()), (1, 4));
+        assert_eq!(backlog.len(), 2);
+    }
+
+    #[test]
+    fn a_run_takes_in_nothing_that_does_not_continue_it_or_would_not_fit() {
+        let phone = [to("p")];
+        let mut run = output("s", 1, &["a"]);
+        // Other phones, a gap in the seqs, a flush between.
+        for next in [job(&[to("q")], output("s", 2, &["b"])), job(&phone, output("s", 3, &["b"])), Job::Flush(oneshot::channel().0)] {
+            let mut backlog = VecDeque::from([next]);
+            absorb_run(&mut run, &phone, &mut backlog);
+            assert_eq!((run.entries.len(), backlog.len()), (1, 1));
+        }
+        // More than one event holds.
+        let big = "x".repeat(RUN_MAX_BYTES / 2);
+        let mut run = output("s", 1, &[&big]);
+        let mut backlog = VecDeque::from([job(&phone, output("s", 2, &[&big])), job(&phone, output("s", 3, &["y"]))]);
+        absorb_run(&mut run, &phone, &mut backlog);
+        assert_eq!((run.entries.len(), backlog.len()), (1, 2));
     }
 
     #[test]
