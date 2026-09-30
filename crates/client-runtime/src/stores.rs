@@ -18,7 +18,10 @@ use client_core::stores::pending_sessions::PendingSessionsState;
 use client_core::stores::quick_prompts::{
     hydrate_quick_prompts, serialize_quick_prompts, QuickPromptsState, QUICK_PROMPTS_STORAGE_KEY,
 };
+use client_core::stores::backup::{hydrate_backup_config, serialize_backup_config, BackupConfig, ConfigBackup, BACKUP_STORAGE_KEY};
 use client_core::stores::settings::{hydrate_settings, serialize_settings, SettingsState};
+
+use crate::backup::BackupStatus;
 use client_core::stores::transcript::TranscriptState;
 use client_core::stores::ui::UiState;
 
@@ -31,6 +34,8 @@ pub const DISMISSED_SESSIONS_KEY: &str = "machines.dismissed";
 pub const OUTBOX_KEY: &str = "outbox";
 pub const SETTINGS_KEY: &str = "settings";
 pub const QUICK_PROMPTS_KEY: &str = QUICK_PROMPTS_STORAGE_KEY;
+/// The config backup's relay and what was last saved there.
+pub const BACKUP_KEY: &str = BACKUP_STORAGE_KEY;
 /// The session keys, when the host keeps them in the KV (see
 /// [`crate::ports::KvSessionKeyStore`]).
 pub const SESSION_KEYS_KEY: &str = "session.keys";
@@ -40,6 +45,16 @@ pub const OLD_SESSION_KEY_KEY: &str = "session.secretKey";
 /// `nostr_client`'s `last_stored_seen` cursor (seconds), persisted so a reboot
 /// resumes its since-window.
 pub const LAST_STORED_SEEN_KEY: &str = "client.lastStoredSeen";
+
+/// The config backup: its relay (persisted), where the current operation
+/// stands, and a backup found on the relay the user has not decided on yet
+/// (in memory only, never written down).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BackupState {
+    pub config: BackupConfig,
+    pub status: BackupStatus,
+    pub found: Option<ConfigBackup>,
+}
 
 /// Boot options for the store bundle.
 #[derive(Debug, Clone, Default)]
@@ -58,6 +73,7 @@ pub struct CoreStores {
     pub pairing: PairingState,
     pub settings: SettingsState,
     pub quick_prompts: QuickPromptsState,
+    pub backup: BackupState,
     pub ui: UiState,
     pub notifications: NotificationCoordinator,
     pub delete_controller: DeleteController,
@@ -65,10 +81,13 @@ pub struct CoreStores {
 
 impl CoreStores {
     /// The relays the transport dials: every paired machine's, plus a pairing
-    /// candidate's, which its pair-request and pair-ack travel over.
+    /// candidate's, which its pair-request and pair-ack travel over, plus the
+    /// config backup's. Dialled like the others, so through Tor when it is
+    /// on, and answering the relay's AUTH with the identity.
     pub fn relay_set(&self) -> Vec<String> {
         let mut relays = self.machines.relay_set();
-        for relay in self.pairing.candidate.iter().flat_map(|c| &c.relays) {
+        let candidate = self.pairing.candidate.iter().flat_map(|c| &c.relays);
+        for relay in candidate.chain(self.backup.config.relay.as_ref()) {
             if !relays.contains(relay) {
                 relays.push(relay.clone());
             }
@@ -157,6 +176,10 @@ pub async fn hydrate(
     config: &StoresConfig,
 ) -> HydratedCore {
     let settings = SettingsState::new(hydrate_settings(kv.get(SETTINGS_KEY).await.as_deref()));
+    let backup = BackupState {
+        config: hydrate_backup_config(kv.get(BACKUP_KEY).await.as_deref()),
+        ..BackupState::default()
+    };
     let quick_prompts =
         QuickPromptsState::from_hydrated(hydrate_quick_prompts(kv.get(QUICK_PROMPTS_KEY).await.as_deref()));
     let mut machines = MachinesState::new(
@@ -192,6 +215,7 @@ pub async fn hydrate(
             pairing: PairingState::default(),
             settings,
             quick_prompts,
+            backup,
             ui: UiState::default(),
             notifications: NotificationCoordinator::default(),
             delete_controller: DeleteController::default(),
@@ -231,6 +255,10 @@ impl<'a> Persister<'a> {
         self.kv
             .set(QUICK_PROMPTS_KEY, &serialize_quick_prompts(&s.prompts))
             .await;
+    }
+
+    pub async fn save_backup(&self, s: &BackupState) {
+        self.kv.set(BACKUP_KEY, &serialize_backup_config(&s.config)).await;
     }
 
     pub async fn save_last_stored_seen(&self, ts: i64) {

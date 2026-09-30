@@ -383,6 +383,20 @@ pub enum Intent {
     SetUiScale(f64),
     SetShowUsageBadge(bool),
     SetShowCommitBadge(bool),
+
+    // --- config backup (the loop's, see `runtime::backup`) ---
+    /// Turn the backup on with this relay (or move it there), then look for
+    /// a backup already on it.
+    SetBackupRelay(String),
+    /// Merge the backup found on the relay into this phone.
+    ImportBackup,
+    /// Leave the backup found on the relay and save this phone's over it.
+    KeepLocalConfig,
+    /// Save the backup now.
+    BackupNow,
+    /// Turn the backup off; `delete` also asks the relay to delete it.
+    DisableBackup { delete: bool },
+
     AddQuickPrompt {
         id: String,
         label: String,
@@ -864,6 +878,12 @@ pub fn apply(
             stores.settings.set_show_commit_badge(on);
             r.persist(StoreId::Settings);
         }
+        // Taken by the loop before the stores see an intent.
+        Intent::SetBackupRelay(_)
+        | Intent::ImportBackup
+        | Intent::KeepLocalConfig
+        | Intent::BackupNow
+        | Intent::DisableBackup { .. } => {}
         Intent::AddQuickPrompt { id, label, text } => {
             if stores.quick_prompts.add_prompt(&id, &label, &text) {
                 r.persist(StoreId::QuickPrompts);

@@ -952,7 +952,7 @@ pub struct UniffiSettingsView {
 }
 
 pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
-    let d = &v.0;
+    let d = &v.data;
     UniffiSettingsView {
         ui_scale: d.ui_scale,
         stay_connected: d.stay_connected,

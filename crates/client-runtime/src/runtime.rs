@@ -47,6 +47,7 @@ use crate::ports::{
 };
 use crate::signer::{Cipher, IdentityAuth, IdentitySigner, PhoneKeys, SignerError};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
+use client_core::stores::backup::ConfigBackup;
 use crate::transport::ws::{WsConfig, WsTransport, PING_EVERY, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use crate::view::{
     ConnectionView, MachinesView, OutboxView, PairingView,
@@ -424,6 +425,9 @@ impl Core {
             last_connected_relays: Vec::new(),
             pair_timer: None,
             undo_timer: None,
+            backup_timer: None,
+            backup_busy: false,
+            backup_created_at: 0,
             machines_dirty: false,
             stored_seen_dirty: None,
             flush_timer: None,
@@ -699,6 +703,15 @@ enum Msg {
     },
     /// A bridge's direct link delivered an event.
     DirectEvent(NostrEvent),
+    /// Time to save the config backup.
+    BackupDue,
+    /// A look on the backup relay finished.
+    BackupFetched(backup::Fetched),
+    /// A backup save finished: when it was made and what it held, or why
+    /// it failed.
+    BackupSaved(Result<(u64, String), String>),
+    /// The backup's deletion was sent (or given up on).
+    BackupDeleted,
     /// A machine's direct link came up on an endpoint, or went down.
     DirectState {
         machine: String,
@@ -721,6 +734,22 @@ enum SignerJob {
     },
     /// Decrypt a message the session key could not.
     Decrypt(NostrEvent),
+    /// Open the identity's config backup.
+    OpenBackup {
+        event: NostrEvent,
+        reply: oneshot::Sender<Result<ConfigBackup, String>>,
+    },
+    /// Seal the config backup into a signed event.
+    SealBackup {
+        backup: Box<ConfigBackup>,
+        created_at: u64,
+        reply: oneshot::Sender<Result<SignedEvent, String>>,
+    },
+    /// Sign the deletion of the config backup.
+    SealDeletion {
+        created_at: u64,
+        reply: oneshot::Sender<Result<SignedEvent, String>>,
+    },
 }
 
 async fn run_signer(
@@ -740,6 +769,19 @@ async fn run_signer(
                 plaintext: signer.nip44_decrypt(&event.pubkey, &event.content).await,
                 event,
             },
+            // The backup's own task waits for these.
+            SignerJob::OpenBackup { event, reply } => {
+                let _ = reply.send(crate::backup::open_backup(signer.as_ref(), &event).await);
+                continue;
+            }
+            SignerJob::SealBackup { backup, created_at, reply } => {
+                let _ = reply.send(crate::backup::seal_backup(signer.as_ref(), &backup, created_at).await);
+                continue;
+            }
+            SignerJob::SealDeletion { created_at, reply } => {
+                let _ = reply.send(crate::backup::seal_deletion(signer.as_ref(), created_at).await);
+                continue;
+            }
         };
         if tx.send(msg).is_err() {
             return;
@@ -849,6 +891,12 @@ struct Loop {
     pair_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
+    /// The pending config backup save (see `runtime::backup`).
+    backup_timer: Option<AbortHandle>,
+    /// A backup look, save or deletion is under way.
+    backup_busy: bool,
+    /// The `created_at` (s) of the last backup event made.
+    backup_created_at: u64,
     /// The machines store changed since it was last written.
     machines_dirty: bool,
     /// A stored-event cursor not written yet.
@@ -1009,6 +1057,10 @@ impl Loop {
                 }
                 Msg::CommandSigned { machine, event, reply, outbox_id } => self.publish_built(&machine, event, reply, outbox_id),
                 Msg::DirectEvent(event) => self.nostr.deliver(&event),
+                Msg::BackupDue => self.on_backup_due(),
+                Msg::BackupFetched(found) => self.on_backup_fetched(found),
+                Msg::BackupSaved(saved) => self.on_backup_saved(saved).await,
+                Msg::BackupDeleted => self.forget_backup_relay().await,
                 Msg::DirectState { machine, endpoint } => {
                     let changed = match endpoint {
                         Some(endpoint) => self.links_up.insert(machine, endpoint.clone()) != Some(endpoint),
@@ -1412,6 +1464,10 @@ impl Loop {
     }
 
     async fn persist_store(&mut self, id: StoreId) {
+        // What these hold goes in the config backup.
+        if id != StoreId::Outbox {
+            self.backup_changed();
+        }
         let p = Persister::new(self.kv.as_ref());
         match id {
             StoreId::Machines => {
@@ -1483,6 +1539,7 @@ impl Loop {
         reply: oneshot::Sender<()>,
     ) -> Option<oneshot::Sender<()>> {
         let mut reply = Some(reply);
+        let Some(intent) = self.on_backup_intent(intent).await else { return reply };
         // A pairing grants the current key: never one about to be replaced.
         self.rotate_session_key_if_due().await;
         let ctx = IntentCtx {
@@ -2113,5 +2170,6 @@ fn egress_detail(err: &EgressError) -> String {
     }
 }
 
+mod backup;
 #[cfg(test)]
 mod tests;

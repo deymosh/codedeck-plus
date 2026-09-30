@@ -2236,3 +2236,101 @@ fn core_event_json_shape_is_externally_tagged_camel_case() {
         serde_json::json!({ "actionFailed": { "kind": "publishRejected" } }),
     );
 }
+
+/// The next frame of `kind` (`REQ`, `EVENT`, …), skipping the others.
+async fn next_frame_of(mock: &mut MockRelay, kind: &str) -> Vec<serde_json::Value> {
+    for _ in 0..20 {
+        let frame = mock.next_frame().await;
+        let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+        if v[0] == kind {
+            return v;
+        }
+    }
+    panic!("no {kind} frame");
+}
+
+/// The backup look's REQ: answered with `events` then EOSE.
+async fn answer_backup_req(mock: &mut MockRelay, me: &str, events: &[serde_json::Value]) {
+    loop {
+        let req = next_frame_of(mock, "REQ").await;
+        let sub = req[1].as_str().unwrap().to_string();
+        if req[2]["#d"].is_array() {
+            assert_eq!(req[2]["kinds"], serde_json::json!([30078]));
+            assert_eq!(req[2]["authors"], serde_json::json!([me]));
+            for e in events {
+                mock.push(serde_json::json!(["EVENT", sub, e]).to_string());
+            }
+            mock.push(format!(r#"["EOSE","{sub}"]"#));
+            return;
+        }
+        mock.push(format!(r#"["EOSE","{sub}"]"#));
+    }
+}
+
+async fn settings_backup(core: &Core) -> crate::view::BackupView {
+    core.settings_view().await.unwrap().backup
+}
+
+#[tokio::test]
+async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
+    LocalSet::new()
+        .run_until(async {
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+
+            // The old phone, paired with a machine, turns the backup on.
+            let mut first = mock_relay().await;
+            let mut state = client_core::stores::machines::MachinesState::default();
+            // Names with spaces: base64 ciphertext can never contain them by chance.
+            state.register_machine(&machine.pubkey_hex, "my laptop", Some("Work lab".into()), None, &[first.url.clone()]);
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let old = core_for_ports(&first, &phone, Rc::new(Spy::default()), CorePorts { kv: Rc::new(kv), ..CorePorts::default() }).await;
+            old.start();
+            old.dispatch(Intent::SetBackupRelay(first.url.clone())).await;
+            // Nothing on the relay yet: this phone's is saved.
+            answer_backup_req(&mut first, &phone.pubkey_hex, &[]).await;
+            let event = next_frame_of(&mut first, "EVENT").await[1].clone();
+            assert_eq!(event["kind"], 30078);
+            let wire = event.to_string();
+            assert!(!wire.contains("my laptop") && !wire.contains("Work lab") && !wire.contains(&machine.pubkey_hex));
+            first.push(serde_json::json!(["OK", event["id"], true, ""]).to_string());
+            settle().await;
+            let saved = settings_backup(&old).await;
+            assert_eq!(saved.relay.as_deref(), Some(first.url.as_str()));
+            assert!(saved.saved_at.is_some());
+
+            // A fresh phone with the same identity finds it and imports it.
+            let mut second = mock_relay().await;
+            let new = core_for(&second, &phone, Rc::new(Spy::default())).await;
+            new.start();
+            new.dispatch(Intent::SetBackupRelay(second.url.clone())).await;
+            answer_backup_req(&mut second, &phone.pubkey_hex, &[event]).await;
+            settle().await;
+            assert!(matches!(settings_backup(&new).await.status, crate::backup::BackupStatus::Found { machines: 1, .. }));
+            assert!(new.machines_view().await.machines.is_empty(), "nothing is imported before the user says so");
+
+            new.dispatch(Intent::ImportBackup).await;
+            let machines = new.machines_view().await.machines;
+            let restored = &machines[&machine.pubkey_hex];
+            assert_eq!((restored.label.as_deref(), restored.relays.clone()), (Some("Work lab"), vec![first.url.clone()]));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_relay_address_the_phone_may_not_dial_is_refused() {
+    LocalSet::new()
+        .run_until(async {
+            let mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+            core.dispatch(Intent::SetBackupRelay("ws://plain.example".into())).await;
+            let backup = settings_backup(&core).await;
+            assert_eq!(backup.relay, None);
+            assert!(matches!(backup.status, crate::backup::BackupStatus::Failed { .. }));
+        })
+        .await;
+}
