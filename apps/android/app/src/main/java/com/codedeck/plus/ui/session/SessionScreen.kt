@@ -116,7 +116,22 @@ private class ParsedTranscript(
     val displayEntries: List<DisplayEntry> get() = rows.entries
 
     companion object {
-        fun of(view: UniffiTranscriptDelta, previous: ParsedTranscript?): ParsedTranscript = ParsedTranscript(
+        /** `previous` itself when [view] changes nothing it shows, so the
+         *  screen does not recompose for an update that only re-read it. */
+        fun of(view: UniffiTranscriptDelta, previous: ParsedTranscript?): ParsedTranscript =
+            if (previous != null && !view.full && view.changed.isEmpty() &&
+                view.order.size == previous.rows.entries.size &&
+                view.pendingPermissionJson == previous.view.pendingPermissionJson &&
+                view.activityJson == previous.view.activityJson &&
+                view.syncState == previous.view.syncState &&
+                view.contiguous == previous.view.contiguous
+            ) {
+                previous
+            } else {
+                parse(view, previous)
+            }
+
+        private fun parse(view: UniffiTranscriptDelta, previous: ParsedTranscript?): ParsedTranscript = ParsedTranscript(
             view = view,
             rows = TranscriptRows.apply(
                 previous?.rows ?: TranscriptRows.EMPTY,
@@ -199,7 +214,9 @@ fun SessionScreen(
     val pendingPermission: PendingPermissionSummary? = transcript?.pendingPermission
 
     val sessionKey = "$machine $sessionId"
-    val respondedCards = uiView?.respondedCards?.get(sessionKey)?.toSet().orEmpty()
+    // Remembered: a fresh set on every recomposition (each keystroke in the
+    // composer) would make the transcript recompose along with it.
+    val respondedCards = remember(uiView, sessionKey) { uiView?.respondedCards?.get(sessionKey)?.toSet().orEmpty() }
     val planChoices = uiView?.planApprovalChoices.orEmpty()
 
     var draft by remember(machine, sessionId) { mutableStateOf("") }
