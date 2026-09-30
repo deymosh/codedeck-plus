@@ -467,7 +467,7 @@ impl Engine {
         };
         if let Some(error) = error {
             log::info!("[Engine] plugin-action {action:?} {target}: {error}");
-            self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg { agent, action, target, success: false, error: Some(error) }));
+            self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg { agent, action, target, success: false, error: Some(error), message: None }));
         }
     }
 

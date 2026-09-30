@@ -306,7 +306,8 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
         description: None,
         enabled: true,
     };
-    let plugins = || HostMessage::Plugins { installed: vec![plugin.clone()], marketplaces: Some(vec![]), toggles: true, available: None };
+    let plugins =
+        || HostMessage::Plugins { installed: vec![plugin.clone()], marketplaces: Some(vec![]), toggles: true, available: None, message: None };
 
     rig.send(json!({"type":"plugins-request","agent":"alpha","available":true}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::ListPlugins { .. }));
@@ -323,6 +324,21 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
     let ack = msgs.iter().position(|m| matches!(m, BridgeToPhone::PluginAck(a) if a.success && a.target == "c@m"));
     let list = msgs.iter().position(|m| matches!(m, BridgeToPhone::Plugins(_)));
     assert!(ack.is_some() && ack < list, "{msgs:?}");
+
+    // A marketplace change comes with what was done and the fresh catalog;
+    // the phone would otherwise keep showing the old one.
+    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"update-marketplace","target":"m"}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
+    rig.host_reply(&id, HostMessage::Plugins {
+        installed: vec![plugin.clone()],
+        marketplaces: Some(vec![]),
+        toggles: true,
+        available: Some(vec![]),
+        message: Some("Updated from 0.1.0 to 0.2.0.".into()),
+    });
+    let msgs = rig.messages();
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::PluginAck(a) if a.success && a.message.as_deref() == Some("Updated from 0.1.0 to 0.2.0."))));
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.available.is_some())));
 
     // Refused by the agent: the reason goes back.
     rig.send(json!({"type":"plugin-action","agent":"alpha","action":"install","target":"nope@m"}));

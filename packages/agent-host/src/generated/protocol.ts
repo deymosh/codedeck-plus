@@ -165,8 +165,10 @@ export type BridgeMessage_Deserialize =
 	available?: boolean,
 } } | 
 /**
- *  Change the agent's plugins. Reply: `plugins` once done (without
- *  `available`), or `error` saying why it was not.
+ *  Change the agent's plugins. Reply: `plugins` once done — with
+ *  `available` when the change was to a marketplace (add, remove or
+ *  update), since that changes what the marketplaces offer — or `error`
+ *  saying why it was not.
  */
 { kind: "plugin-action"; payload: {
 	agent: string,
@@ -271,8 +273,10 @@ export type BridgeMessage_Serialize =
 	available?: boolean,
 } } | 
 /**
- *  Change the agent's plugins. Reply: `plugins` once done (without
- *  `available`), or `error` saying why it was not.
+ *  Change the agent's plugins. Reply: `plugins` once done — with
+ *  `available` when the change was to a marketplace (add, remove or
+ *  update), since that changes what the marketplaces offer — or `error`
+ *  saying why it was not.
  */
 { kind: "plugin-action"; payload: {
 	agent: string,
@@ -541,6 +545,11 @@ export type HostMessage_Deserialize =
 	marketplaces?: PluginMarketplace[] | null,
 	toggles?: boolean,
 	available?: AvailablePlugin_Deserialize[] | null,
+	/**
+	 *  After a `plugin-action`, what was done in the agent's own words,
+	 *  when it says (e.g. an update's from/to versions).
+	 */
+	message?: string | null,
 } } | 
 /**
  *  Reply to `list-mcp` and `mcp-action` (the fields mean what they mean
@@ -608,6 +617,11 @@ export type HostMessage_Serialize =
 	marketplaces?: PluginMarketplace[] | null,
 	toggles?: boolean,
 	available?: AvailablePlugin_Serialize[] | null,
+	/**
+	 *  After a `plugin-action`, what was done in the agent's own words,
+	 *  when it says (e.g. an update's from/to versions).
+	 */
+	message?: string | null,
 } } | 
 /**
  *  Reply to `list-mcp` and `mcp-action` (the fields mean what they mean
@@ -883,12 +897,13 @@ export type PlanApprovalRequest_Serialize = {
 
 /**
  *  A change to an agent's plugins; `target` names a plugin (`install`,
- *  `uninstall`, `enable`, `disable`) or a marketplace (`add-marketplace`
- *  takes its source: `owner/repo`, a git URL or a marketplace.json URL;
- *  `remove-marketplace` and `update-marketplace` its name). For an agent
- *  without marketplaces, `install` takes a package name.
+ *  `uninstall`, `enable`, `disable`, `update` — update brings an installed
+ *  plugin to its marketplace's latest version) or a marketplace
+ *  (`add-marketplace` takes its source: `owner/repo`, a git URL or a
+ *  marketplace.json URL; `remove-marketplace` and `update-marketplace` its
+ *  name). For an agent without marketplaces, `install` takes a package name.
  */
-export type PluginAction = "install" | "uninstall" | "enable" | "disable" | "add-marketplace" | "remove-marketplace" | "update-marketplace";
+export type PluginAction = "install" | "uninstall" | "enable" | "disable" | "update" | "add-marketplace" | "remove-marketplace" | "update-marketplace";
 
 /**  A marketplace plugins are installed from. */
 export type PluginMarketplace = {
