@@ -148,6 +148,8 @@ pub enum DisplayEntry {
         reason: Option<String>,
         /// The hook that asked, when one did.
         hook: Option<String>,
+        /// The plugin that hook comes from, when known.
+        hook_plugin: Option<String>,
         is_sub_agent: bool,
         agent_label: Option<String>,
         answered: Option<String>,
@@ -403,6 +405,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 options,
                 reason,
                 hook,
+                hook_plugin,
                 ..
             } => {
                 b.flush_all();
@@ -418,6 +421,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     options: options.clone(),
                     reason: reason.clone(),
                     hook: hook.clone(),
+                    hook_plugin: hook_plugin.clone(),
                     is_sub_agent: entry.subagent.is_some(),
                     agent_label: subagent_label(entry),
                 });
@@ -466,6 +470,7 @@ pub struct PendingPermissionSummary {
     pub options: Vec<PermissionOption>,
     pub reason: Option<String>,
     pub hook: Option<String>,
+    pub hook_plugin: Option<String>,
     pub is_sub_agent: bool,
     pub agent_label: Option<String>,
 }
@@ -488,6 +493,7 @@ pub fn find_pending_permission(
             options,
             reason,
             hook,
+            hook_plugin,
             ..
         } = &item.entry.body
         else {
@@ -504,6 +510,7 @@ pub fn find_pending_permission(
             options: options.clone(),
             reason: reason.clone(),
             hook: hook.clone(),
+            hook_plugin: hook_plugin.clone(),
             is_sub_agent: item.entry.subagent.is_some(),
             agent_label: subagent_label(&item.entry),
         })

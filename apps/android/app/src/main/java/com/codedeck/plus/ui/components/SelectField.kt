@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.codedeck.plus.ui.theme.Tokens
@@ -110,20 +111,23 @@ fun SelectField(
                 .clickable(enabled = enabled) { open = true }
                 .padding(start = Tokens.Space3, end = Tokens.Space2, top = 6.dp, bottom = 6.dp),
         ) {
-            Text(
-                currentLabel,
-                color = when {
-                    !enabled -> Tokens.TextDim
-                    selected == "" -> Tokens.TextMuted
-                    else -> Tokens.Text
-                },
-                fontSize = Tokens.TextSm,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            current?.group?.takeIf { grouped }?.let {
-                Text(it, color = Tokens.TextDim, fontSize = Tokens.TextXs, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            // The provider, when named, sits smaller above the name rather
+            // than beside it, so a long name and provider both still fit.
+            Column(Modifier.weight(1f, fill = false)) {
+                current?.group?.takeIf { grouped }?.let {
+                    Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextXs, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    currentLabel,
+                    color = when {
+                        !enabled -> Tokens.TextDim
+                        selected == "" -> Tokens.TextMuted
+                        else -> Tokens.Text
+                    },
+                    fontSize = Tokens.TextSm,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             // Says the value is a choice, not plain text.
             Icon(

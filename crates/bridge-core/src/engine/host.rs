@@ -765,6 +765,7 @@ impl Engine {
                     options: req.options.clone(),
                     reason: req.reason,
                     hook: req.hook,
+                    hook_plugin: req.hook_plugin,
                 });
                 entry.subagent = req.subagent;
                 let kind = CardKind::Permission { options: req.options };

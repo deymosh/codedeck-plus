@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,7 @@ import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.ActionRow
+import com.codedeck.plus.ui.components.ConfirmDialog
 import com.codedeck.plus.ui.components.DeckIcons
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
@@ -94,6 +96,14 @@ internal sealed interface SettingsPage {
         Account -> "account"
     }
 
+    /** How far below the hub the page sits: Back goes to a shallower page. */
+    val depth: Int
+        get() = when (this) {
+            Hub -> 0
+            is Plugins, is Mcp -> 2
+            else -> 1
+        }
+
     companion object {
         fun restore(saved: String): SettingsPage = when {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
@@ -145,7 +155,13 @@ fun SettingsScreen(
     fun dispatch(intent: UniffiIntent) {
         scope.launch { core.dispatch(intent) }
     }
+    // As in the shell: a page keeps its saved UI state (scroll position,
+    // expanded rows) while a deeper page is open over it, and forgets it once
+    // left for a page no deeper than itself.
+    val pages = rememberSaveableStateHolder()
     fun open(next: SettingsPage) {
+        val left = pageKey
+        if (left != next.save() && next.depth <= SettingsPage.restore(left).depth) pages.removeState(left)
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
@@ -166,48 +182,50 @@ fun SettingsScreen(
     val npub = remember { core.identityNpub() }
     val signerLabel = (login as? Login.SignerApp)?.let { remember(it.packageName) { appLabel(context, it.packageName) } }
 
-    when (page) {
-        SettingsPage.Hub -> SettingsHub(
-            machines = machines,
-            view = view,
-            npub = npub,
-            signerLabel = signerLabel,
-            now = System.currentTimeMillis(),
-            onOpen = ::open,
-            onPairMachine = onPairMachine,
-            onOpenLogs = onOpenLogs,
-            onClose = onClose,
-        )
-        is SettingsPage.Machine -> {
-            val machine = machines.find { it.pubkeyHex == page.pubkey }
-            if (machine == null) {
-                // Removed (here or elsewhere) while open.
-                toHub()
-            } else {
-                MachineSettingsContent(
-                    machine = machine,
-                    connectedRelays = connection?.connectedRelays?.toSet().orEmpty(),
-                    credentialsStatus = ui?.credentialsStatus?.get(machine.pubkeyHex),
-                    providerProfileStatus = ui?.providerProfileStatus?.get(machine.pubkeyHex),
-                    now = System.currentTimeMillis(),
-                    dispatch = ::dispatch,
-                    onBack = toHub,
-                    onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
-                    onOpenMcp = { agent -> open(SettingsPage.Mcp(machine.pubkeyHex, agent)) },
-                )
+    pages.SaveableStateProvider(pageKey) {
+        when (page) {
+            SettingsPage.Hub -> SettingsHub(
+                machines = machines,
+                view = view,
+                npub = npub,
+                signerLabel = signerLabel,
+                now = System.currentTimeMillis(),
+                onOpen = ::open,
+                onPairMachine = onPairMachine,
+                onOpenLogs = onOpenLogs,
+                onClose = onClose,
+            )
+            is SettingsPage.Machine -> {
+                val machine = machines.find { it.pubkeyHex == page.pubkey }
+                if (machine == null) {
+                    // Removed (here or elsewhere) while open.
+                    toHub()
+                } else {
+                    MachineSettingsContent(
+                        machine = machine,
+                        connectedRelays = connection?.connectedRelays?.toSet().orEmpty(),
+                        credentialsStatus = ui?.credentialsStatus?.get(machine.pubkeyHex),
+                        providerProfileStatus = ui?.providerProfileStatus?.get(machine.pubkeyHex),
+                        now = System.currentTimeMillis(),
+                        dispatch = ::dispatch,
+                        onBack = toHub,
+                        onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
+                        onOpenMcp = { agent -> open(SettingsPage.Mcp(machine.pubkeyHex, agent)) },
+                    )
+                }
             }
+            is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
+            is SettingsPage.Mcp -> McpScreen(core, page.pubkey, page.agent, onBack = back)
+            SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
+            SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)
+            SettingsPage.Connection -> {
+                val serviceForeground by StayConnectedService.foreground.collectAsState()
+                ConnectionPage(view, serviceForeground, ::dispatch, toHub)
+            }
+            SettingsPage.Messages -> MessagesPage(view, quickPrompts?.prompts.orEmpty(), ::dispatch, toHub)
+            SettingsPage.Uploads -> UploadsPage(view, ::dispatch, toHub)
+            SettingsPage.Account -> AccountPage(npub, signerLabel, onLogOut, toHub)
         }
-        is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
-        is SettingsPage.Mcp -> McpScreen(core, page.pubkey, page.agent, onBack = back)
-        SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
-        SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)
-        SettingsPage.Connection -> {
-            val serviceForeground by StayConnectedService.foreground.collectAsState()
-            ConnectionPage(view, serviceForeground, ::dispatch, toHub)
-        }
-        SettingsPage.Messages -> MessagesPage(view, quickPrompts?.prompts.orEmpty(), ::dispatch, toHub)
-        SettingsPage.Uploads -> UploadsPage(view, ::dispatch, toHub)
-        SettingsPage.Account -> AccountPage(npub, signerLabel, onLogOut, toHub)
     }
 }
 
@@ -442,6 +460,16 @@ internal fun MessagesPage(
 @Composable
 private fun QuickPromptRow(prompt: UniffiQuickPrompt, dispatch: (UniffiIntent) -> Unit) {
     var editing by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    if (confirmDelete) {
+        ConfirmDialog(
+            title = "Delete “${prompt.label}”?",
+            body = "It no longer appears above the message field.",
+            confirm = "Delete",
+            onConfirm = { dispatch(UniffiIntent.RemoveQuickPrompt(prompt.id)) },
+            onDismiss = { confirmDelete = false },
+        )
+    }
     if (editing) {
         var label by remember { mutableStateOf(prompt.label) }
         var text by remember { mutableStateOf(prompt.text) }
@@ -453,7 +481,7 @@ private fun QuickPromptRow(prompt: UniffiQuickPrompt, dispatch: (UniffiIntent) -
                     dispatch(UniffiIntent.UpdateQuickPrompt(id = prompt.id, label = label, text = text))
                     editing = false
                 }, enabled = label.isNotBlank() && text.isNotBlank())
-                QuietButton("Delete", onClick = { dispatch(UniffiIntent.RemoveQuickPrompt(prompt.id)) }, danger = true)
+                QuietButton("Delete", onClick = { confirmDelete = true }, danger = true)
                 Box(Modifier.weight(1f))
                 QuietButton("Cancel", onClick = { editing = false })
             }

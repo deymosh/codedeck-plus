@@ -62,6 +62,7 @@
       "answered": "Allowed",
       "description": "Read packages/core/src/nostr/pool.ts",
       "hook": null,
+      "hookPlugin": null,
       "isSubAgent": false,
       "kind": "permissionRequest",
       "locations": [],
@@ -215,6 +216,7 @@
       "answered": null,
       "description": null,
       "hook": "PreToolUse:Bash",
+      "hookPlugin": "guard-rails",
       "isSubAgent": false,
       "kind": "permissionRequest",
       "locations": [],
@@ -242,6 +244,7 @@
     "agentLabel": null,
     "description": null,
     "hook": "PreToolUse:Bash",
+    "hookPlugin": "guard-rails",
     "isSubAgent": false,
     "options": [
       {

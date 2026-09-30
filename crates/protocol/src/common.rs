@@ -655,6 +655,10 @@ pub enum EntryBody {
         /// one did: it asks every time, so no "always" choice is offered.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hook: Option<String>,
+        /// The plugin that hook comes from, when it is known to be one
+        /// plugin's: the name the user installed it under.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hook_plugin: Option<String>,
     },
     /// One question of a (possibly multi-question) ask, all sharing
     /// `request_id`. Answered with `question-response`.

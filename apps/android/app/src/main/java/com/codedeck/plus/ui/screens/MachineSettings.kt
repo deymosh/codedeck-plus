@@ -368,12 +368,14 @@ private fun MachineRelays(machine: UniffiMachineSummary, connectedRelays: Set<St
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                // The last relay cannot go: its button keeps its place, hidden and inert.
                 val canRemove = machine.relays.size > 1
                 IconAction(
                     Icons.Outlined.Close,
                     "Remove $url",
-                    onClick = { if (canRemove) dispatch(UniffiIntent.SetMachineRelays(machine.pubkeyHex, machine.relays - url)) },
+                    onClick = { dispatch(UniffiIntent.SetMachineRelays(machine.pubkeyHex, machine.relays - url)) },
                     tint = if (canRemove) Tokens.TextMuted else Color.Transparent,
+                    enabled = canRemove,
                 )
             }
         }

@@ -1016,7 +1016,7 @@ private fun PendingPermissionBar(pending: PendingPermissionSummary, onRespond: (
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space1),
     ) {
         val label = when {
-            pending.hook != null -> "A hook asks before ${pending.toolName} runs"
+            pending.hook != null -> "${pending.hookPlugin ?: "A hook"} asks before ${pending.toolName} runs"
             pending.isSubAgent -> "${pending.agentLabel ?: "Sub-agent"}: ${pending.toolName} needs permission"
             else -> "${pending.toolName} needs permission"
         }
