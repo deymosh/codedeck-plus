@@ -29,6 +29,7 @@ import com.codedeck.plus.ui.screens.NotificationsPage
 import com.codedeck.plus.ui.screens.PairingBody
 import com.codedeck.plus.ui.screens.PluginsContent
 import com.codedeck.plus.ui.screens.UploadsPage
+import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.screens.AccountPage
 import com.codedeck.plus.ui.screens.BackupPage
 import com.codedeck.plus.ui.screens.RestoreContent
@@ -120,6 +121,25 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "transcript_plan" to {
         TranscriptList(
             displayEntries = DesignFixtures.waitingCards.take(2), outboxItems = emptyList(), machine = workstation.pubkeyHex,
+            sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
+            running = false, activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+        )
+    },
+    "transcript_long" to {
+        // Long enough to be cut into blocks: the plan's frame and the user's
+        // bubble must still read as one each.
+        val steps = (1..30).joinToString("\n\n") { i ->
+            "### Step $i\n\nMove the reconnect logic behind the transport port, keep the backoff state in the core, " +
+                "and cover the new path with a deterministic test that drives the clock by hand.\n\n" +
+                "- Touches `crates/client-runtime/src/transport.rs`\n- Keeps the public surface unchanged"
+        }
+        val paste = (1..50).joinToString("\n\n") { "Log line $it: relay wss://relay.example.org dropped the socket after 75 s of silence." }
+        TranscriptList(
+            displayEntries = listOf(
+                DisplayEntry.AgentMessage(1, "# Plan: a quieter reconnect\n\n$steps", isPlan = true),
+                DisplayEntry.UserMessage(2, paste),
+            ),
+            outboxItems = emptyList(), machine = workstation.pubkeyHex,
             sessionId = "s1", syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(),
             running = false, activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
         )
@@ -251,6 +271,7 @@ class DesignSnapshotTest {
     @Test fun transcript() = paparazzi.page("transcript")
     @Test fun transcript_plan() = paparazzi.page("transcript_plan")
     @Test fun transcript_cards() = paparazzi.page("transcript_cards")
+    @Test fun transcript_long() = paparazzi.page("transcript_long")
     @Test fun new_session() = paparazzi.page("new_session")
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")

@@ -41,6 +41,7 @@ import com.codedeck.plus.ui.transcript.rows.PlanApprovalCard
 import com.codedeck.plus.ui.transcript.rows.QuestionCard
 import com.codedeck.plus.ui.transcript.rows.SyncGapRow
 import com.codedeck.plus.ui.transcript.rows.StatusRow
+import com.codedeck.plus.ui.transcript.rows.Segment
 import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
 import com.codedeck.plus.ui.transcript.rows.ToolGroupSheet
 import com.codedeck.plus.ui.transcript.rows.UserMessageRow
@@ -121,7 +122,10 @@ private fun TranscriptListContent(
         visibleOutboxItems(outboxItems, machine, sessionId, displayEntries)
     }
     val showSyncGap = !contiguous && (syncState == "requested" || syncState == "syncing" || syncState == "failed")
-    val itemCount = displayEntries.size + visibleOutbox.size + (if (showSyncGap) 1 else 0) + (if (running) 1 else 0)
+    // A long message is several items, one per block, so only what is on
+    // screen is composed and laid out.
+    val rows = remember(displayEntries) { listRowsOf(displayEntries) }
+    val itemCount = rows.size + visibleOutbox.size + (if (showSyncGap) 1 else 0) + (if (running) 1 else 0)
 
     if (itemCount == 0) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -158,7 +162,16 @@ private fun TranscriptListContent(
                 // contentType lets the lazy list reuse a scrolled-off row's
                 // composition only for a row of the same kind (a tool group never
                 // gets recycled into a Markdown message and vice versa).
-                items(displayEntries, key = { "e${it.seq}" }, contentType = { it::class }) { entry ->
+                items(rows, key = { it.key }, contentType = { it.contentType }) { row ->
+                    val entry = row.entry
+                    if (row is ListRow.Block) {
+                        when (entry) {
+                            is DisplayEntry.AgentMessage -> AgentTextRow(row.text, entry.isPlan, row.segment)
+                            is DisplayEntry.UserMessage -> UserMessageRow(row.text, row.segment)
+                            else -> {}
+                        }
+                        return@items
+                    }
                     TranscriptRow(
                         item = entry,
                         machine = machine,
@@ -232,6 +245,48 @@ private fun TranscriptListContent(
         }
         if (activity != null && activity.ongoing()) {
             ActivityBar(activity, live = running, onOpen = { activityOpen = true })
+        }
+    }
+}
+
+/** One item of the transcript list: an entry, or one block of a long message. */
+private sealed interface ListRow {
+    val entry: DisplayEntry
+    val key: String
+    val contentType: Any
+
+    data class Entry(override val entry: DisplayEntry) : ListRow {
+        override val key get() = "e${entry.seq}"
+        override val contentType: Any get() = entry::class
+    }
+
+    /** Block [index] of a message cut by `markdownBlocks`. The first keeps
+     *  the entry's own key, so a message that grows past one block keeps its
+     *  item (and scroll position) rather than being replaced. */
+    data class Block(override val entry: DisplayEntry, val index: Int, val text: String, val segment: Segment) : ListRow {
+        override val key get() = if (index == 0) "e${entry.seq}" else "e${entry.seq}.$index"
+        override val contentType: Any get() = entry::class
+    }
+}
+
+private fun listRowsOf(entries: List<DisplayEntry>): List<ListRow> = buildList {
+    for (entry in entries) {
+        val blocks = when (entry) {
+            is DisplayEntry.AgentMessage -> entry.blocks
+            is DisplayEntry.UserMessage -> entry.blocks
+            else -> null
+        }
+        if (blocks == null || blocks.size == 1) {
+            add(ListRow.Entry(entry))
+            continue
+        }
+        blocks.forEachIndexed { i, text ->
+            val segment = when (i) {
+                0 -> Segment.First
+                blocks.lastIndex -> Segment.Last
+                else -> Segment.Middle
+            }
+            add(ListRow.Block(entry, i, text, segment))
         }
     }
 }

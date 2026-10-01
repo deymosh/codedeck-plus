@@ -34,9 +34,13 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  * renderer bump silently regressing either one.
  *
  * `immediate = true`: transcript rows are already-received text, not a
- * live-typed editor buffer — synchronous parsing costs one frame on a cold
- * row and, unlike the renderer's default async path (`MarkdownState`
+ * live-typed editor buffer, and a long message reaches this renderer one
+ * block of a few thousand characters at a time (`markdownBlocks`, each block
+ * a list item of its own), so a synchronous parse costs a fraction of a
+ * frame and, unlike the renderer's default async path (`MarkdownState`
  * introduced in 0.33.0), is deterministic for Paparazzi's static snapshots.
+ * Never hand it a whole long message: parsing and laying it out at once on
+ * the main thread is what froze the app.
  *
  * Syntax highlighting stays plain monochrome (no `-code` module, no
  * Rust-side span generation) — matches the TS renderer's own lazy/

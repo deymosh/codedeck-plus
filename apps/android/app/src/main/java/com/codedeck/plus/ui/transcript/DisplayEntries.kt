@@ -3,6 +3,7 @@ package com.codedeck.plus.ui.transcript
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonClassDiscriminator
 
@@ -158,12 +159,22 @@ sealed class DisplayEntry {
 
     @Serializable
     @SerialName("userMessage")
-    data class UserMessage(override val seq: Long, val text: String) : DisplayEntry()
+    data class UserMessage(override val seq: Long, val text: String) : DisplayEntry() {
+        /** [text] in list-sized blocks (see [markdownBlocks]); split as the
+         *  entry is decoded, off the main thread. */
+        @Transient
+        val blocks: List<String> = markdownBlocks(text)
+    }
 
     /** Agent markdown; `isPlan` frames it as a plan document. */
     @Serializable
     @SerialName("agentMessage")
-    data class AgentMessage(override val seq: Long, val text: String, val isPlan: Boolean = false) : DisplayEntry()
+    data class AgentMessage(override val seq: Long, val text: String, val isPlan: Boolean = false) : DisplayEntry() {
+        /** [text] in list-sized blocks (see [markdownBlocks]); split as the
+         *  entry is decoded, off the main thread. */
+        @Transient
+        val blocks: List<String> = markdownBlocks(text)
+    }
 
     /** A run of tool activity. `summary` says what it did ("Ran 3
      *  commands, read a file"); a lone call is its verb, with `subject`
