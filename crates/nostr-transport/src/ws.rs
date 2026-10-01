@@ -1,5 +1,5 @@
 //! `WsTransport` — the real [`Transport`] over WebSockets: one connect + read
-//! task per relay, wired through the pure [`frames`](super::frames) codec and
+//! task per relay, wired through the pure `frames` codec and
 //! [`router`](super::router).
 //!
 //! Single-threaded by construction. The [`SubCallbacks`] closures a
@@ -25,14 +25,14 @@
 //! * **ping liveness** — one pinger pings every relay together each
 //!   [`PING_EVERY`] (a host slows it while in the background, see
 //!   [`WsTransport::set_ping_interval`]), and a socket with no traffic for
-//!   two missed pings ([`DEAD_AFTER`]) is dropped so a silently-rotted relay
+//!   two missed pings (`DEAD_AFTER`) is dropped so a silently-rotted relay
 //!   is detected, not trusted. [`WsTransport::check_liveness`] runs the same
 //!   test on demand, for a host that wakes the device just to check. Reading and writing
 //!   run concurrently, so a write stuck on a full socket buffer can neither
 //!   stall inbound frames nor postpone that check; a write that stays stuck
-//!   for [`WRITE_TIMEOUT`] drops the socket too.
+//!   for `WRITE_TIMEOUT` drops the socket too.
 //! * **bounded everything** — a dial (TCP, SOCKS5, TLS, WS handshake) has a
-//!   deadline, and a relay's outbound queue holds at most [`OUTBOUND_QUEUE`]
+//!   deadline, and a relay's outbound queue holds at most `OUTBOUND_QUEUE`
 //!   frames: a relay that cannot drain it is dropped and redialled rather than
 //!   buffered without limit.
 //! * **NIP-42 AUTH** answered with the identity key; a REQ or EVENT refused
@@ -442,7 +442,7 @@ impl WsTransport {
     }
 
     /// Ping every relay each `interval` from now on, and give a silent socket
-    /// [`dead_after`] that interval before dropping it. A phone slows this
+    /// `dead_after` that interval before dropping it. A phone slows this
     /// down while its app is in the background: every ping is a radio
     /// wake-up, and a background check is driven by
     /// [`Self::check_liveness`] instead.
@@ -483,7 +483,7 @@ impl WsTransport {
     /// — reported and redialled like any dead socket. Returns how many
     /// answered. For a host that wakes the device briefly to check the
     /// connection instead of holding it awake: a socket a NAT or the relay
-    /// silently dropped is found at once, not after [`DEAD_AFTER`] of awake
+    /// silently dropped is found at once, not after `DEAD_AFTER` of awake
     /// time.
     pub async fn check_liveness(&self, within: Duration) -> usize {
         let probes: Vec<(String, u64, Rc<Cell<u64>>, u64)> = {

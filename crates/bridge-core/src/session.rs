@@ -2,7 +2,7 @@
 //! through it.
 //!
 //! A session is its persisted [`SessionRecord`] plus, while it runs, a
-//! [`Runner`]: where it is in its life, the cards waiting on the user, and
+//! `Runner`: where it is in its life, the cards waiting on the user, and
 //! the bookkeeping for its input and output. The agent itself runs in the
 //! agent host; a runner only mirrors it.
 

@@ -8,8 +8,8 @@
 //!   service to forward to.
 //!
 //! A connection must finish its TLS and WebSocket handshakes within
-//! [`HANDSHAKE_TIMEOUT`], then answer the challenge with a paired identity's
-//! HELLO within [`HELLO_TIMEOUT`]. Then it gets every event the bridge publishes
+//! `HANDSHAKE_TIMEOUT`, then answer the challenge with a paired identity's
+//! HELLO within `HELLO_TIMEOUT`. Then it gets every event the bridge publishes
 //! for that identity (and those of the last hour since its resume point),
 //! and its command events go to the engine exactly as a relay's would: the
 //! engine drops one it already saw by its id. Unpairing a phone closes its
