@@ -193,7 +193,9 @@ fun SettingsScreen(
         return
     }
     val machines = machinesView?.machines.orEmpty().sortedBy { it.name.lowercase() }
-    val npub = remember { core.identityNpub() }
+    // An npub that fails to derive shows as absent rather than crashing
+    // the whole settings hub.
+    val npub = remember { runCatching { core.identityNpub() }.getOrDefault("") }
     val signerLabel = (login as? Login.SignerApp)?.let { remember(it.packageName) { appLabel(context, it.packageName) } }
 
     pages.SaveableStateProvider(pageKey) {

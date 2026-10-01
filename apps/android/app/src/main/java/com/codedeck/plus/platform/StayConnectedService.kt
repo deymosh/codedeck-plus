@@ -14,6 +14,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -24,6 +25,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.codedeck.plus.MainActivity
 import com.codedeck.plus.R
 import com.codedeck.plus.core.CoreHost
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -147,8 +149,17 @@ class StayConnectedService : Service() {
         coreJob = job
         CoroutineScope(scope.coroutineContext + job).launch(Dispatchers.IO) {
             // Only started once a login exists (MainActivity); an OS restart
-            // after the user lost theirs has nothing to run.
-            val core = openCore() ?: run {
+            // after the user lost theirs has nothing to run. A storage or
+            // key-vault failure during the open is the same "no core to run"
+            // case, not a crash to die on.
+            val core = try {
+                openCore()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("codedeck", "core open failed: ${e::class.simpleName}: ${e.message?.take(160)}")
+                null
+            } ?: run {
                 withContext(Dispatchers.Main) { stopSelf() }
                 return@launch
             }
@@ -160,7 +171,19 @@ class StayConnectedService : Service() {
                 core.stop()
                 return@launch
             }
-            core.start()
+            // A faulting core at start must not take the process down (the
+            // earlier crash loop): log, stop the service (its launch was the
+            // only thing running the core) so a later startForegroundService
+            // can open a fresh one.
+            try {
+                core.start()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("codedeck", "core start failed: ${e::class.simpleName}: ${e.message?.take(160)}")
+                withContext(Dispatchers.Main) { stopSelf() }
+                return@launch
+            }
             // Registered only now: adding the observer replays the current
             // app visibility at once, which must reach a started core.
             withContext(Dispatchers.Main) {
@@ -229,12 +252,30 @@ class StayConnectedService : Service() {
         // Network reachability drives the connection FSM's offline/online
         // transitions; the first emission reconciles the state at startup.
         connectivity?.let { network ->
-            scope.launch { network.online.collect { core.setOnline(it) } }
+            // A refused setOnline (a faulting core) must not kill the
+            // collector: later emissions still reach the FSM.
+            scope.launch {
+                network.online.collect { online ->
+                    try {
+                        core.setOnline(online)
+                    } catch (e: Exception) {
+                        Log.w("codedeck", "setOnline refused: ${e::class.simpleName}: ${e.message?.take(160)}")
+                    }
+                }
+            }
             // Internet access came back without the network going down (or
             // on another network): redial whatever is down now, rather than
             // after a backoff that grew through the outage. The replayed
             // initial value is not news.
-            scope.launch { network.regained.drop(1).collect { core.setOnline(true) } }
+            scope.launch {
+                network.regained.drop(1).collect {
+                    try {
+                        core.setOnline(true)
+                    } catch (e: Exception) {
+                        Log.w("codedeck", "setOnline refused: ${e::class.simpleName}: ${e.message?.take(160)}")
+                    }
+                }
+            }
         }
         // The stay-connected setting drives THIS service's foreground state —
         // the settings screen only flips the stored value. Collecting here is
@@ -442,7 +483,17 @@ class StayConnectedService : Service() {
             .apply { setReferenceCounted(false); acquire(KEEPALIVE_WAKE_MS) }
         scope.launch {
             try {
-                withTimeoutOrNull(KEEPALIVE_WAKE_MS - 2_000) { core.keepalive() }
+                withTimeoutOrNull(KEEPALIVE_WAKE_MS - 2_000) {
+                    try {
+                        core.keepalive()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // A failed check is not worth the process: the next
+                        // alarm probes again.
+                        Log.w("codedeck", "keepalive failed: ${e::class.simpleName}: ${e.message?.take(160)}")
+                    }
+                }
             } finally {
                 if (core.settings.value?.stayConnected != false) scheduleKeepAlive()
                 if (wakeLock.isHeld) wakeLock.release()

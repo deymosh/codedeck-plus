@@ -124,7 +124,19 @@ class CoreHost(
         private val requests = Channel<Unit>(Channel.CONFLATED)
 
         init {
-            scope.launch { for (request in requests) sink.value = read() }
+            scope.launch {
+                for (request in requests) {
+                    // An FFI read failure logs and keeps the loop alive:
+                    // subsequent requests are re-read, not silent drops.
+                    try {
+                        sink.value = read()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("codedeck", "slice read failed: ${e::class.simpleName}: ${e.message?.take(160)}")
+                    }
+                }
+            }
         }
 
         fun request() {
