@@ -19,6 +19,8 @@ import uniffi.client_ffi.UniffiAgentDefaults
 import uniffi.client_ffi.UniffiAgentModels
 import uniffi.client_ffi.UniffiAgentPlugins
 import uniffi.client_ffi.UniffiAvailablePlugin
+import uniffi.client_ffi.UniffiBackupStatus
+import uniffi.client_ffi.UniffiBackupView
 import uniffi.client_ffi.UniffiInstalledPlugin
 import uniffi.client_ffi.UniffiAgentMcp
 import uniffi.client_ffi.UniffiMcpImport
@@ -188,6 +190,7 @@ internal object DesignFixtures {
     val settings = UniffiSettingsView(
         uiScale = 1.0, stayConnected = true, torProxyEnabled = false, blossomServer = "", maxUploadBytes = 5_250_000uL,
         notificationsEnabled = true, showUsageBadge = true, showCommitBadge = true,
+        backup = UniffiBackupView(relay = null, savedAt = null, status = UniffiBackupStatus.Idle),
     )
 
     val quickPrompts = listOf(

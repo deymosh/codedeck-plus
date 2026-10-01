@@ -108,6 +108,32 @@ cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
 connection that challenges; and a grant, rarely. Everything else it signs —
 commands, Blossom upload auth — follows a user action.
 
+**Config backup.** Opt-in, in Settings → Backup, and offered once right
+after logging in with an existing key. The phone saves what only it knows —
+each paired machine's relays, label, direct endpoints and new-session
+defaults, the settings, the quick prompts, and its session keys with their
+expiries and each machine's confirmed grant — as one NIP-78 event (kind
+30078) on a relay the user picks. The content is NIP-44 encrypted to the
+identity itself, through the signer, so a NIP-55 login works too; the `d`
+tag is a hash of the identity and an app-private context, so it names
+neither the app nor what it holds. What a bridge sends again in its
+heartbeat (sessions, agents, models, credentials) is left out.
+
+A save follows 30 s after the last change worth backing up, and only when
+the content changed; "Back up now" forces one. Turning it on looks on the
+relay first: a backup already there waits for the user to restore it or
+replace it, and nothing is saved over it meanwhile. Restoring merges: the
+machines the phone lacks are added, the ones it has keep their own setup,
+and the settings and quick prompts become the backup's. The phone takes the
+backup's session keys only while it has granted none of its own, so a
+restored phone reads its bridges' messages at once without asking the
+signer to grant every bridge again; a session key never signs, so it can
+read payloads but never command a bridge, and only the identity can open
+the backup. Turning backup off can also send a NIP-09 deletion. The backup
+relay is used for nothing else, and the Tor and AUTH rules of every relay
+apply to it. A login kept on the phone can show and copy its `nsec`
+(Settings → Account), the one thing a backup cannot hold.
+
 **Orbot.** A settings toggle routes the relay connections *and* Blossom
 traffic through Orbot's SOCKS5 proxy (`127.0.0.1:9050`); DNS resolves at the
 proxy, so `.onion` relays and Blossom servers work. The app does not launch

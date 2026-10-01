@@ -949,10 +949,47 @@ pub struct UniffiSettingsView {
     pub notifications_enabled: bool,
     pub show_usage_badge: bool,
     pub show_commit_badge: bool,
+    pub backup: UniffiBackupView,
+}
+
+/// The config backup, as the settings page shows it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiBackupView {
+    /// `None`: backup is off.
+    pub relay: Option<String>,
+    /// When a backup last reached the relay (ms since the epoch).
+    pub saved_at: Option<u64>,
+    pub status: UniffiBackupStatus,
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum UniffiBackupStatus {
+    /// Nothing going on (off, or on and up to date).
+    Idle,
+    /// Looking on the relay for a backup.
+    Checking,
+    /// A backup is on the relay: import it, or keep this phone's.
+    Found { saved_at: u64, machines: u32 },
+    Saving,
+    Importing,
+    /// The last operation failed; `reason` is for the user.
+    Failed { reason: String },
+}
+
+fn build_uniffi_backup_status(s: &client_runtime::backup::BackupStatus) -> UniffiBackupStatus {
+    use client_runtime::backup::BackupStatus;
+    match s {
+        BackupStatus::Idle => UniffiBackupStatus::Idle,
+        BackupStatus::Checking => UniffiBackupStatus::Checking,
+        BackupStatus::Found { saved_at, machines } => UniffiBackupStatus::Found { saved_at: *saved_at, machines: *machines },
+        BackupStatus::Saving => UniffiBackupStatus::Saving,
+        BackupStatus::Importing => UniffiBackupStatus::Importing,
+        BackupStatus::Failed { reason } => UniffiBackupStatus::Failed { reason: reason.clone() },
+    }
 }
 
 pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
-    let d = &v.0;
+    let d = &v.data;
     UniffiSettingsView {
         ui_scale: d.ui_scale,
         stay_connected: d.stay_connected,
@@ -962,6 +999,11 @@ pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
         notifications_enabled: d.notifications_enabled,
         show_usage_badge: d.show_usage_badge,
         show_commit_badge: d.show_commit_badge,
+        backup: UniffiBackupView {
+            relay: v.backup.relay.clone(),
+            saved_at: v.backup.saved_at,
+            status: build_uniffi_backup_status(&v.backup.status),
+        },
     }
 }
 

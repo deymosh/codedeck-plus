@@ -20,6 +20,7 @@
 uniffi::setup_scaffolding!();
 
 pub mod attachments;
+pub mod backup;
 pub mod deadline;
 pub mod dispatch;
 pub mod intent;
@@ -44,7 +45,7 @@ pub use intent::{Intent, IntentCtx, SessionFileSend};
 pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, SessionKeyStore, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
-    ConnectionView, MachinesView, OutboxView, PairingView,
+    BackupView, ConnectionView, MachinesView, OutboxView, PairingView,
     PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, TranscriptRowView,
     TranscriptSyncView, UiView,
 };

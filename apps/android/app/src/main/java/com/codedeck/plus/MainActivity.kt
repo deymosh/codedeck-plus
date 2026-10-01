@@ -25,6 +25,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -48,6 +49,7 @@ import com.codedeck.plus.platform.installedSignerApps
 import com.codedeck.plus.platform.signerAnswerOf
 import com.codedeck.plus.ui.OpenSessionRequest
 import com.codedeck.plus.ui.Shell
+import com.codedeck.plus.ui.screens.RestoreContent
 import com.codedeck.plus.ui.screens.WelcomeBusy
 import com.codedeck.plus.ui.screens.WelcomeScreen
 import com.codedeck.plus.ui.theme.CodeDeckTheme
@@ -87,6 +89,9 @@ class MainViewModel : ViewModel() {
     /** Whether a login exists; until one does, the welcome screen shows and
      *  no core runs. */
     val loggedIn = MutableStateFlow<Boolean?>(null)
+    /** Whether to offer restoring a backup before the app proper: once,
+     *  right after logging in with a key that may have one. */
+    val offerRestore = MutableStateFlow(false)
     val welcomeBusy = MutableStateFlow<WelcomeBusy?>(null)
     val welcomeError = MutableStateFlow<String?>(null)
     val signers = MutableStateFlow<List<SignerAppInfo>>(emptyList())
@@ -209,7 +214,8 @@ class MainActivity : ComponentActivity() {
                             busy = busy,
                             error = error,
                             onUseSigner = ::useSigner,
-                            onCreateKey = { logIn(Login.OnDevice) { vault -> vault.setIdentity(freshSecretHex()) } },
+                            // A key made just now has no backup to restore.
+                            onCreateKey = { logIn(Login.OnDevice, offerRestore = false) { vault -> vault.setIdentity(freshSecretHex()) } },
                             onImportKey = ::importKey,
                         )
                     } else if (current != null) {
@@ -217,12 +223,22 @@ class MainActivity : ComponentActivity() {
                         // and sp text scale as one, like the TSX multiplier.
                         val settings by current.settings.collectAsState()
                         val openRequest by viewModel.openRequest.collectAsState()
+                        val offerRestore by viewModel.offerRestore.collectAsState()
                         val scale = settings?.uiScale?.toFloat() ?: 1f
                         val d = LocalDensity.current
+                        val restoreFrom = settings
                         CompositionLocalProvider(
                             LocalDensity provides Density(d.density * scale, d.fontScale * scale),
                         ) {
-                            Shell(
+                            if (offerRestore && restoreFrom != null) {
+                                val scope = rememberCoroutineScope()
+                                RestoreContent(
+                                    backup = restoreFrom.backup,
+                                    torOn = restoreFrom.torProxyEnabled,
+                                    dispatch = { intent -> scope.launch { current.dispatch(intent) } },
+                                    onDone = { viewModel.offerRestore.value = false },
+                                )
+                            } else Shell(
                                 current,
                                 openRequest = openRequest,
                                 onOpenRequestHandled = viewModel::openRequestHandled,
@@ -323,7 +339,7 @@ class MainActivity : ComponentActivity() {
 
     /** Store `login` (after `prepare` set up its keys, off the main thread),
      *  give it a fresh session key, and start the core. */
-    private fun logIn(login: Login, prepare: (KeyVault) -> Unit) {
+    private fun logIn(login: Login, offerRestore: Boolean = true, prepare: (KeyVault) -> Unit) {
         viewModel.welcomeError.value = null
         if (viewModel.welcomeBusy.value == null) viewModel.welcomeBusy.value = WelcomeBusy.Key
         lifecycleScope.launch {
@@ -340,6 +356,7 @@ class MainActivity : ComponentActivity() {
                 viewModel.welcomeError.value = "Could not store the key on this device."
                 return@launch
             }
+            viewModel.offerRestore.value = offerRestore
             viewModel.loggedIn.value = true
             startCore()
             bind()

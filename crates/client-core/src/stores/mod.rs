@@ -1,6 +1,7 @@
 //! stores — domain state as pure state machines. No zustand, no
 //! I/O; the runtime owns wiring + persistence.
 
+pub mod backup;
 pub mod session_key;
 pub mod fetches;
 pub mod machines;

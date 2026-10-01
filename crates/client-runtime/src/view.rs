@@ -110,12 +110,35 @@ impl OutboxView {
 // --- settings ------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
-#[serde(transparent)]
-pub struct SettingsView(pub SettingsData);
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    #[serde(flatten)]
+    pub data: SettingsData,
+    pub backup: BackupView,
+}
+
+/// The config backup as the settings page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupView {
+    /// `None`: backup is off.
+    pub relay: Option<String>,
+    /// When a backup last reached the relay (ms).
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub saved_at: Option<u64>,
+    pub status: crate::backup::BackupStatus,
+}
 
 impl SettingsView {
     pub fn from_stores(s: &CoreStores) -> Self {
-        Self(s.settings.data.clone())
+        Self {
+            data: s.settings.data.clone(),
+            backup: BackupView {
+                relay: s.backup.config.relay.clone(),
+                saved_at: s.backup.config.saved_at,
+                status: s.backup.status.clone(),
+            },
+        }
     }
 }
 
@@ -405,9 +428,10 @@ mod tests {
         let mv = MachinesView::from_stores(&s);
         assert_eq!(mv.machines["m"].relays, vec!["wss://extra.example"]);
         let sv = SettingsView::from_stores(&s);
-        assert_eq!(sv.0.ui_scale, 1.2);
-        // transparent — serializes as the bare SettingsData
-        assert!(serde_json::to_string(&sv).unwrap().starts_with('{'));
+        assert_eq!(sv.data.ui_scale, 1.2);
+        assert_eq!(sv.backup.relay, None);
+        // The settings' own fields stay at the top level.
+        assert!(serde_json::to_string(&sv).unwrap().contains("\"uiScale\":1.2"));
     }
 
     #[tokio::test]

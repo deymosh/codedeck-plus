@@ -1,7 +1,11 @@
 package com.codedeck.plus.ui.screens
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.PersistableBundle
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.SettingsEthernet
@@ -37,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.BuildConfig
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.platform.KeyVault
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.platform.StayConnectedService
 import com.codedeck.plus.ui.components.ActionRow
@@ -55,8 +61,13 @@ import com.codedeck.plus.ui.components.SwitchRow
 import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uniffi.client_ffi.UniffiBackupStatus
+import uniffi.client_ffi.UniffiBackupView
 import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.nsecOf
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiQuickPrompt
 import uniffi.client_ffi.UniffiSettingsView
@@ -81,6 +92,7 @@ internal sealed interface SettingsPage {
     data object Connection : SettingsPage
     data object Messages : SettingsPage
     data object Uploads : SettingsPage
+    data object Backup : SettingsPage
     data object Account : SettingsPage
 
     fun save(): String = when (this) {
@@ -93,6 +105,7 @@ internal sealed interface SettingsPage {
         Connection -> "connection"
         Messages -> "messages"
         Uploads -> "uploads"
+        Backup -> "backup"
         Account -> "account"
     }
 
@@ -114,6 +127,7 @@ internal sealed interface SettingsPage {
             saved == "connection" -> Connection
             saved == "messages" -> Messages
             saved == "uploads" -> Uploads
+            saved == "backup" -> Backup
             saved == "account" -> Account
             else -> Hub
         }
@@ -224,7 +238,20 @@ fun SettingsScreen(
             }
             SettingsPage.Messages -> MessagesPage(view, quickPrompts?.prompts.orEmpty(), ::dispatch, toHub)
             SettingsPage.Uploads -> UploadsPage(view, ::dispatch, toHub)
-            SettingsPage.Account -> AccountPage(npub, signerLabel, onLogOut, toHub)
+            SettingsPage.Backup -> BackupPage(view.backup, view.torProxyEnabled, System.currentTimeMillis(), ::dispatch, toHub)
+            SettingsPage.Account -> AccountPage(
+                npub,
+                signerLabel,
+                onLogOut,
+                toHub,
+                // Only a key kept on this phone can be shown; reading it
+                // touches the Keystore and a file, so not on the main thread.
+                revealKey = if (login is Login.OnDevice) {
+                    { withContext(Dispatchers.IO) { KeyVault(context).identitySecretHex()?.let { nsecOf(it) } } }
+                } else {
+                    null
+                },
+            )
         }
     }
 }
@@ -296,6 +323,13 @@ internal fun SettingsHub(
                 icon = { RowIcon(Icons.Outlined.CloudUpload) },
                 subtitle = if (view.blossomServer.isNotBlank()) "To ${blossomHost(view.blossomServer)}" else "Through the relays",
             )
+            Divider(inset = 68.dp)
+            NavRow(
+                "Backup",
+                onClick = { onOpen(SettingsPage.Backup) },
+                icon = { RowIcon(Icons.Outlined.CloudSync) },
+                subtitle = backupSummary(view.backup, now),
+            )
         }
         Group {
             NavRow("Logs", onClick = onOpenLogs, icon = { RowIcon(Icons.AutoMirrored.Outlined.Article) })
@@ -313,6 +347,16 @@ internal fun SettingsHub(
             fontSize = Tokens.TextXs,
             modifier = Modifier.fillMaxWidth().padding(horizontal = Tokens.Space2),
         )
+    }
+}
+
+/** The hub's line for the backup: off, waiting on a choice, failing, or when it last saved. */
+private fun backupSummary(backup: UniffiBackupView, now: Long): String {
+    val relay = backup.relay ?: return "Off"
+    return when (val status = backup.status) {
+        is UniffiBackupStatus.Found -> "A backup on ${relayHost(relay)} waits for you"
+        is UniffiBackupStatus.Failed -> "Not backed up"
+        else -> backup.savedAt?.let { "Backed up ${whenSaved(it.toLong(), now)}" } ?: "On, to ${relayHost(relay)}"
     }
 }
 
@@ -507,13 +551,63 @@ private fun NewQuickPrompt(dispatch: (UniffiIntent) -> Unit) {
 }
 
 /**
+ * The secret key of a login kept on this phone, hidden until asked for:
+ * it is the only way back into the identity on another phone or after
+ * logging out. Copied as sensitive, so the keyboard's clipboard preview
+ * does not show it.
+ */
+@Composable
+private fun SecretKeyGroup(revealKey: suspend () -> String?) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var nsec by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    Group(footer = "Anyone with your secret key is you. Keep a copy somewhere safe and never share it.") {
+        val shown = nsec
+        if (shown == null) {
+            ValueRow("Secret key", subtitle = "Hidden") {
+                QuietButton("Show", onClick = { scope.launch { nsec = revealKey() } })
+            }
+        } else {
+            GroupBody {
+                Text(shown, color = Tokens.Text, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
+                Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2), verticalAlignment = Alignment.CenterVertically) {
+                    SecondaryButton(if (copied) "Copied" else "Copy", onClick = {
+                        copySensitive(context, shown)
+                        copied = true
+                    })
+                    QuietButton("Hide", onClick = {
+                        nsec = null
+                        copied = false
+                    })
+                }
+            }
+        }
+    }
+}
+
+/** Put a secret on the clipboard, flagged so Android does not preview it. */
+private fun copySensitive(context: Context, text: String) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    val clip = ClipData.newPlainText("Secret key", text)
+    clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
+    clipboard.setPrimaryClip(clip)
+}
+
+/**
  * Who this phone is logged in as, and logging out. Logging out deletes
  * everything the phone keeps for the identity (paired machines, transcripts,
  * settings) — and, for a key kept on this phone, the key itself, which is
  * why the confirmation says so plainly.
  */
 @Composable
-internal fun AccountPage(npub: String, signerLabel: String?, onLogOut: () -> Unit, onBack: () -> Unit) {
+internal fun AccountPage(
+    npub: String,
+    signerLabel: String?,
+    onLogOut: () -> Unit,
+    onBack: () -> Unit,
+    revealKey: (suspend () -> String?)? = null,
+) {
     var confirming by remember { mutableStateOf(false) }
     Page(title = "Account", onBack = onBack) {
         Group(footer = "Machines and relays know this phone by this key.") {
@@ -523,6 +617,7 @@ internal fun AccountPage(npub: String, signerLabel: String?, onLogOut: () -> Uni
                 mono = true,
             ) {}
         }
+        if (revealKey != null) SecretKeyGroup(revealKey)
         Group {
             if (confirming) {
                 GroupBody {

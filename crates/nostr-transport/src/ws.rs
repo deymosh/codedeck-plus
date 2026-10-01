@@ -1529,6 +1529,7 @@ mod tests {
             kinds: vec![24515],
             authors: vec!["a".repeat(64)],
             p_tags: vec![phone.pubkey_hex.clone()],
+            d_tags: vec![],
             since: None,
         }
     }
