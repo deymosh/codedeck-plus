@@ -2287,7 +2287,9 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
             )]);
-            let old = core_for_ports(&first, &phone, Rc::new(Spy::default()), CorePorts { kv: Rc::new(kv), ..CorePorts::default() }).await;
+            let old_keys = MemoryKeyStore::default();
+            let ports = CorePorts { kv: Rc::new(kv), session_keys: Some(Rc::new(old_keys.clone())), ..CorePorts::default() };
+            let old = core_for_ports(&first, &phone, Rc::new(Spy::default()), ports).await;
             old.start();
             old.dispatch(Intent::SetBackupRelay(first.url.clone())).await;
             // Nothing on the relay yet: this phone's is saved.
@@ -2295,7 +2297,9 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
             let event = next_frame_of(&mut first, "EVENT").await[1].clone();
             assert_eq!(event["kind"], 30078);
             let wire = event.to_string();
+            let old_secret = old_keys.ring().current.keypair.secret_hex();
             assert!(!wire.contains("my laptop") && !wire.contains("Work lab") && !wire.contains(&machine.pubkey_hex));
+            assert!(!wire.contains(&old_secret));
             first.push(serde_json::json!(["OK", event["id"], true, ""]).to_string());
             settle().await;
             let saved = settings_backup(&old).await;
@@ -2304,8 +2308,11 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
 
             // A fresh phone with the same identity finds it and imports it.
             let mut second = mock_relay().await;
-            let new = core_for(&second, &phone, Rc::new(Spy::default())).await;
+            let new_keys = MemoryKeyStore::default();
+            let ports = CorePorts { session_keys: Some(Rc::new(new_keys.clone())), ..CorePorts::default() };
+            let new = core_for_ports(&second, &phone, Rc::new(Spy::default()), ports).await;
             new.start();
+            assert_ne!(new_keys.ring().current.keypair.secret_hex(), old_secret);
             new.dispatch(Intent::SetBackupRelay(second.url.clone())).await;
             answer_backup_req(&mut second, &phone.pubkey_hex, &[event]).await;
             settle().await;
@@ -2316,6 +2323,8 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
             let machines = new.machines_view().await.machines;
             let restored = &machines[&machine.pubkey_hex];
             assert_eq!((restored.label.as_deref(), restored.relays.clone()), (Some("Work lab"), vec![first.url.clone()]));
+            // It granted nothing of its own yet, so it takes the old phone's session keys.
+            assert_eq!(new_keys.ring().current.keypair.secret_hex(), old_secret);
         })
         .await;
 }

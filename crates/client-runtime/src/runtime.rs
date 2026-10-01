@@ -1248,7 +1248,7 @@ impl Loop {
                     self.persist_store(StoreId::Machines).await;
                     if self.session.drop_unused_previous(&self.stores.machines, now) {
                         log::info!("session key: every bridge moved to the new key; the previous one is gone");
-                        self.key_store.save(&self.session.encode()).await;
+                        self.session_ring_changed().await;
                     }
                 }
                 self.interpret_route(result).await;
@@ -1321,10 +1321,20 @@ impl Loop {
         }
         log::info!("session key: replaced by a fresh one");
         self.session.drop_unused_previous(&self.stores.machines, now);
+        self.session_ring_changed().await;
+    }
+
+    /// The session-key ring changed (rotated, pruned, or taken from a
+    /// backup): store it, grant and encrypt under its current key, and back
+    /// it up.
+    pub(super) async fn session_ring_changed(&mut self) {
         self.key_store.save(&self.session.encode()).await;
-        self.keys = PhoneKeys::new(&self.keys.identity_pubkey_hex, &self.session.current);
-        // The old key's grant attempts say nothing about the new one.
-        self.grant_attempts.clear();
+        if self.keys.session_pubkey_hex != self.session.current.pubkey_hex() {
+            self.keys = PhoneKeys::new(&self.keys.identity_pubkey_hex, &self.session.current);
+            // The old key's grant attempts say nothing about the new one.
+            self.grant_attempts.clear();
+        }
+        self.backup_changed();
     }
 
     fn emit(&self, event: CoreEvent) {

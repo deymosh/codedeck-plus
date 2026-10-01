@@ -120,9 +120,19 @@ impl Loop {
         let Some(backup) = self.stores.backup.found.take() else { return };
         self.stores.backup.status = BackupStatus::Importing;
         let tor_before = self.stores.settings.data.tor_proxy_enabled;
+        let now = self.clock.now_ms();
         let stores = &mut self.stores;
-        let summary = merge_backup(&backup, &mut stores.machines, &mut stores.settings, &mut stores.quick_prompts);
-        log::info!("backup: imported ({} machines added, {} kept)", summary.added, summary.kept);
+        let summary =
+            merge_backup(&backup, &mut stores.machines, &mut stores.settings, &mut stores.quick_prompts, &mut self.session, now);
+        log::info!(
+            "backup: imported ({} machines added, {} kept, session keys {})",
+            summary.added,
+            summary.kept,
+            if summary.adopted_keys { "taken" } else { "kept" }
+        );
+        if summary.adopted_keys {
+            self.session_ring_changed().await;
+        }
         for id in [StoreId::Machines, StoreId::Settings, StoreId::QuickPrompts] {
             self.persist_store(id).await;
             self.state_changed(super::slice_of(id));
@@ -201,7 +211,8 @@ impl Loop {
             return;
         }
         let now = self.clock.now_ms();
-        let backup = build_backup(&self.stores.machines, &self.stores.settings.data, &self.stores.quick_prompts.prompts, now);
+        let backup =
+            build_backup(&self.stores.machines, &self.stores.settings.data, &self.stores.quick_prompts.prompts, &self.session, now);
         let fingerprint = backup_fingerprint(&backup);
         if !force && self.stores.backup.config.fingerprint.as_deref() == Some(fingerprint.as_str()) {
             return;

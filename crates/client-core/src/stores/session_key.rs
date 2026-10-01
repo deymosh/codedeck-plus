@@ -84,20 +84,30 @@ pub struct SessionKeyRing {
     pub previous: Option<SessionKey>,
 }
 
-/// The ring as the host stores it. Holds secrets.
-#[derive(Serialize, Deserialize)]
+/// The ring as the host stores it, and as the config backup carries it.
+/// Holds secrets; its `Debug` shows none.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StoredRing {
+pub struct StoredRing {
     current: StoredKey,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     previous: Option<StoredKey>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredKey {
     secret_hex: String,
     expires_at: u64,
+}
+
+impl std::fmt::Debug for StoredRing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredRing")
+            .field("expires_at", &self.current.expires_at)
+            .field("previous", &self.previous.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl StoredKey {
@@ -133,8 +143,21 @@ impl SessionKeyRing {
     /// The ring as the host stores it. Holds the secrets: keep it wherever
     /// the host keeps secrets, never in a log.
     pub fn encode(&self) -> String {
-        let ring = StoredRing { current: StoredKey::of(&self.current), previous: self.previous.as_ref().map(StoredKey::of) };
-        serde_json::to_string(&ring).expect("ring serializes")
+        serde_json::to_string(&self.stored()).expect("ring serializes")
+    }
+
+    /// The ring with its secrets, as the config backup carries it.
+    pub fn stored(&self) -> StoredRing {
+        StoredRing { current: StoredKey::of(&self.current), previous: self.previous.as_ref().map(StoredKey::of) }
+    }
+
+    /// The ring a backup carried, if its current key is readable and still
+    /// live at `now_ms`; a previous key already lapsed is left behind.
+    pub fn from_stored(stored: &StoredRing, now_ms: u64) -> Option<Self> {
+        let now = now_ms / 1000;
+        let current = stored.current.key().filter(|k| k.live(now))?;
+        let previous = stored.previous.as_ref().and_then(StoredKey::key).filter(|k| k.live(now));
+        Some(Self { current, previous })
     }
 
     /// Replace the current key with a fresh one once less than
