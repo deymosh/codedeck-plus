@@ -544,6 +544,7 @@ mod tests {
             removed_sessions: None,
             machine_offline: None,
             direct: None,
+            rev: None,
         })
     }
 
