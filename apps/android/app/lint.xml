@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- The UniFFI bindings are generated (./codedeck gen-android-bindings)
+         and checked for drift, so a finding there cannot be fixed by hand.
+         Its one finding, java.lang.ref.Cleaner on API < 33, is guarded at
+         run time: it falls back to JNA's cleaner when the class is absent. -->
+    <issue id="all">
+        <ignore path="src/main/java/uniffi/**" />
+    </issue>
+</lint>

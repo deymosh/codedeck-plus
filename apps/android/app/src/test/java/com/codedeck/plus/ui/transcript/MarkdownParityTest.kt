@@ -32,7 +32,7 @@ class MarkdownParityTest {
     )
 
     @Composable
-    private fun dark(content: @Composable () -> Unit) {
+    private fun Dark(content: @Composable () -> Unit) {
         CodeDeckTheme {
             Surface(color = Tokens.Bg, contentColor = Tokens.Text) {
                 Column(Modifier.background(Tokens.Bg).fillMaxWidth().padding(16.dp)) { content() }
@@ -42,6 +42,6 @@ class MarkdownParityTest {
 
     @Test
     fun assistant_markdown_gfm_and_code() {
-        paparazzi.snapshot { dark { TranscriptMarkdown(MarkdownCorpus.ASSISTANT_MARKDOWN) } }
+        paparazzi.snapshot { Dark { TranscriptMarkdown(MarkdownCorpus.ASSISTANT_MARKDOWN) } }
     }
 }

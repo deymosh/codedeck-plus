@@ -4,8 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
-import android.util.Log
 import android.speech.RecognizerIntent
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -182,8 +182,8 @@ fun SessionScreen(
     core: CoreHost,
     machine: String,
     sessionId: String,
-    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
 ) {
     val machinesView by core.machines.collectAsState()
     val uiView by core.ui.collectAsState()

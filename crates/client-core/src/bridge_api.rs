@@ -148,7 +148,7 @@ pub enum InvalidStage {
     Decode,
 }
 
-/// A dropped payload, kept for diagnostics (capped at [`INVALID_RECORDS_CAP`]).
+/// A dropped payload, kept for diagnostics (capped at `INVALID_RECORDS_CAP`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidPayloadRecord {
     pub event_id: String,

@@ -168,7 +168,7 @@ internal fun Composer(
                 .size(44.dp)
                 .clip(CircleShape)
                 .background(if (canSend || stop) Tokens.Accent else Tokens.SurfaceHover)
-                .clickable(enabled = canSend || stop, onClick = if (stop) onStop!! else onSend)
+                .clickable(enabled = canSend || stop, onClick = if (stop) onStop else onSend)
                 .semantics { contentDescription = if (stop) "Stop" else "Send" },
             contentAlignment = Alignment.Center,
         ) {

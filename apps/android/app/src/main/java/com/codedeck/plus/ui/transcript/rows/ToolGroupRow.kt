@@ -9,13 +9,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Search
@@ -49,7 +49,7 @@ internal fun toolKindIcon(kind: String): ImageVector = when (kind) {
     "read" -> Icons.Outlined.Visibility
     "edit" -> Icons.Outlined.Description
     "delete" -> Icons.Outlined.Delete
-    "move" -> Icons.Outlined.DriveFileMove
+    "move" -> Icons.AutoMirrored.Outlined.DriveFileMove
     "search" -> Icons.Outlined.Search
     "execute" -> Icons.Outlined.Terminal
     "think" -> Icons.Outlined.Checklist

@@ -1,6 +1,7 @@
 package com.codedeck.plus.platform
 
 import android.content.Context
+import androidx.core.content.edit
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
@@ -143,7 +144,7 @@ class KeyVault(context: Context) {
                 }
             }
             app.getSharedPreferences("codedeck_identity_keyset_prefs", Context.MODE_PRIVATE)
-                .edit().clear().apply()
+                .edit { clear() }
             identityFile.delete()
             sessionKeysFile.delete()
             buildKeysetHandle()

@@ -28,9 +28,11 @@
         </intent>
     </queries>
 
-    <!-- No backup or device transfer: see res/xml/data_extraction_rules.xml. -->
+    <!-- No backup or device transfer: see res/xml/data_extraction_rules.xml
+         (Android 12+); fullBackupContent says the same to older versions. -->
     <application
         android:allowBackup="false"
+        android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"

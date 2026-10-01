@@ -48,7 +48,7 @@ class TranscriptRowsParityTest {
     )
 
     @Composable
-    private fun dark(content: @Composable () -> Unit) {
+    private fun Dark(content: @Composable () -> Unit) {
         CodeDeckTheme {
             Surface(color = Tokens.Bg, contentColor = Tokens.Text) {
                 Column(Modifier.background(Tokens.Bg).fillMaxWidth().padding(16.dp)) { content() }
@@ -75,7 +75,7 @@ class TranscriptRowsParityTest {
             added = 0, removed = 0, failed = 0,
         )
         paparazzi.snapshot {
-            dark {
+            Dark {
                 Column {
                     groups.forEach { ToolGroupRow(it, live = false, onOpen = {}) }
                     ToolGroupRow(lone, live = true, onOpen = {})
@@ -91,7 +91,7 @@ class TranscriptRowsParityTest {
     }
 
     @Composable
-    private fun sheet(content: @Composable () -> Unit) {
+    private fun Sheet(content: @Composable () -> Unit) {
         CodeDeckTheme {
             Surface(color = Tokens.SurfaceRaised, contentColor = Tokens.Text) {
                 Column(Modifier.background(Tokens.SurfaceRaised).fillMaxWidth().padding(top = 16.dp)) { content() }
@@ -102,19 +102,19 @@ class TranscriptRowsParityTest {
     @Test
     fun tool_sheet_timeline() {
         val work = corpus().filterIsInstance<DisplayEntry.ToolGroup>()[1]
-        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
+        paparazzi.snapshot { Sheet { ToolSheetContent(work, live = false, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
     }
 
     @Test
     fun tool_sheet_edit_page() {
         val work = editGroup()
-        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openPath = listOf(work.steps[0].seq), onOpenPath = {}, onClose = {}) } }
+        paparazzi.snapshot { Sheet { ToolSheetContent(work, live = false, openPath = listOf(work.steps[0].seq), onOpenPath = {}, onClose = {}) } }
     }
 
     @Test
     fun tool_sheet_failed_command_page() {
         val work = editGroup()
-        paparazzi.snapshot { sheet { ToolSheetContent(work, live = false, openPath = listOf(work.steps[1].seq), onOpenPath = {}, onClose = {}) } }
+        paparazzi.snapshot { Sheet { ToolSheetContent(work, live = false, openPath = listOf(work.steps[1].seq), onOpenPath = {}, onClose = {}) } }
     }
 
     /** The group with an edit and a failed command. */
@@ -129,19 +129,19 @@ class TranscriptRowsParityTest {
     @Test
     fun tool_sheet_agent_page() {
         val group = agentGroup()
-        paparazzi.snapshot { sheet { ToolSheetContent(group, live = true, openPath = listOf(group.steps[0].seq), onOpenPath = {}, onClose = {}) } }
+        paparazzi.snapshot { Sheet { ToolSheetContent(group, live = true, openPath = listOf(group.steps[0].seq), onOpenPath = {}, onClose = {}) } }
     }
 
     @Test
     fun tool_sheet_agent_timeline() {
         val group = agentGroup()
-        paparazzi.snapshot { sheet { ToolSheetContent(group, live = true, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
+        paparazzi.snapshot { Sheet { ToolSheetContent(group, live = true, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
     }
 
     @Test
     fun tool_sheet_plan_page() {
         val group = agentGroup()
-        paparazzi.snapshot { sheet { ToolSheetContent(group, live = false, openPath = listOf(group.steps[1].seq), onOpenPath = {}, onClose = {}) } }
+        paparazzi.snapshot { Sheet { ToolSheetContent(group, live = false, openPath = listOf(group.steps[1].seq), onOpenPath = {}, onClose = {}) } }
     }
 
     private fun activity(): ActivityView {
@@ -154,7 +154,7 @@ class TranscriptRowsParityTest {
     @Test
     fun activity_sheet() {
         paparazzi.snapshot {
-            sheet { ActivitySheetContent(activity(), live = false, canStop = true, onOpenAgent = {}, onStopTask = {}, onClose = {}) }
+            Sheet { ActivitySheetContent(activity(), live = false, canStop = true, onOpenAgent = {}, onStopTask = {}, onClose = {}) }
         }
     }
 
@@ -162,7 +162,7 @@ class TranscriptRowsParityTest {
     fun activity_bar() {
         val a = activity()
         paparazzi.snapshot {
-            dark {
+            Dark {
                 Column {
                     ActivityBar(a, live = false, onOpen = {})
                     // No plan: what the sub-agent does leads.
@@ -175,14 +175,14 @@ class TranscriptRowsParityTest {
     @Test
     fun diff_card() {
         val diff = corpus().filterIsInstance<DisplayEntry.Diff>().first()
-        paparazzi.snapshot { dark { DiffRow(diff.path, diff.lines, diff.truncated, expanded = false, onToggle = {}) } }
+        paparazzi.snapshot { Dark { DiffRow(diff.path, diff.lines, diff.truncated, expanded = false, onToggle = {}) } }
     }
 
     @Test
     fun permission_card_pending() {
         val permission = corpus().filterIsInstance<DisplayEntry.PermissionRequest>().last()
         paparazzi.snapshot {
-            dark { PermissionCard(permission, "machine", "session", responded = false, actions = {}) }
+            Dark { PermissionCard(permission, "machine", "session", responded = false, actions = {}) }
         }
     }
 
@@ -190,7 +190,7 @@ class TranscriptRowsParityTest {
     fun plan_approval_card_pending() {
         val plan = corpus().filterIsInstance<DisplayEntry.PlanApproval>().first()
         paparazzi.snapshot {
-            dark { PlanApprovalCard(plan, "machine", "session", responded = false, choice = null, actions = {}) }
+            Dark { PlanApprovalCard(plan, "machine", "session", responded = false, choice = null, actions = {}) }
         }
     }
 
@@ -198,7 +198,7 @@ class TranscriptRowsParityTest {
     fun question_card_pending() {
         val question = corpus().filterIsInstance<DisplayEntry.Question>().first()
         paparazzi.snapshot {
-            dark { QuestionCard(question, "machine", "session", respondedCards = emptySet(), actions = {}) }
+            Dark { QuestionCard(question, "machine", "session", respondedCards = emptySet(), actions = {}) }
         }
     }
 
@@ -206,7 +206,7 @@ class TranscriptRowsParityTest {
     fun question_group_card_pending() {
         val group = corpus().filterIsInstance<DisplayEntry.Question>().first { it.questions.size > 1 }
         paparazzi.snapshot {
-            dark { QuestionCard(group, "machine", "session", respondedCards = emptySet(), actions = {}) }
+            Dark { QuestionCard(group, "machine", "session", respondedCards = emptySet(), actions = {}) }
         }
     }
 }

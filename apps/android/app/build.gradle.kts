@@ -136,33 +136,16 @@ dependencies {
     // Chrome/composer icons (mic, attach, pair, settings, menu, close). The
     // full extended set is large, but release builds R8-minify (above) and
     // drop every unused icon; debug builds simply carry the dead weight.
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation(libs.androidx.material.icons.extended)
     implementation(libs.kotlinx.coroutines.android)
-    // JNA: the FFI bridge uniffi-bindgen's generated Kotlin uses to call into
-    // crates/client-ffi's cdylib. Version pinned loosely on purpose — this
-    // is exactly the dependency the generated bindings file itself declares
-    // as a prerequisite; keep it in step with whatever `uniffi` crate version
-    // crates/client-ffi/Cargo.toml pins (currently 0.32).
-    implementation("net.java.dev.jna:jna:5.19.0@aar")
-
-    // Tink directly, not its deprecated androidx.security:security-crypto
-    // wrapper (frozen at 1.1.0-alpha07): platform/SecureIdentityStore.kt
-    // uses AndroidKeysetManager to keep the persisted bridge identity
-    // secret encrypted at rest under a Keystore-held master key.
-    implementation("com.google.crypto.tink:tink-android:1.19.0")
-
-    // Pairing-QR camera scan (ui/screens/PairingScanView.kt): CameraX for the
-    // preview/analysis pipeline, ZXing's core decoder for the QR code — a
-    // plain Java library with no dependencies of its own. Not ML Kit: it
-    // brings Play Services, Firebase components and a usage-reporting
-    // transport (a startup provider, a background upload job) into every
-    // launch, all to read one QR code. Neither library is covered by the
-    // Compose BOM, so they are pinned explicitly.
-    val camerax = "1.6.2"
-    implementation("androidx.camera:camera-camera2:$camerax")
-    implementation("androidx.camera:camera-lifecycle:$camerax")
-    implementation("androidx.camera:camera-view:$camerax")
-    implementation("com.google.zxing:core:3.5.4")
+    // The aar: JNA's Android build, with its native dispatch libraries.
+    // Why each of these is here: gradle/libs.versions.toml.
+    implementation(variantOf(libs.jna) { artifactType("aar") })
+    implementation(libs.tink.android)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
 
     // Compose-native Markdown for assistant/plan transcript rows.
     // GFM (tables, task lists, strikethrough, autolinks) is the renderer's

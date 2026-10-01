@@ -6,7 +6,7 @@
 //! Rust-backed one for a key the app holds itself.
 //!
 //! Every call is blocking from Rust's point of view and runs on a worker
-//! thread ([`SignerAdapter`] hops to `spawn_blocking` first): an
+//! thread (`SignerAdapter` hops to `spawn_blocking` first): an
 //! implementation may take as long as it needs, e.g. waiting for the user to
 //! approve a request in the signer app, and must not touch main-thread
 //! state.

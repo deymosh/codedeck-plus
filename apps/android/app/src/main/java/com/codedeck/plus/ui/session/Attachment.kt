@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.scale
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -163,7 +164,7 @@ private fun downscaledIfHuge(resolver: ContentResolver, picked: PickedFile, file
         BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sampleSize })
     } ?: return null
     val scaled = if (decoded.width != targetWidth || decoded.height != targetHeight) {
-        Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
+        decoded.scale(targetWidth, targetHeight, true)
     } else {
         decoded
     }
