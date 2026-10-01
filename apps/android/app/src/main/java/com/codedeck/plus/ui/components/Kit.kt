@@ -155,9 +155,9 @@ fun IconAction(icon: ImageVector, label: String, onClick: () -> Unit, tint: Colo
  */
 @Composable
 fun Group(
+    modifier: Modifier = Modifier,
     title: String? = null,
     footer: String? = null,
-    modifier: Modifier = Modifier,
     rows: @Composable GroupScope.() -> Unit,
 ) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {

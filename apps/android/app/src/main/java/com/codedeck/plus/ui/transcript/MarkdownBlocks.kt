@@ -61,7 +61,7 @@ fun markdownBlocks(text: String, target: Int = BLOCK_TARGET): List<String> {
                 }
                 append(line)
             } else {
-                val open = fence!!
+                val open = fence
                 if (trimmed.startsWith(open) && trimmed.trimEnd().all { it == open[0] }) {
                     fence = null
                     append(line)

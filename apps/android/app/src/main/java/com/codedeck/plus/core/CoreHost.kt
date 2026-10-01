@@ -1,7 +1,7 @@
 package com.codedeck.plus.core
 
-import com.codedeck.plus.platform.CoreHttpFetch
 import android.util.Log
+import com.codedeck.plus.platform.CoreHttpFetch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

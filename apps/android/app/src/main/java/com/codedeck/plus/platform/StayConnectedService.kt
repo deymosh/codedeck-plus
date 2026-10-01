@@ -14,8 +14,8 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Log
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
@@ -419,14 +419,14 @@ class StayConnectedService : Service() {
      * and its bridges is exactly that type, and unlike `dataSync` it has no
      * daily time budget — Android 15 stops a `dataSync` service after 6 h per
      * 24 h, which silently ended "stay connected". Older versions only know
-     * `dataSync` (no budget there).
+     * `dataSync` (no budget there), and before Android 10 a foreground
+     * service has no type at all.
      */
-    private fun foregroundType(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
-        } else {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        }
+    private fun foregroundType(): Int = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        else -> 0
+    }
 
     /** Re-posting under the foreground notification's own id replaces it in
      *  place; the platform drops the post silently when notifications are

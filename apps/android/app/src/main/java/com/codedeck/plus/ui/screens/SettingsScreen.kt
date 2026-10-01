@@ -5,6 +5,7 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.PersistableBundle
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -29,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -376,7 +378,7 @@ internal fun AppearancePage(view: UniffiSettingsView, dispatch: (UniffiIntent) -
                 // Local position while dragging; re-keyed on the stored value
                 // so a change made elsewhere snaps the thumb to it. The intent
                 // fires on release.
-                var position by remember(view.uiScale) { mutableStateOf(view.uiScale.toFloat()) }
+                var position by remember(view.uiScale) { mutableFloatStateOf(view.uiScale.toFloat()) }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     Text("${Math.round(position * 100)}%", color = Tokens.Text, fontSize = Tokens.TextXl, modifier = Modifier.weight(1f))
                     QuietButton("Reset", enabled = position != UI_SCALE_DEFAULT, onClick = {
@@ -592,7 +594,11 @@ private fun SecretKeyGroup(revealKey: suspend () -> String?) {
 private fun copySensitive(context: Context, text: String) {
     val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
     val clip = ClipData.newPlainText("Secret key", text)
-    clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
+    // API 33 only: before that there is no clipboard preview to hide the
+    // secret from.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
+    }
     clipboard.setPrimaryClip(clip)
 }
 

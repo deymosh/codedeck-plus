@@ -1,6 +1,7 @@
 package com.codedeck.plus.platform
 
 import android.content.Context
+import androidx.core.content.edit
 import uniffi.client_ffi.UniffiIdentitySigner
 import uniffi.client_ffi.localIdentitySigner
 
@@ -29,19 +30,21 @@ class LoginStore(context: Context) {
     fun load(): Login? = decodeLogin(prefs.getString(KIND, null), prefs.getString(PACKAGE, null), prefs.getString(PUBKEY, null))
 
     fun save(login: Login) {
-        val edit = prefs.edit().clear()
-        when (login) {
-            Login.OnDevice -> edit.putString(KIND, "device")
-            is Login.SignerApp -> edit.putString(KIND, "signer")
-                .putString(PACKAGE, login.packageName)
-                .putString(PUBKEY, login.pubkeyHex)
+        // Committed synchronously: the login must be on disk before the core
+        // starts, and the service reads it right after.
+        prefs.edit(commit = true) {
+            clear()
+            when (login) {
+                Login.OnDevice -> putString(KIND, "device")
+                is Login.SignerApp -> putString(KIND, "signer")
+                    .putString(PACKAGE, login.packageName)
+                    .putString(PUBKEY, login.pubkeyHex)
+            }
         }
-        // Committed synchronously: the service reads it right after.
-        edit.commit()
     }
 
     fun clear() {
-        prefs.edit().clear().commit()
+        prefs.edit(commit = true) { clear() }
     }
 }
 

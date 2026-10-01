@@ -91,7 +91,11 @@ class Notifier(private val context: Context) : UniffiNotifier {
         }
 
         val notification = builder.build()
-        NotificationManagerCompat.from(context).notify(effectiveTag, idFor(effectiveTag), notification)
+        try {
+            NotificationManagerCompat.from(context).notify(effectiveTag, idFor(effectiveTag), notification)
+        } catch (e: SecurityException) {
+            // Permission revoked since the check above: drop the post.
+        }
     }
 
     override fun cancel(tag: String) {
@@ -119,7 +123,11 @@ class Notifier(private val context: Context) : UniffiNotifier {
                 ),
             )
             .build()
-        NotificationManagerCompat.from(context).notify(SIGNER_TAG, idFor(SIGNER_TAG), notification)
+        try {
+            NotificationManagerCompat.from(context).notify(SIGNER_TAG, idFor(SIGNER_TAG), notification)
+        } catch (e: SecurityException) {
+            // Permission revoked since the check above: drop the post.
+        }
     }
 
     fun cancelSignerApproval() = cancel(SIGNER_TAG)

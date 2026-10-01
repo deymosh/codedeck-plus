@@ -4,8 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
-import android.net.Uri
 import android.util.Log
+import androidx.core.net.toUri
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
@@ -39,7 +39,7 @@ data class SignerAppInfo(val packageName: String, val label: String)
 /** Every installed NIP-55 signer app, by label. */
 fun installedSignerApps(context: Context): List<SignerAppInfo> {
     val pm = context.packageManager
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:"))
+    val intent = Intent(Intent.ACTION_VIEW, "nostrsigner:".toUri())
     return pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
         .map { SignerAppInfo(it.activityInfo.packageName, it.loadLabel(pm).toString()) }
         .distinctBy { it.packageName }
@@ -50,7 +50,7 @@ fun installedSignerApps(context: Context): List<SignerAppInfo> {
  *  everything the core will need so later requests can be answered without
  *  the user. */
 fun getPublicKeyIntent(packageName: String): Intent =
-    Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:")).apply {
+    Intent(Intent.ACTION_VIEW, "nostrsigner:".toUri()).apply {
         `package` = packageName
         putExtra("type", "get_public_key")
         putExtra("permissions", signerPermissionsJson())
@@ -157,7 +157,7 @@ class Nip55Signer(
     }
 
     private fun resolve(method: String, payload: String, peer: String): ProviderAnswer {
-        val uri = Uri.parse("content://$packageName.$method")
+        val uri = "content://$packageName.$method".toUri()
         val cursor: Cursor = try {
             // NIP-55 passes the arguments in the projection slot.
             app.contentResolver.query(uri, arrayOf(payload, peer, currentUser), null, null, null)
@@ -170,7 +170,7 @@ class Nip55Signer(
 
     private fun viaActivity(type: String, payload: String, peer: String?): SignerAnswer {
         val id = UUID.randomUUID().toString()
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:$payload")).apply {
+        val intent = Intent(Intent.ACTION_VIEW, "nostrsigner:$payload".toUri()).apply {
             `package` = packageName
             putExtra("type", type)
             putExtra("id", id)
