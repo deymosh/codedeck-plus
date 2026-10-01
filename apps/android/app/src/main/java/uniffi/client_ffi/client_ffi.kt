@@ -855,6 +855,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_client_ffi_checksum_func_is_valid_provider_base_url(
     ): Int
+    external fun uniffi_client_ffi_checksum_func_nsec_of(
+    ): Int
     external fun uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled(
     ): Int
     external fun uniffi_client_ffi_checksum_func_provider_base_url_error(
@@ -1065,6 +1067,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_client_ffi_fn_func_is_valid_provider_base_url(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_client_ffi_fn_func_nsec_of(`secretHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_client_ffi_fn_func_persisted_tor_proxy_enabled(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_client_ffi_fn_func_provider_base_url_error(uniffi_out_err: UniffiRustCallStatus, 
@@ -1207,6 +1211,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_client_ffi_checksum_func_is_valid_provider_base_url() and 0xFFFF) != 1205) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_client_ffi_checksum_func_nsec_of() and 0xFFFF) != 40173) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_client_ffi_checksum_func_persisted_tor_proxy_enabled() and 0xFFFF) != 37378) {
@@ -4872,6 +4879,58 @@ public object FfiConverterTypeUniffiAvailablePlugin: FfiConverterRustBuffer<Unif
 
 
 /**
+ * The config backup, as the settings page shows it.
+ */
+data class UniffiBackupView (
+    /**
+     * `None`: backup is off.
+     */
+    var `relay`: kotlin.String?
+    , 
+    /**
+     * When a backup last reached the relay (ms since the epoch).
+     */
+    var `savedAt`: kotlin.ULong?
+    , 
+    var `status`: UniffiBackupStatus
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiBackupView: FfiConverterRustBuffer<UniffiBackupView> {
+    override fun read(buf: ByteBuffer): UniffiBackupView {
+        return UniffiBackupView(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterTypeUniffiBackupStatus.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiBackupView) = (
+            FfiConverterOptionalString.allocationSize(value.`relay`) +
+            FfiConverterOptionalULong.allocationSize(value.`savedAt`) +
+            FfiConverterTypeUniffiBackupStatus.allocationSize(value.`status`)
+    )
+
+    override fun write(value: UniffiBackupView, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`relay`, buf)
+            FfiConverterOptionalULong.write(value.`savedAt`, buf)
+            FfiConverterTypeUniffiBackupStatus.write(value.`status`, buf)
+    }
+}
+
+
+
+/**
  * A credential's status — the secret itself never crosses.
  */
 data class UniffiCredentialStatus (
@@ -7246,6 +7305,8 @@ data class UniffiSettingsView (
     var `showUsageBadge`: kotlin.Boolean
     , 
     var `showCommitBadge`: kotlin.Boolean
+    , 
+    var `backup`: UniffiBackupView
     
 ){
     
@@ -7270,6 +7331,7 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterTypeUniffiBackupView.read(buf),
         )
     }
 
@@ -7281,7 +7343,8 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
             FfiConverterULong.allocationSize(value.`maxUploadBytes`) +
             FfiConverterBoolean.allocationSize(value.`notificationsEnabled`) +
             FfiConverterBoolean.allocationSize(value.`showUsageBadge`) +
-            FfiConverterBoolean.allocationSize(value.`showCommitBadge`)
+            FfiConverterBoolean.allocationSize(value.`showCommitBadge`) +
+            FfiConverterTypeUniffiBackupView.allocationSize(value.`backup`)
     )
 
     override fun write(value: UniffiSettingsView, buf: ByteBuffer) {
@@ -7293,6 +7356,7 @@ public object FfiConverterTypeUniffiSettingsView: FfiConverterRustBuffer<UniffiS
             FfiConverterBoolean.write(value.`notificationsEnabled`, buf)
             FfiConverterBoolean.write(value.`showUsageBadge`, buf)
             FfiConverterBoolean.write(value.`showCommitBadge`, buf)
+            FfiConverterTypeUniffiBackupView.write(value.`backup`, buf)
     }
 }
 
@@ -7798,6 +7862,161 @@ public object FfiConverterTypeCoreInitError : FfiConverterRustBuffer<CoreInitExc
     }
 
 }
+
+
+
+sealed class UniffiBackupStatus {
+    
+    /**
+     * Nothing going on (off, or on and up to date).
+     */
+    object Idle : UniffiBackupStatus()
+    
+    
+    /**
+     * Looking on the relay for a backup.
+     */
+    object Checking : UniffiBackupStatus()
+    
+    
+    /**
+     * A backup is on the relay: import it, or keep this phone's.
+     */
+    data class Found(
+        val `savedAt`: kotlin.ULong, 
+        val `machines`: kotlin.UInt) : UniffiBackupStatus()
+        
+    {
+        
+
+        companion object
+    }
+    
+    object Saving : UniffiBackupStatus()
+    
+    
+    object Importing : UniffiBackupStatus()
+    
+    
+    /**
+     * The last operation failed; `reason` is for the user.
+     */
+    data class Failed(
+        val `reason`: kotlin.String) : UniffiBackupStatus()
+        
+    {
+        
+
+        companion object
+    }
+    
+
+    
+
+    
+    
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiBackupStatus : FfiConverterRustBuffer<UniffiBackupStatus>{
+    override fun read(buf: ByteBuffer): UniffiBackupStatus {
+        return when(buf.getInt()) {
+            1 -> UniffiBackupStatus.Idle
+            2 -> UniffiBackupStatus.Checking
+            3 -> UniffiBackupStatus.Found(
+                FfiConverterULong.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            4 -> UniffiBackupStatus.Saving
+            5 -> UniffiBackupStatus.Importing
+            6 -> UniffiBackupStatus.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: UniffiBackupStatus): ULong = when(value) {
+        is UniffiBackupStatus.Idle -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiBackupStatus.Checking -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiBackupStatus.Found -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterULong.allocationSize(value.`savedAt`)
+                + FfiConverterUInt.allocationSize(value.`machines`)
+            )
+        }
+        is UniffiBackupStatus.Saving -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiBackupStatus.Importing -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiBackupStatus.Failed -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: UniffiBackupStatus, buf: ByteBuffer) {
+        when(value) {
+            is UniffiBackupStatus.Idle -> {
+                buf.putInt(1)
+                Unit
+            }
+            is UniffiBackupStatus.Checking -> {
+                buf.putInt(2)
+                Unit
+            }
+            is UniffiBackupStatus.Found -> {
+                buf.putInt(3)
+                FfiConverterULong.write(value.`savedAt`, buf)
+                FfiConverterUInt.write(value.`machines`, buf)
+                Unit
+            }
+            is UniffiBackupStatus.Saving -> {
+                buf.putInt(4)
+                Unit
+            }
+            is UniffiBackupStatus.Importing -> {
+                buf.putInt(5)
+                Unit
+            }
+            is UniffiBackupStatus.Failed -> {
+                buf.putInt(6)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
 
 
 
@@ -8536,6 +8755,50 @@ sealed class UniffiIntent {
     object ResetPairing : UniffiIntent()
     
     
+    /**
+     * Turn the config backup on with this relay (`wss://`), and look on it
+     * for a backup this identity already saved.
+     */
+    data class SetBackupRelay(
+        val `url`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Merge the backup found on the relay into this phone.
+     */
+    object ImportBackup : UniffiIntent()
+    
+    
+    /**
+     * Keep this phone's configuration over the backup found on the relay;
+     * it replaces that backup.
+     */
+    object KeepLocalConfig : UniffiIntent()
+    
+    
+    /**
+     * Save the backup now, even if nothing changed.
+     */
+    object BackupNow : UniffiIntent()
+    
+    
+    /**
+     * Turn the backup off; with `delete`, also ask the relay to delete it.
+     */
+    data class DisableBackup(
+        val `delete`: kotlin.Boolean) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
 
     
 
@@ -8774,6 +9037,15 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 )
             50 -> UniffiIntent.DismissStagedPairing
             51 -> UniffiIntent.ResetPairing
+            52 -> UniffiIntent.SetBackupRelay(
+                FfiConverterString.read(buf),
+                )
+            53 -> UniffiIntent.ImportBackup
+            54 -> UniffiIntent.KeepLocalConfig
+            55 -> UniffiIntent.BackupNow
+            56 -> UniffiIntent.DisableBackup(
+                FfiConverterBoolean.read(buf),
+                )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -9208,6 +9480,38 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 4UL
             )
         }
+        is UniffiIntent.SetBackupRelay -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`url`)
+            )
+        }
+        is UniffiIntent.ImportBackup -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiIntent.KeepLocalConfig -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiIntent.BackupNow -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiIntent.DisableBackup -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterBoolean.allocationSize(value.`delete`)
+            )
+        }
     }
 
     override fun write(value: UniffiIntent, buf: ByteBuffer) {
@@ -9537,6 +9841,28 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             }
             is UniffiIntent.ResetPairing -> {
                 buf.putInt(51)
+                Unit
+            }
+            is UniffiIntent.SetBackupRelay -> {
+                buf.putInt(52)
+                FfiConverterString.write(value.`url`, buf)
+                Unit
+            }
+            is UniffiIntent.ImportBackup -> {
+                buf.putInt(53)
+                Unit
+            }
+            is UniffiIntent.KeepLocalConfig -> {
+                buf.putInt(54)
+                Unit
+            }
+            is UniffiIntent.BackupNow -> {
+                buf.putInt(55)
+                Unit
+            }
+            is UniffiIntent.DisableBackup -> {
+                buf.putInt(56)
+                FfiConverterBoolean.write(value.`delete`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -11644,6 +11970,22 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
     
         
         FfiConverterString.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The `nsec…` of an on-device login's hex secret, for "Show my key"; `None`
+         * for anything that is not a secret key. A secret: the host shows it only
+         * on the user's request and never logs it.
+         */ fun `nsecOf`(`secretHex`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_client_ffi_fn_func_nsec_of(
+    
+        
+        FfiConverterString.lower(`secretHex`),_status)
 }
     )
     }

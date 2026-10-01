@@ -72,6 +72,15 @@ pub fn npub_from_hex(pubkey_hex: &str) -> Result<String, CryptoError> {
         .map_err(|_| CryptoError::InvalidKey)
 }
 
+/// `nsec…` for a hex secret key, for the user to copy their own key out of
+/// an on-device login. A secret: never log it.
+pub fn nsec_from_secret_hex(secret_hex: &str) -> Result<String, CryptoError> {
+    SecretKey::from_hex(secret_hex)
+        .map_err(|_| CryptoError::InvalidKey)?
+        .to_bech32()
+        .map_err(|_| CryptoError::InvalidKey)
+}
+
 /// hex pubkey for an `npub…` (pairing URL / manual-pair input). `Err` on a
 /// non-`npub` bech32 (e.g. an `nsec`) or garbage — never a panic.
 pub fn hex_from_npub(npub: &str) -> Result<String, CryptoError> {
@@ -153,6 +162,16 @@ mod tests {
             hex_from_npub("nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"),
             Err(CryptoError::InvalidKey)
         );
+    }
+
+    #[test]
+    fn nsec_encodes_a_secret_and_rejects_garbage() {
+        // NIP-19's own example.
+        assert_eq!(
+            nsec_from_secret_hex("67dea2ed018072d675f5415ecfaed7d2597555e202d85b3d65ea4e58d2d92ffa").unwrap(),
+            "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5"
+        );
+        assert_eq!(nsec_from_secret_hex("nothex"), Err(CryptoError::InvalidKey));
     }
 
     #[test]

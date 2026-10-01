@@ -95,6 +95,14 @@ fn is_relay_url(url: String) -> bool {
     client_runtime::client_core::stores::pairing::is_relay_url(url.trim())
 }
 
+/// The `nsec…` of an on-device login's hex secret, for "Show my key"; `None`
+/// for anything that is not a secret key. A secret: the host shows it only
+/// on the user's request and never logs it.
+#[uniffi::export]
+fn nsec_of(secret_hex: String) -> Option<String> {
+    protocol::crypto::nsec_from_secret_hex(secret_hex.trim()).ok()
+}
+
 /// Whether Orbot routing was on when settings were last saved, for
 /// [`Core::new`]'s `tor` argument. Pure read, safe before any `Core` exists:
 /// the proxy must be known before the first relay or Blossom connection,
