@@ -162,6 +162,9 @@ internal fun Composer(
         val stop = onStop != null && !canSend
         Box(
             Modifier
+                // As tall as the icon buttons beside it (48 dp), so the
+                // bottom-aligned row centres all of them on the same line.
+                .padding(vertical = 2.dp)
                 .size(44.dp)
                 .clip(CircleShape)
                 .background(if (canSend || stop) Tokens.Accent else Tokens.SurfaceHover)
