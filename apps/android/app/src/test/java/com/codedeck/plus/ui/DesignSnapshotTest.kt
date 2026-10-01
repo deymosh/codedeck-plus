@@ -29,6 +29,11 @@ import com.codedeck.plus.ui.screens.NotificationsPage
 import com.codedeck.plus.ui.screens.PairingBody
 import com.codedeck.plus.ui.screens.PluginsContent
 import com.codedeck.plus.ui.screens.UploadsPage
+import com.codedeck.plus.ui.screens.AccountPage
+import com.codedeck.plus.ui.screens.BackupPage
+import com.codedeck.plus.ui.screens.RestoreContent
+import uniffi.client_ffi.UniffiBackupStatus
+import uniffi.client_ffi.UniffiBackupView
 import com.codedeck.plus.ui.screens.SettingsHub
 import com.codedeck.plus.ui.session.Composer
 import com.codedeck.plus.ui.session.QuickPromptStrip
@@ -180,6 +185,34 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "settings_uploads_blossom" to {
         UploadsPage(settings.copy(blossomServer = "https://blossom.example.com", maxUploadBytes = 26_214_400uL), {}, {})
     },
+    "settings_backup_off" to { BackupPage(settings.backup, torOn = true, now = NOW, dispatch = {}, onBack = {}) },
+    "settings_backup_on" to {
+        BackupPage(
+            UniffiBackupView(relay = "wss://relay.example.org", savedAt = (NOW - 3 * 60_000).toULong(), status = UniffiBackupStatus.Idle),
+            torOn = false, now = NOW, dispatch = {}, onBack = {},
+        )
+    },
+    "settings_backup_found" to {
+        BackupPage(
+            UniffiBackupView(relay = "wss://relay.example.org", savedAt = null, status = FOUND),
+            torOn = false, now = NOW, dispatch = {}, onBack = {},
+        )
+    },
+    "settings_backup_failed" to {
+        BackupPage(
+            UniffiBackupView(
+                relay = "wss://relay.example.org",
+                savedAt = (NOW - 26 * 3_600_000).toULong(),
+                status = UniffiBackupStatus.Failed("The relay did not take the backup: blocked: auth required"),
+            ),
+            torOn = false, now = NOW, dispatch = {}, onBack = {},
+        )
+    },
+    "settings_account_key" to { AccountPage(workstation.npub, signerLabel = null, onLogOut = {}, onBack = {}, revealKey = { null }) },
+    "restore" to { RestoreContent(settings.backup, torOn = false, dispatch = {}, onDone = {}, now = NOW) },
+    "restore_found" to {
+        RestoreContent(UniffiBackupView(relay = "wss://relay.example.org", savedAt = null, status = FOUND), torOn = false, dispatch = {}, onDone = {}, now = NOW)
+    },
     "logs" to {
         LogsContent(
             lines = listOf(
@@ -195,6 +228,9 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         )
     },
 )
+
+/** A backup another phone saved two hours before the fixtures' clock. */
+private val FOUND = UniffiBackupStatus.Found(savedAt = (NOW - 2 * 3_600_000).toULong(), machines = 2u)
 
 private fun Paparazzi.page(name: String) = snapshot { CodeDeckTheme { pages.getValue(name)() } }
 
@@ -230,6 +266,13 @@ class DesignSnapshotTest {
     @Test fun settings_connection() = paparazzi.page("settings_connection")
     @Test fun settings_uploads() = paparazzi.page("settings_uploads")
     @Test fun settings_uploads_blossom() = paparazzi.page("settings_uploads_blossom")
+    @Test fun settings_backup_off() = paparazzi.page("settings_backup_off")
+    @Test fun settings_backup_on() = paparazzi.page("settings_backup_on")
+    @Test fun settings_backup_found() = paparazzi.page("settings_backup_found")
+    @Test fun settings_backup_failed() = paparazzi.page("settings_backup_failed")
+    @Test fun settings_account_key() = paparazzi.page("settings_account_key")
+    @Test fun restore() = paparazzi.page("restore")
+    @Test fun restore_found() = paparazzi.page("restore_found")
     @Test fun logs() = paparazzi.page("logs")
 }
 
