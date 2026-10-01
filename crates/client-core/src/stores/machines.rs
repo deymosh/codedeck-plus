@@ -301,6 +301,11 @@ pub struct MachineView {
     /// A grant sent to this bridge and not confirmed yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_grant_sent: Option<SessionGrant>,
+    /// The `rev` of the newest session list applied: an older one, arriving
+    /// late over another path or replayed, is not applied over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub list_rev: Option<u64>,
     /// Where the bridge says it can be reached directly (its heartbeat's
     /// `direct`), as last heard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -462,6 +467,7 @@ impl MachineView {
             mcp: BTreeMap::new(),
             session_grant: None,
             session_grant_sent: None,
+            list_rev: None,
             direct: None,
             direct_endpoints: Vec::new(),
             relays: Vec::new(),
@@ -662,6 +668,13 @@ impl MachinesState {
     /// stored value; a field the wire carries always wins. The resurrection
     /// shield filters non-expired user-dismissed session ids out of `msg`
     /// BEFORE the merge.
+    /// Whether `msg` is no newer than the newest list applied for
+    /// `machine_pubkey`, so applying it would step the machine back.
+    pub fn is_outdated_list(&self, machine_pubkey: &str, msg: &SessionListMsg) -> bool {
+        let applied = self.machine(machine_pubkey).and_then(|m| m.list_rev);
+        matches!((msg.rev, applied), (Some(rev), Some(applied)) if rev <= applied)
+    }
+
     pub fn apply_session_list(&mut self, machine_pubkey: &str, msg: &SessionListMsg, at: u64) {
         self.dismissed_sessions = prune_dismissed(&self.dismissed_sessions, at);
         let dismissed = &self.dismissed_sessions;
@@ -703,6 +716,9 @@ impl MachinesState {
         entry.protocol_version = Some(msg.protocol_version);
         entry.machine_offline = msg.machine_offline.unwrap_or(false);
         entry.direct = msg.direct.clone();
+        if msg.rev.is_some() {
+            entry.list_rev = msg.rev;
+        }
         entry.last_heartbeat_at = Some(at);
         entry.sessions = sessions;
     }
