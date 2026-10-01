@@ -57,6 +57,24 @@ fn the_heartbeat_advertises_the_direct_link() {
 }
 
 #[test]
+fn every_session_list_has_a_greater_rev_than_the_last_even_across_a_restart() {
+    let mut rig = Rig::new();
+    let first = last_heartbeat(&rig.messages()).rev.expect("a rev");
+    // Two lists in the same millisecond still differ.
+    rig.host_up();
+    let second = last_heartbeat(&rig.messages()).rev.unwrap();
+    assert!(second > first, "{second} > {first}");
+    rig.advance(60_000);
+    rig.send(serde_json::json!({ "type": "refresh-sessions" }));
+    let third = last_heartbeat(&rig.messages()).rev.unwrap();
+    assert!(third > second, "{third} > {second}");
+    // A restarted bridge whose clock starts behind keeps counting up.
+    let mut rig = rig.restart();
+    let after = last_heartbeat(&rig.messages()).rev.unwrap();
+    assert!(after > third, "{after} > {third}");
+}
+
+#[test]
 fn without_a_paired_phone_nothing_is_published() {
     let mut rig = Rig::with(RigOptions { paired: false, ..Default::default() });
     assert!(rig.messages().is_empty());

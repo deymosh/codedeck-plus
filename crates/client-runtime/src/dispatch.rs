@@ -202,16 +202,19 @@ impl<'a> Router<'a> {
                 r.pending_sessions_changed = true;
             }
             BridgeToPhone::SessionFailed(m) => {
-                self.stores
+                let news = self
+                    .stores
                     .pending_sessions
                     .apply_failed(&m.pending_id, &m.reason, self.now);
                 r.pending_sessions_changed = true;
-                let fx = self.emit_notify(&NotifyEvent::SessionFailed {
-                    machine: machine.to_string(),
-                    session_id: m.pending_id.clone(),
-                    reason: Some(m.reason.clone()).filter(|s| !s.is_empty()),
-                });
-                r.notifies.extend(fx);
+                if news {
+                    let fx = self.emit_notify(&NotifyEvent::SessionFailed {
+                        machine: machine.to_string(),
+                        session_id: m.pending_id.clone(),
+                        reason: Some(m.reason.clone()).filter(|s| !s.is_empty()),
+                    });
+                    r.notifies.extend(fx);
+                }
             }
             BridgeToPhone::SessionReady(m) => {
                 if self.stores.pending_sessions.contains(&m.pending_id) {
@@ -519,6 +522,13 @@ impl<'a> Router<'a> {
         // pairing candidate is let through the ingest gate (its pair-ack must
         // arrive) but must not self-register by sending a session list.
         if self.stores.machines.machine(machine).is_none() {
+            return;
+        }
+        // A list no newer than the one applied (late over another relay or
+        // the direct link, re-published, or replayed after a restart) would
+        // step every session back and re-announce transitions already told.
+        if self.stores.machines.is_outdated_list(machine, m) {
+            log::debug!("session list rev {:?} from {} is outdated; ignored", m.rev, machine.get(..8).unwrap_or(machine));
             return;
         }
 
@@ -839,6 +849,7 @@ mod tests {
             removed_sessions: None,
             machine_offline: None,
             direct: None,
+            rev: None,
         }
     }
 
@@ -1163,6 +1174,58 @@ mod tests {
             [NotifyEffect::Notify { .. }]
         ));
         assert!(out.persist.contains(&StoreId::Machines));
+    }
+
+    #[tokio::test]
+    async fn a_session_list_older_than_the_one_applied_changes_nothing_and_tells_nothing() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        let list = |state, rev| {
+            let mut m = sessions_msg(vec![info("s1", Some(state), None)]);
+            m.rev = Some(rev);
+            BridgeToPhone::Sessions(m)
+        };
+        let route = async |s: &mut CoreStores, msg: BridgeToPhone, now| {
+            let mut r = Router::new(s, &ts, &kp, now);
+            r.visible = false;
+            r.route(MACHINE, &msg).await
+        };
+        assert!(route(&mut s, list(SessionState::Running, 10), 1_000).await.notifies.is_empty());
+        let finished = route(&mut s, list(SessionState::Idle, 20), 2_000).await;
+        assert_eq!(finished.notifies.len(), 1, "the turn's end is told once");
+
+        // A Running list from before it, late over another relay or the
+        // direct link, and the Idle one replayed after a restart: nothing.
+        for (late, now) in [(list(SessionState::Running, 15), 3_000), (list(SessionState::Idle, 20), 4_000)] {
+            let out = route(&mut s, late, now).await;
+            assert_eq!(out, RouteResult::default());
+        }
+        assert_eq!(s.machines.session(MACHINE, "s1").unwrap().info.state, Some(SessionState::Idle));
+
+        // The rev survives the store, so a restarted phone still ignores them.
+        let stored = serde_json::to_string(&s.machines.machines).unwrap();
+        let back: std::collections::BTreeMap<String, client_core::stores::machines::MachineView> =
+            serde_json::from_str(&stored).unwrap();
+        assert_eq!(back[MACHINE].list_rev, Some(20));
+
+        // A newer turn is told again (past the notification cooldown).
+        route(&mut s, list(SessionState::Running, 30), 15_000).await;
+        assert_eq!(route(&mut s, list(SessionState::Idle, 40), 16_000).await.notifies.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_same_session_failure_is_told_once() {
+        let (mut s, ts, kp) = stores().await;
+        let failed = BridgeToPhone::SessionFailed(protocol::events::SessionFailedMsg {
+            pending_id: "p1".into(),
+            reason: "no such folder".into(),
+        });
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        r.visible = false;
+        assert_eq!(r.route(MACHINE, &failed).await.notifies.len(), 1);
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        r.visible = false;
+        assert!(r.route(MACHINE, &failed).await.notifies.is_empty());
     }
 
     #[tokio::test]

@@ -153,6 +153,8 @@ pub struct Engine {
     stopped: bool,
     /// Publish the heartbeat once the current input is handled.
     list_dirty: bool,
+    /// The last session list's `rev`.
+    list_rev: u64,
     /// Store the registry once the current input is handled.
     registry_dirty: bool,
     /// Only `last_activity` changed since the registry was stored: written
@@ -193,6 +195,7 @@ impl Engine {
             started: false,
             stopped: false,
             list_dirty: false,
+            list_rev: 0,
             registry_dirty: false,
             activity_dirty: false,
         }
@@ -274,6 +277,7 @@ impl Engine {
         let last_seen = self.store.get(store_keys::LAST_SEEN).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
         let processed: Vec<String> = load_or_default(self.store.get(store_keys::PROCESSED_IDS), "processed event ids");
         self.ingest = Ingest::new(last_seen, processed);
+        self.list_rev = self.store.get(store_keys::LIST_REV).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
 
         let doc = self.store.get(store_keys::REGISTRY).map(|raw| RegistryDoc::load(&raw)).unwrap_or_default();
         self.tombstones = Tombstones::new(doc.removed_sessions);
@@ -532,6 +536,7 @@ impl Engine {
         let agents = self.catalog.descriptors(|a| self.agent_credentials(a));
         let credentials = self.bridge_credentials();
         let removed = self.tombstones.ids();
+        let rev = self.next_list_rev();
         let message = BridgeToPhone::Sessions(SessionListMsg {
             machine: self.config.machine.clone(),
             host: self.config.host_kind,
@@ -545,7 +550,19 @@ impl Engine {
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
             direct: self.config.direct.clone(),
+            rev: Some(rev),
         });
         self.publish_all(message);
+    }
+
+    /// The next session list's `rev`: the clock in ms, or one past the last
+    /// one when the clock has not moved past it (two lists in one ms, or a
+    /// clock set back). Stored, so a restart keeps it increasing.
+    fn next_list_rev(&mut self) -> u64 {
+        self.list_rev = self.now().max(self.list_rev + 1);
+        if let Err(err) = self.store.set(store_keys::LIST_REV, &self.list_rev.to_string()) {
+            log::warn!("[Engine] Could not store the session list revision: {err}");
+        }
+        self.list_rev
     }
 }

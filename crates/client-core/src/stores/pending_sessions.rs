@@ -84,12 +84,16 @@ impl PendingSessionsState {
 
     /// `session-failed` — flip the placeholder to a visible error. A failure for
     /// a pending we never saw still surfaces (an invisible failure is the old
-    /// bug), with empty machine fields.
-    pub fn apply_failed(&mut self, pending_id: &str, reason: &str, now: u64) {
+    /// bug), with empty machine fields. Returns whether it is news: false
+    /// when the placeholder had already failed (the same failure again, over
+    /// another relay or replayed), so it is told once.
+    pub fn apply_failed(&mut self, pending_id: &str, reason: &str, now: u64) -> bool {
         match self.pending.get_mut(pending_id) {
             Some(existing) => {
+                let news = existing.state != PendingSessionState::Failed;
                 existing.state = PendingSessionState::Failed;
                 existing.reason = Some(reason.to_string());
+                news
             }
             None => {
                 self.pending.insert(
@@ -104,6 +108,7 @@ impl PendingSessionsState {
                         seen_at: now,
                     },
                 );
+                true
             }
         }
     }

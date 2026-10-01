@@ -176,6 +176,9 @@ pub mod store_keys {
     pub const REGISTRY: &str = "registry";
     pub const LAST_SEEN: &str = "lastSeenTimestamp";
     pub const PROCESSED_IDS: &str = "processedEventIds";
+    /// The last session list's `rev`, so the next one is greater even if
+    /// the clock went back across a restart.
+    pub const LIST_REV: &str = "listRev";
     /// Keys whose values contain secrets.
     pub const SECRET_KEYS: [&str; 2] = [CREDENTIALS, PROVIDER_PROFILES];
 }

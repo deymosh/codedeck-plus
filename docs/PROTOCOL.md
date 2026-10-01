@@ -84,6 +84,13 @@ advertised; creating a session on it fails with the reason.
   `session-failed {pendingId, reason}`. The bridge uses the future sessionId as
   the pendingId; a pending placeholder is also resolved by the session simply
   appearing in a heartbeat's `sessions[]`.
+- **Ordering:** each `sessions` list carries `rev`, strictly greater than the
+  last one the bridge published (its clock in ms, kept ahead of the stored
+  last one, so a restart or a clock set back cannot lower it). The same list
+  arrives over every relay and the direct link, and may be re-published or
+  replayed, so a phone applies a list only if its `rev` is greater than that
+  of the newest one it applied for that machine (kept across restarts); an
+  older one changes nothing and announces nothing.
 - **Options:** `set-option {sessionId, option: mode|effort|model, value}` →
   `option-confirmed {sessionId, option, value}`. A refused value publishes
   nothing (the phone keeps what it knew); a refused effort or model confirms

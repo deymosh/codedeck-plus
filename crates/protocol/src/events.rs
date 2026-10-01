@@ -44,6 +44,14 @@ pub struct SessionListMsg {
     /// [`crate::direct`]). Absent when it serves no direct link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct: Option<crate::direct::DirectInfo>,
+    /// The list's revision: strictly greater in each list the bridge
+    /// publishes (its clock in ms, kept ahead of the last one). The same
+    /// list reaches a phone over several relays and the direct link, and
+    /// may be published again, replayed or delayed, so lists arrive out of
+    /// order; a phone applies only one newer than the newest it applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub rev: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
