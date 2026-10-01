@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -90,6 +91,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -206,6 +208,11 @@ fun SessionScreen(
         // Every delta is applied, in order: each builds on the one before.
         core.transcriptFlow(machine, sessionId)
             .map { view -> ParsedTranscript.of(view, previous).also { previous = it } }
+            // One row the JSON decoders cannot parse ends this collection
+            // (the transcript stops updating) rather than crashing the app.
+            .catch { e ->
+                Log.w("codedeck", "transcript decode ended: ${e::class.simpleName}: ${e.message?.take(160)}")
+            }
             .flowOn(Dispatchers.Default)
             .collect { transcript = it }
     }

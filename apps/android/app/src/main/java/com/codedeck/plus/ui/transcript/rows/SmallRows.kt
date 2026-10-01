@@ -15,6 +15,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -23,33 +32,88 @@ import com.codedeck.plus.ui.transcript.TranscriptMarkdown
 
 /** A message the user sent. */
 @Composable
-fun UserMessageRow(text: String) {
+fun UserMessageRow(text: String, segment: Segment = Segment.Only) {
     // Your turns sit on the right, set off from the agent's full-width text.
     Row(Modifier.fillMaxWidth().padding(start = Tokens.Space7), horizontalArrangement = Arrangement.End) {
-        Column(
+        val bubble = if (segment == Segment.Only) {
             Modifier
                 .clip(RoundedCornerShape(topStart = Tokens.RadiusXl, topEnd = Tokens.RadiusXl, bottomStart = Tokens.RadiusXl, bottomEnd = Tokens.RadiusSm))
                 .background(Tokens.SurfaceHover)
-                .padding(horizontal = Tokens.Space4, vertical = Tokens.Space3),
-        ) {
+        } else {
+            // A long message's blocks fill the full width, so they line up as one bubble.
+            Modifier.fillMaxWidth().segmentFrame(segment, Tokens.RadiusXl, fill = Tokens.SurfaceHover)
+        }
+        Column(bubble.padding(segmentInsets(segment, Tokens.Space4, Tokens.Space3))) {
             TranscriptMarkdown(text)
         }
     }
 }
 
+/**
+ * Where a block of a long message sits among its blocks (see
+ * `markdownBlocks`): each is a list item of its own, and a framed message (a
+ * plan, the user's bubble) draws its part of one frame.
+ */
+enum class Segment { Only, First, Middle, Last }
+
+/** The gap the transcript list leaves between items, which a segment's frame bridges. */
+private val ItemGap = Tokens.Space2
+
+/**
+ * A segment's part of a frame round a message cut into list items: the top
+ * corners on the first, the bottom ones on the last, the sides on every one,
+ * running through the gap to the next so the frame shows no break.
+ */
+private fun Modifier.segmentFrame(segment: Segment, radius: Dp, fill: Color? = null, stroke: Color? = null): Modifier = drawBehind {
+    val r = radius.toPx()
+    val gap = ItemGap.toPx()
+    val hasTop = segment == Segment.Only || segment == Segment.First
+    val hasBottom = segment == Segment.Only || segment == Segment.Last
+    // A round rect running past the edges this segment does not close, cut
+    // back to the segment plus the gap below it.
+    val top = if (hasTop) 0f else -(r + 1f)
+    val bottom = if (hasBottom) size.height else size.height + gap + r + 1f
+    val clipBottom = if (hasBottom) size.height else size.height + gap
+    clipRect(top = 0f, bottom = clipBottom) {
+        val corner = CornerRadius(r, r)
+        val at = Offset(0f, top)
+        val area = Size(size.width, bottom - top)
+        fill?.let { drawRoundRect(it, at, area, corner) }
+        stroke?.let {
+            val w = 1.dp.toPx()
+            drawRoundRect(it, at + Offset(w / 2, w / 2), Size(area.width - w, area.height - w), corner, style = Stroke(w))
+        }
+    }
+}
+
+/** A framed segment's insets: none at the edges of a cut, where the list's gap stands in for a paragraph break. */
+private fun segmentInsets(segment: Segment, horizontal: Dp, vertical: Dp): PaddingValues = PaddingValues(
+    start = horizontal,
+    end = horizontal,
+    top = if (segment == Segment.Only || segment == Segment.First) vertical else 0.dp,
+    bottom = if (segment == Segment.Only || segment == Segment.Last) vertical else 0.dp,
+)
+
 /** Agent text (markdown). `isPlan` frames it as a plan document, which stays
  *  readable after the plan is approved: outlined in the accent rather than
  *  filled, so it reads as a document and not as one more card. */
 @Composable
-fun AgentTextRow(text: String, isPlan: Boolean = false) {
+fun AgentTextRow(text: String, isPlan: Boolean = false, segment: Segment = Segment.Only) {
     val planShape = RoundedCornerShape(Tokens.RadiusLg)
+    val planFrame = Tokens.Accent.copy(alpha = 0.55f)
     Column(
         Modifier
             .fillMaxWidth()
-            .let { if (isPlan) it.border(1.dp, Tokens.Accent.copy(alpha = 0.55f), planShape) else it }
-            .padding(if (isPlan) Tokens.Space4 else Tokens.Space1),
+            .let {
+                when {
+                    !isPlan -> it
+                    segment == Segment.Only -> it.border(1.dp, planFrame, planShape)
+                    else -> it.segmentFrame(segment, Tokens.RadiusLg, stroke = planFrame)
+                }
+            }
+            .padding(segmentInsets(segment, if (isPlan) Tokens.Space4 else Tokens.Space1, if (isPlan) Tokens.Space4 else Tokens.Space1)),
     ) {
-        if (isPlan) {
+        if (isPlan && (segment == Segment.Only || segment == Segment.First)) {
             Text(
                 "Plan",
                 color = Tokens.Text,

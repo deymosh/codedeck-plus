@@ -1,6 +1,8 @@
 package com.codedeck.plus.core
 
 import com.codedeck.plus.platform.CoreHttpFetch
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -122,7 +124,19 @@ class CoreHost(
         private val requests = Channel<Unit>(Channel.CONFLATED)
 
         init {
-            scope.launch { for (request in requests) sink.value = read() }
+            scope.launch {
+                for (request in requests) {
+                    // An FFI read failure logs and keeps the loop alive:
+                    // subsequent requests are re-read, not silent drops.
+                    try {
+                        sink.value = read()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("codedeck", "slice read failed: ${e::class.simpleName}: ${e.message?.take(160)}")
+                    }
+                }
+            }
         }
 
         fun request() {
@@ -181,7 +195,22 @@ class CoreHost(
     /** Whether the device has a usable network — see `Connectivity`. */
     fun setOnline(online: Boolean) = core.setOnline(online)
 
-    suspend fun dispatch(intent: UniffiIntent) = core.dispatch(intent)
+    /**
+     * Hand [intent] to the core. Callers fire and forget from a UI scope, so
+     * a refused intent (a value the core does not know) or a fault in the
+     * core is logged here rather than crashing the app; what the user needs
+     * to see of a failure arrives as a core event.
+     */
+    suspend fun dispatch(intent: UniffiIntent) {
+        try {
+            core.dispatch(intent)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The intent's kind only: its fields may hold secrets.
+            Log.w("codedeck", "intent ${intent::class.simpleName} refused: ${e::class.simpleName}: ${e.message?.take(160)}")
+        }
+    }
 
     /**
      * The phone's own Nostr id in bech32 `npub1…` form — derived by the core

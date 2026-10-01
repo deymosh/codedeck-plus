@@ -86,15 +86,22 @@ internal fun SlashCommandMenu(
  *  receding, so each row shows why it is listed. */
 internal fun highlightedName(name: String, query: String): AnnotatedString = buildAnnotatedString {
     val at = if (query.isEmpty()) -1 else name.lowercase().indexOf(query.lowercase())
+    // Lowercasing can change a string's length (e.g. "I" -> Turkish dotless
+    // i on some locales), so the match on the lowercased name may extend
+    // past the original name's end. The match length in the ORIGINAL string
+    // is what bounds the highlight; fall back to no highlight when the
+    // bounds are unsound.
+    val end = (at + query.length).coerceAtMost(name.length)
+    val match = at >= 0 && at < end
     val muted = SpanStyle(color = Tokens.TextMuted)
     withStyle(muted) { append("/") }
-    if (at < 0) {
+    if (!match) {
         withStyle(SpanStyle(color = Tokens.Text)) { append(name) }
         return@buildAnnotatedString
     }
     withStyle(muted) { append(name.substring(0, at)) }
-    withStyle(SpanStyle(color = Tokens.Text, fontWeight = FontWeight.SemiBold)) { append(name.substring(at, at + query.length)) }
-    withStyle(muted) { append(name.substring(at + query.length)) }
+    withStyle(SpanStyle(color = Tokens.Text, fontWeight = FontWeight.SemiBold)) { append(name.substring(at, end)) }
+    withStyle(muted) { append(name.substring(end)) }
 }
 
 @Composable

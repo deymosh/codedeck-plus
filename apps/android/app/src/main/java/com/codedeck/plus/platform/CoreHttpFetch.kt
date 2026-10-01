@@ -88,7 +88,13 @@ class CoreHttpFetch : UniffiHttpFetch {
      * the server at all throws [UniffiHttpException.Failed].
      */
     private fun exchange(url: String, method: String, headers: List<UniffiHttpHeader>, body: ByteArray): UniffiHttpResponse {
-        val conn = URL(url).openConnection(proxy ?: Proxy.NO_PROXY) as HttpURLConnection
+        val conn: HttpURLConnection = try {
+            URL(url).openConnection(proxy ?: Proxy.NO_PROXY) as HttpURLConnection
+        } catch (e: IOException) {
+            // A malformed URL is a failure to reach the server, same as any
+            // other connection failure below.
+            throw UniffiHttpException.Failed("$method $url failed: ${e.javaClass.simpleName}: ${e.message ?: "no detail"}")
+        }
         try {
             conn.requestMethod = method
             conn.connectTimeout = CONNECT_TIMEOUT_MS

@@ -187,9 +187,15 @@ class Nip55Signer(
     private fun failed(detail: String) = UniffiSignerException.Failed(detail)
 
     /** A signed event built from `unsigned` and a bare `signature`, for a
-     *  signer that returns only the signature. The core verifies it. */
+     *  signer that returns only the signature. The core verifies it; an
+     *  `unsigned` the JSON parser refuses is a signer failure like any
+     *  other (same type `ask`/`viaActivity` throw). */
     private fun withSignature(unsigned: String, signature: String): String =
-        JSONObject(unsigned).put("sig", signature).toString()
+        try {
+            JSONObject(unsigned).put("sig", signature).toString()
+        } catch (e: Exception) {
+            throw failed("the signer's answer is not valid JSON: ${e.javaClass.simpleName}")
+        }
 }
 
 /**
