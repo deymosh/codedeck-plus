@@ -437,10 +437,14 @@ impl Engine {
             }
             SessionEvent::Entries { entries } => self.on_entries(session_id, entries),
             SessionEvent::Turn { state } => {
+                // The agent may repeat the state it is in; only a change is
+                // worth a new session list.
                 if let Some(run) = self.run_mut(session_id) {
-                    run.turn = state;
+                    if run.turn != state {
+                        run.turn = state;
+                        self.list_dirty = true;
+                    }
                 }
-                self.list_dirty = true;
             }
             SessionEvent::Ended { error, resume_lost } => {
                 if let Some(run) = self.run_mut(session_id) {
