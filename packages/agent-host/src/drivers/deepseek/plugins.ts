@@ -89,6 +89,9 @@ export interface DeepSeekPluginsOptions {
   /** Run one `dsh plugin` invocation (runDshPlugin, bound to the runtime's
    *  entry point by the driver). */
   run: (args: string[]) => Promise<DshRun>;
+  /** The runtime's own packages directory, for the versions of the bundles a
+   *  profile does not install itself (the harness ships them). */
+  packagesDir?: () => Promise<string | undefined>;
   log: (message: string) => void;
 }
 
@@ -243,15 +246,25 @@ export class DeepSeekPlugins implements PluginManager {
     return { installed, toggles: true, ...(this.message !== undefined ? { message: this.message } : {}) };
   }
 
-  /** The version the profile actually has installed, when it has one. */
+  /**
+   * The version a plugin is at: the profile's own copy when it has one (what
+   * a user installed), else the harness's — a profile composes the bundles
+   * the harness ships without copying them in, so their version lives in the
+   * runtime's tree. A plugin that shows no version is one neither has.
+   */
   private async versionOf(name: string): Promise<string | undefined> {
-    try {
-      const text = await readFile(path.join(this.options.profileDir, 'node_modules', ...name.split('/'), 'package.json'), 'utf8');
-      const manifest = JSON.parse(text) as { version?: unknown };
-      return typeof manifest.version === 'string' ? manifest.version : undefined;
-    } catch {
-      return undefined;
+    const shipped = await this.options.packagesDir?.();
+    const roots = [path.join(this.options.profileDir, 'node_modules'), ...(shipped === undefined ? [] : [shipped])];
+    for (const root of roots) {
+      try {
+        const text = await readFile(path.join(root, ...name.split('/'), 'package.json'), 'utf8');
+        const manifest = JSON.parse(text) as { version?: unknown };
+        if (typeof manifest.version === 'string') return manifest.version;
+      } catch {
+        // Not here; the next root may have it.
+      }
     }
+    return undefined;
   }
 }
 

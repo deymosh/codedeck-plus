@@ -705,6 +705,7 @@ export class DeepSeekDriver implements Driver {
     this.plugins = new DeepSeekPlugins({
       profileDir,
       run: (args) => this.runDsh(args),
+      packagesDir: () => options.runtime.packagesRoot(),
       log: options.log,
     });
   }

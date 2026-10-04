@@ -303,6 +303,22 @@ export class DeepSeekRuntime {
   }
 
   /**
+   * The runtime's own `node_modules`: every `@deepseek-ai/*` package the
+   * harness ships resolves from here, which is where a shipped bundle's
+   * version is found (a profile installs only what a user added).
+   */
+  async packagesRoot(): Promise<string | undefined> {
+    let file = await this.entryPoint();
+    for (let depth = 0; depth < 8; depth++) {
+      const dir = path.dirname(file);
+      if (dir === file) break;
+      if (path.basename(dir) === 'node_modules') return dir;
+      file = dir;
+    }
+    return undefined;
+  }
+
+  /**
    * Resolve the runtime now — installing it when the machine has none — so a
    * session that comes later does not wait for the download. A failure is
    * only logged: the next session asks again, and reports it then.
