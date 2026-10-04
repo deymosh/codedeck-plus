@@ -3,28 +3,12 @@
  * credentials and the session's provider binding, turned into the variables
  * the CLI reads. The returned objects carry SECRETS — never log them.
  */
+import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../provider';
 import type { ProviderBinding, StartSession } from '../../types';
 
 export const ANTHROPIC_API_KEY_CREDENTIAL = 'anthropic_api_key';
 
-/** The message shown when a base URL is refused (the bridge shows the same). */
-export const PROVIDER_BASE_URL_ERROR =
-  'Base URL must be https:// (http:// is allowed only for localhost, 127.0.0.1 or [::1])';
-
-/** https anywhere, or http ONLY on loopback — a local model server has no
- *  cert and its traffic never leaves the machine; anything else is a network
- *  hop carrying a bearer token. */
-export function isValidProviderBaseUrl(raw: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (url.protocol === 'https:') return url.host !== '';
-  if (url.protocol !== 'http:') return false;
-  return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname.toLowerCase());
-}
+export { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR };
 
 /**
  * The env-name namespaces the Claude Code CLI (and the cloud SDKs it embeds)

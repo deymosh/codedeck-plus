@@ -6,12 +6,18 @@
  *
  * Configuration is the environment the bridge passes down:
  *   CODEDECK_AGENT_HOST_DRIVERS   comma-separated drivers to load
- *                                 (default `claude-code,opencode`; `fake` for tests)
+ *                                 (default `claude-code,opencode,deepseek-harness`;
+ *                                 `fake` for tests)
  *   CODEDECK_CLAUDE_PATH          the `claude` executable
  *   CODEDECK_TEST_MODE=1          Claude Code sessions answer canned /test-* commands
  *   CODEDECK_OPENCODE_SERVER_URL  an OpenCode server to use
  *   CODEDECK_OPENCODE_AUTO_START=1, CODEDECK_OPENCODE_PATH, CODEDECK_OPENCODE_PORT
  *                                 spawn and manage an OpenCode server instead
+ *   CODEDECK_DEEPSEEK_PATH        the DeepSeek Harness CLI to run (its
+ *                                 `lib/bin.js`, or an executable of your own);
+ *                                 unset = the runtime this build pins
+ *   CODEDECK_DEEPSEEK_HOME        `$DSH_HOME`, the harness's state root
+ *                                 (the bridge passes `<home>/dsh`)
  *   CODEDECK_AGENT_CACHE          where agent binaries installed on demand live
  *                                 (the bridge passes `<home>/agents`; `bin/`
  *                                 in it links each one under a stable name)
@@ -25,11 +31,16 @@ import { ClaudeDriver } from './drivers/claude/driver';
 import { RealSdkFacade, resolveClaudeExecutable } from './drivers/claude/facade';
 import { bundledClaudeExecutable, claudeBinary } from './drivers/claude/install';
 import { TestModeSdkFacade } from './drivers/claude/testModeFacade';
+import { DeepSeekDriver } from './drivers/deepseek/driver';
+import { installDshTree } from './drivers/deepseek/install';
+import { DeepSeekMcp } from './drivers/deepseek/mcp';
+import { DeepSeekRuntime, dshHomeDir, dshProfileDir } from './drivers/deepseek/runtime';
 import { FakeDriver } from './drivers/fake';
 import { OpenCodeDriver } from './drivers/opencode/driver';
 import { openCodeBinary } from './drivers/opencode/install';
+import { isFile } from './executable';
 import { AgentHost, type HostIo } from './host';
-import { httpPost } from './net';
+import { httpGet, httpPost } from './net';
 
 // stdout carries protocol frames only; a stray console.log from any library
 // would corrupt the stream, so every console method writes to stderr.
@@ -45,7 +56,7 @@ process.on('uncaughtException', (err) => log(`[agent-host] uncaught exception: $
 process.on('unhandledRejection', (err) => log(`[agent-host] unhandled rejection: ${err instanceof Error ? err.stack : String(err)}`));
 
 async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
-  const names = (env.CODEDECK_AGENT_HOST_DRIVERS ?? 'claude-code,opencode')
+  const names = (env.CODEDECK_AGENT_HOST_DRIVERS ?? 'claude-code,opencode,deepseek-harness')
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean);
@@ -90,6 +101,39 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
             log,
           }),
         );
+        break;
+      }
+      case 'deepseek-harness': {
+        const home = dshHomeDir(lookupEnv);
+        const dshPath = env.CODEDECK_DEEPSEEK_PATH?.trim();
+        // The MCP servers live in this profile layer, and a harness process
+        // is told the layer's version as it starts: the same manager serves
+        // both, so a change after a process started is configuration it has
+        // not loaded.
+        const mcp = new DeepSeekMcp({ profileDir: dshProfileDir(home), log });
+        const driver = DeepSeekDriver.create({
+          runtime: new DeepSeekRuntime({
+            // An explicit path is the operator's own harness; without one the
+            // pinned tree is installed on demand, at the version and sha512
+            // pnpm-lock.yaml holds.
+            ...(dshPath ? { dshPath } : {}),
+            home,
+            cacheDir,
+            registry: registryUrl(env),
+            installDsh: installDshTree,
+            configVersion: () => mcp.version,
+            log,
+          }),
+          home,
+          mcp,
+          baseEnv: env,
+          httpGet,
+          log,
+        });
+        if (dshPath && !isFile(dshPath)) {
+          driver.setUnavailable(`CODEDECK_DEEPSEEK_PATH points at ${dshPath}, which is not a file.`);
+        }
+        drivers.push(driver);
         break;
       }
       case 'fake':

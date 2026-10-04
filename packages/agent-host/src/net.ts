@@ -14,3 +14,10 @@ export const httpPost: HttpPost = async (url, headers, body) => {
   const res = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(15_000) });
   return { status: res.status };
 };
+
+export type HttpGet = (url: string, headers: Record<string, string>) => Promise<HttpResponse>;
+
+export const httpGet: HttpGet = async (url, headers) => {
+  const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(15_000) });
+  return { status: res.status };
+};
