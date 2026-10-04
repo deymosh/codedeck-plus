@@ -5,7 +5,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## Project identity
 
 CodeDeck+ is a community-maintained continuation of CodeDeck Next: run coding
-agents (Claude Code, OpenCode, …) on a laptop/VPS ("the bridge") and drive them
+agents (Claude Code, OpenCode, DeepSeek Harness) on a laptop/VPS ("the bridge") and drive them
 from an Android phone over end-to-end-encrypted Nostr. It started as a merge of
 the two upstream projects (`codedeck-next-bridge`, `codedeck-next-mobile`) and
 has since been rebuilt: the protocol, the bridge and the phone's core are Rust;
@@ -218,8 +218,8 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   there by default — keep them consistent. Neither ships the agents' own
   binaries: the agent host installs them on demand at the version and sha512
   pnpm-lock.yaml pins (the image into the `/data` volume); only an image built
-  with `BUNDLE_AGENTS=1` bakes them in. Never add a global Claude Code or
-  OpenCode install — the version must follow the lockfile.
+  with `BUNDLE_AGENTS=1` bakes them in. Never add a global Claude Code,
+  OpenCode or DeepSeek Harness install — the version must follow the lockfile.
 
 ## History note
 

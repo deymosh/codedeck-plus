@@ -303,14 +303,16 @@ Changing a secret means adding the server again.
 
 - `mcp-request {agent}` → `mcp-servers {agent, servers[], toggles, error?}`.
   `toggles`: a server can be switched off without removing it (OpenCode;
-  Claude Code has no such switch). A list that could not be read comes
+  Claude Code and the DeepSeek Harness have no such switch). A list that could
+  not be read comes
   empty, with `error`.
 - `mcp-action {agent, action, servers?, names?}` → `mcp-ack {agent, action,
   names, success, error?}`, then (when done) the new `mcp-servers` to every
   phone. `add` takes up to 50 `servers` (a name that exists is replaced);
   `remove`, `enable`, `disable` take `names`. One bad server refuses the
   whole action. Running sessions pick the change up (Claude Code reloads in
-  place; OpenCode reloads, restarting them).
+  place; OpenCode reloads, restarting them; the harness attaches its servers
+  as it starts, so its next process uses the new list).
 - `session-mcp-request {sessionId}` and `session-mcp-toggle {sessionId, name,
   enabled}` → `session-mcp {sessionId, servers[], toggles, projectWide,
   error?}`, each server `{name, status, error?, tools?}` with `status` one of

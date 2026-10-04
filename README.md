@@ -4,7 +4,7 @@
 
 # CodeDeck+
 
-**Control coding agents (Claude Code, OpenCode) running on your laptop or VPS
+**Control coding agents (Claude Code, OpenCode, DeepSeek Harness) running on your laptop or VPS
 from your Android phone, over end-to-end encrypted Nostr.** No accounts and no
 CodeDeck server: the phone and the bridge pair by scanning a QR code and talk
 through ordinary Nostr relays — public ones, or your own.
@@ -38,8 +38,9 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - Transcripts that survive restarts and offline gaps (ranged sync)
 - Per-session mode, model and effort, plus custom AI provider profiles (Kimi
   K3, OpenRouter, any Anthropic-compatible endpoint)
-- Claude Code and [OpenCode](https://opencode.ai), chosen per session — the
-  protocol is agent-neutral, so another agent is one driver away
+- Claude Code, [OpenCode](https://opencode.ai) and the
+  [DeepSeek Harness](https://www.deepseek.com/en/harness/), chosen per session
+  — the protocol is agent-neutral, so another agent is one driver away
   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
 - File attachments (photos or any file), and project/folder management on every paired bridge
 - NIP-42 `AUTH` relays, and Tor on both ends (see below)
@@ -223,6 +224,7 @@ the full runbook.
 - [`docs/CLIENT.md`](docs/CLIENT.md) — the phone: the Rust client core, the Android app, transport rules, building the APK
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v11 wire contract, the driver protocol, adding an agent
 - [`docs/OPENCODE.md`](docs/OPENCODE.md) — the optional OpenCode session backend: external server vs. bridge-managed, config, Docker setup
+- [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness backend: API key, models and reasoning, gateways, MCP servers and plugins
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 
 ## Upstream
