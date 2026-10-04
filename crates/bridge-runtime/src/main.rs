@@ -52,6 +52,9 @@ struct Cli {
     /// Path to the opencode executable, for auto-start [env: CODEDECK_OPENCODE_PATH]
     #[arg(long, global = true)]
     opencode_path: Option<String>,
+    /// Path to the DeepSeek Harness CLI — its `lib/bin.js`, or an executable of your own — instead of the runtime this build installs [env: CODEDECK_DEEPSEEK_PATH]
+    #[arg(long, global = true)]
+    deepseek_path: Option<String>,
     /// Path to the agent host bundle (main.js) [env: CODEDECK_AGENT_HOST]
     #[arg(long, global = true)]
     agent_host: Option<PathBuf>,
@@ -115,6 +118,7 @@ fn main() -> ExitCode {
         opencode_server_url: cli.opencode_server_url.clone(),
         opencode_auto_start: cli.opencode_auto_start,
         opencode_path: cli.opencode_path.clone(),
+        deepseek_path: cli.deepseek_path.clone(),
         agent_host: cli.agent_host.clone(),
         service: cli.service,
         test_mode: cli.test_mode,
