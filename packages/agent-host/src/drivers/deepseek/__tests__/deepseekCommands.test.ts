@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from '../bridge';
 import { HARNESS_PLUGIN, QUESTION_MARKER, installHarnessPlugin } from '../plugin';
-import { parseQuestionLine, toAnswerItems, toQuestionSpecs } from '../questions';
+import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs } from '../questions';
 
 const socketPathIn = (dir: string): string => path.join(dir, 'commands.sock');
 
@@ -227,11 +227,90 @@ describe('questions, through the plugin', () => {
     for (const cleanup of cleanups) cleanup();
   });
 
-  it('leaves a question it cannot key to another answerer', async () => {
+  it('shows a plan review, whose ask names no wait, and returns the verdict', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
+    const { cleanups, socket, listeners } = await runPlugin(dir, { list: () => [], execute: () => Promise.resolve(undefined) });
+    await waitForSocket(socket);
+    const pushed: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      pushed.push(String(chunk));
+      return true;
+    });
+    // The plan review of `exit_plan_mode` asks the same service the question
+    // tool does: the plan is the question's detail, and the call id is on its
+    // intent — there is no `wait` to read it from.
+    const review = {
+      questions: [
+        {
+          id: 'plan-review',
+          header: 'Plan review',
+          question: 'Approve this plan and leave plan mode?',
+          detail: '# Ship the harness\n\nDo the thing.',
+          options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+          intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-7' },
+        },
+      ],
+      agent: { session: { id: 's1' } },
+      signal: new AbortController().signal,
+    };
+    const pending = listeners.get('user-questions/request')!(review as never, () => Promise.reject(new Error('delegated')) as never);
+    stderr.mockRestore();
+
+    const parsed = parseQuestionLine(pushed.find((chunk) => chunk.includes(QUESTION_MARKER))!, QUESTION_MARKER)!;
+    expect(parsed).toMatchObject({ sessionId: 's1', callId: 'call-7' });
+    expect(toQuestionSpecs(parsed.questions)).toEqual([
+      {
+        question: 'Approve this plan and leave plan mode?\n\n# Ship the harness\n\nDo the thing.',
+        header: 'Plan review',
+        options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+      },
+    ]);
+
+    // The verdict travels back as the harness reads it: the chosen label.
+    await askPlugin(
+      socket,
+      { method: 'answer', callId: 'call-7', sessionId: 's1', answer: toAnswerItems(parsed.questions, ['Approve']) },
+      2_000,
+      () => {},
+    );
+    expect(await pending).toEqual({ answers: [{ id: 'plan-review', selected: ['Approve'] }] });
+    for (const cleanup of cleanups) cleanup();
+  });
+
+  it('asks under a key of its own when the request names none', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
+    const { cleanups, socket, listeners } = await runPlugin(dir, { list: () => [], execute: () => Promise.resolve(undefined) });
+    await waitForSocket(socket);
+    const pushed: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      pushed.push(String(chunk));
+      return true;
+    });
+    const pending = listeners.get('user-questions/request')!(
+      { questions: [{ id: 'q1', question: 'And now?' }], agent: { session: { id: 's1' } } } as never,
+      () => Promise.reject(new Error('delegated')) as never,
+    );
+    stderr.mockRestore();
+
+    const parsed = parseQuestionLine(pushed.find((chunk) => chunk.includes(QUESTION_MARKER))!, QUESTION_MARKER)!;
+    expect(parsed.callId).not.toBe('');
+    await askPlugin(socket, { method: 'answer', callId: parsed.callId, sessionId: 's1', answer: [{ id: 'q1', selected: [] }] }, 2_000, () => {});
+    expect(await pending).toEqual({ answers: [{ id: 'q1', selected: [] }] });
+    for (const cleanup of cleanups) cleanup();
+  });
+
+  it('hands a request it cannot show to the next answerer', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
     const { cleanups, listeners } = await runPlugin(dir, { list: () => [], execute: () => Promise.resolve(undefined) });
     const listener = listeners.get('user-questions/request')!;
-    expect(await listener({ questions: [] } as never, () => Promise.reject(new Error('delegated')) as never)).toBeUndefined();
+    // `next()` is how a waterfall listener passes a request on. Returning
+    // without it vetoes the chain and leaves the caller with `undefined` where
+    // the answer batch belongs — a crash wherever the ask's result is read.
+    const delegated = vi.fn(() => Promise.resolve({ answers: [] }));
+    const nothingAsked = await listener({ questions: [], agent: { session: { id: 's1' } } } as never, delegated as never);
+    const noSession = await listener({ questions: [{ id: 'q1', question: 'Q?' }] } as never, delegated as never);
+    expect([nothingAsked, noSession]).toEqual([{ answers: [] }, { answers: [] }]);
+    expect(delegated).toHaveBeenCalledTimes(2);
     for (const cleanup of cleanups) cleanup();
   });
 });
@@ -278,6 +357,43 @@ describe('what the host makes of a question', () => {
     expect(parseQuestionLine('the harness logging something', QUESTION_MARKER)).toBeUndefined();
     expect(parseQuestionLine(`${QUESTION_MARKER}not json`, QUESTION_MARKER)).toBeUndefined();
     expect(parseQuestionLine(`${QUESTION_MARKER}{"questions":[]}`, QUESTION_MARKER)).toBeUndefined();
+    // What an ask is for travels with it: a plan review is told from a plain
+    // question by nothing else.
+    const withIntent = `${QUESTION_MARKER}${JSON.stringify({
+      sessionId: 's1',
+      callId: 'c1',
+      questions: [{ id: 'q1', question: 'Q?', intent: { kind: 'plan-review', approve: 'Approve' } }],
+    })}`;
+    expect(parseQuestionLine(withIntent, QUESTION_MARKER)?.questions[0]?.intent).toEqual({ kind: 'plan-review', approve: 'Approve' });
+  });
+
+  it('reads a plan review out of an ask, and leaves plain questions alone', () => {
+    expect(planReviewOf([{ id: 'q1', question: 'Q?' }])).toBeUndefined();
+    // Nothing to show, or nothing to choose: an ordinary question either way.
+    expect(planReviewOf([{ id: 'q1', question: 'Q?', intent: { kind: 'plan-review' } }])).toBeUndefined();
+    expect(
+      planReviewOf([{ id: 'q1', question: 'Q?', detail: '# P', intent: { kind: 'plan-review' } }]),
+    ).toBeUndefined();
+    expect(
+      planReviewOf([
+        {
+          id: 'plan-review',
+          header: 'Plan review',
+          question: 'Approve this plan and leave plan mode?',
+          detail: '# Ship it',
+          options: [{ label: 'Approve', description: 'Go.' }, { label: 'Keep planning' }],
+          intent: { kind: 'plan-review', approve: 'Approve' },
+        },
+      ]),
+    ).toEqual({
+      id: 'plan-review',
+      plan: '# Ship it',
+      // The label is the option id: that is what the harness reads back.
+      options: [
+        { id: 'Approve', label: 'Approve', description: 'Go.' },
+        { id: 'Keep planning', label: 'Keep planning' },
+      ],
+    });
   });
 });
 

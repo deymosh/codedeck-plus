@@ -900,6 +900,67 @@ describe('the questions the model asks', () => {
     socket.close();
   });
 
+  /** A plan review as the plugin pushes it: `exit_plan_mode` asks through the
+   *  same service as the question tool, with the plan as one question's
+   *  detail and the verdicts as its options. */
+  const pushedPlan = (callId: string): string =>
+    `${QUESTION_MARKER}${JSON.stringify({
+      sessionId: 's1',
+      callId,
+      questions: [
+        {
+          id: 'plan-review',
+          header: 'Plan review',
+          question: 'Approve this plan and leave plan mode?',
+          detail: '# Ship the harness\n\nDo the thing.',
+          options: [{ label: 'Approve', description: 'Leave plan mode.' }, { label: 'Keep planning' }],
+          intent: { kind: 'plan-review', approve: 'Approve' },
+        },
+      ],
+    })}\n`;
+
+  it('shows a plan review as the plan plus an approval, and sends the verdict', async () => {
+    const ready = withDriver();
+    const socket = await bridge(ready);
+    const ctx = recordingContext({
+      plan: (requestId, options) => {
+        expect(requestId).toBe('c9');
+        // The harness's own labels are the choices: they are what the tool
+        // reads its verdict from.
+        expect(options).toEqual([
+          { id: 'Approve', label: 'Approve', description: 'Leave plan mode.' },
+          { id: 'Keep planning', label: 'Keep planning' },
+        ]);
+        return { outcome: 'selected', optionId: 'Approve' };
+      },
+    });
+    await started(ready, {}, ctx);
+    ready.harness.child.stderr.write(pushedPlan('c9'));
+    await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
+    // The plan is a plan of its own, the way Claude Code's plan review shows
+    // it — not a question card with a plan in its body.
+    expect(ctx.entries().some((entry) => entry.entryType === 'plan' && entry.text === '# Ship the harness\n\nDo the thing.')).toBe(true);
+    expect(ctx.questions).toEqual([]);
+    expect(socket.requests.find((request) => request.method === 'answer')).toMatchObject({
+      sessionId: 's1',
+      callId: 'c9',
+      answer: [{ id: 'plan-review', selected: ['Approve'] }],
+    });
+    socket.close();
+  });
+
+  it('leaves a plan the user did not approve unanswered, so the tool says so', async () => {
+    const ready = withDriver();
+    const socket = await bridge(ready);
+    const ctx = recordingContext({ plan: () => ({ outcome: 'cancelled', reason: 'the phone went away' }) });
+    await started(ready, {}, ctx);
+    ready.harness.child.stderr.write(pushedPlan('c9'));
+    await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
+    const answer = socket.requests.find((request) => request.method === 'answer')!;
+    expect(answer.answer).toBeUndefined();
+    socket.close();
+  });
+
   it('keeps a pushed question out of the harness log', async () => {
     const ready = withDriver();
     const socket = await bridge(ready);

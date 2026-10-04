@@ -39,7 +39,7 @@ import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
 import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from './bridge';
 import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
-import { parseQuestionLine, toAnswerItems, toQuestionSpecs, type PushedQuestionLine } from './questions';
+import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs, type PlanReview, type PushedQuestionLine } from './questions';
 import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
@@ -543,33 +543,55 @@ export class DeepSeekSession implements DriverSession {
 
   /**
    * The harness's model asked the user something, and the plugin pushed it
-   * here. It goes to the phone as the same question card the other agents
-   * send, and the answer goes back the way the harness takes it — labels for
-   * a chosen option, free text for a typed one. An unanswered question (the
+   * here. A question goes to the phone as the same card the other agents send,
+   * and the answer goes back the way the harness takes it — labels for a
+   * chosen option, free text for a typed one. An unanswered question (the
    * phone is gone, the user cancelled, the turn ended) is answered with
    * nothing, which the harness reports to the model as a question that was
    * not answered.
    */
   askQuestion(pushed: PushedQuestionLine): void {
-    const specs = toQuestionSpecs(pushed.questions);
-    void this.ctx
-      .askQuestion(pushed.callId, specs)
-      .then((outcome) =>
-        askPlugin(
-          this.deps.pluginSocket,
-          {
-            method: 'answer',
-            sessionId: this.nativeId,
-            callId: pushed.callId,
-            ...(outcome.outcome === 'answered' ? { answer: toAnswerItems(pushed.questions, outcome.answers) } : {}),
-          },
-          QUESTION_TIMEOUT_MS,
-          this.ctx.log,
-        ),
-      )
-      .catch((error: unknown) => {
-        this.ctx.log(`[deepseek] could not pass a question on: ${error instanceof Error ? error.message : String(error)}`);
-      });
+    const review = planReviewOf(pushed.questions);
+    void (review === undefined ? this.showQuestion(pushed) : this.showPlanReview(pushed, review)).catch((error: unknown) => {
+      this.ctx.log(`[deepseek] could not pass a question on: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  private async showQuestion(pushed: PushedQuestionLine): Promise<void> {
+    const outcome = await this.ctx.askQuestion(pushed.callId, toQuestionSpecs(pushed.questions));
+    await this.answerHarness(pushed.callId, {
+      ...(outcome.outcome === 'answered' ? { answer: toAnswerItems(pushed.questions, outcome.answers) } : {}),
+    });
+  }
+
+  /**
+   * A plan review is the harness's `exit_plan_mode` asking whether to leave
+   * plan mode. It is the same exchange Claude Code's driver has — a plan the
+   * user reads and then approves or sends back — so it gets the same two
+   * pieces on the phone: the plan as a plan of its own, and the approval card,
+   * whose choices are the harness's own labels because that is what the tool
+   * reads its verdict from. The user's feedback on a plan they did not approve
+   * arrives as their next message, as it does for the other agent.
+   */
+  private async showPlanReview(pushed: PushedQuestionLine, review: PlanReview): Promise<void> {
+    this.deliver({ entryType: 'plan', text: review.plan, timestamp: now() });
+    const outcome = await this.ctx.requestPlanApproval(pushed.callId, review.options);
+    await this.answerHarness(pushed.callId, {
+      // The chosen label is the whole verdict: the tool looks for the one its
+      // intent declared as the approval.
+      ...(outcome.outcome === 'selected' ? { answer: [{ id: review.id, selected: [outcome.optionId] }] } : {}),
+    });
+  }
+
+  /** What the phone decided, back to the harness: the plugin is holding the
+   *  ask open, and an answer it is not given is one the user did not make. */
+  private answerHarness(callId: string, answer: Record<string, unknown>): Promise<unknown> {
+    return askPlugin(
+      this.deps.pluginSocket,
+      { method: 'answer', sessionId: this.nativeId, callId, ...answer },
+      QUESTION_TIMEOUT_MS,
+      this.ctx.log,
+    );
   }
 
   /** What this session's harness can run, asked of the harness itself (the
@@ -825,8 +847,8 @@ export class DeepSeekDriver implements Driver {
         providers: true,
         gsd: true,
         interrupt: true,
-        // Through the command plugin this driver installs into the profile
-        // (commandsPlugin.ts): the harness's registry is reachable from
+        // Through the plugin this driver installs into the profile
+        // (plugin.ts): the harness's command registry is reachable from
         // inside its process, never over ACP.
         commands: true,
         plugins: true,

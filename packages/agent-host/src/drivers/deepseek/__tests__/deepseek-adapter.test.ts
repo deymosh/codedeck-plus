@@ -124,6 +124,39 @@ describe('tool calls', () => {
     });
   });
 
+  it('hides the rows of the calls whose card is the exchange', () => {
+    // The question tool and the plan review both ask through the harness's
+    // user-questions service: the bridge shows the ask and sends back the
+    // answer, so their own rows would be a second, emptier copy of it — and
+    // for the plan review that copy is the plan again, as raw arguments.
+    const calls = started('ask_user_question', { questions: [{ id: 'q1', question: 'Q?' }] });
+    const review = entries(
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'c2',
+        title: 'exit_plan_mode',
+        kind: 'other',
+        status: 'in_progress',
+        rawInput: { plan: '# Ship it\n\nDo the thing.' },
+      },
+      calls,
+    );
+    expect(review).toEqual([]);
+    // The result is as invisible as the call, and neither is left behind.
+    expect(
+      entries(
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'c2',
+          status: 'completed',
+          content: [{ type: 'content', content: { type: 'text', text: 'Plan approved' } }],
+        },
+        calls,
+      ),
+    ).toEqual([]);
+    expect(calls.size).toBe(1);
+  });
+
   it('keeps the tool name of an MCP tool', () => {
     const call = entries({
       sessionUpdate: 'tool_call',

@@ -5,8 +5,9 @@
  * Both exist in this profile and neither is reachable from outside it. ACP has
  * no command list and no way to invoke one, and the harness keeps commands and
  * human-interaction for its own UI modules; the same is true of the
- * `user-questions` service, whose answerer is a browser panel. Inside the
- * process both are ordinary services.
+ * `user-questions` service, whose answerer is a browser panel and which every
+ * ask goes through — the question tool, the timed one, and the plan review
+ * `exit_plan_mode` presents. Inside the process both are ordinary services.
  *
  * So CodeDeck brings its own transport: this plugin, installed into the
  * profile, holds the command registry and composes the questions answerer, and
@@ -47,7 +48,8 @@ export const QUESTION_MARKER = 'codedeck-question:';
  * it as it is, so nothing here may need a build step, and it must not import
  * anything of CodeDeck's — the profile has no idea this host exists.
  */
-const SOURCE = `import { mkdirSync, rmSync } from 'node:fs';
+const SOURCE = `import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
@@ -68,13 +70,23 @@ export function apply(ctx, config) {
   /** Questions waiting for the host's answer, by call id. */
   const pending = new Map();
 
-  ctx.on('user-questions/request', async (request) => {
-    // The card is keyed by the tool call, and the host needs the session; a
-    // request without either is one this bridge cannot show, so another
-    // answerer — or the harness's own error — has it.
-    const callId = request?.wait?.callId;
+  ctx.on('user-questions/request', async (request, next) => {
+    const questions = Array.isArray(request?.questions) ? request.questions : [];
     const sessionId = request?.agent?.session?.id;
-    if (callId === undefined || sessionId === undefined) return undefined;
+    // A request this bridge cannot show — nothing asked, or no live session to
+    // put it to — goes on down the chain, where the harness's own answerer or
+    // its "no answerer" error has it. That hand-off is next(): a listener that
+    // simply returns has *vetoed* the chain, which leaves the caller with
+    // undefined where an answer batch belongs.
+    if (questions.length === 0 || typeof sessionId !== 'string') return next();
+    // The card is keyed by the tool call. An ask usually names it (in wait;
+    // the timed one adds the deadline), a plan review names it on the
+    // question's intent instead, and anything else gets a key of ours — it
+    // only has to come back with the answer.
+    const callId =
+      [request?.wait?.callId, ...questions.map((question) => question?.intent?.callId)].find(
+        (id) => typeof id === 'string' && id !== '',
+      ) ?? randomUUID();
     const job = {};
     job.promise = new Promise((resolve, reject) => {
       job.resolve = resolve;

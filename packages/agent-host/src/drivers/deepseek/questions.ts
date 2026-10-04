@@ -1,19 +1,20 @@
 /**
  * The questions the harness's model asks, on their way to the phone and back.
  *
- * The harness has a `user-questions` service and a tool that uses it: the
- * model can put a decision to the user — with options, or free text — and wait
- * for the answer. Its answerer is a UI panel in the harness's own apps; in the
- * automation profile there is none, so the tool fails with "no user-questions
- * answerer configured". Our plugin composes one (plugin.ts), which pushes the
- * question to the host over stderr and waits for the answer on its socket.
+ * The harness has a `user-questions` service, and everything that needs the
+ * user asks through it: the model's question tool, its timed form, and the
+ * plan review `exit_plan_mode` presents. Its answerer is a UI panel in the
+ * harness's own apps; in the automation profile there is none, so the ask
+ * fails with "no user-questions answerer configured". Our plugin composes one
+ * (plugin.ts), which pushes the ask to the host over stderr and waits for the
+ * answer on its socket.
  *
- * This module is the host's half: what a pushed question becomes on the phone
- * (`QuestionSpec`, the same shape the other drivers send), and what the
- * phone's answer becomes for the harness. Both are the harness's own shapes
- * (its `AskUserQuestionItem` and `AskUserQuestionAnswer`), which is what makes
- * the round trip exact: option labels are what a selected answer carries, and
- * free text is what a typed one does.
+ * This module is the host's half: what a pushed ask becomes on the phone
+ * (`QuestionSpec` for a question, a plan and an approval for a plan review),
+ * and what the phone's answer becomes for the harness. Both are the harness's
+ * own shapes (its `AskUserQuestionItem` and `AskUserQuestionAnswer`), which is
+ * what makes the round trip exact: option labels are what a selected answer
+ * carries, and free text is what a typed one does.
  */
 import type { QuestionSpec } from '../../types';
 
@@ -25,6 +26,10 @@ export interface PushedQuestion {
   detail?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  /** What the ask is for, when the harness says. A plan review declares
+   *  `{kind: 'plan-review', approve: <label>}`: the label that means the user
+   *  approved, and the one answer the tool acts on. */
+  intent?: { kind?: string; approve?: string };
 }
 
 /** One line the plugin pushed, once parsed. */
@@ -75,6 +80,7 @@ function toPushed(raw: unknown): PushedQuestion | undefined {
         )
         .filter((option): option is { label: string; description?: string } => option !== undefined)
     : undefined;
+  const intent = record(item.intent);
   return {
     id: item.id,
     question: item.question,
@@ -82,7 +88,45 @@ function toPushed(raw: unknown): PushedQuestion | undefined {
     ...(typeof item.detail === 'string' && item.detail !== '' ? { detail: item.detail } : {}),
     ...(options && options.length > 0 ? { options } : {}),
     ...(item.multiSelect === true ? { multiSelect: true } : {}),
+    ...(intent === undefined ? {} : { intent }),
   };
+}
+
+/** An `intent` as far as this side reads it: the kind and the approval label. */
+function record(value: unknown): { kind?: string; approve?: string } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const raw = value as Record<string, unknown>;
+  const kind = typeof raw.kind === 'string' ? raw.kind : undefined;
+  const approve = typeof raw.approve === 'string' ? raw.approve : undefined;
+  if (kind === undefined && approve === undefined) return undefined;
+  return { ...(kind === undefined ? {} : { kind }), ...(approve === undefined ? {} : { approve }) };
+}
+
+/**
+ * A plan review, which is the harness's `exit_plan_mode` asking through the
+ * same service the question tool uses: the plan is one question's detail, and
+ * its options are the verdicts the tool knows — approve, or keep planning.
+ * `undefined` for a plain question, and for a plan review the plan itself
+ * arrived without, which is then an ordinary question.
+ */
+export interface PlanReview {
+  /** The question's own id, echoed back with the verdict. */
+  id: string;
+  plan: string;
+  options: Array<{ id: string; label: string; description?: string }>;
+}
+
+export function planReviewOf(questions: PushedQuestion[]): PlanReview | undefined {
+  const question = questions.find((item) => item.intent?.kind === 'plan-review');
+  if (question === undefined || question.detail === undefined) return undefined;
+  const options = (question.options ?? []).map((option) => ({
+    // The label is the option id: the harness reads the verdict as the label
+    // of the option that was chosen.
+    id: option.label,
+    label: option.label,
+    ...(option.description ? { description: option.description } : {}),
+  }));
+  return options.length === 0 ? undefined : { id: question.id, plan: question.detail, options };
 }
 
 /**

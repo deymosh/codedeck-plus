@@ -22,11 +22,13 @@ import { MAX_DIFF_LINES, truncateToolResult, toDiffLines, type DiffPayload } fro
 import type { OutputEntry } from '../../types';
 
 /**
- * The harness's question tool. Its card is the question itself — the bridge
- * shows it, and the answer goes back through the command bridge — so its own
- * tool rows would be a second, emptier copy of the same exchange.
+ * The tools whose card *is* the exchange. The question tool asks through the
+ * harness's `user-questions` service and so does the plan review
+ * (`exit_plan_mode`); the bridge shows each as a question card and sends the
+ * answer back, so their own tool rows would be a second, emptier copy — and
+ * for a plan review the copy is its raw arguments, the whole plan as JSON.
  */
-const QUESTION_TOOL = 'ask_user_question';
+const QUESTION_TOOLS = new Set(['ask_user_question', 'exit_plan_mode']);
 
 /** What a tool call's own update carried: its result update repeats neither
  *  the tool's name nor its input. */
@@ -70,7 +72,7 @@ function toolCallEntries(
   const name = toolNameOf(update);
   const input = record(update.rawInput);
   calls.set(update.toolCallId, { name, input });
-  if (name === QUESTION_TOOL) return [];
+  if (QUESTION_TOOLS.has(name)) return [];
   const locations = fileLocations(name, input);
   const full = toolInput(name, input);
   const todos = todosOf(input);
@@ -102,7 +104,7 @@ function toolResultEntries(
   if (status !== 'completed' && status !== 'failed') return [];
   const facts = calls.get(update.toolCallId);
   calls.delete(update.toolCallId);
-  if (facts?.name === QUESTION_TOOL) return [];
+  if (facts !== undefined && QUESTION_TOOLS.has(facts.name)) return [];
   const text = contentText(update.content);
   const entries: OutputEntry[] = [
     {

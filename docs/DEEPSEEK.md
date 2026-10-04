@@ -139,15 +139,24 @@ command's own words come back as the agent's answer (`/plan` answers "Plan mode
 on", `/goal set X` answers with the goal it now holds).
 
 **Questions.** The harness's model can put a decision to the user — its
-`ask_user_question` tool and its plan review both ask through the same service
-— and that service's answerer is a panel in the harness's own apps. Without
-one, the tool fails with "no user-questions answerer configured", which is
-what a plain setup does. The plugin composes an answerer instead: the question
-is pushed to the host as a marker line on the harness's stderr (the one stream
-that is not ACP's), the phone shows it as the very card the other agents' ask
-uses, and the answer goes back the way the harness takes one — the labels of
-the chosen options, or the text the user typed. Each question carries its own
-id, so a batch of them comes back matched to what was asked.
+`ask_user_question` tool, that tool's timed form, and the plan review
+`exit_plan_mode` presents all ask through one service — and that service's
+answerer is a panel in the harness's own apps. Without one the ask fails with
+"no user-questions answerer configured", which is what a plain setup does. The
+plugin composes an answerer instead: the ask is pushed to the host as a marker
+line on the harness's stderr (the one stream that is not ACP's), the phone
+shows it as the very card the other agents' ask uses, and the answer goes back
+the way the harness takes one — the labels of the chosen options, or the text
+the user typed. Each question carries its own id, so a batch of them comes
+back matched to what was asked.
+
+A plan review arrives as the same exchange Claude Code's is, because it is the
+same one: the plan as a plan of its own, and the choice as the approval card,
+wearing the harness's own labels (approve, or keep planning). The labels are
+the verdict — the harness's tool looks for the one its intent declared — so a
+plan the user did not approve goes back to the model to revise, with their
+feedback arriving as their next message, exactly as it does for the other
+agent.
 
 The socket is a file in the bridge's home (`/data/codedeck/dsh-bridge.sock`, a
 named pipe on Windows, named after the home). Nothing else about the profile
@@ -155,9 +164,10 @@ changes, and the plugin is harmless if the harness moves under it: a list that
 cannot be read means the phone offers no commands, an unanswerable question
 reads as one the user did not answer, and a slash line is ordinary text again —
 a session never fails over either. Two things it does not do: a command that
-takes attachments gets none (this bridge sends the line alone), and the
-question tool's own row is hidden in the transcript, since the question card is
-the exchange.
+takes attachments gets none (this bridge sends the line alone), and the rows of
+the calls that ask the user — the question tool's and the plan review's — are
+hidden in the transcript, since the card is the exchange (the plan review's row
+would be the plan again, as raw arguments).
 
 ## MCP servers
 
