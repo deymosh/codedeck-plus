@@ -22,6 +22,7 @@ import type { RequestPermissionRequest, RequestPermissionResponse, SessionConfig
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
 import type { HttpGet } from '../../net';
 import { mcpStatus as mcpStatusOf } from '../../mcp';
+import { parseSlashCommand } from '../../commands';
 import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle } from '../../tools';
 import type {
   AgentInfo,
@@ -30,11 +31,14 @@ import type {
   OutputEntry,
   SessionMcpServer,
   SessionOption,
+  SlashCommand,
   StartSession,
   UsageData,
 } from '../../types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
+import { commandsSocketPath, listSessionCommands, runSessionCommand } from './commands';
+import { installCommandsPlugin } from './commandsPlugin';
 import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
@@ -188,6 +192,9 @@ export class DeepSeekSession implements DriverSession {
   /** Whether the phone has been told the session is up: until then its model
    *  travels in the identity info, not as a change. */
   private announced = false;
+  /** The names this session's harness can run, from the last list fetched
+   *  (dropped again on failure, so the next look asks again). */
+  private commandNames?: Promise<Set<string>>;
   private ended = false;
   /** Prompts run one at a time: ACP refuses a second prompt while one is in
    *  flight, so a message sent meanwhile waits for the turn before it. */
@@ -207,8 +214,11 @@ export class DeepSeekSession implements DriverSession {
         remove(sessionId: string): void;
         events(): DeepSeekProcessEvents;
       };
-      /** The endpoint's catalog, being written into the harness's profile. */
-      gateway: Promise<unknown>;
+      /** The profile as it must be before a harness boots: the endpoint's
+       *  catalog written, the command plugin in place. */
+      prepared: Promise<unknown>;
+      /** Where the command plugin listens. */
+      commandsSocket: string;
     },
   ) {
     this.cwd = params.cwd;
@@ -237,9 +247,9 @@ export class DeepSeekSession implements DriverSession {
 
   private async init(): Promise<void> {
     try {
-      // The harness reads its catalog as it boots, so the endpoint's own
-      // models have to be in the profile before a process starts.
-      await this.deps.gateway;
+      // The harness reads its catalog and mounts its plugins as it boots, so
+      // both have to be in the profile before a process starts.
+      await this.deps.prepared;
       const process_ = await this.deps.runtime.acquire(this.env, this.deps.live.events());
       this.process = process_;
       // A session closed while its harness was starting keeps nothing: the
@@ -474,7 +484,18 @@ export class DeepSeekSession implements DriverSession {
     this.tail = next.catch(() => {});
   }
 
+  /**
+   * A typed `/name` that this session's harness has runs as that command —
+   * `listCommands` is what makes the phone offer it, and the harness's own
+   * command registry is what runs it (`/compact` compacts, rather than being
+   * text the model reads). Anything else is a prompt.
+   */
   private async runPrompt(text: string): Promise<void> {
+    const command = parseSlashCommand(text);
+    if (command && (await this.knownCommands()).has(command.name)) {
+      await this.runCommand(text);
+      return;
+    }
     try {
       await this.ready;
       const sessionId = this.nativeId;
@@ -487,6 +508,53 @@ export class DeepSeekSession implements DriverSession {
       this.deliver({ entryType: 'error', text: error instanceof Error ? error.message : String(error), timestamp: now() });
       this.endTurn();
     }
+  }
+
+  /** Run one command line and show what it said. A command is not a turn in
+   *  the harness, but the phone is waiting on one: it is opened and closed
+   *  around it, so the session never sits there looking busy. */
+  private async runCommand(line: string): Promise<void> {
+    await this.ready;
+    const sessionId = this.nativeId;
+    if (this.ended || sessionId === undefined) return;
+    this.ctx.emit({ type: 'turn', state: 'running' });
+    const outcome = await runSessionCommand(this.deps.commandsSocket, sessionId, line, this.ctx.log);
+    if (this.ended) return;
+    if (outcome === undefined) {
+      this.deliver({ entryType: 'error', text: `${line} did not run: the command bridge is not answering.`, timestamp: now() });
+    } else if (outcome.text !== '') {
+      this.deliver({
+        ...(outcome.ok
+          ? { entryType: 'text' as const, role: 'agent' as const, text: outcome.text }
+          : { entryType: 'error' as const, text: outcome.text }),
+        timestamp: now(),
+      });
+    } else if (!outcome.ok) {
+      this.deliver({ entryType: 'error', text: `${line} failed.`, timestamp: now() });
+    }
+    this.endTurn();
+  }
+
+  /** What this session's harness can run, asked of the harness itself (the
+   *  command plugin) and cached until the session ends. An empty set means
+   *  every slash line is ordinary text, which is what a harness without the
+   *  plugin does. */
+  private knownCommands(): Promise<Set<string>> {
+    this.commandNames ??= this.ready
+      .then(() => listSessionCommands(this.deps.commandsSocket, this.nativeId ?? '', this.ctx.log))
+      .then((commands) => new Set((commands ?? []).map((command) => command.name)))
+      .catch(() => {
+        this.commandNames = undefined;
+        return new Set<string>();
+      });
+    return this.commandNames;
+  }
+
+  async listCommands(): Promise<SlashCommand[]> {
+    await this.ready;
+    const sessionId = this.nativeId;
+    if (this.ended || sessionId === undefined) return [];
+    return (await listSessionCommands(this.deps.commandsSocket, sessionId, this.ctx.log)) ?? [];
   }
 
   /** The turn is over: the transcript marks it and the phone stops showing
@@ -604,10 +672,15 @@ export class DeepSeekDriver implements Driver {
   readonly plugins: PluginManager;
   private unavailable: string | undefined;
   private models?: Promise<{ models: ModelEntry[]; defaultModel?: string }>;
-  /** The gateway's catalog is fetched (and written into the harness profile)
-   *  as the host starts, and everything that starts a harness waits for it:
-   *  a process reads its catalog once, as it boots. */
-  private gateway: Promise<unknown> = Promise.resolve();
+  /**
+   * Everything that has to be true of the harness's profile before a process
+   * starts: the gateway's catalog (a process reads its catalog once, as it
+   * boots) and the command bridge (a process mounts its plugins once, too).
+   * Sessions and the model probe wait for it.
+   */
+  private prepared: Promise<unknown> = Promise.resolve();
+  /** Where the command plugin listens. One per harness home. */
+  private readonly commandsSocket: string;
   /** Sessions by the harness's own ids: a process serves several, and it is
    *  this map that ends them all when it goes away. */
   private readonly sessions = new Map<string, DeepSeekSession>();
@@ -627,6 +700,7 @@ export class DeepSeekDriver implements Driver {
 
   private constructor(private readonly options: DeepSeekDriverOptions) {
     const profileDir = dshProfileDir(options.home);
+    this.commandsSocket = commandsSocketPath(options.home);
     this.mcp = options.mcp ?? new DeepSeekMcp({ profileDir, log: options.log });
     this.plugins = new DeepSeekPlugins({
       profileDir,
@@ -641,8 +715,28 @@ export class DeepSeekDriver implements Driver {
     // the first session (and the model list the phone asks for before it)
     // finds it ready instead of waiting on a download.
     void options.runtime.prepare();
-    driver.gateway = driver.syncGateway();
+    driver.prepared = driver.prepareProfile();
     return driver;
+  }
+
+  /** Everything the profile needs before a harness boots (once, at the
+   *  start): the endpoint's catalog, and the row that mounts our command
+   *  plugin. */
+  private async prepareProfile(): Promise<void> {
+    await this.syncGateway();
+    await this.installCommands();
+  }
+
+  /**
+   * Put the command plugin in the profile and tell it where to listen. A
+   * failure only costs commands: it is logged, and the session runs on.
+   */
+  private async installCommands(): Promise<void> {
+    try {
+      await installCommandsPlugin(dshProfileDir(this.options.home), this.commandsSocket, this.options.log);
+    } catch (error) {
+      this.options.log(`[deepseek] could not install the command bridge: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -689,7 +783,10 @@ export class DeepSeekDriver implements Driver {
         providers: true,
         gsd: true,
         interrupt: true,
-        commands: false,
+        // Through the command plugin this driver installs into the profile
+        // (commandsPlugin.ts): the harness's registry is reachable from
+        // inside its process, never over ACP.
+        commands: true,
         plugins: true,
         mcp: true,
         tasks: false,
@@ -709,7 +806,8 @@ export class DeepSeekDriver implements Driver {
       mcp: this.mcp,
       baseEnv: this.options.baseEnv ?? process.env,
       live: this.live,
-      gateway: this.gateway,
+      prepared: this.prepared,
+      commandsSocket: this.commandsSocket,
     });
   }
 
@@ -730,7 +828,7 @@ export class DeepSeekDriver implements Driver {
   }
 
   private async probeModels(): Promise<{ models: ModelEntry[]; defaultModel?: string }> {
-    await this.gateway;
+    await this.prepared;
     const env = buildDeepSeekEnv({}, this.options.baseEnv ?? process.env);
     const process_ = await this.options.runtime.acquire(env, { ended: () => {} });
     try {

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -6,6 +7,7 @@ import { recordingContext, type RecordingContext } from '../../../__tests__/cont
 import type { StartSession } from '../../../types';
 import type { DriverSession } from '../../../driver';
 import { DeepSeekDriver } from '../driver';
+import { commandsSocketPath } from '../commands';
 import { DeepSeekMcp } from '../mcp';
 import { DeepSeekRuntime, dshHomeDir } from '../runtime';
 import { FakeHarness } from './fakeHarness';
@@ -100,7 +102,7 @@ describe('DeepSeekDriver.info', () => {
       providers: true,
       gsd: true,
       interrupt: true,
-      commands: false,
+      commands: true,
       plugins: true,
       mcp: true,
       tasks: false,
@@ -728,6 +730,102 @@ describe('a gateway', () => {
     const after = readFileSync(layer, 'utf8');
     expect(after).not.toMatch(/llm-deepseek/);
     expect(after).toMatch(/# the profile/);
+  });
+});
+
+describe('slash commands', () => {
+  /** A stand-in for the command plugin: it answers over the socket the driver
+   *  asks on, and records what it was asked. */
+  async function commandBridge(
+    home: string,
+    answer: (request: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<{ requests: Array<Record<string, unknown>>; close: () => void }> {
+    const requests: Array<Record<string, unknown>> = [];
+    const server = createServer((connection: Socket) => {
+      connection.setEncoding('utf8');
+      let buffered = '';
+      connection.on('data', (chunk: string) => {
+        buffered += chunk;
+        const end = buffered.indexOf('\n');
+        if (end < 0) return;
+        const request = JSON.parse(buffered.slice(0, end)) as Record<string, unknown>;
+        requests.push(request);
+        connection.write(`${JSON.stringify({ id: request.id, ...answer(request) })}\n`);
+      });
+      connection.on('error', () => {});
+    });
+    const socket = commandsSocketPath(home);
+    mkdirSync(path.dirname(socket), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socket, resolve);
+    });
+    return { requests, close: () => server.close() };
+  }
+
+  const listing = (): Record<string, unknown> => ({
+    ok: true,
+    commands: [{ name: 'compact', description: 'Compact the conversation', hint: '[<focus>]' }],
+  });
+
+  it('lists what the harness has, and runs a typed command rather than prompting', async () => {
+    const ready = withDriver();
+    const bridge = await commandBridge(ready.home, (request) =>
+      request.method === 'list' ? listing() : { ok: true, result: { kind: 'success', text: 'Compacted 12 messages.' } },
+    );
+    const ctx = await started(ready);
+    expect(await ready.session.listCommands?.()).toEqual([
+      { name: 'compact', description: 'Compact the conversation', argumentHint: '[<focus>]' },
+    ]);
+
+    ready.session.prompt('/compact keep the decisions');
+    await vi.waitFor(() => expect(bridge.requests.some((request) => request.method === 'run')).toBe(true));
+    const run = bridge.requests.find((request) => request.method === 'run')!;
+    expect(run).toMatchObject({ sessionId: 's1', line: '/compact keep the decisions' });
+    // The command's own words are in the transcript, and the harness was
+    // never asked to prompt the model with a slash line.
+    await vi.waitFor(() =>
+      expect(ctx.entries().some((entry) => entry.entryType === 'text' && /Compacted 12 messages/.test(entry.text))).toBe(true),
+    );
+    expect(ready.harness.requests.some((request) => request.method === 'session/prompt')).toBe(false);
+    bridge.close();
+  });
+
+  it('reports a command that failed', async () => {
+    const ready = withDriver();
+    const bridge = await commandBridge(ready.home, (request) =>
+      request.method === 'list' ? listing() : { ok: true, result: { kind: 'error', text: 'nothing to compact' } },
+    );
+    const ctx = await started(ready);
+    ready.session.prompt('/compact');
+    await vi.waitFor(() =>
+      expect(ctx.entries().some((entry) => entry.entryType === 'error' && /nothing to compact/.test(entry.text))).toBe(true),
+    );
+    bridge.close();
+  });
+
+  it('sends a slash line the harness does not have to the model, as text', async () => {
+    const ready = withDriver();
+    const bridge = await commandBridge(ready.home, (request) => (request.method === 'list' ? listing() : { ok: false }));
+    const ctx = await started(ready);
+    ready.session.prompt('/etc/hosts is missing');
+    await vi.waitFor(() =>
+      expect(ready.harness.requests.some((request) => request.method === 'session/prompt')).toBe(true),
+    );
+    expect(bridge.requests.some((request) => request.method === 'run')).toBe(false);
+    expect(ctx.entries().length).toBeGreaterThan(0);
+    bridge.close();
+  });
+
+  it('runs the session normally when nothing answers on the command socket', async () => {
+    const ready = withDriver();
+    const ctx = await started(ready);
+    expect(await ready.session.listCommands?.()).toEqual([]);
+    ready.session.prompt('/compact');
+    await vi.waitFor(() =>
+      expect(ready.harness.requests.some((request) => request.method === 'session/prompt')).toBe(true),
+    );
+    expect(ctx.entries().some((entry) => entry.entryType === 'error')).toBe(false);
   });
 });
 
