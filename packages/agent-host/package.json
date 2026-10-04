@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "CodeDeck+ agent host — the Node sidecar the bridge runs agent SDKs in (Claude Code, OpenCode), spoken to over the driver protocol on stdio.",
+  "description": "CodeDeck+ agent host — the Node sidecar the bridge runs agent SDKs in (Claude Code, OpenCode, DeepSeek Harness), spoken to over the driver protocol on stdio.",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
@@ -16,8 +16,12 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@agentclientprotocol/sdk": "^1.7.0",
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
+    "js-yaml": "^4.2.0",
     "opencode-ai": "1.18.32",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
