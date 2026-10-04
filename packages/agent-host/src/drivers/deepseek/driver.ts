@@ -34,7 +34,8 @@ import type {
   UsageData,
 } from '../../types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
-import { DEEPSEEK_API_KEY_CREDENTIAL, buildDeepSeekEnv } from './env';
+import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
+import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
 import { DeepSeekPlugins, runDshPlugin, type DshRun } from './plugins';
@@ -80,8 +81,10 @@ const EFFORT_CONFIG_ID = 'reasoning_effort';
 
 /** One choice of a session config option. */
 interface Choice {
+  /** The harness's own selector value (what `set_config_option` takes). */
   value: string;
   label: string;
+  /** Who serves it, as a person reads it (`DeepSeek`), when the option says. */
   provider?: string;
   description?: string;
 }
@@ -114,8 +117,31 @@ export function selectChoices(option: SessionConfigOption | undefined): Choice[]
 
 /** ACP sends a select option's values either as one flat list or as groups;
  *  only a group entry carries values of its own. */
-function isGroup(entry: { value?: unknown; options?: unknown }): entry is { name: string; options: Array<{ value: string; name: string; description?: string | null }> } {
+function isGroup(entry: {
+  value?: unknown;
+  options?: unknown;
+}): entry is { name: string; group?: string; options: Array<{ value: string; name: string; description?: string | null }> } {
   return Array.isArray(entry.options);
+}
+
+/**
+ * One model as the phone sees it, in the shape the other drivers report: the
+ * id is the model's own — a gateway's usually names its channel before a
+ * slash (`Z.ai (Global) - Coding Plan/glm-5.3-flash`, Claude Code's gateway
+ * models arrive the same way) — and the channel becomes the provider, with
+ * the model part as the label. The harness's own selector value is what
+ * travels back to it; `resolveModel` maps one to the other.
+ */
+export function toModelEntry(choice: Choice): ModelEntry {
+  const id = modelIdOf(choice.value);
+  const slash = id.indexOf('/');
+  const channel = slash > 0 ? id.slice(0, slash) : undefined;
+  const label = channel !== undefined ? id.slice(slash + 1) : choice.label;
+  return {
+    id,
+    label,
+    ...(channel !== undefined ? { provider: channel } : choice.provider ? { provider: choice.provider } : {}),
+  };
 }
 
 /** The model choices of a session's option state: `value` is the opaque
@@ -181,6 +207,8 @@ export class DeepSeekSession implements DriverSession {
         remove(sessionId: string): void;
         events(): DeepSeekProcessEvents;
       };
+      /** The endpoint's catalog, being written into the harness's profile. */
+      gateway: Promise<unknown>;
     },
   ) {
     this.cwd = params.cwd;
@@ -209,6 +237,9 @@ export class DeepSeekSession implements DriverSession {
 
   private async init(): Promise<void> {
     try {
+      // The harness reads its catalog as it boots, so the endpoint's own
+      // models have to be in the profile before a process starts.
+      await this.deps.gateway;
       const process_ = await this.deps.runtime.acquire(this.env, this.deps.live.events());
       this.process = process_;
       // A session closed while its harness was starting keeps nothing: the
@@ -311,11 +342,17 @@ export class DeepSeekSession implements DriverSession {
     }
   }
 
-  /** The value to select for a model the bridge names: the option's own
-   *  opaque value, or the choice whose model id it is. */
+  /**
+   * The value to select for a model the bridge names. Two shapes reach here:
+   * the model id this driver reports (what the phone was shown, and what a
+   * provider profile names), and the harness's own selector value. Anything
+   * else matches nothing, so it is refused rather than guessed at.
+   */
   private resolveModel(model: string): string | undefined {
     const choices = modelChoices(this.optionOf(MODEL_CONFIG_ID));
-    return choices.find((choice) => choice.value === model)?.value ?? choices.find((choice) => modelIdOf(choice.value) === model)?.value;
+    return (
+      choices.find((choice) => choice.value === model)?.value ?? choices.find((choice) => modelIdOf(choice.value) === model)?.value
+    );
   }
 
   private optionOf(id: string): SessionConfigOption | undefined {
@@ -567,6 +604,10 @@ export class DeepSeekDriver implements Driver {
   readonly plugins: PluginManager;
   private unavailable: string | undefined;
   private models?: Promise<{ models: ModelEntry[]; defaultModel?: string }>;
+  /** The gateway's catalog is fetched (and written into the harness profile)
+   *  as the host starts, and everything that starts a harness waits for it:
+   *  a process reads its catalog once, as it boots. */
+  private gateway: Promise<unknown> = Promise.resolve();
   /** Sessions by the harness's own ids: a process serves several, and it is
    *  this map that ends them all when it goes away. */
   private readonly sessions = new Map<string, DeepSeekSession>();
@@ -600,7 +641,29 @@ export class DeepSeekDriver implements Driver {
     // the first session (and the model list the phone asks for before it)
     // finds it ready instead of waiting on a download.
     void options.runtime.prepare();
+    driver.gateway = driver.syncGateway();
     return driver;
+  }
+
+  /**
+   * Point the harness at the operator's endpoint, with the models that
+   * endpoint serves (gateway.ts): without this a session on a gateway would
+   * be sent a DeepSeek model name the gateway does not know, and the phone
+   * would offer models that are not there.
+   */
+  private async syncGateway(): Promise<void> {
+    const env = this.options.baseEnv ?? process.env;
+    try {
+      await syncGatewayCatalog(
+        { profileDir: dshProfileDir(this.options.home), log: this.options.log, ...(this.options.httpGet ? { httpGet: this.options.httpGet } : {}) },
+        env[DEEPSEEK_BASE_URL_ENV]?.trim() || undefined,
+        env[DEEPSEEK_API_KEY_ENV]?.trim() || undefined,
+      );
+    } catch (error) {
+      // The catalog is a convenience, never a reason to refuse to run: the
+      // harness's own models still work.
+      this.options.log(`[deepseek] could not write the gateway's catalog: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Mark the driver unusable (a path the operator named is not a file). */
@@ -646,6 +709,7 @@ export class DeepSeekDriver implements Driver {
       mcp: this.mcp,
       baseEnv: this.options.baseEnv ?? process.env,
       live: this.live,
+      gateway: this.gateway,
     });
   }
 
@@ -666,23 +730,22 @@ export class DeepSeekDriver implements Driver {
   }
 
   private async probeModels(): Promise<{ models: ModelEntry[]; defaultModel?: string }> {
+    await this.gateway;
     const env = buildDeepSeekEnv({}, this.options.baseEnv ?? process.env);
     const process_ = await this.options.runtime.acquire(env, { ended: () => {} });
     try {
       const opened = await process_.client.request('session/new', { cwd: this.options.home, mcpServers: [] });
       const option = (opened.configOptions ?? []).find((entry) => entry.id === MODEL_CONFIG_ID);
-      const models: ModelEntry[] = modelChoices(option).map((choice) => ({
-        id: choice.value,
-        label: choice.label,
-        ...(choice.provider ? { provider: choice.provider } : {}),
-      }));
+      const choices = modelChoices(option);
+      const models: ModelEntry[] = choices.map(toModelEntry);
       if (models.length === 0) this.models = undefined;
       // The probe's own conversation is disposed of; nothing of it survives
       // but an empty session record in the harness's home.
       await process_.client.request('session/close', { sessionId: opened.sessionId }).catch(() => {});
+      const current = choices.find((choice) => choice.value === option?.currentValue);
       return {
         models,
-        ...(option && option.type === 'select' && option.currentValue ? { defaultModel: option.currentValue } : {}),
+        ...(current ? { defaultModel: toModelEntry(current).id } : {}),
       };
     } finally {
       process_.release();
@@ -690,17 +753,19 @@ export class DeepSeekDriver implements Driver {
   }
 
   /**
-   * Check the DeepSeek API key against the DeepSeek API. With an operator-set
-   * `DEEPSEEK_BASE_URL` the key belongs to that endpoint instead, whose model
-   * list this bridge does not know: the check is left to the gateway, and
-   * nothing is claimed about the key.
+   * Check the key against the endpoint it is for: the operator's gateway when
+   * one is configured (its `/models` is the one call every gateway has in
+   * common — the same one this driver reads the catalog from), else the
+   * DeepSeek API. A refusal is a refusal; anything else says nothing.
    */
   async checkCredential(credential: string, value: string): Promise<boolean | undefined> {
     if (credential !== DEEPSEEK_API_KEY_CREDENTIAL || !this.options.httpGet) return undefined;
     const baseEnv = this.options.baseEnv ?? process.env;
-    if (baseEnv.DEEPSEEK_BASE_URL?.trim()) return undefined;
+    const base = baseEnv[DEEPSEEK_BASE_URL_ENV]?.trim();
     try {
-      const res = await this.options.httpGet('https://api.deepseek.com/models', { authorization: `Bearer ${value}` });
+      const res = await this.options.httpGet(base ? gatewayModelsUrl(base) : 'https://api.deepseek.com/models', {
+        authorization: `Bearer ${value}`,
+      });
       return res.status !== 401 && res.status !== 403;
     } catch {
       return undefined;

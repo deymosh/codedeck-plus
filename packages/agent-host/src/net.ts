@@ -6,6 +6,9 @@
 
 export interface HttpResponse {
   status: number;
+  /** The response body, for a call that asked for it. `net.ts`'s own
+   *  fetchers read it; a test's fake may leave it out. */
+  text?: string;
 }
 
 export type HttpPost = (url: string, headers: Record<string, string>, body: string) => Promise<HttpResponse>;
@@ -19,5 +22,5 @@ export type HttpGet = (url: string, headers: Record<string, string>) => Promise<
 
 export const httpGet: HttpGet = async (url, headers) => {
   const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(15_000) });
-  return { status: res.status };
+  return { status: res.status, text: await res.text() };
 };

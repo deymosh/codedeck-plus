@@ -495,10 +495,10 @@ describe('DeepSeekDriver model catalog', () => {
   it('lists the harness catalog from a probe session, once', async () => {
     const ready = withDriver();
     const models = await ready.driver.listModels();
-    expect(models.defaultModel).toBe('["deepseek-official","deepseek-v4-flash"]');
+    expect(models.defaultModel).toBe('deepseek-v4-flash');
     expect(models.models).toEqual([
-      { id: '["deepseek-official","deepseek-v4-flash"]', label: 'deepseek-v4-flash', provider: 'DeepSeek' },
-      { id: '["deepseek-official","deepseek-v4-pro"]', label: 'DeepSeek-V4-Pro', provider: 'DeepSeek' },
+      { id: 'deepseek-v4-flash', label: 'deepseek-v4-flash', provider: 'DeepSeek' },
+      { id: 'deepseek-v4-pro', label: 'DeepSeek-V4-Pro', provider: 'DeepSeek' },
     ]);
     await ready.driver.listModels();
     expect(ready.harness.newSessions).toHaveLength(1);
@@ -562,18 +562,20 @@ describe('DeepSeekDriver credential check', () => {
     expect(await unreachable.checkCredential('deepseek_api_key', 'sk-1')).toBeUndefined();
   });
 
-  it('claims nothing about a key that belongs to a configured gateway', async () => {
-    const httpGet = vi.fn(async () => ({ status: 401 }));
+  it('checks a key against the gateway it belongs to, not the DeepSeek API', async () => {
+    const httpGet = vi.fn(async () => ({ status: 200 }));
     const ready = withDriver();
     const driver = DeepSeekDriver.create({
       runtime: ready.runtime,
       home: ready.home,
-      baseEnv: { DEEPSEEK_BASE_URL: 'https://gateway.example/v1' } as NodeJS.ProcessEnv,
+      baseEnv: { DEEPSEEK_BASE_URL: 'https://gateway.example' } as NodeJS.ProcessEnv,
       httpGet,
       log: () => {},
     });
-    expect(await driver.checkCredential('deepseek_api_key', 'sk-gateway')).toBeUndefined();
-    expect(httpGet).not.toHaveBeenCalled();
+    expect(await driver.checkCredential('deepseek_api_key', 'sk-gateway')).toBe(true);
+    // The list the gateway serves is the one call every gateway has, and the
+    // one this driver reads its catalog from.
+    expect(httpGet).toHaveBeenCalledWith('https://gateway.example/v1/models', { authorization: 'Bearer sk-gateway' });
   });
 });
 
@@ -659,6 +661,73 @@ describe('the harness runtime', () => {
     const driver = DeepSeekDriver.create({ runtime, home, log: (line) => logs.push(line) });
     await vi.waitFor(() => expect(logs.some((line) => /not ready yet: no network/.test(line))).toBe(true));
     expect(driver.info().unavailableReason).toBeUndefined();
+  });
+});
+
+describe('a gateway', () => {
+  const gatewayEnv = (base: string, key = 'sk-gateway'): NodeJS.ProcessEnv =>
+    ({ DEEPSEEK_BASE_URL: base, DEEPSEEK_API_KEY: key }) as NodeJS.ProcessEnv;
+
+  it('writes the models the gateway serves into the harness profile, as the host starts', async () => {
+    const ready = withDriver({ env: gatewayEnv('http://gateway.example:3458') });
+    ready.driver = DeepSeekDriver.create({
+      runtime: ready.runtime,
+      home: ready.home,
+      baseEnv: gatewayEnv('http://gateway.example:3458'),
+      httpGet: async (url, headers) => {
+        expect(url).toBe('http://gateway.example:3458/v1/models');
+        expect(headers.authorization).toBe('Bearer sk-gateway');
+        return { status: 200, text: JSON.stringify({ data: [{ id: 'kimi-k2' }, { id: 'glm-4.6', context_length: 200_000 }] }) };
+      },
+      log: () => {},
+    });
+    await vi.waitFor(() =>
+      expect(readFileSync(path.join(ready.home, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8')).toMatch(/kimi-k2/),
+    );
+    const layer = readFileSync(path.join(ready.home, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8');
+    // The row the harness reads: the endpoint, and the catalog it may serve.
+    expect(layer).toMatch(/id: llm-deepseek/);
+    expect(layer).toMatch(/baseURL: http:\/\/gateway\.example:3458/);
+    expect(layer).toMatch(/contextWindow: 200000/);
+    // Its own block, and nothing else of ours: the MCP list is another one.
+    expect(layer).toMatch(/CodeDeck\+ gateway catalog/);
+    expect(layer).not.toMatch(/CodeDeck\+ MCP servers/);
+  });
+
+  it('leaves the harness catalog alone when the gateway does not answer', async () => {
+    const ready = withDriver();
+    const driver = DeepSeekDriver.create({
+      runtime: ready.runtime,
+      home: ready.home,
+      baseEnv: gatewayEnv('http://gateway.example:3458'),
+      httpGet: async () => {
+        throw new Error('ECONNREFUSED');
+      },
+      log: () => {},
+    });
+    await driver.listModels();
+    expect(readFileSync(path.join(ready.home, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8')).not.toMatch(/llm-deepseek/);
+  });
+
+  it('takes its catalog back out when no gateway is configured any more', async () => {
+    const ready = withDriver();
+    const layer = path.join(ready.home, 'profiles', 'acp', 'cordis.patch.yml');
+    writeFileSync(
+      layer,
+      `# the profile
+
+# --- CodeDeck+ gateway catalog: written from the gateway's own model list; everything outside this block is yours ---
+- id: llm-deepseek
+  config:
+    baseURL: http://old.example
+# --- end CodeDeck+ gateway catalog ---
+`,
+    );
+    const driver = DeepSeekDriver.create({ runtime: ready.runtime, home: ready.home, baseEnv: {} as NodeJS.ProcessEnv, log: () => {} });
+    await driver.listModels();
+    const after = readFileSync(layer, 'utf8');
+    expect(after).not.toMatch(/llm-deepseek/);
+    expect(after).toMatch(/# the profile/);
   });
 });
 

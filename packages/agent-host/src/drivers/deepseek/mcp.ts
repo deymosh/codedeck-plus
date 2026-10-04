@@ -26,19 +26,22 @@
  * start, so a single mistyped server would lock the user out of every
  * session, and each session would pay its own connections.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { load, dump } from 'js-yaml';
 import type { McpManager, McpState } from '../../driver';
 import { serverInfo } from '../../mcp';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../types';
+import { ProfileLayer, type LayerBlock } from './profileLayer';
 
 /** The plugin every managed row mounts. */
 const MCP_CLIENT_PLUGIN = '@deepseek-ai/dsh-mcp-client';
 /** Which servers are this bridge's, among the profile's other rows. */
 const ROW_PREFIX = 'codedeck-mcp-';
-const MARKER_BEGIN = '# --- CodeDeck+ MCP servers: managed from the MCP screen; everything outside this block is yours ---';
-const MARKER_END = '# --- end CodeDeck+ MCP servers ---';
+/** This manager's own block in that layer (profileLayer.ts). */
+const BLOCK: LayerBlock = {
+  begin: '# --- CodeDeck+ MCP servers: managed from the MCP screen; everything outside this block is yours ---',
+  end: '# --- end CodeDeck+ MCP servers ---',
+};
 
 /** The harness's own rule for a server namespace, so a name this bridge
  *  writes is one the harness accepts (`mcp__<name>__<tool>` names follow). */
@@ -61,14 +64,17 @@ export interface DeepSeekMcpOptions {
 type PatchDoc = Record<string, unknown>;
 
 export class DeepSeekMcp implements McpManager {
-  /** One write at a time: each reads the file, edits, writes it back. */
+  /** One change at a time: each reads the block, edits it, writes it back. */
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly layer: ProfileLayer;
   /** How many times this manager changed the layer. A harness process records
    *  it as it starts, so a change made afterwards is configuration that
    *  process has not loaded — no file timestamp, and no clock, involved. */
   private versions = 0;
 
-  constructor(private readonly options: DeepSeekMcpOptions) {}
+  constructor(options: DeepSeekMcpOptions) {
+    this.layer = new ProfileLayer(path.join(options.profileDir, 'cordis.patch.yml'), options.log);
+  }
 
   /** How many times the layer has changed since this bridge started. */
   get version(): number {
@@ -83,13 +89,9 @@ export class DeepSeekMcp implements McpManager {
     return this.serial(async () => {
       const current = await this.servers();
       const next = applyAction(current, action, servers, names);
-      await this.write(next);
+      if (await this.layer.set(BLOCK, next.length === 0 ? undefined : renderRows(next))) this.versions++;
       return this.state(next);
     });
-  }
-
-  private file(): string {
-    return path.join(this.options.profileDir, 'cordis.patch.yml');
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -109,118 +111,28 @@ export class DeepSeekMcp implements McpManager {
 
   /** The servers in the managed block, in the order they are written. */
   private async servers(): Promise<ManagedServer[]> {
-    const text = await this.read();
-    const block = extractBlock(text);
+    const block = await this.layer.body(BLOCK);
     if (block === undefined) return [];
     let docs: unknown;
     try {
       docs = load(block);
     } catch (error) {
-      throw new Error(`${this.file()} has a CodeDeck MCP block that is not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `the DeepSeek Harness profile has a CodeDeck MCP block that is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     return serversOf(Array.isArray(docs) ? (docs as PatchDoc[]) : []);
   }
-
-  private async read(): Promise<string> {
-    try {
-      return await readFile(this.file(), 'utf8');
-    } catch {
-      return '';
-    }
-  }
-
-  private async write(servers: ManagedServer[]): Promise<void> {
-    const text = await this.read();
-    const rest = removeBlock(text);
-    const joined = servers.length === 0 ? restoreEmptyList(rest) : withBlock(rest, renderBlock(servers));
-    const content = joined.endsWith('\n') ? joined : `${joined}\n`;
-    // A change that leaves the layer as it was is not a change: a session
-    // reads this version to tell a server its harness has from one it has
-    // not loaded yet.
-    if (content === text) return;
-    this.versions++;
-    const file = this.file();
-    await mkdir(path.dirname(file), { recursive: true });
-    // Written beside and renamed: a torn write would leave a profile the
-    // harness cannot read at all.
-    const temporary = `${file}.codedeck-${process.pid}`;
-    await writeFile(temporary, content);
-    await rename(temporary, file);
-    this.options.log(`[deepseek] MCP servers updated in ${file}`);
-  }
 }
 
-/** The block's own text, without its markers; `undefined` when there is none. */
-function extractBlock(text: string): string | undefined {
-  const start = text.indexOf(MARKER_BEGIN);
-  if (start < 0) return undefined;
-  const end = text.indexOf(MARKER_END, start);
-  if (end < 0) return undefined;
-  return text.slice(start + MARKER_BEGIN.length, end).trim();
-}
-
-/** `text` with the managed block taken out (markers included). */
-function removeBlock(text: string): string {
-  const start = text.indexOf(MARKER_BEGIN);
-  if (start < 0) return text;
-  const end = text.indexOf(MARKER_END, start);
-  if (end < 0) return text;
-  return `${text.slice(0, start)}${text.slice(end + MARKER_END.length)}`.trimEnd() + '\n';
-}
-
-/** Whether a profile patch layer holds anything but comments and blanks. */
-function isEmptyLayer(text: string): boolean {
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) continue;
-    // The profile's initial layer: an empty list, and nothing else.
-    if (trimmed === '[]' || trimmed === '---') continue;
-    return false;
-  }
-  return true;
-}
-
-/**
- * The layer's own rows, then the managed block, as one document. The
- * harness's initial layer is an empty list (`[]`) on its own, and an empty
- * sequence cannot share a document with a block sequence — nor can a `[]` a
- * user left after their own rows — so those lines go.
- */
-function withBlock(rest: string, block: string): string {
-  const head = withoutEmptyList(rest).trimEnd();
-  return head === '' ? block : `${head}\n\n${block}`;
-}
-
-/** The layer with no managed block and no rows of ours: the profile's own
- *  comments and its empty list, which is the shape the harness starts from. */
-function restoreEmptyList(rest: string): string {
-  if (!isEmptyLayer(rest)) return rest.trimEnd();
-  const head = rest
-    .split('\n')
-    .filter((line) => line.trim().startsWith('#'))
-    .join('\n')
-    .trimEnd();
-  return head === '' ? '[]' : `${head}\n[]`;
-}
-
-/** `text` without a line that is an empty-list document (`[]` at the left
- *  margin; an argument's own `[]` is indented and kept). */
-function withoutEmptyList(text: string): string {
-  return text
-    .split('\n')
-    .filter((line) => line.replace(/\r$/, '') !== '[]')
-    .join('\n');
-}
-
-/** The managed block for `servers`, as the patch list the harness loads. */
-function renderBlock(servers: ManagedServer[]): string {
+/** The rows of the managed block, as the patch list the harness loads. */
+function renderRows(servers: ManagedServer[]): string {
   const docs: PatchDoc[] = [];
   for (const server of servers) {
     docs.push({ insert: [{ id: `${ROW_PREFIX}${server.name}`, name: MCP_CLIENT_PLUGIN, config: server.config }] });
     if (!server.enabled) docs.push({ id: `${ROW_PREFIX}${server.name}`, disabled: true });
   }
-  const body = dump(docs, { lineWidth: -1, noRefs: true, quotingType: "'" }).trimEnd();
-  return `${MARKER_BEGIN}\n${body}\n${MARKER_END}`;
+  return dump(docs, { lineWidth: -1, noRefs: true, quotingType: "'" }).trimEnd();
 }
 
 /** The servers a managed block describes, the last row per id winning. */
