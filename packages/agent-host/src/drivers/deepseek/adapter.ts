@@ -21,6 +21,13 @@ import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../
 import { MAX_DIFF_LINES, truncateToolResult, toDiffLines, type DiffPayload } from '../../transcript';
 import type { OutputEntry } from '../../types';
 
+/**
+ * The harness's question tool. Its card is the question itself — the bridge
+ * shows it, and the answer goes back through the command bridge — so its own
+ * tool rows would be a second, emptier copy of the same exchange.
+ */
+const QUESTION_TOOL = 'ask_user_question';
+
 /** What a tool call's own update carried: its result update repeats neither
  *  the tool's name nor its input. */
 export interface ToolCallFacts {
@@ -63,6 +70,7 @@ function toolCallEntries(
   const name = toolNameOf(update);
   const input = record(update.rawInput);
   calls.set(update.toolCallId, { name, input });
+  if (name === QUESTION_TOOL) return [];
   const locations = fileLocations(name, input);
   const full = toolInput(name, input);
   const todos = todosOf(input);
@@ -94,6 +102,7 @@ function toolResultEntries(
   if (status !== 'completed' && status !== 'failed') return [];
   const facts = calls.get(update.toolCallId);
   calls.delete(update.toolCallId);
+  if (facts?.name === QUESTION_TOOL) return [];
   const text = contentText(update.content);
   const entries: OutputEntry[] = [
     {

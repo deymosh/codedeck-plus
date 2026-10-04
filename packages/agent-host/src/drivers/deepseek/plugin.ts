@@ -1,0 +1,236 @@
+/**
+ * The plugin that carries what the harness's ACP surface does not: its slash
+ * commands, and the questions its model asks the user.
+ *
+ * Both exist in this profile and neither is reachable from outside it. ACP has
+ * no command list and no way to invoke one, and the harness keeps commands and
+ * human-interaction for its own UI modules; the same is true of the
+ * `user-questions` service, whose answerer is a browser panel. Inside the
+ * process both are ordinary services.
+ *
+ * So CodeDeck brings its own transport: this plugin, installed into the
+ * profile, holds the command registry and composes the questions answerer, and
+ * talks to the agent host over a local socket. It is ours, which is the point:
+ * no harness API is patched, and a harness that changes under it leaves
+ * commands or questions unanswered (the driver treats every failure that way)
+ * rather than breaking a session.
+ *
+ * The plugin is a package in the profile's own `node_modules`, written from
+ * the source below — dsh resolves a row's plugin by name from there, so no
+ * package manager is involved (and installing one later can prune the
+ * directory, which is why it is rewritten when the host starts).
+ *
+ * Two channels, deliberately: questions are *pushed* to the host as
+ * marker-prefixed lines on stderr (the one stream the harness leaves free —
+ * stdout is ACP), and every answer, like every command asked for, is a request
+ * on the socket.
+ */
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { ProfileLayer, type LayerBlock } from './profileLayer';
+
+/** The package name the profile's row refers to. */
+export const HARNESS_PLUGIN = 'codedeck-dsh-bridge';
+
+/** This plugin's block in the profile's patch layer. */
+const BLOCK: LayerBlock = {
+  begin: '# --- CodeDeck+ bridge: brings this profile its slash commands and its questions, over a local socket; everything outside this block is yours ---',
+  end: '# --- end CodeDeck+ bridge ---',
+};
+
+/** Where a pushed question starts on the harness's stderr (the host reads
+ *  these lines and never logs them as harness output). */
+export const QUESTION_MARKER = 'codedeck-question:';
+
+/**
+ * The plugin, as it is written to disk. Plain JavaScript: the harness imports
+ * it as it is, so nothing here may need a build step, and it must not import
+ * anything of CodeDeck's — the profile has no idea this host exists.
+ */
+const SOURCE = `import { mkdirSync, rmSync } from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+
+export const name = 'codedeck-bridge';
+export const inject = ['agents', 'commands', 'userQuestions'];
+
+const QUESTION_MARKER = 'codedeck-question:';
+
+/**
+ * Serve the host's socket, and answer the harness's questions over it.
+ * @param ctx - the profile's plugin context.
+ * @param config - this row's config: the socket path to listen on.
+ */
+export function apply(ctx, config) {
+  const socket = config?.socket;
+  if (typeof socket !== 'string' || socket === '') throw new Error('codedeck-bridge: config.socket is required');
+
+  /** Questions waiting for the host's answer, by call id. */
+  const pending = new Map();
+
+  ctx.on('user-questions/request', async (request) => {
+    // The card is keyed by the tool call, and the host needs the session; a
+    // request without either is one this bridge cannot show, so another
+    // answerer — or the harness's own error — has it.
+    const callId = request?.wait?.callId;
+    const sessionId = request?.agent?.session?.id;
+    if (callId === undefined || sessionId === undefined) return undefined;
+    const job = {};
+    job.promise = new Promise((resolve, reject) => {
+      job.resolve = resolve;
+      job.reject = reject;
+    });
+    pending.set(callId, job);
+    // The host learns about the question on stderr — the one stream that is
+    // not ACP's — and answers on the socket.
+    process.stderr.write(QUESTION_MARKER + JSON.stringify({
+      sessionId,
+      callId,
+      questions: request.questions,
+    }) + '\\n');
+    const onAbort = () => {
+      pending.delete(callId);
+      job.reject(new Error('the question was cancelled'));
+    };
+    request.signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      return await job.promise;
+    } finally {
+      pending.delete(callId);
+      request.signal?.removeEventListener('abort', onAbort);
+    }
+  });
+
+  const server = net.createServer((connection) => {
+    connection.setEncoding('utf8');
+    let buffered = '';
+    connection.on('data', (chunk) => {
+      buffered += chunk;
+      for (;;) {
+        const end = buffered.indexOf('\\n');
+        if (end < 0) break;
+        const line = buffered.slice(0, end);
+        buffered = buffered.slice(end + 1);
+        if (line.trim() !== '') void respond(ctx, connection, line, pending);
+      }
+    });
+    connection.on('error', () => {});
+  });
+  mkdirSync(path.dirname(socket), { recursive: true });
+  rmSync(socket, { force: true });
+  server.on('error', (error) => ctx.logger?.warn?.('codedeck-bridge: ' + error.message));
+  server.listen(socket);
+  ctx.effect(() => () => {
+    server.close();
+    rmSync(socket, { force: true });
+  }, 'codedeck.bridge');
+}
+
+/** One socket request: what a session can run, or the answer to a question. */
+async function respond(ctx, connection, line, pending) {
+  const reply = (body) => connection.write(JSON.stringify(body) + '\\n');
+  let request;
+  try {
+    request = JSON.parse(line);
+  } catch {
+    reply({ ok: false, error: 'malformed request' });
+    return;
+  }
+  const id = request?.id;
+  try {
+    if (request.method === 'answer') {
+      const job = pending.get(request.callId);
+      if (job === undefined) {
+        reply({ id, ok: false, error: 'that question is no longer waiting' });
+        return;
+      }
+      pending.delete(request.callId);
+      if (request.answer === undefined) job.reject(new Error('the user did not answer'));
+      else job.resolve({ answers: request.answer });
+      reply({ id, ok: true });
+      return;
+    }
+    const agent = ctx.get('agents')?.get(request?.sessionId);
+    if (agent === undefined) {
+      reply({ id, ok: false, error: 'no live session with that id' });
+      return;
+    }
+    const commands = ctx.get('commands');
+    if (request.method === 'list') {
+      reply({
+        id,
+        ok: true,
+        commands: commands.list(agent).map((command) => ({
+          name: command.name,
+          description: command.description,
+          ...(command.input?.hint === undefined ? {} : { hint: command.input.hint }),
+        })),
+      });
+      return;
+    }
+    if (request.method === 'run') {
+      // An empty attachment list: the phone sends the line, and a command
+      // that wants files is out of scope for this bridge.
+      const execution = await commands.execute(agent, String(request.line ?? ''), [], new AbortController().signal);
+      if (execution === undefined) {
+        reply({ id, ok: false, error: 'not a command this session has' });
+        return;
+      }
+      reply({ id, ok: true, result: { kind: execution.result.kind, text: execution.result.text ?? '' } });
+      return;
+    }
+    reply({ id, ok: false, error: 'unknown method ' + String(request.method) });
+  } catch (error) {
+    reply({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+`;
+
+/** The package manifest the loader reads beside the source. */
+function manifest(): string {
+  return `${JSON.stringify(
+    {
+      name: HARNESS_PLUGIN,
+      version: '1.0.0',
+      private: true,
+      type: 'module',
+      main: 'index.js',
+      description: "CodeDeck+'s side channel into the harness's automation profile",
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/**
+ * Put the plugin where the harness loads it from — its package in the
+ * profile's `node_modules`, and a row naming it in the profile's patch layer.
+ */
+export async function installHarnessPlugin(profileDir: string, socket: string, log: (message: string) => void): Promise<void> {
+  const dir = path.join(profileDir, 'node_modules', HARNESS_PLUGIN);
+  await mkdir(dir, { recursive: true });
+  await writeIfChanged(path.join(dir, 'package.json'), manifest());
+  await writeIfChanged(path.join(dir, 'index.js'), SOURCE);
+  await new ProfileLayer(path.join(profileDir, 'cordis.patch.yml'), log).set(BLOCK, rows(socket));
+}
+
+/** The row that mounts it, with the socket it answers on. */
+function rows(socket: string): string {
+  return [
+    '- insert:',
+    '    - id: codedeck-bridge',
+    `      name: '${HARNESS_PLUGIN}'`,
+    '      config:',
+    `        socket: ${JSON.stringify(socket)}`,
+  ].join('\n');
+}
+
+/** A file the harness may be running: rewritten only when its content is. */
+async function writeIfChanged(file: string, content: string): Promise<void> {
+  try {
+    if ((await readFile(file, 'utf8')) === content) return;
+  } catch {
+    // Not written yet.
+  }
+  await writeFile(file, content);
+}

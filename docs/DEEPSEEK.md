@@ -122,29 +122,42 @@ A gateway of another shape (OpenAI-completions, Anthropic messages) is
 configured in the harness's own profile — dsh's configuration to write, not
 this driver's.
 
-## Slash commands
+## Commands and questions
 
-The harness has commands — `/compact`, `/goal`, `/feedback`, `/plan`,
-`/permission`, and whatever its plugins add — and this driver brings them to
-the phone, which is not something its automation surface does on its own: ACP
-carries no command list and no way to invoke one, and the harness keeps
-commands for its own UI modules. A typed `/name` would otherwise be prompt
-text that reaches the model.
+Two things the harness does in this profile that its automation surface does
+not carry, and that CodeDeck brings to the phone with one small plugin of its
+own (`codedeck-dsh-bridge`, mounted by a row in the profile's patch layer):
 
-So CodeDeck installs one small plugin of its own into the profile
-(`codedeck-dsh-commands`, mounted by a row in the profile's patch layer) that
-holds the harness's command registry and answers two questions over a local
-socket: what this session can run, and "run this line". The phone lists what
-it says, and a typed `/name` runs there instead of being sent to the model —
-the command's own words come back as the agent's answer (`/plan` answers with
-"Plan mode on", `/compact` with what it compacted).
+**Slash commands.** The harness has `/compact`, `/goal`, `/feedback`, `/plan`,
+`/permission`, and whatever its plugins add. ACP carries no command list and
+no way to invoke one, and the harness keeps commands for its own UI modules, so
+a typed `/name` would otherwise be prompt text that reaches the model. The
+plugin holds the command registry and answers two questions over a local
+socket: what this session can run, and "run this line". The phone lists what it
+says, and a typed `/name` runs there instead of being sent to the model — the
+command's own words come back as the agent's answer (`/plan` answers "Plan mode
+on", `/goal set X` answers with the goal it now holds).
 
-The socket is a file in the bridge's home (`/data/codedeck/dsh-commands.sock`,
-a named pipe on Windows, named after the home). Nothing else about the profile
+**Questions.** The harness's model can put a decision to the user — its
+`ask_user_question` tool and its plan review both ask through the same service
+— and that service's answerer is a panel in the harness's own apps. Without
+one, the tool fails with "no user-questions answerer configured", which is
+what a plain setup does. The plugin composes an answerer instead: the question
+is pushed to the host as a marker line on the harness's stderr (the one stream
+that is not ACP's), the phone shows it as the very card the other agents' ask
+uses, and the answer goes back the way the harness takes one — the labels of
+the chosen options, or the text the user typed. Each question carries its own
+id, so a batch of them comes back matched to what was asked.
+
+The socket is a file in the bridge's home (`/data/codedeck/dsh-bridge.sock`, a
+named pipe on Windows, named after the home). Nothing else about the profile
 changes, and the plugin is harmless if the harness moves under it: a list that
-cannot be read means the phone offers no commands and a slash line is ordinary
-text again — a session never fails because of it. A command that takes
-attachments has none to take: this bridge sends the line alone.
+cannot be read means the phone offers no commands, an unanswerable question
+reads as one the user did not answer, and a slash line is ordinary text again —
+a session never fails over either. Two things it does not do: a command that
+takes attachments gets none (this bridge sends the line alone), and the
+question tool's own row is hidden in the transcript, since the question card is
+the exchange.
 
 ## MCP servers
 
@@ -191,7 +204,7 @@ catalog the phone reads:
   own: send every permission to the phone, or allow everything. Asked
   permissions offer Allow and Deny only — the harness has no "always allow"
   to choose.
-- **No questions or background tasks**, and no attachments on a command.
+- **No background tasks**, and no attachments on a command or a question.
 - **No subscription usage** to ask for (the context meter still works).
 - **No diff blocks.** The harness reports a tool result as text, so a file
   change is reconstructed from the call's own arguments — what an `edit`

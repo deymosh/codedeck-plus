@@ -37,8 +37,9 @@ import type {
 } from '../../types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
-import { commandsSocketPath, listSessionCommands, runSessionCommand } from './commands';
-import { installCommandsPlugin } from './commandsPlugin';
+import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from './bridge';
+import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
+import { parseQuestionLine, toAnswerItems, toQuestionSpecs, type PushedQuestionLine } from './questions';
 import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
@@ -78,6 +79,11 @@ const DEEPSEEK_EFFORTS = [
 ];
 /** What the DeepSeek route runs at when nothing is chosen. */
 const DEFAULT_EFFORT = 'high';
+
+/** How long the harness waits for the phone's answer to a question before
+ *  the bridge gives up on it (the harness's own waits are its business; this
+ *  is only the socket round trip that carries the answer). */
+const QUESTION_TIMEOUT_MS = 60_000;
 
 /** The harness's own option ids (standard ACP session config options). */
 const MODEL_CONFIG_ID = 'model';
@@ -217,8 +223,8 @@ export class DeepSeekSession implements DriverSession {
       /** The profile as it must be before a harness boots: the endpoint's
        *  catalog written, the command plugin in place. */
       prepared: Promise<unknown>;
-      /** Where the command plugin listens. */
-      commandsSocket: string;
+      /** Where the Codeck plugin listens. */
+      pluginSocket: string;
     },
   ) {
     this.cwd = params.cwd;
@@ -518,7 +524,7 @@ export class DeepSeekSession implements DriverSession {
     const sessionId = this.nativeId;
     if (this.ended || sessionId === undefined) return;
     this.ctx.emit({ type: 'turn', state: 'running' });
-    const outcome = await runSessionCommand(this.deps.commandsSocket, sessionId, line, this.ctx.log);
+    const outcome = await runSessionCommand(this.deps.pluginSocket, sessionId, line, this.ctx.log);
     if (this.ended) return;
     if (outcome === undefined) {
       this.deliver({ entryType: 'error', text: `${line} did not run: the command bridge is not answering.`, timestamp: now() });
@@ -535,13 +541,44 @@ export class DeepSeekSession implements DriverSession {
     this.endTurn();
   }
 
+  /**
+   * The harness's model asked the user something, and the plugin pushed it
+   * here. It goes to the phone as the same question card the other agents
+   * send, and the answer goes back the way the harness takes it — labels for
+   * a chosen option, free text for a typed one. An unanswered question (the
+   * phone is gone, the user cancelled, the turn ended) is answered with
+   * nothing, which the harness reports to the model as a question that was
+   * not answered.
+   */
+  askQuestion(pushed: PushedQuestionLine): void {
+    const specs = toQuestionSpecs(pushed.questions);
+    void this.ctx
+      .askQuestion(pushed.callId, specs)
+      .then((outcome) =>
+        askPlugin(
+          this.deps.pluginSocket,
+          {
+            method: 'answer',
+            sessionId: this.nativeId,
+            callId: pushed.callId,
+            ...(outcome.outcome === 'answered' ? { answer: toAnswerItems(pushed.questions, outcome.answers) } : {}),
+          },
+          QUESTION_TIMEOUT_MS,
+          this.ctx.log,
+        ),
+      )
+      .catch((error: unknown) => {
+        this.ctx.log(`[deepseek] could not pass a question on: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  }
+
   /** What this session's harness can run, asked of the harness itself (the
    *  command plugin) and cached until the session ends. An empty set means
    *  every slash line is ordinary text, which is what a harness without the
    *  plugin does. */
   private knownCommands(): Promise<Set<string>> {
     this.commandNames ??= this.ready
-      .then(() => listSessionCommands(this.deps.commandsSocket, this.nativeId ?? '', this.ctx.log))
+      .then(() => listSessionCommands(this.deps.pluginSocket, this.nativeId ?? '', this.ctx.log))
       .then((commands) => new Set((commands ?? []).map((command) => command.name)))
       .catch(() => {
         this.commandNames = undefined;
@@ -554,7 +591,7 @@ export class DeepSeekSession implements DriverSession {
     await this.ready;
     const sessionId = this.nativeId;
     if (this.ended || sessionId === undefined) return [];
-    return (await listSessionCommands(this.deps.commandsSocket, sessionId, this.ctx.log)) ?? [];
+    return (await listSessionCommands(this.deps.pluginSocket, sessionId, this.ctx.log)) ?? [];
   }
 
   /** The turn is over: the transcript marks it and the phone stops showing
@@ -679,8 +716,8 @@ export class DeepSeekDriver implements Driver {
    * Sessions and the model probe wait for it.
    */
   private prepared: Promise<unknown> = Promise.resolve();
-  /** Where the command plugin listens. One per harness home. */
-  private readonly commandsSocket: string;
+  /** Where the CodeDeck plugin listens. One per harness home. */
+  private readonly pluginSocket: string;
   /** Sessions by the harness's own ids: a process serves several, and it is
    *  this map that ends them all when it goes away. */
   private readonly sessions = new Map<string, DeepSeekSession>();
@@ -688,6 +725,10 @@ export class DeepSeekDriver implements Driver {
     events: (): DeepSeekProcessEvents => ({
       ended: (sessionIds: readonly string[], error: string) => {
         for (const sessionId of sessionIds) this.sessions.get(sessionId)?.endFromProcess(error);
+      },
+      question: (line: string) => {
+        const pushed = parseQuestionLine(line, QUESTION_MARKER);
+        if (pushed?.sessionId !== undefined) this.sessions.get(pushed.sessionId)?.askQuestion(pushed);
       },
     }),
     add: (sessionId: string, session: DeepSeekSession): void => {
@@ -700,7 +741,7 @@ export class DeepSeekDriver implements Driver {
 
   private constructor(private readonly options: DeepSeekDriverOptions) {
     const profileDir = dshProfileDir(options.home);
-    this.commandsSocket = commandsSocketPath(options.home);
+    this.pluginSocket = bridgeSocketPath(options.home);
     this.mcp = options.mcp ?? new DeepSeekMcp({ profileDir, log: options.log });
     this.plugins = new DeepSeekPlugins({
       profileDir,
@@ -734,7 +775,7 @@ export class DeepSeekDriver implements Driver {
    */
   private async installCommands(): Promise<void> {
     try {
-      await installCommandsPlugin(dshProfileDir(this.options.home), this.commandsSocket, this.options.log);
+      await installHarnessPlugin(dshProfileDir(this.options.home), this.pluginSocket, this.options.log);
     } catch (error) {
       this.options.log(`[deepseek] could not install the command bridge: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -808,7 +849,7 @@ export class DeepSeekDriver implements Driver {
       baseEnv: this.options.baseEnv ?? process.env,
       live: this.live,
       prepared: this.prepared,
-      commandsSocket: this.commandsSocket,
+      pluginSocket: this.pluginSocket,
     });
   }
 

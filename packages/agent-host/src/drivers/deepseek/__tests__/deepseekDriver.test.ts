@@ -7,7 +7,8 @@ import { recordingContext, type RecordingContext } from '../../../__tests__/cont
 import type { StartSession } from '../../../types';
 import type { DriverSession } from '../../../driver';
 import { DeepSeekDriver } from '../driver';
-import { commandsSocketPath } from '../commands';
+import { bridgeSocketPath } from '../bridge';
+import { QUESTION_MARKER } from '../plugin';
 import { DeepSeekMcp } from '../mcp';
 import { DeepSeekRuntime, dshHomeDir } from '../runtime';
 import { FakeHarness } from './fakeHarness';
@@ -754,7 +755,7 @@ describe('slash commands', () => {
       });
       connection.on('error', () => {});
     });
-    const socket = commandsSocketPath(home);
+    const socket = bridgeSocketPath(home);
     mkdirSync(path.dirname(socket), { recursive: true });
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -826,6 +827,88 @@ describe('slash commands', () => {
       expect(ready.harness.requests.some((request) => request.method === 'session/prompt')).toBe(true),
     );
     expect(ctx.entries().some((entry) => entry.entryType === 'error')).toBe(false);
+  });
+});
+
+describe('the questions the model asks', () => {
+  /** A question as the plugin pushes it: a marker line on the harness's
+   *  stderr, which is the one stream ACP does not own. */
+  const pushed = (callId: string): string =>
+    `${QUESTION_MARKER}${JSON.stringify({
+      sessionId: 's1',
+      callId,
+      questions: [{ id: 'q1', question: 'Which database?', options: [{ label: 'SQLite' }, { label: 'Postgres' }] }],
+    })}\n`;
+
+  async function bridge(ready: Harness): Promise<{ requests: Array<Record<string, unknown>>; close: () => void }> {
+    const requests: Array<Record<string, unknown>> = [];
+    const server = createServer((connection: Socket) => {
+      connection.setEncoding('utf8');
+      let buffered = '';
+      connection.on('data', (chunk: string) => {
+        buffered += chunk;
+        const end = buffered.indexOf('\n');
+        if (end < 0) return;
+        const request = JSON.parse(buffered.slice(0, end)) as Record<string, unknown>;
+        requests.push(request);
+        connection.write(`${JSON.stringify({ id: request.id, ok: true })}\n`);
+      });
+      connection.on('error', () => {});
+    });
+    const socket = bridgeSocketPath(ready.home);
+    mkdirSync(path.dirname(socket), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socket, resolve);
+    });
+    return { requests, close: () => server.close() };
+  }
+
+  it('shows it on the phone and answers the harness with what it chose', async () => {
+    const ready = withDriver();
+    const socket = await bridge(ready);
+    const ctx = recordingContext({
+      question: (requestId, questions) => {
+        expect(requestId).toBe('c9');
+        expect(questions).toEqual([
+          { question: 'Which database?', options: [{ label: 'SQLite' }, { label: 'Postgres' }] },
+        ]);
+        return { outcome: 'answered', answers: ['SQLite'] };
+      },
+    });
+    await started(ready, {}, ctx);
+    ready.harness.child.stderr.write(pushed('c9'));
+    await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
+    expect(socket.requests.find((request) => request.method === 'answer')).toMatchObject({
+      sessionId: 's1',
+      callId: 'c9',
+      answer: [{ id: 'q1', selected: ['SQLite'] }],
+    });
+    socket.close();
+  });
+
+  it('answers with nothing when the user does not, so the model is told', async () => {
+    const ready = withDriver();
+    const socket = await bridge(ready);
+    const ctx = recordingContext({ question: () => ({ outcome: 'cancelled', reason: 'the phone went away' }) });
+    await started(ready, {}, ctx);
+    ready.harness.child.stderr.write(pushed('c9'));
+    await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
+    const answer = socket.requests.find((request) => request.method === 'answer')!;
+    expect(answer).toMatchObject({ sessionId: 's1', callId: 'c9' });
+    expect(answer.answer).toBeUndefined();
+    socket.close();
+  });
+
+  it('keeps a pushed question out of the harness log', async () => {
+    const ready = withDriver();
+    const socket = await bridge(ready);
+    const ctx = recordingContext({ question: () => ({ outcome: 'cancelled', reason: 'never mind' }) });
+    await started(ready, {}, ctx);
+    ready.harness.child.stderr.write(pushed('c9'));
+    await vi.waitFor(() => expect(socket.requests.length).toBeGreaterThan(0));
+    expect(ready.logs.some((line) => line.includes(QUESTION_MARKER))).toBe(false);
+    socket.close();
   });
 });
 

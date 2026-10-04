@@ -36,6 +36,7 @@ import { agentCacheDir } from '../../agentInstall';
 import { isFile } from '../../executable';
 import { AcpClient, INITIALIZE_TIMEOUT_MS } from './acp';
 import { DSH_LABEL } from './install';
+import { QUESTION_MARKER } from './plugin';
 
 /** The ACP profile the driver runs: the automation surface, ACP on stdio. */
 export const DSH_PROFILE = 'acp';
@@ -66,6 +67,9 @@ export interface DeepSeekSessionHandler {
 export interface DeepSeekProcessEvents {
   /** The process is gone: every session it served has ended. */
   ended(sessionIds: readonly string[], error: string): void;
+  /** The harness's model asked the user something (the plugin pushes it on
+   *  stderr, the one stream that is not the protocol's). */
+  question?(line: string): void;
 }
 
 /** One live harness process. */
@@ -175,6 +179,7 @@ class HarnessProcess implements DeepSeekProcess {
     configVersion: number,
     private readonly hooks: {
       log: (message: string) => void;
+      question: (line: string) => void;
       gone: (process_: HarnessProcess) => void;
       release: (process_: HarnessProcess) => void;
       ended: (sessionIds: readonly string[], error: string) => void;
@@ -269,6 +274,12 @@ class HarnessProcess implements DeepSeekProcess {
       const line = this.stderrBuffer.slice(0, end).replace(/\r$/, '');
       this.stderrBuffer = this.stderrBuffer.slice(end + 1);
       if (line.trim() === '') continue;
+      // A question this bridge is asked to carry is the driver's, not the
+      // log's: the plugin pushes it here because stdout belongs to ACP.
+      if (line.includes(QUESTION_MARKER)) {
+        this.hooks.question(line);
+        continue;
+      }
       this.hooks.log(`[deepseek] ${line}`);
       const failure = MCP_FAILURE.exec(line);
       if (failure?.[1] !== undefined) this.failures.set(failure[1], line);
@@ -303,6 +314,19 @@ export class DeepSeekRuntime {
   }
 
   /**
+   * Resolve the runtime now — installing it when the machine has none — so a
+   * session that comes later does not wait for the download. A failure is
+   * only logged: the next session asks again, and reports it then.
+   */
+  async prepare(): Promise<void> {
+    try {
+      await this.entryPoint();
+    } catch (error) {
+      this.log(`[deepseek] the DeepSeek Harness runtime is not ready yet: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * The runtime's own `node_modules`: every `@deepseek-ai/*` package the
    * harness ships resolves from here, which is where a shipped bundle's
    * version is found (a profile installs only what a user added).
@@ -316,19 +340,6 @@ export class DeepSeekRuntime {
       file = dir;
     }
     return undefined;
-  }
-
-  /**
-   * Resolve the runtime now — installing it when the machine has none — so a
-   * session that comes later does not wait for the download. A failure is
-   * only logged: the next session asks again, and reports it then.
-   */
-  async prepare(): Promise<void> {
-    try {
-      await this.entryPoint();
-    } catch (error) {
-      this.log(`[deepseek] the DeepSeek Harness runtime is not ready yet: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
 
   /** Close every process. Called on host shutdown. */
@@ -383,6 +394,7 @@ export class DeepSeekRuntime {
       this.options.configVersion?.() ?? 0,
       {
         log: this.log,
+        question: (line) => events.question?.(line),
         gone: (gone) => this.forget(context.key, context, gone),
         release: (released) => this.release(context, released),
         ended: (sessionIds, error) => events.ended(sessionIds, error),

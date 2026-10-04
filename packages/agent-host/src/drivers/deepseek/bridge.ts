@@ -1,13 +1,13 @@
 /**
- * The driver's side of the command bridge: what a session's commands are, and
- * running one line of them.
+ * The driver's side of the socket the plugin listens on (plugin.ts): what a
+ * session's commands are, running one line of them, and answering a question
+ * the harness's model asked.
  *
- * The plugin (commandsPlugin.ts) holds the harness's command registry and
- * answers over a local socket, so this module is a small client of it: one
- * connection per question, line-delimited JSON, and `undefined` for anything
- * that does not work out — a harness without the plugin, a plugin that could
- * not start, a timeout. Commands are a convenience: a session runs without
- * them exactly as it did before, and nothing here may fail one.
+ * One connection per request, line-delimited JSON, and `undefined` for
+ * anything that does not work out — a harness without the plugin, a plugin
+ * that could not start, a timeout. Commands and questions are conveniences:
+ * a session runs without them exactly as it did before, and nothing here may
+ * fail one.
  */
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
@@ -26,12 +26,12 @@ const RUN_TIMEOUT_MS = 10 * 60_000;
  * machine — one home, one socket — and a named pipe on Windows, named after
  * the home so two bridges on one machine do not collide.
  */
-export function commandsSocketPath(home: string, platform: NodeJS.Platform = process.platform): string {
+export function bridgeSocketPath(home: string, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') {
     const tag = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 12);
-    return `\\\\.\\pipe\\codedeck-dsh-commands-${tag}`;
+    return `\\\\.\\pipe\\codedeck-dsh-bridge-${tag}`;
   }
-  return path.join(home, 'codedeck', 'dsh-commands.sock');
+  return path.join(home, 'codedeck', 'dsh-bridge.sock');
 }
 
 /** One command as the plugin lists it. */
@@ -42,7 +42,7 @@ interface CommandListing {
 }
 
 /** The plugin's answer. */
-interface Reply {
+export interface Reply {
   ok: boolean;
   error?: string;
   commands?: CommandListing[];
@@ -56,7 +56,7 @@ export async function listSessionCommands(
   log: (message: string) => void,
   timeoutMs: number = LIST_TIMEOUT_MS,
 ): Promise<SlashCommand[] | undefined> {
-  const reply = await ask(socket, { method: 'list', sessionId }, timeoutMs, log);
+  const reply = await askPlugin(socket, { method: 'list', sessionId }, timeoutMs, log);
   if (!reply?.ok) return undefined;
   return (reply.commands ?? [])
     .filter((command) => typeof command.name === 'string' && command.name !== '')
@@ -72,7 +72,7 @@ export async function runSessionCommand(
   log: (message: string) => void,
   timeoutMs: number = RUN_TIMEOUT_MS,
 ): Promise<{ ok: boolean; text: string } | undefined> {
-  const reply = await ask(socket, { method: 'run', sessionId, line }, timeoutMs, log);
+  const reply = await askPlugin(socket, { method: 'run', sessionId, line }, timeoutMs, log);
   if (!reply) return undefined;
   if (!reply.ok) return { ok: false, text: reply.error ?? 'the command could not be run' };
   return { ok: reply.result?.kind !== 'error', text: reply.result?.text ?? '' };
@@ -80,7 +80,9 @@ export async function runSessionCommand(
 
 /** One question, one answer. Never throws: a socket that is not there (no
  *  plugin, a harness that has not started) is not an error worth a stack. */
-async function ask(
+/** One request to the plugin, for the callers in this folder and beside it
+ *  (questions.ts). Never throws. */
+export async function askPlugin(
   socket: string,
   request: Record<string, unknown>,
   timeoutMs: number,
