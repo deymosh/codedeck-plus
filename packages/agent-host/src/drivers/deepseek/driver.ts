@@ -39,6 +39,7 @@ import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
 import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from './bridge';
 import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
+import { ASK_USER_TOOL, installProfileTools } from './profileTools';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs, type PlanReview, type PushedQuestionLine } from './questions';
 import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
 import { DSH_LABEL } from './install';
@@ -784,22 +785,32 @@ export class DeepSeekDriver implements Driver {
   }
 
   /** Everything the profile needs before a harness boots (once, at the
-   *  start): the endpoint's catalog, and the row that mounts our command
-   *  plugin. */
+   *  start): the endpoint's catalog, and CodeDeck's own rows in its patch
+   *  layer. */
   private async prepareProfile(): Promise<void> {
     await this.syncGateway();
-    await this.installCommands();
+    await this.ownProfile();
   }
 
   /**
-   * Put the command plugin in the profile and tell it where to listen. A
-   * failure only costs commands: it is logged, and the session runs on.
+   * Put CodeDeck's part of the profile in place: the plugin that carries the
+   * harness's commands and questions out to the phone, and the tool rows the
+   * profile's own bundles leave out. Each is independent and each failure
+   * costs only itself: it is logged, and the session runs on.
    */
-  private async installCommands(): Promise<void> {
+  private async ownProfile(): Promise<void> {
+    const profileDir = dshProfileDir(this.options.home);
     try {
-      await installHarnessPlugin(dshProfileDir(this.options.home), this.pluginSocket, this.options.log);
+      await installHarnessPlugin(profileDir, this.pluginSocket, this.options.log);
     } catch (error) {
       this.options.log(`[deepseek] could not install the command bridge: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      await installProfileTools(profileDir, this.options.log);
+    } catch (error) {
+      this.options.log(
+        `[deepseek] could not mount ${ASK_USER_TOOL}, so the model has no question tool: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

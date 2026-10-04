@@ -138,6 +138,17 @@ says, and a typed `/name` runs there instead of being sent to the model — the
 command's own words come back as the agent's answer (`/plan` answers "Plan mode
 on", `/goal set X` answers with the goal it now holds).
 
+**The question tool.** The harness's shared core registers the question
+*service* and the plan-mode tool that presents a plan through it, but the tool
+the model asks with — `ask_user_question` — is mounted by the web app's agent
+presets, not by the core. An automation profile therefore runs a model that
+plan mode's own instructions tell to ask with a tool it does not have, and a
+model asked about its tools says exactly that. The driver mounts it in the
+profile's patch layer, bare, the way the harness's own presets do; the row
+names the harness's own package, so nothing is installed into the profile for
+it. `present` — the web app's deliverables tool — is deliberately left out:
+nothing on the phone would show what it declares.
+
 **Questions.** The harness's model can put a decision to the user — its
 `ask_user_question` tool, that tool's timed form, and the plan review
 `exit_plan_mode` presents all ask through one service — and that service's

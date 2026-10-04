@@ -61,10 +61,7 @@ export class ProfileLayer {
   set(block: LayerBlock, body: string | undefined): Promise<boolean> {
     return this.serial(async () => {
       const text = await this.text();
-      const rest = withoutBlock(text, block);
-      const rendered = body === undefined || body.trim() === '' ? undefined : `${block.begin}\n${body.trim()}\n${block.end}`;
-      const joined = rendered === undefined ? restoreEmptyList(rest) : addRows(rest, rendered);
-      const content = joined.endsWith('\n') ? joined : `${joined}\n`;
+      const content = nextLayer(text, block, body);
       if (content === text) return false;
       await mkdir(path.dirname(this.file), { recursive: true });
       const temporary = `${this.file}.codedeck-${process.pid}`;
@@ -86,13 +83,39 @@ export class ProfileLayer {
   }
 }
 
-/** `text` with one block taken out (its markers included). */
-function withoutBlock(text: string, block: LayerBlock): string {
+/**
+ * The layer after one write: the block replaced where it already stands — so
+ * a start that changes nothing leaves the file byte for byte as it was, and
+ * the blocks do not drift through a file a person is reading — or appended
+ * when the layer has none yet.
+ *
+ * Taking a block out leaves one blank line behind, never a growing pile: a
+ * layer rewritten at every start must not grow on every start.
+ */
+function nextLayer(text: string, block: LayerBlock, body: string | undefined): string {
+  const rendered = body === undefined || body.trim() === '' ? undefined : `${block.begin}\n${body.trim()}\n${block.end}`;
   const start = text.indexOf(block.begin);
-  if (start < 0) return text;
-  const end = text.indexOf(block.end, start);
-  if (end < 0) return text;
-  return `${text.slice(0, start)}${text.slice(end + block.end.length)}`.trimEnd() + '\n';
+  const end = start < 0 ? -1 : text.indexOf(block.end, start);
+  if (rendered === undefined) {
+    if (start < 0 || end < 0) return text;
+    const before = text.slice(0, start).replace(/\s+$/, '');
+    const after = text.slice(end + block.end.length).replace(/^\s+/, '');
+    const joined = before === '' ? after : after === '' ? before : `${before}\n\n${after}`;
+    return document(joined, false);
+  }
+  if (start >= 0 && end >= 0) {
+    return document(`${text.slice(0, start)}${rendered}${text.slice(end + block.end.length)}`, true);
+  }
+  return document(addRows(text, rendered), true);
+}
+
+/** One document, ending in a newline. Rows live in a sequence, so the
+ *  harness's empty-list line cannot stay beside them — and comes back when
+ *  nothing but the layer's own comments is left. */
+function document(text: string, hasRows: boolean): string {
+  const trimmed = text.trimEnd();
+  const body = !hasRows && isEmptyLayer(trimmed) ? restoreEmptyList(trimmed) : hasRows ? withoutEmptyList(trimmed) : trimmed;
+  return `${body}\n`;
 }
 
 /** Whether a profile patch layer holds anything but comments and blanks. */
