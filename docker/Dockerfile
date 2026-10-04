@@ -23,7 +23,9 @@
 #
 # BUNDLE_AGENTS=1 builds a complete image for hosts without internet access:
 # the Agent SDK's platform package stays in (so /usr/local/bin/claude is a
-# symlink to its binary, version-locked to the SDK) and OpenCode is copied in.
+# symlink to its binary, version-locked to the SDK), OpenCode is copied in,
+# and the DeepSeek Harness's runtime — a package tree, not one binary, so the
+# host's own installer fetches it — is laid down in the cache it installs into.
 ARG BUNDLE_AGENTS=0
 
 ARG NODE_IMAGE=node:24.20.0-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
@@ -74,6 +76,17 @@ RUN --mount=type=cache,id=codedeck-pnpm-store,target=/root/.local/share/pnpm/sto
          && ln -s "${claude_bin#/deploy/}" /deploy/claude; \
        else \
          rm -rf /deploy/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@*; \
+       fi
+# The DeepSeek Harness runs from a whole package tree rather than one binary,
+# so it cannot be copied in the way OpenCode is: the host's own installer —
+# the code that would fetch it on a machine with internet — lays it down here,
+# into the cache layout the host looks in, at the version and sha512
+# pnpm-lock.yaml pins. An image built without BUNDLE_AGENTS ships nothing of
+# it and installs it on first use.
+RUN mkdir -p /agents \
+    && if [ "$BUNDLE_AGENTS" = 1 ]; then \
+         CODEDECK_AGENT_HOST_WARM=1 CODEDECK_AGENT_HOST_DRIVERS=deepseek-harness \
+         CODEDECK_AGENT_CACHE=/agents node /deploy/dist/main.js; \
        fi
 
 # ---------------------------------------------------------------------------
@@ -147,6 +160,11 @@ RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROU
 # The binary finds the agent host at agent-host/ beside it.
 COPY --from=opencode /out/ /usr/local/bin/
 COPY --from=agenthost /deploy /app/agent-host
+# Agents bundled at build time land in the cache the host installs into. That
+# cache lives in the /data volume, which Docker fills from the image when the
+# volume is FIRST created — so a bundle reaches a new deployment, and a volume
+# that already exists keeps what it has (the agents already installed in it).
+COPY --from=agenthost /agents/ /data/agents/
 COPY --from=bridge /codedeck-bridge /app/codedeck-bridge
 COPY --chmod=0755 docker/entrypoint.sh /app/entrypoint.sh
 COPY --chmod=0755 docker/git-credential-codedeck-secret /usr/local/bin/git-credential-codedeck-secret

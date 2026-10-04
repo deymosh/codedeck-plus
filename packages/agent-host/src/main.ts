@@ -18,6 +18,9 @@
  *                                 unset = the runtime this build pins
  *   CODEDECK_DEEPSEEK_HOME        `$DSH_HOME`, the harness's state root
  *                                 (the bridge passes `<home>/dsh`)
+ *   CODEDECK_AGENT_HOST_WARM=1    install the enabled agents' runtimes and
+ *                                 exit, without serving anything (an image
+ *                                 build, or a first-run warm-up)
  *   CODEDECK_AGENT_CACHE          where agent binaries installed on demand live
  *                                 (the bridge passes `<home>/agents`; `bin/`
  *                                 in it links each one under a stable name)
@@ -38,6 +41,7 @@ import { DeepSeekRuntime, dshHomeDir, dshProfileDir } from './drivers/deepseek/r
 import { FakeDriver } from './drivers/fake';
 import { OpenCodeDriver } from './drivers/opencode/driver';
 import { openCodeBinary } from './drivers/opencode/install';
+import { resolveOpenCodePath } from './drivers/opencode/server';
 import { isFile } from './executable';
 import { AgentHost, type HostIo } from './host';
 import { httpGet, httpPost } from './net';
@@ -55,11 +59,66 @@ const log = (message: string): void => {
 process.on('uncaughtException', (err) => log(`[agent-host] uncaught exception: ${err instanceof Error ? err.stack : String(err)}`));
 process.on('unhandledRejection', (err) => log(`[agent-host] unhandled rejection: ${err instanceof Error ? err.stack : String(err)}`));
 
-async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
-  const names = (env.CODEDECK_AGENT_HOST_DRIVERS ?? 'claude-code,opencode,deepseek-harness')
+/** The drivers this host runs, in the order they were asked for. */
+function driverNames(env: NodeJS.ProcessEnv): string[] {
+  return (env.CODEDECK_AGENT_HOST_DRIVERS ?? 'claude-code,opencode,deepseek-harness')
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean);
+}
+
+/**
+ * `CODEDECK_AGENT_HOST_WARM=1` with a driver list: fetch what those agents
+ * run from (the same installs a first session would trigger) and exit. An
+ * image built with BUNDLE_AGENTS=1 runs this at build time, so a host with no
+ * internet has every runtime already; an operator can run it to have the
+ * first session start without waiting for a download.
+ *
+ * Nothing is installed twice: each agent's own lookup decides, so an agent
+ * already on the machine (or bundled beside the host) is left alone.
+ */
+async function warmAgents(env: NodeJS.ProcessEnv, names: string[], cacheDir: string): Promise<void> {
+  const cache = { cacheDir, registry: registryUrl(env), log };
+  for (const name of names) {
+    switch (name) {
+      case 'claude-code': {
+        const found = env.CODEDECK_TEST_MODE === '1' ? 'test mode' : (resolveClaudeExecutable(undefined, env) ?? bundledClaudeExecutable());
+        if (found) {
+          log(`[warm] Claude Code is already available (${found})`);
+          break;
+        }
+        log(`[warm] Claude Code: ${await installBinary(claudeBinary(), cache)}`);
+        break;
+      }
+      case 'opencode': {
+        const found = resolveOpenCodePath(undefined, env);
+        if (found) {
+          log(`[warm] OpenCode is already available (${found})`);
+          break;
+        }
+        log(`[warm] OpenCode: ${await installBinary(openCodeBinary(), cache)}`);
+        break;
+      }
+      case 'deepseek-harness': {
+        const explicit = env.CODEDECK_DEEPSEEK_PATH?.trim();
+        if (explicit) {
+          log(`[warm] the DeepSeek Harness runs the CLI at ${explicit}`);
+          break;
+        }
+        log(`[warm] DeepSeek Harness: ${await installDshTree(cache)}`);
+        break;
+      }
+      case 'fake':
+        break;
+      default:
+        log(`[warm] unknown driver '${name}' — skipped`);
+    }
+  }
+  log('[warm] every agent this host was asked for is installed');
+}
+
+async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
+  const names = driverNames(env);
   const drivers: Driver[] = [];
   const cacheDir = agentCacheDir(env);
   const install = (binary: PackagedBinary) => (): Promise<string> =>
@@ -147,6 +206,13 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
 }
 
 async function main(): Promise<void> {
+  const warm = process.env.CODEDECK_AGENT_HOST_WARM?.trim();
+  if (warm === '1' || warm === 'true') {
+    // A build step or a first-run warm-up: install, then exit without ever
+    // reading stdin.
+    await warmAgents(process.env, driverNames(process.env), agentCacheDir(process.env));
+    return;
+  }
   const io: HostIo = {
     write: (line) => {
       process.stdout.write(`${line}\n`);
@@ -164,4 +230,7 @@ async function main(): Promise<void> {
   });
 }
 
-void main();
+main().catch((error: unknown) => {
+  log(`[agent-host] could not start: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  process.exitCode = 1;
+});
