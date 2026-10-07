@@ -20,6 +20,7 @@ import type {
   ModelEntry,
   OptionChoice,
   PermissionRequest,
+  PlanOutcome,
   PluginAction,
   PluginMarketplace,
   QuestionOutcome,
@@ -43,8 +44,10 @@ export interface SessionContext {
   requestPermission(request: Omit<PermissionRequest, 'sessionId'>): Promise<SelectOutcome>;
   /** Ask the user one or more questions. */
   askQuestion(requestId: string, questions: QuestionSpec[]): Promise<QuestionOutcome>;
-  /** Ask the user how to proceed with a finished plan. */
-  requestPlanApproval(requestId: string, options: OptionChoice[]): Promise<SelectOutcome>;
+  /** Ask the user how to proceed with a finished plan. `revise` is the
+   *  option that sends the plan back, when the agent has one: the user may
+   *  choose it with their feedback, which arrives in the outcome. */
+  requestPlanApproval(requestId: string, options: OptionChoice[], revise?: string): Promise<PlanOutcome>;
   /** A diagnostic line for the bridge log (stderr). Never pass secrets. */
   log(message: string): void;
 }

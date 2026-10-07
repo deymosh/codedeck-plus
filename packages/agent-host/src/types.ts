@@ -13,6 +13,7 @@ export type BridgeMessage = G.BridgeMessage_Serialize;
 export type StartSession = G.StartSession_Serialize;
 export type ProviderBinding = G.ProviderBinding_Serialize;
 export type SelectOutcome = G.SelectOutcome;
+export type PlanOutcome = G.PlanOutcome_Serialize;
 export type QuestionOutcome = G.QuestionOutcome;
 export type SessionOption = G.SessionOption;
 export type McpAction = G.McpAction;

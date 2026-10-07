@@ -160,7 +160,8 @@ pub(crate) struct Card {
 
 pub(crate) enum CardKind {
     Permission { options: Vec<PermissionOption> },
-    Plan { options: Vec<OptionChoice> },
+    /// `revise` is the option the user's feedback may travel with.
+    Plan { options: Vec<OptionChoice>, revise: Option<String> },
     Question { questions: Vec<QuestionSpec>, answers: BTreeMap<u32, String> },
 }
 

@@ -17,7 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use agent_protocol::{
-    decode_host_frame, encode_frame, BridgeMessage, Frame, HostFrame, HostMessage, QuestionOutcome,
+    decode_host_frame, encode_frame, BridgeMessage, Frame, HostFrame, HostMessage, PlanOutcome, QuestionOutcome,
     SelectOutcome, SessionEvent, StartSession,
 };
 use protocol::common::EntryBody;
@@ -215,7 +215,8 @@ fn the_agent_host_speaks_the_driver_protocol() {
     let (req, message) = host.host_request("plan approval", |m| matches!(m, HostMessage::RequestPlanApproval(_)));
     let HostMessage::RequestPlanApproval(plan) = message else { unreachable!() };
     assert!(plan.options.iter().any(|o| o.id == "revise"));
-    host.send(Some(req), BridgeMessage::PlanOutcome(selected("default")));
+    assert_eq!(plan.revise.as_deref(), Some("revise"));
+    host.send(Some(req), BridgeMessage::PlanOutcome(PlanOutcome::Selected { option_id: "default".into(), feedback: None }));
     host.text("c1", "Plan approved");
     host.event("the mode switch", "c1", |e| matches!(e, SessionEvent::Info { mode: Some(m), .. } if m == "default"));
 

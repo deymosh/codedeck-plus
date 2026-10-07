@@ -93,6 +93,7 @@ class DisplayEntriesFixtureTest {
         assertEquals("tu-plan", planApproval.requestId)
         assertEquals(3, planApproval.options.size)
         assertEquals("Stay in plan mode and send feedback", planApproval.options[2].description)
+        assertEquals("revise", planApproval.revise)
 
         val question = entries[15] as DisplayEntry.Question
         assertEquals(1, question.questions.size)

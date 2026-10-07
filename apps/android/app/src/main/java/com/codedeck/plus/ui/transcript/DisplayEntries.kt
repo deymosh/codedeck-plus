@@ -227,6 +227,9 @@ sealed class DisplayEntry {
         override val seq: Long,
         val requestId: String,
         val options: List<OptionChoice> = emptyList(),
+        /** The option the user's feedback goes with, when the agent takes
+         *  feedback on its plan. */
+        val revise: String? = null,
         /** The outcome, once the bridge resolved it. */
         val answered: String? = null,
     ) : DisplayEntry()

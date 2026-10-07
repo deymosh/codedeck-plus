@@ -226,6 +226,7 @@ internal object DesignFixtures {
                 OptionChoice("default", "Yes, and ask before each edit"),
                 OptionChoice("plan", "No, keep planning", "Stay in plan mode and send feedback"),
             ),
+            revise = "plan",
         ),
         DisplayEntry.Question(
             seq = 3,

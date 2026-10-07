@@ -576,16 +576,22 @@ export class DeepSeekSession implements DriverSession {
    * user reads and then approves or sends back — so it gets the same two
    * pieces on the phone: the plan as a plan of its own, and the approval card,
    * whose choices are the harness's own labels because that is what the tool
-   * reads its verdict from. The user's feedback on a plan they did not approve
-   * arrives as their next message, as it does for the other agent.
+   * reads its verdict from. Feedback on a plan the user sends back goes with
+   * that choice, as the answer's free text — where the harness's tool reads
+   * it and hands it to the model with the request to revise.
    */
   private async showPlanReview(pushed: PushedQuestionLine, review: PlanReview): Promise<void> {
     this.deliver({ entryType: 'plan', text: review.plan, timestamp: now() });
-    const outcome = await this.ctx.requestPlanApproval(pushed.callId, review.options);
+    const outcome = await this.ctx.requestPlanApproval(pushed.callId, review.options, review.revise);
+    if (outcome.outcome !== 'selected') {
+      await this.answerHarness(pushed.callId, {});
+      return;
+    }
+    const feedback = outcome.optionId === review.revise ? outcome.feedback?.trim() : undefined;
     await this.answerHarness(pushed.callId, {
       // The chosen label is the whole verdict: the tool looks for the one its
       // intent declared as the approval.
-      ...(outcome.outcome === 'selected' ? { answer: [{ id: review.id, selected: [outcome.optionId] }] } : {}),
+      answer: [{ id: review.id, selected: [outcome.optionId], ...(feedback ? { custom: feedback } : {}) }],
     });
   }
 

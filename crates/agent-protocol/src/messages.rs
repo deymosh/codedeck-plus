@@ -263,14 +263,33 @@ pub struct PlanApprovalRequest {
     pub session_id: String,
     pub request_id: String,
     pub options: Vec<OptionChoice>,
+    /// The option that sends the plan back to the agent to revise, when one
+    /// does: the user may send their feedback with it (`plan-outcome`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revise: Option<String>,
 }
 
-/// The answer to a permission request or a plan approval.
+/// The answer to a permission request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "outcome", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum SelectOutcome {
     /// One of the request's options.
     Selected { option_id: String },
+    /// Nobody chose: timed out, interrupted, the session is ending.
+    Cancelled { reason: String },
+}
+
+/// The answer to a plan approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "outcome", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum PlanOutcome {
+    /// One of the request's options. `feedback` is what the user wants
+    /// changed, only ever with the request's `revise` option.
+    Selected {
+        option_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
+    },
     /// Nobody chose: timed out, interrupted, the session is ending.
     Cancelled { reason: String },
 }
@@ -366,7 +385,7 @@ pub enum BridgeMessage {
     /// Reply to `request-permission`.
     PermissionOutcome(SelectOutcome),
     /// Reply to `request-plan-approval`.
-    PlanOutcome(SelectOutcome),
+    PlanOutcome(PlanOutcome),
     /// Reply to `ask-question`.
     QuestionOutcome(QuestionOutcome),
 }

@@ -410,11 +410,23 @@ describe('Claude permission policy', () => {
     const approve = start({ mode: 'plan' }, { plan: () => ({ outcome: 'selected', optionId: 'acceptEdits' }) });
     expect(await ask(approve.canUseTool, 'ExitPlanMode', { plan: '1. x' })).toMatchObject({ behavior: 'allow' });
     expect(approve.ctx.plans[0]?.options).toEqual(PLAN_APPROVAL_OPTIONS);
+    // `revise` is the choice the user's feedback goes with.
+    expect(approve.ctx.plans[0]?.revise).toBe('revise');
     await approve.ctx.waitFor((e) => e.type === 'info' && e.mode === 'acceptEdits');
     expect(approve.handle.modes).toEqual(['acceptEdits']);
 
     const revise = start({ mode: 'plan' }, { plan: () => ({ outcome: 'selected', optionId: 'revise' }) });
     expect(await ask(revise.canUseTool, 'ExitPlanMode', { plan: '1. x' })).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/keep planning/) });
+    expect(revise.handle.modes).toEqual([]);
+  });
+
+  it('plan approval: feedback sent with revise is what the agent is told to revise with', async () => {
+    const revise = start(
+      { mode: 'plan' },
+      { plan: () => ({ outcome: 'selected', optionId: 'revise', feedback: 'Split the migration out.' }) },
+    );
+    const answer = await ask(revise.canUseTool, 'ExitPlanMode', { plan: '1. x' });
+    expect(answer).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/keep planning[\s\S]*Split the migration out\.$/) });
     expect(revise.handle.modes).toEqual([]);
   });
 });

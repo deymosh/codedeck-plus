@@ -95,6 +95,7 @@ const PLAIN_CONTEXT_WINDOW = 200_000;
  *  denied call explains itself to the model instead. */
 const USER_DENIED = 'User denied';
 const KEEP_PLANNING = 'The user wants to keep planning — revise the plan with their feedback.';
+const KEEP_PLANNING_WITH_FEEDBACK = 'The user wants to keep planning. Revise the plan with their feedback:';
 
 /** A model id compared the way the CLI would: case aside, and without the
  *  `[1m]` context marker it strips before sending. */
@@ -572,12 +573,16 @@ export class ClaudeSession implements DriverSession {
   }
 
   /** Every option but `revise` approves the plan and continues in the mode
-   *  it names; `revise` keeps the agent planning (the user's feedback
-   *  arrives as the next prompt). */
+   *  it names; `revise` keeps the agent planning, with the user's feedback
+   *  as the refusal's message when they sent some (else it arrives as their
+   *  next prompt). */
   private async approvePlan(requestId: string): Promise<SdkPermissionResult> {
-    const outcome = await this.ctx.requestPlanApproval(requestId, PLAN_APPROVAL_OPTIONS);
+    const outcome = await this.ctx.requestPlanApproval(requestId, PLAN_APPROVAL_OPTIONS, PLAN_REVISE);
     if (outcome.outcome === 'cancelled') return { behavior: 'deny', message: outcome.reason };
-    if (outcome.optionId === PLAN_REVISE || !isMode(outcome.optionId)) return { behavior: 'deny', message: KEEP_PLANNING };
+    if (outcome.optionId === PLAN_REVISE || !isMode(outcome.optionId)) {
+      const feedback = outcome.feedback?.trim();
+      return { behavior: 'deny', message: feedback ? `${KEEP_PLANNING_WITH_FEEDBACK}\n\n${feedback}` : KEEP_PLANNING };
+    }
     const mode = outcome.optionId;
     // After the approval resolves: the SDK leaves plan mode on its own
     // answer, then the chosen mode is applied on top.

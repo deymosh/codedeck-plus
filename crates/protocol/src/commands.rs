@@ -77,6 +77,10 @@ pub struct PlanResponseMsg {
     pub session_id: String,
     pub request_id: String,
     pub option_id: String,
+    /// What the user wants changed, sent with the entry's `revise` option
+    /// (with any other option it is ignored).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
 }
 
 /// Change a session option. `value` must be one the session's agent

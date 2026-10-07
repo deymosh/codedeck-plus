@@ -967,6 +967,26 @@ describe('the questions the model asks', () => {
     socket.close();
   });
 
+  it('sends feedback with the plan back to the harness, as the answer its tool revises with', async () => {
+    const ready = withDriver();
+    const ctx = recordingContext({
+      plan: (_requestId, _options, revise) => {
+        // Anything but the approval the intent declares keeps planning.
+        expect(revise).toBe('Keep planning');
+        return { outcome: 'selected', optionId: 'Keep planning', feedback: '  Ship it in two steps.  ' };
+      },
+    });
+    await started(ready, {}, ctx);
+    const socket = await bridge(socketOf(ready));
+    ready.harness.child.stderr.write(pushedPlan('c9'));
+    await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
+    expect(socket.requests.find((request) => request.method === 'answer')).toMatchObject({
+      callId: 'c9',
+      answer: [{ id: 'plan-review', selected: ['Keep planning'], custom: 'Ship it in two steps.' }],
+    });
+    socket.close();
+  });
+
   it('leaves a plan the user did not approve unanswered, so the tool says so', async () => {
     const ready = withDriver();
     const ctx = recordingContext({ plan: () => ({ outcome: 'cancelled', reason: 'the phone went away' }) });

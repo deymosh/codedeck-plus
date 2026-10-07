@@ -85,7 +85,7 @@ fn corpus() -> Vec<SeqEntry> {
             {"id":"acceptEdits","label":"Approve, auto-accept edits"},
             {"id":"default","label":"Approve"},
             {"id":"revise","label":"Keep planning","description":"Stay in plan mode and send feedback"}
-        ]}),
+        ],"revise":"revise"}),
         json!({"entryType":"question","requestId":"tu-solo-question","index":0,"count":1,"header":"Direction","question":"Which approach?",
             "options":[{"label":"Extract first"},{"label":"Rewrite in one pass"}]}),
         json!({"entryType":"question","requestId":"tu-question-group","index":0,"count":2,"header":"Scope","question":"How wide?",

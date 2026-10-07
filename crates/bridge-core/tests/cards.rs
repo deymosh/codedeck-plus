@@ -4,7 +4,7 @@
 mod support;
 
 use agent_protocol::{
-    BridgeMessage, HostMessage, PermissionRequest, PlanApprovalRequest, QuestionOutcome, QuestionRequest,
+    BridgeMessage, HostMessage, PermissionRequest, PlanApprovalRequest, PlanOutcome, QuestionOutcome, QuestionRequest,
     QuestionSpec, SelectOutcome, SessionEvent,
 };
 use bridge_core::{Effect, Input};
@@ -164,16 +164,59 @@ fn a_plan_answer_and_the_agents_mode_switch_reach_the_phone() {
         session_id: s.clone(),
         request_id: "p1".into(),
         options: vec![choice("yolo"), choice("revise")],
+        revise: Some("revise".into()),
     }));
-    assert!(matches!(&outputs(&rig.messages())[0].1.body, EntryBody::PlanApproval { options, .. } if options.len() == 2));
-    rig.send(json!({"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"yolo"}));
-    assert_eq!(reply_to(&mut rig, &h), BridgeMessage::PlanOutcome(SelectOutcome::Selected { option_id: "yolo".into() }));
+    assert!(matches!(
+        &outputs(&rig.messages())[0].1.body,
+        EntryBody::PlanApproval { options, revise: Some(revise), .. } if options.len() == 2 && revise == "revise"
+    ));
+    // Feedback is what changes are wanted: an approval carries none.
+    rig.send(json!({"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"yolo","feedback":"ignored"}));
+    assert_eq!(
+        reply_to(&mut rig, &h),
+        BridgeMessage::PlanOutcome(PlanOutcome::Selected { option_id: "yolo".into(), feedback: None })
+    );
     assert_eq!(resolved(&rig.messages()), ["YOLO"]);
 
     rig.host_event(&s, SessionEvent::Info { native_session_id: None, model: None, mode: Some("yolo".into()), context_window: None, context_percentage: None });
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::OptionConfirmed(o) if o.value == "yolo")));
     assert_eq!(last_heartbeat(&msgs).sessions[0].mode.as_deref(), Some("yolo"));
+}
+
+#[test]
+fn feedback_on_a_plan_goes_to_the_agent_with_the_revise_choice_and_into_the_transcript() {
+    let mut rig = Rig::new();
+    let s = ready(&mut rig);
+    let h = rig.host_ask(HostMessage::RequestPlanApproval(PlanApprovalRequest {
+        session_id: s.clone(),
+        request_id: "p1".into(),
+        options: vec![choice("yolo"), choice("revise")],
+        revise: Some("revise".into()),
+    }));
+    rig.messages();
+    rig.send(json!({"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"revise","feedback":"  Fewer steps.  "}));
+    assert_eq!(
+        reply_to(&mut rig, &h),
+        BridgeMessage::PlanOutcome(PlanOutcome::Selected { option_id: "revise".into(), feedback: Some("Fewer steps.".into()) })
+    );
+    let msgs = rig.messages();
+    assert_eq!(resolved(&msgs), ["REVISE"]);
+    // The user's words, after the card's resolution, as a typed message is.
+    assert!(outputs(&msgs).iter().any(|(_, e)| matches!(&e.body, EntryBody::Text { text, .. } if text == "Fewer steps.")));
+}
+
+#[test]
+fn a_revise_option_the_card_does_not_offer_is_no_revise_option() {
+    let mut rig = Rig::new();
+    let s = ready(&mut rig);
+    rig.host_ask(HostMessage::RequestPlanApproval(PlanApprovalRequest {
+        session_id: s,
+        request_id: "p1".into(),
+        options: vec![choice("yolo")],
+        revise: Some("missing".into()),
+    }));
+    assert!(matches!(&outputs(&rig.messages())[0].1.body, EntryBody::PlanApproval { revise: None, .. }));
 }
 
 #[test]

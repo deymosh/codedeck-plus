@@ -419,6 +419,8 @@ describe('what the host makes of a question', () => {
         { id: 'Approve', label: 'Approve', description: 'Go.' },
         { id: 'Keep planning', label: 'Keep planning' },
       ],
+      // Not the approval: the choice the user's feedback goes with.
+      revise: 'Keep planning',
     });
   });
 });

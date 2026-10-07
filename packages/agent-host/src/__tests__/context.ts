@@ -7,6 +7,7 @@ import type {
   OptionChoice,
   OutputEntry,
   PermissionRequest,
+  PlanOutcome,
   QuestionOutcome,
   QuestionSpec,
   SelectOutcome,
@@ -16,14 +17,14 @@ import type {
 export interface Handlers {
   permission?: (request: Omit<PermissionRequest, 'sessionId'>) => SelectOutcome | Promise<SelectOutcome>;
   question?: (requestId: string, questions: QuestionSpec[]) => QuestionOutcome | Promise<QuestionOutcome>;
-  plan?: (requestId: string, options: OptionChoice[]) => SelectOutcome | Promise<SelectOutcome>;
+  plan?: (requestId: string, options: OptionChoice[], revise?: string) => PlanOutcome | Promise<PlanOutcome>;
 }
 
 export interface RecordingContext extends SessionContext {
   events: SessionEvent[];
   permissions: Array<Omit<PermissionRequest, 'sessionId'>>;
   questions: Array<{ requestId: string; questions: QuestionSpec[] }>;
-  plans: Array<{ requestId: string; options: OptionChoice[] }>;
+  plans: Array<{ requestId: string; options: OptionChoice[]; revise?: string }>;
   logs: string[];
   /** Every entry reported so far, in order. */
   entries(): OutputEntry[];
@@ -61,9 +62,9 @@ export function recordingContext(handlers: Handlers = {}, sessionId = 's1'): Rec
       ctx.questions.push({ requestId, questions });
       return handlers.question ? handlers.question(requestId, questions) : { outcome: 'cancelled', reason: 'no handler' };
     },
-    async requestPlanApproval(requestId, options) {
-      ctx.plans.push({ requestId, options });
-      return handlers.plan ? handlers.plan(requestId, options) : { outcome: 'cancelled', reason: 'no handler' };
+    async requestPlanApproval(requestId, options, revise) {
+      ctx.plans.push({ requestId, options, ...(revise !== undefined ? { revise } : {}) });
+      return handlers.plan ? handlers.plan(requestId, options, revise) : { outcome: 'cancelled', reason: 'no handler' };
     },
     log(message) {
       ctx.logs.push(message);

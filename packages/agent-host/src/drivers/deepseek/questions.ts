@@ -114,6 +114,10 @@ export interface PlanReview {
   id: string;
   plan: string;
   options: Array<{ id: string; label: string; description?: string }>;
+  /** The option that keeps the model planning — anything but the approval
+   *  the intent declares. The harness takes the user's feedback with it, as
+   *  the answer's free text. */
+  revise?: string;
 }
 
 export function planReviewOf(questions: PushedQuestion[]): PlanReview | undefined {
@@ -126,7 +130,10 @@ export function planReviewOf(questions: PushedQuestion[]): PlanReview | undefine
     label: option.label,
     ...(option.description ? { description: option.description } : {}),
   }));
-  return options.length === 0 ? undefined : { id: question.id, plan: question.detail, options };
+  if (options.length === 0) return undefined;
+  const approve = question.intent?.approve;
+  const revise = approve === undefined ? undefined : options.find((option) => option.id !== approve)?.id;
+  return { id: question.id, plan: question.detail, options, ...(revise === undefined ? {} : { revise }) };
 }
 
 /**

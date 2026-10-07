@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use agent_protocol::{
-    BridgeMessage, HostFrame, HostMessage, QuestionOutcome, SelectOutcome, SessionEvent, StartSession,
+    BridgeMessage, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, SelectOutcome, SessionEvent, StartSession,
 };
 use protocol::common::{EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
 use protocol::common::{McpAction, PluginAction};
@@ -61,7 +61,7 @@ fn cancelled(kind: &CardKind, reason: &str) -> BridgeMessage {
     let reason = reason.to_string();
     match kind {
         CardKind::Permission { .. } => BridgeMessage::PermissionOutcome(SelectOutcome::Cancelled { reason }),
-        CardKind::Plan { .. } => BridgeMessage::PlanOutcome(SelectOutcome::Cancelled { reason }),
+        CardKind::Plan { .. } => BridgeMessage::PlanOutcome(PlanOutcome::Cancelled { reason }),
         CardKind::Question { .. } => BridgeMessage::QuestionOutcome(QuestionOutcome::Cancelled { reason }),
     }
 }
@@ -820,11 +820,18 @@ impl Engine {
             }
             HostMessage::RequestPlanApproval(req) => {
                 if !self.is_running(&req.session_id) {
-                    return self.reply(host_id, cancelled(&CardKind::Plan { options: vec![] }, "the session is not running"));
+                    return self.reply(host_id, cancelled(&CardKind::Plan { options: vec![], revise: None }, "the session is not running"));
                 }
                 log::info!("[Engine] Waiting on plan approval: {} in {}", req.request_id, req.session_id);
-                let entry = self.entry(EntryBody::PlanApproval { request_id: req.request_id.clone(), options: req.options.clone() });
-                let kind = CardKind::Plan { options: req.options };
+                // A `revise` that names none of the options would offer a
+                // feedback box no choice can carry: the card has none then.
+                let revise = req.revise.filter(|id| req.options.iter().any(|o| &o.id == id));
+                let entry = self.entry(EntryBody::PlanApproval {
+                    request_id: req.request_id.clone(),
+                    options: req.options.clone(),
+                    revise: revise.clone(),
+                });
+                let kind = CardKind::Plan { options: req.options, revise };
                 self.open_card(&req.session_id, &req.request_id, host_id, kind, vec![entry]);
             }
             _ => log::warn!("[Engine] The agent host sent a reply kind as a request — dropped"),

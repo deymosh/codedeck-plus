@@ -684,6 +684,11 @@ pub enum EntryBody {
     PlanApproval {
         request_id: String,
         options: Vec<OptionChoice>,
+        /// The option that sends the plan back to the agent to revise, when
+        /// one does: a `plan-response` choosing it may carry the user's
+        /// `feedback`, which the agent revises the plan with.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revise: Option<String>,
     },
     /// A permission request, question or plan approval was answered (or
     /// cancelled); `summary` is a short human description of the outcome.

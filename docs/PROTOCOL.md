@@ -124,7 +124,7 @@ tagged by `entryType`:
 | `background_task` | work left running beside the turn: `taskId`, `kind: shell|agent|other`, `title`, `status: running|completed|failed|stopped`, `callId?` (the call that started it), `summary?`; the latest entry for a `taskId` is where it stands |
 | `permission_request` | a card: `requestId`, the tool, and `options[] {id, label, kind: allow_once|allow_always|reject_once|reject_always}`; optional `reason` (why the agent asks, in its words) `hook` (the hook that asked, e.g. `PreToolUse:Bash` — it asks every time, so no "always" option) and `hookPlugin` (the plugin that hook comes from, when exactly one loaded plugin and no settings file declares a matching hook) |
 | `question` | one question of an ask: `requestId`, `index`/`count`, `options`, `multiSelect` |
-| `plan_approval` | a card: `requestId`, `options[]` |
+| `plan_approval` | a card: `requestId`, `options[]`; optional `revise` (the option that sends the plan back to revise, which the user's feedback may go with) |
 | `resolved` | a card was answered or cancelled: `requestId`, `summary` |
 | `notice` | `session_restart`, `session_died`, `session_failed`, `auth_error` |
 | `status`, `error`, `turn_complete` | one-line status, an error, the end of a turn |
@@ -135,7 +135,8 @@ Clients branch on `entryType` and `kind`, never on tool names.
 closed by exactly one `resolved` entry with the same `requestId` — answered,
 timed out (after an hour), interrupted, or cancelled because the agent died.
 Answers: `permission-response {requestId, optionId}`,
-`plan-response {requestId, optionId}`,
+`plan-response {requestId, optionId, feedback?}` (`feedback` only with the
+card's `revise` option; the bridge records it as the user's message),
 `question-response {requestId, index, answer: {kind: options, selected} | {kind: text, text}}`.
 Plain `input` while a question is pending answers its first unanswered
 question.
@@ -509,7 +510,7 @@ Requests the host makes (the bridge answers each exactly once):
 |---|---|
 | `request-permission {sessionId, requestId, toolName, kind, title, …, options, reason?, hook?, hookPlugin?}` | `permission-outcome {outcome: selected {optionId} \| cancelled {reason}}` |
 | `ask-question {sessionId, requestId, questions}` | `question-outcome {outcome: answered {answers} \| cancelled {reason}}` |
-| `request-plan-approval {sessionId, requestId, options}` | `plan-outcome` (as permission) |
+| `request-plan-approval {sessionId, requestId, options, revise?}` | `plan-outcome {outcome: selected {optionId, feedback?} \| cancelled {reason}}` (`feedback` only with `revise`) |
 
 A `cancelled` outcome means nobody chose: the card timed out, the user
 interrupted, or the session is ending.

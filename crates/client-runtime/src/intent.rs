@@ -236,12 +236,15 @@ pub enum Intent {
         index: u32,
         answer: QuestionAnswer,
     },
-    /// Answer a plan approval with one of its advertised options.
+    /// Answer a plan approval with one of its advertised options; `feedback`
+    /// is what the user wants changed, with the card's `revise` option.
     RespondPlan {
         machine: String,
         session_id: String,
         request_id: String,
         option_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
     },
     /// Change a session's mode / effort / model.
     SetOption {
@@ -618,6 +621,7 @@ pub fn apply(
             session_id,
             request_id,
             option_id,
+            feedback,
         } => {
             stores
                 .ui
@@ -630,6 +634,7 @@ pub fn apply(
                     session_id,
                     request_id,
                     option_id,
+                    feedback: feedback.filter(|text| !text.trim().is_empty()),
                 }),
             );
         }

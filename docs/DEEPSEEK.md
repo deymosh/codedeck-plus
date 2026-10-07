@@ -167,9 +167,12 @@ A plan review arrives as the same exchange Claude Code's is, because it is the
 same one: the plan as a plan of its own, and the choice as the approval card,
 wearing the harness's own labels (approve, or keep planning). The labels are
 the verdict — the harness's tool looks for the one its intent declared — so a
-plan the user did not approve goes back to the model to revise, with their
-feedback arriving as their next message, exactly as it does for the other
-agent.
+plan the user did not approve goes back to the model to revise. What the user
+wants changed goes with that choice, in the same answer: the card asks for it
+when they choose to keep planning, and the harness's tool hands it to the
+model with the request to revise (the tool asks for a revision at once, so
+feedback sent as a later message would arrive after the model had already
+started one).
 
 Each harness process has a socket of its own — a file under the harness's home
 (`/data/dsh/codedeck/dsh-bridge-<id>.sock`, a named pipe on Windows), named

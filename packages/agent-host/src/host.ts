@@ -244,11 +244,13 @@ export class AgentHost {
         const reply = await this.request({ kind: 'ask-question', payload: { sessionId, requestId, questions } });
         return reply?.kind === 'question-outcome' ? reply.payload : cancelled();
       },
-      requestPlanApproval: async (requestId, options) =>
-        selectOutcome(
-          await this.request({ kind: 'request-plan-approval', payload: { sessionId, requestId, options } }),
-          'plan-outcome',
-        ),
+      requestPlanApproval: async (requestId, options, revise) => {
+        const reply = await this.request({
+          kind: 'request-plan-approval',
+          payload: { sessionId, requestId, options, ...(revise !== undefined ? { revise } : {}) },
+        });
+        return reply?.kind === 'plan-outcome' ? reply.payload : cancelled();
+      },
       log: (line) => this.io.log(line),
     };
   }
@@ -314,7 +316,7 @@ function cancelled(): { outcome: 'cancelled'; reason: string } {
   return { outcome: 'cancelled', reason: 'The agent host is shutting down' };
 }
 
-function selectOutcome(reply: Reply | null, kind: 'permission-outcome' | 'plan-outcome'): SelectOutcome {
+function selectOutcome(reply: Reply | null, kind: 'permission-outcome'): SelectOutcome {
   return reply?.kind === kind ? reply.payload : cancelled();
 }
 
