@@ -37,7 +37,7 @@ import type {
 } from '../../types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
-import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from './bridge';
+import { askPlugin, listSessionCommands, runSessionCommand } from './bridge';
 import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
 import { ASK_USER_TOOL, installProfileTools } from './profileTools';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs, type PlanReview, type PushedQuestionLine } from './questions';
@@ -224,8 +224,6 @@ export class DeepSeekSession implements DriverSession {
       /** The profile as it must be before a harness boots: the endpoint's
        *  catalog written, the command plugin in place. */
       prepared: Promise<unknown>;
-      /** Where the Codeck plugin listens. */
-      pluginSocket: string;
     },
   ) {
     this.cwd = params.cwd;
@@ -244,6 +242,12 @@ export class DeepSeekSession implements DriverSession {
     const process_ = this.process;
     if (!process_) throw new Error('the DeepSeek Harness session has not started');
     return process_.client;
+  }
+
+  /** Where the plugin of the process holding this session answers. Every
+   *  process has its own socket, so it is always this process's. */
+  private get bridgeSocket(): string | undefined {
+    return this.process?.bridgeSocket;
   }
 
   /** The harness process this session shares went away, taking the session
@@ -525,7 +529,8 @@ export class DeepSeekSession implements DriverSession {
     const sessionId = this.nativeId;
     if (this.ended || sessionId === undefined) return;
     this.ctx.emit({ type: 'turn', state: 'running' });
-    const outcome = await runSessionCommand(this.deps.pluginSocket, sessionId, line, this.ctx.log);
+    const socket = this.bridgeSocket;
+    const outcome = socket === undefined ? undefined : await runSessionCommand(socket, sessionId, line, this.ctx.log);
     if (this.ended) return;
     if (outcome === undefined) {
       this.deliver({ entryType: 'error', text: `${line} did not run: the command bridge is not answering.`, timestamp: now() });
@@ -586,13 +591,10 @@ export class DeepSeekSession implements DriverSession {
 
   /** What the phone decided, back to the harness: the plugin is holding the
    *  ask open, and an answer it is not given is one the user did not make. */
-  private answerHarness(callId: string, answer: Record<string, unknown>): Promise<unknown> {
-    return askPlugin(
-      this.deps.pluginSocket,
-      { method: 'answer', sessionId: this.nativeId, callId, ...answer },
-      QUESTION_TIMEOUT_MS,
-      this.ctx.log,
-    );
+  private async answerHarness(callId: string, answer: Record<string, unknown>): Promise<void> {
+    const socket = this.bridgeSocket;
+    if (socket === undefined) return;
+    await askPlugin(socket, { method: 'answer', sessionId: this.nativeId, callId, ...answer }, QUESTION_TIMEOUT_MS, this.ctx.log);
   }
 
   /** What this session's harness can run, asked of the harness itself (the
@@ -601,7 +603,7 @@ export class DeepSeekSession implements DriverSession {
    *  plugin does. */
   private knownCommands(): Promise<Set<string>> {
     this.commandNames ??= this.ready
-      .then(() => listSessionCommands(this.deps.pluginSocket, this.nativeId ?? '', this.ctx.log))
+      .then(() => this.sessionCommands())
       .then((commands) => new Set((commands ?? []).map((command) => command.name)))
       .catch(() => {
         this.commandNames = undefined;
@@ -610,11 +612,19 @@ export class DeepSeekSession implements DriverSession {
     return this.commandNames;
   }
 
+  /** The session's commands as its harness lists them, or `undefined` when
+   *  the plugin cannot be asked. */
+  private async sessionCommands(): Promise<SlashCommand[] | undefined> {
+    const socket = this.bridgeSocket;
+    const sessionId = this.nativeId;
+    if (socket === undefined || sessionId === undefined) return undefined;
+    return listSessionCommands(socket, sessionId, this.ctx.log);
+  }
+
   async listCommands(): Promise<SlashCommand[]> {
     await this.ready;
-    const sessionId = this.nativeId;
-    if (this.ended || sessionId === undefined) return [];
-    return (await listSessionCommands(this.deps.pluginSocket, sessionId, this.ctx.log)) ?? [];
+    if (this.ended) return [];
+    return (await this.sessionCommands()) ?? [];
   }
 
   /** The turn is over: the transcript marks it and the phone stops showing
@@ -739,8 +749,6 @@ export class DeepSeekDriver implements Driver {
    * Sessions and the model probe wait for it.
    */
   private prepared: Promise<unknown> = Promise.resolve();
-  /** Where the CodeDeck plugin listens. One per harness home. */
-  private readonly pluginSocket: string;
   /** Sessions by the harness's own ids: a process serves several, and it is
    *  this map that ends them all when it goes away. */
   private readonly sessions = new Map<string, DeepSeekSession>();
@@ -764,7 +772,6 @@ export class DeepSeekDriver implements Driver {
 
   private constructor(private readonly options: DeepSeekDriverOptions) {
     const profileDir = dshProfileDir(options.home);
-    this.pluginSocket = bridgeSocketPath(options.home);
     this.mcp = options.mcp ?? new DeepSeekMcp({ profileDir, log: options.log });
     this.plugins = new DeepSeekPlugins({
       profileDir,
@@ -801,7 +808,7 @@ export class DeepSeekDriver implements Driver {
   private async ownProfile(): Promise<void> {
     const profileDir = dshProfileDir(this.options.home);
     try {
-      await installHarnessPlugin(profileDir, this.pluginSocket, this.options.log);
+      await installHarnessPlugin(profileDir, this.options.log);
     } catch (error) {
       this.options.log(`[deepseek] could not install the command bridge: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -882,7 +889,6 @@ export class DeepSeekDriver implements Driver {
       baseEnv: this.options.baseEnv ?? process.env,
       live: this.live,
       prepared: this.prepared,
-      pluginSocket: this.pluginSocket,
     });
   }
 

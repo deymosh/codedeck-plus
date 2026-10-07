@@ -43,14 +43,13 @@ describe('the tools a profile needs', () => {
     // stand, never re-appended, since a file that grows on every start grows
     // without end.
     const start = async (): Promise<string> => {
-      await installHarnessPlugin(dir, '/tmp/some.sock', () => {});
+      await installHarnessPlugin(dir, () => {});
       await installProfileTools(dir, () => {});
       return layerOf(dir);
     };
     const first = await start();
     expect(first).toMatch(/- id: codedeck-bridge/);
     expect(first).toContain(`name: '${HARNESS_PLUGIN}'`);
-    expect(first).toMatch(/socket: "\/tmp\/some\.sock"/);
     expect(first).toMatch(/- id: tool-ask-user/);
     expect(await start()).toBe(first);
     expect(await start()).toBe(first);

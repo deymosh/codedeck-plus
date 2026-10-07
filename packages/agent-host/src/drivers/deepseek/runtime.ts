@@ -23,7 +23,8 @@
  * has anything to say about it.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type {
@@ -35,8 +36,9 @@ import type {
 import { agentCacheDir } from '../../agentInstall';
 import { isFile } from '../../executable';
 import { AcpClient, INITIALIZE_TIMEOUT_MS } from './acp';
+import { bridgeSocketPath } from './bridge';
 import { DSH_LABEL } from './install';
-import { QUESTION_MARKER } from './plugin';
+import { BRIDGE_SOCKET_ENV, QUESTION_MARKER } from './plugin';
 
 /** The ACP profile the driver runs: the automation surface, ACP on stdio. */
 export const DSH_PROFILE = 'acp';
@@ -78,6 +80,9 @@ export interface DeepSeekProcess {
   /** What the harness said it implements, from `initialize`. */
   readonly capabilities: NonNullable<InitializeResponse['agentCapabilities']>;
   readonly pid: number | undefined;
+  /** Where this process's CodeDeck plugin answers (plugin.ts): its own, so
+   *  a session asks the process that holds it. */
+  readonly bridgeSocket: string;
   /** The driver's configuration version as it was when this process
    *  started: a change since is configuration this process has not loaded. */
   readonly configVersion: number;
@@ -177,6 +182,7 @@ class HarnessProcess implements DeepSeekProcess {
     private readonly child: ChildProcess,
     readonly client: AcpClient,
     configVersion: number,
+    readonly bridgeSocket: string,
     private readonly hooks: {
       log: (message: string) => void;
       question: (line: string) => void;
@@ -210,6 +216,9 @@ class HarnessProcess implements DeepSeekProcess {
       this.client.finish({ error: error.message });
     });
     child.on('exit', (code, signal) => {
+      // The plugin removes its socket as it closes; a process that was killed
+      // never got to, and the path is nobody's now.
+      if (process.platform !== 'win32') rmSync(bridgeSocket, { force: true });
       this.client.finish({ error: `the DeepSeek Harness process exited (${signal ? `signal ${signal}` : `code ${code ?? '?'}`})` });
     });
     void this.client.closed.then((closed) => {
@@ -383,8 +392,11 @@ export class DeepSeekRuntime {
     // The harness's state root is the driver's to set, never the session's:
     // a session that moved it would lose the conversation it is resuming.
     const command = dshCommand(entry, ['--profile', DSH_PROFILE]);
+    // Not part of the environment's identity (envKeyOf): it names this one
+    // process, whichever sessions share it.
+    const bridgeSocket = bridgeSocketPath(this.options.home, randomBytes(6).toString('hex'));
     const child = (this.options.spawnFn ?? spawn)(command.command, command.args, {
-      env: { ...env, DSH_HOME: this.options.home },
+      env: { ...env, DSH_HOME: this.options.home, [BRIDGE_SOCKET_ENV]: bridgeSocket },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -392,6 +404,7 @@ export class DeepSeekRuntime {
       child,
       new AcpClient({ stdin: child.stdin!, stdout: child.stdout!, log: this.log }),
       this.options.configVersion?.() ?? 0,
+      bridgeSocket,
       {
         log: this.log,
         question: (line) => events.question?.(line),

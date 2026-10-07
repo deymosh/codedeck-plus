@@ -43,6 +43,11 @@ const BLOCK: LayerBlock = {
  *  these lines and never logs them as harness output). */
 export const QUESTION_MARKER = 'codedeck-question:';
 
+/** The variable that names a harness process's own socket. The profile is
+ *  shared by every process the runtime starts, so the path cannot live in
+ *  the plugin's row; the runtime sets it per spawn. */
+export const BRIDGE_SOCKET_ENV = 'CODEDECK_DSH_BRIDGE_SOCKET';
+
 /**
  * The plugin, as it is written to disk. Plain JavaScript: the harness imports
  * it as it is, so nothing here may need a build step, and it must not import
@@ -57,28 +62,37 @@ export const name = 'codedeck-bridge';
 export const inject = ['agents', 'commands', 'userQuestions'];
 
 const QUESTION_MARKER = 'codedeck-question:';
+const SOCKET_ENV = '${BRIDGE_SOCKET_ENV}';
 
 /**
  * Serve the host's socket, and answer the harness's questions over it.
  * @param ctx - the profile's plugin context.
- * @param config - this row's config: the socket path to listen on.
  */
-export function apply(ctx, config) {
-  const socket = config?.socket;
-  if (typeof socket !== 'string' || socket === '') throw new Error('codedeck-bridge: config.socket is required');
+export function apply(ctx) {
+  // The socket is this process's own, named by the host that spawned it. A
+  // harness started any other way — the plugin CLI, a person running the
+  // profile by hand — has no host to answer, and putting its questions on
+  // stderr would leave them waiting forever: the harness's own "no answerer"
+  // is the honest outcome there.
+  const socket = process.env[SOCKET_ENV];
+  if (typeof socket !== 'string' || socket === '') return;
 
   /** Questions waiting for the host's answer, by call id. */
   const pending = new Map();
+  /** Whether the host can reach this process. Until it can — and if it never
+   *  can — a question is not ours to take. */
+  let listening = false;
 
   ctx.on('user-questions/request', async (request, next) => {
     const questions = Array.isArray(request?.questions) ? request.questions : [];
     const sessionId = request?.agent?.session?.id;
-    // A request this bridge cannot show — nothing asked, or no live session to
-    // put it to — goes on down the chain, where the harness's own answerer or
-    // its "no answerer" error has it. That hand-off is next(): a listener that
-    // simply returns has *vetoed* the chain, which leaves the caller with
-    // undefined where an answer batch belongs.
-    if (questions.length === 0 || typeof sessionId !== 'string') return next();
+    // A request this bridge cannot show — nothing asked, no live session to
+    // put it to, no socket the answer could come back on — goes on down the
+    // chain, where the harness's own answerer or its "no answerer" error has
+    // it. That hand-off is next(): a listener that simply returns has *vetoed*
+    // the chain, which leaves the caller with undefined where an answer batch
+    // belongs.
+    if (!listening || questions.length === 0 || typeof sessionId !== 'string') return next();
     // The card is keyed by the tool call. An ask usually names it (in wait;
     // the timed one adds the deadline), a plan review names it on the
     // question's intent instead, and anything else gets a key of ours — it
@@ -128,13 +142,25 @@ export function apply(ctx, config) {
     });
     connection.on('error', () => {});
   });
-  mkdirSync(path.dirname(socket), { recursive: true });
-  rmSync(socket, { force: true });
-  server.on('error', (error) => ctx.logger?.warn?.('codedeck-bridge: ' + error.message));
+  // A named pipe is not a file; only a socket path has a directory to make
+  // and a stale file (a process that was killed) to clear.
+  const isPipe = socket.startsWith('\\\\\\\\.\\\\pipe\\\\');
+  if (!isPipe) {
+    mkdirSync(path.dirname(socket), { recursive: true });
+    rmSync(socket, { force: true });
+  }
+  server.on('listening', () => {
+    listening = true;
+  });
+  server.on('error', (error) => {
+    listening = false;
+    process.stderr.write('codedeck-bridge: cannot listen on ' + socket + ': ' + error.message + '\\n');
+  });
   server.listen(socket);
   ctx.effect(() => () => {
+    listening = false;
     server.close();
-    rmSync(socket, { force: true });
+    if (!isPipe) rmSync(socket, { force: true });
   }, 'codedeck.bridge');
 }
 
@@ -218,24 +244,17 @@ function manifest(): string {
  * Put the plugin where the harness loads it from — its package in the
  * profile's `node_modules`, and a row naming it in the profile's patch layer.
  */
-export async function installHarnessPlugin(profileDir: string, socket: string, log: (message: string) => void): Promise<void> {
+export async function installHarnessPlugin(profileDir: string, log: (message: string) => void): Promise<void> {
   const dir = path.join(profileDir, 'node_modules', HARNESS_PLUGIN);
   await mkdir(dir, { recursive: true });
   await writeIfChanged(path.join(dir, 'package.json'), manifest());
   await writeIfChanged(path.join(dir, 'index.js'), SOURCE);
-  await new ProfileLayer(path.join(profileDir, 'cordis.patch.yml'), log).set(BLOCK, rows(socket));
+  await new ProfileLayer(path.join(profileDir, 'cordis.patch.yml'), log).set(BLOCK, ROWS);
 }
 
-/** The row that mounts it, with the socket it answers on. */
-function rows(socket: string): string {
-  return [
-    '- insert:',
-    '    - id: codedeck-bridge',
-    `      name: '${HARNESS_PLUGIN}'`,
-    '      config:',
-    `        socket: ${JSON.stringify(socket)}`,
-  ].join('\n');
-}
+/** The row that mounts it. It carries no socket: that is each process's own
+ *  (BRIDGE_SOCKET_ENV). */
+const ROWS = ['- insert:', '    - id: codedeck-bridge', `      name: '${HARNESS_PLUGIN}'`].join('\n');
 
 /** A file the harness may be running: rewritten only when its content is. */
 async function writeIfChanged(file: string, content: string): Promise<void> {

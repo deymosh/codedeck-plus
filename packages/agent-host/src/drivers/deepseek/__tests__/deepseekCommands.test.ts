@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from '../bridge';
-import { HARNESS_PLUGIN, QUESTION_MARKER, installHarnessPlugin } from '../plugin';
+import { BRIDGE_SOCKET_ENV, HARNESS_PLUGIN, QUESTION_MARKER, installHarnessPlugin } from '../plugin';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs } from '../questions';
 
 const socketPathIn = (dir: string): string => path.join(dir, 'commands.sock');
@@ -48,16 +48,23 @@ async function runPlugin(
   listeners: Map<string, (payload: never, next: () => never) => unknown>;
 }> {
   const socket = socketPathIn(profileDir);
-  await installHarnessPlugin(profileDir, socket, () => {});
+  await installHarnessPlugin(profileDir, () => {});
   const module = (await import(pathToFileURL(path.join(profileDir, 'node_modules', HARNESS_PLUGIN, 'index.js')).href)) as {
-    apply: (ctx: unknown, config: unknown) => void;
+    apply: (ctx: unknown) => void;
     name: string;
     inject: string[];
   };
   expect(module.name).toBe('codedeck-bridge');
   expect(module.inject).toEqual(['agents', 'commands', 'userQuestions']);
   const { ctx, cleanups, listeners } = pluginContext(commandService, agents);
-  module.apply(ctx, { socket });
+  // The runtime names each process's socket in its environment; the plugin
+  // reads it as it applies.
+  process.env[BRIDGE_SOCKET_ENV] = socket;
+  try {
+    module.apply(ctx);
+  } finally {
+    delete process.env[BRIDGE_SOCKET_ENV];
+  }
   return { cleanups, socket, listeners };
 }
 
@@ -83,7 +90,7 @@ describe('installing the command plugin', () => {
   it('writes its package into the profile and its row into the layer', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
     writeFileSync(path.join(dir, 'cordis.patch.yml'), '# the profile\n[]\n');
-    await installHarnessPlugin(dir, '/tmp/some.sock', () => {});
+    await installHarnessPlugin(dir, () => {});
     const manifest = JSON.parse(readFileSync(path.join(dir, 'node_modules', HARNESS_PLUGIN, 'package.json'), 'utf8')) as {
       name: string;
       type: string;
@@ -94,7 +101,9 @@ describe('installing the command plugin', () => {
     expect(layer).toMatch(/CodeDeck\+ bridge/);
     expect(layer).toMatch(/- id: codedeck-bridge/);
     expect(layer).toMatch(new RegExp(`name: '${HARNESS_PLUGIN}'`));
-    expect(layer).toMatch(/socket: "\/tmp\/some\.sock"/);
+    // The row names no socket: the profile is shared by every process, and
+    // each process has its own.
+    expect(layer).not.toMatch(/socket:/);
     // The profile's own content is still there.
     expect(layer).toMatch(/# the profile/);
   });
@@ -102,13 +111,30 @@ describe('installing the command plugin', () => {
   it('leaves the files alone when they are already right', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
     const write = vi.fn();
-    await installHarnessPlugin(dir, '/tmp/a.sock', () => {});
+    await installHarnessPlugin(dir, () => {});
     const first = readFileSync(path.join(dir, 'node_modules', HARNESS_PLUGIN, 'index.js'), 'utf8');
     // A second run must not rewrite the source the harness may be running —
     // the content check is what makes it safe to run at every start.
-    await installHarnessPlugin(dir, '/tmp/a.sock', () => {});
+    await installHarnessPlugin(dir, () => {});
     expect(readFileSync(path.join(dir, 'node_modules', HARNESS_PLUGIN, 'index.js'), 'utf8')).toBe(first);
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe('the plugin in a harness CodeDeck did not start', () => {
+  it('neither listens nor takes questions it could never answer', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
+    await installHarnessPlugin(dir, () => {});
+    const module = (await import(pathToFileURL(path.join(dir, 'node_modules', HARNESS_PLUGIN, 'index.js')).href)) as {
+      apply: (ctx: unknown) => void;
+    };
+    const { ctx, cleanups, listeners } = pluginContext({ list: () => [] });
+    delete process.env[BRIDGE_SOCKET_ENV];
+    module.apply(ctx);
+    // The harness's own "no answerer" stands, rather than a question that
+    // waits on a host that is not there.
+    expect(listeners.size).toBe(0);
+    expect(cleanups).toEqual([]);
   });
 });
 
@@ -446,12 +472,16 @@ describe('the client on its own', () => {
 });
 
 describe('the socket path', () => {
-  it('is one file per home, and a named pipe on Windows', () => {
-    expect(bridgeSocketPath('/data')).toBe(path.join('/data', 'codedeck', 'dsh-bridge.sock'));
-    const pipe = bridgeSocketPath('/data', 'win32');
+  it('is one per harness process, and a named pipe on Windows', () => {
+    expect(bridgeSocketPath('/data', 'a1')).toBe(path.join('/data', 'codedeck', 'dsh-bridge-a1.sock'));
+    // Two processes of one home never share a socket: the second would take
+    // the first one's file, and whichever closed first would unlink the
+    // other's.
+    expect(bridgeSocketPath('/data', 'a1')).not.toBe(bridgeSocketPath('/data', 'b2'));
+    const pipe = bridgeSocketPath('/data', 'a1', 'win32');
     expect(pipe.startsWith('\\\\.\\pipe\\codedeck-dsh-bridge-')).toBe(true);
     // Two homes, two pipes: a machine running two bridges must not have them
     // answer each other's questions.
-    expect(bridgeSocketPath('/data', 'win32')).not.toBe(bridgeSocketPath('/other', 'win32'));
+    expect(bridgeSocketPath('/data', 'a1', 'win32')).not.toBe(bridgeSocketPath('/other', 'a1', 'win32'));
   });
 });

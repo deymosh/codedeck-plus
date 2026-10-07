@@ -7,8 +7,7 @@ import { recordingContext, type RecordingContext } from '../../../__tests__/cont
 import type { StartSession } from '../../../types';
 import type { DriverSession } from '../../../driver';
 import { DeepSeekDriver } from '../driver';
-import { bridgeSocketPath } from '../bridge';
-import { QUESTION_MARKER } from '../plugin';
+import { BRIDGE_SOCKET_ENV, QUESTION_MARKER } from '../plugin';
 import { DeepSeekMcp } from '../mcp';
 import { DeepSeekRuntime, dshHomeDir } from '../runtime';
 import { FakeHarness } from './fakeHarness';
@@ -85,6 +84,10 @@ async function started(
   await ctx.waitFor((event) => event.type === 'ready');
   return ctx;
 }
+
+/** The socket the runtime gave the process it spawned, where the plugin
+ *  of that process listens. */
+const socketOf = (ready: Harness): string => ready.spawns[0]!.env[BRIDGE_SOCKET_ENV]!;
 
 const infoEvents = (ctx: RecordingContext) => ctx.events.filter((event) => event.type === 'info');
 
@@ -738,7 +741,7 @@ describe('slash commands', () => {
   /** A stand-in for the command plugin: it answers over the socket the driver
    *  asks on, and records what it was asked. */
   async function commandBridge(
-    home: string,
+    socket: string,
     answer: (request: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<{ requests: Array<Record<string, unknown>>; close: () => void }> {
     const requests: Array<Record<string, unknown>> = [];
@@ -755,7 +758,6 @@ describe('slash commands', () => {
       });
       connection.on('error', () => {});
     });
-    const socket = bridgeSocketPath(home);
     mkdirSync(path.dirname(socket), { recursive: true });
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -771,10 +773,10 @@ describe('slash commands', () => {
 
   it('lists what the harness has, and runs a typed command rather than prompting', async () => {
     const ready = withDriver();
-    const bridge = await commandBridge(ready.home, (request) =>
+    const ctx = await started(ready);
+    const bridge = await commandBridge(socketOf(ready), (request) =>
       request.method === 'list' ? listing() : { ok: true, result: { kind: 'success', text: 'Compacted 12 messages.' } },
     );
-    const ctx = await started(ready);
     expect(await ready.session.listCommands?.()).toEqual([
       { name: 'compact', description: 'Compact the conversation', argumentHint: '[<focus>]' },
     ]);
@@ -794,10 +796,10 @@ describe('slash commands', () => {
 
   it('reports a command that failed', async () => {
     const ready = withDriver();
-    const bridge = await commandBridge(ready.home, (request) =>
+    const ctx = await started(ready);
+    const bridge = await commandBridge(socketOf(ready), (request) =>
       request.method === 'list' ? listing() : { ok: true, result: { kind: 'error', text: 'nothing to compact' } },
     );
-    const ctx = await started(ready);
     ready.session.prompt('/compact');
     await vi.waitFor(() =>
       expect(ctx.entries().some((entry) => entry.entryType === 'error' && /nothing to compact/.test(entry.text))).toBe(true),
@@ -807,8 +809,8 @@ describe('slash commands', () => {
 
   it('sends a slash line the harness does not have to the model, as text', async () => {
     const ready = withDriver();
-    const bridge = await commandBridge(ready.home, (request) => (request.method === 'list' ? listing() : { ok: false }));
     const ctx = await started(ready);
+    const bridge = await commandBridge(socketOf(ready), (request) => (request.method === 'list' ? listing() : { ok: false }));
     ready.session.prompt('/etc/hosts is missing');
     await vi.waitFor(() =>
       expect(ready.harness.requests.some((request) => request.method === 'session/prompt')).toBe(true),
@@ -840,7 +842,7 @@ describe('the questions the model asks', () => {
       questions: [{ id: 'q1', question: 'Which database?', options: [{ label: 'SQLite' }, { label: 'Postgres' }] }],
     })}\n`;
 
-  async function bridge(ready: Harness): Promise<{ requests: Array<Record<string, unknown>>; close: () => void }> {
+  async function bridge(socket: string): Promise<{ requests: Array<Record<string, unknown>>; close: () => void }> {
     const requests: Array<Record<string, unknown>> = [];
     const server = createServer((connection: Socket) => {
       connection.setEncoding('utf8');
@@ -855,7 +857,6 @@ describe('the questions the model asks', () => {
       });
       connection.on('error', () => {});
     });
-    const socket = bridgeSocketPath(ready.home);
     mkdirSync(path.dirname(socket), { recursive: true });
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -866,7 +867,6 @@ describe('the questions the model asks', () => {
 
   it('shows it on the phone and answers the harness with what it chose', async () => {
     const ready = withDriver();
-    const socket = await bridge(ready);
     const ctx = recordingContext({
       question: (requestId, questions) => {
         expect(requestId).toBe('c9');
@@ -877,6 +877,7 @@ describe('the questions the model asks', () => {
       },
     });
     await started(ready, {}, ctx);
+    const socket = await bridge(socketOf(ready));
     ready.harness.child.stderr.write(pushed('c9'));
     await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
     expect(socket.requests.find((request) => request.method === 'answer')).toMatchObject({
@@ -889,9 +890,9 @@ describe('the questions the model asks', () => {
 
   it('answers with nothing when the user does not, so the model is told', async () => {
     const ready = withDriver();
-    const socket = await bridge(ready);
     const ctx = recordingContext({ question: () => ({ outcome: 'cancelled', reason: 'the phone went away' }) });
     await started(ready, {}, ctx);
+    const socket = await bridge(socketOf(ready));
     ready.harness.child.stderr.write(pushed('c9'));
     await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
     const answer = socket.requests.find((request) => request.method === 'answer')!;
@@ -921,7 +922,6 @@ describe('the questions the model asks', () => {
 
   it('shows a plan review as the plan plus an approval, and sends the verdict', async () => {
     const ready = withDriver();
-    const socket = await bridge(ready);
     const ctx = recordingContext({
       plan: (requestId, options) => {
         expect(requestId).toBe('c9');
@@ -935,6 +935,7 @@ describe('the questions the model asks', () => {
       },
     });
     await started(ready, {}, ctx);
+    const socket = await bridge(socketOf(ready));
     ready.harness.child.stderr.write(pushedPlan('c9'));
     await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
     // The plan is a plan of its own, the way Claude Code's plan review shows
@@ -951,9 +952,9 @@ describe('the questions the model asks', () => {
 
   it('leaves a plan the user did not approve unanswered, so the tool says so', async () => {
     const ready = withDriver();
-    const socket = await bridge(ready);
     const ctx = recordingContext({ plan: () => ({ outcome: 'cancelled', reason: 'the phone went away' }) });
     await started(ready, {}, ctx);
+    const socket = await bridge(socketOf(ready));
     ready.harness.child.stderr.write(pushedPlan('c9'));
     await vi.waitFor(() => expect(socket.requests.some((request) => request.method === 'answer')).toBe(true));
     const answer = socket.requests.find((request) => request.method === 'answer')!;
@@ -963,9 +964,9 @@ describe('the questions the model asks', () => {
 
   it('keeps a pushed question out of the harness log', async () => {
     const ready = withDriver();
-    const socket = await bridge(ready);
     const ctx = recordingContext({ question: () => ({ outcome: 'cancelled', reason: 'never mind' }) });
     await started(ready, {}, ctx);
+    const socket = await bridge(socketOf(ready));
     ready.harness.child.stderr.write(pushed('c9'));
     await vi.waitFor(() => expect(socket.requests.length).toBeGreaterThan(0));
     expect(ready.logs.some((line) => line.includes(QUESTION_MARKER))).toBe(false);
@@ -979,6 +980,22 @@ describe('the harness process', () => {
     await started(ready);
     expect(ready.spawns[0]?.args).toEqual(['/fake/dsh/lib/bin.js', '--profile', 'acp']);
     expect(ready.spawns[0]?.env.DSH_HOME).toBe(ready.home);
+  });
+
+  it('gives every process a socket of its own', async () => {
+    // Two environments, two processes — a stored GitHub token is enough to
+    // tell a session's environment from the model probe's. Sharing one path,
+    // the second plugin would take the first one's socket file, and the first
+    // to close would unlink the other's, leaving it unreachable.
+    const ready = withDriver();
+    await started(ready);
+    await started(ready, { sessionId: 'b2', env: { GITHUB_TOKEN: 'ghp_x' } });
+    expect(ready.spawns).toHaveLength(2);
+    const [first, second] = ready.spawns.map((spawn) => spawn.env[BRIDGE_SOCKET_ENV]);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first).not.toBe(second);
+    expect(path.dirname(first!)).toBe(path.join(ready.home, 'codedeck'));
   });
 
   it('runs an operator-provided entry point instead of installing one', async () => {

@@ -22,16 +22,21 @@ const LIST_TIMEOUT_MS = 5_000;
 const RUN_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * Where the plugin listens. A file inside the bridge's home on a POSIX
- * machine — one home, one socket — and a named pipe on Windows, named after
- * the home so two bridges on one machine do not collide.
+ * Where one harness process's plugin listens. Every process has its own: the
+ * runtime runs one per environment, so several can be up at once, and two
+ * plugins on one path take the file from each other — the second unlinks the
+ * first one's socket as it starts, and whichever closes first unlinks the
+ * other's, leaving a live process that nothing can reach. `tag` names the
+ * process. A file inside the bridge's home on a POSIX machine, and a named
+ * pipe on Windows, named after the home too so two bridges on one machine do
+ * not collide.
  */
-export function bridgeSocketPath(home: string, platform: NodeJS.Platform = process.platform): string {
+export function bridgeSocketPath(home: string, tag: string, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') {
-    const tag = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 12);
-    return `\\\\.\\pipe\\codedeck-dsh-bridge-${tag}`;
+    const homeTag = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 12);
+    return `\\\\.\\pipe\\codedeck-dsh-bridge-${homeTag}-${tag}`;
   }
-  return path.join(home, 'codedeck', 'dsh-bridge.sock');
+  return path.join(home, 'codedeck', `dsh-bridge-${tag}.sock`);
 }
 
 /** One command as the plugin lists it. */
@@ -78,10 +83,9 @@ export async function runSessionCommand(
   return { ok: reply.result?.kind !== 'error', text: reply.result?.text ?? '' };
 }
 
-/** One question, one answer. Never throws: a socket that is not there (no
- *  plugin, a harness that has not started) is not an error worth a stack. */
-/** One request to the plugin, for the callers in this folder and beside it
- *  (questions.ts). Never throws. */
+/** One request to the plugin, one answer. Never throws: a socket that is not
+ *  there (no plugin, a harness that has not started) is not an error worth a
+ *  stack. */
 export async function askPlugin(
   socket: string,
   request: Record<string, unknown>,

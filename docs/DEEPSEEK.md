@@ -169,8 +169,13 @@ plan the user did not approve goes back to the model to revise, with their
 feedback arriving as their next message, exactly as it does for the other
 agent.
 
-The socket is a file in the bridge's home (`/data/codedeck/dsh-bridge.sock`, a
-named pipe on Windows, named after the home). Nothing else about the profile
+Each harness process has a socket of its own — a file under the harness's home
+(`/data/dsh/codedeck/dsh-bridge-<id>.sock`, a named pipe on Windows), named
+in that process's environment rather than in the shared profile, since one
+bridge can run several processes at once (a session bound to a provider
+profile gets its own). A harness started any other way — by hand, or by the
+plugin CLI — gets no socket, so its plugin stays out of the way and its
+questions fail the harness's own way. Nothing else about the profile
 changes, and the plugin is harmless if the harness moves under it: a list that
 cannot be read means the phone offers no commands, an unanswerable question
 reads as one the user did not answer, and a slash line is ordinary text again —
