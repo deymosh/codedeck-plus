@@ -598,13 +598,17 @@ export class DeepSeekSession implements DriverSession {
   }
 
   /** What this session's harness can run, asked of the harness itself (the
-   *  command plugin) and cached until the session ends. An empty set means
-   *  every slash line is ordinary text, which is what a harness without the
-   *  plugin does. */
+   *  command plugin) and cached until the session ends once it has been
+   *  read. A list that could not be read is asked for again next time — the
+   *  plugin may simply not be answering yet — and meanwhile every slash line
+   *  is ordinary text, which is what a harness without the plugin does. */
   private knownCommands(): Promise<Set<string>> {
     this.commandNames ??= this.ready
       .then(() => this.sessionCommands())
-      .then((commands) => new Set((commands ?? []).map((command) => command.name)))
+      .then((commands) => {
+        if (commands === undefined) this.commandNames = undefined;
+        return new Set((commands ?? []).map((command) => command.name));
+      })
       .catch(() => {
         this.commandNames = undefined;
         return new Set<string>();

@@ -820,6 +820,21 @@ describe('slash commands', () => {
     bridge.close();
   });
 
+  it('asks for the commands again once the plugin answers', async () => {
+    const ready = withDriver();
+    await started(ready);
+    // Nothing listening yet: the line is text, and that is not remembered as
+    // "this harness has no commands".
+    ready.session.prompt('/compact');
+    await vi.waitFor(() => expect(ready.harness.requests.some((request) => request.method === 'session/prompt')).toBe(true));
+    const bridge = await commandBridge(socketOf(ready), (request) =>
+      request.method === 'list' ? listing() : { ok: true, result: { kind: 'success', text: 'Compacted.' } },
+    );
+    ready.session.prompt('/compact');
+    await vi.waitFor(() => expect(bridge.requests.some((request) => request.method === 'run')).toBe(true));
+    bridge.close();
+  });
+
   it('runs the session normally when nothing answers on the command socket', async () => {
     const ready = withDriver();
     const ctx = await started(ready);
