@@ -948,6 +948,14 @@ impl Loop {
                 }
                 Msg::Pause => {
                     // Backgrounded: the OS may kill the process from here on.
+                    // A delete still in its undo window is committed now —
+                    // its toast is out of sight, and the window lives only
+                    // in memory: a process killed before it closed would
+                    // never send the `close-session`, and the session would
+                    // come back once its dismissal expired.
+                    if self.stores.delete_controller.is_pending() {
+                        self.on_undo_timer().await;
+                    }
                     self.flush_acks();
                     self.flush_writes().await;
                     self.ws.set_ping_interval(BACKGROUND_PING_EVERY);
