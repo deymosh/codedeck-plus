@@ -89,6 +89,17 @@ function realPath(p: string): string {
   }
 }
 
+/**
+ * The file beside an installed binary that says it is complete: written,
+ * holding the pin's sha512, only once the binary is whole. Installs never
+ * rename anything into place — some filesystems the cache lives on (a
+ * Windows host's bind mount in a container, a Windows disk an antivirus is
+ * scanning) refuse a rename of a file they have just seen written, for
+ * longer than any retry should wait — so completeness is this marker's to
+ * say instead.
+ */
+const INSTALLED_MARKER = '.installed';
+
 /** Install `binary` if it is not cached yet, and return its path. */
 export async function installBinary(binary: PackagedBinary, options: InstallOptions): Promise<string> {
   const pin = (options.pins ?? PLATFORM_PACKAGES)[binary.pkg];
@@ -97,14 +108,17 @@ export async function installBinary(binary: PackagedBinary, options: InstallOpti
   const prefix = `${binary.pkg.replace('/', '+')}@`;
   const dir = path.join(options.cacheDir, `${prefix}${pin.version}`);
   const target = path.join(dir, ...binary.file.split('/'));
-  if (isFile(target)) {
+  const marker = path.join(dir, INSTALLED_MARKER);
+  if (isFile(target) && readQuietly(marker) === pin.integrity) {
     linkIntoBin(options.cacheDir, target);
     return target;
   }
 
+  // Whatever is there is incomplete: it stops counting as installed before
+  // a byte of the new one is written.
+  removeQuietly(marker);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const tarball = path.join(dir, `.download-${process.pid}.tgz`);
-  const partial = `${target}.part-${process.pid}`;
   try {
     const url = `${options.registry ?? DEFAULT_REGISTRY}/${binary.pkg}/-/${binary.pkg.split('/').pop()}-${pin.version}.tgz`;
     const res = await (options.fetchFn ?? fetch)(url);
@@ -136,21 +150,18 @@ export async function installBinary(binary: PackagedBinary, options: InstallOpti
     const source = fs.createReadStream(tarball);
     let found: boolean;
     try {
-      found = await extractFile(source.pipe(createGunzip()), `package/${binary.file}`, partial);
+      found = await extractFile(source.pipe(createGunzip()), `package/${binary.file}`, target);
     } finally {
       source.destroy();
       if (!source.closed) await once(source, 'close');
     }
     if (!found) throw new Error(`${binary.pkg}@${pin.version} has no ${binary.file}`);
-    fs.chmodSync(partial, 0o755);
-    // A file's rename is refused by the same filesystem in the same way (see
-    // renameIntoPlace), so it waits the same way.
-    await renameIntoPlace(partial, target, { log: options.log });
+    fs.chmodSync(target, 0o755);
+    fs.writeFileSync(marker, pin.integrity);
   } catch (err) {
     throw new Error(`${binary.label} could not be installed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     removeQuietly(tarball);
-    removeQuietly(partial);
   }
 
   pruneOtherVersions(options.cacheDir, prefix, path.basename(dir));
@@ -189,6 +200,15 @@ function removeQuietly(target: string): void {
     fs.rmSync(target, { recursive: true, force: true });
   } catch {
     /* left for the next install to overwrite */
+  }
+}
+
+/** A small text file's contents, or undefined when it cannot be read. */
+function readQuietly(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
   }
 }
 
@@ -352,18 +372,24 @@ async function* oneBuffer(data: Buffer): AsyncGenerator<Buffer> {
  * extractFile; non-file entries other than directories (symlinks, devices)
  * do not occur in npm tarballs and are skipped. The executable bit of a
  * file's tar mode survives as 0o755.
+ *
+ * `last` names one file (relative to `dest`, `/`-separated) that is held
+ * back and written only after every other one: a reader that trusts that
+ * file to mean "complete" never sees it beside a half-written package.
  */
-export async function extractTree(tar: AsyncIterable<Buffer>, dest: string): Promise<void> {
+export async function extractTree(tar: AsyncIterable<Buffer>, dest: string, options: { last?: string } = {}): Promise<void> {
   let pending: Buffer = Buffer.alloc(0);
   let inBody = false;
   let bodyLeft = 0;
   let padLeft = 0;
-  let sink: 'skip' | 'file' | 'dir' | 'pax' | 'longname' = 'skip';
+  let sink: 'skip' | 'file' | 'held' | 'dir' | 'pax' | 'longname' = 'skip';
   let meta: Buffer[] = [];
   let nextName: string | undefined;
   let out: fs.WriteStream | null = null;
   let outPath = '';
   let mode = 0;
+  const lastPath = options.last !== undefined ? path.join(dest, ...options.last.split('/')) : undefined;
+  let held: Buffer[] | undefined;
 
   /** npm packs under `package/`; anything else is not an npm tarball, and a
    *  `..` or empty segment would write outside `dest` — refuse both. */
@@ -389,6 +415,8 @@ export async function extractTree(tar: AsyncIterable<Buffer>, dest: string): Pro
           /* best effort — the bit is not worth failing an install */
         }
       }
+    } else if (sink === 'held') {
+      held = meta;
     } else if (sink === 'dir') {
       fs.mkdirSync(outPath, { recursive: true });
     }
@@ -421,6 +449,7 @@ export async function extractTree(tar: AsyncIterable<Buffer>, dest: string): Pro
           const where = sink === 'file' || sink === 'dir' ? target(name) : null;
           if (sink === 'file' && where === null) sink = 'skip'; // not an npm path: skip, keep parsing
           if (sink === 'dir' && where === null) sink = 'skip';
+          if (sink === 'file' && where === lastPath) sink = 'held';
           if (sink === 'file') {
             outPath = where!;
             fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -438,7 +467,7 @@ export async function extractTree(tar: AsyncIterable<Buffer>, dest: string): Pro
         offset += n;
         bodyLeft -= n;
         if (sink === 'file' && out && !out.write(piece)) await once(out, 'drain');
-        else if (sink === 'pax' || sink === 'longname') meta.push(Buffer.from(piece));
+        else if (sink === 'pax' || sink === 'longname' || sink === 'held') meta.push(Buffer.from(piece));
         if (bodyLeft === 0) await endBody();
       }
       pending = pending.subarray(offset);
@@ -446,55 +475,14 @@ export async function extractTree(tar: AsyncIterable<Buffer>, dest: string): Pro
   } finally {
     if (out && !out.writableFinished) out.destroy();
   }
+  if (held && lastPath) {
+    fs.mkdirSync(path.dirname(lastPath), { recursive: true });
+    fs.writeFileSync(lastPath, Buffer.concat(held));
+  }
 }
 
 /** How many packages the installer downloads at once. */
 const TREE_CONCURRENCY = 4;
-
-/** How many times a directory rename is retried before it is a real failure,
- *  and how long the longest wait between two attempts is. Long enough to sit
- *  out a foreign filesystem's moment of busyness (~2.5s in all), short enough
- *  that a filesystem that is simply not going to allow it fails the install
- *  rather than hanging it. */
-const RENAME_ATTEMPTS = 8;
-const RENAME_BACKOFF_MS = 500;
-
-/**
- * Move a staged package into place.
- *
- * Retried, because one filesystem this runs on refuses a directory rename
- * that the same filesystem accepts a moment later: a bind mount from a
- * Windows host (the container's `/data`, Docker Desktop) answers EACCES while
- * a file just written inside the directory is still being let go of by the
- * host side. It is not a race this code could remove — the rename is
- * serialised, the destination is recreated first, and the same tree of a few
- * hundred packages installs on the first attempt on an ordinary filesystem —
- * and it is not a failure the caller can fix, since which package it lands on
- * differs from run to run. Waiting is the whole of the answer; a rename that
- * keeps failing, or fails for any other reason, is still a failure.
- */
-export async function renameIntoPlace(
-  from: string,
-  to: string,
-  options: { log?: (message: string) => void; rename?: (from: string, to: string) => void } = {},
-): Promise<void> {
-  const rename = options.rename ?? fs.renameSync;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      rename(from, to);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? '';
-      if (attempt >= RENAME_ATTEMPTS || !['EACCES', 'EPERM', 'EBUSY'].includes(code)) throw error;
-      if (attempt === 2) options.log?.(`[install] ${to} was busy (${code}); retrying`);
-      await delay(Math.min(attempt * 100, RENAME_BACKOFF_MS));
-    }
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Install one runtime's pinned dependency closure — `entries` come from a
@@ -507,6 +495,12 @@ function delay(ms: number): Promise<void> {
  * skipped, so an interrupted install resumes; an optional package that
  * cannot be fetched is skipped (npm's own semantics), everything else fails
  * the install.
+ *
+ * Each package is extracted straight into its destination with its
+ * `package.json` written last, and a package counts as installed only when
+ * that file names the pinned version: a package cut off mid-extraction has
+ * none and is laid down again by the next install. Nothing is renamed into
+ * place — see INSTALLED_MARKER for why.
  */
 export async function installPackageTree(
   root: string,
@@ -518,7 +512,6 @@ export async function installPackageTree(
 
   const label = options.label ?? root;
   const dir = path.join(options.cacheDir, `${root.replace('/', '+')}@${rootEntry.version}`);
-  const nodeModules = path.join(dir, 'node_modules');
   const target = (dest: string): string => path.join(dir, ...dest.split('/'));
 
   // A package whose platform gates exclude this machine: optional ones are
@@ -534,83 +527,74 @@ export async function installPackageTree(
     wanted.push(entry);
   }
 
-  const atVersion = (entry: TreePackageEntry): boolean => installedVersion(target(entry.dest)) === entry.version;
-  if (wanted.every(atVersion)) return target(rootEntry.dest);
+  // What must be laid down: every package not at its pinned version, and
+  // everything nested inside one, since laying a package down replaces its
+  // whole directory — its own node_modules included.
+  const stale = wanted.filter((entry) => installedVersion(target(entry.dest)) !== entry.version);
+  if (stale.length === 0) return target(rootEntry.dest);
+  const replaced = stale.map((entry) => `${entry.dest}/`);
+  const redo = new Set(wanted.filter((entry) => stale.includes(entry) || replaced.some((dest) => entry.dest.startsWith(dest))));
 
   // The same tarball serves every spot its package occupies (a nested
   // variant may sit under several consumers): fetch once, extract per dest.
   const byTarball = new Map<string, TreePackageEntry[]>();
-  for (const entry of wanted) {
+  for (const entry of redo) {
     const key = `${entry.name}@${entry.version}`;
     byTarball.set(key, [...(byTarball.get(key) ?? []), entry]);
   }
 
-  const staging = path.join(dir, `.staging-${process.pid}`);
   const registry = options.registry ?? DEFAULT_REGISTRY;
   const fetchFn = options.fetchFn ?? fetch;
   const started = Date.now();
   options.log(`[install] downloading ${label} (${byTarball.size} packages) from ${registry}`);
-  try {
-    fs.mkdirSync(staging, { recursive: true });
-
-    // Phase 1: fetch every distinct tarball once, in parallel — this is the
-    // network-bound part. An optional package that cannot be fetched is
-    // dropped here (npm's own semantics); anything else fails the install.
-    // The tarballs are kept as they came, gzipped: a whole runtime inflated
-    // at once is the better part of a gigabyte held in memory, on a machine
-    // that may be a small VPS.
-    const tarballs = new Map<string, Buffer | null>();
-    const jobs = [...byTarball.keys()];
-    let next = 0;
-    const download = async (): Promise<void> => {
-      for (;;) {
-        const index = next++;
-        if (index >= jobs.length) return;
-        const group = byTarball.get(jobs[index]!)!;
-        const first = group[0]!;
-        if (group.every(atVersion)) {
-          tarballs.set(jobs[index]!, null); // already on disk
+  // Phase 1: fetch every distinct tarball once, in parallel — this is the
+  // network-bound part. An optional package that cannot be fetched is
+  // dropped here (npm's own semantics); anything else fails the install.
+  // The tarballs are kept as they came, gzipped: a whole runtime inflated
+  // at once is the better part of a gigabyte held in memory, on a machine
+  // that may be a small VPS.
+  const tarballs = new Map<string, Buffer | null>();
+  const jobs = [...byTarball.keys()];
+  let next = 0;
+  const download = async (): Promise<void> => {
+    for (;;) {
+      const index = next++;
+      if (index >= jobs.length) return;
+      const group = byTarball.get(jobs[index]!)!;
+      const first = group[0]!;
+      try {
+        const url = `${registry}/${first.name}/-/${first.name.split('/').pop()}-${first.version}.tgz`;
+        tarballs.set(jobs[index]!, await fetchVerifiedTarball(url, first.integrity, fetchFn));
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (first.optional) {
+          options.log(`[install] skipping optional ${first.name}@${first.version}: ${reason}`);
+          tarballs.set(jobs[index]!, null);
           continue;
         }
-        try {
-          const url = `${registry}/${first.name}/-/${first.name.split('/').pop()}-${first.version}.tgz`;
-          tarballs.set(jobs[index]!, await fetchVerifiedTarball(url, first.integrity, fetchFn));
-        } catch (err) {
-          const reason = err instanceof Error ? err.message : String(err);
-          if (first.optional) {
-            options.log(`[install] skipping optional ${first.name}@${first.version}: ${reason}`);
-            tarballs.set(jobs[index]!, null);
-            continue;
-          }
-          throw new Error(`${first.name} could not be installed: ${reason}`);
-        }
+        throw new Error(`${first.name} could not be installed: ${reason}`);
       }
-    };
-    await Promise.all(Array.from({ length: TREE_CONCURRENCY }, () => download()));
-
-    // Phase 2: lay the tarballs down serially, shallow dest first. A nested
-    // entry installs inside its parent's directory, so extracting in
-    // parallel would race a parent's replace against its children.
-    const depth = (dest: string): number => dest.split('/').length;
-    const ordered = wanted
-      .filter((entry) => tarballs.get(`${entry.name}@${entry.version}`))
-      .sort((a, b) => depth(a.dest) - depth(b.dest));
-    for (const entry of ordered) {
-      if (atVersion(entry)) continue;
-      const tar = gunzipSync(tarballs.get(`${entry.name}@${entry.version}`)!);
-      const pkgDir = target(entry.dest);
-      const stage = path.join(staging, entry.dest);
-      fs.rmSync(stage, { recursive: true, force: true });
-      await extractTree(oneBuffer(tar), stage);
-      fs.rmSync(pkgDir, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(pkgDir), { recursive: true });
-      await renameIntoPlace(stage, pkgDir, { log: options.log });
     }
+  };
+  await Promise.all(Array.from({ length: TREE_CONCURRENCY }, () => download()));
 
-    pruneOtherVersions(options.cacheDir, `${root.replace('/', '+')}@`, path.basename(dir));
-    options.log(`[install] ${label} installed at ${dir} (${((Date.now() - started) / 1000) | 0}s)`);
-    return target(rootEntry.dest);
-  } finally {
-    removeQuietly(staging);
+  // Phase 2: lay the tarballs down serially, shallow dest first. A nested
+  // entry installs inside its parent's directory, so extracting in
+  // parallel would race a parent's replace against its children.
+  const depth = (dest: string): number => dest.split('/').length;
+  const ordered = [...redo]
+    .filter((entry) => tarballs.get(`${entry.name}@${entry.version}`))
+    .sort((a, b) => depth(a.dest) - depth(b.dest));
+  for (const entry of ordered) {
+    const tar = gunzipSync(tarballs.get(`${entry.name}@${entry.version}`)!);
+    const pkgDir = target(entry.dest);
+    // Retried by Node itself on the transient EBUSY / EPERM a scanner or
+    // a foreign filesystem answers with.
+    fs.rmSync(pkgDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await extractTree(oneBuffer(tar), pkgDir, { last: 'package.json' });
   }
+
+  pruneOtherVersions(options.cacheDir, `${root.replace('/', '+')}@`, path.basename(dir));
+  options.log(`[install] ${label} installed at ${dir} (${((Date.now() - started) / 1000) | 0}s)`);
+  return target(rootEntry.dest);
 }
