@@ -13,7 +13,10 @@ import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand, st
 import { BRIDGE_SOCKET_ENV, HARNESS_PLUGIN, QUESTION_MARKER, installHarnessPlugin } from '../plugin';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs } from '../questions';
 
-const socketPathIn = (dir: string): string => path.join(dir, 'commands.sock');
+/** A socket of the test's own: a file in its directory, or on Windows — where
+ *  a socket is a named pipe — a pipe named after that directory. */
+const socketPathIn = (dir: string): string =>
+  process.platform === 'win32' ? bridgeSocketPath(dir, 'test') : path.join(dir, 'commands.sock');
 
 /** A stand-in for the harness's plugin context: the two services the plugin
  *  asks for, the effect disposer, and a logger. */
@@ -499,11 +502,12 @@ describe('the client on its own', () => {
 
 describe('the socket path', () => {
   it('is one per harness process, and a named pipe on Windows', () => {
-    expect(bridgeSocketPath('/data', 'a1')).toBe(path.join('/data', 'codedeck', 'dsh-bridge-a1.sock'));
+    expect(bridgeSocketPath('/data', 'a1', 'linux')).toBe(path.join('/data', 'codedeck', 'dsh-bridge-a1.sock'));
     // Two processes of one home never share a socket: the second would take
     // the first one's file, and whichever closed first would unlink the
     // other's.
-    expect(bridgeSocketPath('/data', 'a1')).not.toBe(bridgeSocketPath('/data', 'b2'));
+    expect(bridgeSocketPath('/data', 'a1', 'linux')).not.toBe(bridgeSocketPath('/data', 'b2', 'linux'));
+    expect(bridgeSocketPath('/data', 'a1', 'win32')).not.toBe(bridgeSocketPath('/data', 'b2', 'win32'));
     const pipe = bridgeSocketPath('/data', 'a1', 'win32');
     expect(pipe.startsWith('\\\\.\\pipe\\codedeck-dsh-bridge-')).toBe(true);
     // Two homes, two pipes: a machine running two bridges must not have them

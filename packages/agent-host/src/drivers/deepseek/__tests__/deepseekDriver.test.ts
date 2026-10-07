@@ -1084,7 +1084,9 @@ describe('the harness process', () => {
     expect(first).toBeDefined();
     expect(second).toBeDefined();
     expect(first).not.toBe(second);
-    expect(path.dirname(first!)).toBe(path.join(ready.home, 'codedeck'));
+    // Under the harness's home — or, on Windows, a named pipe.
+    if (process.platform === 'win32') expect(first!.startsWith('\\\\.\\pipe\\')).toBe(true);
+    else expect(path.dirname(first!)).toBe(path.join(ready.home, 'codedeck'));
   });
 
   it('runs a plugin command in the sessions\' home, and puts its own plugin back after it', async () => {
