@@ -146,8 +146,17 @@ function readJson(response: Awaited<ReturnType<HttpGet>>): unknown {
   return JSON.parse(response.text ?? '') as unknown;
 }
 
-/** The patch rows for a gateway's catalog: the catalog itself, and the
- *  model a session starts on. */
+/**
+ * The patch rows for a gateway's catalog: the catalog itself, and the model
+ * a session starts on.
+ *
+ * Never the endpoint. The profile is shared by every harness process, and
+ * the route takes a `baseURL` in its config over `DEEPSEEK_BASE_URL` in the
+ * environment — so an endpoint written here would also be where a session
+ * bound to a provider profile sent that profile's token, whatever its own
+ * environment named. The operator's process finds the gateway in the
+ * environment it already has.
+ */
 export function renderCatalogLayer(catalog: GatewayCatalog): string {
   const models = catalog.models.map((model) => ({
     id: model.id,
@@ -156,7 +165,7 @@ export function renderCatalogLayer(catalog: GatewayCatalog): string {
   }));
   const selection = { provider: NATIVE_PROVIDER, model: catalog.defaultModel };
   const rows = [
-    { id: PROVIDER_ROW, config: { baseURL: catalog.baseUrl, models } },
+    { id: PROVIDER_ROW, config: { models } },
     { id: SESSION_MODEL_ROW, config: selection },
     { id: DEFAULT_MODEL_ROW, config: selection },
   ];

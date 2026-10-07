@@ -691,9 +691,10 @@ describe('a gateway', () => {
       expect(readFileSync(path.join(ready.home, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8')).toMatch(/kimi-k2/),
     );
     const layer = readFileSync(path.join(ready.home, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8');
-    // The row the harness reads: the endpoint, and the catalog it may serve.
+    // The row the harness reads: the catalog it may serve. The endpoint stays
+    // in the operator's environment, where only the operator's process sees it.
     expect(layer).toMatch(/id: llm-deepseek/);
-    expect(layer).toMatch(/baseURL: http:\/\/gateway\.example:3458/);
+    expect(layer).not.toMatch(/baseURL/);
     expect(layer).toMatch(/contextWindow: 200000/);
     // Its own block, and nothing else of ours: the MCP list is another one.
     expect(layer).toMatch(/CodeDeck\+ gateway catalog/);

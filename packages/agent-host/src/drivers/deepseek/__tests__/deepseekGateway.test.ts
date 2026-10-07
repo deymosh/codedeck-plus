@@ -74,14 +74,18 @@ describe('the model list a gateway serves', () => {
 });
 
 describe('the catalog the harness reads', () => {
-  it('is a row over the deployment entry, carrying the endpoint and the models', () => {
+  it('is a row over the deployment entry, carrying the models and never the endpoint', () => {
     const rows = renderCatalogLayer({
       baseUrl: 'http://gw.example',
       models: [{ id: 'kimi-k2' }, { id: 'glm-4.6', contextWindow: 200_000 }],
       defaultModel: 'kimi-k2',
     });
     expect(rows).toMatch(/^- id: llm-deepseek/m);
-    expect(rows).toMatch(/baseURL: http:\/\/gw\.example/);
+    // An endpoint in the shared profile would outrank the one a provider-bound
+    // session's own environment names, and take that profile's token to the
+    // operator's gateway.
+    expect(rows).not.toMatch(/baseURL/);
+    expect(rows).not.toMatch(/gw\.example/);
     expect(rows).toMatch(/id: kimi-k2/);
     expect(rows).toMatch(/contextWindow: 200000/);
     // And the model a session starts on moves with the catalog: the harness
