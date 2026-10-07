@@ -556,6 +556,9 @@ export async function installPackageTree(
     // Phase 1: fetch every distinct tarball once, in parallel — this is the
     // network-bound part. An optional package that cannot be fetched is
     // dropped here (npm's own semantics); anything else fails the install.
+    // The tarballs are kept as they came, gzipped: a whole runtime inflated
+    // at once is the better part of a gigabyte held in memory, on a machine
+    // that may be a small VPS.
     const tarballs = new Map<string, Buffer | null>();
     const jobs = [...byTarball.keys()];
     let next = 0;
@@ -571,7 +574,7 @@ export async function installPackageTree(
         }
         try {
           const url = `${registry}/${first.name}/-/${first.name.split('/').pop()}-${first.version}.tgz`;
-          tarballs.set(jobs[index]!, gunzipSync(await fetchVerifiedTarball(url, first.integrity, fetchFn)));
+          tarballs.set(jobs[index]!, await fetchVerifiedTarball(url, first.integrity, fetchFn));
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           if (first.optional) {
@@ -594,7 +597,7 @@ export async function installPackageTree(
       .sort((a, b) => depth(a.dest) - depth(b.dest));
     for (const entry of ordered) {
       if (atVersion(entry)) continue;
-      const tar = tarballs.get(`${entry.name}@${entry.version}`)!;
+      const tar = gunzipSync(tarballs.get(`${entry.name}@${entry.version}`)!);
       const pkgDir = target(entry.dest);
       const stage = path.join(staging, entry.dest);
       fs.rmSync(stage, { recursive: true, force: true });
