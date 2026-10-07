@@ -391,10 +391,13 @@ export async function extractTree(tar: AsyncIterable<Buffer>, dest: string, opti
   const lastPath = options.last !== undefined ? path.join(dest, ...options.last.split('/')) : undefined;
   let held: Buffer[] | undefined;
 
-  /** npm packs under `package/`; anything else is not an npm tarball, and a
-   *  `..` or empty segment would write outside `dest` — refuse both. */
+  /** Everything sits under one top-level directory, stripped as npm strips
+   *  it: `package/` for what `npm pack` makes, the package's own name for
+   *  some (DefinitelyTyped's `@types/*` ship under `node/`, `retry/`, …).
+   *  A `..` or empty segment would write outside `dest` — refused. */
   const target = (name: string): string | null => {
-    const rel = name.startsWith('package/') ? name.slice('package/'.length) : name;
+    const slash = name.indexOf('/');
+    const rel = slash < 0 ? '' : name.slice(slash + 1);
     if (rel.length === 0) return null;
     const parts = rel.split('/');
     if (parts.some((p) => p === '' || p === '.' || p === '..')) return null;

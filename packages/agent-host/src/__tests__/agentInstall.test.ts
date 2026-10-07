@@ -232,6 +232,18 @@ describe('extractTree', () => {
     expect(fs.readFileSync(path.join(dir, 'lib', 'bin.js'), 'utf8')).toBe('console.log(1)');
   });
 
+  it('strips whatever top-level directory the package ships under, as npm does', async () => {
+    // DefinitelyTyped's packages are packed under their own name, not package/.
+    const tar = Buffer.concat([
+      tarEntry('node/package.json', '{"version":"22.0.0"}', '0', 0o644),
+      tarEntry('node/fs.d.ts', 'declare module "fs";', '0', 0o644),
+      Buffer.alloc(1024),
+    ]);
+    await extractTree(chunks(tar, 512), dir, { last: 'package.json' });
+    expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe('{"version":"22.0.0"}');
+    expect(fs.readFileSync(path.join(dir, 'fs.d.ts'), 'utf8')).toBe('declare module "fs";');
+  });
+
   it('skips an entry that would leave the package, and keeps going', async () => {
     const tar = Buffer.concat([
       tarEntry('package/../evil', 'no'),
