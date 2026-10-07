@@ -1758,6 +1758,108 @@ async fn the_undo_toast_clears_itself_when_the_window_expires_without_a_tap() {
         .await;
 }
 
+/// A heartbeat listing `ids` for the machine of the session-delete test.
+fn heartbeat_listing(ids: &[&str]) -> BridgeToPhone {
+    let sessions: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({"id": id, "agent": "claude-code", "slug": id, "cwd": "/w",
+                "lastActivity": "t", "lineCount": 0, "title": null, "project": "p"})
+        })
+        .collect();
+    protocol::codec::decode_bridge_to_phone(
+        &serde_json::json!({
+            "type": "sessions",
+            "machine": "laptop",
+            "sessions": sessions,
+            "agents": [],
+            "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
+        })
+        .to_string(),
+    )
+    .unwrap()
+}
+
+/// Deleting sessions one after another: each delete commits the one before
+/// it at once (one `close-session` each), a heartbeat sent before the
+/// bridge has closed the later ones does not bring them back, and the
+/// last one — still in its undo window — is committed as soon as the app
+/// is backgrounded rather than lost with a killed process.
+#[tokio::test]
+async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let mut state = client_core::stores::machines::MachinesState::default();
+            state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let ports = CorePorts { kv: Rc::new(kv), ..CorePorts::default() };
+            let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+            core.start();
+            eose_all(&mut mock).await;
+            let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+            assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+
+            let listed = heartbeat_listing(&["s1", "s2", "s3"]);
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &listed);
+            settle().await;
+            let sessions = |view: MachinesView| -> Vec<String> {
+                view.machines[&machine.pubkey_hex].sessions.keys().cloned().collect()
+            };
+            assert_eq!(sessions(core.machines_view().await), ["s1", "s2", "s3"]);
+
+            for id in ["s1", "s2", "s3"] {
+                core.dispatch(Intent::DeleteSession {
+                    machine: machine.pubkey_hex.clone(),
+                    session_id: id.into(),
+                    label: None,
+                })
+                .await;
+            }
+            assert!(sessions(core.machines_view().await).is_empty());
+            let toast = core.ui_view().await.undo_toast.expect("the last delete is undoable");
+            assert_eq!(toast.session_id, "s3");
+
+            // s1 and s2 were committed by the delete that followed each.
+            let closed = |cmd: Option<PhoneToBridge>| match cmd {
+                Some(PhoneToBridge::CloseSession(m)) => m.session_id,
+                other => panic!("expected a close-session, got {other:?}"),
+            };
+            for id in ["s1", "s2"] {
+                assert_eq!(closed(next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await), id);
+            }
+
+            // The bridge has closed s1 only; its next list still has the
+            // other two, which must stay deleted on the phone.
+            let after_first = heartbeat_listing(&["s2", "s3"]);
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &after_first);
+            settle().await;
+            assert!(sessions(core.machines_view().await).is_empty());
+
+            // Backgrounded inside s3's undo window: committed now, well
+            // before the window would have run out.
+            core.pause();
+            let last = tokio::time::timeout(
+                std::time::Duration::from_millis(client_core::delete_controller::UNDO_DELAY_MS / 2),
+                next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine),
+            )
+            .await
+            .expect("the pending delete is sent when the app is backgrounded");
+            assert_eq!(closed(last), "s3");
+            assert!(core.ui_view().await.undo_toast.is_none());
+
+            // Nothing is left to undo, and nothing is sent twice.
+            core.dispatch(Intent::UndoDelete).await;
+            assert!(sessions(core.machines_view().await).is_empty());
+        })
+        .await;
+}
+
 /// The next command EVENT the identity `phone` signed for `machine`,
 /// with its payload decrypted as from `payload_key` (the phone's
 /// identity or its session key). Every EVENT is ACKed on the way.
