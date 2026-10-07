@@ -955,12 +955,21 @@ export class DeepSeekDriver implements Driver {
     }
   }
 
-  /** One `dsh plugin` invocation, through the same CLI the sessions run. */
+  /**
+   * One `dsh plugin` invocation, through the same CLI the sessions run. It
+   * runs pnpm in the profile, whose `node_modules` also holds CodeDeck's own
+   * plugin — a package no lockfile lists, which an install is free to prune —
+   * so CodeDeck's part of the profile is put back after every run.
+   */
   private async runDsh(args: string[]): Promise<DshRun> {
     const entry = await this.options.runtime.entryPoint();
-    return this.options.spawnFn === undefined
-      ? runDshPlugin(entry, DSH_PROFILE, args)
-      : runDshPlugin(entry, DSH_PROFILE, args, this.options.spawnFn);
+    try {
+      return this.options.spawnFn === undefined
+        ? await runDshPlugin(entry, this.options.home, DSH_PROFILE, args)
+        : await runDshPlugin(entry, this.options.home, DSH_PROFILE, args, this.options.spawnFn);
+    } finally {
+      await this.ownProfile();
+    }
   }
 
   async shutdown(): Promise<void> {

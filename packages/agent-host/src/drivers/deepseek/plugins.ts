@@ -46,9 +46,15 @@ export interface DshRun {
   stderr: string;
 }
 
-/** Run `dsh plugin --profile <profile> <args>` and answer with its output. */
+/**
+ * Run `dsh plugin --profile <profile> <args>` in the harness home `home` and
+ * answer with its output. The home is set as the sessions' processes have it
+ * set: without it the CLI works on the profile of the default home, which
+ * is not the one any session runs.
+ */
 export function runDshPlugin(
   entry: string,
+  home: string,
   profile: string,
   args: string[],
   spawnFn: SpawnFn = spawn,
@@ -56,6 +62,7 @@ export function runDshPlugin(
   const command = dshCommand(entry, ['plugin', '--profile', profile, ...args]);
   return new Promise((resolve, reject) => {
     const child = spawnFn(command.command, command.args, {
+      env: { ...process.env, DSH_HOME: home },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

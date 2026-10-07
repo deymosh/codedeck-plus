@@ -196,14 +196,14 @@ describe('runDshPlugin', () => {
     }
   }
 
-  it('runs the harness CLI with the profile and the pnpm arguments', async () => {
+  it('runs the harness CLI with the profile, the pnpm arguments and the sessions\' home', async () => {
     const child = new FakeChild();
     const spawnFn = vi.fn(() => child) as unknown as SpawnFn;
-    const pending = runDshPlugin('/tree/dsh/lib/bin.js', 'acp', ['add', 'demo'], spawnFn);
+    const pending = runDshPlugin('/tree/dsh/lib/bin.js', '/data/dsh', 'acp', ['add', 'demo'], spawnFn);
     expect(spawnFn).toHaveBeenCalledWith(
       process.execPath,
       ['/tree/dsh/lib/bin.js', 'plugin', '--profile', 'acp', 'add', 'demo'],
-      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'], env: expect.objectContaining({ DSH_HOME: '/data/dsh' }) }),
     );
     child.stdout.emit('data', Buffer.from('installed\n'));
     child.stderr.emit('data', Buffer.from('a warning\n'));
@@ -214,7 +214,7 @@ describe('runDshPlugin', () => {
   it('answers a failure the CLI could not even start', async () => {
     const child = new FakeChild();
     const spawnFn = vi.fn(() => child) as unknown as SpawnFn;
-    const pending = runDshPlugin('/tree/dsh/lib/bin.js', 'acp', ['add', 'demo'], spawnFn);
+    const pending = runDshPlugin('/tree/dsh/lib/bin.js', '/data/dsh', 'acp', ['add', 'demo'], spawnFn);
     child.emit('error', new Error('ENOENT'));
     await expect(pending).rejects.toThrow(/ENOENT/);
   });

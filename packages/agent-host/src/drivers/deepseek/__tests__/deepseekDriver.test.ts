@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -1012,6 +1013,30 @@ describe('the harness process', () => {
     expect(second).toBeDefined();
     expect(first).not.toBe(second);
     expect(path.dirname(first!)).toBe(path.join(ready.home, 'codedeck'));
+  });
+
+  it('runs a plugin command in the sessions\' home, and puts its own plugin back after it', async () => {
+    const ready = withDriver();
+    const pluginDir = path.join(ready.home, 'profiles', 'acp', 'node_modules', 'codedeck-dsh-bridge');
+    const runs: Array<Record<string, string>> = [];
+    const driver = DeepSeekDriver.create({
+      runtime: ready.runtime,
+      home: ready.home,
+      baseEnv: {} as NodeJS.ProcessEnv,
+      spawnFn: ((_command: string, _args: string[], opts: { env: Record<string, string> }) => {
+        runs.push(opts.env);
+        // What an install may do to a package no lockfile lists.
+        rmSync(pluginDir, { recursive: true, force: true });
+        const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+        setImmediate(() => child.emit('close', 0));
+        return child;
+      }) as never,
+      log: () => {},
+    });
+    await vi.waitFor(() => expect(existsSync(path.join(pluginDir, 'index.js'))).toBe(true));
+    await driver.plugins.act('install', 'demo-plugin');
+    expect(runs[0]?.DSH_HOME).toBe(ready.home);
+    expect(existsSync(path.join(pluginDir, 'index.js'))).toBe(true);
   });
 
   it('runs an operator-provided entry point instead of installing one', async () => {
