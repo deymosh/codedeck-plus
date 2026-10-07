@@ -64,6 +64,14 @@ services:
         mode: 0440
     volumes:
       - ./data:/data
+      # The agents' runtimes, a cache of what the host installs on demand (or
+      # an image built with BUNDLE_AGENTS=1 carries), in a volume of Docker's
+      # own rather than in ./data. A host directory is never filled from the
+      # image, so a bundle would not reach it; and on Docker Desktop it is a
+      # file share slow enough to dominate a runtime of hundreds of packages —
+      # the DeepSeek Harness boots in about a second from a volume and in
+      # about 25 from ./data.
+      - agents:/data/agents
 
   codedeck-tor:
     image: lncm/tor:0.4.7.13@sha256:5a3cfb478d978feb1426ce6dca8e10906bbdd72cff94d7c0c589339f717b2503
@@ -84,6 +92,9 @@ secrets:
     environment: GITHUB_TOKEN
   deepseek_api_key:
     environment: DEEPSEEK_API_KEY
+
+volumes:
+  agents:
 
 networks:
   codedeck-net:

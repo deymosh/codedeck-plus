@@ -250,8 +250,10 @@ catalog the phone reads:
 - `CODEDECK_AGENT_HOST_WARM=1` runs that install and exits, for a host that
   should fetch everything before it serves anything.
 - The harness's runtime is large (some 600 packages): a minute or two on a
-  normal connection, and several on a bind mount from a Windows host (Docker
-  Desktop's `/data` is far slower than a container's own filesystem, and can
-  refuse a rename for a moment — the installer waits and retries).
-- A container recreated with an existing `/data` volume keeps whatever agents
-  that volume already has; the bundled copy reaches a *new* volume.
+  normal connection. The compose file keeps it in the `agents` volume rather
+  than in `./data`: a harness process reads the whole tree every time it
+  boots, and from a Docker Desktop host directory that is some 25 seconds
+  against about one from a volume. (A host directory can also refuse a
+  rename for a moment, which the installer waits out.)
+- A container recreated with an existing `agents` volume keeps whatever
+  agents that volume already has; the bundled copy reaches a *new* volume.

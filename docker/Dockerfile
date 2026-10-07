@@ -160,11 +160,13 @@ RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROU
 # The binary finds the agent host at agent-host/ beside it.
 COPY --from=opencode /out/ /usr/local/bin/
 COPY --from=agenthost /deploy /app/agent-host
-# Agents bundled at build time land in the cache the host installs into. That
-# cache lives in the /data volume, which Docker fills from the image when the
-# volume is FIRST created — so a bundle reaches a new deployment, and a volume
-# that already exists keeps what it has (the agents already installed in it).
-COPY --from=agenthost /agents/ /data/agents/
+# Agents bundled at build time land in the cache the host installs into,
+# /data/agents. Compose keeps that cache in a volume of Docker's own, which
+# Docker fills from the image when the volume is FIRST created — so a bundle
+# reaches a new deployment, and a volume that already exists keeps what it has
+# (the agents already installed in it). Owned by the runtime user: the host
+# installs into it, and a volume takes the ownership the image gives it.
+COPY --chown=codedeck:codedeck --from=agenthost /agents/ /data/agents/
 COPY --from=bridge /codedeck-bridge /app/codedeck-bridge
 COPY --chmod=0755 docker/entrypoint.sh /app/entrypoint.sh
 COPY --chmod=0755 docker/git-credential-codedeck-secret /usr/local/bin/git-credential-codedeck-secret
