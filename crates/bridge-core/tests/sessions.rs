@@ -457,6 +457,71 @@ fn close_session_ends_it_tombstones_it_and_forgets_its_transcript() {
 }
 
 #[test]
+fn closing_sessions_in_a_row_ends_each_and_late_host_events_bring_none_back() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let ready: Vec<String> = ["alpha", "beta", "alpha"].iter().map(|a| rig.ready_session(a)).collect();
+    for s in &ready {
+        rig.say(s, "x");
+    }
+    // One more that the host has not answered yet: closed while starting.
+    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    let (start_id, starting) = rig.start_request();
+    rig.take();
+
+    let mut all = ready.clone();
+    all.push(starting.session_id.clone());
+    for s in &all {
+        rig.send(json!({"type":"close-session","sessionId":s}));
+    }
+
+    let ended: Vec<String> = rig
+        .host_frames()
+        .into_iter()
+        .filter_map(|f| match f.message {
+            BridgeMessage::EndSession { session_id } => Some(session_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended, all, "every session is ended in the host, the starting one included");
+    rig.advance(5_000);
+    let msgs = rig.messages();
+    let acked: Vec<&str> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            BridgeToPhone::CloseSessionAck(a) if a.success => Some(a.session_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(acked, all.iter().map(String::as_str).collect::<Vec<_>>());
+    let hb = last_heartbeat(&msgs);
+    assert!(hb.sessions.is_empty());
+    let mut removed = hb.removed_sessions.clone().unwrap_or_default();
+    removed.sort();
+    let mut expected = all.clone();
+    expected.sort();
+    assert_eq!(removed, expected);
+
+    // What the host still had in flight arrives after the closes.
+    rig.host_reply(&start_id, HostMessage::Ack);
+    rig.host_event(&starting.session_id, SessionEvent::Ready {});
+    rig.say(&ready[0], "late");
+    rig.host_event(&ready[1], SessionEvent::Ended { error: None, resume_lost: false });
+    rig.advance(5_000);
+    let msgs = rig.messages();
+    assert!(outputs(&msgs).is_empty(), "no output of a closed session reaches the phone");
+    if let Some(hb) = msgs.iter().rev().find_map(|m| match m {
+        BridgeToPhone::Sessions(h) => Some(h),
+        _ => None,
+    }) {
+        assert!(hb.sessions.is_empty(), "a closed session came back: {:?}", hb.sessions);
+    }
+    for s in &all {
+        assert!(rig.transcripts.entries(s).is_empty());
+    }
+}
+
+#[test]
 fn shutdown_publishes_every_session_offline_and_stops() {
     let mut rig = Rig::new();
     rig.host_up();

@@ -479,6 +479,24 @@ describe('DeepSeekSession lifecycle', () => {
     await vi.waitFor(() => expect(ready.harness.child.killed).toContain('SIGTERM'));
   });
 
+  it('closes sessions ended together one by one, and the shared process only after the last', async () => {
+    const ready = withDriver();
+    const sessions: DriverSession[] = [];
+    for (const sessionId of ['b1', 'b2', 'b3']) {
+      await started(ready, { sessionId });
+      sessions.push(ready.session);
+    }
+    expect(ready.spawns).toHaveLength(1);
+
+    await Promise.all([sessions[0]!.end(), sessions[1]!.end()]);
+    expect([...ready.harness.closed].sort()).toEqual(['s1', 's2']);
+    expect(ready.harness.child.killed).toEqual([]);
+
+    await Promise.all([sessions[2]!.end(), sessions[2]!.end()]);
+    expect([...ready.harness.closed].sort()).toEqual(['s1', 's2', 's3']);
+    await vi.waitFor(() => expect(ready.harness.child.killed).toContain('SIGTERM'));
+  });
+
   it('ends every session of a harness process that goes away', async () => {
     const ready = withDriver();
     const first = await started(ready, { sessionId: 'b1' });
