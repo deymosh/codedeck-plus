@@ -9,7 +9,6 @@ import {
   extractTree,
   installBinary,
   installPackageTree,
-  renameIntoPlace,
   type PackagedBinary,
   withoutAgentBin,
 } from '../agentInstall';
@@ -120,6 +119,21 @@ describe('installBinary', () => {
     expect(fs.readdirSync(path.join(cache, '@scope+tool-linux-x64@2.0.0'), { recursive: true })).toEqual(['bin']);
   });
 
+  it('installs again over a binary an interrupted install left without its marker', async () => {
+    const target = path.join(cache, '@scope+tool-linux-x64@2.0.0', 'bin', 'tool');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'truncated');
+    const fetchFn = vi.fn(async () => new Response(tgz));
+    const options = { cacheDir: cache, pins, log, fetchFn: fetchFn as unknown as typeof fetch };
+    expect(await installBinary(binary, options)).toBe(target);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(target).equals(payload)).toBe(true);
+    // A marker for another pin (the same version republished) does not count either.
+    fs.writeFileSync(path.join(cache, '@scope+tool-linux-x64@2.0.0', '.installed'), 'sha512-other');
+    await installBinary(binary, options);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses a package this build does not pin', async () => {
     await expect(installBinary({ ...binary, pkg: 'unpinned' }, { cacheDir: cache, pins, log })).rejects.toThrow(/not pinned/);
   });
@@ -198,6 +212,38 @@ describe('extractTree', () => {
     }
   });
 
+  it('writes the file named last after every other one', async () => {
+    const tar = Buffer.concat([
+      tarEntry('package/package.json', '{"version":"1.0.0"}', '0', 0o644),
+      tarEntry('package/lib/bin.js', 'console.log(1)'),
+      Buffer.alloc(1024),
+    ]);
+    // Every block of the archive has been read, the other file written —
+    // and still no package.json.
+    let seenBeforeEnd: boolean | undefined;
+    async function* watched(): AsyncGenerator<Buffer> {
+      yield* chunks(tar.subarray(0, tar.length - 1024), 512);
+      seenBeforeEnd = fs.existsSync(path.join(dir, 'package.json'));
+      yield tar.subarray(tar.length - 1024);
+    }
+    await extractTree(watched(), dir, { last: 'package.json' });
+    expect(seenBeforeEnd).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe('{"version":"1.0.0"}');
+    expect(fs.readFileSync(path.join(dir, 'lib', 'bin.js'), 'utf8')).toBe('console.log(1)');
+  });
+
+  it('strips whatever top-level directory the package ships under, as npm does', async () => {
+    // DefinitelyTyped's packages are packed under their own name, not package/.
+    const tar = Buffer.concat([
+      tarEntry('node/package.json', '{"version":"22.0.0"}', '0', 0o644),
+      tarEntry('node/fs.d.ts', 'declare module "fs";', '0', 0o644),
+      Buffer.alloc(1024),
+    ]);
+    await extractTree(chunks(tar, 512), dir, { last: 'package.json' });
+    expect(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).toBe('{"version":"22.0.0"}');
+    expect(fs.readFileSync(path.join(dir, 'fs.d.ts'), 'utf8')).toBe('declare module "fs";');
+  });
+
   it('skips an entry that would leave the package, and keeps going', async () => {
     const tar = Buffer.concat([
       tarEntry('package/../evil', 'no'),
@@ -227,39 +273,6 @@ describe('extractTree', () => {
     const tar = Buffer.concat([paxEntry(long), tarEntry('package/truncated', 'x'.repeat(10)), Buffer.alloc(1024)]);
     await extractTree(chunks(tar, 300), dir);
     expect(fs.readFileSync(path.join(dir, ...long.slice('package/'.length).split('/')), 'utf8')).toBe('x'.repeat(10));
-  });
-});
-
-describe('renameIntoPlace', () => {
-  it('retries a rename a filesystem refuses for a moment, and then takes it', async () => {
-    const codes: Array<string | undefined> = ['EACCES', 'EPERM', 'EBUSY', undefined];
-    let calls = 0;
-    const rename = (): void => {
-      const code = codes[calls++];
-      if (code !== undefined) throw Object.assign(new Error(`${code}: permission denied`), { code });
-    };
-    const logs: string[] = [];
-    await renameIntoPlace('/staging/a', '/tree/a', { rename, log: (line) => logs.push(line) });
-    expect(calls).toBe(4);
-    // Said once, so a slow install on such a filesystem is explicable.
-    expect(logs).toEqual(['[install] /tree/a was busy (EPERM); retrying']);
-  });
-
-  it('fails at once for a rename that is a real error', async () => {
-    const failing = (): void => {
-      throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' });
-    };
-    await expect(renameIntoPlace('/a', '/b', { rename: failing })).rejects.toThrow(/ENOTEMPTY/);
-  });
-
-  it('gives up after enough attempts on one that never takes', async () => {
-    let attempts = 0;
-    const never = (): void => {
-      attempts++;
-      throw Object.assign(new Error('EACCES: still busy'), { code: 'EACCES' });
-    };
-    await expect(renameIntoPlace('/a', '/b', { rename: never })).rejects.toThrow(/still busy/);
-    expect(attempts).toBe(8);
   });
 });
 
@@ -327,6 +340,27 @@ describe('installPackageTree', () => {
     const fetchFn = registryOf(tgzOf);
     await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
     expect(JSON.parse(fs.readFileSync(path.join(stale, 'package.json'), 'utf8')).version).toBe('15.0.0');
+  });
+
+  it('lays down again a package an interrupted install left without its package.json', async () => {
+    const fetchFn = registryOf(tgzOf);
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
+    const commander = path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'commander');
+    fs.rmSync(path.join(commander, 'package.json'));
+    fs.rmSync(path.join(commander, 'index.js'));
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
+    expect(fs.readFileSync(path.join(commander, 'index.js'), 'utf8')).toBe('ok');
+    expect(JSON.parse(fs.readFileSync(path.join(commander, 'package.json'), 'utf8')).version).toBe('15.0.0');
+  });
+
+  it('puts back what was nested inside a package it lays down again', async () => {
+    const fetchFn = registryOf(tgzOf);
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
+    const commander = path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'commander');
+    fs.writeFileSync(path.join(commander, 'package.json'), '{"version":"14.0.0"}');
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
+    // shared-old was at its version, but lived inside commander's directory.
+    expect(JSON.parse(fs.readFileSync(path.join(commander, 'node_modules', 'shared-old', 'package.json'), 'utf8')).version).toBe('0.6.4');
   });
 
   it('skips an optional package the registry will not serve', async () => {

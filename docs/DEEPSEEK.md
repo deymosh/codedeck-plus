@@ -265,7 +265,9 @@ catalog the phone reads:
   normal connection. The compose file keeps it in the `agents` volume rather
   than in `./data`: a harness process reads the whole tree every time it
   boots, and from a Docker Desktop host directory that is some 25 seconds
-  against about one from a volume. (A host directory can also refuse a
-  rename for a moment, which the installer waits out.)
+  against about one from a volume. (The installer never renames into
+  place, which a host directory can refuse for a moment: each package is
+  extracted where it belongs and counts as installed once its
+  `package.json` — written last — names the pinned version.)
 - A container recreated with an existing `agents` volume keeps whatever
   agents that volume already has; the bundled copy reaches a *new* volume.
