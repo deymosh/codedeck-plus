@@ -52,6 +52,8 @@ export interface Reply {
   error?: string;
   commands?: CommandListing[];
   result?: { kind: string; text?: string };
+  /** For `steer`: whether a running turn took the message. */
+  steered?: boolean;
 }
 
 /** The commands of one session, or `undefined` when they cannot be read. */
@@ -81,6 +83,20 @@ export async function runSessionCommand(
   if (!reply) return undefined;
   if (!reply.ok) return { ok: false, text: reply.error ?? 'the command could not be run' };
   return { ok: reply.result?.kind !== 'error', text: reply.result?.text ?? '' };
+}
+
+/** Hand a message to the turn a session is running, as the harness's own
+ *  apps steer one. `false` when there was no turn to take it, or nothing to
+ *  ask — the message is then for a prompt of its own. */
+export async function steerSession(
+  socket: string,
+  sessionId: string,
+  text: string,
+  log: (message: string) => void,
+  timeoutMs: number = LIST_TIMEOUT_MS,
+): Promise<boolean> {
+  const reply = await askPlugin(socket, { method: 'steer', sessionId, text }, timeoutMs, log);
+  return reply?.ok === true && reply.steered === true;
 }
 
 /** One request to the plugin, one answer. Never throws: a socket that is not

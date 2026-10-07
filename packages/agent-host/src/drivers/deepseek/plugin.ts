@@ -54,15 +54,36 @@ export const BRIDGE_SOCKET_ENV = 'CODEDECK_DSH_BRIDGE_SOCKET';
  * anything of CodeDeck's — the profile has no idea this host exists.
  */
 const SOURCE = `import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export const name = 'codedeck-bridge';
 export const inject = ['agents', 'commands', 'userQuestions'];
 
 const QUESTION_MARKER = 'codedeck-question:';
 const SOCKET_ENV = '${BRIDGE_SOCKET_ENV}';
+
+/**
+ * The harness's own message constructor, out of the installation this
+ * process runs (its CLI is the script node was started with): a message the
+ * agent takes must be the harness's own shape, and this package has no
+ * dependencies to bring one. Undefined when it cannot be found, which only
+ * means a message waits for the turn instead of steering it.
+ */
+let userMessageFactory;
+function userMessageConstructor() {
+  userMessageFactory ??= (async () => {
+    // Through its real path, as node resolved the CLI itself: an installed
+    // CLI is often a link into a package store, whose neighbours are there.
+    const harness = createRequire(realpathSync(path.resolve(process.argv[1] ?? '.')));
+    const llm = await import(pathToFileURL(harness.resolve('@deepseek-ai/dsh-llm')).href);
+    return typeof llm.createUserMessage === 'function' ? llm.createUserMessage : undefined;
+  })().catch(() => undefined);
+  return userMessageFactory;
+}
 
 /**
  * Serve the host's socket, and answer the harness's questions over it.
@@ -164,7 +185,8 @@ export function apply(ctx) {
   }, 'codedeck.bridge');
 }
 
-/** One socket request: what a session can run, or the answer to a question. */
+/** One socket request: what a session can run, running a line of it, a
+ *  message for the running turn, or the answer to a question. */
 async function respond(ctx, connection, line, pending) {
   const reply = (body) => connection.write(JSON.stringify(body) + '\\n');
   let request;
@@ -191,6 +213,19 @@ async function respond(ctx, connection, line, pending) {
     const agent = ctx.get('agents')?.get(request?.sessionId);
     if (agent === undefined) {
       reply({ id, ok: false, error: 'no live session with that id' });
+      return;
+    }
+    if (request.method === 'steer') {
+      // Into the turn that is running, at its next step — what the harness's
+      // own apps do with a message sent while the agent works. An agent that
+      // is not running has no turn to steer; the host prompts it instead.
+      const create = await userMessageConstructor();
+      if (agent.status !== 'running' || typeof agent.steer !== 'function' || create === undefined) {
+        reply({ id, ok: true, steered: false });
+        return;
+      }
+      agent.steer(create({ content: [{ type: 'text', text: String(request.text ?? '') }], source: { kind: 'user' } }));
+      reply({ id, ok: true, steered: true });
       return;
     }
     const commands = ctx.get('commands');

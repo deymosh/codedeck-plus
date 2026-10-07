@@ -7,9 +7,9 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand } from '../bridge';
+import { askPlugin, bridgeSocketPath, listSessionCommands, runSessionCommand, steerSession } from '../bridge';
 import { BRIDGE_SOCKET_ENV, HARNESS_PLUGIN, QUESTION_MARKER, installHarnessPlugin } from '../plugin';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs } from '../questions';
 
@@ -150,6 +150,30 @@ describe('the plugin, talking to the driver', () => {
         ? Promise.resolve({ commandId: 'c1', result: { kind: 'success', text: 'Compacted 12 messages.' } })
         : Promise.resolve(undefined),
   };
+
+  it('steers a running agent with a message of the harness\'s own making, and leaves an idle one alone', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));
+    const steered: unknown[] = [];
+    const agent = { id: 'a1', status: 'running', steer: (message: unknown) => steered.push(message) };
+    const { cleanups, socket } = await runPlugin(dir, commands, { get: () => agent });
+    await waitForSocket(socket);
+    // The plugin builds the message with the harness it runs in, found from
+    // the CLI node was started with: here, the harness this repo pins.
+    const argv = process.argv[1] ?? '';
+    process.argv[1] = fileURLToPath(new URL('../../../../node_modules/@deepseek-ai/dsh/lib/bin.js', import.meta.url));
+    try {
+      expect(await steerSession(socket, 's1', 'use the other parser', () => {})).toBe(true);
+      expect(steered).toHaveLength(1);
+      expect(steered[0]).toMatchObject({ role: 'user', content: [{ type: 'text', text: 'use the other parser' }] });
+      agent.status = 'idle';
+      // No turn to take it: the host prompts it instead.
+      expect(await steerSession(socket, 's1', 'and then?', () => {})).toBe(false);
+      expect(steered).toHaveLength(1);
+    } finally {
+      process.argv[1] = argv;
+      for (const cleanup of cleanups) cleanup();
+    }
+  });
 
   it('lists them, with the hint the harness gives', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-cmd-'));

@@ -837,6 +837,58 @@ describe('slash commands', () => {
     bridge.close();
   });
 
+  /** A turn the test ends itself: `release` lets the harness answer the
+   *  prompt it is holding. */
+  function heldTurn(ready: Harness): { release: () => void } {
+    const held: Array<() => void> = [];
+    ready.harness.onPrompt = () => new Promise<string>((resolve) => held.push(() => resolve('end_turn')));
+    return { release: () => held.shift()?.() };
+  }
+  const prompts = (ready: Harness) => ready.harness.requests.filter((request) => request.method === 'session/prompt');
+
+  it('steers a message sent while a turn runs into that turn', async () => {
+    const ready = withDriver();
+    const turn = heldTurn(ready);
+    await started(ready);
+    const bridge = await commandBridge(socketOf(ready), (request) =>
+      request.method === 'steer' ? { ok: true, steered: true } : { ok: false },
+    );
+    ready.session.prompt('build the parser');
+    await vi.waitFor(() => expect(prompts(ready)).toHaveLength(1));
+    ready.session.prompt('use a recursive descent one');
+    await vi.waitFor(() =>
+      expect(bridge.requests.find((request) => request.method === 'steer')).toMatchObject({
+        sessionId: 's1',
+        text: 'use a recursive descent one',
+      }),
+    );
+    turn.release();
+    // The model read it inside the turn: ACP was never asked for a second
+    // prompt, which it would have refused while the first was in flight.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(prompts(ready)).toHaveLength(1);
+    bridge.close();
+  });
+
+  it('prompts a message the running turn could not take once that turn ends', async () => {
+    const ready = withDriver();
+    const turn = heldTurn(ready);
+    await started(ready);
+    const bridge = await commandBridge(socketOf(ready), (request) =>
+      request.method === 'steer' ? { ok: true, steered: false } : { ok: false },
+    );
+    ready.session.prompt('build the parser');
+    await vi.waitFor(() => expect(prompts(ready)).toHaveLength(1));
+    ready.session.prompt('then the printer');
+    await vi.waitFor(() => expect(bridge.requests.some((request) => request.method === 'steer')).toBe(true));
+    expect(prompts(ready)).toHaveLength(1);
+    turn.release();
+    await vi.waitFor(() => expect(prompts(ready)).toHaveLength(2));
+    expect(prompts(ready)[1]).toMatchObject({ params: { prompt: [{ type: 'text', text: 'then the printer' }] } });
+    turn.release();
+    bridge.close();
+  });
+
   it('runs the session normally when nothing answers on the command socket', async () => {
     const ready = withDriver();
     const ctx = await started(ready);

@@ -174,6 +174,15 @@ model with the request to revise (the tool asks for a revision at once, so
 feedback sent as a later message would arrive after the model had already
 started one).
 
+**Messages during a turn.** ACP takes one prompt at a time, so a message sent
+while the agent works would otherwise wait for the turn to end. The plugin
+hands it to the running turn instead — the harness's own steering, which its
+apps use for exactly this — and the model reads it at its next step. A slash
+command, or a message that arrives as the turn ends, waits for the next turn
+as before (as do the ones sent after it, so nothing overtakes it). A message
+while a question card is open still answers that question, as with every
+agent.
+
 Each harness process has a socket of its own — a file under the harness's home
 (`/data/dsh/codedeck/dsh-bridge-<id>.sock`, a named pipe on Windows), named
 in that process's environment rather than in the shared profile, since one

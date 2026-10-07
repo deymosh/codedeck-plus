@@ -6,11 +6,15 @@
  * mid-session. Its `sdk` profile has none of the last three, and `headless`
  * is one-shot.
  *
+ * What ACP does not carry — the harness's slash commands, the questions its
+ * model asks, and a message for the turn that is running — reaches the
+ * harness through CodeDeck's own plugin in the profile (plugin.ts), over a
+ * socket each process has to itself.
+ *
  * Deliberate limits, all of them the ACP surface's:
  *  - no modes: the harness has none, so `ask`/`default` are this driver's own
  *    (every ask to the phone, or auto-approve);
- *  - no slash commands, questions or background tasks: the automation profile
- *    carries none of them;
+ *  - no background tasks: the automation profile carries none;
  *  - no subscription usage: there is nothing to ask (the context meter
  *    travels as session info instead);
  *  - MCP servers are attached when the harness starts, so a session shows
@@ -37,7 +41,7 @@ import type {
 } from '../../types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
-import { askPlugin, listSessionCommands, runSessionCommand } from './bridge';
+import { askPlugin, listSessionCommands, runSessionCommand, steerSession } from './bridge';
 import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
 import { ASK_USER_TOOL, installProfileTools } from './profileTools';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs, type PlanReview, type PushedQuestionLine } from './questions';
@@ -204,8 +208,17 @@ export class DeepSeekSession implements DriverSession {
   private commandNames?: Promise<Set<string>>;
   private ended = false;
   /** Prompts run one at a time: ACP refuses a second prompt while one is in
-   *  flight, so a message sent meanwhile waits for the turn before it. */
+   *  flight, so a message that cannot steer the running turn waits for it. */
   private tail: Promise<unknown> = Promise.resolve();
+  /** Whether a `session/prompt` of this session is in flight — the turn a
+   *  message sent now can steer. */
+  private promptInFlight = false;
+  /** Messages sent during the running turn, steered (or queued) one after
+   *  another so they reach the model in the order they were sent. */
+  private steering: Promise<unknown> = Promise.resolve();
+  /** A message of this turn already waits for the next one: whatever is sent
+   *  after it waits too, so it never overtakes it. */
+  private queuedBehindTurn = false;
 
   constructor(
     private readonly params: StartSession,
@@ -487,12 +500,38 @@ export class DeepSeekSession implements DriverSession {
     process_?.release();
   }
 
+  /**
+   * One message from the user. While a turn runs, ACP takes no second prompt,
+   * so a message is handed to that turn instead — the harness's own steering,
+   * which its apps use for a message sent while the agent works, through the
+   * plugin — and the model reads it at its next step. One the turn cannot take
+   * (a slash command, a turn just ending, no plugin) waits for the turn to end.
+   */
   prompt(text: string): void {
+    if (this.promptInFlight && !parseSlashCommand(text)) {
+      const next = this.steering.then(() => this.steerOrQueue(text));
+      this.steering = next.catch(() => {});
+      return;
+    }
+    this.enqueue(text);
+  }
+
+  private enqueue(text: string): void {
     const next = this.tail.then(
       () => this.runPrompt(text),
       () => this.runPrompt(text),
     );
     this.tail = next.catch(() => {});
+  }
+
+  private async steerOrQueue(text: string): Promise<void> {
+    const socket = this.bridgeSocket;
+    const sessionId = this.nativeId;
+    if (!this.queuedBehindTurn && this.promptInFlight && socket !== undefined && sessionId !== undefined) {
+      if (await steerSession(socket, sessionId, text, this.ctx.log)) return;
+    }
+    this.queuedBehindTurn = true;
+    this.enqueue(text);
   }
 
   /**
@@ -512,7 +551,13 @@ export class DeepSeekSession implements DriverSession {
       const sessionId = this.nativeId;
       if (this.ended || sessionId === undefined) return;
       this.ctx.emit({ type: 'turn', state: 'running' });
-      await this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+      this.promptInFlight = true;
+      try {
+        await this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+      } finally {
+        this.promptInFlight = false;
+        this.queuedBehindTurn = false;
+      }
       this.endTurn();
     } catch (error) {
       if (this.ended) return;
