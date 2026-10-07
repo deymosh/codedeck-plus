@@ -36,17 +36,37 @@ export const DEEPSEEK_BASE_URL_ENV = 'DEEPSEEK_BASE_URL';
  */
 const VENDOR_ENV_PREFIXES = ['DEEPSEEK_'] as const;
 
+/** Whether a variable is in the harness's endpoint/credential namespace. */
+export function isDeepSeekEnvName(name: string): boolean {
+  const upper = name.toUpperCase();
+  return VENDOR_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+}
+
 /** The base environment for a session bound to a CUSTOM provider: everything
  *  inherited except the harness's own endpoint/credential namespace. */
 export function sanitizeDeepSeekBaseEnv(baseEnv: Record<string, string | undefined>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(baseEnv)) {
-    if (value === undefined) continue;
-    const upper = key.toUpperCase();
-    if (VENDOR_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue;
+    if (value === undefined || isDeepSeekEnvName(key)) continue;
     env[key] = value;
   }
   return env;
+}
+
+/**
+ * Take the harness's endpoint and key out of `env` (the host's own
+ * environment, which every agent process inherits) and answer the
+ * environment the harness's driver runs with: the whole of it, those
+ * included. They are the operator's settings for this one agent, and another
+ * agent reads its own meaning into them — OpenCode, for one, switches on a
+ * DeepSeek provider of its own for any `DEEPSEEK_API_KEY` it finds.
+ */
+export function takeDeepSeekEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const harness = { ...env };
+  for (const key of Object.keys(env)) {
+    if (isDeepSeekEnvName(key)) delete env[key];
+  }
+  return harness;
 }
 
 function inherited(baseEnv: Record<string, string | undefined>): Record<string, string> {

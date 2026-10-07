@@ -35,6 +35,7 @@ import { RealSdkFacade, resolveClaudeExecutable } from './drivers/claude/facade'
 import { bundledClaudeExecutable, claudeBinary } from './drivers/claude/install';
 import { TestModeSdkFacade } from './drivers/claude/testModeFacade';
 import { DeepSeekDriver } from './drivers/deepseek/driver';
+import { takeDeepSeekEnv } from './drivers/deepseek/env';
 import { installDshTree } from './drivers/deepseek/install';
 import { DeepSeekMcp } from './drivers/deepseek/mcp';
 import { DeepSeekRuntime, dshHomeDir, dshProfileDir } from './drivers/deepseek/runtime';
@@ -119,6 +120,9 @@ async function warmAgents(env: NodeJS.ProcessEnv, names: string[], cacheDir: str
 
 async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
   const names = driverNames(env);
+  // Before any driver starts a process: every agent's process inherits this
+  // environment, and the harness's endpoint and key are its driver's alone.
+  const harnessEnv = names.includes('deepseek-harness') ? takeDeepSeekEnv(env) : env;
   const drivers: Driver[] = [];
   const cacheDir = agentCacheDir(env);
   const install = (binary: PackagedBinary) => (): Promise<string> =>
@@ -185,7 +189,7 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
           }),
           home,
           mcp,
-          baseEnv: env,
+          baseEnv: harnessEnv,
           httpGet,
           log,
         });

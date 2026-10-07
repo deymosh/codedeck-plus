@@ -39,7 +39,9 @@ Harness → credential), or export `DEEPSEEK_API_KEY` on the bridge — an
 exported key wins over a stored one and the phone cannot clear it. The key is
 verified against `https://api.deepseek.com/models` when you save it (a
 refusal means the key is not accepted; a network error means nothing was
-claimed either way).
+claimed either way). An exported `DEEPSEEK_*` variable is the harness's alone:
+the agent host keeps it out of the other agents' processes, where it would
+mean something else (OpenCode would offer a DeepSeek provider of its own).
 
 ## Its own home
 

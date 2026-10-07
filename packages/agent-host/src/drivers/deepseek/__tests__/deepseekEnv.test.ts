@@ -9,6 +9,7 @@ import {
   DEEPSEEK_API_KEY_CREDENTIAL,
   buildDeepSeekEnv,
   sanitizeDeepSeekBaseEnv,
+  takeDeepSeekEnv,
 } from '../env';
 
 const BASE: Record<string, string | undefined> = {
@@ -114,5 +115,26 @@ describe('sanitizeDeepSeekBaseEnv', () => {
 
   it('skips variables an operator left unset', () => {
     expect(sanitizeDeepSeekBaseEnv({ PATH: undefined, HOME: '/home' })).toEqual({ HOME: '/home' });
+  });
+});
+
+describe('takeDeepSeekEnv', () => {
+  it('keeps the harness settings for its driver and out of every other agent', () => {
+    const host = {
+      PATH: '/bin',
+      DEEPSEEK_API_KEY: 'sk-ds',
+      DEEPSEEK_BASE_URL: 'https://gateway.example',
+      CODEDECK_DEEPSEEK_HOME: '/data/dsh',
+    } as NodeJS.ProcessEnv;
+    const harness = takeDeepSeekEnv(host);
+    expect(harness).toEqual({
+      PATH: '/bin',
+      DEEPSEEK_API_KEY: 'sk-ds',
+      DEEPSEEK_BASE_URL: 'https://gateway.example',
+      CODEDECK_DEEPSEEK_HOME: '/data/dsh',
+    });
+    // What the other agents' processes inherit: the host's own settings for
+    // the harness stay, the harness's endpoint and key do not.
+    expect(host).toEqual({ PATH: '/bin', CODEDECK_DEEPSEEK_HOME: '/data/dsh' });
   });
 });
