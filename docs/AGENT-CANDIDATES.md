@@ -125,10 +125,56 @@ Proposal:
 Do this before the Tier 1 agents land, so each new agent costs nothing until
 someone chooses it.
 
+## Package layout
+
+**Keep the name `packages/agent-host`.** It names the process — the Node
+sidecar the bridge spawns, which hosts the drivers — and pairs with
+`crates/agent-protocol`, the protocol it speaks. Renaming it would move the
+image's and the release archives' `agent-host/dist/main.js`, which the
+bridge binary looks for by default, for no gain.
+
+**Do not split the drivers into packages of their own (yet).** What a split
+would buy — per-driver dependencies, a published SDK for outside authors —
+is not needed today: the drivers ship as one esbuild bundle, version in
+lockstep with the host, and nobody outside this repository writes one. What
+it would cost is real: the installer's pins are generated from the agent
+host's importer in `pnpm-lock.yaml` (`opencode-ai` and `@deepseek-ai/dsh`
+are dev dependencies there only so the lockfile pins them), the release and
+image builds `pnpm deploy` one package, and every driver package would need
+its own build, typecheck and test wiring. Revisit if third-party drivers
+become a goal.
+
+**Do give the driver SDK a shape inside the package.** The boundary already
+holds — drivers import only shared host modules, never each other, and only
+`main.ts` names them — but the SDK is ~1,100 lines spread flat over `src/`,
+and `main.ts` knows every agent through two `switch` statements (loading and
+warm-up), with agent-specific environment handling in them. Target layout:
+
+```
+src/
+  host/        main.ts, host.ts — the process, framing, routing
+  sdk/         driver.ts, types.ts, transcript, tools, commands, mcp,
+               provider, net, executable — the only thing a driver imports
+  install/     agentInstall, lockfilePins, generated/ — pinned runtimes
+  acp/         the ACP client and a generic ACP session/driver base
+               (extracted from drivers/deepseek)
+  drivers/<agent>/   each exports one DriverModule
+```
+
+A `DriverModule` is the agent's whole registration: its id and label, how
+to build the driver from the environment, and its runtime as an install
+descriptor (a pinned binary, a pinned package tree, or "found on PATH").
+`main.ts` keeps a list of modules instead of a `switch`; loading, the
+warm-up mode and install-on-demand all iterate that list, so adding an
+agent really is one folder plus one line. A test fails the build when a
+driver imports anything outside `sdk/`, `install/`, `acp/` or its own
+folder.
+
 ## Order
 
 1. Release candidate of what is merged.
-2. Install on demand (above).
-3. Extract the generic ACP driver from the DeepSeek driver.
+2. Driver SDK layout and `DriverModule` registry (above), then install on
+   demand on top of it.
+3. Extract the generic ACP driver from the DeepSeek driver into `acp/`.
 4. Codex (native), Pi (RPC, with the permission gate), Copilot (ACP).
 5. Tier 2 on the ACP driver, as users ask for them.
