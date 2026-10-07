@@ -30,6 +30,17 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   enterplanmode: 'switch_mode',
   task: 'agent',
   agent: 'agent',
+  // The DeepSeek Harness's own tools.
+  pwsh: 'execute',
+  str_replace_editor: 'edit',
+  todo_write: 'think',
+  web_fetch: 'fetch',
+  web_search: 'fetch',
+  read_image: 'read',
+  skill: 'read',
+  job_output: 'read',
+  job_list: 'read',
+  job_kill: 'execute',
 };
 
 /** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `bash`)
@@ -56,14 +67,20 @@ function oneLine(text: string): string {
 export function toolTitle(toolName: string, input: Record<string, unknown>): string {
   switch (toolName.toLowerCase()) {
     case 'bash':
+    case 'pwsh':
       return oneLine(str(input.command) || str(input.description));
     case 'read':
     case 'write':
     case 'edit':
     case 'multiedit':
+    case 'read_image':
       return str(input.file_path) || str(input.filePath);
     case 'notebookedit':
       return str(input.notebook_path) || str(input.file_path);
+    // The DeepSeek Harness's editor names its file `path`; its `command`
+    // (view, create, str_replace, insert) says what the call does.
+    case 'str_replace_editor':
+      return `${str(input.command)} ${str(input.path)}`.trim();
     case 'glob':
     case 'grep':
       return str(input.pattern);
@@ -75,8 +92,13 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
     }
     case 'websearch':
       return str(input.query);
+    case 'web_search':
+      return Array.isArray(input.queries) ? str(input.queries[0]) : '';
     case 'webfetch':
+    case 'web_fetch':
       return str(input.url);
+    case 'skill':
+      return str(input.name);
     default:
       return JSON.stringify(input ?? {}).slice(0, MAX_TITLE_CHARS);
   }
@@ -111,6 +133,8 @@ export function toolInput(toolName: string, input: Record<string, unknown>): str
     case 'apply_patch':
     case 'todowrite':
     case 'todoread':
+    case 'todo_write':
+    case 'str_replace_editor':
       return undefined;
     default: {
       const keys = Object.keys(input ?? {});

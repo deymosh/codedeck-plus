@@ -1,11 +1,11 @@
 //! Commands from phones: ingest, then one handler per message type.
 
-use agent_protocol::{BridgeMessage, SelectOutcome};
+use agent_protocol::{BridgeMessage, PlanOutcome, SelectOutcome};
 use protocol::commands::{
     CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PhoneToBridge, PlanResponseMsg,
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
-use protocol::common::{is_valid_provider_base_url, SessionOption, PROVIDER_BASE_URL_ERROR};
+use protocol::common::{is_valid_provider_base_url, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{
     BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
     CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
@@ -177,8 +177,8 @@ impl Engine {
 
     fn on_plan_response(&mut self, m: PlanResponseMsg) {
         let card = self.run_ref(&m.session_id).and_then(|r| r.cards.get(&m.request_id));
-        let option = match card.map(|c| &c.kind) {
-            Some(CardKind::Plan { options }) => options.iter().find(|o| o.id == m.option_id).cloned(),
+        let (option, revise) = match card.map(|c| &c.kind) {
+            Some(CardKind::Plan { options, revise }) => (options.iter().find(|o| o.id == m.option_id).cloned(), revise.clone()),
             _ => {
                 log::info!("[Engine] plan-response for {} in {} matched nothing pending", m.request_id, m.session_id);
                 return;
@@ -188,10 +188,22 @@ impl Engine {
             log::info!("[Engine] Plan option '{}' is not offered for {}", m.option_id, m.request_id);
             return;
         };
+        // Feedback goes with the option that sends the plan back, and with
+        // nothing else: an approval is not a request for changes.
+        let feedback = m
+            .feedback
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty() && revise.as_deref() == Some(option.id.as_str()));
         // An approving option's mode change comes back from the agent as
         // session info.
-        let answer = BridgeMessage::PlanOutcome(SelectOutcome::Selected { option_id: option.id });
+        let answer = BridgeMessage::PlanOutcome(PlanOutcome::Selected { option_id: option.id, feedback: feedback.clone() });
         self.close_card(&m.session_id, &m.request_id, answer, &option.label);
+        // The feedback is the user's own words to the agent, so the transcript
+        // keeps them the way it keeps a typed message.
+        if let Some(text) = feedback {
+            let entry = self.entry(EntryBody::Text { role: Role::User, text });
+            self.append(&m.session_id, vec![entry]);
+        }
     }
 
     fn on_question_response(&mut self, m: QuestionResponseMsg) {

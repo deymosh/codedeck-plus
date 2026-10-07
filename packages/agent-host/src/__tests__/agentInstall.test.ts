@@ -4,14 +4,23 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { extractFile, installBinary, type PackagedBinary, withoutAgentBin } from '../agentInstall';
+import {
+  extractFile,
+  extractTree,
+  installBinary,
+  installPackageTree,
+  renameIntoPlace,
+  type PackagedBinary,
+  withoutAgentBin,
+} from '../agentInstall';
+import type { TreePackageEntry } from '../lockfilePins';
 
 /** One ustar header + body, padded to 512-byte blocks. */
-function tarEntry(name: string, body: Buffer | string, type = '0'): Buffer {
+function tarEntry(name: string, body: Buffer | string, type = '0', mode = 0o755): Buffer {
   const data = typeof body === 'string' ? Buffer.from(body) : body;
   const header = Buffer.alloc(512);
   header.write(name.slice(0, 100), 0);
-  header.write('0000755\0', 100);
+  header.write(`${mode.toString(8).padStart(7, '0')}\0`, 100);
   header.write('0000000\0', 108);
   header.write('0000000\0', 116);
   header.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124);
@@ -161,6 +170,194 @@ describe.skipIf(process.platform === 'win32')('the stable links in <cache>/bin',
     fs.rmSync(link);
     await installBinary(binary, { cacheDir: cache, log, pins: pins2 }); // a cache hit: no fetch
     expect(fs.readFileSync(link, 'utf8')).toBe('two');
+  });
+});
+
+describe('extractTree', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'extract-tree-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes every file under dest, stripping the package/ prefix, whatever the chunking', async () => {
+    const tar = Buffer.concat([
+      tarEntry('package/', '', '5'),
+      tarEntry('package/package.json', '{"version":"1.0.0"}', '0', 0o644),
+      tarEntry('package/lib/', '', '5'),
+      tarEntry('package/lib/bin.js', 'console.log(1)'),
+      tarEntry('package/LICENSE', 'mit', '0', 0o644),
+      Buffer.alloc(1024),
+    ]);
+    for (const size of [1, 300, 512, 4096, tar.length]) {
+      const dest = path.join(dir, `tree-${size}`);
+      await extractTree(chunks(tar, size), dest);
+      expect(fs.readFileSync(path.join(dest, 'package.json'), 'utf8')).toBe('{"version":"1.0.0"}');
+      expect(fs.readFileSync(path.join(dest, 'lib', 'bin.js'), 'utf8')).toBe('console.log(1)');
+      expect(fs.readFileSync(path.join(dest, 'LICENSE'), 'utf8')).toBe('mit');
+    }
+  });
+
+  it('skips an entry that would leave the package, and keeps going', async () => {
+    const tar = Buffer.concat([
+      tarEntry('package/../evil', 'no'),
+      tarEntry('package/ok', 'yes'),
+      Buffer.alloc(1024),
+    ]);
+    await extractTree(chunks(tar, 512), dir);
+    expect(fs.existsSync(path.join(dir, 'evil'))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'ok'), 'utf8')).toBe('yes');
+  });
+
+  it('keeps a file executable only when its tar mode is', async () => {
+    const tar = Buffer.concat([
+      tarEntry('package/run.sh', '#!/bin/sh\n', '0', 0o755),
+      tarEntry('package/plain.txt', 'x', '0', 0o644),
+      Buffer.alloc(1024),
+    ]);
+    await extractTree(chunks(tar, 512), dir);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(path.join(dir, 'run.sh')).mode & 0o111).not.toBe(0);
+      expect(fs.statSync(path.join(dir, 'plain.txt')).mode & 0o111).toBe(0);
+    }
+  });
+
+  it('follows a pax long name', async () => {
+    const long = `package/${'d/'.repeat(60)}tool`;
+    const tar = Buffer.concat([paxEntry(long), tarEntry('package/truncated', 'x'.repeat(10)), Buffer.alloc(1024)]);
+    await extractTree(chunks(tar, 300), dir);
+    expect(fs.readFileSync(path.join(dir, ...long.slice('package/'.length).split('/')), 'utf8')).toBe('x'.repeat(10));
+  });
+});
+
+describe('renameIntoPlace', () => {
+  it('retries a rename a filesystem refuses for a moment, and then takes it', async () => {
+    const codes: Array<string | undefined> = ['EACCES', 'EPERM', 'EBUSY', undefined];
+    let calls = 0;
+    const rename = (): void => {
+      const code = codes[calls++];
+      if (code !== undefined) throw Object.assign(new Error(`${code}: permission denied`), { code });
+    };
+    const logs: string[] = [];
+    await renameIntoPlace('/staging/a', '/tree/a', { rename, log: (line) => logs.push(line) });
+    expect(calls).toBe(4);
+    // Said once, so a slow install on such a filesystem is explicable.
+    expect(logs).toEqual(['[install] /tree/a was busy (EPERM); retrying']);
+  });
+
+  it('fails at once for a rename that is a real error', async () => {
+    const failing = (): void => {
+      throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' });
+    };
+    await expect(renameIntoPlace('/a', '/b', { rename: failing })).rejects.toThrow(/ENOTEMPTY/);
+  });
+
+  it('gives up after enough attempts on one that never takes', async () => {
+    let attempts = 0;
+    const never = (): void => {
+      attempts++;
+      throw Object.assign(new Error('EACCES: still busy'), { code: 'EACCES' });
+    };
+    await expect(renameIntoPlace('/a', '/b', { rename: never })).rejects.toThrow(/still busy/);
+    expect(attempts).toBe(8);
+  });
+});
+
+describe('installPackageTree', () => {
+  let cache: string;
+  const log = vi.fn();
+
+  /** A minimal npm package tarball: package.json + lib/bin.js for the root. */
+  const packageTarball = (name: string, version: string): Buffer =>
+    tarball(
+      tarEntry('package/package.json', JSON.stringify({ name, version }), '0', 0o644),
+      ...(name === '@deepseek-ai/dsh' ? [tarEntry('package/lib/bin.js', 'bin!')] : [tarEntry('package/index.js', 'ok', '0', 0o644)]),
+    );
+
+  const tgzOf = new Map<string, Buffer>([
+    ['@deepseek-ai/dsh', packageTarball('@deepseek-ai/dsh', '1.0.0')],
+    ['commander', packageTarball('commander', '15.0.0')],
+    ['shared-old', packageTarball('shared-old', '0.6.4')],
+  ]);
+  const entries: TreePackageEntry[] = [
+    { name: '@deepseek-ai/dsh', version: '1.0.0', integrity: sha512(tgzOf.get('@deepseek-ai/dsh')!), dest: 'node_modules/@deepseek-ai/dsh' },
+    { name: 'commander', version: '15.0.0', integrity: sha512(tgzOf.get('commander')!), dest: 'node_modules/commander' },
+    // A second version of a name, nested under its consumer like pnpm laid it out.
+    { name: 'shared-old', version: '0.6.4', integrity: sha512(tgzOf.get('shared-old')!), dest: 'node_modules/commander/node_modules/shared-old' },
+    { name: 'sunos-only', version: '1.0.0', integrity: 'sha512-whatever', dest: 'node_modules/sunos-only', optional: true, os: ['sunos'] },
+  ];
+  const registryOf = (bodies: Map<string, Buffer | number>) =>
+    vi.fn(async (url: string | URL | Request) => {
+      const name = [...bodies.keys()].find((n) => String(url).includes(`/${n}/-`));
+      const body = name !== undefined ? bodies.get(name) : undefined;
+      if (typeof body === 'number') return new Response('nope', { status: body });
+      return body !== undefined ? new Response(body) : new Response('nope', { status: 404 });
+    }) as unknown as typeof fetch;
+
+  beforeEach(() => {
+    cache = fs.mkdtempSync(path.join(os.tmpdir(), 'install-tree-'));
+    log.mockClear();
+  });
+  afterEach(() => fs.rmSync(cache, { recursive: true, force: true }));
+
+  it('lays every entry out at its dest, serving a repeat call from the cache', async () => {
+    const fetchFn = registryOf(tgzOf);
+    const root = await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, registry: 'https://registry.test', log, fetchFn, label: 'DSH' });
+    expect(root).toBe(path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', '@deepseek-ai', 'dsh'));
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))).toEqual({ name: '@deepseek-ai/dsh', version: '1.0.0' });
+    expect(fs.readFileSync(path.join(root, 'lib', 'bin.js'), 'utf8')).toBe('bin!');
+    expect(fs.readFileSync(path.join(root, '..', '..', 'commander', 'index.js'), 'utf8')).toBe('ok');
+    expect(
+      JSON.parse(fs.readFileSync(path.join(root, '..', '..', 'commander', 'node_modules', 'shared-old', 'package.json'), 'utf8')).version,
+    ).toBe('0.6.4');
+    // The sunos-only optional is gated away on any machine CI runs; it must
+    // be neither fetched nor laid down.
+    expect(fs.existsSync(path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'sunos-only'))).toBe(false);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(fs.readdirSync(path.join(cache, '@deepseek-ai+dsh@1.0.0'))).toEqual(['node_modules']); // no staging left
+  });
+
+  it('replaces a package left at the wrong version', async () => {
+    const stale = path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'commander');
+    fs.mkdirSync(stale, { recursive: true });
+    fs.writeFileSync(path.join(stale, 'package.json'), '{"version":"14.0.0"}');
+    const fetchFn = registryOf(tgzOf);
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn, label: 'DSH' });
+    expect(JSON.parse(fs.readFileSync(path.join(stale, 'package.json'), 'utf8')).version).toBe('15.0.0');
+  });
+
+  it('skips an optional package the registry will not serve', async () => {
+    const withOptional = [
+      ...entries.slice(0, 3),
+      { name: 'maybe-here', version: '1.0.0', integrity: 'sha512-x', dest: 'node_modules/maybe-here', optional: true } as TreePackageEntry,
+    ];
+    await installPackageTree('@deepseek-ai/dsh', withOptional, { cacheDir: cache, log, fetchFn: registryOf(tgzOf), label: 'DSH' });
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/skipping optional maybe-here@1.0.0/));
+    expect(fs.existsSync(path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'maybe-here'))).toBe(false);
+  });
+
+  it('fails the install when a required tarball does not match its pin', async () => {
+    const tampered = new Map([['@deepseek-ai/dsh', packageTarball('@deepseek-ai/dsh', '9.9.9')], ['commander', tgzOf.get('commander')!], ['shared-old', tgzOf.get('shared-old')!]]);
+    await expect(
+      installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn: registryOf(tampered), label: 'DSH' }),
+    ).rejects.toThrow(/@deepseek-ai\/dsh could not be installed: the tarball does not match its pinned sha512/);
+  });
+
+  it('refuses a root this build does not pin', async () => {
+    await expect(installPackageTree('unpinned', entries, { cacheDir: cache, log })).rejects.toThrow(/unpinned is not pinned/);
+  });
+
+  it('prunes older versions of the tree once the new one is in', async () => {
+    const old = path.join(cache, '@deepseek-ai+dsh@0.9.0');
+    const unrelated = path.join(cache, 'opencode-linux-x64@1.0.0');
+    fs.mkdirSync(old);
+    fs.mkdirSync(unrelated);
+    await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn: registryOf(tgzOf), label: 'DSH' });
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(unrelated)).toBe(true);
   });
 });
 

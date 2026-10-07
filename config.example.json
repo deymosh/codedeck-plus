@@ -13,6 +13,7 @@
   "openCodePort": 4096,
   "openCodeServerUrl": "http://127.0.0.1:4096",
   "openCodePath": "/usr/local/bin/opencode",
+  "deepseekPath": "/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js",
   "relayRegisterEndpoint": "https://relay.example.com/admin/allow",
   "relayRegisterToken": "admin-token",
   "blossomRegisterEndpoint": "https://blossom.example.com/admin/allow",

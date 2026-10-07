@@ -82,6 +82,8 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"10","kind":"check-credential","payload":{"agent":"claude-code","credential":"anthropic_api_key","value":"sk"}}));
         bridge_rt(json!({"v":1,"id":"h1","kind":"permission-outcome","payload":{"outcome":"selected","optionId":"allow"}}));
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
+        bridge_rt(json!({"v":1,"id":"h4","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"revise","feedback":"Fewer steps."}}));
+        bridge_rt(json!({"v":1,"id":"h5","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"default"}}));
         bridge_rt(json!({"v":1,"id":"h3","kind":"question-outcome","payload":{"outcome":"answered","answers":["Red","a, b"]}}));
     }
 
@@ -140,13 +142,14 @@ mod tests {
             {"question":"Why?","options":[]}
         ]}}));
         host_rt(json!({"v":1,"id":"h3","kind":"request-plan-approval","payload":{"sessionId":"s","requestId":"p","options":[{"id":"default","label":"Approve"}]}}));
+        host_rt(json!({"v":1,"id":"h4","kind":"request-plan-approval","payload":{"sessionId":"s","requestId":"p","options":[{"id":"default","label":"Approve"},{"id":"revise","label":"Keep planning"}],"revise":"revise"}}));
     }
 
     #[test]
     fn replies_are_told_apart_from_requests() {
         assert!(HostMessage::Ack.is_reply());
         assert!(!HostMessage::SessionEvent { session_id: "s".into(), event: SessionEvent::Ready {} }.is_reply());
-        assert!(BridgeMessage::PlanOutcome(SelectOutcome::Cancelled { reason: "x".into() }).is_reply());
+        assert!(BridgeMessage::PlanOutcome(PlanOutcome::Cancelled { reason: "x".into() }).is_reply());
         assert!(!BridgeMessage::Interrupt { session_id: "s".into() }.is_reply());
     }
 

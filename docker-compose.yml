@@ -25,6 +25,10 @@ services:
       # Claude Code's own settings, for an LLM gateway / router.
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}
+      # The DeepSeek Harness's endpoint — a DeepSeek-compatible relay or
+      # gateway, unless a session is bound to a provider profile. Its key
+      # travels as a secret, below.
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-}
       # The bridge's own settings live in ./data/config.json (created on
       # first start; config.example.json shows every key). The common ones
       # can also be set in .env: a variable set there wins over the file,
@@ -35,6 +39,7 @@ services:
       - CODEDECK_OPENCODE_SERVER_URL=${CODEDECK_OPENCODE_SERVER_URL:-}
       - CODEDECK_OPENCODE_AUTO_START=${CODEDECK_OPENCODE_AUTO_START:-}
       - CODEDECK_OPENCODE_PORT=${CODEDECK_OPENCODE_PORT:-}
+      - CODEDECK_DEEPSEEK_PATH=${CODEDECK_DEEPSEEK_PATH:-}
       - CODEDECK_DIRECT_LISTEN=${CODEDECK_DIRECT_LISTEN:-}
       - CODEDECK_DIRECT_ENDPOINTS=${CODEDECK_DIRECT_ENDPOINTS:-}
     # The direct link: phones on your network (or VPN) reach the bridge here
@@ -52,8 +57,21 @@ services:
         uid: "1000"
         gid: "1000"
         mode: 0440
+      - source: deepseek_api_key
+        target: deepseek_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
     volumes:
       - ./data:/data
+      # The agents' runtimes, a cache of what the host installs on demand (or
+      # an image built with BUNDLE_AGENTS=1 carries), in a volume of Docker's
+      # own rather than in ./data. A host directory is never filled from the
+      # image, so a bundle would not reach it; and on Docker Desktop it is a
+      # file share slow enough to dominate a runtime of hundreds of packages —
+      # the DeepSeek Harness boots in about a second from a volume and in
+      # about 25 from ./data.
+      - agents:/data/agents
 
   codedeck-tor:
     image: lncm/tor:0.4.7.13@sha256:5a3cfb478d978feb1426ce6dca8e10906bbdd72cff94d7c0c589339f717b2503
@@ -72,6 +90,11 @@ secrets:
     environment: CLAUDE_CODE_OAUTH_TOKEN
   github_token:
     environment: GITHUB_TOKEN
+  deepseek_api_key:
+    environment: DEEPSEEK_API_KEY
+
+volumes:
+  agents:
 
 networks:
   codedeck-net:

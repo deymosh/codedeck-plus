@@ -2,15 +2,26 @@ package com.codedeck.plus.ui.transcript.rows
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
@@ -22,6 +33,12 @@ import uniffi.client_ffi.UniffiIntent
  * alongside the answer so the card can name it before the bridge resolves
  * the request. The first option is the agent's own go-ahead, so it is the
  * one shown as the primary choice.
+ *
+ * The option that sends the plan back (`revise`, when the agent has one)
+ * asks what should change first: the feedback goes to the agent with the
+ * choice, in one answer, rather than as a message after it — by then the
+ * agent may already be revising without it. Sending it empty keeps planning
+ * with no feedback.
  */
 @Composable
 fun PlanApprovalCard(
@@ -40,19 +57,49 @@ fun PlanApprovalCard(
         return
     }
 
+    var writingFeedback by remember(item.requestId) { mutableStateOf(false) }
+    var feedback by remember(item.requestId) { mutableStateOf("") }
+    fun respond(optionId: String, withFeedback: String?) {
+        actions(UniffiIntent.SetPlanApprovalChoice(cardId = item.requestId, key = optionId))
+        actions(
+            UniffiIntent.RespondPlan(
+                machine = machine,
+                sessionId = sessionId,
+                requestId = item.requestId,
+                optionId = optionId,
+                feedback = withFeedback?.trim()?.takeIf { it.isNotEmpty() },
+            ),
+        )
+    }
+
     Column(Modifier.interactionCard(waiting = true)) {
         Text("Approve this plan?", color = Tokens.Text, fontSize = Tokens.TextMd)
+        val revise = item.revise
+        if (writingFeedback && revise != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = Tokens.Space2),
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+            ) {
+                OutlinedTextField(
+                    value = feedback,
+                    onValueChange = { feedback = it },
+                    placeholder = { Text("What should change? (optional)") },
+                    modifier = Modifier.weight(1f),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { respond(revise, feedback) }),
+                )
+                ActionChip("Send", Tokens.Text) { respond(revise, feedback) }
+            }
+            // Choosing to revise is not a commitment until it is sent: the
+            // other choices stay one tap away, and the draft is kept.
+            TextButton(onClick = { writingFeedback = false }) {
+                Text("Back to options", color = Tokens.TextMuted, fontSize = Tokens.TextXs)
+            }
+            return@Column
+        }
         item.options.forEachIndexed { i, option ->
             PlanOption(option.label, option.description, primary = i == 0) {
-                actions(UniffiIntent.SetPlanApprovalChoice(cardId = item.requestId, key = option.id))
-                actions(
-                    UniffiIntent.RespondPlan(
-                        machine = machine,
-                        sessionId = sessionId,
-                        requestId = item.requestId,
-                        optionId = option.id,
-                    ),
-                )
+                if (option.id == revise) writingFeedback = true else respond(option.id, null)
             }
         }
     }

@@ -23,6 +23,7 @@ pub struct Flags {
     pub opencode_server_url: Option<String>,
     pub opencode_auto_start: bool,
     pub opencode_path: Option<String>,
+    pub deepseek_path: Option<String>,
     pub agent_host: Option<PathBuf>,
     pub service: bool,
     pub test_mode: bool,
@@ -48,6 +49,7 @@ struct FileConfig {
     open_code_server_url: Option<String>,
     open_code_auto_start: Option<bool>,
     open_code_path: Option<String>,
+    deepseek_path: Option<String>,
     open_code_port: Option<u16>,
     agent_host_path: Option<String>,
     node_path: Option<String>,
@@ -373,11 +375,15 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     put("CODEDECK_OPENCODE_AUTO_START", auto_start.then(|| "1".into()));
     put("CODEDECK_OPENCODE_PATH", flags.opencode_path.clone().or_else(|| env("CODEDECK_OPENCODE_PATH")).or(file.open_code_path));
     put("CODEDECK_OPENCODE_PORT", env("CODEDECK_OPENCODE_PORT").or(file.open_code_port.map(|p| p.to_string())));
+    put("CODEDECK_DEEPSEEK_PATH", flags.deepseek_path.clone().or_else(|| env("CODEDECK_DEEPSEEK_PATH")).or(file.deepseek_path));
     let test_mode = flags.test_mode || env_bool("CODEDECK_TEST_MODE").unwrap_or(false);
     put("CODEDECK_TEST_MODE", test_mode.then(|| "1".into()));
     put("CODEDECK_AGENT_HOST_DRIVERS", env("CODEDECK_AGENT_HOST_DRIVERS"));
-    // Agent binaries the host installs on demand live under the bridge's home.
+    // Agent binaries the host installs on demand live under the bridge's home,
+    // and so does the state of an agent that keeps its own (the harness's
+    // profiles, sessions and credentials).
     put("CODEDECK_AGENT_CACHE", Some(home.join("agents").to_string_lossy().into_owned()));
+    put("CODEDECK_DEEPSEEK_HOME", Some(home.join("dsh").to_string_lossy().into_owned()));
 
     let direct = direct_config(flags, file.direct)?;
 
@@ -450,6 +456,7 @@ mod tests {
             open_code_server_url,
             open_code_auto_start,
             open_code_path,
+            deepseek_path,
             open_code_port,
             agent_host_path,
             node_path,
@@ -470,6 +477,7 @@ mod tests {
             ("openCodeServerUrl", open_code_server_url.is_some()),
             ("openCodeAutoStart", open_code_auto_start.is_some()),
             ("openCodePath", open_code_path.is_some()),
+            ("deepseekPath", deepseek_path.is_some()),
             ("openCodePort", open_code_port.is_some()),
             ("agentHostPath", agent_host_path.is_some()),
             ("nodePath", node_path.is_some()),

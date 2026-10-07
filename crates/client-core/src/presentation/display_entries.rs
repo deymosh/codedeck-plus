@@ -276,6 +276,9 @@ pub enum DisplayEntry {
         seq: u64,
         request_id: String,
         options: Vec<OptionChoice>,
+        /// The option the user's feedback goes with, when the agent takes
+        /// feedback on its plan.
+        revise: Option<String>,
         /// The outcome, once a `resolved` entry answered it.
         answered: Option<String>,
     },
@@ -617,13 +620,14 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     agent_label: subagent_label(entry),
                 });
             }
-            EntryBody::PlanApproval { request_id, options } => {
+            EntryBody::PlanApproval { request_id, options, revise } => {
                 b.flush_all();
                 b.display.push(DisplayEntry::PlanApproval {
                     seq,
                     answered: b.resolved.get(request_id).cloned(),
                     request_id: request_id.clone(),
                     options: options.clone(),
+                    revise: revise.clone(),
                 });
             }
             EntryBody::Notice { kind, text } => {
@@ -989,11 +993,12 @@ mod tests {
     #[test]
     fn plan_approval_carries_its_options_and_outcome() {
         let d = build_display_entries(&seq(&[
-            json!({"entryType":"plan_approval","requestId":"p","options":[{"id":"approve","label":"Approve"}]}),
+            json!({"entryType":"plan_approval","requestId":"p","options":[{"id":"approve","label":"Approve"},{"id":"revise","label":"Keep planning"}],"revise":"revise"}),
             json!({"entryType":"resolved","requestId":"p","summary":"Plan approved"}),
         ]));
-        let DisplayEntry::PlanApproval { options, answered, .. } = &d[0] else { panic!() };
+        let DisplayEntry::PlanApproval { options, answered, revise, .. } = &d[0] else { panic!() };
         assert_eq!(options[0].id, "approve");
+        assert_eq!(revise.as_deref(), Some("revise"));
         assert_eq!(answered.as_deref(), Some("Plan approved"));
     }
 

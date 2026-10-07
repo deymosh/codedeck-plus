@@ -6,12 +6,21 @@
  *
  * Configuration is the environment the bridge passes down:
  *   CODEDECK_AGENT_HOST_DRIVERS   comma-separated drivers to load
- *                                 (default `claude-code,opencode`; `fake` for tests)
+ *                                 (default `claude-code,opencode,deepseek-harness`;
+ *                                 `fake` for tests)
  *   CODEDECK_CLAUDE_PATH          the `claude` executable
  *   CODEDECK_TEST_MODE=1          Claude Code sessions answer canned /test-* commands
  *   CODEDECK_OPENCODE_SERVER_URL  an OpenCode server to use
  *   CODEDECK_OPENCODE_AUTO_START=1, CODEDECK_OPENCODE_PATH, CODEDECK_OPENCODE_PORT
  *                                 spawn and manage an OpenCode server instead
+ *   CODEDECK_DEEPSEEK_PATH        the DeepSeek Harness CLI to run (its
+ *                                 `lib/bin.js`, or an executable of your own);
+ *                                 unset = the runtime this build pins
+ *   CODEDECK_DEEPSEEK_HOME        `$DSH_HOME`, the harness's state root
+ *                                 (the bridge passes `<home>/dsh`)
+ *   CODEDECK_AGENT_HOST_WARM=1    install the enabled agents' runtimes and
+ *                                 exit, without serving anything (an image
+ *                                 build, or a first-run warm-up)
  *   CODEDECK_AGENT_CACHE          where agent binaries installed on demand live
  *                                 (the bridge passes `<home>/agents`; `bin/`
  *                                 in it links each one under a stable name)
@@ -25,11 +34,18 @@ import { ClaudeDriver } from './drivers/claude/driver';
 import { RealSdkFacade, resolveClaudeExecutable } from './drivers/claude/facade';
 import { bundledClaudeExecutable, claudeBinary } from './drivers/claude/install';
 import { TestModeSdkFacade } from './drivers/claude/testModeFacade';
+import { DeepSeekDriver } from './drivers/deepseek/driver';
+import { takeDeepSeekEnv } from './drivers/deepseek/env';
+import { installDshTree } from './drivers/deepseek/install';
+import { DeepSeekMcp } from './drivers/deepseek/mcp';
+import { DeepSeekRuntime, dshHomeDir, dshProfileDir } from './drivers/deepseek/runtime';
 import { FakeDriver } from './drivers/fake';
 import { OpenCodeDriver } from './drivers/opencode/driver';
 import { openCodeBinary } from './drivers/opencode/install';
+import { resolveOpenCodePath } from './drivers/opencode/server';
+import { isFile } from './executable';
 import { AgentHost, type HostIo } from './host';
-import { httpPost } from './net';
+import { httpGet, httpPost } from './net';
 
 // stdout carries protocol frames only; a stray console.log from any library
 // would corrupt the stream, so every console method writes to stderr.
@@ -44,11 +60,69 @@ const log = (message: string): void => {
 process.on('uncaughtException', (err) => log(`[agent-host] uncaught exception: ${err instanceof Error ? err.stack : String(err)}`));
 process.on('unhandledRejection', (err) => log(`[agent-host] unhandled rejection: ${err instanceof Error ? err.stack : String(err)}`));
 
-async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
-  const names = (env.CODEDECK_AGENT_HOST_DRIVERS ?? 'claude-code,opencode')
+/** The drivers this host runs, in the order they were asked for. */
+function driverNames(env: NodeJS.ProcessEnv): string[] {
+  return (env.CODEDECK_AGENT_HOST_DRIVERS ?? 'claude-code,opencode,deepseek-harness')
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean);
+}
+
+/**
+ * `CODEDECK_AGENT_HOST_WARM=1` with a driver list: fetch what those agents
+ * run from (the same installs a first session would trigger) and exit. An
+ * image built with BUNDLE_AGENTS=1 runs this at build time, so a host with no
+ * internet has every runtime already; an operator can run it to have the
+ * first session start without waiting for a download.
+ *
+ * Nothing is installed twice: each agent's own lookup decides, so an agent
+ * already on the machine (or bundled beside the host) is left alone.
+ */
+async function warmAgents(env: NodeJS.ProcessEnv, names: string[], cacheDir: string): Promise<void> {
+  const cache = { cacheDir, registry: registryUrl(env), log };
+  for (const name of names) {
+    switch (name) {
+      case 'claude-code': {
+        const found = env.CODEDECK_TEST_MODE === '1' ? 'test mode' : (resolveClaudeExecutable(undefined, env) ?? bundledClaudeExecutable());
+        if (found) {
+          log(`[warm] Claude Code is already available (${found})`);
+          break;
+        }
+        log(`[warm] Claude Code: ${await installBinary(claudeBinary(), cache)}`);
+        break;
+      }
+      case 'opencode': {
+        const found = resolveOpenCodePath(undefined, env);
+        if (found) {
+          log(`[warm] OpenCode is already available (${found})`);
+          break;
+        }
+        log(`[warm] OpenCode: ${await installBinary(openCodeBinary(), cache)}`);
+        break;
+      }
+      case 'deepseek-harness': {
+        const explicit = env.CODEDECK_DEEPSEEK_PATH?.trim();
+        if (explicit) {
+          log(`[warm] the DeepSeek Harness runs the CLI at ${explicit}`);
+          break;
+        }
+        log(`[warm] DeepSeek Harness: ${await installDshTree(cache)}`);
+        break;
+      }
+      case 'fake':
+        break;
+      default:
+        log(`[warm] unknown driver '${name}' — skipped`);
+    }
+  }
+  log('[warm] every agent this host was asked for is installed');
+}
+
+async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
+  const names = driverNames(env);
+  // Before any driver starts a process: every agent's process inherits this
+  // environment, and the harness's endpoint and key are its driver's alone.
+  const harnessEnv = names.includes('deepseek-harness') ? takeDeepSeekEnv(env) : env;
   const drivers: Driver[] = [];
   const cacheDir = agentCacheDir(env);
   const install = (binary: PackagedBinary) => (): Promise<string> =>
@@ -92,6 +166,39 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
         );
         break;
       }
+      case 'deepseek-harness': {
+        const home = dshHomeDir(lookupEnv);
+        const dshPath = env.CODEDECK_DEEPSEEK_PATH?.trim();
+        // The MCP servers live in this profile layer, and a harness process
+        // is told the layer's version as it starts: the same manager serves
+        // both, so a change after a process started is configuration it has
+        // not loaded.
+        const mcp = new DeepSeekMcp({ profileDir: dshProfileDir(home), log });
+        const driver = DeepSeekDriver.create({
+          runtime: new DeepSeekRuntime({
+            // An explicit path is the operator's own harness; without one the
+            // pinned tree is installed on demand, at the version and sha512
+            // pnpm-lock.yaml holds.
+            ...(dshPath ? { dshPath } : {}),
+            home,
+            cacheDir,
+            registry: registryUrl(env),
+            installDsh: installDshTree,
+            configVersion: () => mcp.version,
+            log,
+          }),
+          home,
+          mcp,
+          baseEnv: harnessEnv,
+          httpGet,
+          log,
+        });
+        if (dshPath && !isFile(dshPath)) {
+          driver.setUnavailable(`CODEDECK_DEEPSEEK_PATH points at ${dshPath}, which is not a file.`);
+        }
+        drivers.push(driver);
+        break;
+      }
       case 'fake':
         drivers.push(new FakeDriver());
         break;
@@ -103,6 +210,13 @@ async function loadDrivers(env: NodeJS.ProcessEnv): Promise<Driver[]> {
 }
 
 async function main(): Promise<void> {
+  const warm = process.env.CODEDECK_AGENT_HOST_WARM?.trim();
+  if (warm === '1' || warm === 'true') {
+    // A build step or a first-run warm-up: install, then exit without ever
+    // reading stdin.
+    await warmAgents(process.env, driverNames(process.env), agentCacheDir(process.env));
+    return;
+  }
   const io: HostIo = {
     write: (line) => {
       process.stdout.write(`${line}\n`);
@@ -120,4 +234,7 @@ async function main(): Promise<void> {
   });
 }
 
-void main();
+main().catch((error: unknown) => {
+  log(`[agent-host] could not start: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+  process.exitCode = 1;
+});

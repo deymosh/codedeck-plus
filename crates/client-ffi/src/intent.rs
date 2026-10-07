@@ -261,12 +261,14 @@ pub enum UniffiIntent {
         selected: Vec<u32>,
         text: Option<String>,
     },
-    /// Answer a plan approval with one of its options' ids.
+    /// Answer a plan approval with one of its options' ids; `feedback` is
+    /// what the user wants changed, with the card's `revise` option.
     RespondPlan {
         machine: String,
         session_id: String,
         request_id: String,
         option_id: String,
+        feedback: Option<String>,
     },
     /// Change a session option: `option` is `"mode"` / `"effort"` /
     /// `"model"`, `value` an id the session's agent advertises (or a model id).
@@ -539,8 +541,8 @@ impl TryFrom<UniffiIntent> for Intent {
                     },
                 }
             }
-            UniffiIntent::RespondPlan { machine, session_id, request_id, option_id } => {
-                Intent::RespondPlan { machine, session_id, request_id, option_id }
+            UniffiIntent::RespondPlan { machine, session_id, request_id, option_id, feedback } => {
+                Intent::RespondPlan { machine, session_id, request_id, option_id, feedback }
             }
             UniffiIntent::SetOption { machine, session_id, option, value } => Intent::SetOption {
                 machine,

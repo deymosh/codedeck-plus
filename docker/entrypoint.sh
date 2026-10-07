@@ -24,7 +24,8 @@ read_secret() {
 
 CLAUDE_CODE_OAUTH_TOKEN=$(read_secret claude_code_oauth_token CLAUDE_CODE_OAUTH_TOKEN)
 GITHUB_TOKEN=$(read_secret github_token GITHUB_TOKEN)
-export CLAUDE_CODE_OAUTH_TOKEN
+DEEPSEEK_API_KEY=$(read_secret deepseek_api_key DEEPSEEK_API_KEY)
+export CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY
 
 # /data is the only volume this image persists — the Dockerfile points
 # XDG_CONFIG_HOME/XDG_DATA_HOME there so OpenCode's own config/auth (e.g. a

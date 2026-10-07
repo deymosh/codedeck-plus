@@ -1,0 +1,7 @@
+# Line endings. The repository stores LF and every checkout gets LF, whatever
+# the platform that made the change: a Windows checkout would otherwise write
+# CRLF into a file it edits, and the tree would carry a whole-file diff that
+# says nothing. `text=auto` leaves binaries alone (git detects them), and
+# Gradle's wrapper script is the one text file that has to keep its CRLF.
+* text=auto eol=lf
+apps/android/gradlew.bat text eol=crlf

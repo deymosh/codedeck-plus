@@ -8424,13 +8424,15 @@ sealed class UniffiIntent {
     }
     
     /**
-     * Answer a plan approval with one of its options' ids.
+     * Answer a plan approval with one of its options' ids; `feedback` is
+     * what the user wants changed, with the card's `revise` option.
      */
     data class RespondPlan(
         val `machine`: kotlin.String, 
         val `sessionId`: kotlin.String, 
         val `requestId`: kotlin.String, 
-        val `optionId`: kotlin.String) : UniffiIntent()
+        val `optionId`: kotlin.String, 
+        val `feedback`: kotlin.String?) : UniffiIntent()
         
     {
         
@@ -8935,6 +8937,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
                 )
             24 -> UniffiIntent.SetOption(
                 FfiConverterString.read(buf),
@@ -9262,6 +9265,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`sessionId`)
                 + FfiConverterString.allocationSize(value.`requestId`)
                 + FfiConverterString.allocationSize(value.`optionId`)
+                + FfiConverterOptionalString.allocationSize(value.`feedback`)
             )
         }
         is UniffiIntent.SetOption -> {
@@ -9681,6 +9685,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
                 FfiConverterString.write(value.`optionId`, buf)
+                FfiConverterOptionalString.write(value.`feedback`, buf)
                 Unit
             }
             is UniffiIntent.SetOption -> {
