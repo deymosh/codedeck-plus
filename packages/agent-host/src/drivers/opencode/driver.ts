@@ -1090,6 +1090,15 @@ export class OpenCodeDriver implements Driver {
     }
   }
 
+  /** OpenCode deletes a session's subagent sessions with it. */
+  async deleteConversation(conversationId: string, cwd: string): Promise<void> {
+    const client = await this.client();
+    const { error, response } = await client.session.delete({ sessionID: conversationId, directory: cwd });
+    if (error && response?.status !== 404) {
+      throw new Error(`OpenCode could not delete session ${conversationId}: ${JSON.stringify(error)}`);
+    }
+  }
+
   async shutdown(): Promise<void> {
     this.stopped = true;
     await this.server?.close();

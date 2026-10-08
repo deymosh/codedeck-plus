@@ -131,6 +131,21 @@ export type BridgeMessage_Deserialize =
 { kind: "end-session"; payload: {
 	sessionId: string,
 } } | 
+/**
+ *  Delete the agent's own record of a conversation — its transcript
+ *  files, or its session on the agent's server — once the user deleted
+ *  the bridge session `session_id` that ran it. Sent only for
+ *  conversations the bridge itself started, never for one the user
+ *  began elsewhere. The host first waits for `session_id` to finish
+ *  ending. Reply: `ack`, also when there was nothing to delete, or
+ *  `error`.
+ */
+{ kind: "delete-conversation"; payload: {
+	sessionId: string,
+	agent: string,
+	cwd: string,
+	conversationId: string,
+} } | 
 /**  Hand user input to the agent. Reply: `ack`. */
 { kind: "prompt"; payload: {
 	sessionId: string,
@@ -247,6 +262,21 @@ export type BridgeMessage_Serialize =
 /**  Stop the session and forget it. Reply: `ack`. No `ended` follows. */
 { kind: "end-session"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  Delete the agent's own record of a conversation — its transcript
+ *  files, or its session on the agent's server — once the user deleted
+ *  the bridge session `session_id` that ran it. Sent only for
+ *  conversations the bridge itself started, never for one the user
+ *  began elsewhere. The host first waits for `session_id` to finish
+ *  ending. Reply: `ack`, also when there was nothing to delete, or
+ *  `error`.
+ */
+{ kind: "delete-conversation"; payload: {
+	sessionId: string,
+	agent: string,
+	cwd: string,
+	conversationId: string,
 } } | 
 /**  Hand user input to the agent. Reply: `ack`. */
 { kind: "prompt"; payload: {

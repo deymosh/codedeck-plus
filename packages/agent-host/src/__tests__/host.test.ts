@@ -4,8 +4,10 @@
  * bridge, and session lifetimes.
  */
 import { describe, it, expect } from 'vitest';
+import type { Driver } from '../driver';
 import { FakeDriver } from '../drivers/fake';
 import { AgentHost, parseBridgeFrame } from '../host';
+import type { AgentInfo } from '../types';
 
 interface Frame {
   v: number;
@@ -124,6 +126,54 @@ describe('AgentHost', () => {
     // Ending an unknown session is not an error: the bridge may race an `ended`.
     await h.send('end-session', { sessionId: 'gone' }, 'z');
     expect(h.reply('z')).toMatchObject({ kind: 'ack' });
+  });
+
+  it('deleting a conversation waits for its session to finish ending', async () => {
+    const log: string[] = [];
+    let release!: () => void;
+    const stopped = new Promise<void>((r) => (release = r));
+    const driver: Driver = {
+      info: () => ({ id: 'slow', displayName: 'Slow', modes: [], efforts: [], supports: {} as AgentInfo['supports'], credentials: [] }),
+      startSession: () => ({
+        prompt: () => {},
+        interrupt: async () => {},
+        setOption: async () => {},
+        getUsage: async () => null,
+        end: async () => {
+          await stopped;
+          log.push('ended');
+        },
+      }),
+      listModels: async () => ({ models: [] }),
+      deleteConversation: async (id, cwd) => {
+        log.push(`deleted ${id} in ${cwd}`);
+      },
+    };
+    const out: Frame[] = [];
+    const host = new AgentHost([driver], { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
+    const send = (id: string, kind: string, payload: Record<string, unknown>) =>
+      host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
+    await send('st', 'start-session', { sessionId: 's1', agent: 'slow', cwd: '/w' });
+
+    // A delete while the session runs is refused: the agent still writes.
+    await send('d0', 'delete-conversation', { sessionId: 's1', agent: 'slow', cwd: '/w', conversationId: 'n1' });
+    expect(out.find((f) => f.id === 'd0')).toMatchObject({ kind: 'error', payload: { message: 'session s1 is still running' } });
+
+    // Handled concurrently, as main.ts does: the delete waits for the end.
+    const ending = send('e', 'end-session', { sessionId: 's1' });
+    const deleting = send('d1', 'delete-conversation', { sessionId: 's1', agent: 'slow', cwd: '/w', conversationId: 'n1' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(log).toEqual([]);
+    release();
+    await Promise.all([ending, deleting]);
+    expect(log).toEqual(['ended', 'deleted n1 in /w']);
+    expect(out.find((f) => f.id === 'd1')).toEqual({ v: 1, id: 'd1', kind: 'ack' });
+  });
+
+  it('deleting a conversation of an agent that keeps none is acknowledged', async () => {
+    const h = harness();
+    await h.send('delete-conversation', { sessionId: 's1', agent: 'fake', cwd: '/w', conversationId: 'n1' }, 'd');
+    expect(h.reply('d')).toMatchObject({ kind: 'ack' });
   });
 
   it('a lost resume target ends the session at once, saying so', async () => {

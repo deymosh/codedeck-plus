@@ -11,7 +11,7 @@ use protocol::events::{
     CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
-use super::{Engine, HostCall};
+use super::{ConversationDelete, Engine, HostCall};
 use crate::catalog::{is_effort, is_mode};
 use crate::io::{Effect, InboundEvent, Via};
 use crate::registry::{project_of, SessionRecord};
@@ -366,7 +366,19 @@ impl Engine {
     fn on_close_session(&mut self, session_id: &str) {
         let existed = self.sessions.contains_key(session_id);
         self.close_runner(session_id, "Session closed");
-        self.sessions.remove(session_id);
+        // Every conversation a record points to was started by the bridge (a
+        // session can only be created fresh), so the agent's copy goes too —
+        // including one dropped as missing, which may exist after all.
+        if let Some(Session { rec, .. }) = self.sessions.remove(session_id) {
+            for conversation_id in [rec.native_session_id, rec.previous_native_session_id].into_iter().flatten() {
+                self.delete_conversation(ConversationDelete {
+                    session_id: session_id.to_string(),
+                    agent: rec.agent.clone(),
+                    cwd: rec.cwd.clone(),
+                    conversation_id,
+                });
+            }
+        }
         self.tombstones.add(session_id);
         self.registry_dirty = true;
         if let Err(err) = self.transcripts.remove(session_id) {

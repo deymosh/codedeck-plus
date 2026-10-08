@@ -473,6 +473,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `initialize {bridgeVersion}` | `initialized {hostVersion, agents: AgentInfo[]}` |
 | `start-session {sessionId, agent, cwd, mode?, effort?, model?, resume?, credentials, env, provider?}` | `ack` once starting (progress follows as events), or `error` |
 | `end-session {sessionId}` | `ack`; no `ended` follows |
+| `delete-conversation {sessionId, agent, cwd, conversationId}` | `ack` once the agent's own record of a deleted session's conversation is gone (also when there was none), after `sessionId` finished ending; or `error` |
 | `prompt {sessionId, text}` | `ack` |
 | `interrupt {sessionId}` | `ack` |
 | `stop-task {sessionId, taskId}` | `ack` once asked (the task's next `background_task` entry says it stopped), or `error` |

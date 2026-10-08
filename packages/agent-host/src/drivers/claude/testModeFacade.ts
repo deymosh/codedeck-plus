@@ -210,4 +210,5 @@ export class TestModeSdkFacade implements SdkFacade {
   async supportedModels(): Promise<SdkModelDescriptor[]> {
     return [{ id: 'test-mode', label: 'Test Mode' }];
   }
+  async deleteSession(): Promise<void> {}
 }

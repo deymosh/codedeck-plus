@@ -45,6 +45,7 @@ import { askPlugin, listSessionCommands, runSessionCommand, steerSession } from 
 import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
 import { ASK_USER_TOOL, installProfileTools } from './profileTools';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs, type PlanReview, type PushedQuestionLine } from './questions';
+import { deleteDshConversation } from './conversations';
 import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
@@ -1004,6 +1005,10 @@ export class DeepSeekDriver implements Driver {
     } catch {
       return undefined;
     }
+  }
+
+  deleteConversation(conversationId: string): Promise<void> {
+    return deleteDshConversation(this.options.home, conversationId);
   }
 
   /**

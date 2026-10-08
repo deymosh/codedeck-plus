@@ -63,6 +63,9 @@ function errorText(err: unknown): string {
 export class AgentHost {
   private readonly drivers: Map<string, Driver>;
   private readonly sessions = new Map<string, SessionSlot>();
+  /** Sessions an `end-session` is still stopping: what deleting their
+   *  conversation waits for, since lines are handled concurrently. */
+  private readonly ending = new Map<string, Promise<void>>();
   private readonly pending = new Map<string, (reply: Reply | null) => void>();
   private nextRequestId = 0;
   private shuttingDown = false;
@@ -144,12 +147,27 @@ export class AgentHost {
           payload: { hostVersion: this.hostVersion, agents: [...this.drivers.values()].map((d) => d.info()) },
         };
       case 'end-session': {
-        const slot = this.sessions.get(message.payload.sessionId);
-        this.sessions.delete(message.payload.sessionId);
+        const { sessionId } = message.payload;
+        const slot = this.sessions.get(sessionId);
+        this.sessions.delete(sessionId);
         if (slot) {
           slot.closed = true;
-          await slot.session?.end();
+          const ending = Promise.resolve(slot.session?.end());
+          const settled = ending.catch(() => {});
+          this.ending.set(sessionId, settled);
+          void settled.finally(() => {
+            if (this.ending.get(sessionId) === settled) this.ending.delete(sessionId);
+          });
+          await ending;
         }
+        return ack();
+      }
+      case 'delete-conversation': {
+        const { sessionId, agent, cwd, conversationId } = message.payload;
+        // The agent must have stopped writing to the conversation first.
+        if (this.sessions.has(sessionId)) throw new Error(`session ${sessionId} is still running`);
+        await this.ending.get(sessionId);
+        await this.driver(agent).deleteConversation?.(conversationId, cwd);
         return ack();
       }
       case 'prompt':

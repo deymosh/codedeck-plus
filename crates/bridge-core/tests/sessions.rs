@@ -456,6 +456,66 @@ fn close_session_ends_it_tombstones_it_and_forgets_its_transcript() {
     assert!(rig.transcripts.entries(&s).is_empty());
 }
 
+fn conversation_deletes(frames: &[agent_protocol::BridgeFrame]) -> Vec<(String, String, String)> {
+    frames
+        .iter()
+        .filter_map(|f| match &f.message {
+            BridgeMessage::DeleteConversation { session_id, agent, conversation_id, .. } => {
+                Some((session_id.clone(), agent.clone(), conversation_id.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn closing_a_session_deletes_its_conversation_after_ending_it() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    info_native(&mut rig, &s, "n1");
+    rig.take();
+    rig.send(json!({"type":"close-session","sessionId":s}));
+    let frames = rig.host_frames();
+    let end = frames.iter().position(|f| matches!(f.message, BridgeMessage::EndSession { .. }));
+    let delete = frames.iter().position(|f| matches!(f.message, BridgeMessage::DeleteConversation { .. }));
+    assert!(end.is_some() && end < delete, "ended first: {frames:?}");
+    assert_eq!(conversation_deletes(&frames), vec![(s.clone(), "alpha".into(), "n1".into())]);
+}
+
+#[test]
+fn closing_a_session_with_no_conversation_deletes_nothing() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    rig.take();
+    rig.send(json!({"type":"close-session","sessionId":s}));
+    assert!(conversation_deletes(&rig.host_frames()).is_empty());
+}
+
+#[test]
+fn a_conversation_delete_waits_for_the_host_and_survives_its_death() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let a = rig.ready_session("alpha");
+    info_native(&mut rig, &a, "na");
+    let b = rig.ready_session("alpha");
+    info_native(&mut rig, &b, "nb");
+    rig.take();
+
+    // In flight when the host dies: sent again once it is back.
+    rig.send(json!({"type":"close-session","sessionId":a}));
+    assert_eq!(conversation_deletes(&rig.host_frames()).len(), 1);
+    rig.input(Input::HostDown { reason: "exit 1".into() });
+    // Asked while it is down: held until then.
+    rig.send(json!({"type":"close-session","sessionId":b}));
+    assert!(conversation_deletes(&rig.host_frames()).is_empty());
+
+    rig.host_up();
+    let deleted: Vec<String> = conversation_deletes(&rig.host_frames()).into_iter().map(|(_, _, c)| c).collect();
+    assert_eq!(deleted, vec!["na".to_string(), "nb".to_string()]);
+}
+
 #[test]
 fn closing_sessions_in_a_row_ends_each_and_late_host_events_bring_none_back() {
     let mut rig = Rig::new();

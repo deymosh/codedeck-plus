@@ -55,6 +55,16 @@ pub(crate) enum HostCall {
     /// A session's MCP status, asked for or answering a toggle.
     SessionMcp { session_id: String },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
+    DeleteConversation(ConversationDelete),
+}
+
+/// A conversation of a deleted session, for its agent to delete.
+#[derive(Debug, Clone)]
+pub(crate) struct ConversationDelete {
+    pub session_id: String,
+    pub agent: String,
+    pub cwd: String,
+    pub conversation_id: String,
 }
 
 fn cancelled(kind: &CardKind, reason: &str) -> BridgeMessage {
@@ -115,6 +125,10 @@ impl Engine {
         self.host.up = false;
         self.host.initialized = false;
         for call in std::mem::take(&mut self.host.calls).into_values() {
+            if let HostCall::DeleteConversation(delete) = call {
+                self.host.deletes.push(delete);
+                continue;
+            }
             // Session-bound requests die with the sessions, handled below.
             if !matches!(
                 call,
@@ -175,6 +189,9 @@ impl Engine {
                     for id in waiting {
                         self.spawn(&id);
                     }
+                    for delete in std::mem::take(&mut self.host.deletes) {
+                        self.delete_conversation(delete);
+                    }
                 }
                 Ok(_) => log::error!("[Engine] The agent host answered initialize with the wrong reply"),
                 Err(err) => log::error!("[Engine] The agent host failed to initialize: {err}"),
@@ -216,7 +233,31 @@ impl Engine {
                 };
                 self.on_credential_checked(ticket, &agent, &credential, &value, valid);
             }
+            HostCall::DeleteConversation(delete) => match result {
+                Ok(_) => log::info!("[Engine] Conversation {} of {} deleted", delete.conversation_id, delete.session_id),
+                Err(err) => log::warn!(
+                    "[Engine] Deleting conversation {} of {} failed: {err}",
+                    delete.conversation_id,
+                    delete.session_id
+                ),
+            },
         }
+    }
+
+    /// Ask the host to delete a deleted session's conversation, or keep the
+    /// request until the host is back.
+    pub(super) fn delete_conversation(&mut self, delete: ConversationDelete) {
+        if !self.host.initialized {
+            self.host.deletes.push(delete);
+            return;
+        }
+        let message = BridgeMessage::DeleteConversation {
+            session_id: delete.session_id.clone(),
+            agent: delete.agent.clone(),
+            cwd: delete.cwd.clone(),
+            conversation_id: delete.conversation_id.clone(),
+        };
+        self.call(HostCall::DeleteConversation(delete), message);
     }
 
     fn on_option_reply(&mut self, session_id: &str, option: SessionOption, value: String, result: Result<(), String>) {

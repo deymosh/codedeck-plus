@@ -139,6 +139,16 @@ export interface Driver {
   /** Check a credential value with its provider: true/false, or undefined
    *  when it could not be checked. */
   checkCredential?(credential: string, value: string): Promise<boolean | undefined>;
+  /**
+   * Delete the agent's own record of a conversation (an `info`
+   * `nativeSessionId` it reported, run in `cwd`): its transcript files, or
+   * its session on the agent's server, with any subagent conversations it
+   * spawned. Called only once the session that ran it has ended. Resolves
+   * when nothing of it is left — also when there was nothing to begin with —
+   * and rejects with the reason it could not. Absent: the agent keeps
+   * nothing the host can remove.
+   */
+  deleteConversation?(conversationId: string, cwd: string): Promise<void>;
   /** Manages the agent's plugins, when it has any. */
   readonly plugins?: PluginManager;
   /** Manages the agent's MCP servers, when it supports them. */

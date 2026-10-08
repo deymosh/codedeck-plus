@@ -62,6 +62,9 @@ mod tests {
         assert_eq!(s.credentials["anthropic_api_key"].expose(), "sk");
         bridge_rt(json!({"v":1,"id":"3","kind":"start-session","payload":{"sessionId":"s","agent":"fake","cwd":"/"}}));
         bridge_rt(json!({"v":1,"id":"4","kind":"end-session","payload":{"sessionId":"s"}}));
+        bridge_rt(json!({"v":1,"id":"4b","kind":"delete-conversation","payload":{
+            "sessionId":"s","agent":"claude-code","cwd":"/w","conversationId":"native-1"
+        }}));
         bridge_rt(json!({"v":1,"id":"5","kind":"prompt","payload":{"sessionId":"s","text":"hi"}}));
         bridge_rt(json!({"v":1,"id":"6","kind":"interrupt","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"6b","kind":"stop-task","payload":{"sessionId":"s","taskId":"b1"}}));

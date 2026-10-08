@@ -316,6 +316,19 @@ pub enum BridgeMessage {
     StartSession(Box<StartSession>),
     /// Stop the session and forget it. Reply: `ack`. No `ended` follows.
     EndSession { session_id: String },
+    /// Delete the agent's own record of a conversation — its transcript
+    /// files, or its session on the agent's server — once the user deleted
+    /// the bridge session `session_id` that ran it. Sent only for
+    /// conversations the bridge itself started, never for one the user
+    /// began elsewhere. The host first waits for `session_id` to finish
+    /// ending. Reply: `ack`, also when there was nothing to delete, or
+    /// `error`.
+    DeleteConversation {
+        session_id: String,
+        agent: String,
+        cwd: String,
+        conversation_id: String,
+    },
     /// Hand user input to the agent. Reply: `ack`.
     Prompt { session_id: String, text: String },
     /// Stop the running turn. Reply: `ack`.
