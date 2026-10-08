@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::capabilities::BridgeHostKind;
 use super::common::{
-    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo, OutputEntry,
+    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     SessionMcpServer,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     UsageData,
@@ -208,7 +208,7 @@ pub struct GsdStateMsg {
     pub gsd: GsdState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ModelEntry {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,6 +217,11 @@ pub struct ModelEntry {
     /// says: the same model can be offered by more than one provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The reasoning levels of this model, for an agent whose levels differ
+    /// by model (its catalog entry lists none of its own). Empty: the
+    /// agent's own levels, if any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<OptionChoice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

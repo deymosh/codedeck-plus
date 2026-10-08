@@ -74,7 +74,7 @@ class SessionChromeSnapshotTest {
                                     UniffiUsageWindow(label = "5h", utilization = 61.0, resetsAt = null),
                                     UniffiUsageWindow(label = "7d", utilization = 23.0, resetsAt = null),
                                 ),
-                                sessionCostUsd = null,
+                                sessionCostUsd = 0.42,
                                 fetchedAt = "2026-09-23T10:00:00Z",
                             ),
                         )

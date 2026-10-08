@@ -1310,7 +1310,7 @@ mod tests {
                     models: vec![protocol::events::ModelEntry {
                         id: "sonnet".into(),
                         label: Some("Sonnet".into()),
-                        provider: None,
+                        ..Default::default()
                     }],
                     default_model: Some("sonnet".into()),
                     error: None,

@@ -92,21 +92,21 @@ internal object DesignFixtures {
         UniffiProviderProfileInfo(
             id = "home-gateway", agent = "opencode", label = "Home gateway", baseUrl = "http://192.168.1.2:3458",
             models = listOf(
-                UniffiModelEntry("OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "Home gateway · OpenCode Go", 1_000_000u),
-                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Home gateway · Z.ai", 200_000u),
-                UniffiModelEntry("qwen3.8-coder", null, "Home gateway", null),
+                UniffiModelEntry("OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "Home gateway · OpenCode Go", 1_000_000u, emptyList()),
+                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Home gateway · Z.ai", 200_000u, emptyList()),
+                UniffiModelEntry("qwen3.8-coder", null, "Home gateway", null, emptyList()),
             ),
             modelsFromProvider = true, defaultModel = "OpenCode Go/deepseek-v4.1-flash", hasToken = true, error = null,
         ),
         UniffiProviderProfileInfo(
             id = "openrouter", agent = "opencode", label = "OpenRouter", baseUrl = "https://openrouter.ai/api",
-            models = (1..42).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null) },
+            models = (1..42).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null, emptyList()) },
             modelsFromProvider = true, defaultModel = null, hasToken = false,
             error = "OpenCode already has a provider called 'openrouter'. Give this profile another name.",
         ),
         UniffiProviderProfileInfo(
             id = "kimi-k3", agent = "", label = "Kimi K3", baseUrl = "https://api.moonshot.ai/anthropic",
-            models = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Kimi K3", null)),
+            models = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Kimi K3", null, emptyList())),
             modelsFromProvider = false, defaultModel = "kimi-k3", hasToken = true, error = null,
         ),
     )
@@ -188,12 +188,24 @@ internal object DesignFixtures {
         models = listOf(UniffiAgentModels(
             "claude-code",
             listOf(
-                UniffiModelEntry("opus", "Opus", "Anthropic", null),
-                UniffiModelEntry("fable", "Fable", "Anthropic", null),
-                UniffiModelEntry("OpenCode Go/glm-5.3-flash", "glm-5.3-flash", "OpenCode Go", null),
-                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Z.ai", null),
+                UniffiModelEntry("opus", "Opus", "Anthropic", null, emptyList()),
+                UniffiModelEntry("fable", "Fable", "Anthropic", null, emptyList()),
+                UniffiModelEntry("OpenCode Go/glm-5.3-flash", "glm-5.3-flash", "OpenCode Go", null, emptyList()),
+                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Z.ai", null, emptyList()),
             ),
             "opus",
+            null,
+        ), UniffiAgentModels(
+            "opencode",
+            listOf(
+                UniffiModelEntry(
+                    "home-gateway/OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "Home gateway · OpenCode Go", null,
+                    listOf("default" to "Default", "low" to "Low", "medium" to "Medium", "high" to "High", "max" to "Max")
+                        .map { (id, label) -> UniffiOptionChoice(id, label, null) },
+                ),
+                UniffiModelEntry("opencode/big-pickle", "Big Pickle", "OpenCode Zen", null, emptyList()),
+            ),
+            "home-gateway/OpenCode Go/deepseek-v4.1-flash",
             null,
         )),
         providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp),

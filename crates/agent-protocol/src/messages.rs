@@ -195,6 +195,11 @@ pub enum SessionEvent {
         /// plan approval switched it).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode: Option<String>,
+        /// The agent named the session itself (OpenCode titles a session
+        /// after its first message). It wins over the title the bridge takes
+        /// from that message and over the topic it asks the agent for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[specta(type = Option<specta_typescript::Number>)]
         context_window: Option<u64>,

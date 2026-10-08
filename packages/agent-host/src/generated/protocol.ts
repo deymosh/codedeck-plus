@@ -981,6 +981,12 @@ export type ModelEntry_Deserialize = {
 	 *  says: the same model can be offered by more than one provider.
 	 */
 	provider?: string | null,
+	/**
+	 *  The reasoning levels of this model, for an agent whose levels differ
+	 *  by model (its catalog entry lists none of its own). Empty: the
+	 *  agent's own levels, if any.
+	 */
+	efforts?: OptionChoice_Deserialize[],
 };
 
 export type ModelEntry_Serialize = {
@@ -991,6 +997,12 @@ export type ModelEntry_Serialize = {
 	 *  says: the same model can be offered by more than one provider.
 	 */
 	provider?: string | null,
+	/**
+	 *  The reasoning levels of this model, for an agent whose levels differ
+	 *  by model (its catalog entry lists none of its own). Empty: the
+	 *  agent's own levels, if any.
+	 */
+	efforts?: OptionChoice_Serialize[],
 };
 
 /**  Session lifecycle notices a client shows as a marker line. */
@@ -1327,7 +1339,7 @@ export type SessionEvent = SessionEvent_Serialize | SessionEvent_Deserialize;
  */
 export type SessionEvent_Deserialize = 
 /**  The agent came up and accepts prompts. Sent once per `start-session`. */
-({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never } | 
+({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | 
 /**  Session facts changed. Only the fields that changed are set. */
 ({ type: "info"; 
 /**  The agent's own conversation id — the `resume` target. */
@@ -1338,11 +1350,17 @@ model?: string | null;
  *  The agent changed its own mode (e.g. it entered plan mode, or a
  *  plan approval switched it).
  */
-mode?: string | null; contextWindow?: number | null; 
+mode?: string | null; 
+/**
+ *  The agent named the session itself (OpenCode titles a session
+ *  after its first message). It wins over the title the bridge takes
+ *  from that message and over the topic it asks the agent for.
+ */
+title?: string | null; contextWindow?: number | null; 
 /**  0–100. */
 contextPercentage?: number | null }) & { entries?: never; error?: never; resumeLost?: never; state?: never } | 
 /**  Transcript entries, in order. The bridge assigns their seqs. */
-({ type: "entries"; entries: OutputEntry_Deserialize[] }) & { contextPercentage?: never; contextWindow?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never } | 
+({ type: "entries"; entries: OutputEntry_Deserialize[] }) & { contextPercentage?: never; contextWindow?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; title?: never } | 
 /**
  *  The session is gone. Absent `error` = it ended normally. The host
  *  forgets the session after sending this.
@@ -1352,7 +1370,7 @@ contextPercentage?: number | null }) & { entries?: never; error?: never; resumeL
  *  The agent could not find the `resume` conversation, so continuing
  *  it is impossible; a new start must be fresh.
  */
-resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never };
+resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never; title?: never };
 
 /**
  *  Something a running session reports. The host translates its agent's own
@@ -1360,7 +1378,7 @@ resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; en
  */
 export type SessionEvent_Serialize = 
 /**  The agent came up and accepts prompts. Sent once per `start-session`. */
-({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never } | 
+({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | 
 /**  Session facts changed. Only the fields that changed are set. */
 ({ type: "info"; 
 /**  The agent's own conversation id — the `resume` target. */
@@ -1371,11 +1389,17 @@ model?: string | null;
  *  The agent changed its own mode (e.g. it entered plan mode, or a
  *  plan approval switched it).
  */
-mode?: string | null; contextWindow?: number | null; 
+mode?: string | null; 
+/**
+ *  The agent named the session itself (OpenCode titles a session
+ *  after its first message). It wins over the title the bridge takes
+ *  from that message and over the topic it asks the agent for.
+ */
+title?: string | null; contextWindow?: number | null; 
 /**  0–100. */
 contextPercentage?: number | null }) & { entries?: never; error?: never; resumeLost?: never; state?: never } | 
 /**  Transcript entries, in order. The bridge assigns their seqs. */
-({ type: "entries"; entries: OutputEntry_Serialize[] }) & { contextPercentage?: never; contextWindow?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never } | 
+({ type: "entries"; entries: OutputEntry_Serialize[] }) & { contextPercentage?: never; contextWindow?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; title?: never } | 
 /**
  *  The session is gone. Absent `error` = it ended normally. The host
  *  forgets the session after sending this.
@@ -1385,7 +1409,7 @@ contextPercentage?: number | null }) & { entries?: never; error?: never; resumeL
  *  The agent could not find the `resume` conversation, so continuing
  *  it is impossible; a new start must be fresh.
  */
-resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never };
+resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never; title?: never };
 
 /**  One MCP server of a running session. */
 export type SessionMcpServer = SessionMcpServer_Serialize | SessionMcpServer_Deserialize;

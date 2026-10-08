@@ -69,6 +69,9 @@ pub(crate) fn is_mode(agent: &AgentInfo, mode: &str) -> bool {
     agent.modes.iter().any(|m| m.id == mode)
 }
 
+/// Whether `effort` may be asked of `agent`: one of its levels, or — for an
+/// agent that lists none of its own, its levels differing by model
+/// (`ModelEntry.efforts`) — any, which the agent itself checks.
 pub(crate) fn is_effort(agent: &AgentInfo, effort: &str) -> bool {
-    agent.efforts.iter().any(|e| e.id == effort)
+    agent.efforts.is_empty() || agent.efforts.iter().any(|e| e.id == effort)
 }

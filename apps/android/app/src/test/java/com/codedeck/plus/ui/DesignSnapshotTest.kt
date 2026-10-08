@@ -35,6 +35,7 @@ import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.screens.AccountPage
 import com.codedeck.plus.ui.screens.BackupPage
 import com.codedeck.plus.ui.screens.RestoreContent
+import uniffi.client_ffi.UniffiUsageData
 import uniffi.client_ffi.UniffiBackupStatus
 import uniffi.client_ffi.UniffiBackupView
 import com.codedeck.plus.ui.screens.SettingsHub
@@ -90,6 +91,16 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             Composer(
                 draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
                 canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
+            )
+        }
+    },
+    "session_controls_opencode" to {
+        Column(Modifier.background(Tokens.Bg)) {
+            SessionControlsBar(
+                effort = null, efforts = emptyList(), modeLabel = "Plan", modePending = false, model = "home-gateway/OpenCode Go/deepseek-v4.1-flash",
+                contextPercentage = 18.0, contextWindow = 1_000_000, onEffortSelect = {}, onModeTap = {}, showUsageBadge = true,
+                usage = UniffiUsageData(available = true, plan = null, windows = emptyList(), sessionCostUsd = 0.0371, fetchedAt = "2026-10-08T10:00:00Z"),
+                modelName = "deepseek-v4.1-flash",
             )
         }
     },
@@ -155,6 +166,9 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "new_session" to {
         NewSessionBody(machine = workstation, events = MutableSharedFlow<CoreEvent>(), dispatch = {}, onClose = {}, onCreated = {})
+    },
+    "new_session_opencode" to {
+        NewSessionBody(machine = workstation.copy(defaultAgent = "opencode"), events = MutableSharedFlow<CoreEvent>(), dispatch = {}, onClose = {}, onCreated = {})
     },
     "pairing" to {
         CompositionLocalProvider(LocalActivityResultRegistryOwner provides DesignFixtures.noResults) {
@@ -276,12 +290,14 @@ class DesignSnapshotTest {
     @Test fun home() = paparazzi.page("home")
     @Test fun home_nothing_paired() = paparazzi.page("home_nothing_paired")
     @Test fun session() = paparazzi.page("session")
+    @Test fun session_controls_opencode() = paparazzi.page("session_controls_opencode")
     @Test fun session_commands() = paparazzi.page("session_commands")
     @Test fun transcript() = paparazzi.page("transcript")
     @Test fun transcript_plan() = paparazzi.page("transcript_plan")
     @Test fun transcript_cards() = paparazzi.page("transcript_cards")
     @Test fun transcript_long() = paparazzi.page("transcript_long")
     @Test fun new_session() = paparazzi.page("new_session")
+    @Test fun new_session_opencode() = paparazzi.page("new_session_opencode")
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
     @Test fun plugins() = paparazzi.page("plugins")

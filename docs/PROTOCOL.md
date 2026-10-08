@@ -269,9 +269,12 @@ wrong provider).
 ### `models`
 
 `models-request {agent}` → `models {agent, models[], defaultModel?, error?}`.
-Each model is `{id, label?, provider?}`: `provider` names who serves it (an
+Each model is `{id, label?, provider?, efforts?}`: `provider` names who serves it (an
 OpenCode provider, a router's channel such as `OpenCode Go`), since the same
-model can be offered by more than one. An empty list always comes with an `error` saying why, so the phone can tell
+model can be offered by more than one. `efforts` are the model's own
+reasoning levels, from an agent whose levels differ by model: its catalog
+entry lists no `efforts`, the phone offers the session model's instead, and
+the bridge leaves checking a level to the agent. An empty list always comes with an `error` saying why, so the phone can tell
 "no answer yet" from a lost message. Models are correlated by the machine that
 sent them (the event author), never by a payload field.
 
@@ -538,7 +541,7 @@ Session events are notifications: `session-event {sessionId, event}` with
 | Event | Meaning |
 |---|---|
 | `ready` | The agent accepts prompts (once per `start-session`). |
-| `info` | Changed facts only: `nativeSessionId` (the resume target), `model`, `mode`, `contextWindow`, `contextPercentage`. |
+| `info` | Changed facts only: `nativeSessionId` (the resume target), `model`, `mode`, `title` (the agent named the session; wins over the bridge's title from the first message and the session-meta topic), `contextWindow`, `contextPercentage`. |
 | `entries` | Transcript entries, in order (the bridge assigns seqs). |
 | `turn` | `running` / `idle`. |
 | `ended` | The session is gone: no `error` = a normal end; `resumeLost` = the conversation to resume no longer exists. The host forgets the session. |

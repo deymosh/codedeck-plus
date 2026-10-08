@@ -198,6 +198,7 @@ fn a_session_started_on_the_default_model_is_listed_with_it() {
         native_session_id: None,
         model: Some("m-default".into()),
         mode: None,
+        title: None,
         context_window: None,
         context_percentage: None,
     });
@@ -292,6 +293,30 @@ fn the_meta_tag_titles_the_session_once_and_is_always_stripped() {
 }
 
 #[test]
+fn a_title_the_agent_gives_wins_over_the_meta_topic() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    let info = |title: &str| SessionEvent::Info {
+        native_session_id: None,
+        model: None,
+        mode: None,
+        title: Some(title.into()),
+        context_window: None,
+        context_percentage: None,
+    };
+    rig.host_event(&s, info("Fix the login redirect"));
+    rig.say(&s, "Done.\n<!-- session-meta: {\"topic\": \"Fix login\", \"project\": \"web\"} -->");
+    let hb = last_heartbeat(&rig.messages());
+    assert_eq!((hb.sessions[0].title.as_deref(), hb.sessions[0].project.as_str()), (Some("Fix the login redirect"), "web"));
+    // A later title from the agent still renames it; a blank one does not.
+    rig.host_event(&s, info("Fix the OAuth login redirect"));
+    rig.host_event(&s, info("  "));
+    let hb = last_heartbeat(&rig.messages());
+    assert_eq!(hb.sessions[0].title.as_deref(), Some("Fix the OAuth login redirect"));
+}
+
+#[test]
 fn input_to_an_unknown_session_is_no_session_and_to_an_ended_one_error() {
     let mut rig = Rig::new();
     rig.host_up();
@@ -319,7 +344,7 @@ fn turn_events_drive_the_listed_state() {
 fn info_native(rig: &mut Rig, s: &str, id: &str) {
     rig.host_event(
         s,
-        SessionEvent::Info { native_session_id: Some(id.into()), model: None, mode: None, context_window: None, context_percentage: None },
+        SessionEvent::Info { native_session_id: Some(id.into()), model: None, mode: None, title: None, context_window: None, context_percentage: None },
     );
 }
 

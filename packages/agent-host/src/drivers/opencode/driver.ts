@@ -42,6 +42,7 @@ import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
   ModelEntry,
+  OptionChoice,
   PermissionOption,
   ProviderBinding,
   QuestionSpec,
@@ -52,10 +53,12 @@ import type {
   Subagent,
   UsageData,
 } from '../../sdk/types';
+import { SESSION_COMMANDS, sessionCommand, sessionSlashCommands } from './sessionCommands';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
-import { admitProfiles, profileModelGroup, profileProviderId, providersFingerprint, serverSetup } from './providers';
+import { type Catalog, EMPTY_CATALOG } from './catalog';
+import { NOTHING_SERVED, type Placement, placeProfiles, profileModelGroup, providersFingerprint, type Served, servedBy, serverSetup } from './providers';
 import {
   resolveOpenCodePath,
   startOpenCodeServer,
@@ -203,6 +206,30 @@ export function pickDefaultModel(
 
 /** Why OpenCode cannot run `model`: none of its providers offers it. When
  *  the model list could not be fetched, nothing is refused. */
+/** The variant OpenCode reads as "none": the model's own settings. */
+const DEFAULT_VARIANT = 'default';
+
+/** How a variant reads in the effort picker. */
+const VARIANT_LABELS: Record<string, string> = { xhigh: 'Extra high', none: 'None' };
+
+/** A model's reasoning levels, from its OpenCode variants (`low`, `high`,
+ *  `max`…, set by OpenCode from what the model is): its default first. A
+ *  model without variants has none. */
+export function reasoningLevels(variants: Record<string, unknown> | undefined): OptionChoice[] {
+  const ids = Object.keys(variants ?? {}).filter((id) => id !== DEFAULT_VARIANT);
+  if (ids.length === 0) return [];
+  const label = (id: string) => VARIANT_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+  return [{ id: DEFAULT_VARIANT, label: 'Default' }, ...ids.map((id) => ({ id, label: label(id) }))];
+}
+
+/** The name OpenCode gives a session it has not titled yet
+ *  ("New session - <ISO time>"; "Child session - …" for a sub-agent's). */
+const PLACEHOLDER_TITLE = /^(New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+export function isPlaceholderTitle(title: string): boolean {
+  return PLACEHOLDER_TITLE.test(title);
+}
+
 export function unsupportedModelReason(model: string, models: ModelEntry[]): string | undefined {
   if (models.length === 0 || models.some((m) => m.id === model)) return undefined;
   return `OpenCode does not offer the model '${model}' — none of its configured providers serves it; choose one from its model list.`;
@@ -295,7 +322,12 @@ export class OpenCodeSession implements DriverSession {
   private readonly translate = newTranslateContext();
   private ended = false;
   private mode: string;
+  /** The title last reported for the session. */
+  private title: string | undefined;
   private model?: { providerID: string; modelID: string };
+  /** The reasoning level ("variant") prompts ask of the model; none = the
+   *  model's default. */
+  private variant: string | undefined;
 
   /** messageID -> role, seeded from message.updated events, so a later
    *  message.part.updated for the same messageID can be tagged — Part itself
@@ -361,6 +393,9 @@ export class OpenCodeSession implements DriverSession {
     this.mode = params.mode ?? DEFAULT_MODE;
     this.catalog = options.catalog ?? (async () => ({ models: [] }));
     this.model = splitModelId(params.model ?? undefined);
+    // A level the model lacks is ignored by OpenCode: the session starts on
+    // the model's default rather than failing.
+    this.variant = params.effort && params.effort !== DEFAULT_VARIANT ? params.effort : undefined;
     this.ready = this.init(clientPromise, params);
     // init() reports its own failure as `ended`; nothing else awaits this
     // rejection except prompt/interrupt, which catch it themselves.
@@ -411,6 +446,7 @@ export class OpenCodeSession implements DriverSession {
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
         this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode });
+        this.reportTitle(session.title);
         this.deliver({ type: 'started', ...(model ? { model } : {}) });
         this.ctx.emit({ type: 'ready' });
       }
@@ -447,13 +483,14 @@ export class OpenCodeSession implements DriverSession {
         `[opencode] resume ${params.resume} not found server-side ` +
           `(${error ? JSON.stringify(error) : 'no session returned'}) — starting a fresh session instead`,
       );
-      return { session: await this.createSessionRemote(client, params), resumeLost: true };
+      return { session: await this.createSessionRemote(client), resumeLost: true };
     }
-    return { session: await this.createSessionRemote(client, params), resumeLost: false };
+    return { session: await this.createSessionRemote(client), resumeLost: false };
   }
 
-  private async createSessionRemote(client: OpencodeClient, params: StartSession): Promise<Session> {
-    const { data, error } = await client.session.create({ directory: this.cwd, title: params.sessionId });
+  /** Created untitled, so OpenCode names it after its first message. */
+  private async createSessionRemote(client: OpencodeClient): Promise<Session> {
+    const { data, error } = await client.session.create({ directory: this.cwd });
     if (error || !data) {
       throw new Error(`OpenCode session.create failed: ${JSON.stringify(error ?? 'no session returned')}`);
     }
@@ -519,6 +556,10 @@ export class OpenCodeSession implements DriverSession {
           const status = event.properties.status.type;
           if (status !== 'busy' && status !== 'idle') break;
           if (!this.ended) this.ctx.emit({ type: 'turn', state: status === 'busy' ? 'running' : 'idle' });
+          break;
+        }
+        case 'session.updated': {
+          if (event.properties.sessionID === sessionId) this.reportTitle(event.properties.info.title);
           break;
         }
         case 'session.diff': {
@@ -841,8 +882,14 @@ export class OpenCodeSession implements DriverSession {
     const command = parseSlashCommand(text);
     this.ready
       .then(async ({ client, session }) => {
-        if (command && (await this.knownCommands(client)).has(command.name)) {
+        const listed = command ? await this.knownCommands(client) : new Set<string>();
+        if (command && listed.has(command.name)) {
           this.runCommand(client, session.id, command.name, command.args);
+          return;
+        }
+        const builtin = command && sessionCommand(command.name, listed);
+        if (builtin) {
+          this.runSessionCommand(client, session.id, builtin);
           return;
         }
         const { error } = await client.session.promptAsync({
@@ -851,12 +898,35 @@ export class OpenCodeSession implements DriverSession {
           parts: [{ type: 'text', text }],
           ...(this.model ? { model: this.model } : {}),
           ...this.agentField(),
+          ...this.variantField(),
         });
         if (error) this.deliver({ type: 'error', content: `OpenCode prompt failed: ${JSON.stringify(error)}` });
       })
       .catch((err) => {
         this.deliver({ type: 'error', content: `OpenCode prompt failed: ${err instanceof Error ? err.message : String(err)}` });
       });
+  }
+
+  /** One of the commands OpenCode's terminal runs itself; its outcome is a
+   *  status line, its failure an error entry. */
+  private runSessionCommand(client: OpencodeClient, sessionID: string, command: (typeof SESSION_COMMANDS)[number]): void {
+    command
+      .run({
+        client,
+        sessionID,
+        directory: this.cwd,
+        ...(this.model ? { model: this.model } : {}),
+        status: (text) => this.deliver({ type: 'status', text }),
+      })
+      .catch((err) => this.deliver({ type: 'error', content: err instanceof Error ? err.message : String(err) }));
+  }
+
+  /** The title OpenCode gave the session, once it has one of its own
+   *  (not the timestamp a new session starts with) — each new one once. */
+  private reportTitle(title: string | undefined): void {
+    if (!title || isPlaceholderTitle(title) || title === this.title || this.ended) return;
+    this.title = title;
+    this.ctx.emit({ type: 'info', title });
   }
 
   /** The OpenCode agent a prompt names: the plan agent in the plan mode,
@@ -872,7 +942,7 @@ export class OpenCodeSession implements DriverSession {
   private runCommand(client: OpencodeClient, sessionID: string, name: string, args: string): void {
     const model = this.model ? `${this.model.providerID}/${this.model.modelID}` : undefined;
     client.session
-      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField() })
+      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField(), ...this.variantField() })
       .then(({ error }) => {
         if (error) this.deliver({ type: 'error', content: `OpenCode /${name} failed: ${JSON.stringify(error)}` });
       })
@@ -897,9 +967,11 @@ export class OpenCodeSession implements DriverSession {
     return this.commandNames;
   }
 
+  /** The server's commands, then the ones the driver runs itself. */
   async listCommands(): Promise<SlashCommand[]> {
     const { client } = await this.ready;
-    return toSlashCommands(await this.fetchCommands(client));
+    const commands = await this.fetchCommands(client);
+    return [...toSlashCommands(commands), ...sessionSlashCommands(new Set(commands.map((c) => c.name)))];
   }
 
   async mcpStatus(): Promise<SessionMcpState> {
@@ -922,14 +994,31 @@ export class OpenCodeSession implements DriverSession {
         // Model selection is per prompt in OpenCode; the next prompt uses it.
         const split = splitModelId(value);
         if (!split) throw new Error(`'${value}' is not an OpenCode provider/model id`);
-        const refused = unsupportedModelReason(value, (await this.catalog()).models);
+        const models = (await this.catalog()).models;
+        const refused = unsupportedModelReason(value, models);
         if (refused) throw new Error(refused);
         this.model = split;
+        // A level the new model lacks would be ignored; drop it.
+        if (this.variant && !models.find((m) => m.id === value)?.efforts?.some((e) => e.id === this.variant)) this.variant = undefined;
         return;
       }
-      case 'effort':
-        throw new Error('OpenCode has no effort levels');
+      case 'effort': {
+        // Levels are the model's own (its OpenCode variants).
+        const { models, defaultModel } = await this.catalog();
+        const id = this.model ? `${this.model.providerID}/${this.model.modelID}` : defaultModel;
+        const levels = models.find((m) => m.id === id)?.efforts ?? [];
+        if (!levels.some((e) => e.id === value)) {
+          throw new Error(levels.length > 0 ? `'${value}' is not a reasoning level of ${id}` : `${id ?? 'This model'} has no reasoning levels`);
+        }
+        this.variant = value === DEFAULT_VARIANT ? undefined : value;
+        return;
+      }
     }
+  }
+
+  /** The reasoning level a prompt or command asks for, if any. */
+  private variantField(): { variant?: string } {
+    return this.variant ? { variant: this.variant } : {};
   }
 
   async interrupt(): Promise<void> {
@@ -953,8 +1042,14 @@ export class OpenCodeSession implements DriverSession {
     if (error) throw new Error(`OpenCode could not stop the task: ${JSON.stringify(error)}`);
   }
 
+  /** What the session has cost so far, as OpenCode prices its models (no
+   *  subscription windows: OpenCode has none to report). A free or
+   *  unpriced model's session reports no cost. */
   async getUsage(): Promise<UsageData | null> {
-    return null;
+    const { client, session } = await this.ready;
+    const { data, error } = await client.session.get({ sessionID: session.id, directory: this.cwd });
+    if (error || !data) return null;
+    return { available: true, windows: [], ...(data.cost ? { sessionCostUsd: data.cost } : {}), fetchedAt: new Date().toISOString() };
   }
 
   async end(): Promise<void> {
@@ -1012,12 +1107,14 @@ export class OpenCodeDriver implements Driver {
    *  session. */
   private installs = false;
   private stopped = false;
-  /** The provider profiles the server should have, and those the running
-   *  one was started with. */
-  private providers: ProviderBinding[] = [];
+  /** Where the provider profiles go among the server's providers, and the
+   *  catalog that placed them (it fills in their models). */
+  private placed: Placement[] = [];
+  private catalog: Catalog = EMPTY_CATALOG;
+  /** The placements the running server was started with: their
+   *  fingerprint, and the providers they made. */
   private served = providersFingerprint([]);
-  /** The provider ids the running server has from profiles. */
-  private servedIds = new Set<string>();
+  private serving: Served = NOTHING_SERVED;
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
@@ -1079,8 +1176,8 @@ export class OpenCodeDriver implements Driver {
   /** Start `opencode serve` with the provider profiles it should have, and
    *  connect to it. */
   private async startServer(bin: string): Promise<OpencodeClient> {
-    const profiles = this.providers;
-    const setup = serverSetup(profiles, process.env);
+    const placed = this.placed;
+    const setup = serverSetup(placed, this.catalog, process.env);
     const start = this.options.startServer ?? startOpenCodeServer;
     let server: OpenCodeServerHandle;
     try {
@@ -1097,9 +1194,9 @@ export class OpenCodeDriver implements Driver {
       throw new Error('the agent host is shutting down');
     }
     this.server = server;
-    this.served = providersFingerprint(profiles);
-    this.servedIds = new Set(profiles.map(profileProviderId));
-    const added = profiles.length > 0 ? `, with ${profiles.length} provider profile(s)` : '';
+    this.served = providersFingerprint(placed);
+    this.serving = servedBy(placed);
+    const added = placed.length > 0 ? `, with ${placed.length} provider profile(s)` : '';
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
     return this.connect({ baseUrl: server.url, headers: setup.headers });
   }
@@ -1125,8 +1222,9 @@ export class OpenCodeDriver implements Driver {
     );
   }
 
-  /** The provider profiles to add to OpenCode's own providers; those whose
-   *  name one of its providers already has are left out. The server reads
+  /** The provider profiles to add to OpenCode's own providers, placed by
+   *  its catalog (providers.ts); one that would shadow a provider OpenCode
+   *  has is left out, with the reason. The server reads
    *  its config only when it starts, so a changed list restarts it:
    *  sessions on the old one end with an error and the bridge resumes them
    *  on the new one. */
@@ -1144,13 +1242,15 @@ export class OpenCodeDriver implements Driver {
 
   private async applyProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     // A server still being installed or started is waited for: it may have
-    // read an older list, and it says which names are taken.
+    // read an older list, and its catalog places the profiles.
     await this.clientPromise?.catch(() => {});
     // A profile the bridge would not let a session use is not added either.
     const usable = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
-    const { admitted, refused } = admitProfiles(usable, await this.ownProviderIds());
-    this.providers = admitted;
-    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return refused;
+    const catalog = await this.readCatalog();
+    const { placed, refused } = placeProfiles(usable, catalog, this.serving);
+    this.placed = placed;
+    this.catalog = catalog;
+    if (this.stopped || !this.server || !this.bin || providersFingerprint(placed) === this.served) return refused;
     this.options.log('[opencode] restarting the server: its provider profiles changed');
     const old = this.server;
     this.server = null;
@@ -1159,19 +1259,19 @@ export class OpenCodeDriver implements Driver {
     return refused;
   }
 
-  /** The provider ids OpenCode has of its own — built in, configured by
-   *  the operator, signed in to — without the profiles this driver added.
-   *  Empty when the server cannot say (nothing is refused then). */
-  private async ownProviderIds(): Promise<Set<string>> {
+  /** The running server's catalog (catalog.ts). Empty when it cannot say:
+   *  every profile is then a provider of its own, nothing refused or
+   *  filled in. */
+  private async readCatalog(): Promise<Catalog> {
     try {
       const client = await this.clientPromise;
-      if (!client) return new Set();
+      if (!client) return EMPTY_CATALOG;
       const { data, error } = await client.provider.list();
       if (error || !data) throw new Error(JSON.stringify(error ?? 'no provider list'));
-      return new Set(data.all.map((p) => p.id).filter((id) => !this.servedIds.has(id)));
+      return { providers: new Map(data.all.map((p) => [p.id, p])), connected: new Set(data.connected) };
     } catch (err) {
-      this.options.log(`[opencode] could not list its providers, so profile names are not checked: ${err instanceof Error ? err.message : String(err)}`);
-      return new Set();
+      this.options.log(`[opencode] could not read its provider catalog, so profiles are not checked against it: ${err instanceof Error ? err.message : String(err)}`);
+      return EMPTY_CATALOG;
     }
   }
 
@@ -1182,11 +1282,11 @@ export class OpenCodeDriver implements Driver {
       modes: OPENCODE_MODES,
       efforts: [],
       defaultMode: DEFAULT_MODE,
-      // No subscription usage. Provider profiles add models to the server
-      // this driver starts; sessions are never bound to one.
+      // Usage is the session's cost. Provider profiles add models to the
+      // server this driver starts; sessions are never bound to one.
       supports: {
         models: true,
-        usage: false,
+        usage: true,
         providers: false,
         providerModels: this.manages,
         gsd: true,
@@ -1237,14 +1337,15 @@ export class OpenCodeDriver implements Driver {
       if (error || !data) return { models: [] };
       const models: ModelEntry[] = [];
       const contextLimits: Record<string, number> = {};
-      const profiles = new Map(this.providers.map((p) => [profileProviderId(p), p]));
+      const profiles = new Map(this.placed.map((p) => [p.providerId, p.profile]));
       for (const provider of data.providers) {
         const profile = profiles.get(provider.id);
         for (const model of Object.values(provider.models)) {
           const id = `${provider.id}/${model.id}`;
           const name = provider.name || provider.id;
           const group = profile ? profileModelGroup(name, profile.models.find((m) => m.id === model.id)) : name;
-          models.push({ id, label: model.name, provider: group });
+          const efforts = reasoningLevels(model.variants);
+          models.push({ id, label: model.name, provider: group, ...(efforts.length > 0 ? { efforts } : {}) });
           const window = model.limit?.context ?? 0;
           if (window > 0) contextLimits[id] = window;
         }
