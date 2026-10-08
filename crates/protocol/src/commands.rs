@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{CredentialValues, McpAction, McpServerSpec, PluginAction, ProviderModel, SessionOption};
+use super::common::{
+    AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, ProviderModel, SessionOption,
+};
 use super::tristate::Tristate;
 use crate::ranges::SeqRange;
 
@@ -176,6 +178,16 @@ pub struct PluginActionMsg {
     pub agent: String,
     pub action: PluginAction,
     pub target: String,
+}
+
+/// Install or remove an agent on the bridge's machine. Reply: `agent-ack`;
+/// how it goes shows in the agent's `install` in the session list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AgentActionMsg {
+    #[serde(flatten)]
+    pub version: VersionFields,
+    pub agent: String,
+    pub action: AgentAction,
 }
 
 /// Ask for an agent's MCP servers (agents with `supports.mcp`). Reply:
@@ -421,6 +433,7 @@ pub enum PhoneToBridge {
     CommandsRequest(SessionIdMsg),
     PluginsRequest(PluginsRequestMsg),
     PluginAction(PluginActionMsg),
+    AgentAction(AgentActionMsg),
     McpRequest(McpRequestMsg),
     McpAction(McpActionMsg),
     /// A running session's MCP servers and where each stands. Reply:
@@ -487,6 +500,8 @@ mod tests {
         rt(&json!({"type":"plugins-request","agent":"claude-code","available":true}));
         rt(&json!({"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));
         rt(&json!({"type":"plugin-action","agent":"claude-code","action":"update","target":"c@m"}));
+        rt(&json!({"type":"agent-action","agent":"opencode","action":"install"}));
+        rt(&json!({"type":"agent-action","agent":"opencode","action":"remove"}));
         rt(&json!({"type":"mcp-request","agent":"claude-code"}));
         rt(&json!({"type":"mcp-action","agent":"claude-code","action":"add","servers":[
             {"name":"github","transport":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer t"}}},

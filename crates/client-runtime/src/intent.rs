@@ -17,12 +17,12 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg,
+    AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     StopTaskMsg, VersionFields,
 };
-use protocol::common::{CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
+use protocol::common::{AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
 use serde::{Deserialize, Serialize};
 
@@ -313,6 +313,13 @@ pub enum Intent {
         agent: String,
         action: PluginAction,
         target: String,
+    },
+    /// Install or remove an agent on a machine; it is busy until the bridge
+    /// acknowledges it.
+    AgentAction {
+        machine: String,
+        agent: String,
+        action: AgentAction,
     },
     /// Ask for an agent's MCP servers on a machine.
     RequestMcp {
@@ -751,6 +758,11 @@ pub fn apply(
                 r.persist(StoreId::Machines);
                 r.send(&machine, PhoneToBridge::PluginAction(PluginActionMsg { version: v(), agent, action, target }));
             }
+        }
+        Intent::AgentAction { machine, agent, action } => {
+            stores.machines.agent_action_sent(&machine, &agent, action);
+            r.persist(StoreId::Machines);
+            r.send(&machine, PhoneToBridge::AgentAction(AgentActionMsg { version: v(), agent, action }));
         }
         Intent::RequestMcp { machine, agent } => {
             r.send(&machine, PhoneToBridge::McpRequest(McpRequestMsg { version: v(), agent }))

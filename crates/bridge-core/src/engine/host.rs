@@ -17,12 +17,13 @@
 use std::collections::BTreeMap;
 
 use agent_protocol::{
-    BridgeMessage, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, SelectOutcome, SessionEvent, StartSession,
+    AgentInfo, BridgeMessage, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, SelectOutcome, SessionEvent,
+    StartSession,
 };
-use protocol::common::{EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
+use protocol::common::{AgentAction, AgentInstall, EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
 use protocol::common::{McpAction, PluginAction};
 use protocol::events::{
-    BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
+    AgentAckMsg, BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
     SessionReadyMsg, UsageMsg,
 };
 
@@ -61,6 +62,8 @@ pub(crate) enum HostCall {
     ListProviderModels { ticket: u64 },
     /// An agent's profiles, for the save waiting on them when there is one.
     SetProviders { agent: String, save: Option<u64> },
+    /// An install or removal the phone asked for, answered with `agent-ack`.
+    AgentAction { agent: String, action: AgentAction },
     DeleteConversation(ConversationDelete),
 }
 
@@ -171,6 +174,7 @@ impl Engine {
         match id {
             None => match message {
                 HostMessage::SessionEvent { session_id, event } => self.on_session_event(&session_id, event),
+                HostMessage::AgentChanged { agent } => self.on_agent_changed(agent),
                 _ => log::warn!("[Engine] The agent host sent a request or reply without an id — dropped"),
             },
             Some(id) if message.is_reply() => match self.host.calls.remove(&id) {
@@ -273,6 +277,14 @@ impl Engine {
                 };
                 self.on_providers_set(&agent, save, refused);
             }
+            HostCall::AgentAction { agent, action } => {
+                let error = result.err();
+                match &error {
+                    Some(error) => log::info!("[Engine] agent-action {action:?} {agent}: {error}"),
+                    None => log::info!("[Engine] agent-action {action:?} {agent}: taken up"),
+                }
+                self.publish_all(BridgeToPhone::AgentAck(AgentAckMsg { agent, action, success: error.is_none(), error }));
+            }
             HostCall::DeleteConversation(delete) => match result {
                 Ok(_) => log::info!("[Engine] Conversation {} of {} deleted", delete.conversation_id, delete.session_id),
                 Err(err) => log::warn!(
@@ -281,6 +293,35 @@ impl Engine {
                     delete.session_id
                 ),
             },
+        }
+    }
+
+    /// An agent was installed, removed, or is being installed: the phone's
+    /// list shows it, and sessions waiting on the install start — or fail,
+    /// when it did not come to be.
+    fn on_agent_changed(&mut self, agent: AgentInfo) {
+        let id = agent.id.clone();
+        log::info!("[Engine] Agent {id} is now {:?}", agent.install);
+        let ready = agent.install.is_ready();
+        let settled = !matches!(agent.install, AgentInstall::Installing {});
+        self.catalog.update(agent);
+        self.list_dirty = true;
+        if !self.host.initialized {
+            return;
+        }
+        if settled {
+            let waiting: Vec<String> = self
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.rec.agent == id && s.run.as_ref().is_some_and(|r| !r.started))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for session_id in waiting {
+                self.spawn(&session_id);
+            }
+        }
+        if ready {
+            self.push_providers(&id, None);
         }
     }
 
@@ -434,6 +475,10 @@ impl Engine {
     pub(super) fn spawn(&mut self, session_id: &str) {
         if !self.host.initialized {
             log::info!("[Engine] Session {session_id} waits for the agent host");
+            return;
+        }
+        if self.sessions.get(session_id).is_some_and(|s| self.catalog.installing(&s.rec.agent)) {
+            log::info!("[Engine] Session {session_id} waits for its agent to be installed");
             return;
         }
         let params = match self.start_params(session_id) {

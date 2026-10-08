@@ -99,6 +99,7 @@ impl HostMessage {
             | Self::ProviderModels { .. }
             | Self::ProvidersSet { .. } => true,
             Self::SessionEvent { .. }
+            | Self::AgentChanged { .. }
             | Self::RequestPermission(_)
             | Self::AskQuestion(_)
             | Self::RequestPlanApproval(_) => false,

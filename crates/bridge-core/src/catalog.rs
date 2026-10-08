@@ -3,7 +3,7 @@
 //! one of its modes, what does the phone see.
 
 use agent_protocol::AgentInfo;
-use protocol::common::{AgentDescriptor, CredentialStatus};
+use protocol::common::{AgentDescriptor, AgentInstall, CredentialStatus};
 
 #[derive(Default)]
 pub(crate) struct Catalog {
@@ -17,6 +17,15 @@ impl Catalog {
     pub fn set(&mut self, agents: Vec<AgentInfo>) {
         self.agents = agents;
         self.known = true;
+    }
+
+    /// One agent's entry changed (`agent-changed`): it replaces the one the
+    /// host reported before, or joins the list.
+    pub fn update(&mut self, agent: AgentInfo) {
+        match self.agents.iter_mut().find(|a| a.id == agent.id) {
+            Some(entry) => *entry = agent,
+            None => self.agents.push(agent),
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<&AgentInfo> {
@@ -39,18 +48,30 @@ impl Catalog {
     /// The agent, when sessions can run on it; otherwise why not.
     pub fn usable(&self, id: &str) -> Result<&AgentInfo, String> {
         let agent = self.known(id)?;
-        match &agent.unavailable_reason {
-            Some(reason) => Err(reason.clone()),
-            None => Ok(agent),
+        let name = &agent.display_name;
+        match (&agent.install, &agent.unavailable_reason) {
+            (AgentInstall::Ready { .. }, None) => Ok(agent),
+            (AgentInstall::Ready { .. }, Some(reason)) => Err(reason.clone()),
+            (AgentInstall::NotInstalled {}, _) => {
+                Err(format!("{name} is not installed on this machine — install it from the list of agents."))
+            }
+            (AgentInstall::Installing {}, _) => Err(format!("{name} is still being installed.")),
+            (AgentInstall::Failed { reason }, _) => Err(format!("{name} could not be installed: {reason}")),
         }
     }
 
-    /// What the heartbeat advertises: every usable agent, with the status of
-    /// its credentials.
+    /// The agent is being installed: a session of it waits rather than fail.
+    pub fn installing(&self, id: &str) -> bool {
+        self.get(id).is_some_and(|a| matches!(a.install, AgentInstall::Installing {}))
+    }
+
+    /// What the heartbeat advertises: every agent the phone can run or
+    /// install — not one that is installed but cannot run here — with the
+    /// status of its credentials.
     pub fn descriptors(&self, credentials: impl Fn(&AgentInfo) -> Vec<CredentialStatus>) -> Vec<AgentDescriptor> {
         self.agents
             .iter()
-            .filter(|a| a.unavailable_reason.is_none())
+            .filter(|a| !(a.install.is_ready() && a.unavailable_reason.is_some()))
             .map(|a| AgentDescriptor {
                 id: a.id.clone(),
                 display_name: a.display_name.clone(),
@@ -60,6 +81,7 @@ impl Catalog {
                 default_effort: a.default_effort.clone(),
                 supports: a.supports.clone(),
                 credentials: credentials(a),
+                install: a.install.clone(),
             })
             .collect()
     }

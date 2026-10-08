@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use protocol::common::{
-    AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
+    AgentInstall, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
     OptionChoice, OutputEntry, PermissionOption, PluginAction, PluginMarketplace, ProviderModel,
     QuestionOption, SessionMcpServer, SessionOption, Subagent, ToolKind, UsageData,
 };
@@ -57,10 +57,16 @@ pub struct AgentInfo {
     pub supports: AgentSupports,
     #[serde(default)]
     pub credentials: Vec<CredentialSpec>,
-    /// Set when the driver is installed but cannot run sessions here (e.g. a
-    /// missing binary); the bridge refuses sessions with this reason.
+    /// Set when the agent is installed but cannot run sessions here (e.g. a
+    /// server that will not start); the bridge refuses sessions with this
+    /// reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// Whether the agent is on this machine. One that is not has only its
+    /// id and name filled in; the rest arrives in `agent-changed` once it
+    /// is installed.
+    #[serde(default)]
+    pub install: AgentInstall,
 }
 
 // --- MCP servers ---
@@ -437,6 +443,15 @@ pub enum BridgeMessage {
         agent: String,
         providers: Vec<ProviderBinding>,
     },
+    /// Install an agent that is not on this machine, at the version this
+    /// build pins. Reply: `ack` once the install began (or when the agent is
+    /// already there); `agent-changed` follows as it goes and when it is
+    /// done. `error` when it cannot be installed at all.
+    InstallAgent { agent: String },
+    /// Remove what was installed of an agent (`ready` with `removable`):
+    /// its sessions end first. Reply: `ack` once it is gone, after an
+    /// `agent-changed` saying so, or `error` saying why it cannot be.
+    RemoveAgent { agent: String },
     /// Reply to `request-permission`.
     PermissionOutcome(SelectOutcome),
     /// Reply to `request-plan-approval`.
@@ -512,6 +527,10 @@ pub enum HostMessage {
     /// Reply to `set-providers`: the profiles left out, with the reason in
     /// words for a person; every other one is offered.
     ProvidersSet { refused: Vec<RefusedProvider> },
+    /// A notification: an agent's catalog entry changed — it is being
+    /// installed, it was installed or removed, or the install failed. It
+    /// replaces the entry `initialized` reported.
+    AgentChanged { agent: AgentInfo },
     /// A notification: no frame id, no reply.
     SessionEvent {
         session_id: String,

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::capabilities::BridgeHostKind;
 use super::common::{
-    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
+    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     SessionMcpServer,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     UsageData,
@@ -305,6 +305,19 @@ pub struct PluginAckMsg {
     pub message: Option<String>,
 }
 
+/// Reply to `agent-action`: `success` once the bridge took it up — an
+/// install then goes on in the background, its progress and outcome in the
+/// agent's `install` — else `error` says why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAckMsg {
+    pub agent: String,
+    pub action: AgentAction,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// An agent's MCP servers on the bridge's machine: the reply to
 /// `mcp-request`, and sent again after every `mcp-action`. When the list
 /// could not be read, `error` says why and `servers` is empty. `toggles`
@@ -430,6 +443,7 @@ pub enum BridgeToPhone {
     Commands(CommandsMsg),
     Plugins(PluginsMsg),
     PluginAck(PluginAckMsg),
+    AgentAck(AgentAckMsg),
     McpServers(McpServersMsg),
     McpAck(McpAckMsg),
     SessionMcp(SessionMcpMsg),
@@ -538,6 +552,8 @@ mod tests {
         rt(&json!({"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
         rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
         rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"update","target":"c@m","success":true,"message":"Updated from 0.1.0 to 0.2.0."}));
+        rt(&json!({"type":"agent-ack","agent":"opencode","action":"install","success":true}));
+        rt(&json!({"type":"agent-ack","agent":"claude-code","action":"remove","success":false,"error":"Claude Code is on this machine outside CodeDeck."}));
         rt(&json!({"type":"mcp-servers","agent":"claude-code","servers":[
             {"name":"github","transport":"http","target":"https://api.githubcopilot.com/mcp/","headerKeys":["Authorization"],"enabled":true},
             {"name":"fs","transport":"stdio","target":"npx","envKeys":["K"],"enabled":false}],"toggles":true}));

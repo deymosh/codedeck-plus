@@ -370,6 +370,52 @@ pub struct AgentDescriptor {
     /// Credentials this agent can use, with their current status.
     #[serde(default)]
     pub credentials: Vec<CredentialStatus>,
+    /// Whether the agent is on the bridge's machine. Sessions start only on
+    /// a `ready` one; the rest of the descriptor is filled in once it is.
+    #[serde(default)]
+    pub install: AgentInstall,
+}
+
+/// Where an agent stands on the bridge's machine. The bridge installs an
+/// agent when asked (`agent-action`), at the version its build pins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "state", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum AgentInstall {
+    /// Installed. `removable`: CodeDeck installed it and can remove it; an
+    /// agent the machine has of its own (on PATH, bundled, configured) is
+    /// not.
+    Ready {
+        #[serde(default, skip_serializing_if = "is_false")]
+        removable: bool,
+    },
+    NotInstalled {},
+    Installing {},
+    /// The last install did not finish, for `reason`; installing again
+    /// retries.
+    Failed { reason: String },
+}
+
+impl Default for AgentInstall {
+    fn default() -> Self {
+        Self::Ready { removable: false }
+    }
+}
+
+impl AgentInstall {
+    pub fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+}
+
+/// A change to which agents are on the bridge's machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentAction {
+    /// Download and install the agent at the version the bridge pins.
+    Install,
+    /// Remove what CodeDeck installed of it (`ready` with `removable`); its
+    /// sessions end. The agent's own settings and conversations stay.
+    Remove,
 }
 
 // --- sessions ---

@@ -87,6 +87,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::CommandsRequest(_) => "commands-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
         PhoneToBridge::PluginAction(_) => "plugin-action",
+        PhoneToBridge::AgentAction(_) => "agent-action",
         PhoneToBridge::McpRequest(_) => "mcp-request",
         PhoneToBridge::McpAction(_) => "mcp-action",
         PhoneToBridge::SessionMcpRequest(_) => "session-mcp-request",
@@ -98,7 +99,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::SessionKey(_) => "session-key",
     }
 }
-const P2B_TYPES: usize = 29;
+const P2B_TYPES: usize = 30;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {
@@ -123,6 +124,7 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::Commands(_) => "commands",
         BridgeToPhone::Plugins(_) => "plugins",
         BridgeToPhone::PluginAck(_) => "plugin-ack",
+        BridgeToPhone::AgentAck(_) => "agent-ack",
         BridgeToPhone::McpServers(_) => "mcp-servers",
         BridgeToPhone::McpAck(_) => "mcp-ack",
         BridgeToPhone::SessionMcp(_) => "session-mcp",
@@ -132,7 +134,7 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::ProviderProfileAck(_) => "provider-profile-ack",
     }
 }
-const B2P_TYPES: usize = 27;
+const B2P_TYPES: usize = 28;
 
 #[test]
 fn corpus_covers_every_message_type() {

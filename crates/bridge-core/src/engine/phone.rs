@@ -5,9 +5,11 @@ use protocol::commands::{
     CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PhoneToBridge, PlanResponseMsg,
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
-use protocol::common::{is_valid_provider_base_url, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR};
+use protocol::common::{
+    is_valid_provider_base_url, AgentAction, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
+};
 use protocol::events::{
-    BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
+    AgentAckMsg, BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
     CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
@@ -41,6 +43,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::CommandsRequest(_) => "commands-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
         PhoneToBridge::PluginAction(_) => "plugin-action",
+        PhoneToBridge::AgentAction(_) => "agent-action",
         PhoneToBridge::McpRequest(_) => "mcp-request",
         PhoneToBridge::McpAction(_) => "mcp-action",
         PhoneToBridge::SessionMcpRequest(_) => "session-mcp-request",
@@ -125,6 +128,7 @@ impl Engine {
             PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
             PhoneToBridge::PluginsRequest(m) => self.on_plugins_request(m.agent, m.available),
             PhoneToBridge::PluginAction(m) => self.on_plugin_action(m),
+            PhoneToBridge::AgentAction(m) => self.on_agent_action(m.agent, m.action),
             PhoneToBridge::McpRequest(m) => self.on_mcp_request(m.agent),
             PhoneToBridge::McpAction(m) => self.on_mcp_action(m),
             PhoneToBridge::SessionMcpRequest(m) => self.on_session_mcp_request(m.session_id),
@@ -497,6 +501,27 @@ impl Engine {
         if let Some(error) = error {
             log::info!("[Engine] plugin-action {action:?} {target}: {error}");
             self.publish_all(BridgeToPhone::PluginAck(PluginAckMsg { agent, action, target, success: false, error: Some(error), message: None }));
+        }
+    }
+
+    /// Install or remove an agent. The host knows what it can do — whether
+    /// the agent is already there, whether CodeDeck can remove it — and says
+    /// why not; the outcome shows in the agent's `install`.
+    fn on_agent_action(&mut self, agent: String, action: AgentAction) {
+        let error = match self.catalog.known(&agent) {
+            Err(error) => Some(error),
+            Ok(_) => {
+                let message = match action {
+                    AgentAction::Install => BridgeMessage::InstallAgent { agent: agent.clone() },
+                    AgentAction::Remove => BridgeMessage::RemoveAgent { agent: agent.clone() },
+                };
+                let sent = self.call(HostCall::AgentAction { agent: agent.clone(), action }, message);
+                sent.is_none().then(|| "The agent host is not running — try again in a moment.".to_string())
+            }
+        };
+        if let Some(error) = error {
+            log::info!("[Engine] agent-action {action:?} {agent}: {error}");
+            self.publish_all(BridgeToPhone::AgentAck(AgentAckMsg { agent, action, success: false, error: Some(error) }));
         }
     }
 

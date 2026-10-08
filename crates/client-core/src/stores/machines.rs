@@ -17,11 +17,11 @@ use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::BridgeHostKind;
 use protocol::common::{
-    AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo,
+    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
-    CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg,
+    AgentAckMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg,
     SessionListMsg, SessionMcpMsg, SlashCommand,
 };
 
@@ -294,6 +294,10 @@ pub struct MachineView {
     /// MCP servers, by agent id. Never persisted, like `plugins`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp: BTreeMap<String, AgentMcp>,
+    /// Installs and removals asked of the bridge, by agent id. Never
+    /// persisted, like `plugins`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_actions: BTreeMap<String, AgentActionState>,
     /// The session-key grant this bridge last confirmed. See
     /// `stores::session_key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +419,20 @@ pub struct AgentMcp {
     pub failure: Option<McpFailure>,
 }
 
+/// An install or removal of an agent asked of the bridge: in flight until
+/// the bridge takes it up, or refused. The install itself then shows in the
+/// agent's `install`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActionState {
+    /// Sent, and not acknowledged yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy: Option<AgentAction>,
+    /// Why the bridge refused the last one, until the next one is taken up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct McpFailure {
@@ -465,6 +483,7 @@ impl MachineView {
             provider_profiles: None,
             plugins: BTreeMap::new(),
             mcp: BTreeMap::new(),
+            agent_actions: BTreeMap::new(),
             session_grant: None,
             session_grant_sent: None,
             list_rev: None,
@@ -492,6 +511,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
             m.provider_profiles = None;
             m.plugins.clear();
             m.mcp.clear();
+            m.agent_actions.clear();
             for s in m.sessions.values_mut() {
                 s.commands = None;
                 s.mcp = None;
@@ -938,6 +958,23 @@ impl MachinesState {
                 target: msg.target.clone(),
                 error: msg.error.clone().unwrap_or_else(|| "It could not be done.".into()),
             });
+        });
+    }
+
+    /// An install or removal was sent: the agent is busy until acknowledged.
+    pub fn agent_action_sent(&mut self, machine_pubkey: &str, agent: &str, action: AgentAction) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.agent_actions.entry(agent.to_string()).or_default();
+            a.busy = Some(action);
+            a.failure = None;
+        });
+    }
+
+    pub fn apply_agent_ack(&mut self, machine_pubkey: &str, msg: &AgentAckMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.agent_actions.entry(msg.agent.clone()).or_default();
+            a.busy = None;
+            a.failure = (!msg.success).then(|| msg.error.clone().unwrap_or_else(|| "It could not be done.".into()));
         });
     }
 
@@ -1468,6 +1505,29 @@ mod tests {
         assert_eq!(held(&st).commands, vec![cmd("init")]);
         let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
         assert_eq!(back["pk"].sessions["s1"].commands, None);
+    }
+
+    #[test]
+    fn an_agent_action_is_busy_until_acknowledged_and_never_persisted() {
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        let held = |st: &MachinesState| st.machine("pk").unwrap().agent_actions["opencode"].clone();
+        let ack = |success: bool, error: Option<&str>| AgentAckMsg {
+            agent: "opencode".into(),
+            action: AgentAction::Remove,
+            success,
+            error: error.map(str::to_string),
+        };
+
+        st.agent_action_sent("pk", "opencode", AgentAction::Remove);
+        assert_eq!(held(&st).busy, Some(AgentAction::Remove));
+        assert!(serialize_machines(&st.machines).find("agentActions").is_none());
+        st.apply_agent_ack("pk", &ack(false, Some("not removable")));
+        assert_eq!(held(&st), AgentActionState { busy: None, failure: Some("not removable".into()) });
+        st.agent_action_sent("pk", "opencode", AgentAction::Install);
+        assert_eq!(held(&st).failure, None, "a new action clears the last refusal");
+        st.apply_agent_ack("pk", &ack(true, None));
+        assert_eq!(held(&st), AgentActionState::default());
     }
 
     #[test]

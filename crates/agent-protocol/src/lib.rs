@@ -89,6 +89,8 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"20","kind":"set-providers","payload":{"agent":"opencode","providers":[
             {"id":"or","label":"OpenRouter","baseUrl":"https://openrouter.ai/api","authToken":"tok","models":[{"id":"a/b","label":"B"}],"defaultModel":"a/b"}]}}));
         bridge_rt(json!({"v":1,"id":"21","kind":"set-providers","payload":{"agent":"opencode","providers":[]}}));
+        bridge_rt(json!({"v":1,"id":"22","kind":"install-agent","payload":{"agent":"opencode"}}));
+        bridge_rt(json!({"v":1,"id":"23","kind":"remove-agent","payload":{"agent":"opencode"}}));
         bridge_rt(json!({"v":1,"id":"h1","kind":"permission-outcome","payload":{"outcome":"selected","optionId":"allow"}}));
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
         bridge_rt(json!({"v":1,"id":"h4","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"revise","feedback":"Fewer steps."}}));
@@ -102,11 +104,16 @@ mod tests {
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
             "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"gsd":true,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true},
-            "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}]
+            "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}],
+            "install":{"state":"ready"}
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
             "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"gsd":false,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false},
-            "credentials":[],"unavailableReason":"opencode is not installed"
+            "credentials":[],"unavailableReason":"The OpenCode server failed to start","install":{"state":"ready","removable":true}
+        },{
+            "id":"deepseek-harness","displayName":"DeepSeek Harness","modes":[],"efforts":[],
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"gsd":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false},
+            "credentials":[],"install":{"state":"not_installed"}
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
         host_rt(json!({"v":1,"id":"3","kind":"error","payload":{"message":"no such agent"}}));
@@ -136,6 +143,16 @@ mod tests {
             OutputEntry::new("t", EntryBody::Text { role: Role::Agent, text: "hello".into() })
         );
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"turn","state":"running"}}}));
+        let placeholder = |install: serde_json::Value| {
+            json!({"v":1,"kind":"agent-changed","payload":{"agent":{
+                "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
+                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"gsd":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false},
+                "credentials":[],"install":install}}})
+        };
+        let changed = host_rt(placeholder(json!({"state":"installing"})));
+        assert!(!changed.message.is_reply());
+        host_rt(placeholder(json!({"state":"failed","reason":"HTTP 503"})));
+        host_rt(placeholder(json!({"state":"ready","removable":true})));
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"ended"}}}));
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"ended","error":"exit 1","resumeLost":true}}}));
         let perm = host_rt(json!({"v":1,"id":"h1","kind":"request-permission","payload":{

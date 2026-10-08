@@ -37,6 +37,7 @@ pub fn alpha() -> AgentInfo {
         supports: AgentSupports { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true, tasks: true, ..Default::default() },
         credentials: vec![CredentialSpec { id: "alpha_key".into(), label: "Alpha key".into(), env_var: Some("ALPHA_KEY".into()) }],
         unavailable_reason: None,
+        install: Default::default(),
     }
 }
 
@@ -52,6 +53,7 @@ pub fn beta() -> AgentInfo {
         supports: AgentSupports { models: true, ..Default::default() },
         credentials: vec![],
         unavailable_reason: None,
+        install: Default::default(),
     }
 }
 
