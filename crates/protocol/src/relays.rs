@@ -1,4 +1,5 @@
-//! Default relay lists. Originally mirrored from the TypeScript protocol package.
+//! The default relays: what a phone and a bridge use when the user names
+//! none.
 
 pub const PRIMARY_RELAY: &str = "wss://relay2.descendant.io";
 pub const PAIRING_RELAY: &str = "wss://relay.primal.net";

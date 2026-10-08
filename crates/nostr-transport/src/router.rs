@@ -14,8 +14,7 @@
 //!   relays send are dropped before anyone parses or verifies them (see
 //!   [`Router::note_delivered`]).
 //! * `on_eose` fires **once**, when every REQ'd relay still connected has sent
-//!   EOSE — matching nostr-tools `subscribeMany` (EOSE = "stored events are in
-//!   from all relays"), so the connection FSM's socket-open is honest. A
+//!   EOSE (EOSE = "stored events are in from all relays"), so the connection FSM's socket-open is honest. A
 //!   relay still waiting on NIP-42 AUTH does not hold it back.
 //! * `on_close` fires **once**, only when the subscription is dead on *every*
 //!   REQ'd relay (all `CLOSED` / all sockets dropped). One relay dropping while
@@ -506,7 +505,7 @@ impl Router {
             return;
         }
         // An acceptance is final — no reason to wait on a slow sibling relay
-        // (matches the TS `raceForAcceptance`). Otherwise wait for every relay.
+        // Otherwise wait for every relay.
         let accepted = p
             .results
             .iter()

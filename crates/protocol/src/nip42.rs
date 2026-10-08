@@ -1,13 +1,10 @@
-//! NIP-42 relay AUTH — originally ported from the TypeScript protocol package.
+//! NIP-42 relay AUTH.
 //!
 //! Both the bridge and the phone answer a relay's `["AUTH", challenge]` with a
 //! kind-22242 event signed by their OWN identity keypair — the same pubkey
 //! already used for pairing and publishing — so a private / Haven relay only
 //! needs ONE allowlisted pubkey per side, with no separate auth-only credential.
-//!
-//! Where the TS signer takes a template nostr-tools has already built, the Rust
-//! transport builds the event itself; this is that one call. A relay that never
-//! challenges never triggers it.
+//! A relay that never challenges never triggers it.
 
 use nostr::key::Keys;
 use nostr::{EventBuilder, RelayUrl, Timestamp};

@@ -257,7 +257,8 @@ pub struct CreateFolderMsg {
     pub request_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+/// `key` decrypts the uploaded file: its `Debug` leaves it out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadFileBlossomMsg {
     #[serde(flatten)]
@@ -272,6 +273,20 @@ pub struct UploadFileBlossomMsg {
     pub text: String,
     #[specta(type = specta_typescript::Number)]
     pub size_bytes: u64,
+}
+
+impl std::fmt::Debug for UploadFileBlossomMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadFileBlossomMsg")
+            .field("session_id", &self.session_id)
+            .field("hash", &self.hash)
+            .field("url", &self.url)
+            .field("key", &"<redacted>")
+            .field("filename", &self.filename)
+            .field("mime_type", &self.mime_type)
+            .field("size_bytes", &self.size_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -304,8 +319,9 @@ pub enum UploadFileMsg {
 /// absent = the bridge's own credentials (e.g. a GitHub token). `values`
 /// maps credential ids (from the agent's advertised `credentials`) to a new
 /// secret, or `null` to clear; ids not listed are left unchanged. The only
-/// message a credential secret ever rides.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+/// message a credential secret ever rides, so its `Debug` names the ids
+/// and whether each is set or cleared, never a value.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SetCredentialsMsg {
     #[serde(flatten)]
@@ -315,7 +331,24 @@ pub struct SetCredentialsMsg {
     pub values: CredentialValues,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+impl std::fmt::Debug for SetCredentialsMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let values: std::collections::BTreeMap<&str, &str> = self
+            .values
+            .iter()
+            .map(|(id, v)| (id.as_str(), if v.is_some() { "<set>" } else { "<clear>" }))
+            .collect();
+        f.debug_struct("SetCredentialsMsg")
+            .field("version", &self.version)
+            .field("agent", &self.agent)
+            .field("values", &values)
+            .finish()
+    }
+}
+
+/// `token` is the pairing window's one-time secret: its `Debug` leaves it
+/// out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRequestMsg {
     #[serde(flatten)]
@@ -332,6 +365,19 @@ pub struct PairRequestMsg {
     /// session keys ignores the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_key: Option<SessionKeyGrant>,
+}
+
+impl std::fmt::Debug for PairRequestMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairRequestMsg")
+            .field("version", &self.version)
+            .field("npub", &self.npub)
+            .field("pubkey_hex", &self.pubkey_hex)
+            .field("label", &self.label)
+            .field("token", &"<redacted>")
+            .field("session_key", &self.session_key)
+            .finish()
+    }
 }
 
 /// A key the phone's identity lets encrypt its traffic with one bridge: the
@@ -379,8 +425,10 @@ pub struct ProviderProfileWrite {
     /// `providers` or `providerModels`).
     pub agent: String,
     pub label: String,
-    /// CDX-071: https, or http ONLY on loopback — validated on egress
-    /// ([`super::codec::encode_phone_to_bridge`]).
+    /// CDX-071: https, or http only to this machine or a private-network
+    /// address ([`is_valid_provider_base_url`](super::common::is_valid_provider_base_url))
+    /// — validated on egress ([`super::codec::encode_phone_to_bridge`]) and
+    /// again by the bridge.
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Tristate::is_keep")]
     pub auth_token: Tristate<String>,
@@ -539,6 +587,21 @@ mod tests {
         // No agent = the bridge's own credentials.
         let m = rt(&json!({"type":"set-credentials","values":{"github_pat":"ghp_x"}}));
         assert!(matches!(m, PhoneToBridge::SetCredentials(SetCredentialsMsg { agent: None, .. })));
+    }
+
+    #[test]
+    fn logging_a_command_never_prints_its_secrets() {
+        for v in [
+            json!({"type":"set-credentials","agent":"claude-code","values":{"anthropic_api_key":"sk-SECRET","other":null}}),
+            json!({"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"SECRET-key","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":1}),
+            json!({"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"SECRET-token"}),
+            json!({"type":"set-provider-profile","profileId":"p","profile":{"agent":"opencode","label":"L","baseUrl":"https://x","authToken":"tok-SECRET","models":[]}}),
+        ] {
+            let shown = format!("{:?}", rt(&v));
+            assert!(!shown.contains("SECRET"), "{shown}");
+        }
+        let shown = format!("{:?}", rt(&json!({"type":"set-credentials","values":{"github_pat":"x","old":null}})));
+        assert!(shown.contains("github_pat") && shown.contains("<set>") && shown.contains("<clear>"), "{shown}");
     }
 
     #[test]

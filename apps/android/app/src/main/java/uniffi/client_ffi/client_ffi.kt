@@ -6835,8 +6835,9 @@ public object FfiConverterTypeUniffiProviderProfileAck: FfiConverterRustBuffer<U
 
 
 /**
- * A custom AI provider profile the bridge has stored — gated on the
- * `custom-providers` capability, same as the TS `NewSessionModal.tsx`.
+ * A custom AI provider profile the bridge has stored. Which agent uses it,
+ * and how, is that agent's catalog entry (`supports.providers` /
+ * `supports.providerModels`).
  */
 data class UniffiProviderProfileInfo (
     var `id`: kotlin.String
@@ -8596,7 +8597,8 @@ sealed class UniffiIntent {
      * Records which plan-approval option the user tapped so the
      * resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
      * actual answer (`RespondPlan`), not
-     * instead of it — same contract the TS `PlanApprovalCard.tsx` had.
+     * instead of it: the label is display state, the answer goes to the
+     * bridge.
      */
     data class SetPlanApprovalChoice(
         val `cardId`: kotlin.String, 

@@ -112,6 +112,9 @@ machine has of its own is not removable.
   nothing (the phone keeps what it knew); a refused effort or model confirms
   the value still in force. `option-confirmed` is also sent when the agent
   changes its own mode (it entered plan mode, a plan approval switched it).
+- **`committed`:** the session's folder got a git commit after the session
+  started (the agent's own, caught at once, or one made by hand, caught
+  within seconds); a phone shows it as a badge.
 - **Resume:** every session in the bridge's registry comes back when the
   bridge starts. When its agent dies it is restarted (continuing the agent's
   conversation when it has one) up to twice, each with a `notice` entry.
@@ -123,7 +126,8 @@ machine has of its own is not removable.
 agent wrote in one go as one run, and the entries written while the relay
 was still taking the previous event join the next one, up to what one event
 holds unfragmented; a quiet session still sends each entry as it comes. Each
-entry has a `timestamp`, optional `subagent {label?, parentCallId?}` (`parentCallId`: the
+entry has a `timestamp` (ISO 8601 in UTC with milliseconds,
+`2026-09-25T13:04:05.123Z`, like every timestamp on the wire), optional `subagent {label?, parentCallId?}` (`parentCallId`: the
 `agent` call that started it, so a client can nest its steps under that call), optional `agentExtras` (the one
 sanctioned escape hatch — agent-specific data no client depends on) and a body
 tagged by `entryType`:
@@ -185,8 +189,8 @@ question.
 
 ### Input
 
-`input {sessionId, text, inputId?}` → `input-ack {inputId}` or
-`input-failed {inputId?, reason}`:
+`input {sessionId, text, inputId?}` → `input-ack {sessionId, inputId}` or
+`input-failed {sessionId, inputId?, reason}`:
 
 | Reason | Meaning |
 |---|---|

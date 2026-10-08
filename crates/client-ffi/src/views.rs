@@ -369,8 +369,9 @@ fn to_uniffi_profile_model(profile: &str, m: &protocol::common::ProviderModel) -
     }
 }
 
-/// A custom AI provider profile the bridge has stored — gated on the
-/// `custom-providers` capability, same as the TS `NewSessionModal.tsx`.
+/// A custom AI provider profile the bridge has stored. Which agent uses it,
+/// and how, is that agent's catalog entry (`supports.providers` /
+/// `supports.providerModels`).
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiProviderProfileInfo {
     pub id: String,

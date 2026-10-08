@@ -1,5 +1,5 @@
 //! Event-content fragmentation — the transport layer BELOW the semantic
-//! protocol. Originally ported from the TypeScript protocol package.
+//! protocol.
 //!
 //! Every bridge→phone message rides one Nostr event as `base64(NIP-44(JSON))` in
 //! `event.content`. Relays cap `content` at 65535 bytes. A large model reply is
@@ -30,8 +30,9 @@ pub const NIP44_SAFE_PLAINTEXT_BYTES: usize = 40960;
 /// wrapper's own JSON overhead. A lower bound the binary search targets.
 pub const CHUNK_ENVELOPE_MARGIN: usize = 64;
 
-/// Wire `type` of a fragment envelope. Deliberately NOT part of
-/// `bridgeToPhoneSchema` — the semantic layer must never see a fragment.
+/// Wire `type` of a fragment envelope. Deliberately NOT a
+/// [`BridgeToPhone`](crate::events::BridgeToPhone) variant — the semantic
+/// layer must never see a fragment.
 pub const CHUNK_MESSAGE_TYPE: &str = "chunk";
 
 /// Idle-group discard window (ms). The missing message is then recovered by the
@@ -41,8 +42,8 @@ pub const CHUNK_ASSEMBLY_TTL_MS: u64 = 60_000;
 const DEFAULT_MAX_OPEN: usize = 64;
 const DEFAULT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-/// A fragment envelope. Field order matches `JSON.stringify({type,cid,i,n,part})`
-/// so [`parse_chunk_envelope`]'s cheap `{"type":"chunk"` prefix check works.
+/// A fragment envelope. `type` is serialized first, so
+/// [`parse_chunk_envelope`]'s cheap `{"type":"chunk"` prefix check works.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChunkEnvelope {
     #[serde(rename = "type")]
@@ -57,8 +58,7 @@ pub struct ChunkEnvelope {
     pub part: String,
 }
 
-/// UTF-8 byte length. Trivial in Rust (`str` is UTF-8) — kept under the TS name
-/// for parity; the TS version exists only because JS strings are UTF-16.
+/// UTF-8 byte length: what the relay's content cap counts.
 #[inline]
 pub fn utf8_size(s: &str) -> usize {
     s.len()
@@ -218,9 +218,9 @@ impl ChunkAssembler {
         self.open.len()
     }
 
-    /// Drop groups older than `ttl_ms`. Stale ⟺ `now - first_seen >= ttl`
-    /// (the TS computes `first_seen <= now - ttl` in signed arithmetic — a
-    /// `saturating_sub` on the cutoff would wrongly drop everything at now=0).
+    /// Drop groups older than `ttl_ms`. Stale ⟺ `now - first_seen >= ttl`,
+    /// computed as an age: a `saturating_sub` on a cutoff (`now - ttl`)
+    /// would wrongly drop everything while `now < ttl`.
     pub fn sweep(&mut self, now_ms: u64) {
         let stale: Vec<String> = self
             .open
@@ -334,8 +334,8 @@ mod tests {
         }
     }
 
-    /// A plausible large JSON-shaped string of ~`bytes` length (stands in for
-    /// `encodeBridgeToPhone(outputOfSize(bytes))` — the codec lands later).
+    /// A plausible large JSON-shaped string of ~`bytes` length: fragmenting
+    /// works on any string, so it need not be a decodable message.
     fn big_json(bytes: usize, filler: &str) -> String {
         let head = r#"{"type":"output","sessionId":"s1","seq":12345,"entry":{"entryType":"text","content":""#;
         let tail = r#"","timestamp":"2026-08-05T00:00:00.000Z"}}"#;
