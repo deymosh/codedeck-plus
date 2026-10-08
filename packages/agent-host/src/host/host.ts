@@ -11,6 +11,7 @@
  *   or with `cancelled` when the host shuts down.
  */
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext } from '../sdk/driver';
+import type { Agents } from './agents';
 import {
   DRIVER_PROTOCOL_VERSION,
   type BridgeFrame,
@@ -61,7 +62,6 @@ function errorText(err: unknown): string {
 }
 
 export class AgentHost {
-  private readonly drivers: Map<string, Driver>;
   private readonly sessions = new Map<string, SessionSlot>();
   /** Sessions an `end-session` is still stopping: what deleting their
    *  conversation waits for, since lines are handled concurrently. */
@@ -71,11 +71,13 @@ export class AgentHost {
   private shuttingDown = false;
 
   constructor(
-    drivers: Driver[],
+    private readonly agents: Agents,
     private readonly io: HostIo,
     private readonly hostVersion: string,
   ) {
-    this.drivers = new Map(drivers.map((d) => [d.info().id, d]));
+    agents.onChange = (agent) => {
+      if (!this.shuttingDown) this.write(undefined, { kind: 'agent-changed', payload: { agent } });
+    };
   }
 
   /** Handle one line from the bridge. Never rejects. */
@@ -136,7 +138,15 @@ export class AgentHost {
     });
     this.sessions.clear();
     await Promise.all(ends);
-    await Promise.all([...this.drivers.values()].map((d) => d.shutdown?.().catch(() => {})));
+    await this.agents.shutdown();
+  }
+
+  /** End every session of `agent`, telling the bridge why (it is being
+   *  removed). */
+  private async endSessionsOf(agent: string, reason: string): Promise<void> {
+    const slots = [...this.sessions.entries()].filter(([, slot]) => slot.agent === agent);
+    for (const [sessionId, slot] of slots) this.emit(sessionId, slot, { type: 'ended', error: reason });
+    await Promise.all(slots.map(([, slot]) => slot.session?.end().catch(() => {})));
   }
 
   private async handleRequest(message: BridgeMessage): Promise<HostMessage> {
@@ -144,8 +154,16 @@ export class AgentHost {
       case 'initialize':
         return {
           kind: 'initialized',
-          payload: { hostVersion: this.hostVersion, agents: [...this.drivers.values()].map((d) => d.info()) },
+          payload: { hostVersion: this.hostVersion, agents: this.agents.list() },
         };
+      case 'install-agent':
+        this.agents.install(message.payload.agent);
+        return ack();
+      case 'remove-agent': {
+        const { agent } = message.payload;
+        await this.agents.remove(agent, (reason) => this.endSessionsOf(agent, reason));
+        return ack();
+      }
       case 'end-session': {
         const { sessionId } = message.payload;
         const slot = this.sessions.get(sessionId);
@@ -262,7 +280,7 @@ export class AgentHost {
   }
 
   private startSession(params: Extract<BridgeMessage, { kind: 'start-session' }>['payload']): SessionSlot {
-    const driver = this.driver(params.agent);
+    const driver = this.agents.driver(params.agent);
     const reason = driver.info().unavailableReason;
     if (reason) throw new Error(reason);
     if (this.sessions.has(params.sessionId)) throw new Error(`session ${params.sessionId} is already running`);
@@ -330,9 +348,7 @@ export class AgentHost {
   }
 
   private driver(agent: string): Driver {
-    const driver = this.drivers.get(agent);
-    if (!driver) throw new Error(`no agent '${agent}' in this host`);
-    return driver;
+    return this.agents.driver(agent);
   }
 
   private plugins(agent: string): PluginManager {

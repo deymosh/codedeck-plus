@@ -50,10 +50,9 @@ fi
 #    default (this is a real network call to the npm registry on every
 #    container boot, and the bridge's GSD strip already degrades to a blank
 #    snapshot when gsd-tools is missing). Opt in with
-#    CODEDECK_GSD_AUTO_INSTALL=1, mirroring the CODEDECK_OPENCODE_AUTO_START
-#    convention. An unset/empty value (Compose's `${VAR:-}` default for every
-#    operator who never touched it) and an explicit "0"/"false" both mean
-#    disabled.
+#    CODEDECK_GSD_AUTO_INSTALL=1. An unset/empty value (Compose's `${VAR:-}`
+#    default for every operator who never touched it) and an explicit
+#    "0"/"false" both mean disabled.
 case "${CODEDECK_GSD_AUTO_INSTALL:-}" in
   ''|0|false) ;;
   *)

@@ -3,9 +3,14 @@
  * pairing, the ack-before-events ordering, requests the host sends to the
  * bridge, and session lifetimes.
  */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { Driver } from '../../sdk/driver';
+import type { DriverModule } from '../../sdk/module';
 import { FakeDriver } from '../../drivers/fake/driver';
+import { Agents } from '../agents';
 import { AgentHost, parseBridgeFrame } from '../host';
 import type { AgentInfo } from '../../sdk/types';
 
@@ -19,7 +24,7 @@ interface Frame {
 function harness() {
   const out: Frame[] = [];
   const logs: string[] = [];
-  const host = new AgentHost([new FakeDriver()], { write: (l) => out.push(JSON.parse(l) as Frame), log: (m) => logs.push(m) }, '9.9.9');
+  const host = new AgentHost(Agents.of([new FakeDriver()]), { write: (l) => out.push(JSON.parse(l) as Frame), log: (m) => logs.push(m) }, '9.9.9');
   let next = 0;
   const send = (kind: string, payload: Record<string, unknown>, id: string | undefined = `b${++next}`) =>
     host.handleLine(JSON.stringify({ v: 1, ...(id ? { id } : {}), kind, payload }));
@@ -150,7 +155,7 @@ describe('AgentHost', () => {
       },
     };
     const out: Frame[] = [];
-    const host = new AgentHost([driver], { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
+    const host = new AgentHost(Agents.of([driver]), { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
     const send = (id: string, kind: string, payload: Record<string, unknown>) =>
       host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
     await send('st', 'start-session', { sessionId: 's1', agent: 'slow', cwd: '/w' });
@@ -238,6 +243,56 @@ describe('AgentHost', () => {
     // The driver saw a cancellation, but the session was closed first, so
     // nothing more reaches the bridge.
     expect(h.texts()).toEqual([]);
+  });
+
+  it('removes and installs an agent, telling the bridge before its sessions end', async () => {
+    let pinned = true;
+    const module: DriverModule = {
+      id: 'fake',
+      label: 'Fake agent',
+      create: () => new FakeDriver(),
+      runtime: {
+        find: () => null,
+        installed: () => (pinned ? '/cache/fake' : null),
+        install: async () => {
+          pinned = true;
+          return '/cache/fake';
+        },
+        remove: () => {
+          pinned = false;
+        },
+      },
+    };
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-agents-'));
+    try {
+      const agents = await Agents.load([module], { env: {}, lookupEnv: {}, cacheDir, registry: '', log: () => {} });
+      const out: Frame[] = [];
+      const host = new AgentHost(agents, { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
+      const send = (id: string, kind: string, payload: Record<string, unknown>) =>
+        host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
+      await send('st', 'start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });
+
+      await send('rm', 'remove-agent', { agent: 'fake' });
+      const kinds = out.map((f) => (f.kind === 'session-event' ? `${f.kind}:${String(f.payload?.event?.type)}` : f.kind));
+      expect(kinds.slice(kinds.indexOf('agent-changed'))).toEqual(['agent-changed', 'session-event:ended', 'ack']);
+      expect(out.find((f) => f.kind === 'session-event' && f.payload?.event?.type === 'ended')?.payload?.event).toEqual({
+        type: 'ended',
+        error: 'Fake agent was removed from this machine.',
+      });
+      expect(pinned).toBe(false);
+
+      await send('st2', 'start-session', { sessionId: 's2', agent: 'fake', cwd: '/w' });
+      expect(out.find((f) => f.id === 'st2')).toMatchObject({ kind: 'error', payload: { message: 'Fake agent is not installed on this machine' } });
+
+      out.length = 0;
+      await send('in', 'install-agent', { agent: 'fake' });
+      expect(out[0]).toMatchObject({ kind: 'agent-changed', payload: { agent: { id: 'fake', install: { state: 'installing' } } } });
+      expect(out[1]).toEqual({ v: 1, id: 'in', kind: 'ack' });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(out[2]).toMatchObject({ kind: 'agent-changed', payload: { agent: { displayName: 'Fake agent', install: { state: 'ready', removable: true } } } });
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
   });
 
   it('malformed frames, other versions and stray replies are logged and dropped', async () => {

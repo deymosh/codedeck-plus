@@ -8,8 +8,12 @@ import {
   extractFile,
   extractTree,
   installBinary,
+  installedBinary,
+  installedPackageTree,
   installPackageTree,
   type PackagedBinary,
+  removeBinary,
+  removePackageTree,
   withoutAgentBin,
 } from '../agentInstall';
 import type { TreePackageEntry } from '../lockfilePins';
@@ -152,6 +156,21 @@ describe('installBinary', () => {
   it('reports an HTTP failure', async () => {
     const fetchFn = (async () => new Response('nope', { status: 404 })) as unknown as typeof fetch;
     await expect(installBinary(binary, { cacheDir: cache, pins, log, fetchFn })).rejects.toThrow(/Tool could not be installed: HTTP 404/);
+  });
+
+  it('is found installed without a download, and removed with every version and its link', async () => {
+    expect(installedBinary(binary, { cacheDir: cache, pins })).toBeNull();
+    const fetchFn = (async () => new Response(tgz)) as unknown as typeof fetch;
+    const target = await installBinary(binary, { cacheDir: cache, pins, log, fetchFn });
+    expect(installedBinary(binary, { cacheDir: cache, pins })).toBe(target);
+    expect(installedBinary(binary, { cacheDir: cache, pins: {} })).toBeNull();
+
+    fs.mkdirSync(path.join(cache, '@scope+tool-linux-x64@1.0.0'));
+    fs.mkdirSync(path.join(cache, '@scope+other@1.0.0'));
+    removeBinary(binary, cache);
+    expect(fs.readdirSync(cache).filter((n) => n !== 'bin')).toEqual(['@scope+other@1.0.0']);
+    if (process.platform !== 'win32') expect(fs.readdirSync(path.join(cache, 'bin'))).toEqual([]);
+    expect(installedBinary(binary, { cacheDir: cache, pins })).toBeNull();
   });
 });
 
@@ -382,6 +401,21 @@ describe('installPackageTree', () => {
 
   it('refuses a root this build does not pin', async () => {
     await expect(installPackageTree('unpinned', entries, { cacheDir: cache, log })).rejects.toThrow(/unpinned is not pinned/);
+  });
+
+  it('is found installed only when complete, and removed', async () => {
+    expect(installedPackageTree('@deepseek-ai/dsh', entries, cache)).toBeNull();
+    const root = await installPackageTree('@deepseek-ai/dsh', entries, { cacheDir: cache, log, fetchFn: registryOf(tgzOf), label: 'DSH' });
+    expect(installedPackageTree('@deepseek-ai/dsh', entries, cache)).toBe(root);
+    expect(installedPackageTree('unpinned', entries, cache)).toBeNull();
+
+    // A package cut off mid-install has no package.json: not installed.
+    fs.rmSync(path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'commander', 'package.json'));
+    expect(installedPackageTree('@deepseek-ai/dsh', entries, cache)).toBeNull();
+
+    fs.mkdirSync(path.join(cache, 'opencode-linux-x64@1.0.0'));
+    removePackageTree('@deepseek-ai/dsh', cache);
+    expect(fs.readdirSync(cache)).toEqual(['opencode-linux-x64@1.0.0']);
   });
 
   it('prunes older versions of the tree once the new one is in', async () => {

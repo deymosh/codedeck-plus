@@ -15,9 +15,11 @@
 #              agent's own tool use.
 #
 # The agents' own binaries are NOT in the image by default. The agent host
-# installs Claude Code (and OpenCode, when auto-start is on) on first use,
-# pinned to pnpm-lock.yaml's sha512, into /data/agents — the persisted volume,
-# so a container recreated from a newer image reuses them until the pin moves.
+# installs OpenCode, the default agent, when it first starts, and any other
+# agent when someone installs it from the phone (or `codedeck-bridge agents
+# install`), pinned to pnpm-lock.yaml's sha512, into /data/agents — the
+# persisted volume, so a container recreated from a newer image reuses them
+# until the pin moves.
 # /data/agents/bin (links under stable names) is on PATH for a shell in the
 # container, e.g. a one-time `opencode auth login`.
 #
@@ -82,11 +84,10 @@ RUN --mount=type=cache,id=codedeck-pnpm-store,target=/root/.local/share/pnpm/sto
 # the code that would fetch it on a machine with internet — lays it down here,
 # into the cache layout the host looks in, at the version and sha512
 # pnpm-lock.yaml pins. An image built without BUNDLE_AGENTS ships nothing of
-# it and installs it on first use.
+# it and installs it when someone asks for it.
 RUN mkdir -p /agents \
     && if [ "$BUNDLE_AGENTS" = 1 ]; then \
-         CODEDECK_AGENT_HOST_WARM=1 CODEDECK_AGENT_HOST_DRIVERS=deepseek-harness \
-         CODEDECK_AGENT_CACHE=/agents node /deploy/dist/main.js; \
+         CODEDECK_AGENT_CACHE=/agents node /deploy/dist/main.js install deepseek-harness; \
        fi
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 /**
  * Claude Code: the Agent SDK around the `claude` binary — the one on the
  * machine (CODEDECK_CLAUDE_PATH, PATH, or the SDK's own platform package),
- * else the pinned platform package installed on demand.
+ * else the pinned platform package, installed when asked for.
  * CODEDECK_TEST_MODE=1 swaps the SDK for canned `/test-*` sessions.
  */
-import { installBinary } from '../../install/agentInstall';
+import { installBinary, installedBinary, removeBinary } from '../../install/agentInstall';
 import type { DriverEnv, DriverModule } from '../../sdk/module';
 import { httpPost, providerHttp } from '../../sdk/net';
 import { ClaudeDriver } from './driver';
@@ -32,8 +32,8 @@ export const claudeModule: DriverModule = {
     return new ClaudeDriver({
       facade: test ? new TestModeSdkFacade() : new RealSdkFacade(),
       ...(claudePath ? { claudePath } : {}),
-      // Nothing on the machine: the driver installs it in the background,
-      // so the agent is listed right away and the first session waits for it.
+      // Not the machine's own: the pinned install, which is in place by now
+      // and found without a download (or laid down again if it went).
       ...(!test && !claudePath ? { installClaude: () => install(ctx) } : {}),
       httpPost,
       providerHttp,
@@ -44,6 +44,8 @@ export const claudeModule: DriverModule = {
   },
   runtime: {
     find: (ctx) => (testMode(ctx) ? 'test mode' : existing(ctx)),
+    installed: (ctx) => installedBinary(claudeBinary(), ctx),
     install,
+    remove: (ctx) => removeBinary(claudeBinary(), ctx.cacheDir),
   },
 };

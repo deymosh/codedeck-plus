@@ -26,6 +26,7 @@ export type McpServerSetup = G.McpServerSetup;
 export type HostFrame = G.Frame_Deserialize<G.HostMessage_Deserialize>;
 export type HostMessage = G.HostMessage_Deserialize;
 export type AgentInfo = G.AgentInfo_Deserialize;
+export type AgentInstall = G.AgentInstall_Deserialize;
 export type SessionEvent = G.SessionEvent_Deserialize;
 export type OutputEntry = G.OutputEntry_Deserialize;
 export type DiffLine = G.DiffLine;

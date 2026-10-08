@@ -6,8 +6,7 @@ import { claudeModule } from '../drivers/claude/module';
 import { deepSeekModule } from '../drivers/deepseek/module';
 import { fakeModule } from '../drivers/fake/module';
 import { openCodeModule } from '../drivers/opencode/module';
-import type { Driver } from '../sdk/driver';
-import type { DriverEnv, DriverModule } from '../sdk/module';
+import type { DriverModule } from '../sdk/module';
 
 export const DRIVER_MODULES: readonly DriverModule[] = [claudeModule, openCodeModule, deepSeekModule, fakeModule];
 
@@ -30,35 +29,4 @@ export function selectModules(
     else log(`[agent-host] unknown driver '${id}' — skipped`);
   }
   return selected;
-}
-
-type Base = Omit<DriverEnv, 'ownEnv'>;
-
-/** Build the modules' drivers. Every module claims its own variables first,
- *  since every agent process inherits the environment left over. */
-export async function loadDrivers(modules: readonly DriverModule[], base: Base): Promise<Driver[]> {
-  const own = modules.map((m) => m.claimEnv?.(base.env) ?? base.env);
-  const drivers: Driver[] = [];
-  for (const [i, module] of modules.entries()) {
-    drivers.push(await module.create({ ...base, ownEnv: own[i]! }));
-  }
-  return drivers;
-}
-
-/**
- * Install what the modules' agents run from — the same installs a first
- * session would trigger — leaving alone any agent the machine already has.
- */
-export async function warmModules(modules: readonly DriverModule[], base: Base): Promise<void> {
-  for (const module of modules) {
-    if (!module.runtime) continue;
-    const ctx = { ...base, ownEnv: base.env };
-    const found = module.runtime.find(ctx);
-    if (found) {
-      base.log(`[warm] ${module.label} is already available (${found})`);
-      continue;
-    }
-    base.log(`[warm] ${module.label}: ${await module.runtime.install(ctx)}`);
-  }
-  base.log('[warm] every agent this host was asked for is installed');
 }

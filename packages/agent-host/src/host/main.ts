@@ -4,33 +4,35 @@
  * Everything else — logs from the host, the drivers or the SDKs — goes to
  * stderr, which the bridge copies into its own log.
  *
+ * `node main.js list | install <id>… | remove <id>…` runs one command on the
+ * agents instead of serving (commands.ts).
+ *
  * Configuration is the environment the bridge passes down:
  *   CODEDECK_AGENT_HOST_DRIVERS   comma-separated drivers to load
  *                                 (default `claude-code,opencode,deepseek-harness`;
  *                                 `fake` for tests)
  *   CODEDECK_CLAUDE_PATH          the `claude` executable
  *   CODEDECK_TEST_MODE=1          Claude Code sessions answer canned /test-* commands
- *   CODEDECK_OPENCODE_SERVER_URL  an OpenCode server to use
- *   CODEDECK_OPENCODE_AUTO_START=1, CODEDECK_OPENCODE_PATH, CODEDECK_OPENCODE_PORT
- *                                 spawn and manage an OpenCode server instead
+ *   CODEDECK_OPENCODE_SERVER_URL  an OpenCode server to use; unset = the
+ *                                 driver starts and manages its own, with
+ *   CODEDECK_OPENCODE_PATH, CODEDECK_OPENCODE_PORT
  *   CODEDECK_DEEPSEEK_PATH        the DeepSeek Harness CLI to run (its
  *                                 `lib/bin.js`, or an executable of your own);
  *                                 unset = the runtime this build pins
  *   CODEDECK_DEEPSEEK_HOME        `$DSH_HOME`, the harness's state root
  *                                 (the bridge passes `<home>/dsh`)
- *   CODEDECK_AGENT_HOST_WARM=1    install the enabled agents' runtimes and
- *                                 exit, without serving anything (an image
- *                                 build, or a first-run warm-up)
- *   CODEDECK_AGENT_CACHE          where agent binaries installed on demand live
- *                                 (the bridge passes `<home>/agents`; `bin/`
- *                                 in it links each one under a stable name)
+ *   CODEDECK_AGENT_CACHE          where the agents CodeDeck installs live (the
+ *                                 bridge passes `<home>/agents`; `bin/` in it
+ *                                 links each binary under a stable name)
  *   CODEDECK_NPM_REGISTRY         an npm mirror to install them from
  */
 import * as readline from 'node:readline';
 import pkg from '../../package.json';
 import { agentCacheDir, registryUrl, withoutAgentBin } from '../install/agentInstall';
+import { Agents } from './agents';
+import { runCommand } from './commands';
 import { AgentHost, type HostIo } from './host';
-import { loadDrivers, selectModules, warmModules } from './modules';
+import { selectModules } from './modules';
 
 // stdout carries protocol frames only; a stray console.log from any library
 // would corrupt the stream, so every console method writes to stderr.
@@ -53,13 +55,10 @@ function driverEnv(env: NodeJS.ProcessEnv) {
 }
 
 async function main(): Promise<void> {
-  const warm = process.env.CODEDECK_AGENT_HOST_WARM?.trim();
-  if (warm === '1' || warm === 'true') {
-    // A build step or a first-run warm-up: install what the asked-for
-    // agents run from (an image built with BUNDLE_AGENTS=1, so a host with
-    // no internet has every runtime; or so the first session does not wait
-    // for a download), then exit without ever reading stdin.
-    await warmModules(selectModules(process.env, log), driverEnv(process.env));
+  const args = process.argv.slice(2);
+  if (args.length > 0) {
+    // One command, then exit without ever reading stdin.
+    process.exitCode = await runCommand(args, driverEnv(process.env), (line) => process.stdout.write(`${line}\n`));
     return;
   }
   const io: HostIo = {
@@ -68,7 +67,8 @@ async function main(): Promise<void> {
     },
     log,
   };
-  const host = new AgentHost(await loadDrivers(selectModules(process.env, log), driverEnv(process.env)), io, pkg.version);
+  const agents = await Agents.load(selectModules(process.env, log), driverEnv(process.env));
+  const host = new AgentHost(agents, io, pkg.version);
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   // Lines are handled concurrently: a slow request (a model list, a mode
   // switch) must not hold up the replies that unblock a waiting agent.

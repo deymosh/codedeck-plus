@@ -46,10 +46,7 @@ struct Cli {
     /// External OpenCode server [env: CODEDECK_OPENCODE_SERVER_URL]
     #[arg(long, global = true)]
     opencode_server_url: Option<String>,
-    /// Start and manage an OpenCode server [env: CODEDECK_OPENCODE_AUTO_START]
-    #[arg(long, global = true)]
-    opencode_auto_start: bool,
-    /// Path to the opencode executable, for auto-start [env: CODEDECK_OPENCODE_PATH]
+    /// Path to the opencode executable for the server the bridge starts [env: CODEDECK_OPENCODE_PATH]
     #[arg(long, global = true)]
     opencode_path: Option<String>,
     /// Path to the DeepSeek Harness CLI — its `lib/bin.js`, or an executable of your own — instead of the runtime this build installs [env: CODEDECK_DEEPSEEK_PATH]
@@ -91,8 +88,29 @@ enum Command {
     },
     /// List the project folders a phone can start sessions in
     Folders,
+    /// List, install or remove the agents on this machine
+    Agents {
+        #[command(subcommand)]
+        action: AgentsCommand,
+    },
     /// Print the version
     Version,
+}
+
+#[derive(Subcommand)]
+enum AgentsCommand {
+    /// Every agent and where it stands on this machine
+    List,
+    /// Install agents at the version this build pins
+    Install {
+        #[arg(required = true)]
+        agents: Vec<String>,
+    },
+    /// Remove what CodeDeck installed of agents (their settings and conversations stay)
+    Remove {
+        #[arg(required = true)]
+        agents: Vec<String>,
+    },
 }
 
 /// The start banner's title art.
@@ -116,7 +134,6 @@ fn main() -> ExitCode {
         claude_path: cli.claude_path.clone(),
         tor_proxy: cli.tor_proxy.clone(),
         opencode_server_url: cli.opencode_server_url.clone(),
-        opencode_auto_start: cli.opencode_auto_start,
         opencode_path: cli.opencode_path.clone(),
         deepseek_path: cli.deepseek_path.clone(),
         agent_host: cli.agent_host.clone(),
@@ -149,9 +166,35 @@ fn main() -> ExitCode {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Command::Agents { action } => agents(&config, action),
         Command::Version => unreachable!(),
     };
     result.unwrap_or_else(|err| fail(&err))
+}
+
+/// Runs the agent host's own command, with the environment the bridge gives
+/// it when serving, so it works on the same agent cache.
+fn agents(config: &Config, action: AgentsCommand) -> Result<ExitCode, String> {
+    let args: Vec<String> = match action {
+        AgentsCommand::List => vec!["list".into()],
+        AgentsCommand::Install { agents } => [vec!["install".into()], agents].concat(),
+        AgentsCommand::Remove { agents } => [vec!["remove".into()], agents].concat(),
+    };
+    let changes = args[0] != "list";
+    let status = std::process::Command::new(&config.node_path)
+        .arg(&config.agent_host_path)
+        .args(&args)
+        .envs(&config.host_env)
+        .status()
+        .map_err(|e| format!("cannot run the agent host with {}: {e}", config.node_path))?;
+    if changes && lock_holder(&config.home).is_some() {
+        println!("A bridge is running: it sees this change once its agent host restarts (installing from the phone takes effect at once).");
+    }
+    Ok(match status.code() {
+        Some(0) => ExitCode::SUCCESS,
+        Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+        None => ExitCode::FAILURE,
+    })
 }
 
 fn fail(err: &str) -> ExitCode {
