@@ -53,6 +53,7 @@
       { "type": "set-provider-profile", "profileId": "p", "profile": null },
       { "type": "set-provider-profile", "profileId": "p", "profile": { "label": "L", "baseUrl": "https://api.example.com/v1", "authToken": "tok", "models": [{ "id": "m1", "label": "M1" }], "defaultModel": "m1" } },
       { "type": "set-provider-profile", "profileId": "p", "profile": { "label": "L", "baseUrl": "http://localhost:11434/v1", "models": [{ "id": "m1" }] } },
+      { "type": "set-provider-profile", "profileId": "p", "profile": { "label": "L", "baseUrl": "https://openrouter.ai/api", "authToken": "tok", "models": [], "modelsFromProvider": true, "defaultModel": "m1" } },
       { "type": "provider-profiles-request" },
       { "type": "session-key", "sessionKey": { "pubkeyHex": "bb", "bridgePubkeyHex": "cc", "expiresAt": 1800000000 } }
     ],
@@ -147,7 +148,7 @@
       { "type": "credentials-ack", "machine": "m", "success": false, "credentials": [], "error": "not writable" },
       { "type": "pair-ack", "machine": "m", "ok": true },
       { "type": "pair-ack", "machine": "m", "ok": false, "reason": "bad-token", "relays": ["wss://r"], "host": "cli" },
-      { "type": "provider-profiles", "machine": "m", "profiles": [{ "id": "p", "label": "L", "baseUrl": "https://x", "models": [{ "id": "m" }], "hasToken": true }] },
+      { "type": "provider-profiles", "machine": "m", "profiles": [{ "id": "p", "label": "L", "baseUrl": "https://x", "models": [{ "id": "m" }], "hasToken": true }, { "id": "q", "label": "Q", "baseUrl": "https://y", "models": [{ "id": "a/b", "label": "B" }], "modelsFromProvider": true, "hasToken": true }] },
       { "type": "provider-profile-ack", "machine": "m", "profileId": "p", "success": true, "tokenValid": false }
     ],
     "rejected": [

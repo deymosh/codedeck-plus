@@ -210,14 +210,24 @@ this message, inbound; status only ever goes out.**
 
 ### Custom provider profiles
 
-Phone-managed, bridge-stored profiles that point a session at an
-Anthropic-compatible backend. Only agents with `supports.providers` accept one.
+Phone-managed, bridge-stored profiles that point a session at another
+endpoint: a provider's own API, or a gateway in front of several. Which wire
+the endpoint must speak is the agent's (Claude Code: Anthropic's Messages
+API; OpenCode: OpenAI's chat completions). Only agents with
+`supports.providers` accept one.
 
 - `set-provider-profile {profileId, profile | null}`: upsert or delete (`null`
   deletes). `profile.authToken` is tri-state: absent = keep, `null` = clear,
   string = set. The base URL must be https (http only on loopback) — the
   bridge never stores an insecure profile, and refuses to start a session on
   one written before that rule.
+- `profile.modelsFromProvider: true`: the phone lists no models; the bridge
+  reads them from the endpoint's `/v1/models` (`/models` when the base URL
+  already ends in `/v1`) with the profile's token, on every save, and stores
+  at most 200. It follows no redirect, and refuses the save when the list
+  cannot be read or is empty. A `defaultModel` the list does not name is
+  dropped. The stored profile reports the flag back, so a later save (with
+  the token kept) reads the list again.
 - `provider-profiles-request` → `provider-profiles {profiles[]}` to the asking
   phone; after every change the bridge broadcasts the new list to all phones.
 - `provider-profile-ack {profileId, success, tokenValid?, error?}`;

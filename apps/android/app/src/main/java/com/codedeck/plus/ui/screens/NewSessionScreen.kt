@@ -199,14 +199,12 @@ internal fun NewSessionBody(
         val name = choices.firstOrNull { it.first == id }?.second ?: id
         return "Default $kind ($name)"
     }
-    // The same model can come from more than one provider; then the
-    // default names its provider too.
-    val manyProviders = modelOptions.mapNotNull { it.provider }.distinct().size > 1
+    // The default names its provider too, as every entry in the list does.
     val defaultModelLabel = defaultLabel(
         "model",
         // A profile with no default of its own runs its first model.
         if (activeProfile != null) activeProfile.defaultModel ?: activeProfile.models.firstOrNull()?.id else agentModels?.defaultModel,
-        modelOptions.map { m -> m.id to (m.label ?: m.id) + (m.provider?.takeIf { manyProviders }?.let { " from $it" } ?: "") },
+        modelOptions.map { m -> m.id to (m.label ?: m.id) + (m.provider?.let { " from $it" } ?: "") },
     )
 
     fun create() {

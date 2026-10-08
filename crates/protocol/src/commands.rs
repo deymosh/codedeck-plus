@@ -369,7 +369,14 @@ pub struct ProviderProfileWrite {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Tristate::is_keep")]
     pub auth_token: Tristate<String>,
+    /// Ignored when `models_from_provider` is set.
     pub models: Vec<ProviderModel>,
+    /// Ask the provider for its models instead: the bridge reads its
+    /// `/v1/models` with the profile's token on every save, and stores
+    /// what it lists (or refuses the save when it lists nothing).
+    #[serde(default, skip_serializing_if = "super::common::is_false")]
+    pub models_from_provider: bool,
+    /// With `models_from_provider`, kept only when the provider lists it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
 }

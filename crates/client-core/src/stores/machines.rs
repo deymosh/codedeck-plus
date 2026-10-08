@@ -1850,6 +1850,7 @@ mod tests {
                     label: "Anthropic".into(),
                     base_url: "https://api.example".into(),
                     models: vec![],
+                    models_from_provider: false,
                     default_model: None,
                     has_token: true,
                 }],

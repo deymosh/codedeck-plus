@@ -342,6 +342,8 @@ pub struct UniffiProviderProfileInfo {
     pub label: String,
     pub base_url: String,
     pub models: Vec<UniffiModelEntry>,
+    /// The models are the provider's own list.
+    pub models_from_provider: bool,
     pub default_model: Option<String>,
     pub has_token: bool,
 }
@@ -754,6 +756,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             .iter()
                             .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: Some(p.label.clone()) })
                             .collect(),
+                        models_from_provider: p.models_from_provider,
                         default_model: p.default_model.clone(),
                         has_token: p.has_token,
                     })

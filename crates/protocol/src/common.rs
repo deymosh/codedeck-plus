@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-fn is_false(b: &bool) -> bool {
+pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
@@ -495,6 +495,9 @@ pub struct ProviderProfileInfo {
     pub label: String,
     pub base_url: String,
     pub models: Vec<ProviderModel>,
+    /// The models are the provider's own list, read when it was last saved.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub models_from_provider: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     pub has_token: bool,

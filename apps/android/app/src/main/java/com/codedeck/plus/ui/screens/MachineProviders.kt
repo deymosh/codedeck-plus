@@ -58,12 +58,19 @@ private fun profileIdFromLabel(label: String, taken: Set<String>): String {
     return "$base-$n"
 }
 
-/** Add-form prefills for the two providers the feature was built around. */
-private data class Preset(val name: String, val baseUrl: String, val models: List<ModelRow>, val defaultModel: String)
+/** Add-form prefills for the two providers the feature was built around.
+ *  [fromProvider]: the provider lists its own models, so none are typed. */
+private data class Preset(
+    val name: String,
+    val baseUrl: String,
+    val models: List<ModelRow>,
+    val defaultModel: String,
+    val fromProvider: Boolean,
+)
 
 private val PRESETS = listOf(
-    Preset("Kimi K3", "https://api.moonshot.ai/anthropic", listOf(ModelRow("kimi-k3", "Kimi K3")), "kimi-k3"),
-    Preset("OpenRouter", "https://openrouter.ai/api", listOf(EMPTY_ROW), ""),
+    Preset("Kimi K3", "https://api.moonshot.ai/anthropic", listOf(ModelRow("kimi-k3", "Kimi K3")), "kimi-k3", fromProvider = false),
+    Preset("OpenRouter", "https://openrouter.ai/api", listOf(EMPTY_ROW), "", fromProvider = true),
 )
 
 /**
@@ -91,6 +98,8 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
     var token by remember(machine.pubkeyHex) { mutableStateOf("") }
     var clearToken by remember(machine.pubkeyHex) { mutableStateOf(false) }
     var models by remember(machine.pubkeyHex) { mutableStateOf(listOf(EMPTY_ROW)) }
+    /** The bridge reads the models from the provider instead of [models]. */
+    var fromProvider by remember(machine.pubkeyHex) { mutableStateOf(true) }
     var defaultModel by remember(machine.pubkeyHex) { mutableStateOf("") }
     /** Which profile's Delete awaits its confirm step. */
     var confirmDelete by remember(machine.pubkeyHex) { mutableStateOf<String?>(null) }
@@ -108,7 +117,18 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
     // Only once there is something to check: an empty field is not an error yet.
     val baseUrlValid = trimmedBaseUrl.isNotEmpty() && isValidProviderBaseUrl(trimmedBaseUrl)
     val baseUrlError = trimmedBaseUrl.isNotEmpty() && !baseUrlValid
-    val canSave = label.trim().isNotEmpty() && baseUrlValid && validModels.isNotEmpty()
+    // Reading the provider's list takes its token: a new one, or the stored one.
+    val hasTokenToUse = token.trim().isNotEmpty() || (editingProfile?.hasToken == true && !clearToken)
+    val canSave = label.trim().isNotEmpty() && baseUrlValid &&
+        (if (fromProvider) hasTokenToUse else validModels.isNotEmpty())
+    // What the default-model picker offers: the typed list, or what the
+    // provider listed at the profile's last save.
+    val defaultChoices: List<Pair<String, String>> =
+        if (fromProvider) {
+            editingProfile?.takeIf { it.modelsFromProvider }?.models.orEmpty().map { it.id to (it.label ?: it.id) }
+        } else {
+            validModels.map { m -> m.id.trim() to m.label.trim().ifEmpty { m.id.trim() } }
+        }
 
     fun resetForm() {
         editingId = null
@@ -117,6 +137,7 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
         token = ""
         clearToken = false
         models = listOf(EMPTY_ROW)
+        fromProvider = true
         defaultModel = ""
     }
 
@@ -143,7 +164,8 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
         baseUrl = p.baseUrl
         token = ""
         clearToken = false
-        models = p.models.map { ModelRow(it.id, it.label ?: "") }
+        models = if (p.modelsFromProvider) listOf(EMPTY_ROW) else p.models.map { ModelRow(it.id, it.label ?: "") }
+        fromProvider = p.modelsFromProvider
         defaultModel = p.defaultModel ?: ""
         formOpen = true
     }
@@ -153,6 +175,7 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
         baseUrl = preset.baseUrl
         models = preset.models
         defaultModel = preset.defaultModel
+        fromProvider = preset.fromProvider
     }
 
     fun save() {
@@ -165,7 +188,13 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
             token.trim().isNotEmpty() -> UniffiTristate.Set(token.trim())
             else -> UniffiTristate.Keep
         }
-        val resolvedDefault = if (defaultModel.isNotEmpty() && wireModels.any { it.id == defaultModel }) defaultModel else null
+        // A provider-listed default the provider no longer lists is dropped
+        // by the bridge, which reads the list anew.
+        val resolvedDefault = when {
+            defaultModel.isEmpty() -> null
+            fromProvider || wireModels.any { it.id == defaultModel } -> defaultModel
+            else -> null
+        }
         saving = true
         dispatch(
             UniffiIntent.SetProviderProfile(
@@ -175,7 +204,8 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                     label = label.trim(),
                     baseUrl = baseUrl.trim(),
                     authToken = authToken,
-                    models = wireModels,
+                    models = if (fromProvider) emptyList() else wireModels,
+                    modelsFromProvider = fromProvider,
                     defaultModel = resolvedDefault,
                 ),
             ),
@@ -186,6 +216,25 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
         token = ""
         clearToken = false
         awaitingSave = true
+    }
+
+    /** Read a provider's model list again, changing nothing else. */
+    fun refreshModels(p: UniffiProviderProfileInfo) {
+        saving = true
+        dispatch(
+            UniffiIntent.SetProviderProfile(
+                machine = machine.pubkeyHex,
+                profileId = p.id,
+                profile = UniffiProviderProfileWrite(
+                    label = p.label,
+                    baseUrl = p.baseUrl,
+                    authToken = UniffiTristate.Keep,
+                    models = emptyList(),
+                    modelsFromProvider = true,
+                    defaultModel = p.defaultModel,
+                ),
+            ),
+        )
     }
 
     fun deleteProfile(profileId: String) {
@@ -200,8 +249,9 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
 
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
         Text(
-            "Anthropic-compatible providers (Kimi, OpenRouter, …) kept on the bridge. A new session can " +
-                "run on one. Their tokens stay on the bridge; this phone never stores them.",
+            "Providers and gateways (OpenRouter, Kimi, your own router, …) kept on the bridge. A new " +
+                "session can run on one, when its agent speaks the provider's API. Their tokens stay on " +
+                "the bridge; this phone never stores them.",
             color = Tokens.TextMuted,
             fontSize = Tokens.TextSm,
         )
@@ -226,6 +276,7 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                 Text(p.baseUrl, color = Tokens.TextMuted, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
                 Text(
                     "${p.models.size} ${if (p.models.size == 1) "model" else "models"}" +
+                        (if (p.modelsFromProvider) " from the provider" else "") +
                         (p.defaultModel?.let { ", default $it" } ?: ""),
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextSm,
@@ -244,6 +295,9 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                         QuietButton("Edit", onClick = { openEdit(p) })
+                        if (p.modelsFromProvider && p.hasToken) {
+                            QuietButton("Refresh models", onClick = { refreshModels(p) }, enabled = !saving)
+                        }
                         QuietButton("Delete", onClick = { confirmDelete = p.id }, danger = true)
                     }
                 }
@@ -288,7 +342,17 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                         Text("Delete the stored token when saving", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
                     }
                 }
-                models.forEachIndexed { i, row ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                    Checkbox(checked = fromProvider, onCheckedChange = { fromProvider = it })
+                    Text("Read the models from the provider", color = Tokens.Text, fontSize = Tokens.TextSm)
+                }
+                if (fromProvider) {
+                    Text(
+                        "The bridge asks the provider for its model list each time you save, with the token above.",
+                        color = Tokens.TextMuted,
+                        fontSize = Tokens.TextSm,
+                    )
+                } else models.forEachIndexed { i, row ->
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -317,17 +381,14 @@ fun MachineProviders(machine: UniffiMachineSummary, status: UniffiProviderProfil
                         )
                     }
                 }
-                QuietButton("Add model", onClick = { models = models + EMPTY_ROW })
+                if (!fromProvider) QuietButton("Add model", onClick = { models = models + EMPTY_ROW })
 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     Text("Default model", color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
                     SelectField(
                         options = buildList {
                             add(PickerOption("", "First model"))
-                            validModels.forEach { m ->
-                                val id = m.id.trim()
-                                add(PickerOption(id, m.label.trim().ifEmpty { id }))
-                            }
+                            defaultChoices.forEach { (id, name) -> add(PickerOption(id, name)) }
                         },
                         selected = defaultModel,
                         onSelect = { defaultModel = it },

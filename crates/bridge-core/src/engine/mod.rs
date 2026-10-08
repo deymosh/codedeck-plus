@@ -148,6 +148,9 @@ pub struct Engine {
     credential_acks: BTreeMap<u64, settings::CredentialAck>,
     /// set-provider-profile waiting on the token check: ticket → (phone, profile id).
     profile_acks: BTreeMap<u64, (String, String)>,
+    /// set-provider-profile waiting on the provider's model list: ticket →
+    /// (phone, the profile to store once its models are in).
+    model_fetches: BTreeMap<u64, (String, ProviderProfile)>,
     next_ticket: u64,
     sync: SyncServer,
     pairing: Option<PairingWindow>,
@@ -191,6 +194,7 @@ impl Engine {
             profiles: BTreeMap::new(),
             credential_acks: BTreeMap::new(),
             profile_acks: BTreeMap::new(),
+            model_fetches: BTreeMap::new(),
             next_ticket: 0,
             sync,
             pairing: None,
@@ -226,6 +230,7 @@ impl Engine {
                 self.publish_all(BridgeToPhone::GsdState(protocol::events::GsdStateMsg { session_id, gsd }));
             }
             Input::ProviderTokenChecked { ticket, valid } => self.on_provider_token_checked(ticket, valid),
+            Input::ProviderModelsFetched { ticket, models } => self.on_provider_models_fetched(ticket, models),
             Input::FileReady { session_id, text } => {
                 if !self.send_input(&session_id, text) {
                     log::warn!("[Engine] Uploaded image for {session_id} could not be delivered: no live session");

@@ -7,7 +7,7 @@ use agent_protocol::{BridgeMessage, HostMessage, SessionEvent};
 use bridge_core::ports::memory::{MemoryStore, MemoryTranscripts};
 use bridge_core::ports::Transcripts as _;
 use bridge_core::{Effect, Input, PairingCloseReason, Via};
-use protocol::common::{EntryBody, NoticeKind, OutputEntry, PROVIDER_BASE_URL_ERROR};
+use protocol::common::{EntryBody, NoticeKind, OutputEntry, ProviderModel, PROVIDER_BASE_URL_ERROR};
 use protocol::crypto::generate_keypair;
 use protocol::events::{BridgeToPhone, PairAckReason};
 use serde_json::json;
@@ -264,6 +264,107 @@ fn the_token_is_kept_cleared_or_replaced_and_a_profile_can_be_deleted() {
     assert_eq!(has_token(&mut rig), Some(false));
     rig.send(json!({"type":"set-provider-profile","profileId":"kimi","profile":null}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::ProviderProfiles(p) if p.profiles.is_empty())));
+}
+
+/// A profile whose models come from the provider.
+fn router(token: Option<&str>, default_model: Option<&str>) -> serde_json::Value {
+    let mut p = json!({"label":"Router","baseUrl":"https://router.test/api","models":[],"modelsFromProvider":true});
+    if let Some(token) = token {
+        p["authToken"] = json!(token);
+    }
+    if let Some(model) = default_model {
+        p["defaultModel"] = json!(model);
+    }
+    p
+}
+
+/// Take the pending model-list read: (ticket, base URL, token).
+fn take_model_fetch(rig: &mut Rig) -> Option<(u64, String, String)> {
+    let (fetches, rest): (Vec<_>, Vec<_>) =
+        rig.take().into_iter().partition(|e| matches!(e, Effect::FetchProviderModels { .. }));
+    rig.effects = rest;
+    fetches.into_iter().find_map(|e| match e {
+        Effect::FetchProviderModels { ticket, base_url, token } => Some((ticket, base_url, token.expose().to_string())),
+        _ => None,
+    })
+}
+
+fn listed(ids: &[&str]) -> Vec<ProviderModel> {
+    ids.iter().map(|id| ProviderModel { id: (*id).into(), label: None }).collect()
+}
+
+fn stored_profile(rig: &mut Rig) -> Option<protocol::common::ProviderProfileInfo> {
+    rig.messages().into_iter().find_map(|m| match m {
+        BridgeToPhone::ProviderProfiles(p) => p.profiles.into_iter().next(),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_profile_can_take_its_models_from_the_provider() {
+    let mut rig = Rig::new();
+    rig.take();
+    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("tok-r"), Some("b"))}));
+    let (ticket, base_url, token) = take_model_fetch(&mut rig).expect("the models are read first");
+    assert_eq!((base_url.as_str(), token.as_str()), ("https://router.test/api", "tok-r"));
+    assert!(!rig.store.snapshot().contains_key("providerProfiles"), "stored only with its models");
+    rig.input(Input::ProviderModelsFetched { ticket, models: Ok(listed(&["a", "b"])) });
+    // Then the token is checked as for any profile, on the default model.
+    let model = rig.effects.iter().find_map(|e| match e {
+        Effect::CheckProviderToken { model, .. } => Some(model.clone()),
+        _ => None,
+    });
+    assert_eq!(model.as_deref(), Some("b"));
+    answer_token_check(&mut rig, Some(true));
+    let info = stored_profile(&mut rig).expect("broadcast");
+    assert!(info.models_from_provider);
+    assert_eq!(info.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    assert_eq!(info.default_model.as_deref(), Some("b"));
+    assert!(rig.store.snapshot()["providerProfiles"].contains("modelsFromProvider"));
+}
+
+#[test]
+fn a_default_the_provider_no_longer_lists_is_dropped() {
+    let mut rig = Rig::new();
+    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("t"), Some("gone"))}));
+    let (ticket, ..) = take_model_fetch(&mut rig).unwrap();
+    rig.input(Input::ProviderModelsFetched { ticket, models: Ok(listed(&["a"])) });
+    answer_token_check(&mut rig, None);
+    assert_eq!(stored_profile(&mut rig).unwrap().default_model, None);
+}
+
+#[test]
+fn no_model_list_means_no_save() {
+    let mut rig = Rig::new();
+    // Without a token there is nothing to read the list with.
+    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(None, None)}));
+    assert!(take_model_fetch(&mut rig).is_none());
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::ProviderProfileAck(a) if !a.success && a.error.as_deref().is_some_and(|e| e.contains("needs its API token")))));
+
+    for answer in [Err("the provider refused the token (HTTP 401)".to_string()), Ok(vec![])] {
+        rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("t"), None)}));
+        let (ticket, ..) = take_model_fetch(&mut rig).unwrap();
+        rig.input(Input::ProviderModelsFetched { ticket, models: answer });
+        let msgs = rig.messages();
+        let error = msgs.iter().find_map(|m| match m {
+            BridgeToPhone::ProviderProfileAck(a) if !a.success => a.error.clone(),
+            _ => None,
+        });
+        assert!(error.is_some_and(|e| e.starts_with("Could not read the models from https://router.test/api: ")));
+        assert!(!msgs.iter().any(|m| matches!(m, BridgeToPhone::ProviderProfiles(_))));
+    }
+    assert!(!rig.store.snapshot().contains_key("providerProfiles"));
+}
+
+#[test]
+fn a_newer_save_wins_over_a_model_list_still_on_its_way() {
+    let mut rig = Rig::new();
+    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("t"), None)}));
+    let (stale, ..) = take_model_fetch(&mut rig).unwrap();
+    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":null}));
+    rig.take();
+    rig.input(Input::ProviderModelsFetched { ticket: stale, models: Ok(listed(&["a"])) });
+    assert!(rig.take().is_empty(), "the deleted profile is not brought back");
 }
 
 fn with_kimi() -> Rig {

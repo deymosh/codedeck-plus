@@ -6,7 +6,7 @@
 
 use agent_protocol::{AgentInfo, BridgeMessage, ProviderBinding, Secret};
 use protocol::commands::{SetCredentialsMsg, SetProviderProfileMsg};
-use protocol::common::{is_valid_provider_base_url, CredentialStatus, PROVIDER_BASE_URL_ERROR};
+use protocol::common::{is_valid_provider_base_url, CredentialStatus, ProviderModel, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{BridgeToPhone, CredentialsAckMsg, ProviderProfileAckMsg, ProviderProfilesMsg};
 use protocol::tristate::Tristate;
 
@@ -215,18 +215,22 @@ impl Engine {
         })
     }
 
-    /// Create, update or delete one profile. An upsert with a token checks it
+    /// Create, update or delete one profile. An upsert whose models come
+    /// from the provider reads them first; one with a token then checks it
     /// against the profile's own endpoint before acking; every phone then
     /// gets the new (redacted) list.
     pub(super) fn on_set_provider_profile(&mut self, m: SetProviderProfileMsg, phone: &str) {
         let id = m.profile_id;
         log::info!("[Engine] set-provider-profile '{id}' from {}...", phone.get(..8).unwrap_or(phone));
-        let mut next = self.profiles.clone();
+        // The newest write of a profile is the one that stands: a model list
+        // still on its way for an older one is dropped.
+        self.model_fetches.retain(|_, (_, pending)| pending.id != id);
         let Some(write) = m.profile else {
             // Deleting is never refused, whatever the stored URL: a profile
             // that needs fixing must stay removable. Sessions bound to it
             // fail at their next start rather than fall back to another
             // account.
+            let mut next = self.profiles.clone();
             let existed = next.remove(&id).is_some();
             if let Err(err) = self.store_profiles(next) {
                 return self.send_profile_ack(phone, &id, Err(err));
@@ -235,13 +239,13 @@ impl Engine {
             self.send_profile_ack(phone, &id, Ok(None));
             return;
         };
-        // The store never holds an insecure profile: the token check below
-        // sends the token to this URL.
+        // The store never holds an insecure profile: the token check and the
+        // model list send the token to this URL.
         if !is_valid_provider_base_url(&write.base_url) {
             log::info!("[Engine] Provider profile '{id}' refused: insecure base URL ({})", write.base_url);
             return self.send_profile_ack(phone, &id, Err(PROVIDER_BASE_URL_ERROR.into()));
         }
-        if write.models.is_empty() {
+        if !write.models_from_provider && write.models.is_empty() {
             return self.send_profile_ack(phone, &id, Err("A provider profile needs at least one model.".into()));
         }
         let auth_token = match write.auth_token {
@@ -254,19 +258,65 @@ impl Engine {
             label: write.label,
             base_url: write.base_url,
             auth_token,
-            models: write.models,
+            models: if write.models_from_provider { Vec::new() } else { write.models },
+            models_from_provider: write.models_from_provider,
             default_model: write.default_model,
             updated_at: Some(self.now_iso()),
         };
+        if !profile.models_from_provider {
+            return self.save_profile(phone, profile);
+        }
+        let Some(token) = profile.auth_token.clone() else {
+            return self.send_profile_ack(phone, &id, Err("Reading the provider's models needs its API token.".into()));
+        };
+        self.next_ticket += 1;
+        let ticket = self.next_ticket;
+        let base_url = profile.base_url.clone();
+        self.model_fetches.insert(ticket, (phone.to_string(), profile));
+        self.out.push(Effect::FetchProviderModels { ticket, base_url, token });
+    }
+
+    /// The provider's model list came back: store the profile with it, or
+    /// refuse the save when there is none to store.
+    pub(super) fn on_provider_models_fetched(&mut self, ticket: u64, models: Result<Vec<ProviderModel>, String>) {
+        let Some((phone, mut profile)) = self.model_fetches.remove(&ticket) else { return };
+        let models = match models {
+            Ok(models) if models.is_empty() => Err("it lists no models".to_string()),
+            other => other,
+        };
+        match models {
+            Ok(models) => {
+                // A default the provider no longer lists would start sessions
+                // on a model it cannot serve; its first one stands in.
+                if profile.default_model.as_ref().is_some_and(|d| !models.iter().any(|m| &m.id == d)) {
+                    profile.default_model = None;
+                }
+                profile.models = models;
+                self.save_profile(&phone, profile);
+            }
+            Err(reason) => {
+                log::info!("[Engine] Provider profile '{}' refused: no model list from {} ({reason})", profile.id, profile.base_url);
+                let error = format!("Could not read the models from {}: {reason}", profile.base_url);
+                self.send_profile_ack(&phone, &profile.id, Err(error));
+            }
+        }
+    }
+
+    /// Store an upserted profile, then check its token (when it has one and
+    /// a model to ask for) before acking.
+    fn save_profile(&mut self, phone: &str, profile: ProviderProfile) {
+        let id = profile.id.clone();
+        let mut next = self.profiles.clone();
         next.insert(id.clone(), profile.clone());
         if let Err(err) = self.store_profiles(next) {
             return self.send_profile_ack(phone, &id, Err(err));
         }
         log::info!(
-            "[Engine] Provider profile saved: '{id}' (\"{}\", {}, {} model(s), hasToken={})",
+            "[Engine] Provider profile saved: '{id}' (\"{}\", {}, {} model(s){}, hasToken={})",
             profile.label,
             profile.base_url,
             profile.models.len(),
+            if profile.models_from_provider { " from the provider" } else { "" },
             profile.auth_token.is_some()
         );
         let model = profile.fallback_model().map(str::to_string);

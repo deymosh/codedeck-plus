@@ -6781,6 +6781,11 @@ data class UniffiProviderProfileInfo (
     , 
     var `models`: List<UniffiModelEntry>
     , 
+    /**
+     * The models are the provider's own list.
+     */
+    var `modelsFromProvider`: kotlin.Boolean
+    , 
     var `defaultModel`: kotlin.String?
     , 
     var `hasToken`: kotlin.Boolean
@@ -6804,6 +6809,7 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceTypeUniffiModelEntry.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
         )
@@ -6814,6 +6820,7 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterString.allocationSize(value.`label`) +
             FfiConverterString.allocationSize(value.`baseUrl`) +
             FfiConverterSequenceTypeUniffiModelEntry.allocationSize(value.`models`) +
+            FfiConverterBoolean.allocationSize(value.`modelsFromProvider`) +
             FfiConverterOptionalString.allocationSize(value.`defaultModel`) +
             FfiConverterBoolean.allocationSize(value.`hasToken`)
     )
@@ -6823,6 +6830,7 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterString.write(value.`label`, buf)
             FfiConverterString.write(value.`baseUrl`, buf)
             FfiConverterSequenceTypeUniffiModelEntry.write(value.`models`, buf)
+            FfiConverterBoolean.write(value.`modelsFromProvider`, buf)
             FfiConverterOptionalString.write(value.`defaultModel`, buf)
             FfiConverterBoolean.write(value.`hasToken`, buf)
     }
@@ -6841,6 +6849,12 @@ data class UniffiProviderProfileWrite (
     var `authToken`: UniffiTristate
     , 
     var `models`: List<UniffiProviderModelWrite>
+    , 
+    /**
+     * The bridge reads the models from the provider instead (`models` is
+     * then ignored).
+     */
+    var `modelsFromProvider`: kotlin.Boolean
     , 
     var `defaultModel`: kotlin.String?
     
@@ -6863,6 +6877,7 @@ public object FfiConverterTypeUniffiProviderProfileWrite: FfiConverterRustBuffer
             FfiConverterString.read(buf),
             FfiConverterTypeUniffiTristate.read(buf),
             FfiConverterSequenceTypeUniffiProviderModelWrite.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
@@ -6872,6 +6887,7 @@ public object FfiConverterTypeUniffiProviderProfileWrite: FfiConverterRustBuffer
             FfiConverterString.allocationSize(value.`baseUrl`) +
             FfiConverterTypeUniffiTristate.allocationSize(value.`authToken`) +
             FfiConverterSequenceTypeUniffiProviderModelWrite.allocationSize(value.`models`) +
+            FfiConverterBoolean.allocationSize(value.`modelsFromProvider`) +
             FfiConverterOptionalString.allocationSize(value.`defaultModel`)
     )
 
@@ -6880,6 +6896,7 @@ public object FfiConverterTypeUniffiProviderProfileWrite: FfiConverterRustBuffer
             FfiConverterString.write(value.`baseUrl`, buf)
             FfiConverterTypeUniffiTristate.write(value.`authToken`, buf)
             FfiConverterSequenceTypeUniffiProviderModelWrite.write(value.`models`, buf)
+            FfiConverterBoolean.write(value.`modelsFromProvider`, buf)
             FfiConverterOptionalString.write(value.`defaultModel`, buf)
     }
 }
