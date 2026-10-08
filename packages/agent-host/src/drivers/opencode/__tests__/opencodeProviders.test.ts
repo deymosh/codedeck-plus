@@ -126,6 +126,36 @@ describe('an OpenCode driver given provider profiles', () => {
     expect(closed).toEqual([1, 2, 3]);
   });
 
+  it('has a model list asked for during the restart wait for the new server', async () => {
+    let release!: () => void;
+    const closing = new Promise<void>((resolve) => (release = resolve));
+    let starts = 0;
+    const client = (n: number) =>
+      ({
+        config: {
+          providers: async () => ({ data: { providers: [{ id: 'zen', name: 'Zen', models: { [`m${n}`]: { id: `m${n}`, name: `M${n}` } } }], default: {} } }),
+          get: async () => ({ data: {} }),
+        },
+      }) as unknown as OpencodeClient;
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      startServer: async () => {
+        const n = ++starts;
+        return { url: `http://127.0.0.1:${4100 + n}`, pid: n, exited: new Promise(() => {}), close: () => closing };
+      },
+      connect: () => client(starts),
+    });
+    const restart = driver.setProviders([router()]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const listed = driver.listModels();
+    release();
+    await restart;
+    expect((await listed).models.map((m) => m.id)).toEqual(['zen/m2']);
+    expect(starts).toBe(2);
+  });
+
   it('refuses them for a server it does not start', async () => {
     const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4096', log: () => {}, connect: () => ({}) as OpencodeClient });
     expect(driver.info().supports?.providerModels).toBe(false);

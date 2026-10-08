@@ -1076,9 +1076,11 @@ export class OpenCodeDriver implements Driver {
   }
 
   /** Find (or install) `opencode`, start its server and connect — sessions
-   *  started meanwhile wait on the same promise. */
-  private launch(): void {
+   *  and model lists asked for meanwhile wait on the same promise. `first`
+   *  runs before the start (closing the server being replaced). */
+  private launch(first?: () => Promise<void>): void {
     const attempt = (async (): Promise<OpencodeClient> => {
+      await first?.();
       this.bin ??= await this.options.installOpenCode!();
       return this.startServer(this.bin);
     })();
@@ -1117,9 +1119,7 @@ export class OpenCodeDriver implements Driver {
     this.options.log('[opencode] restarting the server: its provider profiles changed');
     const old = this.server;
     this.server = null;
-    this.clientPromise = null;
-    await old.close();
-    this.launch();
+    this.launch(() => old.close());
     await this.clientPromise;
   }
 
