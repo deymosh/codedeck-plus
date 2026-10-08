@@ -37,11 +37,12 @@ import type {
 } from '@opencode-ai/sdk/v2/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
-import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
 import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
   ModelEntry,
+  PermissionOption,
   ProviderBinding,
   QuestionSpec,
   RefusedProvider,
@@ -69,13 +70,23 @@ import type { EndpointModel } from '../../sdk/providerModels';
 export const OPENCODE_AGENT_ID = 'opencode';
 
 /** `ask` sends every permission OpenCode asks for to the phone; `default`
- *  (the auto-approve mode every agent shares) allows them all. */
+ *  (the auto-approve mode every agent shares) allows them all; `plan` runs
+ *  OpenCode's own plan agent, which may not edit, asking like `ask`. */
 const AUTO_APPROVE_MODE = 'default';
 const DEFAULT_MODE = 'ask';
+const PLAN_MODE = 'plan';
 const OPENCODE_MODES = [
   { id: DEFAULT_MODE, label: 'Ask', description: 'Ask before each tool call' },
+  { id: PLAN_MODE, label: 'Plan', description: 'Explore and plan without editing; switch to Ask or YOLO to build it' },
   { id: AUTO_APPROVE_MODE, label: 'YOLO', description: 'Run every tool without asking' },
 ];
+/** The OpenCode agent the plan mode runs. In any other mode a prompt names
+ *  none, so OpenCode uses its default agent (`build`, or the operator's). */
+const PLAN_AGENT = 'plan';
+
+/** OpenCode's "always": the rule stands for every session of the project
+ *  until its server restarts — it is not saved. */
+const PERMISSION_ALLOW_IN_PROJECT: PermissionOption = { ...PERMISSION_ALLOW_ALWAYS, label: 'Always allow in this project' };
 
 type ToolPart = Extract<Part, { type: 'tool' }>;
 type PermissionAsk = EventPermissionAsked['properties'];
@@ -108,7 +119,9 @@ interface NormalizedPermission {
   toolUseID: string;
   title: string;
   description?: string;
-  reply: (response: 'once' | 'reject') => Promise<void>;
+  /** OpenCode offers to allow such calls from now on. */
+  always: boolean;
+  reply: (response: 'once' | 'always' | 'reject') => Promise<void>;
 }
 
 /** A sub-agent's child session, as its `task` call described it. */
@@ -709,7 +722,7 @@ export class OpenCodeSession implements DriverSession {
   private handlePermission(permission: NormalizedPermission, child?: ChildSession): void {
     if (this.answeredAsks.has(permission.id)) return;
     this.answeredAsks.add(permission.id);
-    const reply = (response: 'once' | 'reject'): void => {
+    const reply = (response: 'once' | 'always' | 'reject'): void => {
       // Best effort — the ask then stays pending server-side; there is no
       // live connection left to retry over.
       permission.reply(response).catch(() => {});
@@ -728,10 +741,13 @@ export class OpenCodeSession implements DriverSession {
         description: permission.description ?? permission.title,
         locations: toolLocations(permission.input),
         rawInput: permission.input,
-        options: [PERMISSION_ALLOW, PERMISSION_DENY],
+        options: permission.always ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })
-      .then((outcome) => reply(outcome.outcome === 'selected' && outcome.optionId === PERMISSION_ALLOW.id ? 'once' : 'reject'))
+      .then((outcome) => {
+        const chosen = outcome.outcome === 'selected' ? outcome.optionId : undefined;
+        reply(chosen === PERMISSION_ALLOW.id ? 'once' : chosen === PERMISSION_ALLOW_IN_PROJECT.id && permission.always ? 'always' : 'reject');
+      })
       .catch(() => reply('reject'));
   }
 
@@ -751,6 +767,7 @@ export class OpenCodeSession implements DriverSession {
       toolUseID: ask.tool?.callID ?? ask.id,
       title: description,
       description,
+      always: ask.always.length > 0,
       reply: async (response) => {
         const { error } = await client.permission.reply({
           requestID: ask.id,
@@ -774,6 +791,7 @@ export class OpenCodeSession implements DriverSession {
       input: permission.metadata ?? {},
       toolUseID: permission.callID ?? permission.id,
       title: permission.title,
+      always: false,
       reply: async (response) => {
         await client.permission.respond({
           sessionID: permission.sessionID,
@@ -832,12 +850,19 @@ export class OpenCodeSession implements DriverSession {
           directory: this.cwd,
           parts: [{ type: 'text', text }],
           ...(this.model ? { model: this.model } : {}),
+          ...this.agentField(),
         });
         if (error) this.deliver({ type: 'error', content: `OpenCode prompt failed: ${JSON.stringify(error)}` });
       })
       .catch((err) => {
         this.deliver({ type: 'error', content: `OpenCode prompt failed: ${err instanceof Error ? err.message : String(err)}` });
       });
+  }
+
+  /** The OpenCode agent a prompt names: the plan agent in the plan mode,
+   *  none (OpenCode's default) otherwise. */
+  private agentField(): { agent?: string } {
+    return this.mode === PLAN_MODE ? { agent: PLAN_AGENT } : {};
   }
 
   /** `session.command` answers only once the whole turn is over, so it is
@@ -847,7 +872,7 @@ export class OpenCodeSession implements DriverSession {
   private runCommand(client: OpencodeClient, sessionID: string, name: string, args: string): void {
     const model = this.model ? `${this.model.providerID}/${this.model.modelID}` : undefined;
     client.session
-      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}) })
+      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField() })
       .then(({ error }) => {
         if (error) this.deliver({ type: 'error', content: `OpenCode /${name} failed: ${JSON.stringify(error)}` });
       })
