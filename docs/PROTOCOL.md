@@ -196,8 +196,6 @@ question.
 |---|---|
 | `no-session` | The bridge knows no session with this id. |
 | `error` | The session exists but is not running. |
-| `busy` | Reserved; not emitted. |
-| `expired` | Reserved; not emitted. |
 
 The bridge writes the user's transcript entry itself (agents do not reliably
 echo input) and drops an agent's echo of it.
@@ -478,17 +476,23 @@ spec.
   `since` (seconds; it keeps an hour of it), then everything new. It takes
   only command events (4515) authored by the identity that said `HELLO`.
 
-### Capabilities
+### Version and capabilities
 
-The heartbeat carries `protocolVersion` + `capabilities[]`; phones stamp
-commands with `v` (+ optional `caps`). What an AGENT can do is catalog data
-(`supports`), not a capability. The bridge's capabilities:
+Every message, both ways, carries `v`: its sender's protocol version (11),
+first in the object. The codec stamps it and the decoder checks it before
+the body: a message of another version, or of none, is refused as such
+(`DecodeError::Version`) rather than read by the wrong version's rules. Two
+ends of different versions cannot talk; each says so instead of failing at
+random. A `chunk` fragment carries no `v` of its own — the message it
+reassembles into does.
 
-- **hard gates** — `files`: the phone shows the attach control only when present;
-  `session-keys`: the phone grants a session key only when present;
-- **presence markers** — `sync/1`, `folders`: the feature is detected from
-  payload data;
-- **transport beacon** — `chunked`: advertised on both sides, gated by neither.
+The heartbeat carries `capabilities[]`, what this BRIDGE offers; what an
+AGENT can do is catalog data (`supports`). Each capability gates something
+a phone does, and a string is added only when a phone relying on it against
+a bridge without it would otherwise fail:
+
+- `files`: the phone shows the attach control only when present;
+- `session-keys`: the phone grants a session key only when present.
 
 ### Oversize-event fragmentation (`chunk`)
 

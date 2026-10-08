@@ -23,7 +23,7 @@ use client_core::stores::fetches::Fetch;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg, VersionFields,
+    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg,
 };
 use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
@@ -304,7 +304,6 @@ impl<'a> Router<'a> {
                 r.send(
                     machine,
                     PhoneToBridge::SyncAck(SyncAckMsg {
-                        version: VersionFields::default(),
                         sync_id: m.sync_id.clone(),
                         ranges: vec![m.range],
                     }),
@@ -383,15 +382,6 @@ impl<'a> Router<'a> {
                 self.stores
                     .machines
                     .apply_gsd(machine, &m.session_id, m.gsd.clone());
-                r.persist(StoreId::Machines);
-            }
-            BridgeToPhone::SessionReplaced(m) => {
-                self.stores.machines.apply_session_replaced(
-                    machine,
-                    &m.old_session_id,
-                    &m.new_session,
-                    self.now,
-                );
                 r.persist(StoreId::Machines);
             }
             BridgeToPhone::OptionConfirmed(m) => {
@@ -671,7 +661,7 @@ impl<'a> Router<'a> {
         if paired {
             r.sends.push(Send {
                 machine: machine.to_string(),
-                msg: PhoneToBridge::RefreshSessions(BareMsg { version: VersionFields::default() }),
+                msg: PhoneToBridge::RefreshSessions(BareMsg {}),
             });
         }
     }
@@ -746,7 +736,6 @@ pub fn apply_pairing_effects(
                 out.sends.push(Send {
                     machine: to.clone(),
                     msg: PhoneToBridge::PairRequest(PairRequestMsg {
-                        version: VersionFields::default(),
                         npub: keys.identity_npub.clone(),
                         pubkey_hex: keys.identity_pubkey_hex.clone(),
                         label,
@@ -786,12 +775,10 @@ pub(crate) fn sync_effect_to_cmd(effect: SyncEffect) -> PhoneToBridge {
             session_id,
             have_ranges,
         } => PhoneToBridge::SyncRequest(SyncRequestMsg {
-            version: VersionFields::default(),
             session_id,
             have_ranges,
         }),
         SyncEffect::SendSyncAck { sync_id, range } => PhoneToBridge::SyncAck(SyncAckMsg {
-            version: VersionFields::default(),
             sync_id,
             ranges: vec![range],
         }),
@@ -844,7 +831,6 @@ mod tests {
             sessions,
             agents: Vec::new(),
             credentials: Vec::new(),
-            protocol_version: protocol::capabilities::PROTOCOL_VERSION,
             capabilities: None,
             folders: None,
             roots: None,
@@ -1054,7 +1040,6 @@ mod tests {
             vec![Send {
                 machine: MACHINE.to_string(),
                 msg: PhoneToBridge::SyncAck(SyncAckMsg {
-                    version: VersionFields::default(),
                     sync_id: "sy1".into(),
                     ranges: vec![(1, 2)],
                 }),
@@ -1399,13 +1384,13 @@ mod tests {
                 MACHINE,
                 &BridgeToPhone::InputFailed(InputFailedMsg {
                     session_id: "s1".into(),
-                    reason: protocol::events::InputFailedReason::Busy,
+                    reason: protocol::events::InputFailedReason::NoSession,
                     input_id: Some("in-1".into()),
                 }),
             )
             .await;
         assert_eq!(out.persist, vec![StoreId::Outbox]);
         assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Failed);
-        assert_eq!(s.outbox.items["in-1"].error.as_deref(), Some("busy"));
+        assert_eq!(s.outbox.items["in-1"].error.as_deref(), Some("no-session"));
     }
 }

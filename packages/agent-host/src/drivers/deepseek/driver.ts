@@ -476,7 +476,6 @@ export class DeepSeekSession implements DriverSession {
       kind: toolKindOf(toolName),
       title: toolTitle(toolName, input) || toolName,
       ...(locations.length > 0 ? { locations } : {}),
-      rawInput: input,
       options: [PERMISSION_ALLOW, PERMISSION_DENY],
     });
     if (outcome.outcome === 'cancelled') return { outcome: { outcome: 'cancelled' } };

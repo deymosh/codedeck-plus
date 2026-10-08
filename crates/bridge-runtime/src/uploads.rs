@@ -248,7 +248,6 @@ mod tests {
 
     fn chunk(id: &str, i: u64, n: u64, data: &str, text: &str) -> UploadFileChunkMsg {
         UploadFileChunkMsg {
-            version: Default::default(),
             session_id: "s".into(),
             upload_id: id.into(),
             filename: "../photo name.png".into(),

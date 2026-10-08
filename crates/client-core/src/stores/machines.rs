@@ -264,8 +264,6 @@ pub struct MachineView {
     #[serde(default)]
     pub roots: Vec<String>,
     #[serde(default)]
-    pub protocol_version: Option<u32>,
-    #[serde(default)]
     pub machine_offline: bool,
     #[serde(default)]
     #[specta(type = Option<specta_typescript::Number>)]
@@ -473,7 +471,6 @@ impl MachineView {
             capabilities: Vec::new(),
             folders: Vec::new(),
             roots: Vec::new(),
-            protocol_version: None,
             machine_offline: false,
             last_heartbeat_at: None,
             sessions: BTreeMap::new(),
@@ -733,7 +730,6 @@ impl MachinesState {
         }
         entry.agents = msg.agents.clone();
         entry.credentials = msg.credentials.clone();
-        entry.protocol_version = Some(msg.protocol_version);
         entry.machine_offline = msg.machine_offline.unwrap_or(false);
         entry.direct = msg.direct.clone();
         if msg.rev.is_some() {
@@ -792,37 +788,6 @@ impl MachinesState {
                 mcp: prior.and_then(|p| p.mcp.clone()),
             };
             m.sessions.insert(info.id.clone(), view);
-        });
-    }
-
-    pub fn apply_session_replaced(
-        &mut self,
-        machine_pubkey: &str,
-        old_session_id: &str,
-        info: &RemoteSessionInfo,
-        at: u64,
-    ) {
-        self.with_machine(machine_pubkey, |m| {
-            // The predecessor carries the conversation — its stopgap title
-            // survives a titleless replacement announcement.
-            let prev = m
-                .sessions
-                .get(old_session_id)
-                .or_else(|| m.sessions.get(&info.id))
-                .cloned();
-            m.sessions.remove(old_session_id);
-            m.sessions.insert(
-                info.id.clone(),
-                SessionView {
-                    info: with_guarded_title(info, prev.as_ref()),
-                    presence: ListingPresence::Live,
-                    last_listed_at: at,
-                    usage: prev.as_ref().and_then(|p| p.usage.clone()),
-                    commands: prev.as_ref().and_then(|p| p.commands.clone()),
-                    mcp: prev.as_ref().and_then(|p| p.mcp.clone()),
-                    gsd: prev.and_then(|p| p.gsd),
-                },
-            );
         });
     }
 
@@ -1147,11 +1112,12 @@ mod tests {
     /// keeps the test honest against the wire schema.
     fn list(sessions: &[RemoteSessionInfo], extra: serde_json::Value) -> SessionListMsg {
         let mut obj = json!({
+            "v": 11,
             "type": "sessions",
             "machine": "m1",
             "sessions": sessions,
             "agents": [],
-            "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
+            "v": protocol::capabilities::PROTOCOL_VERSION,
         });
         if let (Some(o), Some(e)) = (obj.as_object_mut(), extra.as_object()) {
             for (k, v) in e {
@@ -1713,10 +1679,10 @@ mod tests {
     #[test]
     fn a_field_less_heartbeat_keeps_the_host_badge_but_a_new_host_wins() {
         let mut st = MachinesState::default();
-        st.apply_session_list("pk", &list(&[], json!({ "host": "vscode" })), 10);
-        assert_eq!(st.machine("pk").unwrap().host, Some(BridgeHostKind::Vscode));
+        st.apply_session_list("pk", &list(&[], json!({ "host": "service" })), 10);
+        assert_eq!(st.machine("pk").unwrap().host, Some(BridgeHostKind::Service));
         st.apply_session_list("pk", &list(&[], NONE()), 20);
-        assert_eq!(st.machine("pk").unwrap().host, Some(BridgeHostKind::Vscode));
+        assert_eq!(st.machine("pk").unwrap().host, Some(BridgeHostKind::Service));
         st.apply_session_list("pk", &list(&[], json!({ "host": "cli" })), 30);
         assert_eq!(st.machine("pk").unwrap().host, Some(BridgeHostKind::Cli));
     }
@@ -1725,10 +1691,10 @@ mod tests {
     fn two_pubkeys_with_the_same_name_stay_two_machines() {
         let mut st = MachinesState::default();
         st.apply_session_list("pkA", &list(&[], json!({ "machine": "box", "host": "cli" })), 1);
-        st.apply_session_list("pkB", &list(&[], json!({ "machine": "box", "host": "vscode" })), 1);
+        st.apply_session_list("pkB", &list(&[], json!({ "machine": "box", "host": "service" })), 1);
         assert_eq!(st.machine_pubkeys(), vec!["pkA", "pkB"]);
         assert_eq!(st.machine("pkA").unwrap().host, Some(BridgeHostKind::Cli));
-        assert_eq!(st.machine("pkB").unwrap().host, Some(BridgeHostKind::Vscode));
+        assert_eq!(st.machine("pkB").unwrap().host, Some(BridgeHostKind::Service));
     }
 
     #[test]
@@ -1758,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn title_guard_covers_upsert_and_replaced() {
+    fn title_guard_covers_upsert() {
         let mut st = MachinesState::default();
         st.register_machine("m1", "m1", None, None, &[]);
         st.apply_session_upsert("m1", &info("s1"), 0);
@@ -1767,11 +1733,8 @@ mod tests {
         st.apply_session_upsert("m1", &info("s1"), 1); // titleless upsert
         assert_eq!(st.session("m1", "s1").unwrap().info.title.as_deref(), Some("stopgap"));
 
-        st.apply_session_replaced("m1", "s1", &info("s2"), 2); // titleless replace inherits
-        assert_eq!(st.session("m1", "s2").unwrap().info.title.as_deref(), Some("stopgap"));
-
-        st.apply_session_replaced("m1", "s2", &titled("s3", "bridge"), 3); // titled wins
-        assert_eq!(st.session("m1", "s3").unwrap().info.title.as_deref(), Some("bridge"));
+        st.apply_session_upsert("m1", &titled("s1", "bridge"), 2); // titled wins
+        assert_eq!(st.session("m1", "s1").unwrap().info.title.as_deref(), Some("bridge"));
     }
 
     #[test]

@@ -376,7 +376,6 @@ describe('Claude permission policy', () => {
       title: 'npm test',
       description: 'Claude wants to run npm test',
       locations: [],
-      rawInput: { command: 'npm test' },
       options: [
         { id: 'allow', label: 'Allow', kind: 'allow_once' },
         { id: 'allow_always', label: 'Always allow', kind: 'allow_always' },

@@ -525,7 +525,6 @@ export class ClaudeSession implements DriverSession {
       title: toolTitle(toolName, input) || toolName,
       ...(description ? { description } : {}),
       locations,
-      rawInput: input,
       options: hook ? [PERMISSION_ALLOW, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],
       ...(reason ? { reason } : {}),
       ...(hook ? { hook: hook.name } : {}),

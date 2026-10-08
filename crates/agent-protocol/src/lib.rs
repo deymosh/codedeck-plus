@@ -157,7 +157,7 @@ mod tests {
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"ended","error":"exit 1","resumeLost":true}}}));
         let perm = host_rt(json!({"v":1,"id":"h1","kind":"request-permission","payload":{
             "sessionId":"s","requestId":"toolu_1","toolName":"Bash","kind":"execute","title":"rm -rf build",
-            "description":"clean","locations":["/w/build"],"rawInput":{"command":"rm -rf build"},
+            "description":"clean","locations":["/w/build"],
             "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}],
             "subagent":{"label":"Plan"}
         }}));

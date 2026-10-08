@@ -83,7 +83,6 @@ class FakeSession implements DriverSession {
           kind: 'execute',
           title: arg || 'echo hi',
           locations: [],
-          rawInput: { command: arg || 'echo hi' },
           options: [PERMISSION_ALLOW, PERMISSION_DENY],
         });
         this.say(outcome.outcome === 'selected' ? `permission: ${outcome.optionId}` : `permission cancelled: ${outcome.reason}`);

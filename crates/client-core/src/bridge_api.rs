@@ -2,7 +2,7 @@
 //! `apps/mobile/src/core/services/bridgeApi.ts`.
 //!
 //! Plan §6.2 splits `bridgeApi.ts` in two: the **policy** (which kind a command
-//! rides, egress validation, version stamping) and the **ingest pipeline**
+//! rides, egress validation) and the **ingest pipeline**
 //! (decrypt → reassemble → decode) are pure and live here; the socket I/O (the
 //! actual publish, the `publishConfirmed` retry loop, folder-ack timers, handler
 //! dispatch) lives in `client-runtime`.
@@ -26,7 +26,6 @@ use nostr::{EventBuilder, Kind, Tag, Timestamp, UnsignedEvent};
 use protocol::chunking::{AssemblerResult, ChunkAssembler};
 use protocol::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
 use protocol::nostr_event::SignedEvent;
-use protocol::capabilities::{ALL_PHONE_CAPABILITIES, PROTOCOL_VERSION};
 use protocol::codec::encode_phone_to_bridge;
 use protocol::commands::PhoneToBridge;
 use protocol::events::BridgeToPhone;
@@ -48,24 +47,6 @@ pub fn kind_for_message(_msg: &PhoneToBridge) -> u16 {
     COMMAND_KIND
 }
 
-/// Stamp `v` + `caps` onto an already-encoded command, mirroring the TS
-/// `{ v, caps, ...msg }` spread: the sender's [`PROTOCOL_VERSION`] and its
-/// capabilities ([`ALL_PHONE_CAPABILITIES`]), so negotiation is visible from
-/// both ends. A field the message already carries is left untouched.
-fn stamp_command(encoded: &str) -> String {
-    let mut value: serde_json::Value =
-        serde_json::from_str(encoded).expect("encode_phone_to_bridge emits a JSON object");
-    let obj = value
-        .as_object_mut()
-        .expect("encode_phone_to_bridge emits a JSON object");
-    obj.entry("v")
-        .or_insert_with(|| serde_json::Value::from(PROTOCOL_VERSION));
-    obj.entry("caps").or_insert_with(|| {
-        serde_json::to_value(ALL_PHONE_CAPABILITIES).expect("caps array serializes")
-    });
-    serde_json::to_string(&value).expect("stamped command re-serializes")
-}
-
 /// Why a command could not be built. Every variant is a caller error surfaced at
 /// the sender rather than a silent bad publish.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -83,11 +64,10 @@ pub enum EgressError {
     Sign(String),
 }
 
-/// Encode (egress-validated) and version-stamp one phone→bridge command: the
-/// plaintext a command event encrypts.
+/// Encode (egress-validated) one phone→bridge command: the plaintext a
+/// command event encrypts.
 pub fn command_plaintext(msg: &PhoneToBridge) -> Result<String, EgressError> {
-    let encoded = encode_phone_to_bridge(msg).map_err(EgressError::Invalid)?;
-    Ok(stamp_command(&encoded))
+    encode_phone_to_bridge(msg).map_err(EgressError::Invalid)
 }
 
 /// The unsigned [`COMMAND_KIND`] event for `msg` from `author_pubkey_hex`:
@@ -120,7 +100,7 @@ pub fn command_event(
     Ok(event)
 }
 
-/// Encode (egress-validated), version-stamp, NIP-44-encrypt, and sign one
+/// Encode (egress-validated), NIP-44-encrypt, and sign one
 /// phone→bridge command with `key` — see [`command_event`] for its shape.
 ///
 /// The returned [`SignedEvent`] is what the caller must re-publish verbatim on
@@ -131,8 +111,8 @@ pub fn build_command(
     msg: &PhoneToBridge,
     now_ms: u64,
 ) -> Result<SignedEvent, EgressError> {
-    let stamped = command_plaintext(msg)?;
-    let content = encrypt_to(&key.secret_key, machine_pubkey_hex, &stamped)?;
+    let plaintext = command_plaintext(msg)?;
+    let content = encrypt_to(&key.secret_key, machine_pubkey_hex, &plaintext)?;
     let event = command_event(&key.pubkey_hex, machine_pubkey_hex, msg, content, now_ms)?
         .sign_with_keys(&Keys::new(key.secret_key.clone()))
         .map_err(|e| EgressError::Sign(e.to_string()))?;
@@ -273,7 +253,7 @@ impl BridgeApi {
         match protocol::codec::decode_bridge_to_phone(&plaintext) {
             Ok(msg) => Ingested::Message(Box::new(msg)),
             Err(error) => {
-                self.record_invalid(event, InvalidStage::Decode, error);
+                self.record_invalid(event, InvalidStage::Decode, error.to_string());
                 self.diagnostics.decode_failures += 1;
                 Ingested::DecodeFailed
             }
@@ -362,6 +342,7 @@ mod tests {
     fn big_output_wire(bytes: usize, seq: u64) -> (BridgeToPhone, String) {
         let msg = decode_bridge_to_phone(
             &json!({
+                "v": 11,
                 "type": "output",
                 "sessionId": "s1",
                 "seq": seq,
@@ -388,15 +369,15 @@ mod tests {
     #[test]
     fn kind_for_message_is_always_command_kind() {
         let msg =
-            decode_phone_to_bridge(r#"{"type":"input","sessionId":"s","text":"hi"}"#).unwrap();
+            decode_phone_to_bridge(r#"{"v":11,"type":"input","sessionId":"s","text":"hi"}"#).unwrap();
         assert_eq!(kind_for_message(&msg), COMMAND_KIND);
     }
 
     #[test]
-    fn build_command_stamps_version_and_caps_and_shapes_the_event() {
+    fn build_command_shapes_the_event_and_encrypts_the_command() {
         let (id, mac) = (phone(), machine());
         let msg =
-            decode_phone_to_bridge(r#"{"type":"input","sessionId":"s1","text":"hello"}"#).unwrap();
+            decode_phone_to_bridge(r#"{"v":11,"type":"input","sessionId":"s1","text":"hello"}"#).unwrap();
 
         let cmd = build_command(&id, &mac.pubkey_hex, &msg, 1_700_000_000_000).unwrap();
 
@@ -410,8 +391,7 @@ mod tests {
         // The bridge decrypts the content with the conversation key.
         let plaintext = decrypt_from(&mac.secret_key, &id.pubkey_hex, &cmd.content).unwrap();
         let payload: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
-        assert_eq!(payload["v"], json!(PROTOCOL_VERSION));
-        assert_eq!(payload["caps"], json!(["chunked"]));
+        assert_eq!(payload, json!({"v":11,"type": "input", "sessionId": "s1", "text": "hello"}));
         assert_eq!(payload["type"], "input");
         assert_eq!(payload["text"], "hello");
     }
@@ -421,6 +401,7 @@ mod tests {
         let (id, mac) = (phone(), machine());
         let msg = decode_phone_to_bridge(
             &json!({
+                "v": 11,
                 "type": "upload-file",
                 "sessionId": "s1",
                 "hash": "c".repeat(64),
@@ -447,7 +428,6 @@ mod tests {
                 assert_eq!(b.key, "a".repeat(64));
                 assert_eq!(b.iv, "b".repeat(24));
                 assert_eq!(b.text, "look at this");
-                assert_eq!(b.version.v, Some(PROTOCOL_VERSION));
             }
             other => panic!("expected blossom upload-image, got {other:?}"),
         }
@@ -458,6 +438,7 @@ mod tests {
         let (id, mac) = (phone(), machine());
         let msg = decode_phone_to_bridge(
             &json!({
+                "v": 11,
                 "type": "upload-file",
                 "sessionId": "s1",
                 "uploadId": "u-1",
@@ -489,6 +470,7 @@ mod tests {
         let (id, mac) = (phone(), machine());
         let msg = decode_phone_to_bridge(
             &json!({
+                "v": 11,
                 "type": "set-provider-profile",
                 "profileId": "p",
                 "profile": {
@@ -513,7 +495,7 @@ mod tests {
         // per call; the envelope the runtime routes on (created_at, kind, tags)
         // must not.
         let (id, mac) = (phone(), machine());
-        let msg = decode_phone_to_bridge(r#"{"type":"refresh-sessions"}"#).unwrap();
+        let msg = decode_phone_to_bridge(r#"{"v":11,"type":"refresh-sessions"}"#).unwrap();
         let a = build_command(&id, &mac.pubkey_hex, &msg, 5_000).unwrap();
         let b = build_command(&id, &mac.pubkey_hex, &msg, 5_000).unwrap();
         assert_eq!(a.created_at, b.created_at);
@@ -527,7 +509,7 @@ mod tests {
     fn ingest_drops_events_from_unknown_pubkeys() {
         let mut api = BridgeApi::new();
         let (id, mac) = (phone(), machine());
-        let content = event_content(r#"{"type":"input-ack","sessionId":"s","inputId":"i"}"#, &mac, &id);
+        let content = event_content(r#"{"v":11,"type":"input-ack","sessionId":"s","inputId":"i"}"#, &mac, &id);
         let out = api.ingest(&incoming(&content, &mac.pubkey_hex), &id, false, 1);
         assert_eq!(out, Ingested::UnknownMachine);
         assert_eq!(api.diagnostics().decrypt_failures, 0);
@@ -552,6 +534,7 @@ mod tests {
         let mut api = BridgeApi::new();
         let (id, mac) = (phone(), machine());
         let src = json!({
+            "v": 11,
             "type": "output",
             "sessionId": "s1",
             "seq": 1,
@@ -569,7 +552,7 @@ mod tests {
     fn ingest_records_a_decode_failure_for_invalid_plaintext() {
         let mut api = BridgeApi::new();
         let (id, mac) = (phone(), machine());
-        let content = event_content(r#"{"type":"output","sessionId":"s"}"#, &mac, &id); // no seq/entries
+        let content = event_content(r#"{"v":11,"type":"output","sessionId":"s"}"#, &mac, &id); // no seq/entries
         assert_eq!(deliver(&mut api, &id, &mac, &content), Ingested::DecodeFailed);
         assert_eq!(api.diagnostics().decode_failures, 1);
         assert_eq!(api.diagnostics().decrypt_failures, 0);
@@ -671,6 +654,7 @@ mod tests {
 
         let small = decode_bridge_to_phone(
             &json!({
+                "v": 11,
                 "type": "output",
                 "sessionId": "s1",
                 "seq": 101,
@@ -728,7 +712,7 @@ mod tests {
         // guards the test helpers above against a crypto regression
         let id = generate_keypair();
         let mac = generate_keypair();
-        let msg = decode_phone_to_bridge(r#"{"type":"models-request","agent":"claude-code"}"#).unwrap();
+        let msg = decode_phone_to_bridge(r#"{"v":11,"type":"models-request","agent":"claude-code"}"#).unwrap();
         let cmd = build_command(&id, &mac.pubkey_hex, &msg, 0).unwrap();
         assert_eq!(cmd.pubkey, id.pubkey_hex);
     }

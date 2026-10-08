@@ -317,7 +317,6 @@ describe('DeepSeekSession permissions', () => {
           toolName: 'bash',
           kind: 'execute',
           title: 'rm -rf build',
-          rawInput: { command: 'rm -rf build' },
           options: [
             { id: 'allow', label: 'Allow', kind: 'allow_once' },
             { id: 'deny', label: 'Deny', kind: 'reject_once' },

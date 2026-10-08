@@ -852,7 +852,6 @@ export class OpenCodeSession implements DriverSession {
         title: toolTitle(permission.toolName, permission.input) || permission.toolName,
         description: permission.description ?? permission.title,
         locations: toolLocations(permission.input),
-        rawInput: permission.input,
         options: permission.always ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })

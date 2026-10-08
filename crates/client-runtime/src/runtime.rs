@@ -1320,7 +1320,6 @@ impl Loop {
         self.on_send(
             machine.to_string(),
             PhoneToBridge::SessionKey(SessionKeyMsg {
-                version: Default::default(),
                 session_key: self.keys.grant_for(machine),
             }),
             None,
@@ -1700,9 +1699,7 @@ impl Loop {
                 // goes stale — CDX-008).
                 self.on_send(
                     machine.clone(),
-                    PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {
-                        version: Default::default(),
-                    }),
+                    PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {}),
                     None,
                 );
             }
@@ -1772,7 +1769,6 @@ impl Loop {
                         machine,
                         msg: PhoneToBridge::CloseSession(
                             protocol::commands::SessionIdMsg {
-                                version: Default::default(),
                                 session_id,
                             },
                         ),
@@ -1896,7 +1892,7 @@ impl Loop {
     fn flush_acks(&mut self) {
         abort(&mut self.ack_timer);
         for (machine, sync_id, ranges) in std::mem::take(&mut self.pending_acks) {
-            let ack = SyncAckMsg { version: Default::default(), sync_id, ranges };
+            let ack = SyncAckMsg { sync_id, ranges };
             self.publish_command(machine, PhoneToBridge::SyncAck(ack), None, None);
         }
     }
@@ -2072,7 +2068,7 @@ impl FileSendCtx {
         let SessionFileSend { machine, session_id, text, data, filename, mime_type } = send;
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
         use protocol::commands::{
-            UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg, VersionFields,
+            UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg,
         };
 
         /// Overall wall clock for the whole send, all stages together.
@@ -2106,7 +2102,6 @@ impl FileSendCtx {
             // --- Stage 2: the reference ---
             let hash = client_core::image_chunks::blossom_hash_from_url(&reference.url).to_string();
             let msg = PhoneToBridge::UploadFile(UploadFileMsg::Blossom(UploadFileBlossomMsg {
-                version: VersionFields::default(),
                 session_id,
                 hash,
                 url: reference.url,
@@ -2146,7 +2141,6 @@ impl FileSendCtx {
                 return;
             }
             let msg = PhoneToBridge::UploadFile(UploadFileMsg::Chunk(UploadFileChunkMsg {
-                version: VersionFields::default(),
                 session_id: session_id.clone(),
                 upload_id: upload_id.clone(),
                 filename: filename.clone(),

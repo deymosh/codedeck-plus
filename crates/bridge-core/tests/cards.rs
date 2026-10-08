@@ -28,7 +28,6 @@ fn permission(session: &str, request: &str) -> HostMessage {
         title: "rm -rf build".into(),
         description: None,
         locations: vec![],
-        raw_input: Some(json!({"command":"rm -rf build"})),
         options: vec![
             option("allow", PermissionOptionKind::AllowOnce),
             option("always", PermissionOptionKind::AllowAlways),
@@ -71,16 +70,16 @@ fn a_permission_card_round_trips_through_the_phone() {
     assert!(matches!(&outputs(&msgs)[0].1.body, EntryBody::PermissionRequest { request_id, options, .. } if request_id == "r1" && options.len() == 3));
     assert_eq!(last_heartbeat(&msgs).sessions[0].state, Some(SessionState::WaitingPermission));
 
-    rig.send(json!({"type":"permission-response","sessionId":s,"requestId":"r1","optionId":"nope"}));
+    rig.send(json!({"v":11,"type":"permission-response","sessionId":s,"requestId":"r1","optionId":"nope"}));
     assert!(rig.host_frames().is_empty(), "an option the card does not offer changes nothing");
 
-    rig.send(json!({"type":"permission-response","sessionId":s,"requestId":"r1","optionId":"always"}));
+    rig.send(json!({"v":11,"type":"permission-response","sessionId":s,"requestId":"r1","optionId":"always"}));
     assert_eq!(reply_to(&mut rig, &h), BridgeMessage::PermissionOutcome(SelectOutcome::Selected { option_id: "always".into() }));
     let msgs = rig.messages();
     assert_eq!(resolved(&msgs), ["Always allowed"]);
     assert_eq!(last_heartbeat(&msgs).sessions[0].state, Some(SessionState::Idle));
 
-    rig.send(json!({"type":"permission-response","sessionId":s,"requestId":"r1","optionId":"allow"}));
+    rig.send(json!({"v":11,"type":"permission-response","sessionId":s,"requestId":"r1","optionId":"allow"}));
     assert!(rig.host_frames().is_empty(), "answered once");
 }
 
@@ -129,11 +128,11 @@ fn questions_are_answered_by_index_in_any_order_then_resolved_together() {
     assert_eq!(asked, [(0, 2), (1, 2)]);
     assert_eq!(last_heartbeat(&msgs).sessions[0].state, Some(SessionState::WaitingQuestion));
 
-    rig.send(json!({"type":"question-response","sessionId":s,"requestId":"q1","index":1,"answer":{"kind":"text","text":"Dev"}}));
+    rig.send(json!({"v":11,"type":"question-response","sessionId":s,"requestId":"q1","index":1,"answer":{"kind":"text","text":"Dev"}}));
     assert!(rig.host_frames().is_empty());
-    rig.send(json!({"type":"question-response","sessionId":s,"requestId":"q1","index":0,"answer":{"kind":"options","selected":[5]}}));
+    rig.send(json!({"v":11,"type":"question-response","sessionId":s,"requestId":"q1","index":0,"answer":{"kind":"options","selected":[5]}}));
     assert!(rig.host_frames().is_empty(), "an out-of-range option answers nothing");
-    rig.send(json!({"type":"question-response","sessionId":s,"requestId":"q1","index":0,"answer":{"kind":"options","selected":[1]}}));
+    rig.send(json!({"v":11,"type":"question-response","sessionId":s,"requestId":"q1","index":0,"answer":{"kind":"options","selected":[1]}}));
     assert_eq!(
         reply_to(&mut rig, &h),
         BridgeMessage::QuestionOutcome(QuestionOutcome::Answered { answers: vec!["Blue".into(), "Dev".into()] })
@@ -146,8 +145,8 @@ fn plain_input_while_a_question_waits_answers_it() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
     let h = rig.host_ask(questions(&s));
-    rig.send(json!({"type":"input","sessionId":s,"text":"Green","inputId":"i"}));
-    rig.send(json!({"type":"input","sessionId":s,"text":"Ops"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"Green","inputId":"i"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"Ops"}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::Prompt { .. })));
     assert_eq!(
         reply_to(&mut rig, &h),
@@ -171,7 +170,7 @@ fn a_plan_answer_and_the_agents_mode_switch_reach_the_phone() {
         EntryBody::PlanApproval { options, revise: Some(revise), .. } if options.len() == 2 && revise == "revise"
     ));
     // Feedback is what changes are wanted: an approval carries none.
-    rig.send(json!({"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"yolo","feedback":"ignored"}));
+    rig.send(json!({"v":11,"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"yolo","feedback":"ignored"}));
     assert_eq!(
         reply_to(&mut rig, &h),
         BridgeMessage::PlanOutcome(PlanOutcome::Selected { option_id: "yolo".into(), feedback: None })
@@ -195,7 +194,7 @@ fn feedback_on_a_plan_goes_to_the_agent_with_the_revise_choice_and_into_the_tran
         revise: Some("revise".into()),
     }));
     rig.messages();
-    rig.send(json!({"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"revise","feedback":"  Fewer steps.  "}));
+    rig.send(json!({"v":11,"type":"plan-response","sessionId":s,"requestId":"p1","optionId":"revise","feedback":"  Fewer steps.  "}));
     assert_eq!(
         reply_to(&mut rig, &h),
         BridgeMessage::PlanOutcome(PlanOutcome::Selected { option_id: "revise".into(), feedback: Some("Fewer steps.".into()) })
@@ -224,7 +223,7 @@ fn interrupt_stops_the_turn_and_cancels_what_waits() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
     let h = rig.host_ask(permission(&s, "r1"));
-    rig.send(json!({"type":"interrupt","sessionId":s}));
+    rig.send(json!({"v":11,"type":"interrupt","sessionId":s}));
     assert!(rig.has_host_request(|m| matches!(m, BridgeMessage::Interrupt { .. })));
     assert_eq!(
         reply_to(&mut rig, &h),
@@ -237,13 +236,13 @@ fn stop_task_reaches_the_host_for_a_running_session_only() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
     let h = rig.host_ask(permission(&s, "r1"));
-    rig.send(json!({"type":"stop-task","sessionId":s,"taskId":"b1"}));
+    rig.send(json!({"v":11,"type":"stop-task","sessionId":s,"taskId":"b1"}));
     assert!(rig.has_host_request(|m| matches!(m, BridgeMessage::StopTask { task_id, .. } if task_id == "b1")));
     // Stopping a background task leaves the turn and its cards alone.
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::Interrupt { .. })));
     let _ = h;
 
-    rig.send(json!({"type":"stop-task","sessionId":"nope","taskId":"b1"}));
+    rig.send(json!({"v":11,"type":"stop-task","sessionId":"nope","taskId":"b1"}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::StopTask { session_id, .. } if session_id == "nope")));
 }
 
@@ -265,7 +264,7 @@ fn a_card_for_a_session_that_is_not_running_is_cancelled_at_once() {
 }
 
 fn set_option(rig: &mut Rig, s: &str, option: &str, value: &str) -> Option<String> {
-    rig.send(json!({"type":"set-option","sessionId":s,"option":option,"value":value}));
+    rig.send(json!({"v":11,"type":"set-option","sessionId":s,"option":option,"value":value}));
     rig.host_frames().into_iter().find(|f| matches!(f.message, BridgeMessage::SetOption { .. })).and_then(|f| f.id)
 }
 
@@ -312,14 +311,14 @@ fn set_option_is_checked_against_the_catalog_then_confirmed() {
 fn usage_is_asked_only_of_agents_that_report_it() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
-    rig.send(json!({"type":"usage-request","sessionId":s}));
+    rig.send(json!({"v":11,"type":"usage-request","sessionId":s}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::GetUsage { .. }));
     let usage = UsageData { available: true, plan: None, windows: vec![], session_cost_usd: None, context: None, fetched_at: "t".into() };
     rig.host_reply(&id, HostMessage::Usage { usage: Some(usage) });
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::Usage(u) if u.session_id == s)));
 
     let b = rig.ready_session("beta");
-    rig.send(json!({"type":"usage-request","sessionId":b}));
+    rig.send(json!({"v":11,"type":"usage-request","sessionId":b}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::GetUsage { .. })));
 }
 
@@ -334,7 +333,7 @@ fn commands_reply(rig: &mut Rig) -> Option<protocol::events::CommandsMsg> {
 fn commands_are_asked_of_the_agent_or_the_phone_is_told_why_not() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
-    rig.send(json!({"type":"commands-request","sessionId":s}));
+    rig.send(json!({"v":11,"type":"commands-request","sessionId":s}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::ListCommands { .. }));
     assert!(matches!(msg, BridgeMessage::ListCommands { ref session_id } if *session_id == s));
     let compact = protocol::events::SlashCommand { name: "compact".into(), description: None, argument_hint: None };
@@ -342,17 +341,17 @@ fn commands_are_asked_of_the_agent_or_the_phone_is_told_why_not() {
     let reply = commands_reply(&mut rig).expect("commands published");
     assert_eq!((reply.session_id.as_str(), reply.commands, reply.error), (s.as_str(), vec![compact], None));
 
-    rig.send(json!({"type":"commands-request","sessionId":s}));
+    rig.send(json!({"v":11,"type":"commands-request","sessionId":s}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListCommands { .. }));
     rig.host_reply(&id, HostMessage::Error { message: "boom".into() });
     assert!(commands_reply(&mut rig).and_then(|r| r.error).is_some_and(|e| e.contains("boom")));
 
     // An agent without commands, or an unknown session, is answered at once.
     let b = rig.ready_session("beta");
-    rig.send(json!({"type":"commands-request","sessionId":b}));
+    rig.send(json!({"v":11,"type":"commands-request","sessionId":b}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::ListCommands { .. })));
     assert!(commands_reply(&mut rig).is_some_and(|r| r.commands.is_empty() && r.error.is_some()));
-    rig.send(json!({"type":"commands-request","sessionId":"nope"}));
+    rig.send(json!({"v":11,"type":"commands-request","sessionId":"nope"}));
     assert!(commands_reply(&mut rig).is_some_and(|r| r.error.is_some()));
 }
 
@@ -372,14 +371,14 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
     let plugins =
         || HostMessage::Plugins { installed: vec![plugin.clone()], marketplaces: Some(vec![]), toggles: true, available: None, message: None };
 
-    rig.send(json!({"type":"plugins-request","agent":"alpha","available":true}));
+    rig.send(json!({"v":11,"type":"plugins-request","agent":"alpha","available":true}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::ListPlugins { .. }));
     assert!(matches!(msg, BridgeMessage::ListPlugins { ref agent, available: true } if agent == "alpha"));
     rig.host_reply(&id, plugins());
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.installed.len() == 1 && p.error.is_none())));
 
     // Done: acknowledged, then the new list for every phone.
-    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"disable","target":" c@m "}));
+    rig.send(json!({"v":11,"type":"plugin-action","agent":"alpha","action":"disable","target":" c@m "}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
     assert!(matches!(msg, BridgeMessage::PluginAction { action: PluginAction::Disable, ref target, .. } if target == "c@m"));
     rig.host_reply(&id, plugins());
@@ -390,7 +389,7 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
 
     // A marketplace change comes with what was done and the fresh catalog;
     // the phone would otherwise keep showing the old one.
-    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"update-marketplace","target":"m"}));
+    rig.send(json!({"v":11,"type":"plugin-action","agent":"alpha","action":"update-marketplace","target":"m"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
     rig.host_reply(&id, HostMessage::Plugins {
         installed: vec![plugin.clone()],
@@ -404,15 +403,15 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.available.is_some())));
 
     // Refused by the agent: the reason goes back.
-    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"install","target":"nope@m"}));
+    rig.send(json!({"v":11,"type":"plugin-action","agent":"alpha","action":"install","target":"nope@m"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
     rig.host_reply(&id, HostMessage::Error { message: "Plugin nope not found".into() });
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::PluginAck(a) if !a.success && a.error.as_deref() == Some("Plugin nope not found"))));
 
     // A target that would read as an option, or an agent without plugins,
     // never reaches the host.
-    rig.send(json!({"type":"plugin-action","agent":"alpha","action":"uninstall","target":"--prune"}));
-    rig.send(json!({"type":"plugins-request","agent":"beta"}));
+    rig.send(json!({"v":11,"type":"plugin-action","agent":"alpha","action":"uninstall","target":"--prune"}));
+    rig.send(json!({"v":11,"type":"plugins-request","agent":"beta"}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::PluginAction { .. } | BridgeMessage::ListPlugins { .. })));
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::PluginAck(a) if !a.success && a.target == "--prune")));
@@ -436,14 +435,14 @@ fn mcp_servers_are_managed_by_the_agent_host_and_never_echo_secrets() {
         toggles: false,
     };
 
-    rig.send(json!({"type":"mcp-request","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"mcp-request","agent":"alpha"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListMcp { agent } if agent == "alpha"));
     rig.host_reply(&id, listed());
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::McpServers(s) if s.servers.len() == 1 && s.error.is_none())));
 
     // Added: the host gets the values as secrets; the phones get an ack,
     // then the list — which names the header, never its value.
-    rig.send(json!({"type":"mcp-action","agent":"alpha","action":"add","servers":[
+    rig.send(json!({"v":11,"type":"mcp-action","agent":"alpha","action":"add","servers":[
         {"name":"github","transport":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer ghp_secret"}}}]}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::McpAction { .. }));
     assert!(!format!("{msg:?}").contains("ghp_secret"), "a logged host request hides the token");
@@ -462,10 +461,10 @@ fn mcp_servers_are_managed_by_the_agent_host_and_never_echo_secrets() {
     assert!(!format!("{msgs:?}").contains("ghp_secret"));
 
     // Refused before the host: a bad server, a bad name, an agent without MCP.
-    rig.send(json!({"type":"mcp-action","agent":"alpha","action":"add","servers":[
+    rig.send(json!({"v":11,"type":"mcp-action","agent":"alpha","action":"add","servers":[
         {"name":"x","transport":{"type":"http","url":"ftp://x"}}]}));
-    rig.send(json!({"type":"mcp-action","agent":"alpha","action":"remove","names":["../etc"]}));
-    rig.send(json!({"type":"mcp-request","agent":"beta"}));
+    rig.send(json!({"v":11,"type":"mcp-action","agent":"alpha","action":"remove","names":["../etc"]}));
+    rig.send(json!({"v":11,"type":"mcp-request","agent":"beta"}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::McpAction { .. } | BridgeMessage::ListMcp { .. })));
     let msgs = rig.messages();
     assert_eq!(msgs.iter().filter(|m| matches!(m, BridgeToPhone::McpAck(a) if !a.success)).count(), 2, "{msgs:?}");
@@ -473,7 +472,7 @@ fn mcp_servers_are_managed_by_the_agent_host_and_never_echo_secrets() {
 
     // A running session's servers, and a toggle answered by its new status.
     let s = rig.ready_session("alpha");
-    rig.send(json!({"type":"session-mcp-toggle","sessionId":s,"name":"github","enabled":false}));
+    rig.send(json!({"v":11,"type":"session-mcp-toggle","sessionId":s,"name":"github","enabled":false}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::SessionMcpToggle { .. }));
     assert!(matches!(msg, BridgeMessage::SessionMcpToggle { enabled: false, ref name, .. } if name == "github"));
     rig.host_reply(&id, HostMessage::SessionMcp {
@@ -485,7 +484,7 @@ fn mcp_servers_are_managed_by_the_agent_host_and_never_echo_secrets() {
         if x.session_id == s && x.toggles && x.servers[0].status == McpStatus::Disabled)));
 
     // An unknown session is answered at once.
-    rig.send(json!({"type":"session-mcp-request","sessionId":"nope"}));
+    rig.send(json!({"v":11,"type":"session-mcp-request","sessionId":"nope"}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::SessionMcp { .. })));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::SessionMcp(x) if x.session_id == "nope" && x.error.is_some())));
 }
@@ -501,18 +500,18 @@ fn models_error(rig: &mut Rig) -> Option<String> {
 fn models_are_listed_or_the_phone_is_told_why_not() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"models-request","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"models-request","agent":"alpha"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListModels { .. }));
     rig.host_reply(&id, HostMessage::Models { models: vec![protocol::events::ModelEntry { id: "m1".into(), ..Default::default() }], default_model: Some("m1".into()) });
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Models(x) if x.models.len() == 1 && x.error.is_none() && x.default_model.as_deref() == Some("m1"))));
 
-    rig.send(json!({"type":"models-request","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"models-request","agent":"alpha"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListModels { .. }));
     rig.host_reply(&id, HostMessage::Models { models: vec![], default_model: None });
     assert!(models_error(&mut rig).unwrap().contains("Alpha reported no models"));
 
-    rig.send(json!({"type":"models-request","agent":"gamma"}));
+    rig.send(json!({"v":11,"type":"models-request","agent":"gamma"}));
     assert!(models_error(&mut rig).unwrap().contains("not configured"));
 }
 
@@ -520,7 +519,7 @@ fn models_are_listed_or_the_phone_is_told_why_not() {
 fn git_commits_mark_the_session() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     assert!(rig.effects.iter().any(|e| matches!(e, Effect::ReadGitHead { cwd, .. } if cwd == "/w")), "the start HEAD is read");
     let s = rig.start_request().1.session_id;
     rig.host_event(&s, SessionEvent::Ready {});
@@ -553,11 +552,11 @@ fn git_commits_mark_the_session() {
 fn folders_are_created_inside_the_workspace_only() {
     let mut rig = Rig::new();
     rig.take();
-    rig.send(json!({"type":"create-folder","path":"new","requestId":"r1"}));
+    rig.send(json!({"v":11,"type":"create-folder","path":"new","requestId":"r1"}));
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::FolderAck(a) if a.success && a.path.as_deref() == Some("new"))));
     assert!(last_heartbeat(&msgs).folders.unwrap().contains(&"new".to_string()));
-    rig.send(json!({"type":"create-folder","path":"../escape","requestId":"r2"}));
+    rig.send(json!({"v":11,"type":"create-folder","path":"../escape","requestId":"r2"}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::FolderAck(a) if !a.success)));
 }
 
@@ -569,7 +568,7 @@ fn a_sync_request_is_answered_to_that_phone_only() {
         rig.say(&s, t);
     }
     rig.take();
-    rig.send(json!({"type":"sync-request","sessionId":s,"haveRanges":[[1,1]]}));
+    rig.send(json!({"v":11,"type":"sync-request","sessionId":s,"haveRanges":[[1,1]]}));
     let published = rig.published();
     assert!(published.iter().all(|(to, _)| *to == [rig.phone.pubkey_hex.clone()]));
     assert!(matches!(&published[0].1, BridgeToPhone::SyncBegin(b) if b.ranges == [(2, 3)] && b.seq_high == 3));
@@ -580,6 +579,6 @@ fn a_sync_request_is_answered_to_that_phone_only() {
 fn gsd_state_is_read_in_the_session_directory() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
-    rig.send(json!({"type":"gsd-request","sessionId":s}));
+    rig.send(json!({"v":11,"type":"gsd-request","sessionId":s}));
     assert!(rig.take().iter().any(|e| matches!(e, Effect::ReadGsd { cwd, .. } if cwd == "/w")));
 }

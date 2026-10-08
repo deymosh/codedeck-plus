@@ -906,7 +906,6 @@ impl Engine {
                     title: req.title,
                     description: req.description,
                     locations: req.locations,
-                    raw_input: req.raw_input,
                     options: req.options.clone(),
                     reason: req.reason,
                     hook: req.hook,

@@ -243,9 +243,6 @@ pub struct PermissionRequest {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[specta(type = Option<specta_typescript::Unknown>)]
-    pub raw_input: Option<serde_json::Value>,
     pub options: Vec<PermissionOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<Subagent>,
