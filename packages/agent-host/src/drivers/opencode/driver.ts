@@ -56,7 +56,8 @@ import { SESSION_COMMANDS, sessionCommand, sessionSlashCommands } from './sessio
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
-import { admitProfiles, profileModelGroup, profileProviderId, providersFingerprint, serverSetup } from './providers';
+import { type Catalog, EMPTY_CATALOG } from './catalog';
+import { NOTHING_SERVED, type Placement, placeProfiles, profileModelGroup, providersFingerprint, type Served, servedBy, serverSetup } from './providers';
 import {
   resolveOpenCodePath,
   startOpenCodeServer,
@@ -1065,12 +1066,14 @@ export class OpenCodeDriver implements Driver {
    *  session. */
   private installs = false;
   private stopped = false;
-  /** The provider profiles the server should have, and those the running
-   *  one was started with. */
-  private providers: ProviderBinding[] = [];
+  /** Where the provider profiles go among the server's providers, and the
+   *  catalog that placed them (it fills in their models). */
+  private placed: Placement[] = [];
+  private catalog: Catalog = EMPTY_CATALOG;
+  /** The placements the running server was started with: their
+   *  fingerprint, and the providers they made. */
   private served = providersFingerprint([]);
-  /** The provider ids the running server has from profiles. */
-  private servedIds = new Set<string>();
+  private serving: Served = NOTHING_SERVED;
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
@@ -1132,8 +1135,8 @@ export class OpenCodeDriver implements Driver {
   /** Start `opencode serve` with the provider profiles it should have, and
    *  connect to it. */
   private async startServer(bin: string): Promise<OpencodeClient> {
-    const profiles = this.providers;
-    const setup = serverSetup(profiles, process.env);
+    const placed = this.placed;
+    const setup = serverSetup(placed, this.catalog, process.env);
     const start = this.options.startServer ?? startOpenCodeServer;
     let server: OpenCodeServerHandle;
     try {
@@ -1150,9 +1153,9 @@ export class OpenCodeDriver implements Driver {
       throw new Error('the agent host is shutting down');
     }
     this.server = server;
-    this.served = providersFingerprint(profiles);
-    this.servedIds = new Set(profiles.map(profileProviderId));
-    const added = profiles.length > 0 ? `, with ${profiles.length} provider profile(s)` : '';
+    this.served = providersFingerprint(placed);
+    this.serving = servedBy(placed);
+    const added = placed.length > 0 ? `, with ${placed.length} provider profile(s)` : '';
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
     return this.connect({ baseUrl: server.url, headers: setup.headers });
   }
@@ -1178,8 +1181,9 @@ export class OpenCodeDriver implements Driver {
     );
   }
 
-  /** The provider profiles to add to OpenCode's own providers; those whose
-   *  name one of its providers already has are left out. The server reads
+  /** The provider profiles to add to OpenCode's own providers, placed by
+   *  its catalog (providers.ts); one that would shadow a provider OpenCode
+   *  has is left out, with the reason. The server reads
    *  its config only when it starts, so a changed list restarts it:
    *  sessions on the old one end with an error and the bridge resumes them
    *  on the new one. */
@@ -1197,13 +1201,15 @@ export class OpenCodeDriver implements Driver {
 
   private async applyProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     // A server still being installed or started is waited for: it may have
-    // read an older list, and it says which names are taken.
+    // read an older list, and its catalog places the profiles.
     await this.clientPromise?.catch(() => {});
     // A profile the bridge would not let a session use is not added either.
     const usable = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
-    const { admitted, refused } = admitProfiles(usable, await this.ownProviderIds());
-    this.providers = admitted;
-    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return refused;
+    const catalog = await this.readCatalog();
+    const { placed, refused } = placeProfiles(usable, catalog, this.serving);
+    this.placed = placed;
+    this.catalog = catalog;
+    if (this.stopped || !this.server || !this.bin || providersFingerprint(placed) === this.served) return refused;
     this.options.log('[opencode] restarting the server: its provider profiles changed');
     const old = this.server;
     this.server = null;
@@ -1212,19 +1218,19 @@ export class OpenCodeDriver implements Driver {
     return refused;
   }
 
-  /** The provider ids OpenCode has of its own — built in, configured by
-   *  the operator, signed in to — without the profiles this driver added.
-   *  Empty when the server cannot say (nothing is refused then). */
-  private async ownProviderIds(): Promise<Set<string>> {
+  /** The running server's catalog (catalog.ts). Empty when it cannot say:
+   *  every profile is then a provider of its own, nothing refused or
+   *  filled in. */
+  private async readCatalog(): Promise<Catalog> {
     try {
       const client = await this.clientPromise;
-      if (!client) return new Set();
+      if (!client) return EMPTY_CATALOG;
       const { data, error } = await client.provider.list();
       if (error || !data) throw new Error(JSON.stringify(error ?? 'no provider list'));
-      return new Set(data.all.map((p) => p.id).filter((id) => !this.servedIds.has(id)));
+      return { providers: new Map(data.all.map((p) => [p.id, p])), connected: new Set(data.connected) };
     } catch (err) {
-      this.options.log(`[opencode] could not list its providers, so profile names are not checked: ${err instanceof Error ? err.message : String(err)}`);
-      return new Set();
+      this.options.log(`[opencode] could not read its provider catalog, so profiles are not checked against it: ${err instanceof Error ? err.message : String(err)}`);
+      return EMPTY_CATALOG;
     }
   }
 
@@ -1290,7 +1296,7 @@ export class OpenCodeDriver implements Driver {
       if (error || !data) return { models: [] };
       const models: ModelEntry[] = [];
       const contextLimits: Record<string, number> = {};
-      const profiles = new Map(this.providers.map((p) => [profileProviderId(p), p]));
+      const profiles = new Map(this.placed.map((p) => [p.providerId, p.profile]));
       for (const provider of data.providers) {
         const profile = profiles.get(provider.id);
         for (const model of Object.values(provider.models)) {
