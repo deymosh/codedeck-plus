@@ -339,13 +339,10 @@ impl<'a> Router<'a> {
             // --- slice C: machines-slice updates + fire-and-answer acks ---
             BridgeToPhone::Models(m) => {
                 self.stores.machines.apply_models(machine, m);
-                // An empty list comes with the reason: ask again next time.
-                let fetch = Fetch::Models(m.agent.clone());
-                if m.models.is_empty() {
-                    self.stores.machines.fetches.forget(machine, fetch);
-                } else {
-                    self.stores.machines.fetches.answered(machine, fetch, self.now);
-                }
+                self.stores
+                    .machines
+                    .fetches
+                    .answered(machine, Fetch::Models(m.agent.clone()));
                 r.persist(StoreId::Machines);
             }
             BridgeToPhone::Usage(m) => {
@@ -407,7 +404,7 @@ impl<'a> Router<'a> {
             }
             BridgeToPhone::ProviderProfiles(m) => {
                 self.stores.machines.apply_provider_profiles(machine, m);
-                self.stores.machines.fetches.answered(machine, Fetch::ProviderProfiles, self.now);
+                self.stores.machines.fetches.answered(machine, Fetch::ProviderProfiles);
                 // CDX-062: provider profiles are never written to disk — the
                 // machines slice strips them when it serializes — but this
                 // persist is what tells the views the slice changed.
@@ -430,8 +427,6 @@ impl<'a> Router<'a> {
                         m.agent.as_deref(),
                         &m.credentials,
                     );
-                    // New credentials can change what the agents list.
-                    self.stores.machines.fetches.forget_models(machine);
                     r.persist(StoreId::Machines);
                 }
             }

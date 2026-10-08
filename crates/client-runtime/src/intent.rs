@@ -1465,9 +1465,10 @@ mod tests {
         ));
     }
 
-    /// Screens ask each time they open; only what is not fresh goes out.
+    /// Screens ask each time they open; the profiles, which the bridge
+    /// pushes on every change, are not asked for twice.
     #[tokio::test]
-    async fn screens_reopening_send_only_the_requests_whose_answers_are_not_fresh() {
+    async fn screens_reopening_ask_again_for_everything_not_pushed() {
         let (mut s, kp) = stores().await;
         let mut sent = 0;
         let mut open_screen = |s: &mut CoreStores, now: u64| {
@@ -1481,13 +1482,11 @@ mod tests {
         };
         assert_eq!(open_screen(&mut s, 0), 2, "first open asks for both");
         assert_eq!(open_screen(&mut s, 1_000), 0, "both still in flight");
-        s.machines.fetches.answered("m", Fetch::ProviderProfiles, 2_000);
-        s.machines.fetches.answered("m", Fetch::Models("claude".into()), 2_000);
-        assert_eq!(open_screen(&mut s, 60_000), 0, "both answered and fresh");
-        let later = 2_000 + client_core::stores::fetches::MODELS_FRESH_FOR_MS;
-        assert_eq!(open_screen(&mut s, later), 1, "the model list went stale; profiles are pushed");
+        s.machines.fetches.answered("m", Fetch::ProviderProfiles);
+        s.machines.fetches.answered("m", Fetch::Models("claude".into()));
+        assert_eq!(open_screen(&mut s, 3_000), 1, "the model list is asked for again; profiles are pushed");
         s.machines.fetches.forget_all();
-        assert_eq!(open_screen(&mut s, later + 1), 2, "a reconnect asks again");
+        assert_eq!(open_screen(&mut s, 4_000), 2, "a reconnect asks again");
     }
 
     #[tokio::test]
