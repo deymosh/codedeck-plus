@@ -1,6 +1,6 @@
-//! `Tristate<T>` — the wire's absent / null / value distinction, used where the
-//! TS schema is `z.string().nullable().optional()` with a keep/clear/set
-//! meaning (`set-credentials`, `set-provider-profile.authToken`).
+//! `Tristate<T>` — the wire's absent / null / value distinction, for an
+//! optional, nullable field with a keep/clear/set meaning
+//! (`set-provider-profile.authToken`).
 //!
 //! - field absent  → `Keep`  (leave the stored value alone)
 //! - field `null`  → `Clear` (delete the stored value)
@@ -63,7 +63,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Tristate<T> {
 
 // Not `#[derive(specta::Type)]` — the wire shape isn't a plain 3-variant enum,
 // it's `Option<T>` (Keep is `skip_serializing_if`-omitted at the FIELD level;
-// present-and-null is Clear; present-and-value is Set). So the TS type IS
+// present-and-null is Clear; present-and-value is Set). So the TypeScript type IS
 // `T | null`, exactly what `Option<T>` already generates — this impl just
 // forwards to it rather than describing a shape that doesn't exist on the
 // wire. Every field of this type keeps its own

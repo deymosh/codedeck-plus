@@ -1,10 +1,10 @@
 //! Seq-range math shared by the sync server (bridge) and the transcript store
-//! (client). Originally ported from the TypeScript protocol package. Ranges are inclusive
-//! `(from, to)` pairs over non-negative seqs; `to < from` is treated as empty.
+//! (client). Ranges are inclusive `(from, to)` pairs over non-negative seqs;
+//! `to < from` is treated as empty.
 
 use std::num::NonZeroU64;
 
-/// Inclusive `[from, to]`. Serializes to a two-element JSON array (`z.tuple`).
+/// Inclusive `[from, to]`. Serializes to a two-element JSON array.
 pub type SeqRange = (u64, u64);
 
 /// Sort + merge overlapping/adjacent ranges into canonical minimal form.
@@ -56,8 +56,8 @@ pub fn missing_ranges(have: &[SeqRange], lo: u64, hi: u64) -> Vec<SeqRange> {
 }
 
 /// Split ranges into chunks of at most `size` seqs each (relay payload cap).
-/// `size` is a `NonZeroU64` — the TS `chunkRanges` throws on `size < 1`; here
-/// that case is simply unrepresentable.
+/// `size` is a `NonZeroU64`: a size of zero would never make progress, so
+/// it is unrepresentable.
 pub fn chunk_ranges(ranges: &[SeqRange], size: NonZeroU64) -> Vec<SeqRange> {
     let size = size.get();
     let mut out = Vec::new();

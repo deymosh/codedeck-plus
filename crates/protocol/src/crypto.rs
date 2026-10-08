@@ -1,6 +1,4 @@
-//! NIP-44 v2 crypto + keypair — a faithful port of
-//! `packages/core/src/nostr/crypto.ts` (mirrored, never imported, in
-//! `apps/mobile/src/core/crypto.ts`). Every protocol payload crosses the relay
+//! NIP-44 v2 crypto + keypair. Every protocol payload crosses the relay
 //! NIP-44-encrypted between the bridge keypair and one client keypair; the
 //! relay only ever sees ciphertext.
 //!
@@ -97,8 +95,8 @@ pub fn hex_from_npub(npub: &str) -> Result<String, CryptoError> {
         .to_hex())
 }
 
-/// Hex → bytes, with the same strictness as the TS helper (even length, only
-/// `0-9a-fA-F`).
+/// Hex → bytes, strictly: an even length of `0-9a-fA-F` only, anything else
+/// an error.
 pub fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, CryptoError> {
     if !hex.len().is_multiple_of(2) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(CryptoError::InvalidHex);
@@ -182,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn hex_helpers_match_ts_strictness() {
+    fn hex_helpers_are_strict() {
         assert_eq!(hex_to_bytes("deadbeef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
         assert_eq!(bytes_to_hex(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
         assert_eq!(hex_to_bytes("abc"), Err(CryptoError::InvalidHex)); // odd length

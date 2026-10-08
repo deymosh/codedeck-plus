@@ -1,9 +1,8 @@
-//! Nostr event kinds for the CodeDeck protocol (unchanged since v10).
+//! Nostr event kinds for the CodeDeck protocol.
 //!
 //! Traffic is split by storage class so the client's stored-event subscription
-//! stays low-frequency — this is what structurally fixes the old since-filter
-//! starvation bug (high-frequency live output no longer advances the
-//! stored-event cursor past the session-list heartbeat).
+//! stays low-frequency: high-frequency live output never advances the
+//! stored-event `since` cursor past a response the phone still needs.
 
 /// Session-list heartbeat. NIP-33 parameterized replaceable (`d` = machine
 /// name). Subscribers always fetch current — never with a `since` filter.
@@ -38,7 +37,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kind_values_match_protocol_v10() {
+    fn kind_values_are_pinned() {
         assert_eq!(SESSION_LIST_KIND, 30515);
         assert_eq!(COMMAND_KIND, 4515);
         assert_eq!(RESPONSE_KIND, 4516);

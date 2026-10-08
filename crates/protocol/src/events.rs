@@ -33,11 +33,11 @@ pub struct SessionListMsg {
     /// CDX-031: the workspace roots themselves, ABSOLUTE, in `--workspace` order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roots: Option<Vec<String>>,
-    /// v10: explicit tombstones — the ONLY way a bridge removes a session
-    /// (absence from `sessions` never deletes).
+    /// Explicit tombstones — the ONLY way a bridge removes a session
+    /// (absence from `sessions` never deletes: a list can be partial).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed_sessions: Option<Vec<String>>,
-    /// v10: set on clean shutdown — sessions stay listed (`state: offline`).
+    /// Set on clean shutdown — sessions stay listed (`state: offline`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_offline: Option<bool>,
     /// Where the phone can reach this bridge without a relay (see

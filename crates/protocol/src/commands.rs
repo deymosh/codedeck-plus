@@ -425,8 +425,10 @@ pub struct ProviderProfileWrite {
     /// `providers` or `providerModels`).
     pub agent: String,
     pub label: String,
-    /// CDX-071: https, or http ONLY on loopback — validated on egress
-    /// ([`super::codec::encode_phone_to_bridge`]).
+    /// CDX-071: https, or http only to this machine or a private-network
+    /// address ([`is_valid_provider_base_url`](super::common::is_valid_provider_base_url))
+    /// — validated on egress ([`super::codec::encode_phone_to_bridge`]) and
+    /// again by the bridge.
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Tristate::is_keep")]
     pub auth_token: Tristate<String>,

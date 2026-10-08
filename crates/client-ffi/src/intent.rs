@@ -300,7 +300,8 @@ pub enum UniffiIntent {
     /// Records which plan-approval option the user tapped so the
     /// resolved `PlanApprovalCard` can label itself. Sent ALONGSIDE the
     /// actual answer (`RespondPlan`), not
-    /// instead of it — same contract the TS `PlanApprovalCard.tsx` had.
+    /// instead of it: the label is display state, the answer goes to the
+    /// bridge.
     SetPlanApprovalChoice {
         card_id: String,
         key: String,

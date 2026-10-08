@@ -1,4 +1,4 @@
-//! The only place wire JSON is parsed. Originally ported from the TypeScript protocol package.
+//! The only place wire JSON is parsed.
 //! Both sides call these at ingest — a raw `serde_json::from_str` into a message
 //! type is banned everywhere else. Invalid payloads come back as a structured
 //! error to log-and-drop, never a panic or a lying value.
@@ -8,8 +8,8 @@ use serde::{de::DeserializeOwned, Serialize};
 use super::commands::PhoneToBridge;
 use super::events::BridgeToPhone;
 
-/// `Ok(msg)` or `Err(human-readable reason)`. Mirrors the TS
-/// `{ ok: true, msg } | { ok: false, error }`.
+/// `Ok(msg)` or `Err(human-readable reason)` — the reason is for a log line
+/// (escaped and capped); the message is dropped.
 pub type DecodeResult<T> = Result<T, String>;
 
 fn decode<T: DeserializeOwned>(json: &str) -> DecodeResult<T> {
@@ -57,8 +57,10 @@ fn encode<T: Serialize>(msg: &T) -> String {
 }
 
 /// Encode a phone→bridge message for the wire. CDX-071: rejects a
-/// `set-provider-profile` whose `base_url` is not https (or http on loopback),
-/// so a cleartext profile fails loudly at the sender.
+/// `set-provider-profile` whose `base_url` the bridge would refuse (see
+/// [`is_valid_provider_base_url`](super::common::is_valid_provider_base_url):
+/// https, or http only to this machine or a private-network address), so it
+/// fails loudly at the sender.
 pub fn encode_phone_to_bridge(msg: &PhoneToBridge) -> DecodeResult<String> {
     if let PhoneToBridge::SetProviderProfile(m) = msg {
         if let Some(profile) = &m.profile {
@@ -132,7 +134,8 @@ mod tests {
 
     #[test]
     fn extra_unknown_field_still_decodes_forward_compat() {
-        // serde ignores unknown fields by default — matches zod's default strip.
+        // serde ignores unknown fields by default: an added optional field
+        // reaches an older peer as nothing, not as an error.
         let with_extra = r#"{"type":"input","sessionId":"s","text":"hi","futureField":123}"#;
         assert!(decode_phone_to_bridge(with_extra).is_ok());
     }

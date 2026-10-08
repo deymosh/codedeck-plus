@@ -94,7 +94,8 @@ pub fn parse_relay_message(text: &str) -> Result<RelayMessage, String> {
 }
 
 /// The relay-JSON form of a [`Filter`]. Empty vecs and an absent `since` are
-/// omitted so the filter is minimal (and matches what the TS SimplePool sends).
+/// omitted so the filter is minimal and names only what it constrains
+/// (relays differ on what an empty list means).
 pub fn filter_to_json(filter: &Filter) -> Value {
     let mut map = serde_json::Map::new();
     if !filter.kinds.is_empty() {

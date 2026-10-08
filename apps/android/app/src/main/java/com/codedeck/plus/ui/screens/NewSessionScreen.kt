@@ -52,17 +52,16 @@ import uniffi.client_ffi.UniffiProviderProfileInfo
 import uniffi.client_runtime.CoreEvent
 import uniffi.client_runtime.SliceId
 
-/** Radio value for the free-text "new folder" branch — same sentinel `NewSessionModal.tsx` uses. */
+/** Radio value for the free-text "new folder" branch; no real folder is named this. */
 private const val NEW_FOLDER = "__new__"
 
 /** How long a create waits for the core to confirm before the UI gives up
  *  waiting and says so. The FFI dispatch is genuinely fire-and-forget (no
- *  awaited response exists to await, unlike mobile's `await core.api.create`),
+ *  awaited response exists to await),
  *  so this bounded wait over [CoreHost.events] is the confirmation. */
 private const val CREATE_CONFIRM_TIMEOUT_MS = 10_000L
 
-/** Last path segment of an absolute workspace root — port of
- *  `NewSessionModal.tsx`'s `rootLabel`. */
+/** Last path segment of an absolute workspace root, either separator. */
 private fun rootLabel(root: String): String {
     val segments = root.split('\\', '/').filter { it.isNotEmpty() }
     return segments.lastOrNull() ?: root

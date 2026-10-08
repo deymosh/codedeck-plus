@@ -5,7 +5,7 @@
 //! Single-threaded by construction. The [`SubCallbacks`] closures a
 //! runtime's subscription logic hands us are `!Send`, so the whole transport runs on a
 //! current-thread runtime inside a `LocalSet` (the FG service's client thread);
-//! every task is `spawn_local`. This mirrors the TS `this`-bound model exactly.
+//! every task is `spawn_local`, and state is shared without locks.
 //!
 //! What lives here and NOT in a relay-pool crate (see docs/CLIENT.md):
 //! * **per-relay redial** — once [`WsTransport::ensure_connected`] has been
