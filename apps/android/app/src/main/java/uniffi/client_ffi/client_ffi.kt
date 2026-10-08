@@ -6114,6 +6114,11 @@ data class UniffiModelEntry (
      * Who serves the model, when the agent says.
      */
     var `provider`: kotlin.String?
+    , 
+    /**
+     * How many tokens the model takes in, when known.
+     */
+    var `contextWindow`: kotlin.UInt?
     
 ){
     
@@ -6133,19 +6138,22 @@ public object FfiConverterTypeUniffiModelEntry: FfiConverterRustBuffer<UniffiMod
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
         )
     }
 
     override fun allocationSize(value: UniffiModelEntry) = (
             FfiConverterString.allocationSize(value.`id`) +
             FfiConverterOptionalString.allocationSize(value.`label`) +
-            FfiConverterOptionalString.allocationSize(value.`provider`)
+            FfiConverterOptionalString.allocationSize(value.`provider`) +
+            FfiConverterOptionalUInt.allocationSize(value.`contextWindow`)
     )
 
     override fun write(value: UniffiModelEntry, buf: ByteBuffer) {
             FfiConverterString.write(value.`id`, buf)
             FfiConverterOptionalString.write(value.`label`, buf)
             FfiConverterOptionalString.write(value.`provider`, buf)
+            FfiConverterOptionalUInt.write(value.`contextWindow`, buf)
     }
 }
 

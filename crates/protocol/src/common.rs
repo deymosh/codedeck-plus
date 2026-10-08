@@ -540,11 +540,20 @@ fn is_private_network_address(host: &str) -> bool {
     false
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+/// A model a provider profile offers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderModel {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The provider a gateway routes the model to (`OpenCode Go` for a
+    /// router's `OpenCode Go/deepseek-v4.1-flash`), when the endpoint says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// How many tokens the model takes in, when the endpoint says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
 }
 
 /// The REDACTED wire shape of a stored provider profile (`hasToken` only — the

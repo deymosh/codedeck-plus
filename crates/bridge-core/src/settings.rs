@@ -161,7 +161,7 @@ mod tests {
             label: "P".into(),
             base_url: "https://x".into(),
             auth_token: Some(Secret::new("t")),
-            models: vec![ProviderModel { id: "m1".into(), label: None }],
+            models: vec![ProviderModel { id: "m1".into(), ..Default::default() }],
             models_from_provider: false,
             default_model: None,
             updated_at: None,

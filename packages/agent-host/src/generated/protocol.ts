@@ -1192,16 +1192,33 @@ export type ProviderBinding_Serialize = {
 	defaultModel?: string | null,
 };
 
+/**  A model a provider profile offers. */
 export type ProviderModel = ProviderModel_Serialize | ProviderModel_Deserialize;
 
+/**  A model a provider profile offers. */
 export type ProviderModel_Deserialize = {
 	id: string,
 	label?: string | null,
+	/**
+	 *  The provider a gateway routes the model to (`OpenCode Go` for a
+	 *  router's `OpenCode Go/deepseek-v4.1-flash`), when the endpoint says.
+	 */
+	provider?: string | null,
+	/**  How many tokens the model takes in, when the endpoint says. */
+	contextWindow?: number | null,
 };
 
+/**  A model a provider profile offers. */
 export type ProviderModel_Serialize = {
 	id: string,
 	label?: string | null,
+	/**
+	 *  The provider a gateway routes the model to (`OpenCode Go` for a
+	 *  router's `OpenCode Go/deepseek-v4.1-flash`), when the endpoint says.
+	 */
+	provider?: string | null,
+	/**  How many tokens the model takes in, when the endpoint says. */
+	contextWindow?: number | null,
 };
 
 export type QuestionOption = QuestionOption_Serialize | QuestionOption_Deserialize;

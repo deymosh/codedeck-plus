@@ -238,7 +238,17 @@ export class AgentHost {
         const driver = this.driver(agent);
         if (!driver.listProviderModels) throw new Error(`${driver.info().displayName} cannot read a provider's models`);
         const models = await driver.listProviderModels(baseUrl, authToken);
-        return { kind: 'provider-models', payload: { models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })) } };
+        return {
+          kind: 'provider-models',
+          payload: {
+            models: models.map((m) => ({
+              id: m.id,
+              ...(m.label ? { label: m.label } : {}),
+              ...(m.provider ? { provider: m.provider } : {}),
+              ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            })),
+          },
+        };
       }
       case 'set-providers': {
         const driver = this.driver(message.payload.agent);

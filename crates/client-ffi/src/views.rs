@@ -328,10 +328,35 @@ pub struct UniffiModelEntry {
     pub label: Option<String>,
     /// Who serves the model, when the agent says.
     pub provider: Option<String>,
+    /// How many tokens the model takes in, when known.
+    pub context_window: Option<u32>,
 }
 
 fn to_uniffi_model_entries(models: &[protocol::events::ModelEntry]) -> Vec<UniffiModelEntry> {
-    models.iter().map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: m.provider.clone() }).collect()
+    models
+        .iter()
+        .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: m.provider.clone(), context_window: None })
+        .collect()
+}
+
+/// A provider profile's model, grouped under the profile — and under the
+/// provider a gateway routes it to, when the endpoint names one, the same
+/// group the agent's own list shows it under. Unnamed, it goes by its id
+/// without that provider, which the group already shows.
+fn to_uniffi_profile_model(profile: &str, m: &protocol::common::ProviderModel) -> UniffiModelEntry {
+    let upstream = m.provider.as_deref().filter(|p| !p.is_empty());
+    let label = m.label.clone().or_else(|| {
+        upstream.and_then(|p| m.id.strip_prefix(p)).and_then(|rest| rest.strip_prefix('/')).map(str::to_string)
+    });
+    UniffiModelEntry {
+        id: m.id.clone(),
+        label,
+        provider: Some(match upstream {
+            Some(p) => format!("{profile} · {p}"),
+            None => profile.to_string(),
+        }),
+        context_window: m.context_window,
+    }
 }
 
 /// A custom AI provider profile the bridge has stored — gated on the
@@ -758,11 +783,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         agent: p.agent.clone(),
                         label: p.label.clone(),
                         base_url: p.base_url.clone(),
-                        models: p
-                            .models
-                            .iter()
-                            .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: Some(p.label.clone()) })
-                            .collect(),
+                        models: p.models.iter().map(|m| to_uniffi_profile_model(&p.label, m)).collect(),
                         models_from_provider: p.models_from_provider,
                         default_model: p.default_model.clone(),
                         has_token: p.has_token,
@@ -1375,6 +1396,24 @@ mod tests {
     }
     fn cached_seqs(cache: &Option<TranscriptCache>) -> Vec<u64> {
         cache.as_ref().map(|c| c.entries().iter().map(|e| e.seq).collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_profile_model_is_grouped_under_the_profile_and_its_upstream() {
+        let routed = protocol::common::ProviderModel {
+            id: "OpenCode Go/deepseek-v4.1-flash".into(),
+            provider: Some("OpenCode Go".into()),
+            context_window: Some(1_000_000),
+            ..Default::default()
+        };
+        let m = to_uniffi_profile_model("CCR", &routed);
+        assert_eq!(m.provider.as_deref(), Some("CCR · OpenCode Go"));
+        assert_eq!(m.label.as_deref(), Some("deepseek-v4.1-flash"), "named without the group's provider");
+        assert_eq!(m.context_window, Some(1_000_000));
+
+        let own = protocol::common::ProviderModel { id: "kimi-k3".into(), label: Some("Kimi K3".into()), ..Default::default() };
+        let m = to_uniffi_profile_model("Moonshot", &own);
+        assert_eq!((m.provider.as_deref(), m.label.as_deref()), (Some("Moonshot"), Some("Kimi K3")));
     }
 
     #[test]

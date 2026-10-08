@@ -321,7 +321,7 @@ fn take_model_fetch(rig: &mut Rig) -> Option<(String, String, String)> {
 }
 
 fn listed(ids: &[&str]) -> HostMessage {
-    HostMessage::ProviderModels { models: ids.iter().map(|id| ProviderModel { id: (*id).into(), label: None }).collect() }
+    HostMessage::ProviderModels { models: ids.iter().map(|id| ProviderModel { id: (*id).into(), ..Default::default() }).collect() }
 }
 
 fn stored_profile(rig: &mut Rig) -> Option<protocol::common::ProviderProfileInfo> {

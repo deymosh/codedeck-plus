@@ -53,7 +53,7 @@ import type {
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
-import { providersFingerprint, serverSetup } from './providers';
+import { profileModelGroup, profileProviderId, providersFingerprint, serverSetup } from './providers';
 import {
   resolveOpenCodePath,
   startOpenCodeServer,
@@ -1185,10 +1185,14 @@ export class OpenCodeDriver implements Driver {
       if (error || !data) return { models: [] };
       const models: ModelEntry[] = [];
       const contextLimits: Record<string, number> = {};
+      const profiles = new Map(this.providers.map((p) => [profileProviderId(p), p]));
       for (const provider of data.providers) {
+        const profile = profiles.get(provider.id);
         for (const model of Object.values(provider.models)) {
           const id = `${provider.id}/${model.id}`;
-          models.push({ id, label: model.name, provider: provider.name || provider.id });
+          const name = provider.name || provider.id;
+          const group = profile ? profileModelGroup(name, profile.models.find((m) => m.id === model.id)) : name;
+          models.push({ id, label: model.name, provider: group });
           const window = model.limit?.context ?? 0;
           if (window > 0) contextLimits[id] = window;
         }

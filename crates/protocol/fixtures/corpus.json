@@ -148,7 +148,7 @@
       { "type": "credentials-ack", "machine": "m", "success": false, "credentials": [], "error": "not writable" },
       { "type": "pair-ack", "machine": "m", "ok": true },
       { "type": "pair-ack", "machine": "m", "ok": false, "reason": "bad-token", "relays": ["wss://r"], "host": "cli" },
-      { "type": "provider-profiles", "machine": "m", "profiles": [{ "id": "p", "agent": "claude-code", "label": "L", "baseUrl": "https://x", "models": [{ "id": "m" }], "hasToken": true }, { "id": "q", "agent": "opencode", "label": "Q", "baseUrl": "https://y", "models": [{ "id": "a/b", "label": "B" }], "modelsFromProvider": true, "hasToken": true }] },
+      { "type": "provider-profiles", "machine": "m", "profiles": [{ "id": "p", "agent": "claude-code", "label": "L", "baseUrl": "https://x", "models": [{ "id": "m" }], "hasToken": true }, { "id": "q", "agent": "opencode", "label": "Q", "baseUrl": "https://y", "models": [{ "id": "a/b", "label": "B" }, { "id": "OpenCode Go/deepseek-v4.1-flash", "label": "deepseek-v4.1-flash", "provider": "OpenCode Go", "contextWindow": 1000000 }], "modelsFromProvider": true, "hasToken": true }] },
       { "type": "provider-profile-ack", "machine": "m", "profileId": "p", "success": true, "tokenValid": false }
     ],
     "rejected": [

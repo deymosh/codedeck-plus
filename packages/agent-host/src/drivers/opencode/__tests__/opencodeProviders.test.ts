@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import { OpenCodeDriver } from '../driver';
-import { providersConfig, serverSetup } from '../providers';
+import { profileModelGroup, providersConfig, serverSetup } from '../providers';
 import type { StartOpenCodeServerOptions } from '../server';
 import type { ProviderBinding } from '../../../sdk/types';
 
@@ -35,6 +35,16 @@ describe('providersConfig', () => {
       },
     });
     expect(JSON.stringify(config)).not.toContain('tok-secret');
+  });
+
+  it('names a routed model without its upstream, which its group shows, and gives OpenCode a known context window', () => {
+    const routed = router({ models: [{ id: 'OpenCode Go/deepseek-v4.1-flash', provider: 'OpenCode Go', contextWindow: 1_000_000 }] });
+    const provider = (providersConfig([routed]).provider as Record<string, { models: Record<string, unknown> }>)['codedeck-router']!;
+    expect(provider.models).toEqual({
+      'OpenCode Go/deepseek-v4.1-flash': { name: 'deepseek-v4.1-flash', limit: { context: 1_000_000, output: 0 } },
+    });
+    expect(profileModelGroup('CCR', routed.models[0])).toBe('CCR · OpenCode Go');
+    expect(profileModelGroup('CCR', { id: 'kimi-k3' })).toBe('CCR');
   });
 
   it('does not restrict the providers OpenCode already has', () => {

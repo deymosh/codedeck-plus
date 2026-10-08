@@ -239,7 +239,10 @@ Messages:
   redirect is followed, and the save is refused when the list cannot be read
   or is empty. A `defaultModel` the list does not name is dropped. The stored
   profile reports the flag back, so a later save (with the token kept) reads
-  the list again.
+  the list again. A model read so keeps, when the endpoint says, the
+  `provider` a gateway routes it to (the part of the id before its first
+  `/`, which stays in the id) and its `contextWindow`; phones group such a
+  model under "profile · provider".
 - The token is checked by the profile's agent, with the smallest request on
   the API it speaks (`tokenValid` in the ack).
 - A profile stored before profiles named their agent has an empty `agent`:
@@ -515,7 +518,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `session-mcp-toggle {sessionId, name, enabled}` | `session-mcp {…}` once done, or `error` |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 | `check-provider {agent, provider, model}` | `credential-checked {valid?}`: a provider profile's token, checked on the API `agent` speaks |
-| `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty), read the way `agent` signs in; or `error` with the reason there is none |
+| `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty; each `{id, label?, provider?, contextWindow?}`), read the way `agent` signs in; or `error` with the reason there is none |
 | `set-providers {agent, providers}` | `ack` once an agent with `supports.providerModels` offers these profiles' models (all of its profiles, sent after `initialize` and on every change), or `error` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds

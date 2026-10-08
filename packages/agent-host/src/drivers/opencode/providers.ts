@@ -22,7 +22,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { providerApiRoot } from '../../sdk/providerModels';
-import type { ProviderBinding } from '../../sdk/types';
+import type { ProviderBinding, ProviderModel } from '../../sdk/types';
 
 /** What a profile's provider id starts with: no OpenCode provider (models.dev
  *  catalog or the operator's) is named so. */
@@ -51,11 +51,29 @@ export function providersConfig(profiles: ProviderBinding[], base: Record<string
         npm: '@ai-sdk/openai-compatible',
         name: profile.label || profile.id,
         options: { baseURL: providerApiRoot(profile.baseUrl), apiKey: `{env:${tokenVariable(index)}}` },
-        models: Object.fromEntries(profile.models.map((m) => [m.id, m.label ? { name: m.label } : {}])),
+        models: Object.fromEntries(profile.models.map((m) => [m.id, modelConfig(m)])),
       },
     ]),
   );
   return { ...base, provider: { ...own, ...added } };
+}
+
+/** A profile model as OpenCode's config holds it: named without the
+ *  upstream provider its group already shows. A known context window
+ *  lets OpenCode compact before the model overflows; the output size is
+ *  never listed by endpoints, so it stays 0, OpenCode's own "unknown". */
+function modelConfig(model: ProviderModel): Record<string, unknown> {
+  const name = model.label ?? (model.provider && model.id.startsWith(`${model.provider}/`) ? model.id.slice(model.provider.length + 1) : undefined);
+  return {
+    ...(name ? { name } : {}),
+    ...(model.contextWindow ? { limit: { context: model.contextWindow, output: 0 } } : {}),
+  };
+}
+
+/** The group a profile model is listed under: the profile, and the
+ *  provider a gateway routes the model to when the endpoint names one. */
+export function profileModelGroup(profile: string, model: ProviderModel | undefined): string {
+  return model?.provider ? `${profile} · ${model.provider}` : profile;
 }
 
 /** What the server is started with to serve `profiles`, and how its client
