@@ -24,12 +24,19 @@ pub enum CryptoError {
 }
 
 /// A bridge/client identity. Hosts persist `secret_hex()`; `pubkey_hex` is the
-/// Nostr event author id; `npub` is for the manual-pairing fallback UI.
-#[derive(Debug, Clone)]
+/// Nostr event author id; `npub` is for the manual-pairing fallback UI. Its
+/// `Debug` shows the public half only.
+#[derive(Clone)]
 pub struct Keypair {
     pub secret_key: SecretKey,
     pub pubkey_hex: String,
     pub npub: String,
+}
+
+impl std::fmt::Debug for Keypair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Keypair").field("pubkey_hex", &self.pubkey_hex).finish_non_exhaustive()
+    }
 }
 
 impl Keypair {

@@ -37,13 +37,26 @@ pub fn pair_timeout_error(ms: u64) -> String {
 
 // --- URL parsing ------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `token` is the pairing window's one-time secret: the `Debug` leaves it
+/// out.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ParsedPairingUrl {
     pub npub: String,
     pub pubkey_hex: String,
     pub relays: Vec<String>,
     pub machine: String,
     pub token: String,
+}
+
+impl std::fmt::Debug for ParsedPairingUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedPairingUrl")
+            .field("npub", &self.npub)
+            .field("relays", &self.relays)
+            .field("machine", &self.machine)
+            .field("token", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 pub type ParsePairingResult = Result<ParsedPairingUrl, String>;

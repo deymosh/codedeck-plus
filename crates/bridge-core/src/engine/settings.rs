@@ -328,7 +328,7 @@ impl Engine {
         // The store never holds an insecure profile: the token check and the
         // model list send the token to this URL.
         if !is_valid_provider_base_url(&write.base_url) {
-            log::info!("[Engine] Provider profile '{id}' refused: insecure base URL ({})", write.base_url);
+            log::info!("[Engine] Provider profile '{id}' refused: insecure base URL ({})", protocol::common::redact_url(&write.base_url));
             return self.send_profile_ack(phone, &id, Err(PROVIDER_BASE_URL_ERROR.into()));
         }
         match self.catalog.known(&write.agent) {
@@ -394,7 +394,7 @@ impl Engine {
                 self.save_profile(&phone, profile);
             }
             Err(reason) => {
-                log::info!("[Engine] Provider profile '{}' refused: no model list from {} ({reason})", profile.id, profile.base_url);
+                log::info!("[Engine] Provider profile '{}' refused: no model list from {} ({reason})", profile.id, protocol::common::redact_url(&profile.base_url));
                 let error = format!("Could not read the models from {}: {reason}", profile.base_url);
                 self.send_profile_ack(&phone, &profile.id, Err(error));
             }
