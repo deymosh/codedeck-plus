@@ -112,7 +112,8 @@ side — a session's provider binding applies to its whole process, so the two
 do not mix.
 
 Both go through the same rules as the other agents: the base URL must be
-`https://` (plain `http://` only to localhost, 127.0.0.1 or `[::1]`), a token
+`https://` (plain `http://` only to this machine, or to an IP address of your
+own network such as a gateway at home), a token
 is required, and the harness's whole `DEEPSEEK_*` namespace is dropped from
 the environment of a bound session — an operator's native key must not be
 billed for a session bound somewhere else. `DSH_HOME` survives: where the

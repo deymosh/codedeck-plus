@@ -227,9 +227,10 @@ fn token_verdict(status: u16) -> Option<bool> {
 /// registered). The token never goes over plaintext except to loopback or an
 /// onion service.
 pub async fn register_pubkey(http: &NostrHttp, endpoint: &RegisterEndpoint, pubkey_hex: &str) -> Result<&'static str, String> {
-    // The same https-or-loopback-http rule as provider base URLs, plus
-    // http to an onion service.
-    if !protocol::common::is_valid_provider_base_url(&endpoint.url) && !is_onion_http(&endpoint.url) {
+    // https, or http to loopback or an onion service: this is Nostr
+    // traffic, which never crosses a network in cleartext (provider base
+    // URLs may also use the LAN; this endpoint may not).
+    if !protocol::common::is_https_or_loopback_url(&endpoint.url) && !is_onion_http(&endpoint.url) {
         return Err("insecure endpoint (the admin token requires https)".into());
     }
     if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|c| c.is_ascii_hexdigit()) {

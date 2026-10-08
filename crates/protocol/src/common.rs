@@ -432,45 +432,83 @@ pub struct RemoteSessionInfo {
 // --- provider base URL rule (CDX-071) ---
 
 /// The message BOTH ends show when a base URL is rejected.
-pub const PROVIDER_BASE_URL_ERROR: &str =
-    "Base URL must be https:// (http:// is allowed only for localhost, 127.0.0.1 or [::1])";
+pub const PROVIDER_BASE_URL_ERROR: &str = "Base URL must be https:// (http:// is allowed only for this machine — localhost, \
+     127.0.0.1, [::1] — or an address on your own network, such as 192.168.1.10)";
 
-/// Is `raw` an acceptable custom-provider base URL? https anywhere, or http
-/// ONLY on loopback (`localhost` / `127.0.0.1` / `[::1]`, matched exactly). A
-/// local model server has no cert and its traffic never leaves the machine;
-/// anything else is a network hop carrying a bearer token.
+/// Is `raw` https, or http to this machine (`localhost` / `127.0.0.1` /
+/// `[::1]`, matched exactly)? The rule for an endpoint whose traffic must
+/// not cross any network in cleartext.
+pub fn is_https_or_loopback_url(raw: &str) -> bool {
+    match plain_http_host(raw) {
+        PlainHttp::NotHttp(https) => https,
+        PlainHttp::Host(host) => matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"),
+        PlainHttp::Refused => false,
+    }
+}
+
+/// Is `raw` an acceptable custom-provider base URL? https anywhere; http to
+/// this machine, where a local model server has no cert and the traffic
+/// never leaves it; or http to an IP address of the user's own network — a
+/// gateway or model server at home or on the office LAN, which rarely has a
+/// cert either. Its token then crosses that network in cleartext, which the
+/// user chose by pointing a profile there; anything beyond it (a public
+/// address, or a name DNS could point anywhere) needs https.
 ///
-/// The http branch refuses whatever the WHATWG URL parser (what actually
-/// dials, e.g. reqwest) could read differently from this minimal split:
-/// userinfo (`http://evil.com@localhost`), a backslash (a path separator
-/// there, so `http://evil.com\@localhost` dials evil.com), and whitespace or
-/// control characters (silently removed there). Refusing is the safe side of
-/// any remaining disagreement: a host this split does not recognise as
-/// loopback is rejected, never guessed at.
+/// Private means the IPv4 ranges set aside for local networks (10/8,
+/// 172.16/12, 192.168/16), carrier-grade NAT space (100.64/10, which VPN
+/// overlays such as Tailscale number their machines in), and IPv6 unique
+/// local addresses (fc00::/7) — written as addresses, never as names.
 pub fn is_valid_provider_base_url(raw: &str) -> bool {
-    // Minimal scheme+host split — no url crate (protocol package stays dep-light).
+    if is_https_or_loopback_url(raw) {
+        return true;
+    }
+    match plain_http_host(raw) {
+        PlainHttp::Host(host) => is_private_network_address(&host),
+        _ => false,
+    }
+}
+
+enum PlainHttp {
+    /// Not `http://`: whether it is a usable `https://` URL instead.
+    NotHttp(bool),
+    /// An `http://` URL's host, lower-case (an IPv6 literal without its
+    /// brackets).
+    Host(String),
+    /// An `http://` URL this split cannot read exactly as a WHATWG parser
+    /// would.
+    Refused,
+}
+
+/// A minimal scheme+host split — no url crate (protocol package stays
+/// dep-light).
+///
+/// It refuses whatever the WHATWG URL parser (what actually dials, e.g.
+/// reqwest) could read differently: userinfo (`http://evil.com@localhost`),
+/// a backslash (a path separator there, so `http://evil.com\@localhost`
+/// dials evil.com), and whitespace or control characters (silently removed
+/// there). Refusing is the safe side of any remaining disagreement: a host
+/// this split does not recognise is rejected, never guessed at.
+fn plain_http_host(raw: &str) -> PlainHttp {
     let rest = match raw.split_once("://") {
         Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
-            "https" => return !rest.is_empty(),
+            "https" => return PlainHttp::NotHttp(!rest.is_empty()),
             "http" => rest,
-            _ => return false,
+            _ => return PlainHttp::NotHttp(false),
         },
-        None => return false,
+        None => return PlainHttp::NotHttp(false),
     };
     if rest.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\') {
-        return false;
+        return PlainHttp::Refused;
     }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.contains('@') {
-        return false;
+        return PlainHttp::Refused;
     }
     let host = if let Some(stripped) = authority.strip_prefix('[') {
-        // IPv6 literal: [::1] or [::1]:port — nothing else after the bracket.
+        // IPv6 literal: [addr] or [addr]:port — nothing else after the bracket.
         match stripped.split_once(']') {
-            Some((h, after)) => {
-                return h == "::1" && (after.is_empty() || after.starts_with(':'))
-            }
-            None => return false,
+            Some((h, after)) if after.is_empty() || after.starts_with(':') => h,
+            _ => return PlainHttp::Refused,
         }
     } else {
         authority.rsplit_once(':').map_or(authority, |(h, _)| h)
@@ -492,6 +530,8 @@ pub struct ProviderModel {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileInfo {
     pub id: String,
+    /// The agent the profile is for: the endpoint speaks that agent's API.
+    pub agent: String,
     pub label: String,
     pub base_url: String,
     pub models: Vec<ProviderModel>,
