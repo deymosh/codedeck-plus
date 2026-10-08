@@ -675,7 +675,11 @@ fun SessionScreen(
 
         SessionControlsBar(
             effort = session?.effort,
-            efforts = agent?.efforts.orEmpty(),
+            // The session model's own levels, for an agent whose levels
+            // differ by model; else the agent's.
+            efforts = machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models
+                ?.firstOrNull { it.id == session?.model }?.efforts?.takeIf { it.isNotEmpty() }
+                ?: agent?.efforts.orEmpty(),
             // The button shows only when the agent has modes to switch between.
             modeLabel = modeLabel?.takeIf { modes.size >= 2 },
             modePending = modeCycle.pending != null,

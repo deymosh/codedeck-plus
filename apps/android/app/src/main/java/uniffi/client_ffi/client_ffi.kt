@@ -6119,6 +6119,12 @@ data class UniffiModelEntry (
      * How many tokens the model takes in, when known.
      */
     var `contextWindow`: kotlin.UInt?
+    , 
+    /**
+     * The model's own reasoning levels, for an agent whose levels differ by
+     * model; empty: the agent's.
+     */
+    var `efforts`: List<UniffiOptionChoice>
     
 ){
     
@@ -6139,6 +6145,7 @@ public object FfiConverterTypeUniffiModelEntry: FfiConverterRustBuffer<UniffiMod
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalUInt.read(buf),
+            FfiConverterSequenceTypeUniffiOptionChoice.read(buf),
         )
     }
 
@@ -6146,7 +6153,8 @@ public object FfiConverterTypeUniffiModelEntry: FfiConverterRustBuffer<UniffiMod
             FfiConverterString.allocationSize(value.`id`) +
             FfiConverterOptionalString.allocationSize(value.`label`) +
             FfiConverterOptionalString.allocationSize(value.`provider`) +
-            FfiConverterOptionalUInt.allocationSize(value.`contextWindow`)
+            FfiConverterOptionalUInt.allocationSize(value.`contextWindow`) +
+            FfiConverterSequenceTypeUniffiOptionChoice.allocationSize(value.`efforts`)
     )
 
     override fun write(value: UniffiModelEntry, buf: ByteBuffer) {
@@ -6154,6 +6162,7 @@ public object FfiConverterTypeUniffiModelEntry: FfiConverterRustBuffer<UniffiMod
             FfiConverterOptionalString.write(value.`label`, buf)
             FfiConverterOptionalString.write(value.`provider`, buf)
             FfiConverterOptionalUInt.write(value.`contextWindow`, buf)
+            FfiConverterSequenceTypeUniffiOptionChoice.write(value.`efforts`, buf)
     }
 }
 

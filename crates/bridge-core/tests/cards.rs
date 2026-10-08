@@ -300,8 +300,12 @@ fn set_option_is_checked_against_the_catalog_then_confirmed() {
     rig.host_reply(&id, HostMessage::Error { message: "no".into() });
     assert_eq!(confirmed(&mut rig), ["low"], "a refused change confirms the effort in force");
 
+    // Beta lists no levels of its own: its levels are per model, so the
+    // agent judges one — and its refusal confirms nothing new.
     let b = rig.ready_session("beta");
-    assert_eq!(set_option(&mut rig, &b, "effort", "low"), None, "beta has no efforts");
+    let id = set_option(&mut rig, &b, "effort", "max").expect("left to the agent");
+    rig.host_reply(&id, HostMessage::Error { message: "not a level of this model".into() });
+    assert!(!confirmed(&mut rig).contains(&"max".to_string()));
 }
 
 #[test]
@@ -499,7 +503,7 @@ fn models_are_listed_or_the_phone_is_told_why_not() {
     rig.host_up();
     rig.send(json!({"type":"models-request","agent":"alpha"}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListModels { .. }));
-    rig.host_reply(&id, HostMessage::Models { models: vec![protocol::events::ModelEntry { id: "m1".into(), label: None, provider: None }], default_model: Some("m1".into()) });
+    rig.host_reply(&id, HostMessage::Models { models: vec![protocol::events::ModelEntry { id: "m1".into(), ..Default::default() }], default_model: Some("m1".into()) });
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Models(x) if x.models.len() == 1 && x.error.is_none() && x.default_model.as_deref() == Some("m1"))));
 

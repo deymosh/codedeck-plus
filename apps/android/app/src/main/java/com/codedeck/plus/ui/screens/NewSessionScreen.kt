@@ -328,8 +328,23 @@ internal fun NewSessionBody(
             }
 
             // --- Effort ---
+            // An agent whose levels differ by model lists none of its own:
+            // the chosen model's (or its default model's) are offered, its
+            // own default among them.
+            val chosenModel = modelOptions.firstOrNull { it.id == model.ifEmpty { agentModels?.defaultModel.orEmpty() } }
+            val modelEfforts = chosenModel?.efforts.orEmpty()
             val efforts = agent?.efforts.orEmpty()
-            if (efforts.isNotEmpty()) {
+            if (modelEfforts.isNotEmpty()) {
+                if (shown++ > 0) Divider()
+                ValueRow("Effort") {
+                    SelectField(
+                        options = modelEfforts.map { PickerOption(it.id, it.label) },
+                        // A level the model lacks reads as its default.
+                        selected = effort.takeIf { pick -> modelEfforts.any { it.id == pick } } ?: modelEfforts.first().id,
+                        onSelect = { effort = it },
+                    )
+                }
+            } else if (efforts.isNotEmpty()) {
                 if (shown++ > 0) Divider()
                 ValueRow("Effort") {
                     SelectField(

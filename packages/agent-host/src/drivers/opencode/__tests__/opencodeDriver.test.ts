@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { Event, OpencodeClient, Provider, Session } from '@opencode-ai/sdk/v2/client';
-import { OpenCodeDriver, pickDefaultModel, toQuestionAnswers } from '../driver';
+import { OpenCodeDriver, reasoningLevels, pickDefaultModel, toQuestionAnswers } from '../driver';
 import type { StartSession } from '../../../sdk/types';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
@@ -409,7 +409,7 @@ describe('OpenCode resume', () => {
 });
 
 describe('OpenCode options', () => {
-  it('accepts its modes and provider/model ids, refuses effort', async () => {
+  it('accepts its modes and provider/model ids', async () => {
     const ctx = recordingContext();
     const session = OpenCodeDriver.withClient(clientWith([])).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
     await session.setOption('mode', 'default');
@@ -417,7 +417,69 @@ describe('OpenCode options', () => {
     await session.setOption('model', 'anthropic/claude-sonnet-5');
     await expect(session.setOption('mode', 'acceptEdits')).rejects.toThrow(/no mode/);
     await expect(session.setOption('model', 'sonnet')).rejects.toThrow(/provider\/model/);
-    await expect(session.setOption('effort', 'high')).rejects.toThrow(/no effort/);
+    await session.end();
+  });
+});
+
+describe('OpenCode reasoning levels', () => {
+  const catalog = {
+    providers: vi.fn().mockResolvedValue({
+      data: {
+        providers: [{
+          id: 'ccr', name: 'CCR',
+          models: {
+            'OpenCode Go/deepseek-v4.1-flash': { id: 'OpenCode Go/deepseek-v4.1-flash', name: 'deepseek-v4.1-flash', variants: { low: {}, high: {}, max: {} }, cost: { input: 0, output: 0 }, status: 'active' },
+            plain: { id: 'plain', name: 'plain', variants: {}, cost: { input: 0, output: 0 }, status: 'active' },
+          },
+        }],
+        default: {},
+      },
+      error: undefined,
+    }),
+    get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  };
+
+  it("are the model's own, default first", () => {
+    expect(reasoningLevels({ low: {}, xhigh: {}, max: {} })).toEqual([
+      { id: 'default', label: 'Default' },
+      { id: 'low', label: 'Low' },
+      { id: 'xhigh', label: 'Extra high' },
+      { id: 'max', label: 'Max' },
+    ]);
+    expect(reasoningLevels({})).toEqual([]);
+    expect(reasoningLevels(undefined)).toEqual([]);
+  });
+
+  it('are listed with each model, asked of it on every prompt, and checked against it', async () => {
+    const client = Object.assign(clientWith([]), { config: catalog });
+    const promptAsync = vi.fn().mockResolvedValue({ data: undefined, error: undefined });
+    (client.session as unknown as { promptAsync: unknown }).promptAsync = promptAsync;
+    const driver = OpenCodeDriver.withClient(client);
+    const listed = (await driver.listModels()).models;
+    expect(listed.find((m) => m.id === 'ccr/OpenCode Go/deepseek-v4.1-flash')?.efforts?.map((e) => e.id)).toEqual(['default', 'low', 'high', 'max']);
+    expect(listed.find((m) => m.id === 'ccr/plain')).not.toHaveProperty('efforts');
+
+    const ctx = recordingContext();
+    const session = driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'ccr/OpenCode Go/deepseek-v4.1-flash' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await session.setOption('effort', 'max');
+    session.prompt('think hard');
+    await expect.poll(() => promptAsync.mock.calls.length).toBe(1);
+    expect(promptAsync.mock.calls[0]![0].variant).toBe('max');
+    await expect(session.setOption('effort', 'ultra')).rejects.toThrow(/not a reasoning level/);
+
+    // A model without levels drops the level, and refuses one.
+    await session.setOption('model', 'ccr/plain');
+    session.prompt('quick');
+    await expect.poll(() => promptAsync.mock.calls.length).toBe(2);
+    expect(promptAsync.mock.calls[1]![0]).not.toHaveProperty('variant');
+    await expect(session.setOption('effort', 'high')).rejects.toThrow(/has no reasoning levels/);
+
+    await session.setOption('model', 'ccr/OpenCode Go/deepseek-v4.1-flash');
+    await session.setOption('effort', 'default');
+    session.prompt('as usual');
+    await expect.poll(() => promptAsync.mock.calls.length).toBe(3);
+    expect(promptAsync.mock.calls[2]![0]).not.toHaveProperty('variant');
     await session.end();
   });
 });

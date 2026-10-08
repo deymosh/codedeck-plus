@@ -981,6 +981,12 @@ export type ModelEntry_Deserialize = {
 	 *  says: the same model can be offered by more than one provider.
 	 */
 	provider?: string | null,
+	/**
+	 *  The reasoning levels of this model, for an agent whose levels differ
+	 *  by model (its catalog entry lists none of its own). Empty: the
+	 *  agent's own levels, if any.
+	 */
+	efforts?: OptionChoice_Deserialize[],
 };
 
 export type ModelEntry_Serialize = {
@@ -991,6 +997,12 @@ export type ModelEntry_Serialize = {
 	 *  says: the same model can be offered by more than one provider.
 	 */
 	provider?: string | null,
+	/**
+	 *  The reasoning levels of this model, for an agent whose levels differ
+	 *  by model (its catalog entry lists none of its own). Empty: the
+	 *  agent's own levels, if any.
+	 */
+	efforts?: OptionChoice_Serialize[],
 };
 
 /**  Session lifecycle notices a client shows as a marker line. */

@@ -42,6 +42,7 @@ import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
   ModelEntry,
+  OptionChoice,
   PermissionOption,
   ProviderBinding,
   QuestionSpec,
@@ -205,6 +206,22 @@ export function pickDefaultModel(
 
 /** Why OpenCode cannot run `model`: none of its providers offers it. When
  *  the model list could not be fetched, nothing is refused. */
+/** The variant OpenCode reads as "none": the model's own settings. */
+const DEFAULT_VARIANT = 'default';
+
+/** How a variant reads in the effort picker. */
+const VARIANT_LABELS: Record<string, string> = { xhigh: 'Extra high', none: 'None' };
+
+/** A model's reasoning levels, from its OpenCode variants (`low`, `high`,
+ *  `max`…, set by OpenCode from what the model is): its default first. A
+ *  model without variants has none. */
+export function reasoningLevels(variants: Record<string, unknown> | undefined): OptionChoice[] {
+  const ids = Object.keys(variants ?? {}).filter((id) => id !== DEFAULT_VARIANT);
+  if (ids.length === 0) return [];
+  const label = (id: string) => VARIANT_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+  return [{ id: DEFAULT_VARIANT, label: 'Default' }, ...ids.map((id) => ({ id, label: label(id) }))];
+}
+
 /** The name OpenCode gives a session it has not titled yet
  *  ("New session - <ISO time>"; "Child session - …" for a sub-agent's). */
 const PLACEHOLDER_TITLE = /^(New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -308,6 +325,9 @@ export class OpenCodeSession implements DriverSession {
   /** The title last reported for the session. */
   private title: string | undefined;
   private model?: { providerID: string; modelID: string };
+  /** The reasoning level ("variant") prompts ask of the model; none = the
+   *  model's default. */
+  private variant: string | undefined;
 
   /** messageID -> role, seeded from message.updated events, so a later
    *  message.part.updated for the same messageID can be tagged — Part itself
@@ -373,6 +393,9 @@ export class OpenCodeSession implements DriverSession {
     this.mode = params.mode ?? DEFAULT_MODE;
     this.catalog = options.catalog ?? (async () => ({ models: [] }));
     this.model = splitModelId(params.model ?? undefined);
+    // A level the model lacks is ignored by OpenCode: the session starts on
+    // the model's default rather than failing.
+    this.variant = params.effort && params.effort !== DEFAULT_VARIANT ? params.effort : undefined;
     this.ready = this.init(clientPromise, params);
     // init() reports its own failure as `ended`; nothing else awaits this
     // rejection except prompt/interrupt, which catch it themselves.
@@ -875,6 +898,7 @@ export class OpenCodeSession implements DriverSession {
           parts: [{ type: 'text', text }],
           ...(this.model ? { model: this.model } : {}),
           ...this.agentField(),
+          ...this.variantField(),
         });
         if (error) this.deliver({ type: 'error', content: `OpenCode prompt failed: ${JSON.stringify(error)}` });
       })
@@ -918,7 +942,7 @@ export class OpenCodeSession implements DriverSession {
   private runCommand(client: OpencodeClient, sessionID: string, name: string, args: string): void {
     const model = this.model ? `${this.model.providerID}/${this.model.modelID}` : undefined;
     client.session
-      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField() })
+      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField(), ...this.variantField() })
       .then(({ error }) => {
         if (error) this.deliver({ type: 'error', content: `OpenCode /${name} failed: ${JSON.stringify(error)}` });
       })
@@ -970,14 +994,31 @@ export class OpenCodeSession implements DriverSession {
         // Model selection is per prompt in OpenCode; the next prompt uses it.
         const split = splitModelId(value);
         if (!split) throw new Error(`'${value}' is not an OpenCode provider/model id`);
-        const refused = unsupportedModelReason(value, (await this.catalog()).models);
+        const models = (await this.catalog()).models;
+        const refused = unsupportedModelReason(value, models);
         if (refused) throw new Error(refused);
         this.model = split;
+        // A level the new model lacks would be ignored; drop it.
+        if (this.variant && !models.find((m) => m.id === value)?.efforts?.some((e) => e.id === this.variant)) this.variant = undefined;
         return;
       }
-      case 'effort':
-        throw new Error('OpenCode has no effort levels');
+      case 'effort': {
+        // Levels are the model's own (its OpenCode variants).
+        const { models, defaultModel } = await this.catalog();
+        const id = this.model ? `${this.model.providerID}/${this.model.modelID}` : defaultModel;
+        const levels = models.find((m) => m.id === id)?.efforts ?? [];
+        if (!levels.some((e) => e.id === value)) {
+          throw new Error(levels.length > 0 ? `'${value}' is not a reasoning level of ${id}` : `${id ?? 'This model'} has no reasoning levels`);
+        }
+        this.variant = value === DEFAULT_VARIANT ? undefined : value;
+        return;
+      }
     }
+  }
+
+  /** The reasoning level a prompt or command asks for, if any. */
+  private variantField(): { variant?: string } {
+    return this.variant ? { variant: this.variant } : {};
   }
 
   async interrupt(): Promise<void> {
@@ -1303,7 +1344,8 @@ export class OpenCodeDriver implements Driver {
           const id = `${provider.id}/${model.id}`;
           const name = provider.name || provider.id;
           const group = profile ? profileModelGroup(name, profile.models.find((m) => m.id === model.id)) : name;
-          models.push({ id, label: model.name, provider: group });
+          const efforts = reasoningLevels(model.variants);
+          models.push({ id, label: model.name, provider: group, ...(efforts.length > 0 ? { efforts } : {}) });
           const window = model.limit?.context ?? 0;
           if (window > 0) contextLimits[id] = window;
         }

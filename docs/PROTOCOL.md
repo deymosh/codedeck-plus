@@ -269,9 +269,12 @@ wrong provider).
 ### `models`
 
 `models-request {agent}` → `models {agent, models[], defaultModel?, error?}`.
-Each model is `{id, label?, provider?}`: `provider` names who serves it (an
+Each model is `{id, label?, provider?, efforts?}`: `provider` names who serves it (an
 OpenCode provider, a router's channel such as `OpenCode Go`), since the same
-model can be offered by more than one. An empty list always comes with an `error` saying why, so the phone can tell
+model can be offered by more than one. `efforts` are the model's own
+reasoning levels, from an agent whose levels differ by model: its catalog
+entry lists no `efforts`, the phone offers the session model's instead, and
+the bridge leaves checking a level to the agent. An empty list always comes with an `error` saying why, so the phone can tell
 "no answer yet" from a lost message. Models are correlated by the machine that
 sent them (the event author), never by a payload field.
 

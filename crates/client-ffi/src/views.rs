@@ -330,12 +330,21 @@ pub struct UniffiModelEntry {
     pub provider: Option<String>,
     /// How many tokens the model takes in, when known.
     pub context_window: Option<u32>,
+    /// The model's own reasoning levels, for an agent whose levels differ by
+    /// model; empty: the agent's.
+    pub efforts: Vec<UniffiOptionChoice>,
 }
 
 fn to_uniffi_model_entries(models: &[protocol::events::ModelEntry]) -> Vec<UniffiModelEntry> {
     models
         .iter()
-        .map(|m| UniffiModelEntry { id: m.id.clone(), label: m.label.clone(), provider: m.provider.clone(), context_window: None })
+        .map(|m| UniffiModelEntry {
+            id: m.id.clone(),
+            label: m.label.clone(),
+            provider: m.provider.clone(),
+            context_window: None,
+            efforts: m.efforts.iter().map(to_uniffi_option_choice).collect(),
+        })
         .collect()
 }
 
@@ -356,6 +365,7 @@ fn to_uniffi_profile_model(profile: &str, m: &protocol::common::ProviderModel) -
             None => profile.to_string(),
         }),
         context_window: m.context_window,
+        efforts: Vec::new(),
     }
 }
 
