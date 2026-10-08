@@ -1,5 +1,6 @@
 package com.codedeck.plus.ui.transcript.rows
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +33,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,6 +53,11 @@ import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.FileDiffView
 import com.codedeck.plus.ui.transcript.ToolStep
+import com.codedeck.plus.ui.transcript.BLOCK_TARGET
+import com.codedeck.plus.ui.transcript.TranscriptMarkdown
+import com.codedeck.plus.ui.transcript.markdownBlocks
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * A tool group's details, over the conversation. A group of several steps
@@ -60,17 +67,31 @@ import com.codedeck.plus.ui.transcript.ToolStep
  * runs, so a call without a result is running rather than cut short.
  * [openAt] opens it on a step instead: the seqs from the group's step down
  * to the one to show.
+ *
+ * Back, the system's or the header's, goes where the header's arrow does:
+ * from a step to the steps it was opened from, and from the page it opened
+ * on to [onBackOut] when it was opened from somewhere else (the activity
+ * sheet). Only where there is nothing to go back to does it close.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, openAt: List<Long>?, onDismiss: () -> Unit) {
+fun ToolGroupSheet(
+    group: DisplayEntry.ToolGroup,
+    live: Boolean,
+    openAt: List<Long>?,
+    onDismiss: () -> Unit,
+    onBackOut: (() -> Unit)? = null,
+) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
         containerColor = Tokens.SurfaceRaised,
         contentColor = Tokens.Text,
     ) {
-        var path by remember(group.seq, openAt) { mutableStateOf(openAt ?: listOfNotNull(loneStep(group)?.seq)) }
+        val start = openAt ?: listOfNotNull(loneStep(group)?.seq)
+        var path by remember(group.seq, openAt) { mutableStateOf(start) }
+        val back = sheetBack(group, path, entry = start, onBackOut) { path = it }
+        BackHandler(enabled = back != null) { back?.invoke() }
         Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding()) {
             ToolSheetContent(
                 group = group,
@@ -78,9 +99,25 @@ fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, openAt: List<Lo
                 openPath = path,
                 onOpenPath = { path = it },
                 onClose = onDismiss,
+                onBack = back,
             )
         }
     }
+}
+
+/** Where Back goes from [path]: out to [onBackOut] from the [entry] page
+ *  when there is one, else up a step — or nowhere (the sheet closes) on
+ *  the timeline and on a lone call's own page. */
+internal fun sheetBack(
+    group: DisplayEntry.ToolGroup,
+    path: List<Long>,
+    entry: List<Long>,
+    onBackOut: (() -> Unit)?,
+    onPath: (List<Long>) -> Unit,
+): (() -> Unit)? = when {
+    onBackOut != null && path == entry -> onBackOut
+    path.isEmpty() || (path.size == 1 && loneStep(group) != null) -> null
+    else -> { { onPath(path.dropLast(1)) } }
 }
 
 /** The one step a group is, when it is a lone call. */
@@ -100,7 +137,8 @@ private fun resolve(group: DisplayEntry.ToolGroup, path: List<Long>): ToolStep? 
 }
 
 /** The sheet's content, apart so a snapshot can show it without a window:
- *  the timeline, or the page of the step [openPath] leads to. */
+ *  the timeline, or the page of the step [openPath] leads to. [onBack]
+ *  overrides where a step page's arrow goes ([ToolGroupSheet] says). */
 @Composable
 fun ToolSheetContent(
     group: DisplayEntry.ToolGroup,
@@ -108,6 +146,7 @@ fun ToolSheetContent(
     openPath: List<Long>,
     onOpenPath: (List<Long>) -> Unit,
     onClose: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val step = resolve(group, openPath)
     Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space5)) {
@@ -125,7 +164,11 @@ fun ToolSheetContent(
                 title = stepTitle(step),
                 subtitle = stepStatus(step, live),
                 subtitleColor = if ((step as? ToolStep.Call)?.failed == true) Tokens.Danger else Tokens.TextMuted,
-                leading = if (lone) Icons.Outlined.Close to onClose else Icons.AutoMirrored.Outlined.ArrowBack to { onOpenPath(openPath.dropLast(1)) },
+                leading = when {
+                    onBack != null -> Icons.AutoMirrored.Outlined.ArrowBack to onBack
+                    lone -> Icons.Outlined.Close to onClose
+                    else -> Icons.AutoMirrored.Outlined.ArrowBack to { onOpenPath(openPath.dropLast(1)) }
+                },
             )
             StepPage(step, live) { onOpenPath(openPath + it) }
         }
@@ -294,9 +337,9 @@ private fun StepPage(step: ToolStep, live: Boolean, onOpenChild: (Long) -> Unit)
         when (step) {
             is ToolStep.Call -> CallPage(step, live, onOpenChild)
             is ToolStep.Thinking -> Section(null) {
-                Prose(if (step.redacted) "The model's reasoning for this step was withheld by its provider." else step.text)
+                if (step.redacted) Prose("The model's reasoning for this step was withheld by its provider.") else ModelText(step.text)
             }
-            is ToolStep.Text -> Section(null) { Prose(step.text) }
+            is ToolStep.Text -> Section(null) { ModelText(step.text) }
             is ToolStep.Result -> Section("Output") { CodeBlock(step.text, color = if (step.isError) Tokens.Danger else Tokens.Text) }
         }
     }
@@ -310,7 +353,7 @@ private fun CallPage(call: ToolStep.Call, live: Boolean, onOpenChild: (Long) -> 
         call.toolKind == "execute" -> Section("Command") { CodeBlock(given) }
         call.toolKind == "agent" -> {
             Section("Task") { Prose(call.title) }
-            call.input?.let { Section("Instructions") { Prose(it) } }
+            call.input?.let { Section("Instructions") { ModelText(it) } }
             if (call.children.isNotEmpty()) {
                 Section(toolUses(call.children)?.let { "Steps, $it" } ?: "Steps") {
                     Column {
@@ -334,7 +377,7 @@ private fun CallPage(call: ToolStep.Call, live: Boolean, onOpenChild: (Long) -> 
                 else -> "Output"
             }
             Section(label) {
-                if (call.toolKind == "agent" && !result.isError) Prose(result.text)
+                if (call.toolKind == "agent" && !result.isError) ModelText(result.text)
                 else CodeBlock(result.text, color = if (result.isError) Tokens.Danger else Tokens.Text)
             }
         }
@@ -378,6 +421,27 @@ private fun Section(label: String?, content: @Composable () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
         if (label != null) Text(label, color = Tokens.TextMuted, fontSize = Tokens.TextSm, fontWeight = FontWeight.Medium)
         content()
+    }
+}
+
+/**
+ * What a model wrote — its reasoning, a sub-agent's instructions and
+ * report — rendered as the Markdown models write, and selectable as one
+ * text, however long. A short one renders at once; a long one is cut into
+ * blocks ([markdownBlocks]) and each is parsed, all off the main thread,
+ * so even a very long reasoning never stalls the sheet.
+ */
+@Composable
+private fun ModelText(text: String) {
+    if (text.length <= BLOCK_TARGET) {
+        TranscriptMarkdown(text)
+        return
+    }
+    val blocks by produceState<List<String>?>(null, text) { value = withContext(Dispatchers.Default) { markdownBlocks(text) } }
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+            blocks?.forEach { TranscriptMarkdown(it, selectable = false, immediate = false) }
+        }
     }
 }
 

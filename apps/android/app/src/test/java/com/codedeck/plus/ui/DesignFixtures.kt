@@ -4,6 +4,7 @@ import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.core.app.ActivityOptionsCompat
+import com.codedeck.plus.ui.session.SessionOptions
 import com.codedeck.plus.ui.transcript.ActivityView
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.OptionChoice
@@ -322,4 +323,22 @@ internal object DesignFixtures {
             override fun <I, O> onLaunch(requestCode: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {}
         }
     }
+
+    /** A Claude Code session in plan mode, on Opus at high effort, with MCP servers. */
+    val claudeOptions by lazy {
+        SessionOptions(
+            modelName = "Opus", model = "opus", models = workstation.models.first { it.agent == "claude-code" }.models,
+            modes = claude.modes, mode = "plan", modePending = false, defaultMode = "default",
+            efforts = claude.efforts, effort = "high", mcp = sessionMcp,
+        )
+    }
+
+    /** An OpenCode session on a gateway's model, from a list too long for the main page. */
+    val opencodeOptions = SessionOptions(
+        modelName = "deepseek-v4.1-flash", model = "home-gateway/OpenCode Go/deepseek-v4.1-flash",
+        models = listOf(UniffiModelEntry("home-gateway/OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "Home gateway · OpenCode Go", null, emptyList())) +
+            (1..8).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null, emptyList()) },
+        modes = opencode.modes, mode = "build", modePending = false, defaultMode = "build",
+        efforts = emptyList(), effort = null,
+    )
 }

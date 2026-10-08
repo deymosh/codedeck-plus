@@ -41,7 +41,7 @@ internal fun mcpStatusColor(status: String): Color = when (status) {
     else -> Tokens.TextDim
 }
 
-/** The chip's dot: the worst state among the servers that are on. */
+/** The options sheet's MCP dot: the worst state among the servers that are on. */
 internal fun mcpOverallColor(mcp: UniffiSessionMcp): Color {
     val on = mcp.servers.map { it.status }.filter { it != "disabled" }
     return when {
@@ -58,26 +58,6 @@ internal fun mcpStatusText(s: UniffiSessionMcpServer): String = when (s.status) 
     "needs-auth" -> "Needs signing in on the machine"
     "failed" -> s.error?.let { "Failed: $it" } ?: "Failed"
     else -> "Off in this session"
-}
-
-/** The controls bar's MCP pill: how many servers are on, and a dot for how
- *  they are doing. Tapping opens [SessionMcpSheet]. */
-@Composable
-internal fun McpChip(mcp: UniffiSessionMcp, onTap: () -> Unit) {
-    val on = mcp.servers.count { it.status != "disabled" }
-    Row(
-        Modifier
-            .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(Tokens.SurfaceHover)
-            .clickable(onClick = onTap)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Dot(mcpOverallColor(mcp), size = 7.dp)
-        Text("MCP $on", color = Tokens.Text, fontSize = Tokens.TextSm, fontWeight = FontWeight.Medium)
-    }
 }
 
 /**

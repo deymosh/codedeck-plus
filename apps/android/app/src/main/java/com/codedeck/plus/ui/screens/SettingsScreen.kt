@@ -411,7 +411,7 @@ internal fun AppearancePage(view: UniffiSettingsView, dispatch: (UniffiIntent) -
         Group(title = "Badges") {
             SwitchRow(
                 "Usage limits",
-                subtitle = "The 5-hour and 7-day limits in a session's header",
+                subtitle = "Mark a session's context ring when a 5-hour or 7-day limit passes 75%",
                 checked = view.showUsageBadge,
                 onChange = { dispatch(UniffiIntent.SetShowUsageBadge(it)) },
             )

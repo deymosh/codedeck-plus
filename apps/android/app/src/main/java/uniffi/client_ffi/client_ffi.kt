@@ -7278,6 +7278,12 @@ data class UniffiSessionSummary (
     var `seqHigh`: kotlin.ULong?
     , 
     /**
+     * The provider profile the session is bound to, when it is: the
+     * session runs on that profile's models, not the agent's own list.
+     */
+    var `providerId`: kotlin.String? = null 
+    , 
+    /**
      * Usage snapshot (5h/7d limits, cost) — requested via
      * `UniffiIntent::RequestUsage`, absent until the bridge answers.
      */
@@ -7332,6 +7338,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalBoolean.read(buf),
             FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalTypeUniffiUsageData.read(buf),
             FfiConverterOptionalTypeUniffiGsdState.read(buf),
             FfiConverterOptionalTypeUniffiSessionCommands.read(buf),
@@ -7356,6 +7363,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalULong.allocationSize(value.`contextWindow`) +
             FfiConverterOptionalBoolean.allocationSize(value.`committed`) +
             FfiConverterOptionalULong.allocationSize(value.`seqHigh`) +
+            FfiConverterOptionalString.allocationSize(value.`providerId`) +
             FfiConverterOptionalTypeUniffiUsageData.allocationSize(value.`usage`) +
             FfiConverterOptionalTypeUniffiGsdState.allocationSize(value.`gsd`) +
             FfiConverterOptionalTypeUniffiSessionCommands.allocationSize(value.`commands`) +
@@ -7379,6 +7387,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalULong.write(value.`contextWindow`, buf)
             FfiConverterOptionalBoolean.write(value.`committed`, buf)
             FfiConverterOptionalULong.write(value.`seqHigh`, buf)
+            FfiConverterOptionalString.write(value.`providerId`, buf)
             FfiConverterOptionalTypeUniffiUsageData.write(value.`usage`, buf)
             FfiConverterOptionalTypeUniffiGsdState.write(value.`gsd`, buf)
             FfiConverterOptionalTypeUniffiSessionCommands.write(value.`commands`, buf)

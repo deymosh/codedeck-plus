@@ -83,6 +83,10 @@ pub struct UniffiSessionSummary {
     pub context_window: Option<u64>,
     pub committed: Option<bool>,
     pub seq_high: Option<u64>,
+    /// The provider profile the session is bound to, when it is: the
+    /// session runs on that profile's models, not the agent's own list.
+    #[uniffi(default = None)]
+    pub provider_id: Option<String>,
     /// Usage snapshot (5h/7d limits, cost) — requested via
     /// `UniffiIntent::RequestUsage`, absent until the bridge answers.
     pub usage: Option<UniffiUsageData>,
@@ -775,6 +779,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             context_window: info.context_window,
                             committed: info.committed,
                             seq_high: info.seq_high,
+                            provider_id: info.provider_id.clone(),
                             usage: s.usage.as_ref().map(to_uniffi_usage_data),
                             gsd: s.gsd.as_ref().map(to_uniffi_gsd_state),
                             commands: s.commands.as_ref().map(|c| UniffiSessionCommands {
