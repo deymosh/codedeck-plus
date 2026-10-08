@@ -38,6 +38,7 @@ import com.codedeck.plus.ui.components.GroupBody
 import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.QuietButton
+import com.codedeck.plus.ui.components.Toggle
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.theme.Tokens
@@ -339,22 +340,46 @@ internal fun RestoreContent(
                 }
                 else -> Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
                     val valid = isBackupRelay(draft)
+                    // A .onion relay is reachable only through Orbot.
+                    val onionWithoutTor = valid && !torOn && relayHost(draft).substringBefore(':').endsWith(".onion")
                     Field(
                         value = draft,
                         onValueChange = { draft = it },
                         placeholder = "wss://relay.example.com",
                         mono = true,
                         isError = draft.isNotBlank() && !valid,
-                        supporting = if (draft.isNotBlank() && !valid) "Use a wss:// address, or ws:// for a .onion." else null,
+                        supporting = when {
+                            draft.isNotBlank() && !valid -> "Use a wss:// address, or ws:// for a .onion."
+                            onionWithoutTor -> "A .onion relay is reached through Orbot: turn it on below."
+                            else -> null
+                        },
                     )
+                    OrbotSwitch(torOn) { dispatch(UniffiIntent.SetTorEnabled(it)) }
                     if (status is UniffiBackupStatus.Failed) ErrorNote(status.reason)
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2), verticalAlignment = Alignment.CenterVertically) {
                         PrimaryButton("Look for a backup", onClick = { dispatch(UniffiIntent.SetBackupRelay(draft.trim())) }, enabled = valid)
                         QuietButton("Skip", onClick = skip)
                     }
-                    if (torOn) Text("Goes through Orbot.", color = Tokens.TextDim, fontSize = Tokens.TextXs)
                 }
             }
         }
+    }
+}
+
+/** Orbot on or off, right where the relay is entered: a backup kept on a
+ *  .onion relay can only be reached through it, and the user may not have
+ *  set it up yet on a new phone. The same setting as Connection's. */
+@Composable
+private fun OrbotSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Route through Orbot", color = Tokens.Text, fontSize = Tokens.TextMd)
+            Text(
+                "For a .onion relay, or to keep the relay from seeing this phone's address. Orbot must be running.",
+                color = Tokens.TextMuted,
+                fontSize = Tokens.TextSm,
+            )
+        }
+        Toggle(on, onChange)
     }
 }
