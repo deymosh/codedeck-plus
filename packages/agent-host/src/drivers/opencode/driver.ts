@@ -52,6 +52,7 @@ import type {
   Subagent,
   UsageData,
 } from '../../sdk/types';
+import { SESSION_COMMANDS, sessionCommand, sessionSlashCommands } from './sessionCommands';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
@@ -841,8 +842,14 @@ export class OpenCodeSession implements DriverSession {
     const command = parseSlashCommand(text);
     this.ready
       .then(async ({ client, session }) => {
-        if (command && (await this.knownCommands(client)).has(command.name)) {
+        const listed = command ? await this.knownCommands(client) : new Set<string>();
+        if (command && listed.has(command.name)) {
           this.runCommand(client, session.id, command.name, command.args);
+          return;
+        }
+        const builtin = command && sessionCommand(command.name, listed);
+        if (builtin) {
+          this.runSessionCommand(client, session.id, builtin);
           return;
         }
         const { error } = await client.session.promptAsync({
@@ -857,6 +864,20 @@ export class OpenCodeSession implements DriverSession {
       .catch((err) => {
         this.deliver({ type: 'error', content: `OpenCode prompt failed: ${err instanceof Error ? err.message : String(err)}` });
       });
+  }
+
+  /** One of the commands OpenCode's terminal runs itself; its outcome is a
+   *  status line, its failure an error entry. */
+  private runSessionCommand(client: OpencodeClient, sessionID: string, command: (typeof SESSION_COMMANDS)[number]): void {
+    command
+      .run({
+        client,
+        sessionID,
+        directory: this.cwd,
+        ...(this.model ? { model: this.model } : {}),
+        status: (text) => this.deliver({ type: 'status', text }),
+      })
+      .catch((err) => this.deliver({ type: 'error', content: err instanceof Error ? err.message : String(err) }));
   }
 
   /** The OpenCode agent a prompt names: the plan agent in the plan mode,
@@ -897,9 +918,11 @@ export class OpenCodeSession implements DriverSession {
     return this.commandNames;
   }
 
+  /** The server's commands, then the ones the driver runs itself. */
   async listCommands(): Promise<SlashCommand[]> {
     const { client } = await this.ready;
-    return toSlashCommands(await this.fetchCommands(client));
+    const commands = await this.fetchCommands(client);
+    return [...toSlashCommands(commands), ...sessionSlashCommands(new Set(commands.map((c) => c.name)))];
   }
 
   async mcpStatus(): Promise<SessionMcpState> {

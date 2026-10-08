@@ -60,6 +60,12 @@ export interface OpenCodeError {
   content: string;
 }
 
+/** A line about the session, not from the model (a command's outcome). */
+export interface OpenCodeStatus {
+  type: 'status';
+  text: string;
+}
+
 /** The session to resume no longer exists server-side and a fresh one was
  *  created instead — the model does not remember earlier turns, which the
  *  user must not learn only through a silent id change. */
@@ -102,6 +108,7 @@ export type OpenCodeEvent =
   | OpenCodeIdle
   | OpenCodePart
   | OpenCodeError
+  | OpenCodeStatus
   | OpenCodeResumeLost
   | OpenCodeDiff
   | OpenCodeQuestion
@@ -122,6 +129,8 @@ export function opencodeEventToEntries(event: OpenCodeEvent, ctx: TranslateConte
       return parsePart(event, ctx);
     case 'error':
       return [{ entryType: 'error', text: event.content, timestamp: ts }];
+    case 'status':
+      return [{ entryType: 'status', text: event.text, timestamp: ts }];
     case 'resume-lost':
       return [{
         entryType: 'notice',

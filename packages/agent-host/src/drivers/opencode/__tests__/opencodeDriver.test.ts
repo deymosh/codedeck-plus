@@ -533,16 +533,18 @@ describe('OpenCode slash commands', () => {
     return client as FakeClient & { session: { command: ReturnType<typeof vi.fn>; promptAsync: ReturnType<typeof vi.fn> } };
   };
 
-  it('lists its commands with their argument placeholders as hints', async () => {
+  it('lists its commands with their argument placeholders as hints, then the ones the driver runs', async () => {
     const client = withCommands(clientWith([]));
     const ctx = recordingContext();
     const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'a/b', resume: 'x' }, ctx);
     (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
-    expect(await session.listCommands!()).toEqual([
+    const commands = await session.listCommands!();
+    expect(commands.slice(0, 3)).toEqual([
       { name: 'init', description: 'create/update AGENTS.md' },
       { name: 'review', description: 'review changes', argumentHint: '<arguments>' },
       { name: 'fix', argumentHint: '<arg1> <arg2>' },
     ]);
+    expect(commands.slice(3).map((c) => c.name)).toEqual(['compact', 'undo', 'redo', 'share', 'unshare']);
     await session.end();
   });
 
@@ -560,6 +562,21 @@ describe('OpenCode slash commands', () => {
       sessionID: 'ses_1', directory: '/tmp', command: 'review', arguments: 'the auth module', model: 'anthropic/sonnet',
     });
     expect(client.session.promptAsync.mock.calls.map((c) => c[0].parts[0].text).sort()).toEqual(['/etc/hosts is broken', '/unknown thing']);
+    await session.end();
+  });
+
+  it('runs a typed /undo itself, never as a prompt, and reports the outcome', async () => {
+    const client = withCommands(clientWith([]));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', resume: 'x' }, ctx);
+    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
+    Object.assign(client.session, {
+      messages: vi.fn().mockResolvedValue({ data: [{ info: { id: 'm1', role: 'user' }, parts: [{ type: 'text', text: 'fix it' }] }] }),
+      revert: vi.fn().mockResolvedValue({ data: {} }),
+    });
+    session.prompt('/undo');
+    await ctx.waitFor(() => ctx.entries().some((e) => e.entryType === 'status' && e.text.startsWith('Undid "fix it"')));
+    expect(client.session.promptAsync).not.toHaveBeenCalled();
     await session.end();
   });
 });
