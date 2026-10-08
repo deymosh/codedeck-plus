@@ -64,6 +64,16 @@ pub(crate) enum HostCall {
     DeleteConversation(ConversationDelete),
 }
 
+/// The facts a `SessionEvent::Info` changed; absent = unchanged.
+struct InfoUpdate {
+    native_session_id: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    title: Option<String>,
+    context_window: Option<u64>,
+    context_percentage: Option<f64>,
+}
+
 /// A conversation of a deleted session, for its agent to delete.
 #[derive(Debug, Clone)]
 pub(crate) struct ConversationDelete {
@@ -503,8 +513,9 @@ impl Engine {
         }
         match event {
             SessionEvent::Ready {} => self.on_ready(session_id),
-            SessionEvent::Info { native_session_id, model, mode, context_window, context_percentage } => {
-                self.on_info(session_id, native_session_id, model, mode, context_window, context_percentage);
+            SessionEvent::Info { native_session_id, model, mode, title, context_window, context_percentage } => {
+                let info = InfoUpdate { native_session_id, model, mode, title, context_window, context_percentage };
+                self.on_info(session_id, info);
             }
             SessionEvent::Entries { entries } => self.on_entries(session_id, entries),
             SessionEvent::Turn { state } => {
@@ -542,16 +553,15 @@ impl Engine {
         self.publish_all(BridgeToPhone::SessionReady(SessionReadyMsg { pending_id: session_id.to_string(), session: info }));
     }
 
-    fn on_info(
-        &mut self,
-        session_id: &str,
-        native_session_id: Option<String>,
-        model: Option<String>,
-        mode: Option<String>,
-        context_window: Option<u64>,
-        context_percentage: Option<f64>,
-    ) {
+    fn on_info(&mut self, session_id: &str, info: InfoUpdate) {
+        let InfoUpdate { native_session_id, model, mode, title, context_window, context_percentage } = info;
         let Some(session) = self.sessions.get_mut(session_id) else { return };
+        let title = title.and_then(|t| title_from(&t));
+        if title.is_some() {
+            if let Some(run) = session.run.as_mut() {
+                run.agent_titled = true;
+            }
+        }
         let rec = &mut session.rec;
         let mut changed = false;
         let mut set = |field: &mut Option<String>, value: Option<String>| {
@@ -562,6 +572,7 @@ impl Engine {
         };
         set(&mut rec.native_session_id, native_session_id);
         set(&mut rec.model, model);
+        set(&mut rec.title, title);
         let mode_changed = mode.is_some() && rec.mode != mode;
         set(&mut rec.mode, mode.clone());
         if context_window.is_some_and(|w| w > 0) && rec.context_window != context_window {
@@ -606,7 +617,7 @@ impl Engine {
                         *text = stripped;
                         if let Some(meta) = meta.filter(|_| !run.summarized) {
                             run.summarized = true;
-                            if let Some(topic) = meta.topic {
+                            if let Some(topic) = meta.topic.filter(|_| !run.agent_titled) {
                                 session.rec.title = Some(topic);
                             }
                             if let Some(project) = meta.project {

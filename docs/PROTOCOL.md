@@ -538,7 +538,7 @@ Session events are notifications: `session-event {sessionId, event}` with
 | Event | Meaning |
 |---|---|
 | `ready` | The agent accepts prompts (once per `start-session`). |
-| `info` | Changed facts only: `nativeSessionId` (the resume target), `model`, `mode`, `contextWindow`, `contextPercentage`. |
+| `info` | Changed facts only: `nativeSessionId` (the resume target), `model`, `mode`, `title` (the agent named the session; wins over the bridge's title from the first message and the session-meta topic), `contextWindow`, `contextPercentage`. |
 | `entries` | Transcript entries, in order (the bridge assigns seqs). |
 | `turn` | `running` / `idle`. |
 | `ended` | The session is gone: no `error` = a normal end; `resumeLost` = the conversation to resume no longer exists. The host forgets the session. |

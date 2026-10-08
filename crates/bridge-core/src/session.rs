@@ -71,6 +71,9 @@ pub(crate) struct Runner {
     pub meta_requested: bool,
     /// The session-meta tag has been read once; later ones are only stripped.
     pub summarized: bool,
+    /// The agent named the session itself: a session-meta topic no longer
+    /// renames it.
+    pub agent_titled: bool,
     /// git HEAD when the session started; a different HEAD later = a commit.
     pub base_head: Option<String>,
 }
@@ -89,6 +92,7 @@ impl Runner {
             authored: VecDeque::new(),
             meta_requested: titled,
             summarized: titled,
+            agent_titled: false,
             base_head: None,
         }
     }

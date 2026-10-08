@@ -204,6 +204,14 @@ export function pickDefaultModel(
 
 /** Why OpenCode cannot run `model`: none of its providers offers it. When
  *  the model list could not be fetched, nothing is refused. */
+/** The name OpenCode gives a session it has not titled yet
+ *  ("New session - <ISO time>"; "Child session - …" for a sub-agent's). */
+const PLACEHOLDER_TITLE = /^(New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+export function isPlaceholderTitle(title: string): boolean {
+  return PLACEHOLDER_TITLE.test(title);
+}
+
 export function unsupportedModelReason(model: string, models: ModelEntry[]): string | undefined {
   if (models.length === 0 || models.some((m) => m.id === model)) return undefined;
   return `OpenCode does not offer the model '${model}' — none of its configured providers serves it; choose one from its model list.`;
@@ -296,6 +304,8 @@ export class OpenCodeSession implements DriverSession {
   private readonly translate = newTranslateContext();
   private ended = false;
   private mode: string;
+  /** The title last reported for the session. */
+  private title: string | undefined;
   private model?: { providerID: string; modelID: string };
 
   /** messageID -> role, seeded from message.updated events, so a later
@@ -412,6 +422,7 @@ export class OpenCodeSession implements DriverSession {
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
         this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode });
+        this.reportTitle(session.title);
         this.deliver({ type: 'started', ...(model ? { model } : {}) });
         this.ctx.emit({ type: 'ready' });
       }
@@ -448,13 +459,14 @@ export class OpenCodeSession implements DriverSession {
         `[opencode] resume ${params.resume} not found server-side ` +
           `(${error ? JSON.stringify(error) : 'no session returned'}) — starting a fresh session instead`,
       );
-      return { session: await this.createSessionRemote(client, params), resumeLost: true };
+      return { session: await this.createSessionRemote(client), resumeLost: true };
     }
-    return { session: await this.createSessionRemote(client, params), resumeLost: false };
+    return { session: await this.createSessionRemote(client), resumeLost: false };
   }
 
-  private async createSessionRemote(client: OpencodeClient, params: StartSession): Promise<Session> {
-    const { data, error } = await client.session.create({ directory: this.cwd, title: params.sessionId });
+  /** Created untitled, so OpenCode names it after its first message. */
+  private async createSessionRemote(client: OpencodeClient): Promise<Session> {
+    const { data, error } = await client.session.create({ directory: this.cwd });
     if (error || !data) {
       throw new Error(`OpenCode session.create failed: ${JSON.stringify(error ?? 'no session returned')}`);
     }
@@ -520,6 +532,10 @@ export class OpenCodeSession implements DriverSession {
           const status = event.properties.status.type;
           if (status !== 'busy' && status !== 'idle') break;
           if (!this.ended) this.ctx.emit({ type: 'turn', state: status === 'busy' ? 'running' : 'idle' });
+          break;
+        }
+        case 'session.updated': {
+          if (event.properties.sessionID === sessionId) this.reportTitle(event.properties.info.title);
           break;
         }
         case 'session.diff': {
@@ -878,6 +894,14 @@ export class OpenCodeSession implements DriverSession {
         status: (text) => this.deliver({ type: 'status', text }),
       })
       .catch((err) => this.deliver({ type: 'error', content: err instanceof Error ? err.message : String(err) }));
+  }
+
+  /** The title OpenCode gave the session, once it has one of its own
+   *  (not the timestamp a new session starts with) — each new one once. */
+  private reportTitle(title: string | undefined): void {
+    if (!title || isPlaceholderTitle(title) || title === this.title || this.ended) return;
+    this.title = title;
+    this.ctx.emit({ type: 'info', title });
   }
 
   /** The OpenCode agent a prompt names: the plan agent in the plan mode,

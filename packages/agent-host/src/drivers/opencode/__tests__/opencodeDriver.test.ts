@@ -45,6 +45,23 @@ function start(client: FakeClient, overrides: Partial<StartSession> = {}, handle
   return ctx;
 }
 
+describe('OpenCode session titles', () => {
+  const updated = (title: string, sessionID = 'ses_1') => ({ type: 'session.updated', properties: { sessionID, info: { id: sessionID, title } } });
+
+  it('creates a session untitled, then reports the title OpenCode gives it, each new one once', async () => {
+    const client = clientWith([
+      updated('New session - 2026-10-08T10:00:00.000Z'),
+      updated('Fix the login redirect'),
+      updated('Fix the login redirect'),
+      updated('Other session', 'ses_other'),
+    ]);
+    const ctx = start(client);
+    await ctx.ended();
+    expect(client.session.create).toHaveBeenCalledWith({ directory: '/tmp' });
+    expect(ctx.events.filter((e) => e.type === 'info' && 'title' in e)).toEqual([{ type: 'info', title: 'Fix the login redirect' }]);
+  });
+});
+
 describe('OpenCode conversation delete', () => {
   const deleting = (result: unknown) => {
     const client = clientWith([]) as FakeClient & { session: { delete: ReturnType<typeof vi.fn> } };

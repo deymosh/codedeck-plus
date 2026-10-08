@@ -178,7 +178,7 @@ fn a_plan_answer_and_the_agents_mode_switch_reach_the_phone() {
     );
     assert_eq!(resolved(&rig.messages()), ["YOLO"]);
 
-    rig.host_event(&s, SessionEvent::Info { native_session_id: None, model: None, mode: Some("yolo".into()), context_window: None, context_percentage: None });
+    rig.host_event(&s, SessionEvent::Info { native_session_id: None, model: None, mode: Some("yolo".into()), title: None, context_window: None, context_percentage: None });
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::OptionConfirmed(o) if o.value == "yolo")));
     assert_eq!(last_heartbeat(&msgs).sessions[0].mode.as_deref(), Some("yolo"));
