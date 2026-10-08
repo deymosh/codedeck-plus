@@ -98,7 +98,10 @@ Packages write enabled for Actions in repo settings.
    minute re-run; otherwise it simply runs the full suite. The `release` job creates the GitHub
    Release with `generate_release_notes: true`, so the changelog is the
    merged-PR list since the previous tag — another reason to land work as PRs,
-   not direct pushes.
+   not direct pushes. A final release compares against the previous FINAL
+   release (v1.3.0 against v1.2.0, skipping its rcs), so its notes cover the
+   whole cycle; a prerelease compares against whatever GitHub picks, usually
+   the previous rc.
 
 8. **Confirm the release** has all its artifacts, each on the `vX.Y.Z`
    convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.xz`,

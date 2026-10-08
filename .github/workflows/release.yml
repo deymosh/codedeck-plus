@@ -58,11 +58,14 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       number: ${{ steps.v.outputs.number }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      previous_tag: ${{ steps.v.outputs.previous_tag }}
       # A pushed tag always publishes; a manual run only when asked to.
       publish: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
     steps:
       - id: v
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           RAW="${{ github.event.inputs.version }}"
           [ -n "$RAW" ] || RAW="${GITHUB_REF_NAME}"
@@ -77,6 +80,15 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            # GitHub's automatic notes base is the latest release of any kind,
+            # so a final release cut after rcs would list only what changed
+            # since the last rc. Compare against the previous FINAL release
+            # instead: the highest hyphen-free tag below this version.
+            PREV=$(gh api "repos/${{ github.repository }}/tags" --paginate --jq '.[].name' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "v${NUM}" \
+              | { cat; echo "v${NUM}"; } | sort -V | grep -x -B1 "v${NUM}" | grep -vx "v${NUM}" || true)
+            echo "Release notes base: ${PREV:-chosen by GitHub}"
+            echo "previous_tag=${PREV}" >> "$GITHUB_OUTPUT"
           fi
 
   # Whether this exact commit already passed CI: a ci.yml run for it in which
@@ -525,6 +537,7 @@ jobs:
           draft: false
           prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
+          previous_tag: ${{ needs.meta.outputs.previous_tag }}
           fail_on_unmatched_files: true
           body: |
             ## Artifacts
