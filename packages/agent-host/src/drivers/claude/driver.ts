@@ -15,6 +15,9 @@ import * as path from 'node:path';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import { mcpStatus } from '../../sdk/mcp';
 import type { HttpPost } from '../../sdk/net';
+import type { ProviderHttp } from '../../sdk/net';
+import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
+import type { EndpointModel } from '../../sdk/providerModels';
 import { isBenignPlanDirWrite } from './policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
 import { newTranslateContext } from '../../sdk/transcript';
@@ -150,6 +153,8 @@ export interface ClaudeDriverDeps {
   installClaude?: () => Promise<string>;
   /** Outbound HTTP for the API-key check. */
   httpPost?: HttpPost;
+  /** Outbound HTTP to provider profiles' endpoints. */
+  providerHttp?: ProviderHttp;
   /** Spawn a throwaway session for the model list when no live session can
    *  answer it — and once at start, so the list is ready before any session
    *  exists. */
@@ -844,6 +849,17 @@ export class ClaudeDriver implements Driver {
     } catch {
       return undefined;
     }
+  }
+
+  /** A profile's endpoint is Claude Code's Anthropic API: a session on it
+   *  posts to its Messages API. */
+  async checkProvider(provider: ProviderBinding, model: string): Promise<boolean | undefined> {
+    return this.options.providerHttp ? checkToken(ANTHROPIC_API, provider, model, this.options.providerHttp.post) : undefined;
+  }
+
+  async listProviderModels(baseUrl: string, token: string): Promise<EndpointModel[]> {
+    if (!this.options.providerHttp) throw new Error('this host reads no provider endpoints');
+    return listModels(ANTHROPIC_API, baseUrl, token, this.options.providerHttp.get);
   }
 
   deleteConversation(conversationId: string, cwd: string): Promise<void> {

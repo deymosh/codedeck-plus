@@ -6,9 +6,9 @@
 //! further inputs. Nothing here blocks, and nothing here reads a clock the
 //! runtime did not provide — the same inputs always give the same effects.
 
-use agent_protocol::{BridgeFrame, HostFrame, Secret};
+use agent_protocol::{BridgeFrame, HostFrame};
 use protocol::commands::UploadFileMsg;
-use protocol::common::{GsdState, ProviderModel};
+use protocol::common::GsdState;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
 
@@ -102,12 +102,6 @@ pub enum Input {
     GitHead { session_id: String, head: Option<String> },
     /// Answer to [`Effect::ReadGsd`].
     Gsd { session_id: String, gsd: GsdState },
-    /// Answer to [`Effect::CheckProviderToken`]; `None` when it could not be
-    /// checked (network error).
-    ProviderTokenChecked { ticket: u64, valid: Option<bool> },
-    /// Answer to [`Effect::FetchProviderModels`]: what the provider lists,
-    /// or why it could not be read.
-    ProviderModelsFetched { ticket: u64, models: Result<Vec<ProviderModel>, String> },
     /// An [`Effect::HandleFileUpload`] finished: the image is on disk and
     /// `text` (the user's words plus its path) is the session's next input.
     FileReady { session_id: String, text: String },
@@ -154,19 +148,6 @@ pub enum Effect {
     ReadGitHead { session_id: String, cwd: String },
     /// Read the GSD workflow state of `cwd`; answer with [`Input::Gsd`].
     ReadGsd { session_id: String, cwd: String },
-    /// Check a provider token with a one-token request to
-    /// `{base_url}/v1/messages` for `model`; answer with
-    /// [`Input::ProviderTokenChecked`]. `base_url` has passed the https rule.
-    CheckProviderToken {
-        ticket: u64,
-        base_url: String,
-        token: Secret,
-        model: String,
-    },
-    /// Read the models a provider serves from its `/v1/models`, sending
-    /// `token`; answer with [`Input::ProviderModelsFetched`]. `base_url` has
-    /// passed the https rule.
-    FetchProviderModels { ticket: u64, base_url: String, token: Secret },
     /// Fetch / reassemble an uploaded image into the workspace; answer with
     /// [`Input::FileReady`] once it is on disk.
     HandleFileUpload(UploadFileMsg),

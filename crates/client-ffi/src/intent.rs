@@ -93,6 +93,7 @@ pub struct UniffiProviderModelWrite {
 /// UniFFI-crossable mirror of [`protocol::commands::ProviderProfileWrite`].
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiProviderProfileWrite {
+    pub agent: String,
     pub label: String,
     pub base_url: String,
     pub auth_token: UniffiTristate,
@@ -522,6 +523,7 @@ impl TryFrom<UniffiIntent> for Intent {
                 machine,
                 profile_id,
                 profile: profile.map(|p| ProviderProfileWrite {
+                    agent: p.agent,
                     label: p.label,
                     base_url: p.base_url,
                     auth_token: p.auth_token.into(),
@@ -748,6 +750,7 @@ mod tests {
             machine: "m".into(),
             profile_id: "kimi-k3".into(),
             profile: Some(UniffiProviderProfileWrite {
+                agent: "claude-code".into(),
                 label: "Kimi K3".into(),
                 base_url: "https://api.moonshot.ai/anthropic".into(),
                 auth_token: UniffiTristate::Set { value: "sk-1".into() },
@@ -763,6 +766,7 @@ mod tests {
                 machine: "m".into(),
                 profile_id: "kimi-k3".into(),
                 profile: Some(ProviderProfileWrite {
+                    agent: "claude-code".into(),
                     label: "Kimi K3".into(),
                     base_url: "https://api.moonshot.ai/anthropic".into(),
                     auth_token: Tristate::Set("sk-1".into()),

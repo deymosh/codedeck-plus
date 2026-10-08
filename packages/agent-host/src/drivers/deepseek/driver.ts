@@ -24,7 +24,9 @@
  */
 import type { RequestPermissionRequest, RequestPermissionResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
-import type { HttpGet } from '../../sdk/net';
+import type { HttpGet, ProviderHttp } from '../../sdk/net';
+import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
+import type { EndpointModel } from '../../sdk/providerModels';
 import { mcpStatus as mcpStatusOf } from '../../sdk/mcp';
 import { parseSlashCommand } from '../../sdk/commands';
 import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
@@ -33,6 +35,7 @@ import type {
   McpStatus,
   ModelEntry,
   OutputEntry,
+  ProviderBinding,
   SessionMcpServer,
   SessionOption,
   SlashCommand,
@@ -789,6 +792,8 @@ export interface DeepSeekDriverOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** HTTPS client for the credential check. */
   httpGet?: HttpGet;
+  /** Outbound HTTP to provider profiles' endpoints. */
+  providerHttp?: ProviderHttp;
   /** Spawn seam for the plugin commands, for tests. */
   spawnFn?: SpawnFn;
   log: (message: string) => void;
@@ -1006,6 +1011,17 @@ export class DeepSeekDriver implements Driver {
     } catch {
       return undefined;
     }
+  }
+
+  /** The harness reaches a profile's endpoint through its DeepSeek route,
+   *  which speaks Anthropic's Messages API under the endpoint's `/v1`. */
+  async checkProvider(provider: ProviderBinding, model: string): Promise<boolean | undefined> {
+    return this.options.providerHttp ? checkToken(ANTHROPIC_API, provider, model, this.options.providerHttp.post) : undefined;
+  }
+
+  async listProviderModels(baseUrl: string, token: string): Promise<EndpointModel[]> {
+    if (!this.options.providerHttp) throw new Error('this host reads no provider endpoints');
+    return listModels(ANTHROPIC_API, baseUrl, token, this.options.providerHttp.get);
   }
 
   deleteConversation(conversationId: string): Promise<void> {

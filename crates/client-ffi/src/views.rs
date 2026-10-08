@@ -339,6 +339,9 @@ fn to_uniffi_model_entries(models: &[protocol::events::ModelEntry]) -> Vec<Uniff
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct UniffiProviderProfileInfo {
     pub id: String,
+    /// The agent the profile is for; empty for one stored before profiles
+    /// had one, which no agent uses until it is given one.
+    pub agent: String,
     pub label: String,
     pub base_url: String,
     pub models: Vec<UniffiModelEntry>,
@@ -380,6 +383,8 @@ pub struct UniffiAgent {
     pub supports_models: bool,
     pub supports_usage: bool,
     pub supports_providers: bool,
+    /// The agent's provider profiles add models to its own list.
+    pub supports_provider_models: bool,
     pub supports_gsd: bool,
     pub supports_interrupt: bool,
     pub supports_commands: bool,
@@ -429,6 +434,7 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         supports_models: a.supports.models,
         supports_usage: a.supports.usage,
         supports_providers: a.supports.providers,
+        supports_provider_models: a.supports.provider_models,
         supports_gsd: a.supports.gsd,
         supports_interrupt: a.supports.interrupt,
         supports_commands: a.supports.commands,
@@ -749,6 +755,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                     .iter()
                     .map(|p| UniffiProviderProfileInfo {
                         id: p.id.clone(),
+                        agent: p.agent.clone(),
                         label: p.label.clone(),
                         base_url: p.base_url.clone(),
                         models: p

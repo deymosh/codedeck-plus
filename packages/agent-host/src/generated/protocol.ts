@@ -59,8 +59,17 @@ export type AgentSupports = {
 	models?: boolean,
 	/**  `usage-request` returns subscription usage for this agent's sessions. */
 	usage?: boolean,
-	/**  Sessions may be bound to a custom provider profile (`providerId`). */
+	/**
+	 *  Sessions may be bound to one of this agent's provider profiles
+	 *  (`providerId`), which then serves the whole session.
+	 */
 	providers?: boolean,
+	/**
+	 *  This agent's provider profiles add their models to its own model
+	 *  list, beside every provider it already has; a session picks one of
+	 *  them as it would any other model.
+	 */
+	providerModels?: boolean,
 	/**  `gsd-request` returns GSD workflow state for this agent's sessions. */
 	gsd?: boolean,
 	/**  `interrupt` stops the running turn. */
@@ -241,6 +250,36 @@ export type BridgeMessage_Deserialize =
 	credential: string,
 	value: Secret,
 } } | 
+/**
+ *  Check a provider profile's token with the endpoint, the way `agent`
+ *  would use it, on `model`. Reply: `credential-checked`.
+ */
+{ kind: "check-provider"; payload: {
+	agent: string,
+	provider: ProviderBinding_Deserialize,
+	model: string,
+} } | 
+/**
+ *  The models the endpoint at `base_url` lists, read with `auth_token`
+ *  the way `agent` speaks to it (a provider profile of `agent` being
+ *  saved). Reply: `provider-models`, or `error` saying why there is no
+ *  list.
+ */
+{ kind: "list-provider-models"; payload: {
+	agent: string,
+	baseUrl: string,
+	authToken: Secret,
+} } | 
+/**
+ *  The provider profiles of an agent whose catalog entry `supports`
+ *  `providerModels`, all of them: sent after `initialize` and whenever
+ *  one changes. The agent offers their models beside its own. Reply:
+ *  `ack`.
+ */
+{ kind: "set-providers"; payload: {
+	agent: string,
+	providers: ProviderBinding_Deserialize[],
+} } | 
 /**  Reply to `request-permission`. */
 { kind: "permission-outcome"; payload: SelectOutcome } | 
 /**  Reply to `request-plan-approval`. */
@@ -372,6 +411,36 @@ export type BridgeMessage_Serialize =
 	agent: string,
 	credential: string,
 	value: Secret,
+} } | 
+/**
+ *  Check a provider profile's token with the endpoint, the way `agent`
+ *  would use it, on `model`. Reply: `credential-checked`.
+ */
+{ kind: "check-provider"; payload: {
+	agent: string,
+	provider: ProviderBinding_Serialize,
+	model: string,
+} } | 
+/**
+ *  The models the endpoint at `base_url` lists, read with `auth_token`
+ *  the way `agent` speaks to it (a provider profile of `agent` being
+ *  saved). Reply: `provider-models`, or `error` saying why there is no
+ *  list.
+ */
+{ kind: "list-provider-models"; payload: {
+	agent: string,
+	baseUrl: string,
+	authToken: Secret,
+} } | 
+/**
+ *  The provider profiles of an agent whose catalog entry `supports`
+ *  `providerModels`, all of them: sent after `initialize` and whenever
+ *  one changes. The agent offers their models beside its own. Reply:
+ *  `ack`.
+ */
+{ kind: "set-providers"; payload: {
+	agent: string,
+	providers: ProviderBinding_Serialize[],
 } } | 
 /**  Reply to `request-permission`. */
 { kind: "permission-outcome"; payload: SelectOutcome } | 
@@ -683,9 +752,16 @@ export type HostMessage_Deserialize =
 	toggles?: boolean,
 	projectWide?: boolean,
 } } | 
-/**  Reply to `check-credential`; absent `valid` = it could not be checked. */
+/**
+ *  Reply to `check-credential` and `check-provider`; absent `valid` = it
+ *  could not be checked.
+ */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
+} } | 
+/**  Reply to `list-provider-models`: never empty. */
+{ kind: "provider-models"; payload: {
+	models: ProviderModel_Deserialize[],
 } } | 
 /**  A notification: no frame id, no reply. */
 { kind: "session-event"; payload: {
@@ -755,9 +831,16 @@ export type HostMessage_Serialize =
 	toggles?: boolean,
 	projectWide?: boolean,
 } } | 
-/**  Reply to `check-credential`; absent `valid` = it could not be checked. */
+/**
+ *  Reply to `check-credential` and `check-provider`; absent `valid` = it
+ *  could not be checked.
+ */
 { kind: "credential-checked"; payload: {
 	valid?: boolean | null,
+} } | 
+/**  Reply to `list-provider-models`: never empty. */
+{ kind: "provider-models"; payload: {
+	models: ProviderModel_Serialize[],
 } } | 
 /**  A notification: no frame id, no reply. */
 { kind: "session-event"; payload: {
@@ -1075,21 +1158,34 @@ export type PluginMarketplace = {
 	source: string,
 };
 
-/**  A custom provider profile a session is bound to for its whole life. */
+/**
+ *  A provider profile, token included: one a session is bound to for its
+ *  whole life, or one an agent offers the models of (`set-providers`).
+ */
 export type ProviderBinding = ProviderBinding_Serialize | ProviderBinding_Deserialize;
 
-/**  A custom provider profile a session is bound to for its whole life. */
+/**
+ *  A provider profile, token included: one a session is bound to for its
+ *  whole life, or one an agent offers the models of (`set-providers`).
+ */
 export type ProviderBinding_Deserialize = {
 	id: string,
+	/**  The name the user gave it, for showing where a model comes from. */
+	label: string,
 	baseUrl: string,
 	authToken: Secret,
 	models: ProviderModel_Deserialize[],
 	defaultModel?: string | null,
 };
 
-/**  A custom provider profile a session is bound to for its whole life. */
+/**
+ *  A provider profile, token included: one a session is bound to for its
+ *  whole life, or one an agent offers the models of (`set-providers`).
+ */
 export type ProviderBinding_Serialize = {
 	id: string,
+	/**  The name the user gave it, for showing where a model comes from. */
+	label: string,
 	baseUrl: string,
 	authToken: Secret,
 	models: ProviderModel_Serialize[],

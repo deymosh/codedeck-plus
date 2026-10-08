@@ -97,6 +97,17 @@ catalog entry that runs Pi with our extensions (permission gate, question
 and plan-review tools, a short system prompt). Decide after the Pi driver
 exists, when it costs one extension package rather than a project.
 
+### The default agent: OpenCode
+
+Decided 2026-10-08. A default has to work with any OpenAI-compatible
+provider or gateway, take its models from the endpoint's `/v1/models`, and
+offer no tool that only works on its vendor's API. OpenCode meets all
+three: its web search is offered only on its own provider (checked on
+1.18.32), its web fetch is local, and a provider profile adds the
+endpoint's models to its list beside OpenCode Zen's free ones — read from
+the endpoint, never typed by hand. Codex is out (its client speaks only the
+Responses API); a Pi-based entry stays an option once the Pi driver exists.
+
 ## Installing agents on demand
 
 Today every driver the host is told to load (`CODEDECK_AGENT_HOST_DRIVERS`,

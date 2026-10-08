@@ -24,6 +24,7 @@ import type {
   PlanOutcome,
   PluginAction,
   PluginMarketplace,
+  ProviderBinding,
   QuestionOutcome,
   QuestionSpec,
   SelectOutcome,
@@ -34,6 +35,7 @@ import type {
   StartSession,
   UsageData,
 } from './types';
+import type { EndpointModel } from './providerModels';
 
 /** What a running session can do toward the bridge. */
 export interface SessionContext {
@@ -140,6 +142,19 @@ export interface Driver {
   /** Check a credential value with its provider: true/false, or undefined
    *  when it could not be checked. */
   checkCredential?(credential: string, value: string): Promise<boolean | undefined>;
+  /** Check one of this agent's provider profiles: its token, with the
+   *  smallest request on the API the agent speaks to it, on `model`
+   *  (`sdk/providerCheck`). True/false, or undefined when it could not be
+   *  checked. */
+  checkProvider?(provider: ProviderBinding, model: string): Promise<boolean | undefined>;
+  /** The models a provider profile's endpoint lists, read the way this
+   *  agent's API signs in (`sdk/providerApi`). Rejects with the reason
+   *  there is no list. */
+  listProviderModels?(baseUrl: string, token: string): Promise<EndpointModel[]>;
+  /** For an agent whose catalog entry `supports.providerModels`: its
+   *  provider profiles, all of them, whenever one changes. Their models are
+   *  offered beside the agent's own; nothing the agent already has goes. */
+  setProviders?(providers: ProviderBinding[]): Promise<void>;
   /**
    * Delete the agent's own record of a conversation (an `info`
    * `nativeSessionId` it reported, run in `cwd`): its transcript files, or

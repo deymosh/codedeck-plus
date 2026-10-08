@@ -55,6 +55,11 @@ pub(crate) enum HostCall {
     /// A session's MCP status, asked for or answering a toggle.
     SessionMcp { session_id: String },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
+    /// A provider profile's token check, for the save waiting on it.
+    CheckProvider { ticket: u64 },
+    /// A provider's model list, for the save waiting on it.
+    ListProviderModels { ticket: u64 },
+    SetProviders { agent: String },
     DeleteConversation(ConversationDelete),
 }
 
@@ -192,6 +197,7 @@ impl Engine {
                     for delete in std::mem::take(&mut self.host.deletes) {
                         self.delete_conversation(delete);
                     }
+                    self.push_all_providers();
                 }
                 Ok(_) => log::error!("[Engine] The agent host answered initialize with the wrong reply"),
                 Err(err) => log::error!("[Engine] The agent host failed to initialize: {err}"),
@@ -232,6 +238,26 @@ impl Engine {
                     _ => None,
                 };
                 self.on_credential_checked(ticket, &agent, &credential, &value, valid);
+            }
+            HostCall::CheckProvider { ticket } => {
+                let valid = match result {
+                    Ok(HostMessage::CredentialChecked { valid }) => valid,
+                    _ => None,
+                };
+                self.on_provider_token_checked(ticket, valid);
+            }
+            HostCall::ListProviderModels { ticket } => {
+                let models = match result {
+                    Ok(HostMessage::ProviderModels { models }) => Ok(models),
+                    Ok(_) => Err("the agent host gave no model list".to_string()),
+                    Err(err) => Err(err),
+                };
+                self.on_provider_models_fetched(ticket, models);
+            }
+            HostCall::SetProviders { agent } => {
+                if let Err(err) = result {
+                    log::warn!("[Engine] {agent} did not take its provider profiles: {err}");
+                }
             }
             HostCall::DeleteConversation(delete) => match result {
                 Ok(_) => log::info!("[Engine] Conversation {} of {} deleted", delete.conversation_id, delete.session_id),
@@ -430,7 +456,7 @@ impl Engine {
         // A bound profile is looked up now, at every start, so a rotated
         // token reaches restarts — and a deleted or insecure one refuses the
         // start instead of silently falling back to the agent's own account.
-        let provider = rec.provider_id.as_deref().map(|id| self.provider_binding(id)).transpose()?;
+        let provider = rec.provider_id.as_deref().map(|id| self.provider_binding(id, &rec.agent)).transpose()?;
         let env = self
             .credentials
             .get(None, GITHUB_PAT)

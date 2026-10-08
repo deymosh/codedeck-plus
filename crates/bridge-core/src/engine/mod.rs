@@ -229,8 +229,6 @@ impl Engine {
             Input::Gsd { session_id, gsd } => {
                 self.publish_all(BridgeToPhone::GsdState(protocol::events::GsdStateMsg { session_id, gsd }));
             }
-            Input::ProviderTokenChecked { ticket, valid } => self.on_provider_token_checked(ticket, valid),
-            Input::ProviderModelsFetched { ticket, models } => self.on_provider_models_fetched(ticket, models),
             Input::FileReady { session_id, text } => {
                 if !self.send_input(&session_id, text) {
                     log::warn!("[Engine] Uploaded image for {session_id} could not be delivered: no live session");

@@ -34,7 +34,7 @@ pub fn alpha() -> AgentInfo {
         efforts: vec![choice("low"), choice("high")],
         default_mode: Some("ask".into()),
         default_effort: Some("high".into()),
-        supports: AgentSupports { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true, tasks: true },
+        supports: AgentSupports { models: true, usage: true, providers: true, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true, tasks: true, ..Default::default() },
         credentials: vec![CredentialSpec { id: "alpha_key".into(), label: "Alpha key".into(), env_var: Some("ALPHA_KEY".into()) }],
         unavailable_reason: None,
     }
@@ -61,6 +61,16 @@ pub fn gamma() -> AgentInfo {
         id: "gamma".into(),
         display_name: "Gamma".into(),
         unavailable_reason: Some("Gamma is not configured on this machine.".into()),
+        ..beta()
+    }
+}
+
+/// "delta": its provider profiles add models to its own list.
+pub fn delta() -> AgentInfo {
+    AgentInfo {
+        id: "delta".into(),
+        display_name: "Delta".into(),
+        supports: AgentSupports { models: true, provider_models: true, ..Default::default() },
         ..beta()
     }
 }

@@ -82,20 +82,25 @@ impl BridgeMessage {
 
 impl HostMessage {
     /// Whether this message answers a bridge request (as opposed to asking
-    /// or notifying).
+    /// or notifying). Every kind is named, so a new one cannot be left out
+    /// unnoticed.
     pub fn is_reply(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Initialized { .. }
-                | Self::Ack
-                | Self::Error { .. }
-                | Self::Models { .. }
-                | Self::Usage { .. }
-                | Self::Commands { .. }
-                | Self::Plugins { .. }
-                | Self::McpServers { .. }
-                | Self::SessionMcp { .. }
-                | Self::CredentialChecked { .. }
-        )
+            | Self::Ack
+            | Self::Error { .. }
+            | Self::Models { .. }
+            | Self::Usage { .. }
+            | Self::Commands { .. }
+            | Self::Plugins { .. }
+            | Self::McpServers { .. }
+            | Self::SessionMcp { .. }
+            | Self::CredentialChecked { .. }
+            | Self::ProviderModels { .. } => true,
+            Self::SessionEvent { .. }
+            | Self::RequestPermission(_)
+            | Self::AskQuestion(_)
+            | Self::RequestPlanApproval(_) => false,
+        }
     }
 }

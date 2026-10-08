@@ -186,7 +186,7 @@ fn set_profile(rig: &mut Rig, profile: serde_json::Value) {
 }
 
 fn kimi(token: Option<&str>) -> serde_json::Value {
-    let mut p = json!({"label":"Kimi","baseUrl":"https://api.kimi.test/anthropic","models":[{"id":"k2"}]});
+    let mut p = json!({"agent":"alpha","label":"Kimi","baseUrl":"https://api.kimi.test/anthropic","models":[{"id":"k2"}]});
     if let Some(token) = token {
         p["authToken"] = json!(token);
     }
@@ -200,19 +200,23 @@ fn kimi_cleared() -> serde_json::Value {
     p
 }
 
+/// A rig whose host is up with an agent of each kind: alpha binds sessions
+/// to a profile, delta adds a profile's models to its own.
+fn rig_with_providers() -> Rig {
+    let mut rig = Rig::new();
+    rig.host_up_with(vec![alpha(), beta(), delta()]);
+    rig.take();
+    rig
+}
+
 /// Answer the pending token check, if any; returns whether one was pending.
 fn answer_token_check(rig: &mut Rig, valid: Option<bool>) -> bool {
-    let (checks, rest): (Vec<_>, Vec<_>) =
-        rig.take().into_iter().partition(|e| matches!(e, Effect::CheckProviderToken { .. }));
-    rig.effects = rest;
-    let ticket = checks.iter().find_map(|e| match e {
-        Effect::CheckProviderToken { ticket, .. } => Some(*ticket),
-        _ => None,
-    });
-    if let Some(ticket) = ticket {
-        rig.input(Input::ProviderTokenChecked { ticket, valid });
+    if !rig.has_host_request(|m| matches!(m, BridgeMessage::CheckProvider { .. })) {
+        return false;
     }
-    ticket.is_some()
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::CheckProvider { .. }));
+    rig.host_reply(&id, HostMessage::CredentialChecked { valid });
+    true
 }
 
 fn has_token(rig: &mut Rig) -> Option<bool> {
@@ -222,37 +226,60 @@ fn has_token(rig: &mut Rig) -> Option<bool> {
     })
 }
 
-#[test]
-fn a_profile_is_stored_its_token_checked_and_the_list_broadcast_redacted() {
-    let mut rig = Rig::new();
-    rig.take();
-    set_profile(&mut rig, kimi(Some("tok-secret")));
-    let check = rig.effects.iter().find_map(|e| match e {
-        Effect::CheckProviderToken { base_url, token, model, .. } => Some((base_url.clone(), token.expose().to_string(), model.clone())),
+fn ack_error(rig: &mut Rig) -> Option<String> {
+    rig.messages().into_iter().find_map(|m| match m {
+        BridgeToPhone::ProviderProfileAck(a) if !a.success => a.error,
         _ => None,
-    });
-    assert_eq!(check, Some(("https://api.kimi.test/anthropic".into(), "tok-secret".into(), "k2".into())));
-    answer_token_check(&mut rig, Some(false));
+    })
+}
+
+#[test]
+fn a_profile_is_stored_its_token_checked_by_its_agent_and_the_list_broadcast_redacted() {
+    let mut rig = rig_with_providers();
+    set_profile(&mut rig, kimi(Some("tok-secret")));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::CheckProvider { .. }));
+    match msg {
+        BridgeMessage::CheckProvider { agent, provider, model } => {
+            assert_eq!((agent.as_str(), model.as_str()), ("alpha", "k2"));
+            assert_eq!((provider.base_url.as_str(), provider.auth_token.expose()), ("https://api.kimi.test/anthropic", "tok-secret"));
+        }
+        _ => unreachable!(),
+    }
+    rig.host_reply(&id, HostMessage::CredentialChecked { valid: Some(false) });
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::ProviderProfileAck(a) if a.success && a.token_valid == Some(false))));
-    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::ProviderProfiles(p) if p.profiles[0].has_token)));
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::ProviderProfiles(p) if p.profiles[0].has_token && p.profiles[0].agent == "alpha")));
     assert!(!msgs.iter().any(|m| serde_json::to_string(m).unwrap().contains("tok-secret")));
 }
 
 #[test]
+fn a_profile_is_for_an_agent_that_takes_one() {
+    let mut rig = rig_with_providers();
+    let mut p = kimi(Some("t"));
+    p["agent"] = json!("beta");
+    set_profile(&mut rig, p);
+    assert_eq!(ack_error(&mut rig).as_deref(), Some("Beta takes no provider profiles."));
+    let mut p = kimi(Some("t"));
+    p["agent"] = json!("nope");
+    set_profile(&mut rig, p);
+    assert!(ack_error(&mut rig).is_some_and(|e| e.contains("no agent 'nope'")));
+    assert!(!rig.store.snapshot().contains_key("providerProfiles"));
+}
+
+#[test]
 fn an_insecure_base_url_is_never_stored() {
-    let mut rig = Rig::new();
+    let mut rig = rig_with_providers();
     let mut p = kimi(Some("t"));
     p["baseUrl"] = json!("http://api.kimi.test");
     set_profile(&mut rig, p);
     assert!(!answer_token_check(&mut rig, None));
-    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::ProviderProfileAck(a) if !a.success && a.error.as_deref() == Some(PROVIDER_BASE_URL_ERROR))));
+    assert_eq!(ack_error(&mut rig).as_deref(), Some(PROVIDER_BASE_URL_ERROR));
     assert!(!rig.store.snapshot().contains_key("providerProfiles"));
 }
 
 #[test]
 fn the_token_is_kept_cleared_or_replaced_and_a_profile_can_be_deleted() {
-    let mut rig = Rig::new();
+    let mut rig = rig_with_providers();
     set_profile(&mut rig, kimi(Some("t1")));
     answer_token_check(&mut rig, Some(true));
     assert_eq!(has_token(&mut rig), Some(true));
@@ -267,8 +294,8 @@ fn the_token_is_kept_cleared_or_replaced_and_a_profile_can_be_deleted() {
 }
 
 /// A profile whose models come from the provider.
-fn router(token: Option<&str>, default_model: Option<&str>) -> serde_json::Value {
-    let mut p = json!({"label":"Router","baseUrl":"https://router.test/api","models":[],"modelsFromProvider":true});
+fn router(agent: &str, token: Option<&str>, default_model: Option<&str>) -> serde_json::Value {
+    let mut p = json!({"agent":agent,"label":"Router","baseUrl":"https://router.test/api","models":[],"modelsFromProvider":true});
     if let Some(token) = token {
         p["authToken"] = json!(token);
     }
@@ -278,19 +305,23 @@ fn router(token: Option<&str>, default_model: Option<&str>) -> serde_json::Value
     p
 }
 
-/// Take the pending model-list read: (ticket, base URL, token).
-fn take_model_fetch(rig: &mut Rig) -> Option<(u64, String, String)> {
-    let (fetches, rest): (Vec<_>, Vec<_>) =
-        rig.take().into_iter().partition(|e| matches!(e, Effect::FetchProviderModels { .. }));
-    rig.effects = rest;
-    fetches.into_iter().find_map(|e| match e {
-        Effect::FetchProviderModels { ticket, base_url, token } => Some((ticket, base_url, token.expose().to_string())),
-        _ => None,
-    })
+fn set_router(rig: &mut Rig, profile: serde_json::Value) {
+    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":profile}));
 }
 
-fn listed(ids: &[&str]) -> Vec<ProviderModel> {
-    ids.iter().map(|id| ProviderModel { id: (*id).into(), label: None }).collect()
+/// Take the pending model-list read: (request id, base URL, token).
+fn take_model_fetch(rig: &mut Rig) -> Option<(String, String, String)> {
+    if !rig.has_host_request(|m| matches!(m, BridgeMessage::ListProviderModels { .. })) {
+        return None;
+    }
+    match rig.host_request(|m| matches!(m, BridgeMessage::ListProviderModels { .. })) {
+        (id, BridgeMessage::ListProviderModels { base_url, auth_token, .. }) => Some((id, base_url, auth_token.expose().to_string())),
+        _ => unreachable!(),
+    }
+}
+
+fn listed(ids: &[&str]) -> HostMessage {
+    HostMessage::ProviderModels { models: ids.iter().map(|id| ProviderModel { id: (*id).into(), label: None }).collect() }
 }
 
 fn stored_profile(rig: &mut Rig) -> Option<protocol::common::ProviderProfileInfo> {
@@ -302,20 +333,19 @@ fn stored_profile(rig: &mut Rig) -> Option<protocol::common::ProviderProfileInfo
 
 #[test]
 fn a_profile_can_take_its_models_from_the_provider() {
-    let mut rig = Rig::new();
-    rig.take();
-    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("tok-r"), Some("b"))}));
-    let (ticket, base_url, token) = take_model_fetch(&mut rig).expect("the models are read first");
+    let mut rig = rig_with_providers();
+    set_router(&mut rig, router("alpha", Some("tok-r"), Some("b")));
+    let (id, base_url, token) = take_model_fetch(&mut rig).expect("the models are read first");
     assert_eq!((base_url.as_str(), token.as_str()), ("https://router.test/api", "tok-r"));
     assert!(!rig.store.snapshot().contains_key("providerProfiles"), "stored only with its models");
-    rig.input(Input::ProviderModelsFetched { ticket, models: Ok(listed(&["a", "b"])) });
+    rig.host_reply(&id, listed(&["a", "b"]));
     // Then the token is checked as for any profile, on the default model.
-    let model = rig.effects.iter().find_map(|e| match e {
-        Effect::CheckProviderToken { model, .. } => Some(model.clone()),
-        _ => None,
-    });
-    assert_eq!(model.as_deref(), Some("b"));
-    answer_token_check(&mut rig, Some(true));
+    let (check, model) = match rig.host_request(|m| matches!(m, BridgeMessage::CheckProvider { .. })) {
+        (id, BridgeMessage::CheckProvider { model, .. }) => (id, model),
+        _ => unreachable!(),
+    };
+    assert_eq!(model, "b");
+    rig.host_reply(&check, HostMessage::CredentialChecked { valid: Some(true) });
     let info = stored_profile(&mut rig).expect("broadcast");
     assert!(info.models_from_provider);
     assert_eq!(info.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
@@ -325,26 +355,26 @@ fn a_profile_can_take_its_models_from_the_provider() {
 
 #[test]
 fn a_default_the_provider_no_longer_lists_is_dropped() {
-    let mut rig = Rig::new();
-    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("t"), Some("gone"))}));
-    let (ticket, ..) = take_model_fetch(&mut rig).unwrap();
-    rig.input(Input::ProviderModelsFetched { ticket, models: Ok(listed(&["a"])) });
+    let mut rig = rig_with_providers();
+    set_router(&mut rig, router("alpha", Some("t"), Some("gone")));
+    let (id, ..) = take_model_fetch(&mut rig).unwrap();
+    rig.host_reply(&id, listed(&["a"]));
     answer_token_check(&mut rig, None);
     assert_eq!(stored_profile(&mut rig).unwrap().default_model, None);
 }
 
 #[test]
 fn no_model_list_means_no_save() {
-    let mut rig = Rig::new();
+    let mut rig = rig_with_providers();
     // Without a token there is nothing to read the list with.
-    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(None, None)}));
+    set_router(&mut rig, router("alpha", None, None));
     assert!(take_model_fetch(&mut rig).is_none());
-    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::ProviderProfileAck(a) if !a.success && a.error.as_deref().is_some_and(|e| e.contains("needs its API token")))));
+    assert!(ack_error(&mut rig).is_some_and(|e| e.contains("needs its API token")));
 
-    for answer in [Err("the provider refused the token (HTTP 401)".to_string()), Ok(vec![])] {
-        rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("t"), None)}));
-        let (ticket, ..) = take_model_fetch(&mut rig).unwrap();
-        rig.input(Input::ProviderModelsFetched { ticket, models: answer });
+    for answer in [HostMessage::Error { message: "the provider refused the token (HTTP 401)".into() }, listed(&[])] {
+        set_router(&mut rig, router("alpha", Some("t"), None));
+        let (id, ..) = take_model_fetch(&mut rig).unwrap();
+        rig.host_reply(&id, answer);
         let msgs = rig.messages();
         let error = msgs.iter().find_map(|m| match m {
             BridgeToPhone::ProviderProfileAck(a) if !a.success => a.error.clone(),
@@ -358,18 +388,53 @@ fn no_model_list_means_no_save() {
 
 #[test]
 fn a_newer_save_wins_over_a_model_list_still_on_its_way() {
-    let mut rig = Rig::new();
-    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":router(Some("t"), None)}));
+    let mut rig = rig_with_providers();
+    set_router(&mut rig, router("alpha", Some("t"), None));
     let (stale, ..) = take_model_fetch(&mut rig).unwrap();
     rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":null}));
     rig.take();
-    rig.input(Input::ProviderModelsFetched { ticket: stale, models: Ok(listed(&["a"])) });
+    rig.host_reply(&stale, listed(&["a"]));
     assert!(rig.take().is_empty(), "the deleted profile is not brought back");
 }
 
-fn with_kimi() -> Rig {
+/// The providers last handed to delta, if any were.
+fn pushed_to_delta(rig: &mut Rig) -> Option<Vec<String>> {
+    rig.host_frames().into_iter().rev().find_map(|f| match f.message {
+        BridgeMessage::SetProviders { agent, providers } if agent == "delta" => Some(providers.into_iter().map(|p| p.id).collect()),
+        _ => None,
+    })
+}
+
+#[test]
+fn an_agent_that_adds_profile_models_gets_its_profiles_whenever_they_change() {
     let mut rig = Rig::new();
-    rig.host_up();
+    rig.host_up_with(vec![alpha(), beta(), delta()]);
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec![]), "handed its (no) profiles at start");
+
+    let mut p = kimi(Some("t"));
+    p["agent"] = json!("delta");
+    set_profile(&mut rig, p.clone());
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec!["kimi".to_string()]));
+    // Moved to another agent: delta loses it.
+    set_profile(&mut rig, kimi(Some("t")));
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec![]));
+    set_profile(&mut rig, p);
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec!["kimi".to_string()]));
+    rig.send(json!({"type":"set-provider-profile","profileId":"kimi","profile":null}));
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec![]));
+
+    // A host restart hands them over again.
+    set_profile(&mut rig, json!({"agent":"delta","label":"K","baseUrl":"https://k.test","authToken":"t","models":[{"id":"m"}]}));
+    rig.take();
+    rig.input(Input::HostDown { reason: "test".into() });
+    rig.host_up_with(vec![alpha(), beta(), delta()]);
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec!["kimi".to_string()]));
+    // An agent that binds sessions is never handed any.
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::SetProviders { agent, .. } if agent == "alpha")));
+}
+
+fn with_kimi() -> Rig {
+    let mut rig = rig_with_providers();
     set_profile(&mut rig, kimi(Some("tok")));
     answer_token_check(&mut rig, Some(true));
     rig.take();
@@ -408,12 +473,18 @@ fn a_provider_bound_session_starts_on_the_live_profile_with_its_model() {
 }
 
 #[test]
-fn a_provider_session_is_refused_for_an_unknown_profile_or_an_agent_without_providers() {
+fn a_provider_session_is_refused_for_an_unknown_profile_another_agents_or_an_agent_without_providers() {
     let mut rig = with_kimi();
     rig.send(json!({"type":"create-session","agent":"alpha","providerId":"nope"}));
     assert!(failed_reason(&mut rig).contains("Unknown provider profile 'nope'"));
     rig.send(json!({"type":"create-session","agent":"beta","providerId":"kimi"}));
     assert!(failed_reason(&mut rig).contains("Beta does not support custom provider profiles"));
+    let mut p = kimi(None);
+    p["agent"] = json!("delta");
+    set_profile(&mut rig, p);
+    rig.take();
+    rig.send(json!({"type":"create-session","agent":"alpha","providerId":"kimi"}));
+    assert!(failed_reason(&mut rig).contains("is not one of Alpha's"));
     set_profile(&mut rig, kimi_cleared());
     rig.take();
     rig.send(json!({"type":"create-session","agent":"alpha","providerId":"kimi"}));

@@ -151,41 +151,56 @@ export interface FetchProviderModelsOptions {
 }
 
 /**
+ * The models the endpoint at `baseUrl` serves. Rejects with the reason, in
+ * words for a person, when there is no list: not a URL, unreachable,
+ * refused, an answer that is not a model list, or an empty one.
+ */
+export async function readProviderModels(
+  baseUrl: string,
+  options: Pick<FetchProviderModelsOptions, 'token' | 'headers' | 'httpGet'>,
+): Promise<EndpointModel[]> {
+  let url: string;
+  try {
+    url = providerModelsUrl(baseUrl);
+  } catch {
+    throw new Error(`'${baseUrl}' is not a URL`);
+  }
+  let response: Awaited<ReturnType<HttpGet>>;
+  try {
+    response = await options.httpGet(url, {
+      ...options.headers,
+      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+    });
+  } catch (error) {
+    throw new Error(`${url} could not be read (${error instanceof Error ? error.message : String(error)})`);
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(`the provider refused the token (HTTP ${response.status})`);
+  }
+  if (response.status < 200 || response.status >= 300) throw new Error(`${url} answered HTTP ${response.status}`);
+  let body: unknown;
+  try {
+    body = JSON.parse(response.text ?? '') as unknown;
+  } catch {
+    throw new Error(`${url} did not answer with a model list`);
+  }
+  const models = parseProviderModels(body);
+  if (models.length === 0) throw new Error('it lists no models');
+  return models;
+}
+
+/**
  * The models the endpoint at `baseUrl` serves, or `undefined` when they
- * could not be read: unreachable, refused, an answer that is not a model
- * list, or an empty one. Each failure is logged; none throws.
+ * could not be read (see `readProviderModels`) — the reason is logged.
  */
 export async function fetchProviderModels(
   baseUrl: string,
   options: FetchProviderModelsOptions,
 ): Promise<EndpointModel[] | undefined> {
-  const { log, tag } = options;
-  let url: string;
   try {
-    url = providerModelsUrl(baseUrl);
-  } catch {
-    log(`${tag} '${baseUrl}' is not a URL; no model list`);
-    return undefined;
-  }
-  let body: unknown;
-  try {
-    const response = await options.httpGet(url, {
-      ...options.headers,
-      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
-    });
-    if (response.status < 200 || response.status >= 300) {
-      log(`${tag} ${baseUrl} answered ${response.status} for its model list`);
-      return undefined;
-    }
-    body = JSON.parse(response.text ?? '') as unknown;
+    return await readProviderModels(baseUrl, options);
   } catch (error) {
-    log(`${tag} could not read the model list from ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    options.log(`${options.tag} no model list from ${baseUrl}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
-  const models = parseProviderModels(body);
-  if (models.length === 0) {
-    log(`${tag} ${baseUrl} listed no models`);
-    return undefined;
-  }
-  return models;
 }

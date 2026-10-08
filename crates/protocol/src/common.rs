@@ -39,9 +39,15 @@ pub struct AgentSupports {
     /// `usage-request` returns subscription usage for this agent's sessions.
     #[serde(default)]
     pub usage: bool,
-    /// Sessions may be bound to a custom provider profile (`providerId`).
+    /// Sessions may be bound to one of this agent's provider profiles
+    /// (`providerId`), which then serves the whole session.
     #[serde(default)]
     pub providers: bool,
+    /// This agent's provider profiles add their models to its own model
+    /// list, beside every provider it already has; a session picks one of
+    /// them as it would any other model.
+    #[serde(default)]
+    pub provider_models: bool,
     /// `gsd-request` returns GSD workflow state for this agent's sessions.
     #[serde(default)]
     pub gsd: bool,
@@ -513,7 +519,25 @@ fn plain_http_host(raw: &str) -> PlainHttp {
     } else {
         authority.rsplit_once(':').map_or(authority, |(h, _)| h)
     };
-    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1")
+    PlainHttp::Host(host.to_ascii_lowercase())
+}
+
+/// Is `host` an IP address on a private network (see
+/// [`is_valid_provider_base_url`])? Only the canonical spelling counts:
+/// std's parser refuses the shorthands and leading zeros a WHATWG parser
+/// would read as another address (`010.0.0.1` is 8.0.0.1 there).
+fn is_private_network_address(host: &str) -> bool {
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        let [a, b, ..] = v4.octets();
+        return a == 10
+            || (a == 172 && (16..=31).contains(&b))
+            || (a == 192 && b == 168)
+            || (a == 100 && (64..=127).contains(&b));
+    }
+    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
+        return v6.segments()[0] & 0xfe00 == 0xfc00;
+    }
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -1010,6 +1034,43 @@ mod tests {
         assert!(!is_valid_provider_base_url("ftp://localhost"));
         assert!(!is_valid_provider_base_url("not a url"));
         assert!(!is_valid_provider_base_url("https://"));
+    }
+
+    #[test]
+    fn a_provider_may_be_on_the_users_own_network() {
+        for ok in [
+            "http://192.168.1.2:3458",
+            "http://10.0.0.7/v1",
+            "http://172.16.0.1",
+            "http://172.31.255.254:80",
+            "http://100.101.102.103:8080",
+            "http://[fd12:3456::1]:3000/v1",
+            "http://[FC00::1]",
+        ] {
+            assert!(is_valid_provider_base_url(ok), "{ok}");
+            assert!(!is_https_or_loopback_url(ok), "{ok}");
+        }
+        for refused in [
+            "http://172.32.0.1",
+            "http://192.169.0.1",
+            "http://100.128.0.1",
+            "http://8.8.8.8",
+            "http://[2001:db8::1]",
+            "http://[fe80::1]",
+            // Spellings a WHATWG parser reads as another address.
+            "http://010.0.0.1",
+            "http://192.168.1",
+            "http://0xc0.168.1.1",
+            // A name could point anywhere.
+            "http://router.local",
+            "http://192.168.1.2.nip.io",
+            "http://192.168.1.2@evil.com",
+        ] {
+            assert!(!is_valid_provider_base_url(refused), "{refused}");
+        }
+        assert!(is_https_or_loopback_url("https://relay.example"));
+        assert!(is_https_or_loopback_url("http://localhost:8080"));
+        assert!(!is_https_or_loopback_url("http://[::2]"));
     }
 
     #[test]

@@ -5,7 +5,7 @@
  */
 import type { DriverEnv, DriverModule } from '../../sdk/module';
 import { isFile } from '../../sdk/executable';
-import { httpGet } from '../../sdk/net';
+import { httpGet, providerHttp } from '../../sdk/net';
 import { DeepSeekDriver } from './driver';
 import { takeDeepSeekEnv } from './env';
 import { installDshTree } from './install';
@@ -43,6 +43,7 @@ export const deepSeekModule: DriverModule = {
       mcp,
       baseEnv: ctx.ownEnv,
       httpGet,
+      providerHttp,
       log: ctx.log,
     });
     if (dshPath && !isFile(dshPath)) {

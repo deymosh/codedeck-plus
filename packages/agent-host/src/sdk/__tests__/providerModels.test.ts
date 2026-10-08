@@ -133,8 +133,8 @@ describe('fetchProviderModels', () => {
       ),
     ).toBeUndefined();
     expect(await fetchProviderModels('not a url', options(answering({ data: [{ id: 'a' }] })))).toBeUndefined();
-    expect(logs.some((line) => /^\[t\] .*answered 401/.test(line))).toBe(true);
-    expect(logs.some((line) => /listed no models/.test(line))).toBe(true);
+    expect(logs.some((line) => /^\[t\] .*refused the token \(HTTP 401\)/.test(line))).toBe(true);
+    expect(logs.some((line) => /lists no models/.test(line))).toBe(true);
     expect(logs.some((line) => /ECONNREFUSED/.test(line))).toBe(true);
     expect(logs.some((line) => /not a URL/.test(line))).toBe(true);
   });

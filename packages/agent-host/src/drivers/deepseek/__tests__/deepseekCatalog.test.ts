@@ -46,8 +46,8 @@ describe('the model list the endpoint serves', () => {
         throw new Error('ECONNREFUSED');
       }, log),
     ).toBeUndefined();
-    expect(logs.some((line) => /answered 401/.test(line))).toBe(true);
-    expect(logs.some((line) => /listed no models/.test(line))).toBe(true);
+    expect(logs.some((line) => /refused the token \(HTTP 401\)/.test(line))).toBe(true);
+    expect(logs.some((line) => /lists no models/.test(line))).toBe(true);
     expect(logs.some((line) => /ECONNREFUSED/.test(line))).toBe(true);
   });
 });

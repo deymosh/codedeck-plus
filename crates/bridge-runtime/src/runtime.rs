@@ -92,8 +92,6 @@ struct Runtime {
     host: HostHandle,
     inputs: mpsc::UnboundedSender<Input>,
     timers: HashMap<TimerId, JoinHandle<()>>,
-    /// To provider profiles' endpoints (see `work::provider_http_client`).
-    http: reqwest::Client,
     nostr_http: work::NostrHttp,
     outcome: Outcome,
     uploads: Rc<RefCell<Uploads>>,
@@ -165,7 +163,6 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         host,
         inputs,
         timers: HashMap::new(),
-        http: work::provider_http_client(),
         nostr_http,
         outcome: Outcome::Stopped,
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
@@ -282,20 +279,6 @@ impl Runtime {
                 tokio::task::spawn_local(async move {
                     let head = work::git_head(std::path::Path::new(&cwd)).await;
                     let _ = inputs.send(Input::GitHead { session_id, head });
-                });
-            }
-            Effect::CheckProviderToken { ticket, base_url, token, model } => {
-                let (inputs, http) = (self.inputs.clone(), self.http.clone());
-                tokio::task::spawn_local(async move {
-                    let valid = work::check_provider_token(&http, &base_url, token.expose(), &model).await;
-                    let _ = inputs.send(Input::ProviderTokenChecked { ticket, valid });
-                });
-            }
-            Effect::FetchProviderModels { ticket, base_url, token } => {
-                let (inputs, http) = (self.inputs.clone(), self.http.clone());
-                tokio::task::spawn_local(async move {
-                    let models = work::fetch_provider_models(&http, &base_url, token.expose()).await;
-                    let _ = inputs.send(Input::ProviderModelsFetched { ticket, models });
                 });
             }
             Effect::ReadGsd { session_id, cwd } => {

@@ -228,6 +228,24 @@ export class AgentHost {
         const valid = await driver.checkCredential?.(message.payload.credential, message.payload.value);
         return { kind: 'credential-checked', payload: valid === undefined ? {} : { valid } };
       }
+      case 'check-provider': {
+        const { agent, provider, model } = message.payload;
+        const valid = await this.driver(agent).checkProvider?.(provider, model);
+        return { kind: 'credential-checked', payload: valid === undefined ? {} : { valid } };
+      }
+      case 'list-provider-models': {
+        const { agent, baseUrl, authToken } = message.payload;
+        const driver = this.driver(agent);
+        if (!driver.listProviderModels) throw new Error(`${driver.info().displayName} cannot read a provider's models`);
+        const models = await driver.listProviderModels(baseUrl, authToken);
+        return { kind: 'provider-models', payload: { models: models.map((m) => ({ id: m.id, ...(m.label ? { label: m.label } : {}) })) } };
+      }
+      case 'set-providers': {
+        const driver = this.driver(message.payload.agent);
+        if (!driver.setProviders) throw new Error(`${driver.info().displayName} does not add provider profiles to its models`);
+        await driver.setProviders(message.payload.providers);
+        return ack();
+      }
       default:
         throw new Error(`unsupported request ${(message as { kind: string }).kind}`);
     }

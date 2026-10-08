@@ -363,6 +363,9 @@ pub struct SessionKeyMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileWrite {
+    /// The agent the profile is for (one whose catalog entry `supports`
+    /// `providers` or `providerModels`).
+    pub agent: String,
     pub label: String,
     /// CDX-071: https, or http ONLY on loopback — validated on egress
     /// ([`super::codec::encode_phone_to_bridge`]).
@@ -528,7 +531,7 @@ mod tests {
         let m = rt(&json!({"type":"set-provider-profile","profileId":"p","profile":null}));
         assert!(matches!(m, PhoneToBridge::SetProviderProfile(SetProviderProfileMsg { profile: None, .. })));
         let m = rt(&json!({"type":"set-provider-profile","profileId":"p","profile":{
-            "label":"L","baseUrl":"https://api.x","authToken":"tok","models":[{"id":"m1"}]
+            "agent":"claude-code","label":"L","baseUrl":"https://api.x","authToken":"tok","models":[{"id":"m1"}]
         }}));
         match m {
             PhoneToBridge::SetProviderProfile(s) => {

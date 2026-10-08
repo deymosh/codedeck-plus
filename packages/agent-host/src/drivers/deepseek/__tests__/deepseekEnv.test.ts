@@ -23,6 +23,7 @@ const BASE: Record<string, string | undefined> = {
 
 const provider = (overrides: Partial<ProviderBinding> = {}): ProviderBinding => ({
   id: 'gateway',
+  label: 'Gateway',
   baseUrl: 'https://gateway.example/v1',
   authToken: 'sk-gateway',
   models: [],

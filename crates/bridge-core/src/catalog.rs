@@ -23,12 +23,22 @@ impl Catalog {
         self.agents.iter().find(|a| a.id == id)
     }
 
-    /// The agent, when sessions can run on it; otherwise why not.
-    pub fn usable(&self, id: &str) -> Result<&AgentInfo, String> {
+    pub fn all(&self) -> &[AgentInfo] {
+        &self.agents
+    }
+
+    /// The agent, when this bridge has it (usable now or not); otherwise why
+    /// it cannot say.
+    pub fn known(&self, id: &str) -> Result<&AgentInfo, String> {
         if !self.known {
             return Err("The agent host is not running yet — try again in a moment.".into());
         }
-        let agent = self.get(id).ok_or_else(|| format!("This bridge has no agent '{id}'."))?;
+        self.get(id).ok_or_else(|| format!("This bridge has no agent '{id}'."))
+    }
+
+    /// The agent, when sessions can run on it; otherwise why not.
+    pub fn usable(&self, id: &str) -> Result<&AgentInfo, String> {
+        let agent = self.known(id)?;
         match &agent.unavailable_reason {
             Some(reason) => Err(reason.clone()),
             None => Ok(agent),
