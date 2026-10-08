@@ -44,6 +44,7 @@ import type {
   ModelEntry,
   ProviderBinding,
   QuestionSpec,
+  RefusedProvider,
   SessionOption,
   SlashCommand,
   StartSession,
@@ -53,7 +54,7 @@ import type {
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
-import { profileModelGroup, profileProviderId, providersFingerprint, serverSetup } from './providers';
+import { admitProfiles, profileModelGroup, profileProviderId, providersFingerprint, serverSetup } from './providers';
 import {
   resolveOpenCodePath,
   startOpenCodeServer,
@@ -990,6 +991,8 @@ export class OpenCodeDriver implements Driver {
    *  one was started with. */
   private providers: ProviderBinding[] = [];
   private served = providersFingerprint([]);
+  /** The provider ids the running server has from profiles. */
+  private servedIds = new Set<string>();
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
@@ -1070,6 +1073,7 @@ export class OpenCodeDriver implements Driver {
     }
     this.server = server;
     this.served = providersFingerprint(profiles);
+    this.servedIds = new Set(profiles.map(profileProviderId));
     const added = profiles.length > 0 ? `, with ${profiles.length} provider profile(s)` : '';
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
     return this.connect({ baseUrl: server.url, headers: setup.headers });
@@ -1096,31 +1100,54 @@ export class OpenCodeDriver implements Driver {
     );
   }
 
-  /** The provider profiles to add to OpenCode's own providers. The server
-   *  reads its config only when it starts, so a changed list restarts it:
+  /** The provider profiles to add to OpenCode's own providers; those whose
+   *  name one of its providers already has are left out. The server reads
+   *  its config only when it starts, so a changed list restarts it:
    *  sessions on the old one end with an error and the bridge resumes them
    *  on the new one. */
-  async setProviders(providers: ProviderBinding[]): Promise<void> {
+  async setProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     if (!this.manages) {
       throw new Error('OpenCode runs on a server this bridge does not start (CODEDECK_OPENCODE_SERVER_URL), so it cannot add provider profiles to it');
     }
-    // A profile the bridge would not let a session use is not added either.
-    this.providers = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
-    const apply = this.applying.then(() => this.applyProviders());
-    this.applying = apply.catch(() => {});
-    await apply;
+    const apply = this.applying.then(() => this.applyProviders(providers));
+    this.applying = apply.then(
+      () => {},
+      () => {},
+    );
+    return apply;
   }
 
-  private async applyProviders(): Promise<void> {
+  private async applyProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     // A server still being installed or started is waited for: it may have
-    // read an older list.
+    // read an older list, and it says which names are taken.
     await this.clientPromise?.catch(() => {});
-    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return;
+    // A profile the bridge would not let a session use is not added either.
+    const usable = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
+    const { admitted, refused } = admitProfiles(usable, await this.ownProviderIds());
+    this.providers = admitted;
+    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return refused;
     this.options.log('[opencode] restarting the server: its provider profiles changed');
     const old = this.server;
     this.server = null;
     this.launch(() => old.close());
     await this.clientPromise;
+    return refused;
+  }
+
+  /** The provider ids OpenCode has of its own — built in, configured by
+   *  the operator, signed in to — without the profiles this driver added.
+   *  Empty when the server cannot say (nothing is refused then). */
+  private async ownProviderIds(): Promise<Set<string>> {
+    try {
+      const client = await this.clientPromise;
+      if (!client) return new Set();
+      const { data, error } = await client.provider.list();
+      if (error || !data) throw new Error(JSON.stringify(error ?? 'no provider list'));
+      return new Set(data.all.map((p) => p.id).filter((id) => !this.servedIds.has(id)));
+    } catch (err) {
+      this.options.log(`[opencode] could not list its providers, so profile names are not checked: ${err instanceof Error ? err.message : String(err)}`);
+      return new Set();
+    }
   }
 
   info(): AgentInfo {

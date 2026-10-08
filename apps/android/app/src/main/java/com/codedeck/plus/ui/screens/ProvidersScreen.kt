@@ -262,6 +262,8 @@ private fun ProfileSummary(p: UniffiProviderProfileInfo) {
         color = Tokens.TextMuted,
         fontSize = Tokens.TextSm,
     )
+    // Why the agent does not offer its models (its name is taken, say).
+    p.error?.let { Text(it, color = Tokens.Danger, fontSize = Tokens.TextSm) }
 }
 
 /** The last save's outcome, in words. */

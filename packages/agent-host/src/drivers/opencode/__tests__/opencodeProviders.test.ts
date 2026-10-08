@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import { OpenCodeDriver } from '../driver';
-import { profileModelGroup, providersConfig, serverSetup } from '../providers';
+import { admitProfiles, profileModelGroup, profileProviderId, providersConfig, serverSetup } from '../providers';
 import type { StartOpenCodeServerOptions } from '../server';
 import type { ProviderBinding } from '../../../sdk/types';
 
@@ -26,7 +26,7 @@ describe('providersConfig', () => {
       theme: 'dark',
       provider: {
         mine: { npm: 'x' },
-        'codedeck-router': {
+        'home-router': {
           npm: '@ai-sdk/openai-compatible',
           name: 'Home router',
           options: { baseURL: 'http://192.168.1.2:3458/v1', apiKey: '{env:CODEDECK_PROVIDER_KEY_0}' },
@@ -39,12 +39,31 @@ describe('providersConfig', () => {
 
   it('names a routed model without its upstream, which its group shows, and gives OpenCode a known context window', () => {
     const routed = router({ models: [{ id: 'OpenCode Go/deepseek-v4.1-flash', provider: 'OpenCode Go', contextWindow: 1_000_000 }] });
-    const provider = (providersConfig([routed]).provider as Record<string, { models: Record<string, unknown> }>)['codedeck-router']!;
+    const provider = (providersConfig([routed]).provider as Record<string, { models: Record<string, unknown> }>)['home-router']!;
     expect(provider.models).toEqual({
       'OpenCode Go/deepseek-v4.1-flash': { name: 'deepseek-v4.1-flash', limit: { context: 1_000_000, output: 0 } },
     });
     expect(profileModelGroup('CCR', routed.models[0])).toBe('CCR · OpenCode Go');
     expect(profileModelGroup('CCR', { id: 'kimi-k3' })).toBe('CCR');
+  });
+
+  it('names each provider as the user named the profile', () => {
+    expect(profileProviderId(router({ label: 'CCR' }))).toBe('ccr');
+    expect(profileProviderId(router({ label: 'OpenCode Go (OpenAI)' }))).toBe('opencode-go-openai');
+    expect(profileProviderId(router({ label: 'Café / LAN' }))).toBe('cafe-lan');
+    expect(profileProviderId(router({ label: '★', id: 'p-7' }))).toBe('p-7');
+  });
+
+  it("leaves out a profile whose name one of OpenCode's providers, or an earlier profile, already has", () => {
+    const ccr = router({ id: 'a', label: 'CCR' });
+    const again = router({ id: 'b', label: 'ccr' });
+    const deepseek = router({ id: 'c', label: 'DeepSeek' });
+    const { admitted, refused } = admitProfiles([ccr, again, deepseek], new Set(['deepseek', 'opencode']));
+    expect(admitted.map((p) => p.id)).toEqual(['a']);
+    expect(refused).toEqual([
+      { id: 'b', reason: "The provider profile 'CCR' already goes by 'ccr' in OpenCode. Give this one another name." },
+      { id: 'c', reason: "OpenCode already has a provider called 'deepseek'. Give this profile another name." },
+    ]);
   });
 
   it('does not restrict the providers OpenCode already has', () => {
@@ -57,10 +76,10 @@ describe('providersConfig', () => {
 
 describe('serverSetup', () => {
   it('passes the tokens in the environment and guards the server with a password of its own', () => {
-    const a = serverSetup([router(), router({ id: 'or', authToken: 'tok-2' })], {});
+    const a = serverSetup([router(), router({ id: 'or', label: 'My OpenRouter', authToken: 'tok-2' })], {});
     expect(a.env.CODEDECK_PROVIDER_KEY_0).toBe('tok-secret');
     expect(a.env.CODEDECK_PROVIDER_KEY_1).toBe('tok-2');
-    expect(JSON.parse(a.env.OPENCODE_CONFIG_CONTENT!).provider).toHaveProperty('codedeck-or');
+    expect(JSON.parse(a.env.OPENCODE_CONFIG_CONTENT!).provider).toHaveProperty('my-openrouter');
     const password = a.env.OPENCODE_SERVER_PASSWORD!;
     expect(password).toMatch(/^[0-9a-f]{48}$/);
     expect(a.headers.authorization).toBe(`Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`);
@@ -71,7 +90,7 @@ describe('serverSetup', () => {
 
   it("keeps the operator's own environment config underneath", () => {
     const { env } = serverSetup([router()], { OPENCODE_CONFIG_CONTENT: '{"provider":{"mine":{"npm":"x"}}}' });
-    expect(Object.keys(JSON.parse(env.OPENCODE_CONFIG_CONTENT!).provider)).toEqual(['mine', 'codedeck-router']);
+    expect(Object.keys(JSON.parse(env.OPENCODE_CONFIG_CONTENT!).provider)).toEqual(['mine', 'home-router']);
   });
 });
 
@@ -154,6 +173,34 @@ describe('an OpenCode driver given provider profiles', () => {
     await restart;
     expect((await listed).models.map((m) => m.id)).toEqual(['zen/m2']);
     expect(starts).toBe(2);
+  });
+
+  it("leaves out a profile named as one of OpenCode's providers, but never one it added itself", async () => {
+    const starts: StartOpenCodeServerOptions[] = [];
+    const ids = ['opencode', 'deepseek'];
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      startServer: async (options) => {
+        starts.push(options);
+        return { url: `http://127.0.0.1:${4100 + starts.length}`, pid: starts.length, exited: new Promise(() => {}), close: async () => {} };
+      },
+      // The running server lists what it has, the profiles it was given too.
+      connect: () => ({ provider: { list: async () => ({ data: { all: ids.map((id) => ({ id })), default: {}, connected: [] } }) } }) as unknown as OpencodeClient,
+    });
+    expect(await driver.setProviders([router({ label: 'DeepSeek' })])).toEqual([
+      { id: 'router', reason: "OpenCode already has a provider called 'deepseek'. Give this profile another name." },
+    ]);
+    expect(starts).toHaveLength(1);
+
+    expect(await driver.setProviders([router({ label: 'CCR' })])).toEqual([]);
+    expect(starts).toHaveLength(2);
+    ids.push('ccr');
+    // Saved again, it keeps the name it already has.
+    expect(await driver.setProviders([router({ label: 'CCR', models: [{ id: 'other' }] })])).toEqual([]);
+    expect(starts).toHaveLength(3);
+    await driver.shutdown();
   });
 
   it('refuses them for a server it does not start', async () => {

@@ -1854,6 +1854,7 @@ mod tests {
                     models_from_provider: false,
                     default_model: None,
                     has_token: true,
+                    error: None,
                 }],
             },
         );

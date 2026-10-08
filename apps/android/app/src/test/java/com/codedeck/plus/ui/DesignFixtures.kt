@@ -96,17 +96,18 @@ internal object DesignFixtures {
                 UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Home gateway · Z.ai", 200_000u),
                 UniffiModelEntry("qwen3.8-coder", null, "Home gateway", null),
             ),
-            modelsFromProvider = true, defaultModel = "OpenCode Go/deepseek-v4.1-flash", hasToken = true,
+            modelsFromProvider = true, defaultModel = "OpenCode Go/deepseek-v4.1-flash", hasToken = true, error = null,
         ),
         UniffiProviderProfileInfo(
             id = "openrouter", agent = "opencode", label = "OpenRouter", baseUrl = "https://openrouter.ai/api",
             models = (1..42).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null) },
             modelsFromProvider = true, defaultModel = null, hasToken = false,
+            error = "OpenCode already has a provider called 'openrouter'. Give this profile another name.",
         ),
         UniffiProviderProfileInfo(
             id = "kimi-k3", agent = "", label = "Kimi K3", baseUrl = "https://api.moonshot.ai/anthropic",
             models = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Kimi K3", null)),
-            modelsFromProvider = false, defaultModel = "kimi-k3", hasToken = true,
+            modelsFromProvider = false, defaultModel = "kimi-k3", hasToken = true, error = null,
         ),
     )
 

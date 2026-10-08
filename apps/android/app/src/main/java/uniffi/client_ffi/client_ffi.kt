@@ -6811,6 +6811,11 @@ data class UniffiProviderProfileInfo (
     var `defaultModel`: kotlin.String?
     , 
     var `hasToken`: kotlin.Boolean
+    , 
+    /**
+     * Why the agent does not offer this profile's models, when it does not.
+     */
+    var `error`: kotlin.String?
     
 ){
     
@@ -6835,6 +6840,7 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -6846,7 +6852,8 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterSequenceTypeUniffiModelEntry.allocationSize(value.`models`) +
             FfiConverterBoolean.allocationSize(value.`modelsFromProvider`) +
             FfiConverterOptionalString.allocationSize(value.`defaultModel`) +
-            FfiConverterBoolean.allocationSize(value.`hasToken`)
+            FfiConverterBoolean.allocationSize(value.`hasToken`) +
+            FfiConverterOptionalString.allocationSize(value.`error`)
     )
 
     override fun write(value: UniffiProviderProfileInfo, buf: ByteBuffer) {
@@ -6858,6 +6865,7 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterBoolean.write(value.`modelsFromProvider`, buf)
             FfiConverterOptionalString.write(value.`defaultModel`, buf)
             FfiConverterBoolean.write(value.`hasToken`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
     }
 }
 

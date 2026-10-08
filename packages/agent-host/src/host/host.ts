@@ -253,8 +253,8 @@ export class AgentHost {
       case 'set-providers': {
         const driver = this.driver(message.payload.agent);
         if (!driver.setProviders) throw new Error(`${driver.info().displayName} does not add provider profiles to its models`);
-        await driver.setProviders(message.payload.providers);
-        return ack();
+        const refused = await driver.setProviders(message.payload.providers);
+        return { kind: 'providers-set', payload: { refused } };
       }
       default:
         throw new Error(`unsupported request ${(message as { kind: string }).kind}`);

@@ -27,6 +27,7 @@ import type {
   ProviderBinding,
   QuestionOutcome,
   QuestionSpec,
+  RefusedProvider,
   SelectOutcome,
   SessionEvent,
   SessionMcpServer,
@@ -152,9 +153,12 @@ export interface Driver {
    *  there is no list. */
   listProviderModels?(baseUrl: string, token: string): Promise<EndpointModel[]>;
   /** For an agent whose catalog entry `supports.providerModels`: its
-   *  provider profiles, all of them, whenever one changes. Their models are
-   *  offered beside the agent's own; nothing the agent already has goes. */
-  setProviders?(providers: ProviderBinding[]): Promise<void>;
+   *  provider profiles, all of them, oldest saved first, whenever one
+   *  changes. Their models are offered beside the agent's own; nothing the
+   *  agent already has goes. Resolves to the profiles left out (a name one
+   *  of the agent's providers, or an earlier profile, already has), each
+   *  with the reason in words for a person. */
+  setProviders?(providers: ProviderBinding[]): Promise<RefusedProvider[]>;
   /**
    * Delete the agent's own record of a conversation (an `info`
    * `nativeSessionId` it reported, run in `cwd`): its transcript files, or

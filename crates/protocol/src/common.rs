@@ -574,6 +574,10 @@ pub struct ProviderProfileInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     pub has_token: bool,
+    /// Why the agent does not offer this profile's models, when it does not
+    /// (one of its own providers has the profile's name, say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // --- transcript entries ---

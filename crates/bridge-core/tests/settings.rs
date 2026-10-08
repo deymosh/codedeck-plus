@@ -3,7 +3,7 @@
 
 mod support;
 
-use agent_protocol::{BridgeMessage, HostMessage, SessionEvent};
+use agent_protocol::{BridgeMessage, HostMessage, RefusedProvider, SessionEvent};
 use bridge_core::ports::memory::{MemoryStore, MemoryTranscripts};
 use bridge_core::ports::Transcripts as _;
 use bridge_core::{Effect, Input, PairingCloseReason, Via};
@@ -431,6 +431,82 @@ fn an_agent_that_adds_profile_models_gets_its_profiles_whenever_they_change() {
     assert_eq!(pushed_to_delta(&mut rig), Some(vec!["kimi".to_string()]));
     // An agent that binds sessions is never handed any.
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::SetProviders { agent, .. } if agent == "alpha")));
+}
+
+/// Answer the pending `set-providers` to delta, leaving out `refused`
+/// (profile id, reason).
+fn delta_takes(rig: &mut Rig, refused: &[(&str, &str)]) {
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::SetProviders { agent, .. } if agent == "delta"));
+    let refused = refused.iter().map(|(id, reason)| RefusedProvider { id: (*id).into(), reason: (*reason).into() }).collect();
+    rig.host_reply(&id, HostMessage::ProvidersSet { refused });
+}
+
+fn delta_kimi(label: &str) -> serde_json::Value {
+    json!({"agent":"delta","label":label,"baseUrl":"https://k.test","authToken":"t","models":[{"id":"m"}]})
+}
+
+#[test]
+fn a_save_the_agent_leaves_out_is_undone_and_refused_with_its_reason() {
+    let mut rig = rig_with_providers();
+    set_profile(&mut rig, delta_kimi("Home"));
+    assert!(!answer_token_check(&mut rig, None), "the token waits on the agent taking the profile");
+    delta_takes(&mut rig, &[]);
+    assert!(answer_token_check(&mut rig, Some(true)));
+    assert_eq!(stored_profile(&mut rig).map(|p| p.label), Some("Home".into()));
+
+    // Renamed to a name the agent already has: the save is undone.
+    set_profile(&mut rig, delta_kimi("DeepSeek"));
+    let reason = "OpenCode already has a provider called 'deepseek'. Give this profile another name.";
+    delta_takes(&mut rig, &[("kimi", reason)]);
+    assert!(!answer_token_check(&mut rig, None));
+    assert_eq!(ack_error(&mut rig).as_deref(), Some(reason));
+    assert!(rig.store.snapshot()["providerProfiles"].contains("\"Home\""), "the stored profile is the one before");
+    let (_, again) = rig.host_request(|m| matches!(m, BridgeMessage::SetProviders { agent, .. } if agent == "delta"));
+    match again {
+        BridgeMessage::SetProviders { providers, .. } => assert_eq!(providers[0].label, "Home", "and the agent gets it back"),
+        _ => unreachable!(),
+    }
+
+    // A new profile the agent leaves out is not stored at all.
+    rig.take();
+    rig.send(json!({"type":"set-provider-profile","profileId":"other","profile":delta_kimi("DeepSeek")}));
+    delta_takes(&mut rig, &[("other", reason)]);
+    assert_eq!(ack_error(&mut rig).as_deref(), Some(reason));
+    assert!(!rig.store.snapshot()["providerProfiles"].contains("\"other\""));
+}
+
+#[test]
+fn a_profile_the_agent_leaves_out_later_shows_why() {
+    let mut rig = rig_with_providers();
+    set_profile(&mut rig, delta_kimi("Home"));
+    delta_takes(&mut rig, &[]);
+    answer_token_check(&mut rig, Some(true));
+    rig.take();
+    // The host restarts and the agent no longer takes it.
+    rig.input(Input::HostDown { reason: "test".into() });
+    rig.host_up_with(vec![alpha(), beta(), delta()]);
+    delta_takes(&mut rig, &[("kimi", "taken")]);
+    assert_eq!(stored_profile(&mut rig).and_then(|p| p.error).as_deref(), Some("taken"));
+    // Taken again: the reason goes.
+    set_profile(&mut rig, delta_kimi("Home 2"));
+    delta_takes(&mut rig, &[]);
+    answer_token_check(&mut rig, None);
+    assert_eq!(stored_profile(&mut rig).map(|p| p.error), Some(None));
+}
+
+#[test]
+fn profiles_reach_an_agent_oldest_saved_first() {
+    let mut rig = rig_with_providers();
+    for id in ["zeta", "alpha-1"] {
+        rig.send(json!({"type":"set-provider-profile","profileId":id,"profile":delta_kimi(id)}));
+        delta_takes(&mut rig, &[]);
+        answer_token_check(&mut rig, None);
+        rig.advance(1_000);
+    }
+    rig.take();
+    rig.input(Input::HostDown { reason: "test".into() });
+    rig.host_up_with(vec![alpha(), beta(), delta()]);
+    assert_eq!(pushed_to_delta(&mut rig), Some(vec!["zeta".to_string(), "alpha-1".to_string()]));
 }
 
 fn with_kimi() -> Rig {

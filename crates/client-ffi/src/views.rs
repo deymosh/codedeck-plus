@@ -374,6 +374,8 @@ pub struct UniffiProviderProfileInfo {
     pub models_from_provider: bool,
     pub default_model: Option<String>,
     pub has_token: bool,
+    /// Why the agent does not offer this profile's models, when it does not.
+    pub error: Option<String>,
 }
 
 /// One selectable value of an agent option (a mode, an effort level, a plan
@@ -787,6 +789,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         models_from_provider: p.models_from_provider,
                         default_model: p.default_model.clone(),
                         has_token: p.has_token,
+                        error: p.error.clone(),
                     })
                     .collect(),
                 plugins: m.plugins.iter().map(|(agent, p)| to_uniffi_agent_plugins(agent, p)).collect(),

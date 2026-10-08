@@ -8,9 +8,10 @@
  * handed over in its environment, on top of the operator's files (which are
  * never written):
  *
- *  - each profile is the provider `codedeck-<profile id>`, named after the
- *    profile, so its models are `codedeck-<id>/<model>` and the phone shows
- *    them under the profile's name;
+ *  - each profile is a provider named as the user named the profile, its
+ *    id that name in lower case (`CCR` is `ccr`, its models `ccr/<model>`);
+ *    a profile whose id one of OpenCode's own providers already has, or an
+ *    earlier profile, is left out with the reason rather than shadow it;
  *  - each token sits in the server's environment only, referenced from the
  *    config, never in a file;
  *  - the server answers only with a password made for it, since its API
@@ -22,17 +23,51 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { providerApiRoot } from '../../sdk/providerModels';
-import type { ProviderBinding, ProviderModel } from '../../sdk/types';
+import type { ProviderBinding, ProviderModel, RefusedProvider } from '../../sdk/types';
 
-/** What a profile's provider id starts with: no OpenCode provider (models.dev
- *  catalog or the operator's) is named so. */
-export const PROFILE_PROVIDER_PREFIX = 'codedeck-';
 /** The user name OpenCode's server expects with its password. */
 const SERVER_USERNAME = 'opencode';
 
-/** The OpenCode provider id of a profile. */
+/** `name` as an OpenCode provider id: lower case, each run of anything but
+ *  letters and digits one `-` (a `/` would split its model ids). */
+function providerIdOf(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/** The OpenCode provider id of a profile: its name's, or its id's when the
+ *  name has no letter or digit. */
 export function profileProviderId(profile: ProviderBinding): string {
-  return `${PROFILE_PROVIDER_PREFIX}${profile.id}`;
+  return providerIdOf(profile.label) || providerIdOf(profile.id) || 'provider';
+}
+
+/** Which of `profiles` OpenCode can take, in order: one whose provider id
+ *  is `taken` by a provider OpenCode already has, or by an earlier profile,
+ *  is refused with the reason. */
+export function admitProfiles(
+  profiles: ProviderBinding[],
+  taken: ReadonlySet<string>,
+): { admitted: ProviderBinding[]; refused: RefusedProvider[] } {
+  const admitted: ProviderBinding[] = [];
+  const refused: RefusedProvider[] = [];
+  const used = new Map<string, ProviderBinding>();
+  for (const profile of profiles) {
+    const id = profileProviderId(profile);
+    const earlier = used.get(id);
+    if (taken.has(id)) {
+      refused.push({ id: profile.id, reason: `OpenCode already has a provider called '${id}'. Give this profile another name.` });
+    } else if (earlier) {
+      refused.push({ id: profile.id, reason: `The provider profile '${earlier.label}' already goes by '${id}' in OpenCode. Give this one another name.` });
+    } else {
+      used.set(id, profile);
+      admitted.push(profile);
+    }
+  }
+  return { admitted, refused };
 }
 
 /** The variable profile `index`'s token reaches the server in. */
