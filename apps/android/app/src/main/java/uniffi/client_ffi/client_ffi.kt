@@ -4479,6 +4479,32 @@ data class UniffiAgent (
     var `supportsTasks`: kotlin.Boolean
     , 
     var `credentials`: List<UniffiCredentialStatus>
+    , 
+    /**
+     * `ready` / `not_installed` / `installing` / `failed`; sessions start
+     * only on a `ready` agent.
+     */
+    var `installState`: kotlin.String
+    , 
+    /**
+     * CodeDeck installed it and can remove it (only while `ready`).
+     */
+    var `removable`: kotlin.Boolean
+    , 
+    /**
+     * Why the install failed (only while `failed`).
+     */
+    var `installError`: kotlin.String?
+    , 
+    /**
+     * `install` / `remove`: asked of the bridge and not acknowledged yet.
+     */
+    var `actionBusy`: kotlin.String?
+    , 
+    /**
+     * Why the bridge refused the last install or removal.
+     */
+    var `actionFailure`: kotlin.String?
     
 ){
     
@@ -4512,6 +4538,11 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeUniffiCredentialStatus.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -4532,7 +4563,12 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.allocationSize(value.`supportsPlugins`) +
             FfiConverterBoolean.allocationSize(value.`supportsMcp`) +
             FfiConverterBoolean.allocationSize(value.`supportsTasks`) +
-            FfiConverterSequenceTypeUniffiCredentialStatus.allocationSize(value.`credentials`)
+            FfiConverterSequenceTypeUniffiCredentialStatus.allocationSize(value.`credentials`) +
+            FfiConverterString.allocationSize(value.`installState`) +
+            FfiConverterBoolean.allocationSize(value.`removable`) +
+            FfiConverterOptionalString.allocationSize(value.`installError`) +
+            FfiConverterOptionalString.allocationSize(value.`actionBusy`) +
+            FfiConverterOptionalString.allocationSize(value.`actionFailure`)
     )
 
     override fun write(value: UniffiAgent, buf: ByteBuffer) {
@@ -4553,6 +4589,11 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.write(value.`supportsMcp`, buf)
             FfiConverterBoolean.write(value.`supportsTasks`, buf)
             FfiConverterSequenceTypeUniffiCredentialStatus.write(value.`credentials`, buf)
+            FfiConverterString.write(value.`installState`, buf)
+            FfiConverterBoolean.write(value.`removable`, buf)
+            FfiConverterOptionalString.write(value.`installError`, buf)
+            FfiConverterOptionalString.write(value.`actionBusy`, buf)
+            FfiConverterOptionalString.write(value.`actionFailure`, buf)
     }
 }
 
@@ -8340,6 +8381,22 @@ sealed class UniffiIntent {
     }
     
     /**
+     * Install an agent on a machine, or remove what CodeDeck installed of
+     * it. `action`: `install` or `remove`. Progress shows in the agent's
+     * `install_state`; a refusal in its `action_failure`.
+     */
+    data class AgentAction(
+        val `machine`: kotlin.String, 
+        val `agent`: kotlin.String, 
+        val `action`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * Ask for an agent's MCP servers on a machine; the answer lands in
      * `UniffiMachineSummary.mcp`.
      */
@@ -8944,51 +9001,56 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            13 -> UniffiIntent.RequestMcp(
+            13 -> UniffiIntent.AgentAction(
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            14 -> UniffiIntent.McpAction(
+            14 -> UniffiIntent.RequestMcp(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            15 -> UniffiIntent.McpAction(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterSequenceTypeUniffiMcpServerSpec.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            15 -> UniffiIntent.RequestSessionMcp(
+            16 -> UniffiIntent.RequestSessionMcp(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            16 -> UniffiIntent.ToggleSessionMcp(
+            17 -> UniffiIntent.ToggleSessionMcp(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
-            17 -> UniffiIntent.RequestGsd(
+            18 -> UniffiIntent.RequestGsd(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            18 -> UniffiIntent.RequestProviderProfiles(
+            19 -> UniffiIntent.RequestProviderProfiles(
                 FfiConverterString.read(buf),
                 )
-            19 -> UniffiIntent.SetCredentials(
+            20 -> UniffiIntent.SetCredentials(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterSequenceTypeUniffiCredentialWrite.read(buf),
                 )
-            20 -> UniffiIntent.SetProviderProfile(
+            21 -> UniffiIntent.SetProviderProfile(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalTypeUniffiProviderProfileWrite.read(buf),
                 )
-            21 -> UniffiIntent.RespondPermission(
+            22 -> UniffiIntent.RespondPermission(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            22 -> UniffiIntent.AnswerQuestion(
+            23 -> UniffiIntent.AnswerQuestion(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
@@ -8996,121 +9058,121 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterSequenceUInt.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            23 -> UniffiIntent.RespondPlan(
+            24 -> UniffiIntent.RespondPlan(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            24 -> UniffiIntent.SetOption(
+            25 -> UniffiIntent.SetOption(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            25 -> UniffiIntent.SelectSession(
+            26 -> UniffiIntent.SelectSession(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            26 -> UniffiIntent.SetPlanApprovalChoice(
+            27 -> UniffiIntent.SetPlanApprovalChoice(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            27 -> UniffiIntent.RetryOutboxItem(
+            28 -> UniffiIntent.RetryOutboxItem(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            28 -> UniffiIntent.DeleteSession(
+            29 -> UniffiIntent.DeleteSession(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            29 -> UniffiIntent.UndoDelete
-            30 -> UniffiIntent.SetTorEnabled(
+            30 -> UniffiIntent.UndoDelete
+            31 -> UniffiIntent.SetTorEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            31 -> UniffiIntent.SetStayConnected(
+            32 -> UniffiIntent.SetStayConnected(
                 FfiConverterBoolean.read(buf),
                 )
-            32 -> UniffiIntent.SetBlossomServer(
+            33 -> UniffiIntent.SetBlossomServer(
                 FfiConverterString.read(buf),
                 )
-            33 -> UniffiIntent.SetNotificationsEnabled(
+            34 -> UniffiIntent.SetNotificationsEnabled(
                 FfiConverterBoolean.read(buf),
                 )
-            34 -> UniffiIntent.SetUiScale(
+            35 -> UniffiIntent.SetUiScale(
                 FfiConverterDouble.read(buf),
                 )
-            35 -> UniffiIntent.SetShowUsageBadge(
+            36 -> UniffiIntent.SetShowUsageBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            36 -> UniffiIntent.SetShowCommitBadge(
+            37 -> UniffiIntent.SetShowCommitBadge(
                 FfiConverterBoolean.read(buf),
                 )
-            37 -> UniffiIntent.AddQuickPrompt(
+            38 -> UniffiIntent.AddQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            38 -> UniffiIntent.UpdateQuickPrompt(
+            39 -> UniffiIntent.UpdateQuickPrompt(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            39 -> UniffiIntent.RemoveQuickPrompt(
+            40 -> UniffiIntent.RemoveQuickPrompt(
                 FfiConverterString.read(buf),
                 )
-            40 -> UniffiIntent.DismissPendingSession(
+            41 -> UniffiIntent.DismissPendingSession(
                 FfiConverterString.read(buf),
                 )
-            41 -> UniffiIntent.RemoveMachine(
+            42 -> UniffiIntent.RemoveMachine(
                 FfiConverterString.read(buf),
                 )
-            42 -> UniffiIntent.SetDirectEndpoints(
+            43 -> UniffiIntent.SetDirectEndpoints(
                 FfiConverterString.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            43 -> UniffiIntent.SetMachineRelays(
+            44 -> UniffiIntent.SetMachineRelays(
                 FfiConverterString.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            44 -> UniffiIntent.SetDefaultAgent(
+            45 -> UniffiIntent.SetDefaultAgent(
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            45 -> UniffiIntent.SetAgentDefaults(
+            46 -> UniffiIntent.SetAgentDefaults(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            46 -> UniffiIntent.BeginPairing(
+            47 -> UniffiIntent.BeginPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            47 -> UniffiIntent.BeginManualPairing(
+            48 -> UniffiIntent.BeginManualPairing(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            48 -> UniffiIntent.StagePairing(
+            49 -> UniffiIntent.StagePairing(
                 FfiConverterString.read(buf),
                 )
-            49 -> UniffiIntent.ConfirmStagedPairing(
+            50 -> UniffiIntent.ConfirmStagedPairing(
                 FfiConverterString.read(buf),
                 )
-            50 -> UniffiIntent.DismissStagedPairing
-            51 -> UniffiIntent.ResetPairing
-            52 -> UniffiIntent.SetBackupRelay(
+            51 -> UniffiIntent.DismissStagedPairing
+            52 -> UniffiIntent.ResetPairing
+            53 -> UniffiIntent.SetBackupRelay(
                 FfiConverterString.read(buf),
                 )
-            53 -> UniffiIntent.ImportBackup
-            54 -> UniffiIntent.KeepLocalConfig
-            55 -> UniffiIntent.BackupNow
-            56 -> UniffiIntent.DisableBackup(
+            54 -> UniffiIntent.ImportBackup
+            55 -> UniffiIntent.KeepLocalConfig
+            56 -> UniffiIntent.BackupNow
+            57 -> UniffiIntent.DisableBackup(
                 FfiConverterBoolean.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -9227,6 +9289,15 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`agent`)
                 + FfiConverterString.allocationSize(value.`action`)
                 + FfiConverterString.allocationSize(value.`target`)
+            )
+        }
+        is UniffiIntent.AgentAction -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`agent`)
+                + FfiConverterString.allocationSize(value.`action`)
             )
         }
         is UniffiIntent.RequestMcp -> {
@@ -9671,14 +9742,21 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`target`, buf)
                 Unit
             }
-            is UniffiIntent.RequestMcp -> {
+            is UniffiIntent.AgentAction -> {
                 buf.putInt(13)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`agent`, buf)
+                FfiConverterString.write(value.`action`, buf)
+                Unit
+            }
+            is UniffiIntent.RequestMcp -> {
+                buf.putInt(14)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`agent`, buf)
                 Unit
             }
             is UniffiIntent.McpAction -> {
-                buf.putInt(14)
+                buf.putInt(15)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`agent`, buf)
                 FfiConverterString.write(value.`action`, buf)
@@ -9687,13 +9765,13 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.RequestSessionMcp -> {
-                buf.putInt(15)
+                buf.putInt(16)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.ToggleSessionMcp -> {
-                buf.putInt(16)
+                buf.putInt(17)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`name`, buf)
@@ -9701,32 +9779,32 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.RequestGsd -> {
-                buf.putInt(17)
+                buf.putInt(18)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.RequestProviderProfiles -> {
-                buf.putInt(18)
+                buf.putInt(19)
                 FfiConverterString.write(value.`machine`, buf)
                 Unit
             }
             is UniffiIntent.SetCredentials -> {
-                buf.putInt(19)
+                buf.putInt(20)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`agent`, buf)
                 FfiConverterSequenceTypeUniffiCredentialWrite.write(value.`values`, buf)
                 Unit
             }
             is UniffiIntent.SetProviderProfile -> {
-                buf.putInt(20)
+                buf.putInt(21)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`profileId`, buf)
                 FfiConverterOptionalTypeUniffiProviderProfileWrite.write(value.`profile`, buf)
                 Unit
             }
             is UniffiIntent.RespondPermission -> {
-                buf.putInt(21)
+                buf.putInt(22)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -9734,7 +9812,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.AnswerQuestion -> {
-                buf.putInt(22)
+                buf.putInt(23)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -9744,7 +9822,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.RespondPlan -> {
-                buf.putInt(23)
+                buf.putInt(24)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`requestId`, buf)
@@ -9753,7 +9831,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.SetOption -> {
-                buf.putInt(24)
+                buf.putInt(25)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`option`, buf)
@@ -9761,118 +9839,118 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.SelectSession -> {
-                buf.putInt(25)
+                buf.putInt(26)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`sessionId`, buf)
                 Unit
             }
             is UniffiIntent.SetPlanApprovalChoice -> {
-                buf.putInt(26)
+                buf.putInt(27)
                 FfiConverterString.write(value.`cardId`, buf)
                 FfiConverterString.write(value.`key`, buf)
                 Unit
             }
             is UniffiIntent.RetryOutboxItem -> {
-                buf.putInt(27)
+                buf.putInt(28)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DeleteSession -> {
-                buf.putInt(28)
+                buf.putInt(29)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterOptionalString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.UndoDelete -> {
-                buf.putInt(29)
+                buf.putInt(30)
                 Unit
             }
             is UniffiIntent.SetTorEnabled -> {
-                buf.putInt(30)
-                FfiConverterBoolean.write(value.`enabled`, buf)
-                Unit
-            }
-            is UniffiIntent.SetStayConnected -> {
                 buf.putInt(31)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.SetBlossomServer -> {
+            is UniffiIntent.SetStayConnected -> {
                 buf.putInt(32)
+                FfiConverterBoolean.write(value.`enabled`, buf)
+                Unit
+            }
+            is UniffiIntent.SetBlossomServer -> {
+                buf.putInt(33)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.SetNotificationsEnabled -> {
-                buf.putInt(33)
+                buf.putInt(34)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
             is UniffiIntent.SetUiScale -> {
-                buf.putInt(34)
+                buf.putInt(35)
                 FfiConverterDouble.write(value.`scale`, buf)
                 Unit
             }
             is UniffiIntent.SetShowUsageBadge -> {
-                buf.putInt(35)
-                FfiConverterBoolean.write(value.`enabled`, buf)
-                Unit
-            }
-            is UniffiIntent.SetShowCommitBadge -> {
                 buf.putInt(36)
                 FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.AddQuickPrompt -> {
+            is UniffiIntent.SetShowCommitBadge -> {
                 buf.putInt(37)
-                FfiConverterString.write(value.`id`, buf)
-                FfiConverterString.write(value.`label`, buf)
-                FfiConverterString.write(value.`text`, buf)
+                FfiConverterBoolean.write(value.`enabled`, buf)
                 Unit
             }
-            is UniffiIntent.UpdateQuickPrompt -> {
+            is UniffiIntent.AddQuickPrompt -> {
                 buf.putInt(38)
                 FfiConverterString.write(value.`id`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
-            is UniffiIntent.RemoveQuickPrompt -> {
+            is UniffiIntent.UpdateQuickPrompt -> {
                 buf.putInt(39)
+                FfiConverterString.write(value.`id`, buf)
+                FfiConverterString.write(value.`label`, buf)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is UniffiIntent.RemoveQuickPrompt -> {
+                buf.putInt(40)
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
             is UniffiIntent.DismissPendingSession -> {
-                buf.putInt(40)
+                buf.putInt(41)
                 FfiConverterString.write(value.`pendingId`, buf)
                 Unit
             }
             is UniffiIntent.RemoveMachine -> {
-                buf.putInt(41)
+                buf.putInt(42)
                 FfiConverterString.write(value.`pubkeyHex`, buf)
                 Unit
             }
             is UniffiIntent.SetDirectEndpoints -> {
-                buf.putInt(42)
+                buf.putInt(43)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterSequenceString.write(value.`endpoints`, buf)
                 Unit
             }
             is UniffiIntent.SetMachineRelays -> {
-                buf.putInt(43)
+                buf.putInt(44)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterSequenceString.write(value.`relays`, buf)
                 Unit
             }
             is UniffiIntent.SetDefaultAgent -> {
-                buf.putInt(44)
+                buf.putInt(45)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterOptionalString.write(value.`agent`, buf)
                 Unit
             }
             is UniffiIntent.SetAgentDefaults -> {
-                buf.putInt(45)
+                buf.putInt(46)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`agent`, buf)
                 FfiConverterString.write(value.`mode`, buf)
@@ -9881,13 +9959,13 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.BeginPairing -> {
-                buf.putInt(46)
+                buf.putInt(47)
                 FfiConverterString.write(value.`url`, buf)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.BeginManualPairing -> {
-                buf.putInt(47)
+                buf.putInt(48)
                 FfiConverterString.write(value.`npub`, buf)
                 FfiConverterString.write(value.`token`, buf)
                 FfiConverterString.write(value.`relays`, buf)
@@ -9895,42 +9973,42 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 Unit
             }
             is UniffiIntent.StagePairing -> {
-                buf.putInt(48)
+                buf.putInt(49)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ConfirmStagedPairing -> {
-                buf.putInt(49)
+                buf.putInt(50)
                 FfiConverterString.write(value.`label`, buf)
                 Unit
             }
             is UniffiIntent.DismissStagedPairing -> {
-                buf.putInt(50)
-                Unit
-            }
-            is UniffiIntent.ResetPairing -> {
                 buf.putInt(51)
                 Unit
             }
-            is UniffiIntent.SetBackupRelay -> {
+            is UniffiIntent.ResetPairing -> {
                 buf.putInt(52)
+                Unit
+            }
+            is UniffiIntent.SetBackupRelay -> {
+                buf.putInt(53)
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
             is UniffiIntent.ImportBackup -> {
-                buf.putInt(53)
-                Unit
-            }
-            is UniffiIntent.KeepLocalConfig -> {
                 buf.putInt(54)
                 Unit
             }
-            is UniffiIntent.BackupNow -> {
+            is UniffiIntent.KeepLocalConfig -> {
                 buf.putInt(55)
                 Unit
             }
-            is UniffiIntent.DisableBackup -> {
+            is UniffiIntent.BackupNow -> {
                 buf.putInt(56)
+                Unit
+            }
+            is UniffiIntent.DisableBackup -> {
+                buf.putInt(57)
                 FfiConverterBoolean.write(value.`delete`, buf)
                 Unit
             }

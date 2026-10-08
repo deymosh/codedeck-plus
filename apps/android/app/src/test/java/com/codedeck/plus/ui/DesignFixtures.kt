@@ -75,6 +75,7 @@ internal object DesignFixtures {
         defaultMode = "default", defaultEffort = null,
         supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
+        installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null,
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
@@ -82,6 +83,15 @@ internal object DesignFixtures {
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
         supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = emptyList(),
+        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null,
+    )
+    /** An agent the bridge offers and the machine does not have yet: a name, nothing it supports. */
+    val deepseek = UniffiAgent(
+        id = "deepseek-harness", displayName = "DeepSeek Harness",
+        modes = emptyList(), efforts = emptyList(), defaultMode = null, defaultEffort = null,
+        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsGsd = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false,
+        credentials = emptyList(),
+        installState = "not_installed", removable = false, installError = null, actionBusy = null, actionFailure = null,
     )
 
     private const val OFFICIAL = "claude-plugins-official"
@@ -183,7 +193,7 @@ internal object DesignFixtures {
             session("s3", "Tidy the release notes", "website", "idle", agent = "opencode", committed = true),
         ),
         capabilities = emptyList(), folders = listOf("codedeck-plus", "website", "dotfiles"), roots = emptyList(),
-        agents = listOf(claude, opencode),
+        agents = listOf(claude, opencode, deepseek),
         credentials = listOf(UniffiCredentialStatus("github", "GitHub token", present = false, fromEnv = false, valid = null)),
         models = listOf(UniffiAgentModels(
             "claude-code",

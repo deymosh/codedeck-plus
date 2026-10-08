@@ -195,6 +195,14 @@ pub enum UniffiIntent {
         action: String,
         target: String,
     },
+    /// Install an agent on a machine, or remove what CodeDeck installed of
+    /// it. `action`: `install` or `remove`. Progress shows in the agent's
+    /// `install_state`; a refusal in its `action_failure`.
+    AgentAction {
+        machine: String,
+        agent: String,
+        action: String,
+    },
     /// Ask for an agent's MCP servers on a machine; the answer lands in
     /// `UniffiMachineSummary.mcp`.
     RequestMcp {
@@ -490,6 +498,11 @@ impl TryFrom<UniffiIntent> for Intent {
                 agent,
                 action: parse_enum("action", &action)?,
                 target,
+            },
+            UniffiIntent::AgentAction { machine, agent, action } => Intent::AgentAction {
+                machine,
+                agent,
+                action: parse_enum("action", &action)?,
             },
             UniffiIntent::RequestCommands { machine, session_id } => {
                 Intent::RequestCommands { machine, session_id }

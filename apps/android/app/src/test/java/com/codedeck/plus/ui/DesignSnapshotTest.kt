@@ -170,6 +170,11 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "new_session_opencode" to {
         NewSessionBody(machine = workstation.copy(defaultAgent = "opencode"), events = MutableSharedFlow<CoreEvent>(), dispatch = {}, onClose = {}, onCreated = {})
     },
+    "new_session_install" to {
+        // The only agent failed to install: retrying comes before any option.
+        val failed = DesignFixtures.deepseek.copy(installState = "failed", installError = "the download did not match the pinned checksum")
+        NewSessionBody(machine = workstation.copy(agents = listOf(failed), defaultAgent = null), events = MutableSharedFlow<CoreEvent>(), dispatch = {}, onClose = {}, onCreated = {})
+    },
     "pairing" to {
         CompositionLocalProvider(LocalActivityResultRegistryOwner provides DesignFixtures.noResults) {
             PairingBody(
@@ -298,6 +303,7 @@ class DesignSnapshotTest {
     @Test fun transcript_long() = paparazzi.page("transcript_long")
     @Test fun new_session() = paparazzi.page("new_session")
     @Test fun new_session_opencode() = paparazzi.page("new_session_opencode")
+    @Test fun new_session_install() = paparazzi.page("new_session_install")
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
     @Test fun plugins() = paparazzi.page("plugins")
