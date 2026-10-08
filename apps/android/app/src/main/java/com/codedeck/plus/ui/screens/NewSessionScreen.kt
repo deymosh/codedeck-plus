@@ -161,9 +161,10 @@ internal fun NewSessionBody(
     val newFolderPath = newFolder.trim()
     val canCreate = agent != null && (folderChoice != NEW_FOLDER || newFolderPath.isNotEmpty())
 
-    // Custom provider profiles only for an agent that can use them.
+    // The agent's own provider profiles, when a session can be bound to one
+    // (an agent whose profiles add models offers them in the model list).
     val providerProfiles: List<UniffiProviderProfileInfo> =
-        if (agent?.supportsProviders == true) machine.providerProfiles else emptyList()
+        if (agent?.supportsProviders == true) machine.providerProfiles.filter { it.agent == agentId } else emptyList()
     val activeProfile = if (providerId != "") providerProfiles.find { it.id == providerId } else null
     // Each agent has its own model list — the Model picker never mixes them.
     val agentModels = machine.models.firstOrNull { it.agent == agentId }

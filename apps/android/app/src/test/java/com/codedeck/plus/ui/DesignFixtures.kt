@@ -35,6 +35,7 @@ import uniffi.client_ffi.UniffiPluginNotice
 import uniffi.client_ffi.UniffiCredentialStatus
 import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
+import uniffi.client_ffi.UniffiProviderProfileInfo
 import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiQuickPrompt
 import uniffi.client_ffi.UniffiSessionCommands
@@ -72,18 +73,42 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = emptyList(),
     )
 
     private const val OFFICIAL = "claude-plugins-official"
+
+    /** A gateway at home and OpenRouter for OpenCode, their models read from
+     *  each; and one saved before providers named their agent. */
+    val providerProfiles = listOf(
+        UniffiProviderProfileInfo(
+            id = "home-gateway", agent = "opencode", label = "Home gateway", baseUrl = "http://192.168.1.2:3458",
+            models = listOf(
+                UniffiModelEntry("OpenCode Go/deepseek-v4.1-flash", null, "Home gateway"),
+                UniffiModelEntry("Z.ai/glm-5.3-flash", null, "Home gateway"),
+                UniffiModelEntry("qwen3.8-coder", null, "Home gateway"),
+            ),
+            modelsFromProvider = true, defaultModel = "OpenCode Go/deepseek-v4.1-flash", hasToken = true,
+        ),
+        UniffiProviderProfileInfo(
+            id = "openrouter", agent = "opencode", label = "OpenRouter", baseUrl = "https://openrouter.ai/api",
+            models = (1..42).map { UniffiModelEntry("vendor/model-$it", null, "OpenRouter") },
+            modelsFromProvider = true, defaultModel = null, hasToken = false,
+        ),
+        UniffiProviderProfileInfo(
+            id = "kimi-k3", agent = "", label = "Kimi K3", baseUrl = "https://api.moonshot.ai/anthropic",
+            models = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Kimi K3")),
+            modelsFromProvider = false, defaultModel = "kimi-k3", hasToken = true,
+        ),
+    )
 
     /** Claude Code's plugins: two installed (one off), two marketplaces, an
      *  install under way, and a change that failed. */
@@ -170,7 +195,7 @@ internal object DesignFixtures {
             "opus",
             null,
         )),
-        providerProfiles = emptyList(), plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp),
+        providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp),
         directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
         npub = "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvw",
