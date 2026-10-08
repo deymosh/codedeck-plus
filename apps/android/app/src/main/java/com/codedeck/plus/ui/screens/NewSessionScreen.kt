@@ -115,11 +115,13 @@ internal fun NewSessionBody(
     onClose: () -> Unit,
     onCreated: (knownSessionIds: Set<String>) -> Unit,
 ) {
-    // The agent the session runs on: the machine's chosen default while the
-    // bridge still offers it, else its first agent, until the user picks
-    // another. Re-keyed on the machine so another machine's screen starts
-    // from its own defaults rather than a stale prior selection.
-    val startAgent = machine.defaultAgent?.takeIf { id -> machine.agents.any { it.id == id } } ?: machine.agents.firstOrNull()?.id.orEmpty()
+    // The agent the session runs on: the machine's chosen default while it is
+    // installed, else its first installed agent (its first agent when none
+    // is, to install from here), until the user picks another. Re-keyed on
+    // the machine so another machine's screen starts from its own defaults
+    // rather than a stale prior selection.
+    val startAgent = machine.defaultAgent?.takeIf { id -> machine.agents.any { it.id == id && it.ready } }
+        ?: (machine.agents.firstOrNull { it.ready } ?: machine.agents.firstOrNull())?.id.orEmpty()
     var agentId by remember(machine.pubkeyHex) { mutableStateOf(startAgent) }
     val agent: UniffiAgent? = machine.agents.firstOrNull { it.id == agentId }
 
@@ -145,7 +147,9 @@ internal fun NewSessionBody(
     var createError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(machine.pubkeyHex, agentId) {
+    // An agent installed while this screen is open reports what it supports
+    // only then, so its models are asked for at that point.
+    LaunchedEffect(machine.pubkeyHex, agentId, agent?.ready) {
         if (agent?.supportsModels == true) dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, agentId))
     }
     LaunchedEffect(machine.pubkeyHex) {
@@ -159,7 +163,7 @@ internal fun NewSessionBody(
     // identical-looking row would be noise.
     val roots = if (machine.roots.size > 1) machine.roots else emptyList()
     val newFolderPath = newFolder.trim()
-    val canCreate = agent != null && (folderChoice != NEW_FOLDER || newFolderPath.isNotEmpty())
+    val canCreate = agent?.ready == true && (folderChoice != NEW_FOLDER || newFolderPath.isNotEmpty())
 
     // The agent's own provider profiles, when a session can be bound to one
     // (an agent whose profiles add models offers them in the model list).
@@ -209,7 +213,7 @@ internal fun NewSessionBody(
     )
 
     fun create() {
-        if (creating || agent == null) return
+        if (creating || agent == null || !agent.ready) return
         creating = true
         createError = null
         val cwd = if (folderChoice == NEW_FOLDER) newFolderPath else folderChoice
@@ -269,11 +273,23 @@ internal fun NewSessionBody(
                 if (shown++ > 0) Divider()
                 ValueRow("Agent") {
                     SelectField(
-                        options = machine.agents.map { PickerOption(it.id, it.displayName) },
+                        options = machine.agents.map { PickerOption(it.id, agentPickerLabel(it)) },
                         selected = agentId,
                         onSelect = ::changeAgent,
                     )
                 }
+            }
+
+            // An agent not installed has nothing to choose yet: installing
+            // it comes first, and its options appear once it is ready.
+            if (agent != null && !agent.ready) {
+                if (shown++ > 0) Divider()
+                AgentInstallRow(
+                    agent,
+                    onInstall = { dispatch(UniffiIntent.AgentAction(machine.pubkeyHex, agent.id, "install")) },
+                    onRemove = null,
+                )
+                return@Group
             }
 
             if (providerProfiles.isNotEmpty()) {

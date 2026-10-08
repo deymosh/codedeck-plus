@@ -256,12 +256,12 @@ catalog the phone reads:
 
 ## Offline and container notes
 
-- The container image installs the harness into `/data/agents` on first use,
-  like the other agents. Build with `CODEDECK_BUNDLE_AGENTS=1` (see
-  [`BRIDGE.md`](BRIDGE.md)) and the image carries it instead, from the same
-  installer and so at the same pinned version.
-- `CODEDECK_AGENT_HOST_WARM=1` runs that install and exits, for a host that
-  should fetch everything before it serves anything.
+- The harness is installed when someone chooses it — Install on the phone,
+  or `codedeck-bridge agents install deepseek-harness` from a shell, before
+  anyone asks — into `/data/agents` in the container image, like the other
+  agents. Build with `CODEDECK_BUNDLE_AGENTS=1` (see [`BRIDGE.md`](BRIDGE.md))
+  and the image carries it instead, from the same installer and so at the
+  same pinned version.
 - The harness's runtime is large (some 600 packages): a minute or two on a
   normal connection. The compose file keeps it in the `agents` volume rather
   than in `./data`: a harness process reads the whole tree every time it

@@ -109,8 +109,8 @@ internal fun machineOrLeave(core: CoreHost, pubkey: String, onGone: () -> Unit):
 internal fun shortKey(key: String): String = if (key.length <= 20) key else "${key.take(12)}…${key.takeLast(6)}"
 
 /**
- * One machine's page: who it is and whether it is up, what its new sessions
- * start with, the relays it is reached over, its direct link, the
+ * One machine's page: who it is and whether it is up, its agents (installed
+ * and removed from here), what its new sessions start with, the relays it is reached over, its direct link, the
  * credentials kept on it, its agents' AI providers, plugins and MCP
  * servers (each agent's on a page of its own, opened through
  * [onOpenProviders], [onOpenPlugins] and [onOpenMcp]), and forgetting it. Pure — the
@@ -131,19 +131,34 @@ fun MachineSettingsContent(
     onOpenMcp: (agent: String) -> Unit,
 ) {
     // The model pickers need each agent's list, and the provider and plugin
-    // rows their counts: ask for them on opening.
-    LaunchedEffect(machine.pubkeyHex) {
-        machine.agents.filter { it.supportsModels }.forEach { dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, it.id)) }
+    // rows their counts: ask for them on opening, and again for an agent
+    // once it is installed.
+    val readyAgents = machine.agents.filter { it.ready }
+    LaunchedEffect(machine.pubkeyHex, readyAgents.map { it.id }) {
+        readyAgents.filter { it.supportsModels }.forEach { dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, it.id)) }
         if (providerAgents(machine).isNotEmpty()) dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
-        machine.agents.filter { it.supportsPlugins }.forEach {
+        readyAgents.filter { it.supportsPlugins }.forEach {
             dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, it.id, available = false))
         }
-        machine.agents.filter { it.supportsMcp }.forEach { dispatch(UniffiIntent.RequestMcp(machine.pubkeyHex, it.id)) }
+        readyAgents.filter { it.supportsMcp }.forEach { dispatch(UniffiIntent.RequestMcp(machine.pubkeyHex, it.id)) }
     }
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
+    var removeAgent by remember(machine.pubkeyHex) { mutableStateOf<UniffiAgent?>(null) }
 
     Page(title = machineLabel(machine.name), onBack = onBack) {
         MachineHeader(machine, now)
+        if (machine.agents.isNotEmpty()) {
+            Group(title = "Agents", footer = "Installed on the machine at the version its bridge pins. Sessions start only on an installed agent.") {
+                machine.agents.forEachIndexed { i, agent ->
+                    if (i > 0) Divider()
+                    AgentInstallRow(
+                        agent,
+                        onInstall = { dispatch(UniffiIntent.AgentAction(machine.pubkeyHex, agent.id, "install")) },
+                        onRemove = { removeAgent = agent },
+                    )
+                }
+            }
+        }
         NewSessionDefaults(machine, dispatch)
         MachineRelays(machine, connectedRelays, dispatch)
         Group(
@@ -207,6 +222,19 @@ fun MachineSettingsContent(
             onDismiss = { confirmRemove = false },
         )
     }
+    removeAgent?.let { agent ->
+        ConfirmDialog(
+            title = "Remove ${agent.displayName}?",
+            body = "Its sessions on ${machineLabel(machine.name)} end, and what CodeDeck installed of it is deleted. " +
+                "Its settings and conversations stay; install it again here at any time.",
+            confirm = "Remove",
+            onConfirm = {
+                dispatch(UniffiIntent.AgentAction(machine.pubkeyHex, agent.id, "remove"))
+                removeAgent = null
+            },
+            onDismiss = { removeAgent = null },
+        )
+    }
 }
 
 @Composable
@@ -260,22 +288,31 @@ private fun NewSessionDefaults(machine: UniffiMachineSummary, dispatch: (UniffiI
         }
         return
     }
-    val firstAgent = machine.agents.first()
+    // Only an installed agent runs sessions, so only those have defaults.
+    val agents = machine.agents.filter { it.ready }
+    if (agents.isEmpty()) {
+        Group(title = "New sessions", footer = "Install an agent above to start sessions on this machine.") {
+            ValueRow("Agent", subtitle = "None installed") {}
+        }
+        return
+    }
+    val firstAgent = agents.first()
     Group(title = "New sessions", footer = "What a session started here begins with. You can still change any of it when you start one.") {
-        if (machine.agents.size > 1) {
+        if (agents.size > 1) {
             ValueRow("Agent") {
                 SelectField(
                     options = listOf(PickerOption("", "First available (${firstAgent.displayName})")) +
-                        machine.agents.map { PickerOption(it.id, it.displayName) },
-                    selected = machine.defaultAgent.orEmpty(),
+                        agents.map { PickerOption(it.id, it.displayName) },
+                    // A chosen agent since removed reads as the first available, as it acts.
+                    selected = machine.defaultAgent?.takeIf { id -> agents.any { it.id == id } }.orEmpty(),
                     onSelect = { dispatch(UniffiIntent.SetDefaultAgent(machine.pubkeyHex, it.ifEmpty { null })) },
                 )
             }
             Divider()
         }
-        machine.agents.forEachIndexed { index, agent ->
+        agents.forEachIndexed { index, agent ->
             if (index > 0) Divider()
-            AgentDefaultsRows(machine, agent, showName = machine.agents.size > 1, dispatch)
+            AgentDefaultsRows(machine, agent, showName = agents.size > 1, dispatch)
         }
     }
 }

@@ -30,7 +30,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
-use client_runtime::client_core::stores::machines::{AgentMcp, AgentPlugins, SessionMcp};
+use client_runtime::client_core::stores::machines::{AgentActionState, AgentMcp, AgentPlugins, SessionMcp};
 use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
@@ -41,7 +41,7 @@ use client_runtime::{
 };
 use client_runtime::view::TranscriptSyncView;
 use protocol::common::{
-    AgentDescriptor, CredentialStatus, GsdAction, GsdExecution, GsdPhase, GsdState, OptionChoice,
+    AgentDescriptor, AgentInstall, CredentialStatus, GsdAction, GsdExecution, GsdPhase, GsdState, OptionChoice,
     UsageData, UsageWindow,
 };
 use serde::Deserialize;
@@ -430,6 +430,17 @@ pub struct UniffiAgent {
     /// Sessions report background tasks, and `StopTask` stops one.
     pub supports_tasks: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
+    /// `ready` / `not_installed` / `installing` / `failed`; sessions start
+    /// only on a `ready` agent.
+    pub install_state: String,
+    /// CodeDeck installed it and can remove it (only while `ready`).
+    pub removable: bool,
+    /// Why the install failed (only while `failed`).
+    pub install_error: Option<String>,
+    /// `install` / `remove`: asked of the bridge and not acknowledged yet.
+    pub action_busy: Option<String>,
+    /// Why the bridge refused the last install or removal.
+    pub action_failure: Option<String>,
 }
 
 /// One agent's live model list on a machine.
@@ -460,7 +471,13 @@ fn to_uniffi_credential_status(c: &CredentialStatus) -> UniffiCredentialStatus {
     }
 }
 
-fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
+fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>) -> UniffiAgent {
+    let (install_state, removable, install_error) = match &a.install {
+        AgentInstall::Ready { removable } => ("ready", *removable, None),
+        AgentInstall::NotInstalled {} => ("not_installed", false, None),
+        AgentInstall::Installing {} => ("installing", false, None),
+        AgentInstall::Failed { reason } => ("failed", false, Some(reason.clone())),
+    };
     UniffiAgent {
         id: a.id.clone(),
         display_name: a.display_name.clone(),
@@ -479,6 +496,11 @@ fn to_uniffi_agent(a: &AgentDescriptor) -> UniffiAgent {
         supports_mcp: a.supports.mcp,
         supports_tasks: a.supports.tasks,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
+        install_state: install_state.into(),
+        removable,
+        install_error,
+        action_busy: action.and_then(|s| s.busy.as_ref()).map(wire_str),
+        action_failure: action.and_then(|s| s.failure.clone()),
     }
 }
 
@@ -773,7 +795,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                 capabilities: m.capabilities.clone(),
                 folders: m.folders.clone(),
                 roots: m.roots.clone(),
-                agents: m.agents.iter().map(to_uniffi_agent).collect(),
+                agents: m.agents.iter().map(|a| to_uniffi_agent(a, m.agent_actions.get(&a.id))).collect(),
                 credentials: m.credentials.iter().map(to_uniffi_credential_status).collect(),
                 models: m
                     .models

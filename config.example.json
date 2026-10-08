@@ -9,7 +9,6 @@
     "endpoints": ["wss://192.168.1.20:7447", "wss://workstation.tail1234.ts.net:7447", "ws://exampleonionaddress.onion:7448"]
   },
   "claudePath": "/usr/local/bin/claude",
-  "openCodeAutoStart": true,
   "openCodePort": 4096,
   "openCodeServerUrl": "http://127.0.0.1:4096",
   "openCodePath": "/usr/local/bin/opencode",

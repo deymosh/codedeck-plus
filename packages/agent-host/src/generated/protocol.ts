@@ -23,10 +23,17 @@ export type AgentInfo_Deserialize = {
 	supports?: AgentSupports,
 	credentials?: CredentialSpec_Deserialize[],
 	/**
-	 *  Set when the driver is installed but cannot run sessions here (e.g. a
-	 *  missing binary); the bridge refuses sessions with this reason.
+	 *  Set when the agent is installed but cannot run sessions here (e.g. a
+	 *  server that will not start); the bridge refuses sessions with this
+	 *  reason.
 	 */
 	unavailableReason?: string | null,
+	/**
+	 *  Whether the agent is on this machine. One that is not has only its
+	 *  id and name filled in; the rest arrives in `agent-changed` once it
+	 *  is installed.
+	 */
+	install?: AgentInstall_Deserialize,
 };
 
 /**
@@ -44,11 +51,58 @@ export type AgentInfo_Serialize = {
 	supports: AgentSupports,
 	credentials: CredentialSpec_Serialize[],
 	/**
-	 *  Set when the driver is installed but cannot run sessions here (e.g. a
-	 *  missing binary); the bridge refuses sessions with this reason.
+	 *  Set when the agent is installed but cannot run sessions here (e.g. a
+	 *  server that will not start); the bridge refuses sessions with this
+	 *  reason.
 	 */
 	unavailableReason?: string | null,
+	/**
+	 *  Whether the agent is on this machine. One that is not has only its
+	 *  id and name filled in; the rest arrives in `agent-changed` once it
+	 *  is installed.
+	 */
+	install: AgentInstall_Serialize,
 };
+
+/**
+ *  Where an agent stands on the bridge's machine. The bridge installs an
+ *  agent when asked (`agent-action`), at the version its build pins.
+ */
+export type AgentInstall = AgentInstall_Serialize | AgentInstall_Deserialize;
+
+/**
+ *  Where an agent stands on the bridge's machine. The bridge installs an
+ *  agent when asked (`agent-action`), at the version its build pins.
+ */
+export type AgentInstall_Deserialize = 
+/**
+ *  Installed. `removable`: CodeDeck installed it and can remove it; an
+ *  agent the machine has of its own (on PATH, bundled, configured) is
+ *  not.
+ */
+({ state: "ready"; removable?: boolean }) & { reason?: never } | ({ state: "not_installed" }) & { reason?: never; removable?: never } | ({ state: "installing" }) & { reason?: never; removable?: never } | 
+/**
+ *  The last install did not finish, for `reason`; installing again
+ *  retries.
+ */
+({ state: "failed"; reason: string }) & { removable?: never };
+
+/**
+ *  Where an agent stands on the bridge's machine. The bridge installs an
+ *  agent when asked (`agent-action`), at the version its build pins.
+ */
+export type AgentInstall_Serialize = 
+/**
+ *  Installed. `removable`: CodeDeck installed it and can remove it; an
+ *  agent the machine has of its own (on PATH, bundled, configured) is
+ *  not.
+ */
+({ state: "ready"; removable?: boolean }) & { reason?: never } | ({ state: "not_installed" }) & { reason?: never; removable?: never } | ({ state: "installing" }) & { reason?: never; removable?: never } | 
+/**
+ *  The last install did not finish, for `reason`; installing again
+ *  retries.
+ */
+({ state: "failed"; reason: string }) & { removable?: never };
 
 /**
  *  Optional features an agent supports. A client offers a feature only when
@@ -282,6 +336,23 @@ export type BridgeMessage_Deserialize =
 	agent: string,
 	providers: ProviderBinding_Deserialize[],
 } } | 
+/**
+ *  Install an agent that is not on this machine, at the version this
+ *  build pins. Reply: `ack` once the install began (or when the agent is
+ *  already there); `agent-changed` follows as it goes and when it is
+ *  done. `error` when it cannot be installed at all.
+ */
+{ kind: "install-agent"; payload: {
+	agent: string,
+} } | 
+/**
+ *  Remove what was installed of an agent (`ready` with `removable`):
+ *  its sessions end first. Reply: `ack` once it is gone, after an
+ *  `agent-changed` saying so, or `error` saying why it cannot be.
+ */
+{ kind: "remove-agent"; payload: {
+	agent: string,
+} } | 
 /**  Reply to `request-permission`. */
 { kind: "permission-outcome"; payload: SelectOutcome } | 
 /**  Reply to `request-plan-approval`. */
@@ -445,6 +516,23 @@ export type BridgeMessage_Serialize =
 { kind: "set-providers"; payload: {
 	agent: string,
 	providers: ProviderBinding_Serialize[],
+} } | 
+/**
+ *  Install an agent that is not on this machine, at the version this
+ *  build pins. Reply: `ack` once the install began (or when the agent is
+ *  already there); `agent-changed` follows as it goes and when it is
+ *  done. `error` when it cannot be installed at all.
+ */
+{ kind: "install-agent"; payload: {
+	agent: string,
+} } | 
+/**
+ *  Remove what was installed of an agent (`ready` with `removable`):
+ *  its sessions end first. Reply: `ack` once it is gone, after an
+ *  `agent-changed` saying so, or `error` saying why it cannot be.
+ */
+{ kind: "remove-agent"; payload: {
+	agent: string,
 } } | 
 /**  Reply to `request-permission`. */
 { kind: "permission-outcome"; payload: SelectOutcome } | 
@@ -774,6 +862,14 @@ export type HostMessage_Deserialize =
 { kind: "providers-set"; payload: {
 	refused: RefusedProvider[],
 } } | 
+/**
+ *  A notification: an agent's catalog entry changed — it is being
+ *  installed, it was installed or removed, or the install failed. It
+ *  replaces the entry `initialized` reported.
+ */
+{ kind: "agent-changed"; payload: {
+	agent: AgentInfo_Deserialize,
+} } | 
 /**  A notification: no frame id, no reply. */
 { kind: "session-event"; payload: {
 	sessionId: string,
@@ -859,6 +955,14 @@ export type HostMessage_Serialize =
  */
 { kind: "providers-set"; payload: {
 	refused: RefusedProvider[],
+} } | 
+/**
+ *  A notification: an agent's catalog entry changed — it is being
+ *  installed, it was installed or removed, or the install failed. It
+ *  replaces the entry `initialized` reported.
+ */
+{ kind: "agent-changed"; payload: {
+	agent: AgentInfo_Serialize,
 } } | 
 /**  A notification: no frame id, no reply. */
 { kind: "session-event"; payload: {

@@ -8,7 +8,8 @@ import { isFile } from '../../sdk/executable';
 import { httpGet, providerHttp } from '../../sdk/net';
 import { DeepSeekDriver } from './driver';
 import { takeDeepSeekEnv } from './env';
-import { installDshTree } from './install';
+import { removePackageTree } from '../../install/agentInstall';
+import { DSH_PACKAGE, installDshTree, installedDshTree } from './install';
 import { DeepSeekMcp } from './mcp';
 import { DeepSeekRuntime, dshHomeDir, dshProfileDir } from './runtime';
 
@@ -56,6 +57,8 @@ export const deepSeekModule: DriverModule = {
       const dshPath = explicitPath(ctx);
       return dshPath ? `the CLI at ${dshPath}` : null;
     },
+    installed: (ctx) => installedDshTree(ctx.cacheDir),
     install: (ctx) => installDshTree({ cacheDir: ctx.cacheDir, registry: ctx.registry, log: ctx.log }),
+    remove: (ctx) => removePackageTree(DSH_PACKAGE, ctx.cacheDir),
   },
 };

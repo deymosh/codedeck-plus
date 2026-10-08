@@ -100,16 +100,51 @@ function realPath(p: string): string {
  */
 const INSTALLED_MARKER = '.installed';
 
+/** The cache directory name of every installed version of `pkg` starts with
+ *  this. */
+function cachePrefix(pkg: string): string {
+  return `${pkg.replace('/', '+')}@`;
+}
+
+/** Where the pinned version of `binary` sits in the cache. */
+function binaryPlace(binary: PackagedBinary, cacheDir: string, pins: Readonly<Record<string, PackagePin>> = PLATFORM_PACKAGES) {
+  const pin = pins[binary.pkg];
+  if (!pin) return null;
+  const dir = path.join(cacheDir, `${cachePrefix(binary.pkg)}${pin.version}`);
+  return { pin, dir, target: path.join(dir, ...binary.file.split('/')), marker: path.join(dir, INSTALLED_MARKER) };
+}
+
+/** The pinned `binary` when it is installed and complete, else null. Never
+ *  downloads. */
+export function installedBinary(
+  binary: PackagedBinary,
+  options: { cacheDir: string; pins?: Readonly<Record<string, PackagePin>> },
+): string | null {
+  const place = binaryPlace(binary, options.cacheDir, options.pins);
+  return place && isFile(place.target) && readQuietly(place.marker) === place.pin.integrity ? place.target : null;
+}
+
+/** Remove every installed version of `binary`'s package, and its link in
+ *  `<cache>/bin`. */
+export function removeBinary(binary: PackagedBinary, cacheDir: string): void {
+  const prefix = cachePrefix(binary.pkg);
+  const link = path.join(agentBinDir(cacheDir), path.basename(binary.file));
+  try {
+    // The link may point at another package's binary of the same name.
+    if (fs.readlinkSync(link).split(/[\\/]/).some((part) => part.startsWith(prefix))) removeQuietly(link);
+  } catch {
+    /* no link to it */
+  }
+  removeAllVersions(cacheDir, prefix);
+}
+
 /** Install `binary` if it is not cached yet, and return its path. */
 export async function installBinary(binary: PackagedBinary, options: InstallOptions): Promise<string> {
-  const pin = (options.pins ?? PLATFORM_PACKAGES)[binary.pkg];
-  if (!pin) throw new Error(`${binary.label}: ${binary.pkg} is not pinned in this build, so it cannot be downloaded`);
-
-  const prefix = `${binary.pkg.replace('/', '+')}@`;
-  const dir = path.join(options.cacheDir, `${prefix}${pin.version}`);
-  const target = path.join(dir, ...binary.file.split('/'));
-  const marker = path.join(dir, INSTALLED_MARKER);
-  if (isFile(target) && readQuietly(marker) === pin.integrity) {
+  const place = binaryPlace(binary, options.cacheDir, options.pins);
+  if (!place) throw new Error(`${binary.label}: ${binary.pkg} is not pinned in this build, so it cannot be downloaded`);
+  const { pin, dir, target, marker } = place;
+  const prefix = cachePrefix(binary.pkg);
+  if (installedBinary(binary, options)) {
     linkIntoBin(options.cacheDir, target);
     return target;
   }
@@ -209,6 +244,24 @@ function readQuietly(file: string): string | undefined {
     return fs.readFileSync(file, 'utf8');
   } catch {
     return undefined;
+  }
+}
+
+/** Remove every cached version of a package (the directories starting with
+ *  `prefix`). Throws when one cannot be removed: the agent is then still
+ *  there, and saying so beats a half-removed install. */
+function removeAllVersions(cacheDir: string, prefix: string): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(cacheDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    // Retried by Node itself on the transient EBUSY / EPERM a scanner or a
+    // foreign filesystem answers with.
+    fs.rmSync(path.join(cacheDir, name), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 
@@ -510,25 +563,8 @@ export async function installPackageTree(
   entries: readonly TreePackageEntry[],
   options: InstallOptions & { label?: string },
 ): Promise<string> {
-  const rootEntry = entries.find((entry) => entry.name === root);
-  if (!rootEntry) throw new Error(`${options.label ?? root}: ${root} is not pinned in this build, so it cannot be downloaded`);
-
   const label = options.label ?? root;
-  const dir = path.join(options.cacheDir, `${root.replace('/', '+')}@${rootEntry.version}`);
-  const target = (dest: string): string => path.join(dir, ...dest.split('/'));
-
-  // A package whose platform gates exclude this machine: optional ones are
-  // simply not for us (the wasm or other-OS variant), while a required one
-  // would leave the tree unbootable — that is a pins problem to surface, not
-  // a download to attempt.
-  const wanted: TreePackageEntry[] = [];
-  for (const entry of entries) {
-    if (!packageMatchesPlatform(entry)) {
-      if (!entry.optional) throw new Error(`${label}: ${entry.name}@${entry.version} is required but gated to other platforms`);
-      continue;
-    }
-    wanted.push(entry);
-  }
+  const { rootEntry, dir, target, wanted } = treeLayout(root, entries, options.cacheDir, label);
 
   // What must be laid down: every package not at its pinned version, and
   // everything nested inside one, since laying a package down replaces its
@@ -597,7 +633,52 @@ export async function installPackageTree(
     await extractTree(oneBuffer(tar), pkgDir, { last: 'package.json' });
   }
 
-  pruneOtherVersions(options.cacheDir, `${root.replace('/', '+')}@`, path.basename(dir));
+  pruneOtherVersions(options.cacheDir, cachePrefix(root), path.basename(dir));
   options.log(`[install] ${label} installed at ${dir} (${((Date.now() - started) / 1000) | 0}s)`);
   return target(rootEntry.dest);
+}
+
+/** Where a pinned tree sits in the cache, and the packages of it this
+ *  machine needs. */
+function treeLayout(root: string, entries: readonly TreePackageEntry[], cacheDir: string, label: string) {
+  const rootEntry = entries.find((entry) => entry.name === root);
+  if (!rootEntry) throw new Error(`${label}: ${root} is not pinned in this build, so it cannot be downloaded`);
+  const dir = path.join(cacheDir, `${cachePrefix(root)}${rootEntry.version}`);
+  const target = (dest: string): string => path.join(dir, ...dest.split('/'));
+
+  // A package whose platform gates exclude this machine: optional ones are
+  // simply not for us (the wasm or other-OS variant), while a required one
+  // would leave the tree unbootable — that is a pins problem to surface, not
+  // a download to attempt.
+  const wanted: TreePackageEntry[] = [];
+  for (const entry of entries) {
+    if (!packageMatchesPlatform(entry)) {
+      if (!entry.optional) throw new Error(`${label}: ${entry.name}@${entry.version} is required but gated to other platforms`);
+      continue;
+    }
+    wanted.push(entry);
+  }
+  return { rootEntry, dir, target, wanted };
+}
+
+/**
+ * The root package's directory when the pinned tree is installed — every
+ * package this machine needs at its pinned version, optional ones aside
+ * (one that could not be fetched was skipped) — else null. Never downloads.
+ */
+export function installedPackageTree(root: string, entries: readonly TreePackageEntry[], cacheDir: string): string | null {
+  let layout: ReturnType<typeof treeLayout>;
+  try {
+    layout = treeLayout(root, entries, cacheDir, root);
+  } catch {
+    return null;
+  }
+  const { rootEntry, target, wanted } = layout;
+  const complete = wanted.every((entry) => entry.optional || installedVersion(target(entry.dest)) === entry.version);
+  return complete ? target(rootEntry.dest) : null;
+}
+
+/** Remove every installed version of the tree rooted at `root`. */
+export function removePackageTree(root: string, cacheDir: string): void {
+  removeAllVersions(cacheDir, cachePrefix(root));
 }

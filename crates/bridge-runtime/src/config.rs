@@ -21,7 +21,6 @@ pub struct Flags {
     pub claude_path: Option<String>,
     pub tor_proxy: Option<String>,
     pub opencode_server_url: Option<String>,
-    pub opencode_auto_start: bool,
     pub opencode_path: Option<String>,
     pub deepseek_path: Option<String>,
     pub agent_host: Option<PathBuf>,
@@ -47,7 +46,6 @@ struct FileConfig {
     transcript_keep_last: Option<u64>,
     tor_proxy_url: Option<String>,
     open_code_server_url: Option<String>,
-    open_code_auto_start: Option<bool>,
     open_code_path: Option<String>,
     deepseek_path: Option<String>,
     open_code_port: Option<u16>,
@@ -371,8 +369,6 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         "CODEDECK_OPENCODE_SERVER_URL",
         flags.opencode_server_url.clone().or_else(|| env("CODEDECK_OPENCODE_SERVER_URL")).or(file.open_code_server_url),
     );
-    let auto_start = flags.opencode_auto_start || env_bool("CODEDECK_OPENCODE_AUTO_START").or(file.open_code_auto_start).unwrap_or(false);
-    put("CODEDECK_OPENCODE_AUTO_START", auto_start.then(|| "1".into()));
     put("CODEDECK_OPENCODE_PATH", flags.opencode_path.clone().or_else(|| env("CODEDECK_OPENCODE_PATH")).or(file.open_code_path));
     put("CODEDECK_OPENCODE_PORT", env("CODEDECK_OPENCODE_PORT").or(file.open_code_port.map(|p| p.to_string())));
     put("CODEDECK_DEEPSEEK_PATH", flags.deepseek_path.clone().or_else(|| env("CODEDECK_DEEPSEEK_PATH")).or(file.deepseek_path));
@@ -454,7 +450,6 @@ mod tests {
             transcript_keep_last,
             tor_proxy_url,
             open_code_server_url,
-            open_code_auto_start,
             open_code_path,
             deepseek_path,
             open_code_port,
@@ -475,7 +470,6 @@ mod tests {
             ("transcriptKeepLast", transcript_keep_last.is_some()),
             ("torProxyUrl", tor_proxy_url.is_some()),
             ("openCodeServerUrl", open_code_server_url.is_some()),
-            ("openCodeAutoStart", open_code_auto_start.is_some()),
             ("openCodePath", open_code_path.is_some()),
             ("deepseekPath", deepseek_path.is_some()),
             ("openCodePort", open_code_port.is_some()),

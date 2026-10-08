@@ -1093,8 +1093,7 @@ export interface OpenCodeDriverOptions {
 }
 
 /** Why OpenCode cannot run, when it is enabled but unusable. */
-const NOT_CONFIGURED =
-  'This bridge has no OpenCode backend configured (set CODEDECK_OPENCODE_SERVER_URL, or CODEDECK_OPENCODE_AUTO_START=1).';
+const NOT_CONFIGURED = 'This bridge has no OpenCode server to use (CODEDECK_OPENCODE_SERVER_URL), and starts none of its own.';
 
 export class OpenCodeDriver implements Driver {
   private clientPromise: Promise<OpencodeClient> | null = null;

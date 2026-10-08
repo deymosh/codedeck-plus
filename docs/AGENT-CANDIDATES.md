@@ -116,33 +116,36 @@ OpenCode's `websearch` permission) is offered to every model, not only to
 OpenCode's own providers'. Codex is out (its client speaks only the
 Responses API); a Pi-based entry stays an option once the Pi driver exists.
 
-## Installing agents on demand
+## Installing agents on demand (done)
 
-Today every driver the host is told to load (`CODEDECK_AGENT_HOST_DRIVERS`,
-default all three) starts installing its runtime when the host starts.
-With three agents that is acceptable; with eight it is gigabytes downloaded
-for agents the user never opens, on a machine that may be a small VPS.
+Each agent costs nothing until someone chooses it — needed before the Tier 1
+agents land, since installing every runtime at start would mean gigabytes
+downloaded for agents the user never opens, on a machine that may be a small
+VPS. As built:
 
-Proposal:
-
-1. The catalog lists every agent this build knows, each with an install
-   state: `not_installed`, `installing`, `ready`, `failed` (with reason).
-   `unavailableReason` already covers part of this; the state becomes a
-   first-class catalog field — a phone-wire change, so it starts in
-   `crates/protocol` with a fixture, then `crates/agent-protocol`.
-2. New requests `install_agent` / `uninstall_agent` (phone → bridge → host).
-   Installing runs the same pinned installer; uninstalling removes the
-   agent's `<cache>/<package>@<version>` directory. The bridge persists the
-   installed set in its state and passes it to the host on spawn.
-3. The phone's agent picker shows not-installed agents with an Install
-   action and progress; a session can only start on a `ready` agent.
-4. A fresh bridge installs nothing; an agent already on the machine (found
-   on PATH or bundled beside the host, `BUNDLE_AGENTS=1`) is `ready` without
-   a download. `codedeck-bridge agents install <id>` does the same from a
-   shell, and the warm-up mode takes the same list.
-
-Do this before the Tier 1 agents land, so each new agent costs nothing until
-someone chooses it.
+1. The catalog lists every agent the host loads, each with an install state
+   (`AgentInstall` in `crates/protocol`): `ready` (with `removable` when
+   CodeDeck installed it), `not_installed`, `installing`, `failed` (with the
+   reason). An agent that is not ready is a placeholder — its name, nothing
+   it supports — and its driver is built only once it is installed.
+2. The phone sends `agent-action` (`install` / `remove`) and the bridge
+   answers `agent-ack`; the bridge asks the host with `install-agent` /
+   `remove-agent`, and the host reports every change with `agent-changed`,
+   which the bridge passes on in its next session list. A new session is
+   refused until its agent is ready; one the bridge already has (resuming
+   after a host restart) waits for the install, and fails with its reason.
+3. The host keeps what is installed in the agent cache itself, so the bridge
+   persists nothing: an agent the machine has (on PATH, configured, bundled
+   by `BUNDLE_AGENTS=1`) or the cache holds at the pinned version is ready.
+   Removing deletes what CodeDeck installed and leaves a `.removed-<id>`
+   marker, so the default agent is not installed again behind the user's
+   back.
+4. A fresh bridge installs only the default agent, OpenCode
+   (`installByDefault` on its `DriverModule`). The phone lists the others
+   with Install on the machine's page and in New session; a session starts
+   only on a `ready` agent. `codedeck-bridge agents list | install | remove`
+   runs the same from a shell, through the host's one-shot commands, which
+   is also how the bundled image installs at build time.
 
 ## Package layout
 
@@ -183,9 +186,10 @@ A `DriverModule` (`sdk/module.ts`) is the agent's whole registration: its
 id and label, the environment variables that are its alone (taken out of
 the environment every agent process inherits, before any driver is built),
 how to build the driver, and its runtime — what the machine already has,
-and how to install the pinned one. `host/modules.ts` keeps the list;
-loading and the warm-up mode iterate it, and install on demand will too, so
-adding an agent is one folder plus one line. `host/__tests__/layout.test.ts`
+what CodeDeck installed, and how to install and remove the pinned one.
+`host/modules.ts` keeps the list; `host/agents.ts` (each agent's install
+state) and `host/commands.ts` (the one-shot commands) iterate it, so adding
+an agent is one folder plus one line. `host/__tests__/layout.test.ts`
 fails the build when a driver imports anything outside `sdk/`, `install/`,
 `generated/` (and later `acp/`) or its own folder, or when anything but the
 module list names a driver.
@@ -194,7 +198,7 @@ module list names a driver.
 
 1. Release candidate of what is merged.
 2. Driver SDK layout and `DriverModule` registry (above), then install on
-   demand on top of it.
+   demand on top of it (both done).
 3. Extract the generic ACP driver from the DeepSeek driver into `acp/`.
 4. Codex (native), Pi (RPC, with the permission gate), Copilot (ACP).
 5. Tier 2 on the ACP driver, as users ask for them.

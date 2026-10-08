@@ -12,7 +12,7 @@
  * `node`.
  */
 import * as path from 'node:path';
-import { installPackageTree, type InstallOptions } from '../../install/agentInstall';
+import { installedPackageTree, installPackageTree, type InstallOptions } from '../../install/agentInstall';
 import { DSH_PACKAGES } from '../../generated/dshPackages';
 
 /** The npm package the harness ships as. */
@@ -25,6 +25,12 @@ export const DSH_LABEL = 'DeepSeek Harness';
 /** The CLI entry point of a tree the installer has laid down. */
 export function dshEntryPoint(treeRoot: string): string {
   return path.join(treeRoot, DSH_ENTRY);
+}
+
+/** The CLI entry point of the pinned tree when it is installed, else null. */
+export function installedDshTree(cacheDir: string): string | null {
+  const root = installedPackageTree(DSH_PACKAGE, DSH_PACKAGES, cacheDir);
+  return root ? dshEntryPoint(root) : null;
 }
 
 /** Install (or find) the harness tree and return its CLI entry point. */
