@@ -98,6 +98,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
 import uniffi.client_ffi.UniffiIntent
+import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiSessionMcp
 import uniffi.client_ffi.UniffiTranscriptDelta
@@ -495,13 +496,21 @@ fun SessionScreen(
         inputFocus.requestFocus()
     }
 
-    // Refresh the subscription-usage snapshot on open: the bridge only
-    // publishes usage when asked. An agent whose catalog entry says it has
-    // no usage is not asked (it would publish nothing); until the catalog
-    // is known the effect waits, and fires once it says yes.
+    // Refresh the usage snapshot on open and whenever a turn ends (the
+    // session's cost grows with each): the bridge only publishes usage when
+    // asked. An agent whose catalog entry says it has no usage is not asked
+    // (it would publish nothing); until the catalog is known the effect
+    // waits, and fires once it says yes.
+    // The agent's model list names the session's model in the controls bar.
+    LaunchedEffect(machine, agent?.id, agent?.supportsModels) {
+        val id = agent?.id
+        if (id != null && agent.supportsModels) core.dispatch(UniffiIntent.RequestModels(machine = machine, agent = id))
+    }
+
     val supportsUsage = agent?.supportsUsage == true
-    LaunchedEffect(machine, sessionId, supportsUsage) {
-        if (supportsUsage) core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
+    val turnRunning = session?.state == "running"
+    LaunchedEffect(machine, sessionId, supportsUsage, turnRunning) {
+        if (supportsUsage && !turnRunning) core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
     }
 
     // Slash commands: the menu opens while the draft is a bare `/name` (not
@@ -671,6 +680,11 @@ fun SessionScreen(
             modeLabel = modeLabel?.takeIf { modes.size >= 2 },
             modePending = modeCycle.pending != null,
             model = session?.model,
+            modelName = listedModelName(
+                session?.model,
+                listOfNotNull(machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models) +
+                    machineSummary?.providerProfiles.orEmpty().filter { it.agent == session?.agent }.map { it.models },
+            ),
             contextPercentage = session?.contextPercentage,
             contextWindow = session?.contextWindow?.toLong(),
             onEffortSelect = { level ->
@@ -855,6 +869,8 @@ internal fun SessionControlsBar(
     /** `null` hides the MCP pill (no servers, or an agent without MCP). */
     mcp: UniffiSessionMcp? = null,
     onMcpTap: () -> Unit = {},
+    /** The model list's name for [model] ([listedModelName]); null shows its tag. */
+    modelName: String? = null,
 ) {
     Row(
         Modifier
@@ -865,7 +881,7 @@ internal fun SessionControlsBar(
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
         if (model != null) {
-            ModelContextChip(model = model, contextPercentage = contextPercentage, contextWindow = contextWindow)
+            ModelContextChip(model = model, modelName = modelName, contextPercentage = contextPercentage, contextWindow = contextWindow)
         }
         if (modeLabel != null) {
             ModeButton(modeLabel, modePending, onModeTap)
@@ -876,6 +892,9 @@ internal fun SessionControlsBar(
         if (mcp != null) {
             McpChip(mcp, onMcpTap)
         }
+        // What the session has cost so far: the agent's figure, shown whether
+        // or not the subscription windows are.
+        usage?.sessionCostUsd?.let(::sessionCost)?.let { CostPill(it) }
         val badges = usageBadges(usage, System.currentTimeMillis())
         if (showUsageBadge && badges.isNotEmpty()) {
             UsageBox(usage, badges)
@@ -914,6 +933,31 @@ internal fun SendFailedBar(text: String, failedCount: Int, onRetry: () -> Unit) 
             Text("Retry", color = Tokens.Text, fontSize = Tokens.TextSm)
         }
     }
+}
+
+/** A session's cost as a pill: "$0.42", "<$0.01" below a cent; nothing for
+ *  a free (or unpriced) session. */
+internal fun sessionCost(usd: Double): String? = when {
+    !usd.isFinite() || usd <= 0.0 -> null
+    usd < 0.01 -> "<$0.01"
+    usd < 100.0 -> "$" + String.format(java.util.Locale.ROOT, "%.2f", usd)
+    else -> "$" + String.format(java.util.Locale.ROOT, "%.0f", usd)
+}
+
+@Composable
+private fun CostPill(cost: String) {
+    Text(
+        cost,
+        color = Tokens.TextMuted,
+        fontSize = Tokens.TextXs,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .background(Tokens.SurfaceHover)
+            .padding(horizontal = ControlPadH, vertical = ControlPadV)
+            .semantics { contentDescription = "Session cost $cost" },
+    )
 }
 
 /** Effort dropdown over the agent's advertised levels: shows the current
@@ -1078,6 +1122,18 @@ internal fun modelLabel(id: String?): String {
     return base.replace(Regex("^claude-"), "").replace(Regex("-\\d{8}$"), "")
 }
 
+/**
+ * The name a model list gives the session's model [id] — its agent's list,
+ * or a provider profile's — for a model [MODEL_TAGS] has no compact tag
+ * for: an OpenCode or gateway id such as `ccr/OpenCode Go/deepseek-v4.1-flash`
+ * reads as `deepseek-v4.1-flash`, as in the model picker. Null when the tag
+ * table knows it, or no list names it.
+ */
+internal fun listedModelName(id: String?, lists: List<List<UniffiModelEntry>>): String? {
+    if (id.isNullOrEmpty() || MODEL_TAGS.any { (modelId) -> modelId == stripContextMarker(id) }) return null
+    return lists.firstNotNullOfOrNull { list -> list.firstOrNull { it.id == id }?.label?.takeIf { it.isNotBlank() } }
+}
+
 /** Widest the model tag in [ModelContextChip] gets before it marquees. */
 private val MODEL_TAG_MAX_WIDTH = 160.dp
 
@@ -1109,13 +1165,15 @@ private val MODEL_TAG_MAX_WIDTH = 160.dp
 @Composable
 private fun ModelContextChip(
     model: String,
+    /** The model list's name for it ([listedModelName]), when it has one. */
+    modelName: String?,
     contextPercentage: Double?,
     contextWindow: Long?,
 ) {
     Layout(
         content = {
             Text(
-                modelLabel(model),
+                modelName ?: modelLabel(model),
                 color = Tokens.Accent,
                 fontWeight = FontWeight.Bold,
                 fontSize = Tokens.TextXs,

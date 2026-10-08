@@ -1000,8 +1000,14 @@ export class OpenCodeSession implements DriverSession {
     if (error) throw new Error(`OpenCode could not stop the task: ${JSON.stringify(error)}`);
   }
 
+  /** What the session has cost so far, as OpenCode prices its models (no
+   *  subscription windows: OpenCode has none to report). A free or
+   *  unpriced model's session reports no cost. */
   async getUsage(): Promise<UsageData | null> {
-    return null;
+    const { client, session } = await this.ready;
+    const { data, error } = await client.session.get({ sessionID: session.id, directory: this.cwd });
+    if (error || !data) return null;
+    return { available: true, windows: [], ...(data.cost ? { sessionCostUsd: data.cost } : {}), fetchedAt: new Date().toISOString() };
   }
 
   async end(): Promise<void> {
@@ -1229,11 +1235,11 @@ export class OpenCodeDriver implements Driver {
       modes: OPENCODE_MODES,
       efforts: [],
       defaultMode: DEFAULT_MODE,
-      // No subscription usage. Provider profiles add models to the server
-      // this driver starts; sessions are never bound to one.
+      // Usage is the session's cost. Provider profiles add models to the
+      // server this driver starts; sessions are never bound to one.
       supports: {
         models: true,
-        usage: false,
+        usage: true,
         providers: false,
         providerModels: this.manages,
         gsd: true,

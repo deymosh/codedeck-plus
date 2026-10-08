@@ -1,7 +1,9 @@
 package com.codedeck.plus.ui.session
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
+import uniffi.client_ffi.UniffiModelEntry
 
 /** Port of `apps/mobile/src/ui/__tests__/modelLabel.test.ts` — the same
  *  cases, asserting the Kotlin port of `modelLabel` (SessionScreen.kt) keeps
@@ -44,5 +46,16 @@ class ModelLabelTest {
     fun reportsQuestionMarkRatherThanGuessingWhenNoModelIsRecorded() {
         assertEquals("?", modelLabel(null))
         assertEquals("?", modelLabel(""))
+    }
+
+    @Test
+    fun aListedModelReadsByItsListName() {
+        val opencode = listOf(UniffiModelEntry("ccr/OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "CCR · OpenCode Go", null))
+        val profile = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Moonshot", null))
+        assertEquals("deepseek-v4.1-flash", listedModelName("ccr/OpenCode Go/deepseek-v4.1-flash", listOf(opencode, profile)))
+        assertEquals("Kimi K3", listedModelName("kimi-k3", listOf(opencode, profile)))
+        // Claude's compact tags stay; an unlisted model has no name.
+        assertNull(listedModelName("claude-opus-5", listOf(listOf(UniffiModelEntry("claude-opus-5", "Opus 5", null, null)))))
+        assertNull(listedModelName("unlisted/model", listOf(opencode)))
     }
 }

@@ -62,6 +62,21 @@ describe('OpenCode session titles', () => {
   });
 });
 
+describe('OpenCode usage', () => {
+  it("is the session's cost, none for a free session", async () => {
+    const client = clientWith([]);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1', cost: 0.0371 } });
+    expect(await session.getUsage!()).toMatchObject({ available: true, windows: [], sessionCostUsd: 0.0371 });
+    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1', cost: 0 } });
+    expect(await session.getUsage!()).not.toHaveProperty('sessionCostUsd');
+    expect(OpenCodeDriver.withClient(client).info().supports?.usage).toBe(true);
+    await session.end();
+  });
+});
+
 describe('OpenCode conversation delete', () => {
   const deleting = (result: unknown) => {
     const client = clientWith([]) as FakeClient & { session: { delete: ReturnType<typeof vi.fn> } };
