@@ -79,9 +79,10 @@ import {
   fetchGatewayModels,
   isProviderBoundSession,
   modelSupports1mContext,
-  parseGatewayModels,
+  toGatewayModels,
   type SdkSessionOptions,
 } from '../facade';
+import { parseProviderModels } from '../../../sdk/providerModels';
 
 function baseOpts(over: Partial<SdkSessionOptions> = {}): SdkSessionOptions {
   return {
@@ -443,8 +444,8 @@ describe('fetchGatewayModels', () => {
     global.fetch = (async (url: string, init?: RequestInit) => {
       calls.push([url, init]);
       return {
-        ok: true,
-        json: async () => ({
+        status: 200,
+        text: async () => JSON.stringify({
           // Real shape from a claude-code-router instance: some entries
           // carry display_name, some don't.
           data: [
@@ -460,7 +461,7 @@ describe('fetchGatewayModels', () => {
     expect(calls).toHaveLength(1);
     const [url, init] = calls[0]!;
     expect(url).toBe('http://router.example:3458/v1/models'); // trailing slash on the base URL stripped
-    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer tok-123');
     expect(models).toEqual([
       { id: 'Claude Code API/claude-sonnet-5', label: 'Claude Sonnet 5', provider: 'Claude Code API' },
       { id: 'Z.ai (Global) - Coding Plan/glm-5.2', label: 'glm-5.2', provider: 'Z.ai (Global) - Coding Plan' },
@@ -472,10 +473,10 @@ describe('fetchGatewayModels', () => {
     process.env.ANTHROPIC_API_KEY = 'k';
     let userAgent: string | undefined;
     global.fetch = (async (_url: string, init?: RequestInit) => {
-      userAgent = (init?.headers as Record<string, string>)['User-Agent'];
+      userAgent = (init?.headers as Record<string, string>)['user-agent'];
       return {
-        ok: true,
-        json: async () => ({
+        status: 200,
+        text: async () => JSON.stringify({
           data: [
             { id: `anthropic/claude-ccr-h${hex('Gateway Test/glm-9-flash')}[1m]`, display_name: 'Gateway Test/GLM-9-Flash (1M context)', max_input_tokens: 1_310_720 },
             { id: `anthropic/claude-ccr-h${hex('Gateway Test/claude-opus-9')}`, display_name: 'Gateway Test/Claude Opus 9', max_input_tokens: 200_000 },
@@ -501,8 +502,8 @@ describe('fetchGatewayModels', () => {
     process.env.ANTHROPIC_API_KEY = 'api-key';
     let authHeader: string | undefined;
     global.fetch = (async (_url: string, init?: RequestInit) => {
-      authHeader = (init?.headers as Record<string, string>).Authorization;
-      return { ok: true, json: async () => ({ data: [] }) };
+      authHeader = (init?.headers as Record<string, string>).authorization;
+      return { status: 200, text: async () => JSON.stringify({ data: [] }) };
     }) as unknown as typeof fetch;
 
     await fetchGatewayModels();
@@ -512,7 +513,7 @@ describe('fetchGatewayModels', () => {
   it('returns [] on a non-ok response rather than throwing', async () => {
     process.env.ANTHROPIC_BASE_URL = 'http://router.example';
     process.env.ANTHROPIC_API_KEY = 'k';
-    global.fetch = (async () => ({ ok: false, status: 401, statusText: 'Unauthorized' })) as unknown as typeof fetch;
+    global.fetch = (async () => ({ status: 401, text: async () => '' })) as unknown as typeof fetch;
 
     expect(await fetchGatewayModels()).toEqual([]);
   });
@@ -528,7 +529,7 @@ describe('fetchGatewayModels', () => {
   it('returns [] when the response has no "data" array', async () => {
     process.env.ANTHROPIC_BASE_URL = 'http://router.example';
     process.env.ANTHROPIC_API_KEY = 'k';
-    global.fetch = (async () => ({ ok: true, json: async () => ({ unexpected: 'shape' }) })) as unknown as typeof fetch;
+    global.fetch = (async () => ({ status: 200, text: async () => JSON.stringify({ unexpected: 'shape' }) })) as unknown as typeof fetch;
 
     expect(await fetchGatewayModels()).toEqual([]);
   });
@@ -536,10 +537,12 @@ describe('fetchGatewayModels', () => {
 
 const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex');
 
-describe('parseGatewayModels', () => {
+describe('toGatewayModels', () => {
+  const parse = (body: unknown) => toGatewayModels(parseProviderModels(body));
+
   it('decodes claude-code-router ids, drops the provider from labels, and reads each context window', () => {
     // The Anthropic-shaped list claude-code-router sends a Claude Code client.
-    const parsed = parseGatewayModels({
+    const parsed = parse({
       data: [
         {
           id: `anthropic/claude-ccr-h${hex('Z.ai (Global) - Coding Plan/glm-5.3-flash')}[1m]`,
@@ -557,31 +560,26 @@ describe('parseGatewayModels', () => {
         { id: `anthropic/claude-ccr-h${hex('Golem/local-model')}`, display_name: 'Golem/local-model', max_input_tokens: 0 },
       ],
     });
-    expect(parsed?.models).toEqual([
+    expect(parsed.models).toEqual([
       { id: 'Z.ai (Global) - Coding Plan/glm-5.3-flash', label: 'GLM-5.3-Flash (1M context)', provider: 'Z.ai (Global) - Coding Plan' },
       { id: 'Z.ai (Global) - Coding Plan/glm-4.7-flash', label: 'GLM-4.7-Flash', provider: 'Z.ai (Global) - Coding Plan' },
       { id: 'Golem/local-model', label: 'local-model', provider: 'Golem' },
     ]);
-    expect([...parsed!.oneMillion]).toEqual([
+    expect([...parsed.oneMillion]).toEqual([
       ['Z.ai (Global) - Coding Plan/glm-5.3-flash', true],
       ['Z.ai (Global) - Coding Plan/glm-4.7-flash', false],
     ]);
   });
 
   it('takes a plain list as it is, saying nothing about context', () => {
-    const parsed = parseGatewayModels({ data: [{ id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5' }, { id: 7 }] });
-    expect(parsed?.models).toEqual([{ id: 'claude-sonnet-5', label: 'Claude Sonnet 5' }]);
-    expect(parsed?.oneMillion.size).toBe(0);
+    const parsed = parse({ data: [{ id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5' }, { id: 7 }] });
+    expect(parsed.models).toEqual([{ id: 'claude-sonnet-5', label: 'Claude Sonnet 5' }]);
+    expect(parsed.oneMillion.size).toBe(0);
   });
 
   it('lists a model once when it comes both with and without the [1m] marker', () => {
-    const parsed = parseGatewayModels({ data: [{ id: 'claude-opus-5[1m]' }, { id: 'claude-opus-5' }] });
-    expect(parsed?.models).toEqual([{ id: 'claude-opus-5', label: 'claude-opus-5' }]);
-    expect(parsed?.oneMillion.get('claude-opus-5')).toBe(true);
-  });
-
-  it('is null without a data list', () => {
-    expect(parseGatewayModels({ unexpected: 'shape' })).toBeNull();
-    expect(parseGatewayModels(null)).toBeNull();
+    const parsed = parse({ data: [{ id: 'claude-opus-5[1m]' }, { id: 'claude-opus-5' }] });
+    expect(parsed.models).toEqual([{ id: 'claude-opus-5', label: 'claude-opus-5' }]);
+    expect(parsed.oneMillion.get('claude-opus-5')).toBe(true);
   });
 });

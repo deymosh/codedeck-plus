@@ -46,7 +46,8 @@ import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin'
 import { ASK_USER_TOOL, installProfileTools } from './profileTools';
 import { parseQuestionLine, planReviewOf, toAnswerItems, toQuestionSpecs, type PlanReview, type PushedQuestionLine } from './questions';
 import { deleteDshConversation } from './conversations';
-import { gatewayModelsUrl, syncGatewayCatalog } from './gateway';
+import { providerModelsUrl } from '../../sdk/providerModels';
+import { syncEndpointCatalog } from './catalog';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
 import { DeepSeekPlugins, runDshPlugin, type DshRun } from './plugins';
@@ -851,7 +852,7 @@ export class DeepSeekDriver implements Driver {
    *  start): the endpoint's catalog, and CodeDeck's own rows in its patch
    *  layer. */
   private async prepareProfile(): Promise<void> {
-    await this.syncGateway();
+    await this.syncCatalog();
     await this.ownProfile();
   }
 
@@ -879,14 +880,14 @@ export class DeepSeekDriver implements Driver {
 
   /**
    * Point the harness at the operator's endpoint, with the models that
-   * endpoint serves (gateway.ts): without this a session on a gateway would
-   * be sent a DeepSeek model name the gateway does not know, and the phone
+   * endpoint serves (catalog.ts): without this a session on another
+   * endpoint would be sent a DeepSeek model name it does not know, and the phone
    * would offer models that are not there.
    */
-  private async syncGateway(): Promise<void> {
+  private async syncCatalog(): Promise<void> {
     const env = this.options.baseEnv ?? process.env;
     try {
-      await syncGatewayCatalog(
+      await syncEndpointCatalog(
         { profileDir: dshProfileDir(this.options.home), log: this.options.log, ...(this.options.httpGet ? { httpGet: this.options.httpGet } : {}) },
         env[DEEPSEEK_BASE_URL_ENV]?.trim() || undefined,
         env[DEEPSEEK_API_KEY_ENV]?.trim() || undefined,
@@ -894,7 +895,7 @@ export class DeepSeekDriver implements Driver {
     } catch (error) {
       // The catalog is a convenience, never a reason to refuse to run: the
       // harness's own models still work.
-      this.options.log(`[deepseek] could not write the gateway's catalog: ${error instanceof Error ? error.message : String(error)}`);
+      this.options.log(`[deepseek] could not write the endpoint's catalog: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -988,9 +989,9 @@ export class DeepSeekDriver implements Driver {
   }
 
   /**
-   * Check the key against the endpoint it is for: the operator's gateway when
-   * one is configured (its `/models` is the one call every gateway has in
-   * common — the same one this driver reads the catalog from), else the
+   * Check the key against the endpoint it is for: the operator's endpoint
+   * when one is configured (its `/models` is the one call every endpoint has
+   * in common — the same one this driver reads the catalog from), else the
    * DeepSeek API. A refusal is a refusal; anything else says nothing.
    */
   async checkCredential(credential: string, value: string): Promise<boolean | undefined> {
@@ -998,7 +999,7 @@ export class DeepSeekDriver implements Driver {
     const baseEnv = this.options.baseEnv ?? process.env;
     const base = baseEnv[DEEPSEEK_BASE_URL_ENV]?.trim();
     try {
-      const res = await this.options.httpGet(base ? gatewayModelsUrl(base) : 'https://api.deepseek.com/models', {
+      const res = await this.options.httpGet(base ? providerModelsUrl(base) : 'https://api.deepseek.com/models', {
         authorization: `Bearer ${value}`,
       });
       return res.status !== 401 && res.status !== 403;
