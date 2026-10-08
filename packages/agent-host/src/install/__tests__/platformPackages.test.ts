@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { claudePlatformPackage } from '../drivers/claude/install';
-import { openCodePlatformPackage } from '../drivers/opencode/install';
-import { PLATFORM_PACKAGES } from '../generated/platformPackages';
+import { claudePlatformPackage } from '../../drivers/claude/install';
+import { openCodePlatformPackage } from '../../drivers/opencode/install';
+import { PLATFORM_PACKAGES } from '../../generated/platformPackages';
 
 /** Every machine a bridge may run on, as Node names it. */
 const MACHINES: Array<[NodeJS.Platform, string, boolean]> = [

@@ -23,8 +23,8 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { PluginManager, PluginState } from '../../driver';
-import type { InstalledPlugin, PluginAction } from '../../types';
+import type { PluginManager, PluginState } from '../../sdk/driver';
+import type { InstalledPlugin, PluginAction } from '../../sdk/types';
 import { dshCommand, type SpawnFn } from './runtime';
 
 /** The layers a profile composes without any plugin: the shared core and the

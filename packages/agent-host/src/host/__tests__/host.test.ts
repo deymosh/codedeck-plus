@@ -4,10 +4,10 @@
  * bridge, and session lifetimes.
  */
 import { describe, it, expect } from 'vitest';
-import type { Driver } from '../driver';
-import { FakeDriver } from '../drivers/fake';
+import type { Driver } from '../../sdk/driver';
+import { FakeDriver } from '../../drivers/fake/driver';
 import { AgentHost, parseBridgeFrame } from '../host';
-import type { AgentInfo } from '../types';
+import type { AgentInfo } from '../../sdk/types';
 
 interface Frame {
   v: number;

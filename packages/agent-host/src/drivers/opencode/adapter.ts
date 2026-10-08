@@ -7,7 +7,7 @@
  * is pure: one event in, zero or more entries out.
  */
 import type { Part, SnapshotFileDiff } from '@opencode-ai/sdk/v2/client';
-import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
+import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
 import {
   MAX_DIFF_LINE_CHARS,
   MAX_DIFF_LINES,
@@ -15,8 +15,8 @@ import {
   truncateToolResult,
   type DiffPayload,
   type TranslateContext,
-} from '../../transcript';
-import type { DiffLine, OutputEntry, Subagent, TaskStatus } from '../../types';
+} from '../../sdk/transcript';
+import type { DiffLine, OutputEntry, Subagent, TaskStatus } from '../../sdk/types';
 
 /** The OpenCode session exists server-side and accepts prompts. */
 export interface OpenCodeStarted {

@@ -14,9 +14,9 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
-import type { McpManager, McpState } from '../../driver';
-import { serverInfo } from '../../mcp';
-import type { McpAction, McpServerAdd, McpServerInfo } from '../../types';
+import type { McpManager, McpState } from '../../sdk/driver';
+import { serverInfo } from '../../sdk/mcp';
+import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
 import { failureMessage, type CliRunner } from './plugins';
 
 const CHANGE_TIMEOUT_MS = 60_000;

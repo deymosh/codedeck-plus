@@ -61,8 +61,8 @@ describe('src/generated/platformPackages.ts', () => {
   // `vitest run -u` (the gen:platform-packages script) rewrites it; a plain
   // run fails when it no longer matches the lockfile.
   it('matches pnpm-lock.yaml', async () => {
-    const lockfile = fs.readFileSync(path.resolve(__dirname, '../../../../pnpm-lock.yaml'), 'utf8');
-    await expect(renderPlatformPackages(platformPackages(lockfile))).toMatchFileSnapshot('../generated/platformPackages.ts');
+    const lockfile = fs.readFileSync(path.resolve(__dirname, '../../../../../pnpm-lock.yaml'), 'utf8');
+    await expect(renderPlatformPackages(platformPackages(lockfile))).toMatchFileSnapshot('../../generated/platformPackages.ts');
   });
 });
 
@@ -167,9 +167,9 @@ describe('packageTree', () => {
 
 describe('src/generated/dshPackages.ts', () => {
   it('matches pnpm-lock.yaml', async () => {
-    const lockfile = fs.readFileSync(path.resolve(__dirname, '../../../../pnpm-lock.yaml'), 'utf8');
+    const lockfile = fs.readFileSync(path.resolve(__dirname, '../../../../../pnpm-lock.yaml'), 'utf8');
     await expect(renderDshPackages(packageTree(lockfile, 'packages/agent-host', '@deepseek-ai/dsh'))).toMatchFileSnapshot(
-      '../generated/dshPackages.ts',
+      '../../generated/dshPackages.ts',
     );
   });
 });

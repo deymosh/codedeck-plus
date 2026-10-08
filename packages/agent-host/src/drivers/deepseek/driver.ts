@@ -23,11 +23,11 @@
  *    harness's result update carries no diff.
  */
 import type { RequestPermissionRequest, RequestPermissionResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
-import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
-import type { HttpGet } from '../../net';
-import { mcpStatus as mcpStatusOf } from '../../mcp';
-import { parseSlashCommand } from '../../commands';
-import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle } from '../../tools';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
+import type { HttpGet } from '../../sdk/net';
+import { mcpStatus as mcpStatusOf } from '../../sdk/mcp';
+import { parseSlashCommand } from '../../sdk/commands';
+import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
 import type {
   AgentInfo,
   McpStatus,
@@ -38,7 +38,7 @@ import type {
   SlashCommand,
   StartSession,
   UsageData,
-} from '../../types';
+} from '../../sdk/types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
 import { askPlugin, listSessionCommands, runSessionCommand, steerSession } from './bridge';

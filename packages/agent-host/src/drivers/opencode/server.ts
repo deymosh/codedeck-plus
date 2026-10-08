@@ -17,7 +17,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { findInDirs, findOnPath, isFile } from '../../executable';
+import { findInDirs, findOnPath, isFile } from '../../sdk/executable';
 
 /** Resolve the `opencode` binary: explicit path → CODEDECK_OPENCODE_PATH →
  *  PATH → well-known global-install locations → null. Same order as

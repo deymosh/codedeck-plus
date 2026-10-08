@@ -3,8 +3,8 @@
  * custom provider (a gateway), in the style of claudeEnv.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { PROVIDER_BASE_URL_ERROR } from '../../../provider';
-import type { ProviderBinding } from '../../../types';
+import { PROVIDER_BASE_URL_ERROR } from '../../../sdk/provider';
+import type { ProviderBinding } from '../../../sdk/types';
 import {
   DEEPSEEK_API_KEY_CREDENTIAL,
   buildDeepSeekEnv,

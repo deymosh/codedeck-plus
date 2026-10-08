@@ -17,9 +17,9 @@
  * from the name (src/tools.ts) exactly as they do for the other agents.
  */
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
-import { MAX_DIFF_LINES, truncateToolResult, toDiffLines, type DiffPayload } from '../../transcript';
-import type { OutputEntry } from '../../types';
+import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { MAX_DIFF_LINES, truncateToolResult, toDiffLines, type DiffPayload } from '../../sdk/transcript';
+import type { OutputEntry } from '../../sdk/types';
 
 /**
  * The tools whose card *is* the exchange. The question tool asks through the

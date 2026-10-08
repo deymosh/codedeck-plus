@@ -16,7 +16,7 @@
  * what makes the round trip exact: option labels are what a selected answer
  * carries, and free text is what a typed one does.
  */
-import type { QuestionSpec } from '../../types';
+import type { QuestionSpec } from '../../sdk/types';
 
 /** One question as the plugin pushes it. */
 export interface PushedQuestion {

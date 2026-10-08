@@ -14,9 +14,9 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { shortDescription } from '../../commands';
-import type { PluginManager, PluginState } from '../../driver';
-import type { AvailablePlugin, InstalledPlugin, PluginAction, PluginMarketplace } from '../../types';
+import { shortDescription } from '../../sdk/commands';
+import type { PluginManager, PluginState } from '../../sdk/driver';
+import type { AvailablePlugin, InstalledPlugin, PluginAction, PluginMarketplace } from '../../sdk/types';
 
 export interface CliResult {
   code: number;

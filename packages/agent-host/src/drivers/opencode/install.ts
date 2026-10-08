@@ -6,8 +6,8 @@
  * dependency of the agent host only so that pnpm-lock.yaml pins those
  * packages; keep its version in step with the OpenCode SDK's.
  */
-import type { PackagedBinary } from '../../agentInstall';
-import { exeName, isMusl } from '../../executable';
+import type { PackagedBinary } from '../../install/agentInstall';
+import { exeName, isMusl } from '../../sdk/executable';
 
 /** The platform package for a machine. On x64 it is the `baseline` build,
  *  which runs on any x64 CPU (the default one needs AVX2). */

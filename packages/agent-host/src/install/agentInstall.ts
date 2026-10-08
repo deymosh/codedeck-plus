@@ -20,8 +20,8 @@ import * as path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip, gunzipSync } from 'node:zlib';
-import { isFile, isMusl } from './executable';
-import { PLATFORM_PACKAGES } from './generated/platformPackages';
+import { isFile, isMusl } from '../sdk/executable';
+import { PLATFORM_PACKAGES } from '../generated/platformPackages';
 import type { PackagePin, TreePackageEntry } from './lockfilePins';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';

@@ -13,9 +13,9 @@
  * Starting with `resume: "lost"` ends at once with `resumeLost`, like an
  * agent whose conversation is gone.
  */
-import type { Driver, DriverSession, McpManager, McpState, PluginManager, PluginState, SessionContext, SessionMcpState } from '../driver';
-import { serverInfo } from '../mcp';
-import { now, PERMISSION_ALLOW, PERMISSION_DENY } from '../tools';
+import type { Driver, DriverSession, McpManager, McpState, PluginManager, PluginState, SessionContext, SessionMcpState } from '../../sdk/driver';
+import { serverInfo } from '../../sdk/mcp';
+import { now, PERMISSION_ALLOW, PERMISSION_DENY } from '../../sdk/tools';
 import type {
   AgentInfo,
   InstalledPlugin,
@@ -28,7 +28,7 @@ import type {
   SlashCommand,
   StartSession,
   UsageData,
-} from '../types';
+} from '../../sdk/types';
 
 export const FAKE_AGENT_ID = 'fake';
 

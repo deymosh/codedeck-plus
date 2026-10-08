@@ -5,7 +5,7 @@
  * bridge writes, `_Deserialize` what the bridge accepts. The host reads the
  * first and writes the second.
  */
-import type * as G from './generated/protocol';
+import type * as G from '../generated/protocol';
 
 // What the host receives.
 export type BridgeFrame = G.Frame_Serialize<G.BridgeMessage_Serialize>;

@@ -4,8 +4,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import { extractDiff, sdkMessageToEntries } from '../adapter';
-import { newTranslateContext, type TranslateContext } from '../../../transcript';
-import type { OutputEntry } from '../../../types';
+import { newTranslateContext, type TranslateContext } from '../../../sdk/transcript';
+import type { OutputEntry } from '../../../sdk/types';
 import type {
   SdkAssistantMessage,
   SdkMessage,

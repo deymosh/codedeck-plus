@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import type { DiffLine, OutputEntry } from '../../../types';
+import type { DiffLine, OutputEntry } from '../../../sdk/types';
 import { deepseekUpdateToEntries, toolCallDiffs, type ToolCallMemory } from '../adapter';
 
 type EntryOf<T extends OutputEntry['entryType']> = Extract<OutputEntry, { entryType: T }>;

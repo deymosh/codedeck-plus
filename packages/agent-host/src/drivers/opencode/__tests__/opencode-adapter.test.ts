@@ -15,8 +15,8 @@ import type {
   OpenCodeQuestion,
   LegacyFileDiff,
 } from '../adapter';
-import { newTranslateContext, type TranslateContext } from '../../../transcript';
-import type { OutputEntry } from '../../../types';
+import { newTranslateContext, type TranslateContext } from '../../../sdk/transcript';
+import type { OutputEntry } from '../../../sdk/types';
 import type { Part } from '@opencode-ai/sdk/v2/client';
 
 type EntryOf<T extends OutputEntry['entryType']> = Extract<OutputEntry, { entryType: T }>;

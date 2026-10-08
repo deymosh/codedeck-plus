@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { McpServerAdd } from '../../../types';
+import type { McpServerAdd } from '../../../sdk/types';
 import { DeepSeekMcp } from '../mcp';
 
 const INITIAL_LAYER = `# Your patch layer for this dsh profile, applied after every bundle layer.

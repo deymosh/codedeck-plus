@@ -527,20 +527,25 @@ restart.
 ### Adding an agent
 
 1. Write a driver in `packages/agent-host/src/drivers/<agent>/` implementing
-   `Driver` (`src/driver.ts`): `info()` advertises the agent (modes, efforts,
-   `supports`, credentials); `startSession()` returns a `DriverSession` and
-   reports through the `SessionContext` it is handed — `emit()` session
-   events, `requestPermission()` / `askQuestion()` / `requestPlanApproval()`
-   when the user must decide.
+   `Driver` (`src/sdk/driver.ts`): `info()` advertises the agent (modes,
+   efforts, `supports`, credentials); `startSession()` returns a
+   `DriverSession` and reports through the `SessionContext` it is handed —
+   `emit()` session events, `requestPermission()` / `askQuestion()` /
+   `requestPlanApproval()` when the user must decide.
 2. Translate the agent's own events into typed `OutputEntry` values in the
    driver — nothing agent-specific may reach the bridge.
-3. Register it in `src/main.ts` (it is enabled through
-   `CODEDECK_AGENT_HOST_DRIVERS`).
+3. Export a `DriverModule` (`src/sdk/module.ts`) from the folder's
+   `module.ts`: the agent's id, how its driver is built from the
+   environment, and its runtime (what the machine already has, and how to
+   install the pinned one). Add it to the list in `src/host/modules.ts`; it
+   is enabled through `CODEDECK_AGENT_HOST_DRIVERS`.
 4. Test it beside the driver, in `src/drivers/<agent>/__tests__/`, like
    `drivers/claude/__tests__/claudeDriver.test.ts` and
    `drivers/opencode/__tests__/opencodeDriver.test.ts` do, with the
-   recording `SessionContext` in `src/__tests__/context.ts`. Everything the
-   driver owns — its permission policy included — lives in that folder too.
+   recording `SessionContext` in `src/sdk/__tests__/context.ts`. Everything
+   the driver owns — its permission policy included — lives in that folder
+   too. A driver imports only `src/sdk/`, `src/install/`, `src/generated/`
+   and its own folder; `src/host/__tests__/layout.test.ts` enforces it.
 
 The bridge and the phone need no change: the new agent appears in the
 catalog, and its entries render through the typed vocabulary above. Only a

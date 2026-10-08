@@ -28,9 +28,9 @@
  */
 import * as path from 'node:path';
 import { load, dump } from 'js-yaml';
-import type { McpManager, McpState } from '../../driver';
-import { serverInfo } from '../../mcp';
-import type { McpAction, McpServerAdd, McpServerInfo } from '../../types';
+import type { McpManager, McpState } from '../../sdk/driver';
+import { serverInfo } from '../../sdk/mcp';
+import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
 import { ProfileLayer, type LayerBlock } from './profileLayer';
 
 /** The plugin every managed row mounts. */

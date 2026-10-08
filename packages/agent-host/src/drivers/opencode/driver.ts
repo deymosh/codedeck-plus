@@ -30,10 +30,10 @@ import type {
   Session,
   SnapshotFileDiff,
 } from '@opencode-ai/sdk/v2/client';
-import { parseSlashCommand, slashCommand } from '../../commands';
-import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
-import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
-import { newTranslateContext } from '../../transcript';
+import { parseSlashCommand, slashCommand } from '../../sdk/commands';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
+import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
   ModelEntry,
@@ -43,7 +43,7 @@ import type {
   StartSession,
   Subagent,
   UsageData,
-} from '../../types';
+} from '../../sdk/types';
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';

@@ -33,8 +33,8 @@ import type {
   RequestPermissionResponse,
   SessionNotification,
 } from '@agentclientprotocol/sdk';
-import { agentCacheDir } from '../../agentInstall';
-import { isFile } from '../../executable';
+import { agentCacheDir } from '../../install/agentInstall';
+import { isFile } from '../../sdk/executable';
 import { AcpClient, INITIALIZE_TIMEOUT_MS } from './acp';
 import { bridgeSocketPath } from './bridge';
 import { DSH_LABEL } from './install';

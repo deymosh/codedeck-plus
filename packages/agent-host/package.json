@@ -8,7 +8,7 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "gen:platform-packages": "vitest run -u src/__tests__/lockfilePins.test.ts"
+    "gen:platform-packages": "vitest run -u src/install/__tests__/lockfilePins.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.283",
