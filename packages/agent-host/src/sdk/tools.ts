@@ -15,6 +15,7 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   multiedit: 'edit',
   notebookedit: 'edit',
   patch: 'edit',
+  apply_patch: 'edit',
   bash: 'execute',
   bashoutput: 'execute',
   killshell: 'execute',
@@ -30,6 +31,8 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   enterplanmode: 'switch_mode',
   task: 'agent',
   agent: 'agent',
+  // OpenCode's code-intelligence queries (diagnostics, definitions).
+  lsp: 'read',
   // The DeepSeek Harness's own tools.
   pwsh: 'execute',
   str_replace_editor: 'edit',

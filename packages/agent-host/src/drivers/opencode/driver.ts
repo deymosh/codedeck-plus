@@ -37,13 +37,15 @@ import type {
 } from '@opencode-ai/sdk/v2/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
-import { PERMISSION_ALLOW, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
 import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
   ModelEntry,
+  PermissionOption,
   ProviderBinding,
   QuestionSpec,
+  RefusedProvider,
   SessionOption,
   SlashCommand,
   StartSession,
@@ -53,7 +55,7 @@ import type {
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
-import { providersFingerprint, serverSetup } from './providers';
+import { admitProfiles, profileModelGroup, profileProviderId, providersFingerprint, serverSetup } from './providers';
 import {
   resolveOpenCodePath,
   startOpenCodeServer,
@@ -68,13 +70,23 @@ import type { EndpointModel } from '../../sdk/providerModels';
 export const OPENCODE_AGENT_ID = 'opencode';
 
 /** `ask` sends every permission OpenCode asks for to the phone; `default`
- *  (the auto-approve mode every agent shares) allows them all. */
+ *  (the auto-approve mode every agent shares) allows them all; `plan` runs
+ *  OpenCode's own plan agent, which may not edit, asking like `ask`. */
 const AUTO_APPROVE_MODE = 'default';
 const DEFAULT_MODE = 'ask';
+const PLAN_MODE = 'plan';
 const OPENCODE_MODES = [
   { id: DEFAULT_MODE, label: 'Ask', description: 'Ask before each tool call' },
+  { id: PLAN_MODE, label: 'Plan', description: 'Explore and plan without editing; switch to Ask or YOLO to build it' },
   { id: AUTO_APPROVE_MODE, label: 'YOLO', description: 'Run every tool without asking' },
 ];
+/** The OpenCode agent the plan mode runs. In any other mode a prompt names
+ *  none, so OpenCode uses its default agent (`build`, or the operator's). */
+const PLAN_AGENT = 'plan';
+
+/** OpenCode's "always": the rule stands for every session of the project
+ *  until its server restarts — it is not saved. */
+const PERMISSION_ALLOW_IN_PROJECT: PermissionOption = { ...PERMISSION_ALLOW_ALWAYS, label: 'Always allow in this project' };
 
 type ToolPart = Extract<Part, { type: 'tool' }>;
 type PermissionAsk = EventPermissionAsked['properties'];
@@ -107,7 +119,9 @@ interface NormalizedPermission {
   toolUseID: string;
   title: string;
   description?: string;
-  reply: (response: 'once' | 'reject') => Promise<void>;
+  /** OpenCode offers to allow such calls from now on. */
+  always: boolean;
+  reply: (response: 'once' | 'always' | 'reject') => Promise<void>;
 }
 
 /** A sub-agent's child session, as its `task` call described it. */
@@ -708,7 +722,7 @@ export class OpenCodeSession implements DriverSession {
   private handlePermission(permission: NormalizedPermission, child?: ChildSession): void {
     if (this.answeredAsks.has(permission.id)) return;
     this.answeredAsks.add(permission.id);
-    const reply = (response: 'once' | 'reject'): void => {
+    const reply = (response: 'once' | 'always' | 'reject'): void => {
       // Best effort — the ask then stays pending server-side; there is no
       // live connection left to retry over.
       permission.reply(response).catch(() => {});
@@ -727,10 +741,13 @@ export class OpenCodeSession implements DriverSession {
         description: permission.description ?? permission.title,
         locations: toolLocations(permission.input),
         rawInput: permission.input,
-        options: [PERMISSION_ALLOW, PERMISSION_DENY],
+        options: permission.always ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })
-      .then((outcome) => reply(outcome.outcome === 'selected' && outcome.optionId === PERMISSION_ALLOW.id ? 'once' : 'reject'))
+      .then((outcome) => {
+        const chosen = outcome.outcome === 'selected' ? outcome.optionId : undefined;
+        reply(chosen === PERMISSION_ALLOW.id ? 'once' : chosen === PERMISSION_ALLOW_IN_PROJECT.id && permission.always ? 'always' : 'reject');
+      })
       .catch(() => reply('reject'));
   }
 
@@ -750,6 +767,7 @@ export class OpenCodeSession implements DriverSession {
       toolUseID: ask.tool?.callID ?? ask.id,
       title: description,
       description,
+      always: ask.always.length > 0,
       reply: async (response) => {
         const { error } = await client.permission.reply({
           requestID: ask.id,
@@ -773,6 +791,7 @@ export class OpenCodeSession implements DriverSession {
       input: permission.metadata ?? {},
       toolUseID: permission.callID ?? permission.id,
       title: permission.title,
+      always: false,
       reply: async (response) => {
         await client.permission.respond({
           sessionID: permission.sessionID,
@@ -831,12 +850,19 @@ export class OpenCodeSession implements DriverSession {
           directory: this.cwd,
           parts: [{ type: 'text', text }],
           ...(this.model ? { model: this.model } : {}),
+          ...this.agentField(),
         });
         if (error) this.deliver({ type: 'error', content: `OpenCode prompt failed: ${JSON.stringify(error)}` });
       })
       .catch((err) => {
         this.deliver({ type: 'error', content: `OpenCode prompt failed: ${err instanceof Error ? err.message : String(err)}` });
       });
+  }
+
+  /** The OpenCode agent a prompt names: the plan agent in the plan mode,
+   *  none (OpenCode's default) otherwise. */
+  private agentField(): { agent?: string } {
+    return this.mode === PLAN_MODE ? { agent: PLAN_AGENT } : {};
   }
 
   /** `session.command` answers only once the whole turn is over, so it is
@@ -846,7 +872,7 @@ export class OpenCodeSession implements DriverSession {
   private runCommand(client: OpencodeClient, sessionID: string, name: string, args: string): void {
     const model = this.model ? `${this.model.providerID}/${this.model.modelID}` : undefined;
     client.session
-      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}) })
+      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField() })
       .then(({ error }) => {
         if (error) this.deliver({ type: 'error', content: `OpenCode /${name} failed: ${JSON.stringify(error)}` });
       })
@@ -990,6 +1016,8 @@ export class OpenCodeDriver implements Driver {
    *  one was started with. */
   private providers: ProviderBinding[] = [];
   private served = providersFingerprint([]);
+  /** The provider ids the running server has from profiles. */
+  private servedIds = new Set<string>();
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
@@ -1070,15 +1098,18 @@ export class OpenCodeDriver implements Driver {
     }
     this.server = server;
     this.served = providersFingerprint(profiles);
+    this.servedIds = new Set(profiles.map(profileProviderId));
     const added = profiles.length > 0 ? `, with ${profiles.length} provider profile(s)` : '';
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
     return this.connect({ baseUrl: server.url, headers: setup.headers });
   }
 
   /** Find (or install) `opencode`, start its server and connect — sessions
-   *  started meanwhile wait on the same promise. */
-  private launch(): void {
+   *  and model lists asked for meanwhile wait on the same promise. `first`
+   *  runs before the start (closing the server being replaced). */
+  private launch(first?: () => Promise<void>): void {
     const attempt = (async (): Promise<OpencodeClient> => {
+      await first?.();
       this.bin ??= await this.options.installOpenCode!();
       return this.startServer(this.bin);
     })();
@@ -1094,33 +1125,54 @@ export class OpenCodeDriver implements Driver {
     );
   }
 
-  /** The provider profiles to add to OpenCode's own providers. The server
-   *  reads its config only when it starts, so a changed list restarts it:
+  /** The provider profiles to add to OpenCode's own providers; those whose
+   *  name one of its providers already has are left out. The server reads
+   *  its config only when it starts, so a changed list restarts it:
    *  sessions on the old one end with an error and the bridge resumes them
    *  on the new one. */
-  async setProviders(providers: ProviderBinding[]): Promise<void> {
+  async setProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     if (!this.manages) {
       throw new Error('OpenCode runs on a server this bridge does not start (CODEDECK_OPENCODE_SERVER_URL), so it cannot add provider profiles to it');
     }
-    // A profile the bridge would not let a session use is not added either.
-    this.providers = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
-    const apply = this.applying.then(() => this.applyProviders());
-    this.applying = apply.catch(() => {});
-    await apply;
+    const apply = this.applying.then(() => this.applyProviders(providers));
+    this.applying = apply.then(
+      () => {},
+      () => {},
+    );
+    return apply;
   }
 
-  private async applyProviders(): Promise<void> {
+  private async applyProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     // A server still being installed or started is waited for: it may have
-    // read an older list.
+    // read an older list, and it says which names are taken.
     await this.clientPromise?.catch(() => {});
-    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return;
+    // A profile the bridge would not let a session use is not added either.
+    const usable = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
+    const { admitted, refused } = admitProfiles(usable, await this.ownProviderIds());
+    this.providers = admitted;
+    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return refused;
     this.options.log('[opencode] restarting the server: its provider profiles changed');
     const old = this.server;
     this.server = null;
-    this.clientPromise = null;
-    await old.close();
-    this.launch();
+    this.launch(() => old.close());
     await this.clientPromise;
+    return refused;
+  }
+
+  /** The provider ids OpenCode has of its own — built in, configured by
+   *  the operator, signed in to — without the profiles this driver added.
+   *  Empty when the server cannot say (nothing is refused then). */
+  private async ownProviderIds(): Promise<Set<string>> {
+    try {
+      const client = await this.clientPromise;
+      if (!client) return new Set();
+      const { data, error } = await client.provider.list();
+      if (error || !data) throw new Error(JSON.stringify(error ?? 'no provider list'));
+      return new Set(data.all.map((p) => p.id).filter((id) => !this.servedIds.has(id)));
+    } catch (err) {
+      this.options.log(`[opencode] could not list its providers, so profile names are not checked: ${err instanceof Error ? err.message : String(err)}`);
+      return new Set();
+    }
   }
 
   info(): AgentInfo {
@@ -1185,10 +1237,14 @@ export class OpenCodeDriver implements Driver {
       if (error || !data) return { models: [] };
       const models: ModelEntry[] = [];
       const contextLimits: Record<string, number> = {};
+      const profiles = new Map(this.providers.map((p) => [profileProviderId(p), p]));
       for (const provider of data.providers) {
+        const profile = profiles.get(provider.id);
         for (const model of Object.values(provider.models)) {
           const id = `${provider.id}/${model.id}`;
-          models.push({ id, label: model.name, provider: provider.name || provider.id });
+          const name = provider.name || provider.id;
+          const group = profile ? profileModelGroup(name, profile.models.find((m) => m.id === model.id)) : name;
+          models.push({ id, label: model.name, provider: group });
           const window = model.limit?.context ?? 0;
           if (window > 0) contextLimits[id] = window;
         }

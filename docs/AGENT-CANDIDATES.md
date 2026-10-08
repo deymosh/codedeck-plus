@@ -105,7 +105,10 @@ offer no tool that only works on its vendor's API. OpenCode meets all
 three: its web search is offered only on its own provider (checked on
 1.18.32), its web fetch is local, and a provider profile adds the
 endpoint's models to its list beside OpenCode Zen's free ones — read from
-the endpoint, never typed by hand. Codex is out (its client speaks only the
+the endpoint, never typed by hand. The server the bridge starts sets
+`OPENCODE_ENABLE_EXA`, so that web search (Exa's keyless endpoint, behind
+OpenCode's `websearch` permission) is offered to every model, not only to
+OpenCode's own providers'. Codex is out (its client speaks only the
 Responses API); a Pi-based entry stays an option once the Pi driver exists.
 
 ## Installing agents on demand

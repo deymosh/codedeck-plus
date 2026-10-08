@@ -92,21 +92,22 @@ internal object DesignFixtures {
         UniffiProviderProfileInfo(
             id = "home-gateway", agent = "opencode", label = "Home gateway", baseUrl = "http://192.168.1.2:3458",
             models = listOf(
-                UniffiModelEntry("OpenCode Go/deepseek-v4.1-flash", null, "Home gateway"),
-                UniffiModelEntry("Z.ai/glm-5.3-flash", null, "Home gateway"),
-                UniffiModelEntry("qwen3.8-coder", null, "Home gateway"),
+                UniffiModelEntry("OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "Home gateway · OpenCode Go", 1_000_000u),
+                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Home gateway · Z.ai", 200_000u),
+                UniffiModelEntry("qwen3.8-coder", null, "Home gateway", null),
             ),
-            modelsFromProvider = true, defaultModel = "OpenCode Go/deepseek-v4.1-flash", hasToken = true,
+            modelsFromProvider = true, defaultModel = "OpenCode Go/deepseek-v4.1-flash", hasToken = true, error = null,
         ),
         UniffiProviderProfileInfo(
             id = "openrouter", agent = "opencode", label = "OpenRouter", baseUrl = "https://openrouter.ai/api",
-            models = (1..42).map { UniffiModelEntry("vendor/model-$it", null, "OpenRouter") },
+            models = (1..42).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null) },
             modelsFromProvider = true, defaultModel = null, hasToken = false,
+            error = "OpenCode already has a provider called 'openrouter'. Give this profile another name.",
         ),
         UniffiProviderProfileInfo(
             id = "kimi-k3", agent = "", label = "Kimi K3", baseUrl = "https://api.moonshot.ai/anthropic",
-            models = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Kimi K3")),
-            modelsFromProvider = false, defaultModel = "kimi-k3", hasToken = true,
+            models = listOf(UniffiModelEntry("kimi-k3", "Kimi K3", "Kimi K3", null)),
+            modelsFromProvider = false, defaultModel = "kimi-k3", hasToken = true, error = null,
         ),
     )
 
@@ -187,10 +188,10 @@ internal object DesignFixtures {
         models = listOf(UniffiAgentModels(
             "claude-code",
             listOf(
-                UniffiModelEntry("opus", "Opus", "Anthropic"),
-                UniffiModelEntry("fable", "Fable", "Anthropic"),
-                UniffiModelEntry("OpenCode Go/glm-5.3-flash", "glm-5.3-flash", "OpenCode Go"),
-                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Z.ai"),
+                UniffiModelEntry("opus", "Opus", "Anthropic", null),
+                UniffiModelEntry("fable", "Fable", "Anthropic", null),
+                UniffiModelEntry("OpenCode Go/glm-5.3-flash", "glm-5.3-flash", "OpenCode Go", null),
+                UniffiModelEntry("Z.ai/glm-5.3-flash", "glm-5.3-flash", "Z.ai", null),
             ),
             "opus",
             null,

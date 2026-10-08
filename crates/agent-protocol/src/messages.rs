@@ -130,6 +130,14 @@ pub struct ProviderBinding {
     pub default_model: Option<String>,
 }
 
+/// A provider profile an agent left out of `set-providers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct RefusedProvider {
+    /// The profile's id.
+    pub id: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StartSession {
@@ -415,9 +423,11 @@ pub enum BridgeMessage {
         auth_token: Secret,
     },
     /// The provider profiles of an agent whose catalog entry `supports`
-    /// `providerModels`, all of them: sent after `initialize` and whenever
-    /// one changes. The agent offers their models beside its own. Reply:
-    /// `ack`.
+    /// `providerModels`, all of them, oldest saved first: sent after
+    /// `initialize` and whenever one changes. The agent offers their models
+    /// beside its own. One it cannot add (its name is taken by one of the
+    /// agent's own providers, or by an earlier profile) is left out. Reply:
+    /// `providers-set`.
     SetProviders {
         agent: String,
         providers: Vec<ProviderBinding>,
@@ -494,6 +504,9 @@ pub enum HostMessage {
     },
     /// Reply to `list-provider-models`: never empty.
     ProviderModels { models: Vec<ProviderModel> },
+    /// Reply to `set-providers`: the profiles left out, with the reason in
+    /// words for a person; every other one is offered.
+    ProvidersSet { refused: Vec<RefusedProvider> },
     /// A notification: no frame id, no reply.
     SessionEvent {
         session_id: String,

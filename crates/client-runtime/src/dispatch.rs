@@ -339,13 +339,10 @@ impl<'a> Router<'a> {
             // --- slice C: machines-slice updates + fire-and-answer acks ---
             BridgeToPhone::Models(m) => {
                 self.stores.machines.apply_models(machine, m);
-                // An empty list comes with the reason: ask again next time.
-                let fetch = Fetch::Models(m.agent.clone());
-                if m.models.is_empty() {
-                    self.stores.machines.fetches.forget(machine, fetch);
-                } else {
-                    self.stores.machines.fetches.answered(machine, fetch, self.now);
-                }
+                self.stores
+                    .machines
+                    .fetches
+                    .answered(machine, Fetch::Models(m.agent.clone()));
                 r.persist(StoreId::Machines);
             }
             BridgeToPhone::Usage(m) => {
@@ -407,8 +404,11 @@ impl<'a> Router<'a> {
             }
             BridgeToPhone::ProviderProfiles(m) => {
                 self.stores.machines.apply_provider_profiles(machine, m);
-                self.stores.machines.fetches.answered(machine, Fetch::ProviderProfiles, self.now);
-                // CDX-062: provider profiles are never persisted.
+                self.stores.machines.fetches.answered(machine, Fetch::ProviderProfiles);
+                // CDX-062: provider profiles are never written to disk — the
+                // machines slice strips them when it serializes — but this
+                // persist is what tells the views the slice changed.
+                r.persist(StoreId::Machines);
             }
             BridgeToPhone::CredentialsAck(m) => {
                 self.stores.ui.apply_credentials_ack(
@@ -427,8 +427,6 @@ impl<'a> Router<'a> {
                         m.agent.as_deref(),
                         &m.credentials,
                     );
-                    // New credentials can change what the agents list.
-                    self.stores.machines.fetches.forget_models(machine);
                     r.persist(StoreId::Machines);
                 }
             }
@@ -1324,6 +1322,37 @@ mod tests {
             s.machines.machine(MACHINE).unwrap().models["claude-code"].models.as_ref().unwrap()[0].id,
             "sonnet"
         );
+    }
+
+    /// A new profile list must reach the open providers page at once: the
+    /// machines persist is the views' refresh signal, even though the
+    /// profiles themselves are never written.
+    #[tokio::test]
+    async fn provider_profiles_refresh_the_machines_view() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::ProviderProfiles(protocol::events::ProviderProfilesMsg {
+                    machine: MACHINE.into(),
+                    profiles: vec![protocol::common::ProviderProfileInfo {
+                        id: "home".into(),
+                        agent: "opencode".into(),
+                        label: "Home".into(),
+                        base_url: "http://192.168.1.2:3456".into(),
+                        models: vec![],
+                        models_from_provider: false,
+                        default_model: None,
+                        has_token: true,
+                        error: None,
+                    }],
+                }),
+            )
+            .await;
+        assert_eq!(out.persist, vec![StoreId::Machines]);
+        assert_eq!(s.machines.machine(MACHINE).unwrap().provider_profiles.as_ref().unwrap()[0].id, "home");
     }
 
     #[tokio::test]

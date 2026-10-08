@@ -4,7 +4,7 @@
 //! starts, never logged and never sent back — a phone learns only whether a
 //! value is set and whether its provider accepted it.
 
-use agent_protocol::{AgentInfo, BridgeMessage, ProviderBinding, Secret};
+use agent_protocol::{AgentInfo, BridgeMessage, ProviderBinding, RefusedProvider, Secret};
 use protocol::commands::{SetCredentialsMsg, SetProviderProfileMsg};
 use protocol::common::{is_valid_provider_base_url, CredentialStatus, ProviderModel, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{BridgeToPhone, CredentialsAckMsg, ProviderProfileAckMsg, ProviderProfilesMsg};
@@ -13,6 +13,14 @@ use protocol::tristate::Tristate;
 use super::{Engine, HostCall};
 use crate::io::store_keys;
 use crate::settings::{ProviderProfile, StoredProfiles, GITHUB_PAT, GITHUB_PAT_LABEL};
+
+/// A saved provider profile waiting on its agent to take it.
+pub(crate) struct ProfileSave {
+    phone: String,
+    profile: ProviderProfile,
+    /// What the profile was before, restored if the agent leaves it out.
+    previous: Option<ProviderProfile>,
+}
 
 /// A `credentials-ack` waiting on credential checks.
 pub(crate) struct CredentialAck {
@@ -207,26 +215,25 @@ impl Engine {
     pub(super) fn provider_profiles_msg(&self) -> BridgeToPhone {
         BridgeToPhone::ProviderProfiles(ProviderProfilesMsg {
             machine: self.config.machine.clone(),
-            profiles: self.profiles.values().map(ProviderProfile::redacted).collect(),
+            profiles: self.profiles.values().map(|p| p.redacted(self.profile_refusals.get(&p.id).map(String::as_str))).collect(),
         })
     }
 
     /// Hand an agent whose catalog entry `supports.provider_models` its
     /// profiles — every usable one, so a deleted or emptied profile goes
-    /// away too.
-    pub(super) fn push_providers(&mut self, agent: &str) {
+    /// away too — oldest saved first, so of two that clash the older stays.
+    /// `save` is the save waiting on the answer. Whether it was sent.
+    pub(super) fn push_providers(&mut self, agent: &str, save: Option<u64>) -> bool {
         if !self.host.initialized || !self.catalog.get(agent).is_some_and(|a| a.supports.provider_models) {
-            return;
+            return false;
         }
-        let providers: Vec<ProviderBinding> = self
-            .profiles
-            .values()
-            .filter(|p| p.agent == agent && is_valid_provider_base_url(&p.base_url))
-            .filter_map(ProviderProfile::binding)
-            .collect();
+        let mut profiles: Vec<&ProviderProfile> =
+            self.profiles.values().filter(|p| p.agent == agent && is_valid_provider_base_url(&p.base_url)).collect();
+        profiles.sort_by(|a, b| (&a.updated_at, &a.id).cmp(&(&b.updated_at, &b.id)));
+        let providers: Vec<ProviderBinding> = profiles.into_iter().filter_map(ProviderProfile::binding).collect();
         log::info!("[Engine] {agent} gets {} provider profile(s)", providers.len());
         let message = BridgeMessage::SetProviders { agent: agent.to_string(), providers };
-        self.call(HostCall::SetProviders { agent: agent.to_string() }, message);
+        self.call(HostCall::SetProviders { agent: agent.to_string(), save }, message).is_some()
     }
 
     /// Every agent's profiles, once the host is (back) up.
@@ -234,8 +241,59 @@ impl Engine {
         let agents: Vec<String> =
             self.catalog.all().iter().filter(|a| a.supports.provider_models).map(|a| a.id.clone()).collect();
         for agent in agents {
-            self.push_providers(&agent);
+            self.push_providers(&agent, None);
         }
+    }
+
+    /// `agent` answered `set-providers`: it offers every profile but the
+    /// `refused` ones. A save waiting on the answer whose profile was left
+    /// out is undone and refused with the agent's reason; any other goes on
+    /// to its token check.
+    pub(super) fn on_providers_set(&mut self, agent: &str, save: Option<u64>, refused: Result<Vec<RefusedProvider>, String>) {
+        let save = save.and_then(|ticket| self.profile_saves.remove(&ticket));
+        let refused = match refused {
+            Ok(refused) => refused,
+            Err(err) => {
+                log::warn!("[Engine] {agent} did not take its provider profiles: {err}");
+                if let Some(save) = save {
+                    self.check_saved_profile(&save.phone, &save.profile);
+                }
+                return;
+            }
+        };
+        let before = self.profile_refusals.clone();
+        let profiles = &self.profiles;
+        self.profile_refusals.retain(|id, _| profiles.get(id).is_some_and(|p| p.agent != agent));
+        for r in &refused {
+            log::info!("[Engine] {agent} leaves provider profile '{}' out: {}", r.id, r.reason);
+            self.profile_refusals.insert(r.id.clone(), r.reason.clone());
+        }
+        let Some(save) = save else {
+            if self.profile_refusals != before {
+                let list = self.provider_profiles_msg();
+                self.publish_all(list);
+            }
+            return;
+        };
+        let id = save.profile.id.clone();
+        let Some(reason) = refused.into_iter().find(|r| r.id == id).map(|r| r.reason) else {
+            return self.check_saved_profile(&save.phone, &save.profile);
+        };
+        let moved_from = save.previous.as_ref().map(|p| p.agent.clone()).filter(|a| a != agent);
+        let mut next = self.profiles.clone();
+        match save.previous {
+            Some(previous) => next.insert(id.clone(), previous),
+            None => next.remove(&id),
+        };
+        self.profile_refusals.remove(&id);
+        if let Err(err) = self.store_profiles(next) {
+            log::error!("[Engine] Could not undo the save of provider profile '{id}': {err}");
+        }
+        self.push_providers(agent, None);
+        if let Some(moved_from) = moved_from {
+            self.push_providers(&moved_from, None);
+        }
+        self.send_profile_ack(&save.phone, &id, Err(reason));
     }
 
     /// Create, update or delete one profile. An upsert whose models come
@@ -246,8 +304,9 @@ impl Engine {
         let id = m.profile_id;
         log::info!("[Engine] set-provider-profile '{id}' from {}...", phone.get(..8).unwrap_or(phone));
         // The newest write of a profile is the one that stands: a model list
-        // still on its way for an older one is dropped.
+        // or an agent's answer still on its way for an older one is dropped.
         self.model_fetches.retain(|_, (_, pending)| pending.id != id);
+        self.profile_saves.retain(|_, pending| pending.profile.id != id);
         let Some(write) = m.profile else {
             // Deleting is never refused, whatever the stored URL: a profile
             // that needs fixing must stay removable. Sessions bound to it
@@ -259,9 +318,10 @@ impl Engine {
                 return self.send_profile_ack(phone, &id, Err(err));
             }
             log::info!("[Engine] Provider profile '{id}' deleted (existed={})", removed.is_some());
+            self.profile_refusals.remove(&id);
             self.send_profile_ack(phone, &id, Ok(None));
             if let Some(removed) = removed {
-                self.push_providers(&removed.agent);
+                self.push_providers(&removed.agent, None);
             }
             return;
         };
@@ -341,8 +401,9 @@ impl Engine {
         }
     }
 
-    /// Store an upserted profile, hand it to its agent (and take it from the
-    /// agent it was for before), then have its token checked before acking.
+    /// Store an upserted profile and hand it to its agent (taking it from
+    /// the agent it was for before); once that agent has taken it, have its
+    /// token checked before acking.
     fn save_profile(&mut self, phone: &str, profile: ProviderProfile) {
         let id = profile.id.clone();
         let mut next = self.profiles.clone();
@@ -359,10 +420,22 @@ impl Engine {
             if profile.models_from_provider { " from the provider" } else { "" },
             profile.auth_token.is_some()
         );
-        self.push_providers(&profile.agent);
-        if let Some(previous) = previous.filter(|p| p.agent != profile.agent) {
-            self.push_providers(&previous.agent);
+        if let Some(moved) = previous.as_ref().filter(|p| p.agent != profile.agent) {
+            let agent = moved.agent.clone();
+            self.push_providers(&agent, None);
         }
+        self.next_ticket += 1;
+        let ticket = self.next_ticket;
+        if self.push_providers(&profile.agent, Some(ticket)) {
+            self.profile_saves.insert(ticket, ProfileSave { phone: phone.to_string(), profile, previous });
+        } else {
+            self.check_saved_profile(phone, &profile);
+        }
+    }
+
+    /// Have a saved profile's token checked by its agent, then ack.
+    fn check_saved_profile(&mut self, phone: &str, profile: &ProviderProfile) {
+        let id = profile.id.clone();
         let check = profile.binding().zip(profile.fallback_model().map(str::to_string));
         let Some((provider, model)) = check else {
             return self.send_profile_ack(phone, &id, Ok(None));

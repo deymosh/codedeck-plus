@@ -239,9 +239,18 @@ Messages:
   redirect is followed, and the save is refused when the list cannot be read
   or is empty. A `defaultModel` the list does not name is dropped. The stored
   profile reports the flag back, so a later save (with the token kept) reads
-  the list again.
+  the list again. A model read so keeps, when the endpoint says, the
+  `provider` a gateway routes it to (the part of the id before its first
+  `/`, which stays in the id) and its `contextWindow`; phones group such a
+  model under "profile · provider".
 - The token is checked by the profile's agent, with the smallest request on
   the API it speaks (`tokenValid` in the ack).
+- For an agent with `supports.providerModels`, a save waits on the agent
+  taking the new list: a profile it leaves out (its own provider, or an
+  older profile, has the name) is not saved — the earlier version stands —
+  and the ack carries the agent's reason. A stored profile the agent leaves
+  out later (after an operator adds a provider of that name) carries the
+  reason as `error` in `provider-profiles`.
 - A profile stored before profiles named their agent has an empty `agent`:
   no agent uses it until a save names one.
 - `provider-profiles-request` → `provider-profiles {profiles[]}` to the asking
@@ -515,8 +524,8 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `session-mcp-toggle {sessionId, name, enabled}` | `session-mcp {…}` once done, or `error` |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 | `check-provider {agent, provider, model}` | `credential-checked {valid?}`: a provider profile's token, checked on the API `agent` speaks |
-| `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty), read the way `agent` signs in; or `error` with the reason there is none |
-| `set-providers {agent, providers}` | `ack` once an agent with `supports.providerModels` offers these profiles' models (all of its profiles, sent after `initialize` and on every change), or `error` |
+| `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty; each `{id, label?, provider?, contextWindow?}`), read the way `agent` signs in; or `error` with the reason there is none |
+| `set-providers {agent, providers}` | `providers-set {refused: [{id, reason}]}` once an agent with `supports.providerModels` offers these profiles' models (all of its profiles, oldest saved first, sent after `initialize` and on every change) — all but the refused ones, which it cannot add (a name one of its own providers, or an earlier profile, has); or `error` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds
 that), plus `credentials[].envVar` and `unavailableReason`.

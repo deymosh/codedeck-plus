@@ -1,8 +1,10 @@
 package com.codedeck.plus.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Checkbox
@@ -17,10 +19,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.Chip
 import com.codedeck.plus.ui.components.ErrorNote
+import com.codedeck.plus.ui.components.ExpandableRow
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
@@ -114,6 +119,8 @@ fun ProvidersContent(
     onBack: () -> Unit,
     /** Opens straight on the editor (for a snapshot). */
     startEditing: ProviderEditor? = null,
+    /** The provider shown opened (for a snapshot). */
+    openProfile: String? = null,
     /** The core's base URL rule — a native call, so a snapshot, which cannot
      *  load the core, passes its own. */
     validBaseUrl: (String) -> Boolean = ::isValidProviderBaseUrl,
@@ -187,8 +194,7 @@ fun ProvidersContent(
             Group(footer = agent?.let { providerUse(it) + " Tokens stay on the machine; this phone never stores them." }) {
                 own.forEachIndexed { i, p ->
                     if (i > 0) Divider()
-                    GroupBody {
-                        ProfileSummary(p)
+                    ProfileRow(p, startOpen = p.id == openProfile) {
                         if (confirmDelete == p.id) {
                             Text(
                                 if (agent?.supportsProviderModels == true) {
@@ -229,8 +235,7 @@ fun ProvidersContent(
             ) {
                 unassigned.forEachIndexed { i, p ->
                     if (i > 0) Divider()
-                    GroupBody {
-                        ProfileSummary(p)
+                    ProfileRow(p, startOpen = p.id == openProfile) {
                         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
                             QuietButton("Use for $agentName", onClick = { write(p.id, rewrite(p, agentId)) }, enabled = !busy && p.hasToken)
                             QuietButton("Delete", onClick = { write(p.id, null) }, danger = true, enabled = !busy)
@@ -244,24 +249,92 @@ fun ProvidersContent(
     }
 }
 
+/** "3 models", "1 model". */
+private fun modelCount(n: Int) = "$n ${if (n == 1) "model" else "models"}"
+
+/**
+ * One provider: its name and endpoint, with a chip for what matters most —
+ * why its agent does not offer it, a missing token, or how many models it
+ * has. Opened, it lists its models and then [actions].
+ */
 @Composable
-private fun ProfileSummary(p: UniffiProviderProfileInfo) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-        Text(p.label, color = Tokens.Text, fontSize = Tokens.TextMd, modifier = Modifier.weight(1f))
-        Chip(
-            if (p.hasToken) "token set" else "no token",
-            color = if (p.hasToken) Tokens.Success else Tokens.TextDim,
-            border = if (p.hasToken) Tokens.Success.copy(alpha = 0.4f) else Tokens.Border,
-        )
+private fun ProfileRow(p: UniffiProviderProfileInfo, startOpen: Boolean, actions: @Composable () -> Unit) {
+    var open by remember(p.id) { mutableStateOf(startOpen) }
+    ExpandableRow(
+        p.label,
+        p.baseUrl,
+        enabled = p.error == null,
+        open = open,
+        onOpenChange = { open = it },
+        subtitleMono = true,
+        openSubtitleLines = 3,
+        trailing = {
+            when {
+                p.error != null -> Chip("not offered", color = Tokens.Danger, border = Tokens.Danger.copy(alpha = 0.4f))
+                !p.hasToken -> Chip("no token", color = Tokens.Warn, border = Tokens.Warn.copy(alpha = 0.4f))
+                else -> Chip(modelCount(p.models.size))
+            }
+        },
+    ) {
+        Column(Modifier.padding(top = Tokens.Space2), verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+            // Why the agent does not offer its models (its name is taken, say).
+            p.error?.let { Text(it, color = Tokens.Danger, fontSize = Tokens.TextSm) }
+            Text(
+                (if (p.modelsFromProvider) "Models read from the provider at the last save" else "Models typed in by hand") +
+                    if (p.hasToken) " · token set" else " · no token, so nothing runs on it",
+                color = Tokens.TextMuted,
+                fontSize = Tokens.TextSm,
+            )
+            ProfileModels(p)
+            actions()
+        }
     }
-    Text(p.baseUrl, color = Tokens.TextMuted, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
-    Text(
-        "${p.models.size} ${if (p.models.size == 1) "model" else "models"}" +
-            (if (p.modelsFromProvider) " from the provider" else "") +
-            (p.defaultModel?.let { ", default $it" } ?: ""),
-        color = Tokens.TextMuted,
-        fontSize = Tokens.TextSm,
-    )
+}
+
+/**
+ * A profile's models, under the provider a gateway routes each to when the
+ * endpoint names one (the part of the model's group after the profile's
+ * name); its default marked.
+ */
+@Composable
+private fun ProfileModels(p: UniffiProviderProfileInfo) {
+    // Those under no other provider first, so none reads as part of a group.
+    val byUpstream = p.models
+        .groupBy { m -> m.provider?.removePrefix(p.label)?.removePrefix(" · ")?.takeIf { it.isNotEmpty() } }
+        .entries
+        .sortedBy { it.key != null }
+    val default = p.defaultModel ?: p.models.firstOrNull()?.id
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+        byUpstream.forEach { (upstream, models) ->
+            if (upstream != null) Text(upstream, color = Tokens.TextMuted, fontSize = Tokens.TextXs, fontWeight = FontWeight.Medium)
+            models.forEach { m ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+                    Text(
+                        m.label ?: m.id,
+                        color = Tokens.Text,
+                        fontSize = Tokens.TextMd,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (m.id == default) Chip("default")
+                    m.contextWindow?.let { Text(contextSize(it), color = Tokens.TextDim, fontSize = Tokens.TextXs, fontFamily = Tokens.FontMono) }
+                }
+            }
+        }
+    }
+}
+
+/** A context window as people write it: 1M, 200K, 128K (2^17 tokens). */
+internal fun contextSize(tokens: UInt): String {
+    val n = tokens.toLong()
+    fun scaled(unit: Long, binary: Long, suffix: String): String =
+        "${if (n % binary == 0L) n / binary else Math.round(n.toDouble() / unit)}$suffix"
+    return when {
+        n >= 1_000_000L -> scaled(1_000_000L, 1L shl 20, "M")
+        n >= 1_000L -> scaled(1_000L, 1L shl 10, "K")
+        else -> n.toString()
+    }
 }
 
 /** The last save's outcome, in words. */

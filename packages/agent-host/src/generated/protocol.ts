@@ -272,9 +272,11 @@ export type BridgeMessage_Deserialize =
 } } | 
 /**
  *  The provider profiles of an agent whose catalog entry `supports`
- *  `providerModels`, all of them: sent after `initialize` and whenever
- *  one changes. The agent offers their models beside its own. Reply:
- *  `ack`.
+ *  `providerModels`, all of them, oldest saved first: sent after
+ *  `initialize` and whenever one changes. The agent offers their models
+ *  beside its own. One it cannot add (its name is taken by one of the
+ *  agent's own providers, or by an earlier profile) is left out. Reply:
+ *  `providers-set`.
  */
 { kind: "set-providers"; payload: {
 	agent: string,
@@ -434,9 +436,11 @@ export type BridgeMessage_Serialize =
 } } | 
 /**
  *  The provider profiles of an agent whose catalog entry `supports`
- *  `providerModels`, all of them: sent after `initialize` and whenever
- *  one changes. The agent offers their models beside its own. Reply:
- *  `ack`.
+ *  `providerModels`, all of them, oldest saved first: sent after
+ *  `initialize` and whenever one changes. The agent offers their models
+ *  beside its own. One it cannot add (its name is taken by one of the
+ *  agent's own providers, or by an earlier profile) is left out. Reply:
+ *  `providers-set`.
  */
 { kind: "set-providers"; payload: {
 	agent: string,
@@ -763,6 +767,13 @@ export type HostMessage_Deserialize =
 { kind: "provider-models"; payload: {
 	models: ProviderModel_Deserialize[],
 } } | 
+/**
+ *  Reply to `set-providers`: the profiles left out, with the reason in
+ *  words for a person; every other one is offered.
+ */
+{ kind: "providers-set"; payload: {
+	refused: RefusedProvider[],
+} } | 
 /**  A notification: no frame id, no reply. */
 { kind: "session-event"; payload: {
 	sessionId: string,
@@ -841,6 +852,13 @@ export type HostMessage_Serialize =
 /**  Reply to `list-provider-models`: never empty. */
 { kind: "provider-models"; payload: {
 	models: ProviderModel_Serialize[],
+} } | 
+/**
+ *  Reply to `set-providers`: the profiles left out, with the reason in
+ *  words for a person; every other one is offered.
+ */
+{ kind: "providers-set"; payload: {
+	refused: RefusedProvider[],
 } } | 
 /**  A notification: no frame id, no reply. */
 { kind: "session-event"; payload: {
@@ -1192,16 +1210,33 @@ export type ProviderBinding_Serialize = {
 	defaultModel?: string | null,
 };
 
+/**  A model a provider profile offers. */
 export type ProviderModel = ProviderModel_Serialize | ProviderModel_Deserialize;
 
+/**  A model a provider profile offers. */
 export type ProviderModel_Deserialize = {
 	id: string,
 	label?: string | null,
+	/**
+	 *  The provider a gateway routes the model to (`OpenCode Go` for a
+	 *  router's `OpenCode Go/deepseek-v4.1-flash`), when the endpoint says.
+	 */
+	provider?: string | null,
+	/**  How many tokens the model takes in, when the endpoint says. */
+	contextWindow?: number | null,
 };
 
+/**  A model a provider profile offers. */
 export type ProviderModel_Serialize = {
 	id: string,
 	label?: string | null,
+	/**
+	 *  The provider a gateway routes the model to (`OpenCode Go` for a
+	 *  router's `OpenCode Go/deepseek-v4.1-flash`), when the endpoint says.
+	 */
+	provider?: string | null,
+	/**  How many tokens the model takes in, when the endpoint says. */
+	contextWindow?: number | null,
 };
 
 export type QuestionOption = QuestionOption_Serialize | QuestionOption_Deserialize;
@@ -1251,6 +1286,13 @@ export type QuestionSpec_Serialize = {
 	question: string,
 	options: QuestionOption_Serialize[],
 	multiSelect?: boolean,
+};
+
+/**  A provider profile an agent left out of `set-providers`. */
+export type RefusedProvider = {
+	/**  The profile's id. */
+	id: string,
+	reason: string,
 };
 
 /**  Who wrote a text entry. */

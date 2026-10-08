@@ -96,8 +96,9 @@ impl ProviderProfile {
         })
     }
 
-    /// The phone's view: whether a token is set, never the token.
-    pub fn redacted(&self) -> ProviderProfileInfo {
+    /// The phone's view: whether a token is set, never the token; and why
+    /// its agent does not offer it, when it does not.
+    pub fn redacted(&self, error: Option<&str>) -> ProviderProfileInfo {
         ProviderProfileInfo {
             id: self.id.clone(),
             agent: self.agent.clone(),
@@ -107,6 +108,7 @@ impl ProviderProfile {
             models_from_provider: self.models_from_provider,
             default_model: self.default_model.clone(),
             has_token: self.auth_token.is_some(),
+            error: error.map(str::to_string),
         }
     }
 }
@@ -161,12 +163,12 @@ mod tests {
             label: "P".into(),
             base_url: "https://x".into(),
             auth_token: Some(Secret::new("t")),
-            models: vec![ProviderModel { id: "m1".into(), label: None }],
+            models: vec![ProviderModel { id: "m1".into(), ..Default::default() }],
             models_from_provider: false,
             default_model: None,
             updated_at: None,
         };
-        let info = profile.redacted();
+        let info = profile.redacted(None);
         assert!(info.has_token);
         assert!(!serde_json::to_string(&info).unwrap().contains("\"t\""));
         assert_eq!(profile.fallback_model(), Some("m1"));

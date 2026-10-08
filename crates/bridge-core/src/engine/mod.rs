@@ -151,6 +151,12 @@ pub struct Engine {
     /// set-provider-profile waiting on the provider's model list: ticket →
     /// (phone, the profile to store once its models are in).
     model_fetches: BTreeMap<u64, (String, ProviderProfile)>,
+    /// set-provider-profile waiting on its agent taking the new list:
+    /// ticket → the save, undone if the agent leaves the profile out.
+    profile_saves: BTreeMap<u64, settings::ProfileSave>,
+    /// Why an agent leaves a profile out of its models, by profile id, from
+    /// its last answer to `set-providers`. Not persisted.
+    profile_refusals: BTreeMap<String, String>,
     next_ticket: u64,
     sync: SyncServer,
     pairing: Option<PairingWindow>,
@@ -195,6 +201,8 @@ impl Engine {
             credential_acks: BTreeMap::new(),
             profile_acks: BTreeMap::new(),
             model_fetches: BTreeMap::new(),
+            profile_saves: BTreeMap::new(),
+            profile_refusals: BTreeMap::new(),
             next_ticket: 0,
             sync,
             pairing: None,

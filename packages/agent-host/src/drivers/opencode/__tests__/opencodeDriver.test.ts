@@ -196,6 +196,26 @@ describe('OpenCode permission asks', () => {
     expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'once' });
   });
 
+  it("offers OpenCode's always when it has one, and replies with it", async () => {
+    const offered = { ...ask, properties: { ...ask.properties, always: ['/etc/*'] } };
+    const client = clientWith([pendingRead, offered]);
+    const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
+    await ctx.ended();
+    expect(ctx.permissions[0]!.options.map((o) => [o.id, o.label])).toEqual([
+      ['allow', 'Allow'],
+      ['allow_always', 'Always allow in this project'],
+      ['deny', 'Deny'],
+    ]);
+    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'always' });
+  });
+
+  it('an ask with nothing to always allow refuses an always answer', async () => {
+    const client = clientWith([pendingRead, ask]);
+    const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
+    await ctx.ended();
+    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'reject' });
+  });
+
   it('the auto-approve mode allows without asking', async () => {
     const client = clientWith([pendingRead, ask]);
     const ctx = start(client, { mode: 'default' });
@@ -361,8 +381,9 @@ describe('OpenCode options', () => {
     const ctx = recordingContext();
     const session = OpenCodeDriver.withClient(clientWith([])).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
     await session.setOption('mode', 'default');
+    await session.setOption('mode', 'plan');
     await session.setOption('model', 'anthropic/claude-sonnet-5');
-    await expect(session.setOption('mode', 'plan')).rejects.toThrow(/no mode/);
+    await expect(session.setOption('mode', 'acceptEdits')).rejects.toThrow(/no mode/);
     await expect(session.setOption('model', 'sonnet')).rejects.toThrow(/provider\/model/);
     await expect(session.setOption('effort', 'high')).rejects.toThrow(/no effort/);
     await session.end();
@@ -419,6 +440,25 @@ describe('OpenCode default model', () => {
       providerID: 'opencode',
       modelID: 'nemotron-free',
     });
+    await session.end();
+  });
+});
+
+describe('OpenCode plan mode', () => {
+  it("runs OpenCode's plan agent, and its default agent again once left", async () => {
+    const client = clientWith([]);
+    const promptAsync = vi.fn().mockResolvedValue({ data: undefined, error: undefined });
+    (client.session as unknown as { promptAsync: unknown }).promptAsync = promptAsync;
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', mode: 'plan' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    session.prompt('how would you split this module?');
+    await expect.poll(() => promptAsync.mock.calls.length).toBe(1);
+    expect(promptAsync.mock.calls[0]![0].agent).toBe('plan');
+    await session.setOption('mode', 'ask');
+    session.prompt('do it');
+    await expect.poll(() => promptAsync.mock.calls.length).toBe(2);
+    expect(promptAsync.mock.calls[1]![0]).not.toHaveProperty('agent');
     await session.end();
   });
 });

@@ -59,7 +59,8 @@ pub(crate) enum HostCall {
     CheckProvider { ticket: u64 },
     /// A provider's model list, for the save waiting on it.
     ListProviderModels { ticket: u64 },
-    SetProviders { agent: String },
+    /// An agent's profiles, for the save waiting on them when there is one.
+    SetProviders { agent: String, save: Option<u64> },
     DeleteConversation(ConversationDelete),
 }
 
@@ -254,10 +255,13 @@ impl Engine {
                 };
                 self.on_provider_models_fetched(ticket, models);
             }
-            HostCall::SetProviders { agent } => {
-                if let Err(err) = result {
-                    log::warn!("[Engine] {agent} did not take its provider profiles: {err}");
-                }
+            HostCall::SetProviders { agent, save } => {
+                let refused = match result {
+                    Ok(HostMessage::ProvidersSet { refused }) => Ok(refused),
+                    Ok(_) => Err("the agent host answered with the wrong reply".to_string()),
+                    Err(err) => Err(err),
+                };
+                self.on_providers_set(&agent, save, refused);
             }
             HostCall::DeleteConversation(delete) => match result {
                 Ok(_) => log::info!("[Engine] Conversation {} of {} deleted", delete.conversation_id, delete.session_id),
