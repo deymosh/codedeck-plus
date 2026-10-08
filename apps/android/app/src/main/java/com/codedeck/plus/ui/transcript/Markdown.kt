@@ -46,46 +46,58 @@ import com.mikepenz.markdown.model.rememberMarkdownState
  * Rust-side span generation) — matches the TS renderer's own lazy/
  * progressive-enhancement treatment of `rehype-highlight`; highlighting is a
  * deliberately separate decision.
+ *
+ * [selectable] puts the text in a selection container (a long press
+ * selects it); leave it off for blocks that share one container.
+ * [immediate] false parses off the main thread (the block shows once
+ * parsed), for a block among many composed at once.
  */
 @Composable
-fun TranscriptMarkdown(content: String, modifier: Modifier = Modifier) {
-    val state = rememberMarkdownState(content, immediate = true)
-    SelectionContainer(modifier = modifier) {
-        Markdown(
-            markdownState = state,
-            // Per-element text color rides on `typography` below (each `TextStyle`
-            // carries its own `color`) — `markdownColor()` only covers the
-            // non-text surfaces (code/table backgrounds, the divider, alerts).
-            colors = markdownColor(
-                text = Tokens.Text,
-                codeBackground = Tokens.SurfaceInput,
-                inlineCodeBackground = Tokens.SurfaceInput,
-                dividerColor = Tokens.BorderStrong,
-                tableBackground = Tokens.Surface,
-            ),
-            typography = markdownTypography(
-                h1 = headingStyle(22),
-                h2 = headingStyle(18),
-                h3 = headingStyle(16),
-                h4 = headingStyle(15),
-                h5 = headingStyle(14),
-                h6 = headingStyle(13),
-                text = bodyStyle(),
-                paragraph = bodyStyle(),
-                ordered = bodyStyle(),
-                bullet = bodyStyle(),
-                list = bodyStyle(),
-                quote = bodyStyle(color = Tokens.TextMuted),
-                code = monoStyle(),
-                inlineCode = monoStyle(),
-                table = bodyStyle(),
-            ),
-            components = markdownComponents(
-                table = { TranscriptMarkdownTable(it.content, it.node, it.typography.table) },
-            ),
-            modifier = modifier.fillMaxWidth(),
-        )
+fun TranscriptMarkdown(content: String, modifier: Modifier = Modifier, selectable: Boolean = true, immediate: Boolean = true) {
+    if (selectable) {
+        SelectionContainer(modifier = modifier) { MarkdownBody(content, modifier, immediate) }
+    } else {
+        MarkdownBody(content, modifier, immediate)
     }
+}
+
+@Composable
+private fun MarkdownBody(content: String, modifier: Modifier, immediate: Boolean) {
+    val state = rememberMarkdownState(content, immediate = immediate)
+    Markdown(
+        markdownState = state,
+        // Per-element text color rides on `typography` below (each `TextStyle`
+        // carries its own `color`) — `markdownColor()` only covers the
+        // non-text surfaces (code/table backgrounds, the divider, alerts).
+        colors = markdownColor(
+            text = Tokens.Text,
+            codeBackground = Tokens.SurfaceInput,
+            inlineCodeBackground = Tokens.SurfaceInput,
+            dividerColor = Tokens.BorderStrong,
+            tableBackground = Tokens.Surface,
+        ),
+        typography = markdownTypography(
+            h1 = headingStyle(22),
+            h2 = headingStyle(18),
+            h3 = headingStyle(16),
+            h4 = headingStyle(15),
+            h5 = headingStyle(14),
+            h6 = headingStyle(13),
+            text = bodyStyle(),
+            paragraph = bodyStyle(),
+            ordered = bodyStyle(),
+            bullet = bodyStyle(),
+            list = bodyStyle(),
+            quote = bodyStyle(color = Tokens.TextMuted),
+            code = monoStyle(),
+            inlineCode = monoStyle(),
+            table = bodyStyle(),
+        ),
+        components = markdownComponents(
+            table = { TranscriptMarkdownTable(it.content, it.node, it.typography.table) },
+        ),
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
 private fun headingStyle(sizeSp: Int) = TextStyle(

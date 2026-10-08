@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.TranscriptMarkdown
 
-/** A message the user sent. */
+/** A message the user sent; a long press selects its text. */
 @Composable
 fun UserMessageRow(text: String, segment: Segment = Segment.Only) {
     // Your turns sit on the right, set off from the agent's full-width text.
@@ -96,7 +96,8 @@ private fun segmentInsets(segment: Segment, horizontal: Dp, vertical: Dp): Paddi
 
 /** Agent text (markdown). `isPlan` frames it as a plan document, which stays
  *  readable after the plan is approved: outlined in the accent rather than
- *  filled, so it reads as a document and not as one more card. */
+ *  filled, so it reads as a document and not as one more card. A long
+ *  press selects its text. */
 @Composable
 fun AgentTextRow(text: String, isPlan: Boolean = false, segment: Segment = Segment.Only) {
     val planShape = RoundedCornerShape(Tokens.RadiusLg)

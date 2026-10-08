@@ -33,6 +33,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,7 +53,11 @@ import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.FileDiffView
 import com.codedeck.plus.ui.transcript.ToolStep
+import com.codedeck.plus.ui.transcript.BLOCK_TARGET
 import com.codedeck.plus.ui.transcript.TranscriptMarkdown
+import com.codedeck.plus.ui.transcript.markdownBlocks
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * A tool group's details, over the conversation. A group of several steps
@@ -419,11 +424,26 @@ private fun Section(label: String?, content: @Composable () -> Unit) {
     }
 }
 
-/** What a model wrote — its reasoning, a sub-agent's instructions and
- *  report — rendered as the Markdown models write, selectable like the
- *  conversation's own text. */
+/**
+ * What a model wrote — its reasoning, a sub-agent's instructions and
+ * report — rendered as the Markdown models write, and selectable as one
+ * text, however long. A short one renders at once; a long one is cut into
+ * blocks ([markdownBlocks]) and each is parsed, all off the main thread,
+ * so even a very long reasoning never stalls the sheet.
+ */
 @Composable
-private fun ModelText(text: String) = TranscriptMarkdown(text)
+private fun ModelText(text: String) {
+    if (text.length <= BLOCK_TARGET) {
+        TranscriptMarkdown(text)
+        return
+    }
+    val blocks by produceState<List<String>?>(null, text) { value = withContext(Dispatchers.Default) { markdownBlocks(text) } }
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+            blocks?.forEach { TranscriptMarkdown(it, selectable = false, immediate = false) }
+        }
+    }
+}
 
 @Composable
 private fun Prose(text: String) {
