@@ -1,5 +1,6 @@
 package com.codedeck.plus.ui.transcript.rows
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -60,17 +61,31 @@ import com.codedeck.plus.ui.transcript.ToolStep
  * runs, so a call without a result is running rather than cut short.
  * [openAt] opens it on a step instead: the seqs from the group's step down
  * to the one to show.
+ *
+ * Back, the system's or the header's, goes where the header's arrow does:
+ * from a step to the steps it was opened from, and from the page it opened
+ * on to [onBackOut] when it was opened from somewhere else (the activity
+ * sheet). Only where there is nothing to go back to does it close.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, openAt: List<Long>?, onDismiss: () -> Unit) {
+fun ToolGroupSheet(
+    group: DisplayEntry.ToolGroup,
+    live: Boolean,
+    openAt: List<Long>?,
+    onDismiss: () -> Unit,
+    onBackOut: (() -> Unit)? = null,
+) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
         containerColor = Tokens.SurfaceRaised,
         contentColor = Tokens.Text,
     ) {
-        var path by remember(group.seq, openAt) { mutableStateOf(openAt ?: listOfNotNull(loneStep(group)?.seq)) }
+        val start = openAt ?: listOfNotNull(loneStep(group)?.seq)
+        var path by remember(group.seq, openAt) { mutableStateOf(start) }
+        val back = sheetBack(group, path, entry = start, onBackOut) { path = it }
+        BackHandler(enabled = back != null) { back?.invoke() }
         Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding()) {
             ToolSheetContent(
                 group = group,
@@ -78,9 +93,25 @@ fun ToolGroupSheet(group: DisplayEntry.ToolGroup, live: Boolean, openAt: List<Lo
                 openPath = path,
                 onOpenPath = { path = it },
                 onClose = onDismiss,
+                onBack = back,
             )
         }
     }
+}
+
+/** Where Back goes from [path]: out to [onBackOut] from the [entry] page
+ *  when there is one, else up a step — or nowhere (the sheet closes) on
+ *  the timeline and on a lone call's own page. */
+internal fun sheetBack(
+    group: DisplayEntry.ToolGroup,
+    path: List<Long>,
+    entry: List<Long>,
+    onBackOut: (() -> Unit)?,
+    onPath: (List<Long>) -> Unit,
+): (() -> Unit)? = when {
+    onBackOut != null && path == entry -> onBackOut
+    path.isEmpty() || (path.size == 1 && loneStep(group) != null) -> null
+    else -> { { onPath(path.dropLast(1)) } }
 }
 
 /** The one step a group is, when it is a lone call. */
@@ -100,7 +131,8 @@ private fun resolve(group: DisplayEntry.ToolGroup, path: List<Long>): ToolStep? 
 }
 
 /** The sheet's content, apart so a snapshot can show it without a window:
- *  the timeline, or the page of the step [openPath] leads to. */
+ *  the timeline, or the page of the step [openPath] leads to. [onBack]
+ *  overrides where a step page's arrow goes ([ToolGroupSheet] says). */
 @Composable
 fun ToolSheetContent(
     group: DisplayEntry.ToolGroup,
@@ -108,6 +140,7 @@ fun ToolSheetContent(
     openPath: List<Long>,
     onOpenPath: (List<Long>) -> Unit,
     onClose: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val step = resolve(group, openPath)
     Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space5)) {
@@ -125,7 +158,11 @@ fun ToolSheetContent(
                 title = stepTitle(step),
                 subtitle = stepStatus(step, live),
                 subtitleColor = if ((step as? ToolStep.Call)?.failed == true) Tokens.Danger else Tokens.TextMuted,
-                leading = if (lone) Icons.Outlined.Close to onClose else Icons.AutoMirrored.Outlined.ArrowBack to { onOpenPath(openPath.dropLast(1)) },
+                leading = when {
+                    onBack != null -> Icons.AutoMirrored.Outlined.ArrowBack to onBack
+                    lone -> Icons.Outlined.Close to onClose
+                    else -> Icons.AutoMirrored.Outlined.ArrowBack to { onOpenPath(openPath.dropLast(1)) }
+                },
             )
             StepPage(step, live) { onOpenPath(openPath + it) }
         }

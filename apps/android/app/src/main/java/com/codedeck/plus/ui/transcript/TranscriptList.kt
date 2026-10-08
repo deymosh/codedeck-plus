@@ -92,9 +92,10 @@ fun TranscriptList(
     )
 }
 
-/** An open tool-group sheet: the group's seq, and the step it opens on
- *  (see [ToolGroupSheet]'s `openAt`), if not its own first page. */
-private data class OpenGroup(val seq: Long, val at: List<Long>? = null)
+/** An open tool-group sheet: the group's seq, the step it opens on (see
+ *  [ToolGroupSheet]'s `openAt`) if not its own first page, and whether it
+ *  was opened from the activity sheet, which Back then returns to. */
+private data class OpenGroup(val seq: Long, val at: List<Long>? = null, val fromActivity: Boolean = false)
 
 @Composable
 private fun TranscriptListContent(
@@ -206,7 +207,20 @@ private fun TranscriptListContent(
             }
             openGroup?.let { open ->
                 (displayEntries.firstOrNull { it.seq == open.seq } as? DisplayEntry.ToolGroup)?.let { group ->
-                    ToolGroupSheet(group, live = running, openAt = open.at, onDismiss = { openGroup = null })
+                    ToolGroupSheet(
+                        group,
+                        live = running,
+                        openAt = open.at,
+                        onDismiss = { openGroup = null },
+                        onBackOut = if (open.fromActivity) {
+                            {
+                                openGroup = null
+                                activityOpen = true
+                            }
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
             if (activityOpen && activity != null) {
@@ -216,7 +230,7 @@ private fun TranscriptListContent(
                     canStop = canStopTasks,
                     onOpenAgent = { agent ->
                         activityOpen = false
-                        openGroup = OpenGroup(agent.groupSeq, listOf(agent.callSeq))
+                        openGroup = OpenGroup(agent.groupSeq, listOf(agent.callSeq), fromActivity = true)
                     },
                     onStopTask = { taskId ->
                         dispatch(UniffiIntent.StopTask(machine = machine, sessionId = sessionId, taskId = taskId))
