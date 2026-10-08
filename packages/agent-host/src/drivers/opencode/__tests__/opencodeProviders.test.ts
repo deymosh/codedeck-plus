@@ -84,6 +84,8 @@ describe('serverSetup', () => {
     expect(password).toMatch(/^[0-9a-f]{48}$/);
     expect(a.headers.authorization).toBe(`Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`);
     expect(serverSetup([], {}).env.OPENCODE_SERVER_PASSWORD).not.toBe(password);
+    // Web search for every model, not only OpenCode's own providers'.
+    expect(serverSetup([], {}).env.OPENCODE_ENABLE_EXA).toBe('1');
     // No profiles: the operator's config stands as it is.
     expect(serverSetup([], { OPENCODE_CONFIG_CONTENT: '{"theme":"x"}' }).env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
   });

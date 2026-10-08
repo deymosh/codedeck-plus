@@ -118,13 +118,17 @@ export interface ServerSetup {
   headers: Record<string, string>;
 }
 
-/** The environment and credentials of a server for `profiles`. `baseEnv`
- *  is the host's own environment. */
+/** The environment and credentials of a server for `profiles` — and, for
+ *  every model, web search. `baseEnv` is the host's own environment. */
 export function serverSetup(profiles: ProviderBinding[], baseEnv: NodeJS.ProcessEnv): ServerSetup {
   const password = randomBytes(24).toString('hex');
   const env: Record<string, string> = {
     OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
     OPENCODE_SERVER_PASSWORD: password,
+    // OpenCode offers its web search only on its own providers unless this
+    // is set; with it, every model can search (Exa's keyless endpoint,
+    // still behind the `websearch` permission).
+    OPENCODE_ENABLE_EXA: '1',
   };
   if (profiles.length > 0) {
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify(providersConfig(profiles, operatorConfig(baseEnv)));
