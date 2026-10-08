@@ -254,9 +254,9 @@ export function renderPlatformPackages(pins: Record<string, PackagePin>): string
       return `  ${JSON.stringify(name)}: { version: ${JSON.stringify(pin.version)}, integrity: ${JSON.stringify(pin.integrity)} },`;
     });
   return [
-    '// Generated from pnpm-lock.yaml by src/lockfilePins.ts — do not edit.',
+    '// Generated from pnpm-lock.yaml by src/install/lockfilePins.ts — do not edit.',
     "// Regenerate with this package's `gen:platform-packages` script.",
-    "import type { PackagePin } from '../lockfilePins';",
+    "import type { PackagePin } from '../install/lockfilePins';",
     '',
     'export const PLATFORM_PACKAGES: Readonly<Record<string, PackagePin>> = {',
     ...rows,
@@ -281,9 +281,9 @@ export function renderDshPackages(entries: TreePackageEntry[]): string {
     return `  { ${fields.join(', ')} },`;
   });
   return [
-    '// Generated from pnpm-lock.yaml by src/lockfilePins.ts — do not edit.',
+    '// Generated from pnpm-lock.yaml by src/install/lockfilePins.ts — do not edit.',
     "// Regenerate with this package's `gen:platform-packages` script.",
-    "import type { TreePackageEntry } from '../lockfilePins';",
+    "import type { TreePackageEntry } from '../install/lockfilePins';",
     '',
     'export const DSH_PACKAGES: readonly TreePackageEntry[] = [',
     ...rows,

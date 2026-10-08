@@ -21,7 +21,7 @@
  */
 import * as path from 'node:path';
 import { dump } from 'js-yaml';
-import type { HttpGet } from '../../net';
+import type { HttpGet } from '../../sdk/net';
 import { ProfileLayer, type LayerBlock } from './profileLayer';
 
 /** Our block in the profile's patch layer. */

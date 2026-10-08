@@ -144,31 +144,32 @@ image builds `pnpm deploy` one package, and every driver package would need
 its own build, typecheck and test wiring. Revisit if third-party drivers
 become a goal.
 
-**Do give the driver SDK a shape inside the package.** The boundary already
-holds — drivers import only shared host modules, never each other, and only
-`main.ts` names them — but the SDK is ~1,100 lines spread flat over `src/`,
-and `main.ts` knows every agent through two `switch` statements (loading and
-warm-up), with agent-specific environment handling in them. Target layout:
+**Do give the driver SDK a shape inside the package** (done). The layout:
 
 ```
 src/
-  host/        main.ts, host.ts — the process, framing, routing
-  sdk/         driver.ts, types.ts, transcript, tools, commands, mcp,
-               provider, net, executable — the only thing a driver imports
-  install/     agentInstall, lockfilePins, generated/ — pinned runtimes
-  acp/         the ACP client and a generic ACP session/driver base
-               (extracted from drivers/deepseek)
-  drivers/<agent>/   each exports one DriverModule
+  host/        main.ts, host.ts — the process, framing, routing;
+               modules.ts — the list of driver modules
+  sdk/         driver.ts, module.ts, types.ts, transcript, tools, commands,
+               mcp, provider, net, executable — the driver SDK
+  install/     agentInstall, lockfilePins — pinned runtimes
+  generated/   driver-protocol types and lockfile pins (generated; stays
+               put, since the Rust generator and CI's drift check name it)
+  acp/         (next) the ACP client and a generic ACP session/driver base,
+               extracted from drivers/deepseek
+  drivers/<agent>/   each exports one DriverModule from module.ts
 ```
 
-A `DriverModule` is the agent's whole registration: its id and label, how
-to build the driver from the environment, and its runtime as an install
-descriptor (a pinned binary, a pinned package tree, or "found on PATH").
-`main.ts` keeps a list of modules instead of a `switch`; loading, the
-warm-up mode and install-on-demand all iterate that list, so adding an
-agent really is one folder plus one line. A test fails the build when a
-driver imports anything outside `sdk/`, `install/`, `acp/` or its own
-folder.
+A `DriverModule` (`sdk/module.ts`) is the agent's whole registration: its
+id and label, the environment variables that are its alone (taken out of
+the environment every agent process inherits, before any driver is built),
+how to build the driver, and its runtime — what the machine already has,
+and how to install the pinned one. `host/modules.ts` keeps the list;
+loading and the warm-up mode iterate it, and install on demand will too, so
+adding an agent is one folder plus one line. `host/__tests__/layout.test.ts`
+fails the build when a driver imports anything outside `sdk/`, `install/`,
+`generated/` (and later `acp/`) or its own folder, or when anything but the
+module list names a driver.
 
 ## Order
 

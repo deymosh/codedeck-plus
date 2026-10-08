@@ -7,8 +7,9 @@
  * bridge only through the `SessionContext` it is handed, never through the
  * pipe directly — the host does the framing, request ids and routing.
  *
- * Adding an agent = one class implementing `Driver` plus a line in
- * `main.ts`; the bridge needs no change.
+ * Adding an agent = a folder under `drivers/` with a class implementing
+ * `Driver` and a `DriverModule` registering it (`module.ts`), plus a line in
+ * `host/modules.ts`; the bridge needs no change.
  */
 import type {
   AgentInfo,

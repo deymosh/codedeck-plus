@@ -12,8 +12,8 @@
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { connect } from 'node:net';
-import { slashCommand } from '../../commands';
-import type { SlashCommand } from '../../types';
+import { slashCommand } from '../../sdk/commands';
+import type { SlashCommand } from '../../sdk/types';
 
 /** How long one question may take. The plugin answers from memory; a command
  *  that does real work (a compaction asks a model) takes as long as it takes,

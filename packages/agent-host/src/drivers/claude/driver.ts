@@ -12,13 +12,13 @@
  */
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../driver';
-import { mcpStatus } from '../../mcp';
-import type { HttpPost } from '../../net';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
+import { mcpStatus } from '../../sdk/mcp';
+import type { HttpPost } from '../../sdk/net';
 import { isBenignPlanDirWrite } from './policy';
-import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../tools';
-import { newTranslateContext } from '../../transcript';
-import { slashCommand } from '../../commands';
+import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { newTranslateContext } from '../../sdk/transcript';
+import { slashCommand } from '../../sdk/commands';
 import type {
   AgentInfo,
   ModelEntry,
@@ -29,7 +29,7 @@ import type {
   SlashCommand,
   StartSession,
   UsageData,
-} from '../../types';
+} from '../../sdk/types';
 import { sdkMessageToEntries } from './adapter';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
 import {

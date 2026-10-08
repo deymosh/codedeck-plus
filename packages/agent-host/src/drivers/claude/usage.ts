@@ -11,7 +11,7 @@
  * a window is only included when the SDK reports it; null inner values are
  * preserved so the phone can decide whether to render the row.
  */
-import type { UsageData, UsageWindow } from '../../types';
+import type { UsageData, UsageWindow } from '../../sdk/types';
 
 /** The slice of SDKControlGetUsageResponse we consume (experimental shape). */
 interface RawUsageWindow {

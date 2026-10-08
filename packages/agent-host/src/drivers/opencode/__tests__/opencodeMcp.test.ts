@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
 import { OpenCodeMcp, openCodeSessionMcp, openCodeServerConfig, toggleOpenCodeMcp } from '../mcp';
-import { redactUrl } from '../../../mcp';
+import { redactUrl } from '../../../sdk/mcp';
 
 /** A server whose global config is `config`; an update first re-reads the
  *  global config file when `reload` is given, then merges into it the way

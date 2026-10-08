@@ -23,9 +23,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
-import type { McpManager, McpState, SessionMcpState } from '../../driver';
-import { mcpStatus, serverInfo } from '../../mcp';
-import type { McpAction, McpServerAdd, McpServerInfo } from '../../types';
+import type { McpManager, McpState, SessionMcpState } from '../../sdk/driver';
+import { mcpStatus, serverInfo } from '../../sdk/mcp';
+import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
 
 type RawConfig = Record<string, unknown>;
 

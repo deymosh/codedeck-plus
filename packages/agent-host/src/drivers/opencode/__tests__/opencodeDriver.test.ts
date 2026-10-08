@@ -6,8 +6,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Event, OpencodeClient, Provider, Session } from '@opencode-ai/sdk/v2/client';
 import { OpenCodeDriver, pickDefaultModel, toQuestionAnswers } from '../driver';
-import type { StartSession } from '../../../types';
-import { recordingContext, type Handlers } from '../../../__tests__/context';
+import type { StartSession } from '../../../sdk/types';
+import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
 type FakeClient = OpencodeClient & {
   permission: { reply: ReturnType<typeof vi.fn>; respond: ReturnType<typeof vi.fn> };

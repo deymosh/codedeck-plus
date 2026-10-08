@@ -23,8 +23,8 @@ import type {
   SdkSessionHandle,
   SdkSessionOptions,
 } from '../facade';
-import type { StartSession } from '../../../types';
-import { recordingContext, type Handlers } from '../../../__tests__/context';
+import type { StartSession } from '../../../sdk/types';
+import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
 class ScriptedHandle implements SdkSessionHandle {
   readonly pushed: string[] = [];

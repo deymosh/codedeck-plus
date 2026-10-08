@@ -12,7 +12,7 @@
  * `node`.
  */
 import * as path from 'node:path';
-import { installPackageTree, type InstallOptions } from '../../agentInstall';
+import { installPackageTree, type InstallOptions } from '../../install/agentInstall';
 import { DSH_PACKAGES } from '../../generated/dshPackages';
 
 /** The npm package the harness ships as. */

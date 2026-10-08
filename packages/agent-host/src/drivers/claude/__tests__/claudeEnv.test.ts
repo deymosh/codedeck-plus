@@ -9,7 +9,7 @@ import {
   PROVIDER_BASE_URL_ERROR,
   sanitizeProviderBaseEnv,
 } from '../env';
-import type { ProviderBinding, StartSession } from '../../../types';
+import type { ProviderBinding, StartSession } from '../../../sdk/types';
 
 const KIMI_TOKEN = 'sk-kimi-TESTSECRET-000';
 

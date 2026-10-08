@@ -9,8 +9,8 @@
  * removing it, so only `install` and `uninstall` apply.
  */
 import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
-import type { PluginManager, PluginState } from '../../driver';
-import type { InstalledPlugin, PluginAction } from '../../types';
+import type { PluginManager, PluginState } from '../../sdk/driver';
+import type { InstalledPlugin, PluginAction } from '../../sdk/types';
 
 type PluginEntry = string | [string, Record<string, unknown>];
 

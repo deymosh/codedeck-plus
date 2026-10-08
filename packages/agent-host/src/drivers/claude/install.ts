@@ -8,8 +8,8 @@
  */
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
-import type { PackagedBinary } from '../../agentInstall';
-import { exeName, isFile, isMusl } from '../../executable';
+import type { PackagedBinary } from '../../install/agentInstall';
+import { exeName, isFile, isMusl } from '../../sdk/executable';
 
 /** The SDK's platform package for a machine. */
 export function claudePlatformPackage(

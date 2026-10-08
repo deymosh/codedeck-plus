@@ -1,6 +1,6 @@
-// Generated from pnpm-lock.yaml by src/lockfilePins.ts — do not edit.
+// Generated from pnpm-lock.yaml by src/install/lockfilePins.ts — do not edit.
 // Regenerate with this package's `gen:platform-packages` script.
-import type { PackagePin } from '../lockfilePins';
+import type { PackagePin } from '../install/lockfilePins';
 
 export const PLATFORM_PACKAGES: Readonly<Record<string, PackagePin>> = {
   "@anthropic-ai/claude-agent-sdk-darwin-arm64": { version: "0.3.283", integrity: "sha512-UQkROekjufppyB/qrsrU81sM0fcYNWJBEITrGp7NLbOocJZBUR+uVMIx/UHVpe6j81trXPIeRWyfJWgZI17Kxg==" },

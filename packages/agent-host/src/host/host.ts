@@ -10,7 +10,7 @@
  * - a request the host sent is settled exactly once — by the bridge's reply,
  *   or with `cancelled` when the host shuts down.
  */
-import type { Driver, DriverSession, McpManager, PluginManager, SessionContext } from './driver';
+import type { Driver, DriverSession, McpManager, PluginManager, SessionContext } from '../sdk/driver';
 import {
   DRIVER_PROTOCOL_VERSION,
   type BridgeFrame,
@@ -18,7 +18,7 @@ import {
   type HostMessage,
   type SelectOutcome,
   type SessionEvent,
-} from './types';
+} from '../sdk/types';
 
 export interface HostIo {
   /** Write one frame (a single line, no trailing newline). */

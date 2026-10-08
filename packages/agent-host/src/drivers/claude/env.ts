@@ -3,8 +3,8 @@
  * credentials and the session's provider binding, turned into the variables
  * the CLI reads. The returned objects carry SECRETS — never log them.
  */
-import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../provider';
-import type { ProviderBinding, StartSession } from '../../types';
+import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../sdk/provider';
+import type { ProviderBinding, StartSession } from '../../sdk/types';
 
 export const ANTHROPIC_API_KEY_CREDENTIAL = 'anthropic_api_key';
 

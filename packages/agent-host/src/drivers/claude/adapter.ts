@@ -9,7 +9,7 @@
  * hides the tool calls behind those cards so they do not also render as
  * ordinary tool actions.
  */
-import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../tools';
+import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
 import {
   MAX_DIFF_LINES,
   toDiffLines,
@@ -17,8 +17,8 @@ import {
   type DiffPayload,
   type KnownTask,
   type TranslateContext,
-} from '../../transcript';
-import type { DiffLine, OutputEntry, Subagent, TaskKind, TaskStatus } from '../../types';
+} from '../../sdk/transcript';
+import type { DiffLine, OutputEntry, Subagent, TaskKind, TaskStatus } from '../../sdk/types';
 import type {
   SdkMessage,
   SdkAssistantMessage,

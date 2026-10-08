@@ -1,6 +1,6 @@
-// Generated from pnpm-lock.yaml by src/lockfilePins.ts — do not edit.
+// Generated from pnpm-lock.yaml by src/install/lockfilePins.ts — do not edit.
 // Regenerate with this package's `gen:platform-packages` script.
-import type { TreePackageEntry } from '../lockfilePins';
+import type { TreePackageEntry } from '../install/lockfilePins';
 
 export const DSH_PACKAGES: readonly TreePackageEntry[] = [
   { name: "@agentclientprotocol/sdk", version: "1.4.0", integrity: "sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg==", dest: "node_modules/@agentclientprotocol/sdk" },

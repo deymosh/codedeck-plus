@@ -12,8 +12,8 @@
  * the DeepSeek messages API, which is what a DeepSeek-compatible relay
  * serves.
  */
-import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../provider';
-import type { ProviderBinding, StartSession } from '../../types';
+import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../sdk/provider';
+import type { ProviderBinding, StartSession } from '../../sdk/types';
 
 export const DEEPSEEK_API_KEY_CREDENTIAL = 'deepseek_api_key';
 /** The key the harness reads. */
