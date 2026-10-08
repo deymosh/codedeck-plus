@@ -41,7 +41,13 @@ import uniffi.client_ffi.UniffiBackupView
 import com.codedeck.plus.ui.screens.SettingsHub
 import com.codedeck.plus.ui.session.Composer
 import com.codedeck.plus.ui.session.QuickPromptStrip
-import com.codedeck.plus.ui.session.SessionControlsBar
+import com.codedeck.plus.ui.session.ContextDetails
+import com.codedeck.plus.ui.session.ContextRing
+import com.codedeck.plus.ui.session.OptionsPage
+import com.codedeck.plus.ui.session.SessionOptionsChip
+import com.codedeck.plus.ui.session.SessionOptionsList
+import androidx.compose.foundation.layout.Box
+import uniffi.client_ffi.UniffiUsageWindow
 import com.codedeck.plus.ui.session.SessionTopBar
 import com.codedeck.plus.ui.session.SlashCommandMenu
 import com.codedeck.plus.ui.theme.CodeDeckTheme
@@ -84,23 +90,53 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 activity = DesignFixtures.activity(), canStopTasks = true, dispatch = {}, modifier = Modifier.weight(1f),
             )
             QuickPromptStrip(quickPrompts) {}
-            SessionControlsBar(
-                effort = "high", efforts = claude.efforts, modeLabel = "Accept edits", modePending = false, model = "claude-opus-5-5",
-                contextPercentage = 42.0, contextWindow = 200_000, onEffortSelect = {}, onModeTap = {}, showUsageBadge = true, usage = null,
-            )
             Composer(
                 draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
-                canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
+                canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
+                options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
+                meter = { ContextRing(42.0, alert = Tokens.Danger) {} },
             )
         }
     },
-    "session_controls_opencode" to {
+    "session_composer_opencode" to {
         Column(Modifier.background(Tokens.Bg)) {
-            SessionControlsBar(
-                effort = null, efforts = emptyList(), modeLabel = "Plan", modePending = false, model = "home-gateway/OpenCode Go/deepseek-v4.1-flash",
-                contextPercentage = 18.0, contextWindow = 1_000_000, onEffortSelect = {}, onModeTap = {}, showUsageBadge = true,
-                usage = UniffiUsageData(available = true, plan = null, windows = emptyList(), sessionCostUsd = 0.0371, fetchedAt = "2026-10-08T10:00:00Z"),
-                modelName = "deepseek-v4.1-flash",
+            Composer(
+                draft = "Run the migration again and tell me what changed in the schema", onDraftChange = {}, placeholder = "Message…",
+                canAttach = false, uploading = false, canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
+                options = { SessionOptionsChip(DesignFixtures.opencodeOptions) {} },
+                meter = { ContextRing(92.0) {} },
+            )
+        }
+    },
+    "session_options" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, {})
+        }
+    },
+    "session_options_more" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, {})
+        }
+    },
+    "session_options_effort" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, {}, {})
+        }
+    },
+    "session_context" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            ContextDetails(
+                percentage = 42.0, window = 200_000,
+                usage = UniffiUsageData(
+                    available = true, plan = "max",
+                    windows = listOf(
+                        UniffiUsageWindow("5h", 61.0, java.time.Instant.ofEpochMilli(NOW + 134 * 60_000).toString()),
+                        UniffiUsageWindow("7d", 92.0, java.time.Instant.ofEpochMilli(NOW + 2 * 86_400_000 + 5 * 3_600_000).toString()),
+                    ),
+                    sessionCostUsd = 0.0371, fetchedAt = "2026-10-08T10:00:00Z",
+                ),
+                nowMs = NOW,
+                onClose = {},
             )
         }
     },
@@ -113,13 +149,11 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.weight(1f),
             )
             SlashCommandMenu(DesignFixtures.commands, "co") {}
-            SessionControlsBar(
-                effort = "high", efforts = claude.efforts, modeLabel = "Accept edits", modePending = false, model = "claude-opus-5-5",
-                contextPercentage = 42.0, contextWindow = 200_000, onEffortSelect = {}, onModeTap = {}, showUsageBadge = true, usage = null,
-            )
             Composer(
-                draft = "/co", onDraftChange = {}, placeholder = "Message the session…", canAttach = true, uploading = false,
-                canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {}, onSlash = {},
+                draft = "/co", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
+                canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
+                options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
+                meter = { ContextRing(42.0) {} },
             )
         }
     },
@@ -295,7 +329,11 @@ class DesignSnapshotTest {
     @Test fun home() = paparazzi.page("home")
     @Test fun home_nothing_paired() = paparazzi.page("home_nothing_paired")
     @Test fun session() = paparazzi.page("session")
-    @Test fun session_controls_opencode() = paparazzi.page("session_controls_opencode")
+    @Test fun session_composer_opencode() = paparazzi.page("session_composer_opencode")
+    @Test fun session_options() = paparazzi.page("session_options")
+    @Test fun session_options_more() = paparazzi.page("session_options_more")
+    @Test fun session_options_effort() = paparazzi.page("session_options_effort")
+    @Test fun session_context() = paparazzi.page("session_context")
     @Test fun session_commands() = paparazzi.page("session_commands")
     @Test fun transcript() = paparazzi.page("transcript")
     @Test fun transcript_plan() = paparazzi.page("transcript_plan")

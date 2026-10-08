@@ -3,15 +3,19 @@ package com.codedeck.plus.ui.session
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -20,14 +24,13 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
-import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -54,12 +58,12 @@ import com.codedeck.plus.ui.theme.Tokens
 import uniffi.client_ffi.UniffiQuickPrompt
 
 /**
- * The message input: attach (a photo or any file), the text, dictation,
- * and a round Send that lights up once there is something to send — or,
- * while a turn runs and nothing is typed, Stop. One rounded surface, so the
- * controls read as parts of the input rather than a row of buttons. With
- * `onSlash`, an empty input also offers `/`, which starts a command — the
- * key sits on a phone keyboard's second page.
+ * The message input, one rounded surface: the text on top, and under it one
+ * row of controls — `+` (a photo or any file), [options] (what the next
+ * turn runs with), then on the right [meter] (how full the context is) and
+ * one round button for the rest: Send once something is typed; while a
+ * turn runs and nothing is, Stop; otherwise dictation. A long press on it
+ * dictates whatever it shows, so the microphone takes no room of its own.
  */
 @Composable
 internal fun Composer(
@@ -76,7 +80,8 @@ internal fun Composer(
     onDictate: () -> Unit,
     onSend: () -> Unit,
     focusRequester: FocusRequester = FocusRequester(),
-    onSlash: (() -> Unit)? = null,
+    options: (@Composable () -> Unit)? = null,
+    meter: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(26.dp)
     // The field keeps its own cursor; a draft replaced from outside (a quick
@@ -84,58 +89,17 @@ internal fun Composer(
     // is typed next follows the new text.
     var field by remember { mutableStateOf(TextFieldValue(draft, TextRange(draft.length))) }
     val shown = if (field.text == draft) field else TextFieldValue(draft, TextRange(draft.length))
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2)
             .clip(shape)
             .background(Tokens.SurfaceRaised)
             .border(1.dp, Tokens.BorderStrong, shape)
-            .padding(start = Tokens.Space1, end = 6.dp, top = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.Bottom,
+            .padding(6.dp),
     ) {
-        if (canAttach) {
-            var choosing by remember { mutableStateOf(false) }
-            Box {
-                // Dimmed while an upload runs, so the disabled state is visible.
-                IconButton(onClick = { choosing = true }, enabled = !uploading) {
-                    Icon(Icons.Outlined.AttachFile, contentDescription = "Attach", tint = if (uploading) Tokens.TextDim else Tokens.TextMuted)
-                }
-                DropdownMenu(
-                    expanded = choosing,
-                    onDismissRequest = { choosing = false },
-                    modifier = Modifier.background(Tokens.SurfaceRaised),
-                ) {
-                    AttachChoice("Photo", Icons.Outlined.Image) {
-                        choosing = false
-                        onAttachPhoto()
-                    }
-                    AttachChoice("File", Icons.Outlined.Description) {
-                        choosing = false
-                        onAttachFile()
-                    }
-                }
-            }
-        } else {
-            Box(Modifier.size(Tokens.Space3))
-        }
-        if (onSlash != null && draft.isEmpty()) {
-            // Narrower than an icon button and tucked against the attach
-            // icon, so the placeholder keeps its words.
-            Box(
-                Modifier
-                    .offset(x = (-6).dp)
-                    .size(width = 30.dp, height = 48.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onSlash)
-                    .semantics { contentDescription = "Start a command" },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("/", color = Tokens.TextMuted, fontFamily = Tokens.FontMono, fontSize = 22.sp, fontWeight = FontWeight.Medium)
-            }
-        }
         Box(
-            Modifier.weight(1f).heightIn(min = 48.dp).padding(vertical = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             if (draft.isEmpty()) {
@@ -154,44 +118,91 @@ internal fun Composer(
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             )
         }
-        IconButton(onClick = onDictate) {
-            Icon(Icons.Outlined.Mic, contentDescription = "Dictate with voice", tint = Tokens.TextMuted)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (canAttach) AddMenu(uploading, onAttachPhoto, onAttachFile)
+            // The options take what the buttons leave, so on a narrow phone
+            // the chip shortens rather than pushing Send off the edge.
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { options?.invoke() }
+            meter?.invoke(this)
+            Spacer(Modifier.width(Tokens.Space1))
+            // While a turn runs the button stops it — until something is typed:
+            // then it sends, and the agent reads the message when it can.
+            val stop = onStop != null && !canSend
+            val action = when {
+                canSend -> onSend
+                stop -> onStop
+                else -> onDictate
+            }
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(if (canSend || stop) Tokens.Accent else Tokens.SurfaceHover)
+                    .combinedClickable(
+                        onClickLabel = when {
+                            canSend -> "Send"
+                            stop -> "Stop"
+                            else -> "Dictate with voice"
+                        },
+                        onLongClickLabel = "Dictate with voice",
+                        onLongClick = onDictate,
+                        onClick = action,
+                    )
+                    .semantics { contentDescription = if (canSend) "Send" else if (stop) "Stop" else "Dictate with voice" },
+                contentAlignment = Alignment.Center,
+            ) {
+                when {
+                    stop -> Box(Modifier.size(13.dp).clip(RoundedCornerShape(3.dp)).background(Tokens.AccentContrast))
+                    canSend -> Icon(
+                        Icons.AutoMirrored.Outlined.ArrowForward,
+                        contentDescription = null,
+                        tint = Tokens.AccentContrast,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    else -> Icon(Icons.Outlined.Mic, contentDescription = null, tint = Tokens.Text, modifier = Modifier.size(20.dp))
+                }
+            }
         }
-        // While a turn runs the button stops it — until something is typed:
-        // then it sends, and the agent reads the message when it can.
-        val stop = onStop != null && !canSend
+    }
+}
+
+/** The `+` button and what it adds: a photo or a file, both dimmed while
+ *  one uploads. */
+@Composable
+private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
         Box(
             Modifier
-                // As tall as the icon buttons beside it (48 dp), so the
-                // bottom-aligned row centres all of them on the same line.
-                .padding(vertical = 2.dp)
-                .size(44.dp)
+                .size(40.dp)
                 .clip(CircleShape)
-                .background(if (canSend || stop) Tokens.Accent else Tokens.SurfaceHover)
-                .clickable(enabled = canSend || stop, onClick = if (stop) onStop else onSend)
-                .semantics { contentDescription = if (stop) "Stop" else "Send" },
+                .border(1.dp, Tokens.BorderStrong, CircleShape)
+                .clickable { open = true }
+                .semantics { contentDescription = "Add" },
             contentAlignment = Alignment.Center,
         ) {
-            if (stop) {
-                Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)).background(Tokens.AccentContrast))
-            } else {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowForward,
-                    contentDescription = null,
-                    tint = if (canSend) Tokens.AccentContrast else Tokens.TextDim,
-                    modifier = Modifier.size(22.dp),
-                )
+            Icon(Icons.Outlined.Add, contentDescription = null, tint = Tokens.Text, modifier = Modifier.size(22.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.background(Tokens.SurfaceRaised)) {
+            AddChoice("Photo", Icons.Outlined.Image, enabled = !uploading) {
+                open = false
+                onAttachPhoto()
+            }
+            AddChoice("File", Icons.Outlined.Description, enabled = !uploading) {
+                open = false
+                onAttachFile()
             }
         }
     }
 }
 
 @Composable
-private fun AttachChoice(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+private fun AddChoice(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
     DropdownMenuItem(
-        text = { Text(label, color = Tokens.Text, fontSize = Tokens.TextMd) },
-        leadingIcon = { Icon(icon, contentDescription = null, tint = Tokens.TextMuted) },
+        text = { Text(label, color = if (enabled) Tokens.Text else Tokens.TextDim, fontSize = Tokens.TextMd) },
+        leadingIcon = { Icon(icon, contentDescription = null, tint = if (enabled) Tokens.TextMuted else Tokens.TextDim) },
         onClick = onClick,
+        enabled = enabled,
     )
 }
 

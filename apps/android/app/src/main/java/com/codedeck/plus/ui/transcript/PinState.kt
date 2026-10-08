@@ -200,7 +200,7 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
 
     // Layout-driven viewport shifts: a bar appearing below the list (keyboard,
     // ThinkingIndicator, PendingPermissionBar, attachment strip, quick
-    // prompts, SendFailedBar, SessionControlsBar, composer) or an entry
+    // prompts, SendFailedBar, composer) or an entry
     // growing in place shrinks the room at the bottom with no scroll and no
     // new entry, so neither effect above sees it. Whenever the list comes to
     // rest able to scroll further, report that geometry as LeftBottom — an

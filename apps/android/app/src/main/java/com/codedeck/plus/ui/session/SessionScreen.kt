@@ -156,7 +156,6 @@ private class ParsedTranscript(
     }
 }
 
-private const val MODE_TAP_COOLDOWN_MS = 600L
 private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
 
 /** The backstop is the send budget plus a grace, so the bounded stages inside
@@ -169,9 +168,10 @@ private const val SESSION_FILE_SEND_BACKSTOP_MS = SESSION_FILE_SEND_BUDGET_MS + 
  * workspace), the GSD strip, the transcript (whose last line says what a
  * running turn is doing), the always-visible pending-permission bar, the
  * staged image-attachment strip, quick prompts, the [SendFailedBar] with
- * Retry, [SessionControlsBar] (model/context, mode, effort, usage) and the
- * input bar (attach / text field / mic / Send, which is Stop while a turn
- * runs and nothing is typed). Port of `SessionScreen.tsx`,
+ * Retry, and the [Composer]: the text over one row of controls — attach,
+ * the options chip (mode, model, effort: [SessionOptionsSheet]), the context
+ * ring ([ContextDetails]), dictation and Send, which is Stop while a turn
+ * runs and nothing is typed. Port of `SessionScreen.tsx`,
  * including the image flow.
  *
  * While the session waits on a question, text sent from the input bar is
@@ -200,7 +200,7 @@ fun SessionScreen(
     // is not RENDERED at all (a hard gate on the wire, not a hidden one).
     val canAttachFiles = machineSummary?.capabilities?.contains("files") == true
     // The session's agent as the bridge advertises it: its modes and effort
-    // levels are what the controls bar offers.
+    // levels are what the options sheet offers.
     val agent = machineSummary?.agents?.firstOrNull { it.id == session?.agent }
 
     var transcript by remember(machine, sessionId) { mutableStateOf<ParsedTranscript?>(null) }
@@ -456,40 +456,34 @@ fun SessionScreen(
         )
     }
 
-    // --- Mode cycle (CDX-046): steps through the agent's advertised modes.
-    // The confirmed mode comes from the machines view; a tap shows the
-    // REQUESTED mode pulsing until either option-confirmed lands (settling
-    // the request) or the revert window closes (the request may have been
-    // lost — the button must not lie).
+    // --- Mode (CDX-046): picked in the options sheet. The confirmed mode
+    // comes from the machines view; a pick shows the REQUESTED mode pulsing
+    // until either option-confirmed lands (settling the request) or the
+    // revert window closes (the request may have been lost — the chip must
+    // not lie).
     val modes = agent?.modes.orEmpty()
-    val modeCycle = remember(machine, sessionId) { ModeCycleUi() }
+    val modeRequest = remember(machine, sessionId) { ModeRequestUi() }
     val confirmedMode = session?.mode
     LaunchedEffect(confirmedMode) {
-        val pending = modeCycle.pending
+        val pending = modeRequest.pending
         if (pending != null && confirmedMode == pending) {
-            modeCycle.revertJob?.cancel()
-            modeCycle.pending = null
+            modeRequest.revertJob?.cancel()
+            modeRequest.pending = null
         }
     }
-    fun tapMode() {
-        if (modes.size < 2) return
-        val now = SystemClock.elapsedRealtime()
-        if (now - modeCycle.lastTapAtMs < MODE_TAP_COOLDOWN_MS) return
-        modeCycle.lastTapAtMs = now
-        val displayed = modeCycle.pending ?: confirmedMode
-        val next = modes[(modes.indexOfFirst { it.id == displayed } + 1).mod(modes.size)].id
-        modeCycle.pending = next
+    fun selectMode(next: String) {
+        if (next == (modeRequest.pending ?: confirmedMode)) return
+        modeRequest.pending = next
         // Restart the revert window: only the LATEST request's confirmation
-        // (or its absence) decides what the button ends up showing.
-        modeCycle.revertJob?.cancel()
-        modeCycle.revertJob = scope.launch {
+        // (or its absence) decides what the chip ends up showing.
+        modeRequest.revertJob?.cancel()
+        modeRequest.revertJob = scope.launch {
             delay(MODE_CONFIRM_TIMEOUT_MS)
-            modeCycle.pending = null
+            modeRequest.pending = null
         }
         dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "mode", value = next))
     }
-    val displayedMode = modeCycle.pending ?: confirmedMode
-    val modeLabel = modes.firstOrNull { it.id == displayedMode }?.label ?: displayedMode
+    val displayedMode = modeRequest.pending ?: confirmedMode
 
     fun insertPrompt(text: String) {
         draft = appendToDraft(draft, text)
@@ -501,7 +495,8 @@ fun SessionScreen(
     // asked. An agent whose catalog entry says it has no usage is not asked
     // (it would publish nothing); until the catalog is known the effect
     // waits, and fires once it says yes.
-    // The agent's model list names the session's model in the controls bar.
+    // The agent's model list names the session's model in the options chip,
+    // and is what the options sheet switches between.
     LaunchedEffect(machine, agent?.id, agent?.supportsModels) {
         val id = agent?.id
         if (id != null && agent.supportsModels) core.dispatch(UniffiIntent.RequestModels(machine = machine, agent = id))
@@ -673,35 +668,67 @@ fun SessionScreen(
             SendFailedBar(text = failed.text, failedCount = failedOutbox.size, onRetry = ::retryOldestFailed)
         }
 
-        SessionControlsBar(
-            effort = session?.effort,
+        // What the next turn runs with, for the composer's options chip and
+        // its sheet. A session bound to a provider profile runs on that
+        // profile's models; any other on its agent's list, which for an agent
+        // whose profiles add models already carries theirs.
+        val agentModels = machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models
+        val agentProfiles = machineSummary?.providerProfiles.orEmpty().filter { it.agent == session?.agent }
+        val boundProfile = session?.providerId?.let { id -> agentProfiles.firstOrNull { it.id == id } }
+        val sessionOptions = SessionOptions(
+            modelName = session?.model?.let { m ->
+                listedModelName(m, listOfNotNull(agentModels) + agentProfiles.map { it.models }) ?: modelLabel(m)
+            },
+            model = session?.model,
+            models = when {
+                boundProfile != null -> boundProfile.models
+                agent?.supportsModels == true -> agentModels.orEmpty()
+                else -> emptyList()
+            },
+            modes = modes,
+            mode = displayedMode,
+            modePending = modeRequest.pending != null,
+            defaultMode = agent?.defaultMode,
             // The session model's own levels, for an agent whose levels
             // differ by model; else the agent's.
-            efforts = machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models
-                ?.firstOrNull { it.id == session?.model }?.efforts?.takeIf { it.isNotEmpty() }
+            efforts = agentModels?.firstOrNull { it.id == session?.model }?.efforts?.takeIf { it.isNotEmpty() }
                 ?: agent?.efforts.orEmpty(),
-            // The button shows only when the agent has modes to switch between.
-            modeLabel = modeLabel?.takeIf { modes.size >= 2 },
-            modePending = modeCycle.pending != null,
-            model = session?.model,
-            modelName = listedModelName(
-                session?.model,
-                listOfNotNull(machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models) +
-                    machineSummary?.providerProfiles.orEmpty().filter { it.agent == session?.agent }.map { it.models },
-            ),
-            contextPercentage = session?.contextPercentage,
-            contextWindow = session?.contextWindow?.toLong(),
-            onEffortSelect = { level ->
-                if (level != session?.effort) {
-                    dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "effort", value = level))
-                }
-            },
-            onModeTap = ::tapMode,
+            effort = session?.effort,
             mcp = session?.mcp?.takeIf { supportsMcp && it.servers.isNotEmpty() },
-            onMcpTap = { mcpSheetOpen = true },
-            showUsageBadge = settings?.showUsageBadge ?: false,
-            usage = session?.usage,
         )
+        var optionsSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+        if (optionsSheetOpen) {
+            SessionOptionsSheet(
+                sessionOptions,
+                onMode = ::selectMode,
+                onEffort = { level ->
+                    if (level != session?.effort) {
+                        dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "effort", value = level))
+                    }
+                },
+                onModel = { id ->
+                    optionsSheetOpen = false
+                    if (id != session?.model) {
+                        dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "model", value = id))
+                    }
+                },
+                onMcp = {
+                    optionsSheetOpen = false
+                    mcpSheetOpen = true
+                },
+                onDismiss = { optionsSheetOpen = false },
+            )
+        }
+        var contextSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+        if (contextSheetOpen) {
+            ContextSheet(
+                percentage = session?.contextPercentage,
+                window = session?.contextWindow?.toLong(),
+                usage = session?.usage,
+                nowMs = System.currentTimeMillis(),
+                onDismiss = { contextSheetOpen = false },
+            )
+        }
         val sessionMcp = session?.mcp
         if (mcpSheetOpen && sessionMcp != null) {
             SessionMcpSheet(
@@ -712,16 +739,14 @@ fun SessionScreen(
                 onDismiss = { mcpSheetOpen = false },
             )
         }
+        // A usage limit running out marks the context ring, when the user
+        // asked for that warning; the ring's details always list every limit.
+        val limitAlert = if (settings?.showUsageBadge == true) usageAlert(usageWindows(session?.usage, System.currentTimeMillis())) else null
 
         Composer(
             draft = draft,
             onDraftChange = { draft = it },
-            // Shorter beside the `/` button, which would otherwise clip it.
-            placeholder = when {
-                activeQuestion != null -> "Type your answer…"
-                supportsCommands -> "Message…"
-                else -> "Message the session…"
-            },
+            placeholder = if (activeQuestion != null) "Type your answer…" else "Message…",
             canAttach = canAttachFiles,
             uploading = uploading,
             canSend = (draft.isNotBlank() || pendingFile != null) && !uploading,
@@ -735,33 +760,16 @@ fun SessionScreen(
             onDictate = ::dictate,
             onSend = ::send,
             focusRequester = inputFocus,
-            onSlash = if (supportsCommands && activeQuestion == null) {
-                {
-                    draft = "/"
-                    inputFocus.requestFocus()
-                }
-            } else {
-                null
-            },
+            options = { SessionOptionsChip(sessionOptions) { optionsSheetOpen = true } },
+            meter = { ContextRing(session?.contextPercentage, limitAlert) { contextSheetOpen = true } },
         )
     }
 }
 
-/** Mode-cycle display state: what the button shows is the pending request
+/** Mode-request display state: what the chip shows is the pending request
  *  while one is in flight, else the last confirmed mode. */
-private class ModeCycleUi {
+private class ModeRequestUi {
     var pending by mutableStateOf<String?>(null)
-    // `SystemClock.elapsedRealtime()` is always >= 0, so 0L reads as "the
-    // cooldown last fired at boot" and always lets the very first tap
-    // through. `Long.MIN_VALUE` looked like a stronger "never tapped"
-    // sentinel but isn't one: `now - Long.MIN_VALUE` overflows `Long` (wraps
-    // to a huge NEGATIVE number, not a huge positive one), which made
-    // `tapMode()`'s cooldown check pass on every single call — the very
-    // first tap always looked like it was still inside the cooldown window
-    // and returned before ever updating this field, so the mode button did
-    // nothing for the rest of the screen's lifetime (device-observed
-    // 2026-09-19: PLAN/YOLO/EDITS never responded to any tap).
-    var lastTapAtMs = 0L
     var revertJob: Job? = null
 }
 
@@ -851,61 +859,6 @@ internal fun SessionTopBar(
     }
 }
 
-/**
- * What the next turn runs with — model and context used, mode, effort — then
- * subscription usage, in one slim scrollable bar right above the input. The
- * mode button and effort picker show only what the session's agent offers.
- */
-@Composable
-internal fun SessionControlsBar(
-    effort: String?,
-    efforts: List<UniffiOptionChoice>,
-    /** `null` hides the mode button (the agent has no modes to switch). */
-    modeLabel: String?,
-    modePending: Boolean,
-    model: String?,
-    contextPercentage: Double?,
-    contextWindow: Long?,
-    onEffortSelect: (String) -> Unit,
-    onModeTap: () -> Unit,
-    showUsageBadge: Boolean,
-    usage: UniffiUsageData?,
-    /** `null` hides the MCP pill (no servers, or an agent without MCP). */
-    mcp: UniffiSessionMcp? = null,
-    onMcpTap: () -> Unit = {},
-    /** The model list's name for [model] ([listedModelName]); null shows its tag. */
-    modelName: String? = null,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = Tokens.Space2),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
-    ) {
-        if (model != null) {
-            ModelContextChip(model = model, modelName = modelName, contextPercentage = contextPercentage, contextWindow = contextWindow)
-        }
-        if (modeLabel != null) {
-            ModeButton(modeLabel, modePending, onModeTap)
-        }
-        if (efforts.isNotEmpty()) {
-            EffortSelector(effort, efforts, onEffortSelect)
-        }
-        if (mcp != null) {
-            McpChip(mcp, onMcpTap)
-        }
-        // What the session has cost so far: the agent's figure, shown whether
-        // or not the subscription windows are.
-        usage?.sessionCostUsd?.let(::sessionCost)?.let { CostPill(it) }
-        val badges = usageBadges(usage, System.currentTimeMillis())
-        if (showUsageBadge && badges.isNotEmpty()) {
-            UsageBox(usage, badges)
-        }
-    }
-}
-
 /** The oldest failed send's line, right above the controls: what
  *  failed to go out (plus how many more are waiting behind it) and its
  *  Retry. */
@@ -946,99 +899,6 @@ internal fun sessionCost(usd: Double): String? = when {
     usd < 0.01 -> "<$0.01"
     usd < 100.0 -> "$" + String.format(java.util.Locale.ROOT, "%.2f", usd)
     else -> "$" + String.format(java.util.Locale.ROOT, "%.0f", usd)
-}
-
-@Composable
-private fun CostPill(cost: String) {
-    Text(
-        cost,
-        color = Tokens.TextMuted,
-        fontSize = Tokens.TextXs,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        modifier = Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(Tokens.SurfaceHover)
-            .padding(horizontal = ControlPadH, vertical = ControlPadV)
-            .semantics { contentDescription = "Session cost $cost" },
-    )
-}
-
-/** Effort dropdown over the agent's advertised levels: shows the current
- *  level ("effort…" until the bridge reports one), opens the list on tap. The
- *  placeholder carries the muted "effort…" trigger for the not-yet-reported
- *  state without putting a phantom entry into the list itself. */
-@Composable
-private fun EffortSelector(current: String?, efforts: List<UniffiOptionChoice>, onSelect: (String) -> Unit) {
-    SelectField(
-        options = efforts.map { PickerOption(it.id, it.label) },
-        selected = current ?: "",
-        placeholder = "effort…",
-        onSelect = onSelect,
-    )
-}
-
-/** The mode cycle button — taps step through the agent's modes. While a
- *  request is in flight the label is the REQUESTED mode, pulsing. */
-/** Inner padding of the controls bar's pills (model, mode, usage), sized
- *  to match the effort picker beside them. */
-private val ControlPadH = 12.dp
-private val ControlPadV = 7.dp
-
-@Composable
-private fun ModeButton(label: String, pending: Boolean, onTap: () -> Unit) {
-    val alpha = if (pending) pulsingAlpha(min = 0.35f, max = 1f, halfPeriodMs = 500) else 1f
-    Text(
-        label,
-        color = Tokens.Text,
-        fontSize = Tokens.TextSm,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier
-            .minimumInteractiveComponentSize()
-            .graphicsLayer { this.alpha = alpha }
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(Tokens.SurfaceHover)
-            .clickable(onClick = onTap)
-            .padding(horizontal = ControlPadH, vertical = ControlPadV),
-    )
-}
-
-/** The 5h/7d subscription-usage box: the reported windows on one line, the
- *  worst utilization coloring the whole rectangle (warn ≥75, critical ≥90,
- *  critical also straight off a badge's ≥90 flag). */
-@Composable
-private fun UsageBox(usage: UniffiUsageData?, badges: List<UsageBadgeData>) {
-    val accent = when (usageSeverity(usage, badges)) {
-        "critical" -> Tokens.Danger
-        "warn" -> Tokens.Warn
-        else -> Tokens.TextMuted
-    }
-    val fill = when (usageSeverity(usage, badges)) {
-        "critical" -> Tokens.Danger.copy(alpha = 0.10f)
-        "warn" -> Tokens.Warn.copy(alpha = 0.10f)
-        else -> Tokens.SurfaceHover
-    }
-    // One line ("5h 61% · 7d 23%") so it stays as short as the other chips
-    // in the controls bar.
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(fill)
-            .padding(horizontal = ControlPadH, vertical = ControlPadV),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        badges.forEachIndexed { i, badge ->
-            val description = badge.resetCountdown?.let { "${badge.text}, $it" } ?: badge.text
-            Text(
-                (if (i > 0) " · " else "") + badge.text,
-                color = accent,
-                fontSize = Tokens.TextXs,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                modifier = Modifier.semantics { contentDescription = description },
-            )
-        }
-    }
 }
 
 @Composable
@@ -1138,105 +998,12 @@ internal fun listedModelName(id: String?, lists: List<List<UniffiModelEntry>>): 
     return lists.firstNotNullOfOrNull { list -> list.firstOrNull { it.id == id }?.label?.takeIf { it.isNotBlank() } }
 }
 
-/** Widest the model tag in [ModelContextChip] gets before it marquees. */
-private val MODEL_TAG_MAX_WIDTH = 160.dp
-
-/**
- * The controls bar's model+context chip — port of the reference's `.ctxBox`
- * (model tag accent/bold, then the `pct% · used/window` figure, muted).
- *
- * The model tag renders [modelLabel], the reference's own header convention
- * (`SessionScreen.tsx` shows `modelLabel(…)`, not the raw id) — claude ids
- * collapse to tags like O5/S4.6 outright. But modelLabel deliberately passes
- * NON-claude ids through unchanged (the custom-provider label above has no
- * `claude-` prefix and no date suffix, so it comes back at full length), so
- * the tag carries `basicMarquee` — inert on a short tag, scrolling only a
- * genuinely-overflowing long one.
- *
- * The sizing policy is a hand-rolled [Layout] rather than a `Row` because
- * it is a PRIORITY, not a split: the context figure is what the user reads,
- * so its Text measures FIRST at its full intrinsic width and never
- * truncates; the model tag gets whatever width is left (bounded, marquee
- * takes over). A `Row` cannot express this — plain children split by
- * measurement order (both truncate when tight: the long-model case squeezed
- * context to a fragment even while it marqueed, device-observed
- * 2026-09-19), and `weight(1f)` on the tag would make this chip itself
- * expand to all leftover header width (a Row with a weighted child fills
- * its constraints), starving the chips next to it. The chip stays
- * wrap-content: its measured width is exactly the two children plus
- * padding, whatever that comes to.
- */
-@Composable
-private fun ModelContextChip(
-    model: String,
-    /** The model list's name for it ([listedModelName]), when it has one. */
-    modelName: String?,
-    contextPercentage: Double?,
-    contextWindow: Long?,
-) {
-    Layout(
-        content = {
-            Text(
-                modelName ?: modelLabel(model),
-                color = Tokens.Accent,
-                fontWeight = FontWeight.Bold,
-                fontSize = Tokens.TextXs,
-                maxLines = 1,
-                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE),
-            )
-            contextBadge(contextPercentage, contextWindow)?.let { ctx ->
-                Text(
-                    " · $ctx",
-                    // Same thresholds as the usage box: warn from 75 %, danger from 90 %.
-                    color = when {
-                        (contextPercentage ?: 0.0) >= 90.0 -> Tokens.Danger
-                        (contextPercentage ?: 0.0) >= 75.0 -> Tokens.Warn
-                        else -> Tokens.TextMuted
-                    },
-                    fontSize = Tokens.TextXs,
-                    maxLines = 1,
-                )
-            }
-        },
-        modifier = Modifier
-            .clip(RoundedCornerShape(Tokens.RadiusPill))
-            .background(Tokens.SurfaceHover),
-    ) { measurables, constraints ->
-        val hpad = ControlPadH.roundToPx()
-        val vpad = ControlPadV.roundToPx()
-        // In a scrolling row the width is unbounded; subtracting padding from
-        // Constraints.Infinity yields an invalid constraint, so the children
-        // measure unbounded there too.
-        val bounded = constraints.hasBoundedWidth
-        val inner = if (bounded) (constraints.maxWidth - hpad * 2).coerceAtLeast(0) else Constraints.Infinity
-        // Context (the second child, when the badge produced one) measures
-        // first at its full intrinsic width — it never truncates.
-        val contextPlaceable = measurables.getOrNull(1)
-            ?.measure(Constraints(maxWidth = inner, maxHeight = constraints.maxHeight))
-        val contextWidth = contextPlaceable?.width ?: 0
-        // The model tag gets whatever is left (capped, so one long provider
-        // label cannot take the whole bar), and the marquee takes over past
-        // that instead of an ellipsis.
-        val modelCap = MODEL_TAG_MAX_WIDTH.roundToPx()
-        val modelMaxWidth = if (bounded) (inner - contextWidth).coerceIn(0, modelCap) else modelCap
-        val modelPlaceable = measurables[0].measure(
-            Constraints(maxWidth = modelMaxWidth, maxHeight = constraints.maxHeight),
-        )
-        val width = modelPlaceable.width + contextWidth + hpad * 2
-        val height = maxOf(modelPlaceable.height, contextPlaceable?.height ?: 0) + vpad * 2
-        layout(width, height) {
-            modelPlaceable.place(hpad, vpad)
-            contextPlaceable?.place(hpad + modelPlaceable.width, vpad)
-        }
-    }
-}
-
 // --- Subscription-usage presentation helpers (port of `ui/usageFormat.ts`'s
 // header subset).
 
 /** Compact token count: 950 → "950", 84_200 → "84k", 1_240_000 → "1.2M" —
  *  port of `apps/mobile/src/ui/usageFormat.ts`'s `formatTokens`. */
-private fun formatTokens(n: Long): String = when {
+internal fun formatTokens(n: Long): String = when {
     n < 0 -> "?"
     n < 1_000 -> n.toString()
     n < 1_000_000 -> "${(n / 1000.0).roundToInt()}k"
@@ -1251,45 +1018,18 @@ private fun formatTokens(n: Long): String = when {
     }
 }
 
-/** "pct% · used/window" (bare "pct%" when the window is unknown) — port of
- *  `usageFormat.ts`'s `contextBadge`. The header previously showed only the
- *  bare percentage (missing the reference's own `used/window` token count
- *  entirely) even though `UniffiSessionSummary.contextWindow` already
- *  carries the denominator — nothing upstream was missing, this call site
- *  just wasn't reading it (device-observed 2026-09-19). */
-private fun contextBadge(contextPercentage: Double?, contextWindow: Long?): String? {
-    if (contextPercentage == null || !contextPercentage.isFinite()) return null
-    val pct = contextPercentage.roundToInt().coerceIn(0, 100)
-    if (contextWindow == null || contextWindow <= 0) return "$pct%"
-    val used = (pct / 100.0 * contextWindow).roundToInt().toLong()
-    return "$pct% · ${formatTokens(used)}/${formatTokens(contextWindow)}"
-}
+/** One usage limit the agent reports: its label ("5h"), how much of it is
+ *  used, and when it resets. */
+internal data class UsageWindowData(val label: String, val percent: Int, val resetCountdown: String?)
 
-private data class UsageBadgeData(val text: String, val resetCountdown: String?, val critical: Boolean)
-
-private fun usageBadges(usage: UniffiUsageData?, nowMs: Long): List<UsageBadgeData> {
+/** Every usage limit the agent reports, in its order. */
+internal fun usageWindows(usage: UniffiUsageData?, nowMs: Long): List<UsageWindowData> {
     if (usage?.available != true) return emptyList()
-    // Every window the agent reports, in its order ("5h 61% · 7d 23%").
     return usage.windows.mapNotNull { window ->
         val utilization = window.utilization?.takeIf { it.isFinite() } ?: return@mapNotNull null
-        val pct = utilization.coerceIn(0.0, 100.0).roundToInt()
-        UsageBadgeData(
-            text = "${window.label} $pct%",
-            resetCountdown = formatReset(window.resetsAt, nowMs),
-            critical = pct >= 90,
-        )
+        UsageWindowData(window.label, utilization.coerceIn(0.0, 100.0).roundToInt(), formatReset(window.resetsAt, nowMs))
     }
 }
-
-/** Severity for the usage BOX: the worst utilization across the reported
- *  windows colors the whole rectangle; ≥90 critical comes straight from the
- *  badges' own flag. */
-private fun usageSeverity(usage: UniffiUsageData?, badges: List<UsageBadgeData>): String =
-    when {
-        badges.any { it.critical } -> "critical"
-        usage?.windows.orEmpty().any { window -> (window.utilization?.takeIf { it.isFinite() } ?: 0.0) >= 75.0 } -> "warn"
-        else -> "ok"
-    }
 
 /** Coarse reset countdown — carried in the badge row's accessibility
  *  description: the reference keeps it on each badge's tooltip, which has no

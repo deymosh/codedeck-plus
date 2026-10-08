@@ -17,13 +17,12 @@ import com.codedeck.plus.ui.theme.Tokens
 import org.junit.Rule
 import org.junit.Test
 import uniffi.client_ffi.UniffiOptionChoice
-import uniffi.client_ffi.UniffiUsageData
-import uniffi.client_ffi.UniffiUsageWindow
 
 /**
  * The session screen's chrome on a narrow (360dp) phone, where it has to
- * fit: the top bar with a long title, the failed-send line, the controls
- * bar, and the composer while a turn runs (its button is Stop).
+ * fit: the top bar with a long title, the failed-send line, and the
+ * composer with its fullest row of controls while a turn runs (its button
+ * is Stop).
  */
 class SessionChromeSnapshotTest {
 
@@ -53,34 +52,21 @@ class SessionChromeSnapshotTest {
                             failedCount = 2,
                             onRetry = {},
                         )
-                        SessionControlsBar(
-                            effort = "high",
-                            efforts = listOf(
-                                UniffiOptionChoice("low", "Low", null),
-                                UniffiOptionChoice("high", "High", null),
-                            ),
-                            modeLabel = "EDITS",
-                            modePending = false,
-                            model = "claude-opus-5-5",
-                            contextPercentage = 82.0,
-                            contextWindow = 200_000,
-                            onEffortSelect = {},
-                            onModeTap = {},
-                            showUsageBadge = true,
-                            usage = UniffiUsageData(
-                                available = true,
-                                plan = "max",
-                                windows = listOf(
-                                    UniffiUsageWindow(label = "5h", utilization = 61.0, resetsAt = null),
-                                    UniffiUsageWindow(label = "7d", utilization = 23.0, resetsAt = null),
-                                ),
-                                sessionCostUsd = 0.42,
-                                fetchedAt = "2026-09-23T10:00:00Z",
-                            ),
-                        )
                         Composer(
                             draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
                             canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
+                            options = {
+                                SessionOptionsChip(
+                                    SessionOptions(
+                                        modelName = "deepseek-v4.1-flash", model = "gw/deepseek-v4.1-flash", models = emptyList(),
+                                        modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null)),
+                                        mode = "acceptEdits", modePending = false, defaultMode = "default",
+                                        efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
+                                        effort = "high",
+                                    ),
+                                ) {}
+                            },
+                            meter = { ContextRing(82.0, alert = Tokens.Warn) {} },
                         )
                     }
                 }
