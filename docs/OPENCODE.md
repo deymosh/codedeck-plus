@@ -1,10 +1,12 @@
 # OpenCode backend
 
-CodeDeck+ runs sessions on any agent its agent host has a driver for: Claude
-Code (always available) and [OpenCode](https://opencode.ai). A phone picks the
-agent per session from the "New session" sheet, which lists the agents the
-bridge advertises in its heartbeat. OpenCode is optional: without its
-configuration it is simply not advertised.
+CodeDeck+ runs sessions on any agent its agent host has a driver for, and
+[OpenCode](https://opencode.ai) is the default one: a bridge with no OpenCode
+installs it when it first starts (see "Agent binaries" in
+[`BRIDGE.md`](BRIDGE.md)). A phone picks the agent per session from the "New
+session" sheet, which lists the agents the bridge advertises in its
+heartbeat; OpenCode can be removed from the machine's page like any agent
+CodeDeck installed, and is then not installed again until someone asks.
 
 The bridge never manages OpenCode's model access itself — the OpenCode driver
 (`packages/agent-host/src/drivers/opencode/`) talks to a running
@@ -28,22 +30,15 @@ different machines. Precedence is the same as every other bridge setting:
 `--opencode-server-url` flag > `CODEDECK_OPENCODE_SERVER_URL` env >
 `openCodeServerUrl` in `config.json`.
 
-## Mode 2 — let the bridge manage its own OpenCode server
+## Mode 2 — let the bridge manage its own OpenCode server (the default)
 
-Have the bridge spawn `opencode serve` itself at boot, and shut it down
-cleanly when the bridge stops:
+Without a server URL, the bridge spawns `opencode serve` itself once
+OpenCode is installed, and shuts it down cleanly when the bridge stops.
+Nothing needs setting: this is the simplest option when the bridge runs in a
+container (the same container runs OpenCode too, with nothing else to
+deploy) or as a plain local process on a machine you control.
 
-```bash
-codedeck-bridge run --opencode-auto-start
-# or: CODEDECK_OPENCODE_AUTO_START=1 codedeck-bridge run
-# or in config.json: { "openCodeAutoStart": true }
-```
-
-This is the simplest option when the bridge runs in a container (the same
-container can run OpenCode too, with nothing else to deploy) or as a plain
-local process on a machine you control.
-
-Additional settings for this mode:
+Settings for this mode:
 
 - `--opencode-path <path>` / `CODEDECK_OPENCODE_PATH` / `"openCodePath"` —
   explicit path to the `opencode` binary. Otherwise the agent host looks for
@@ -51,8 +46,8 @@ Additional settings for this mode:
   how it resolves `claude`), and when there is none it **installs it**: the
   `opencode-<os>-<arch>` build pinned in `pnpm-lock.yaml` (the `baseline`
   variant on x64, which needs no AVX2), downloaded in the background into
-  `<home>/agents/` — see "Agent binaries" in [`BRIDGE.md`](BRIDGE.md).
-  Sessions started meanwhile wait for it.
+  `<home>/agents/`. The phone shows it as installing meanwhile, and new
+  sessions start on it once it is ready.
 - `CODEDECK_OPENCODE_PORT` / `"openCodePort"` (env/config-file only, no flag —
   a rarely hand-typed knob) — fixes the port instead of the default OS-assigned
   ephemeral one. Useful if you also want to point OpenCode's own TUI at the
@@ -64,24 +59,24 @@ any wider interface.
 
 If an installed `opencode` fails to come up, the agent host logs one
 actionable line and reports OpenCode as unavailable (a session on it fails
-with that reason). If the on-demand install or the server it starts fails,
-the session that waited on it fails with the reason and the next session
-tries again. Either way, OpenCode never blocks Claude Code sessions.
+with that reason). If the install fails, the phone shows OpenCode as failed
+with the reason and offers Retry. Either way, OpenCode never blocks the other agents'
+sessions.
 
-If both `openCodeServerUrl` and `openCodeAutoStart` are set, the external URL
-wins (logged as a warning — usually a leftover setting from switching modes).
+A server URL wins over everything in this mode: with one set, nothing is
+installed or started.
 
 ## Provider credentials
 
 OpenCode supports 75+ model providers with no single credential shape, so
 CodeDeck+ does not manage them for you. Whatever environment reaches the
-`opencode` process (the bridge's own environment, for auto-start; or however
+`opencode` process (the bridge's own environment, for the server it starts; or however
 you started the external server) is what OpenCode sees — including common
 provider env vars like `ANTHROPIC_API_KEY`. See
 [OpenCode's own docs](https://opencode.ai/docs) for the full list of supported
 providers and how to configure each.
 
-For **auto-start under Docker**, run the one-time interactive login once the
+For **the bridge's own server under Docker**, run the one-time interactive login once the
 container is up and OpenCode has been installed (the bridge log says
 `OpenCode installed at …`; the image puts it on `PATH`). The login survives
 container recreation: the image redirects OpenCode's config/auth storage

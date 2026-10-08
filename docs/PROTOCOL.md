@@ -61,7 +61,8 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, providerModels, gsd, interrupt, commands, plugins, mcp, tasks}` and `credentials[]` status. Phones build every
+providers, providerModels, gsd, interrupt, commands, plugins, mcp, tasks}`, `credentials[]` status and
+`install` (below). Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -76,6 +77,21 @@ fails with that reason.
 
 An agent the bridge has but cannot run here (not configured) is not
 advertised; creating a session on it fails with the reason.
+
+`install` says whether the agent is on the machine: `{state: "ready",
+removable?}` (`removable`: CodeDeck installed it and can remove it; absent
+means false, and a missing `install` means ready), `{state:
+"not_installed"}`, `{state: "installing"}` or `{state: "failed", reason}`.
+An agent that is not ready is listed by name only, supports nothing, and
+runs no session: creating one on it fails with the reason. A session the
+bridge already has (one resuming after an agent host restart) waits while
+its agent installs, and starts once it is ready or fails with the install's
+reason. A phone changes it with `agent-action {agent,
+action}` (`install` or `remove`) → `agent-ack {agent, action, success,
+error?}`; the ack says the bridge took it up (or why not), and the install
+itself shows in the next session list's `install`. Removing ends the
+agent's sessions and deletes only what CodeDeck installed; an agent the
+machine has of its own is not removable.
 
 ### Sessions
 
@@ -528,10 +544,16 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 | `check-provider {agent, provider, model}` | `credential-checked {valid?}`: a provider profile's token, checked on the API `agent` speaks |
 | `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty; each `{id, label?, provider?, contextWindow?}`), read the way `agent` signs in; or `error` with the reason there is none |
+| `install-agent {agent}` | `ack` at once; the install's progress follows as `agent-changed`; or `error` |
+| `remove-agent {agent}` | `ack` once removed — after `agent-changed` and the agent's sessions' `ended` — or `error` (e.g. an agent the machine has of its own) |
 | `set-providers {agent, providers}` | `providers-set {refused: [{id, reason}]}` once an agent with `supports.providerModels` offers these profiles' models (all of its profiles, oldest saved first, sent after `initialize` and on every change) — all but the refused ones, which it cannot add (a name one of its own providers, or an earlier profile, has); or `error` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds
-that), plus `credentials[].envVar` and `unavailableReason`.
+that), plus `credentials[].envVar` and `unavailableReason`. The host
+reports a change to one with the notification `agent-changed {agent:
+AgentInfo}` (an install starting, finishing or failing, a removal); the
+bridge replaces that entry, and once the agent is no longer installing
+starts the sessions that waited on it.
 
 ### Host → bridge
 

@@ -17,7 +17,7 @@ the agent host itself; you never run it directly.
 **A release archive** — `codedeck-bridge-vX.Y.Z-linux-<x86_64|aarch64>.tar.xz`
 from the [releases](https://github.com/deymosh/codedeck-plus/releases). It
 bundles the binary, its agent host and a Node runtime; the agents' own
-binaries are installed on first use (see [Agent binaries](#agent-binaries)).
+binaries are installed when chosen (see [Agent binaries](#agent-binaries)).
 The binary needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
 
 ```sh
@@ -42,7 +42,7 @@ Upgrading is extracting the new archive over the old one.
   default.
 - An existing OpenCode is found on `PATH` only as `opencode.exe`; npm's
   global install adds just an `opencode.cmd` shim, so point
-  `CODEDECK_OPENCODE_PATH` at the real binary (or let auto-start install one).
+  `CODEDECK_OPENCODE_PATH` at the real binary (or let the bridge install one).
 - There is no service unit: run it in a terminal, or start it at logon with
   Task Scheduler. Under WSL2, the Linux archive works as on Linux.
 
@@ -54,32 +54,44 @@ keeps its own state under `<home>/dsh`; see [`DEEPSEEK.md`](DEEPSEEK.md).
 ### Agent binaries
 
 The archives leave out the agents' own CLI binaries (a couple of hundred MB
-each). An agent uses one already on the machine — its path setting, then
-`PATH` and the usual install locations — and otherwise the agent host
-installs it on first use:
+each), and a bridge installs an agent only when someone chooses it. Every
+agent the bridge knows is listed on the phone, each in one of four states:
 
-- **Claude Code**: always, the Agent SDK's platform package, at the version
-  the SDK is locked to.
-- **OpenCode**: when auto-start is on (`CODEDECK_OPENCODE_AUTO_START=1`) and
-  no `opencode` is found; a server URL instead needs nothing installed.
-- **The DeepSeek Harness**: always, unless `CODEDECK_DEEPSEEK_PATH` names a
-  CLI to use instead. It is not one binary but a package tree, so this is the
-  bigger download by far — some 600 packages, a few hundred MB.
+- **ready** — it runs sessions. Either the machine has it of its own (its
+  path setting, then `PATH` and the usual install locations; for OpenCode,
+  also a server URL) or CodeDeck installed it.
+- **not installed** — the phone offers Install, on the machine's page and in
+  New session.
+- **installing** — no new session starts on it until it is ready; one
+  resuming after an agent host restart waits for the install, then starts.
+- **failed** — with the reason; the phone offers Retry.
 
-The download starts in the background as the bridge starts, so the agents
-are listed at once and a first session waits for it (about 100 MB for Claude
-Code, 60 MB for OpenCode, and a couple of minutes for the harness on a normal
-connection). It comes from the npm registry and is checked against the sha512
+OpenCode is the default agent: a bridge that has none installs it when it
+first starts, unless it was removed before. Nothing else is installed until
+asked for:
+
+- **Claude Code**: the Agent SDK's platform package, at the version the SDK
+  is locked to (about 100 MB).
+- **OpenCode**: its `opencode-<os>-<arch>` build (about 60 MB). A server URL
+  (`CODEDECK_OPENCODE_SERVER_URL`) needs nothing installed.
+- **The DeepSeek Harness**: not one binary but a package tree — some 600
+  packages, a few hundred MB, a couple of minutes on a normal connection.
+  `CODEDECK_DEEPSEEK_PATH` names a CLI to use instead.
+
+Every download comes from the npm registry and is checked against the sha512
 in this build's `pnpm-lock.yaml`; a mismatch is refused. Binaries live in
 `<home>/agents/`, one version per package, and the harness's tree in
 `<home>/agents/@deepseek-ai+dsh@<version>/`; an upgrade that moves the pin
-installs the new one and removes the old. A failed download (no network) is
-retried by the next session.
+installs the new one and removes the old.
 
-`CODEDECK_AGENT_HOST_WARM=1` installs everything the enabled agents need and
-exits, without serving: a first-run warm-up, and what the image's bundled
-build runs at build time.
+Removing an agent (from the phone, or `codedeck-bridge agents remove`) ends
+its sessions and deletes what CodeDeck installed of it. Its own settings and
+conversations stay, and an agent the machine has of its own cannot be
+removed. A removed default agent is not installed again until someone asks
+for it.
 
+- Ahead of time: `codedeck-bridge agents install <agent>…` installs from the
+  terminal, into the same cache, before any phone asks.
 - Offline machines: install `claude` (or `opencode`) yourself and it is used
   as is, point `CODEDECK_DEEPSEEK_PATH` at a harness you installed, or copy an
   `agents/` directory from another machine.
@@ -119,6 +131,8 @@ install runbook.
 | `status` | Config, identity (npub), paired phones, whether a bridge is running. |
 | `unpair <npub\|hex\|label>` / `unpair --all` | Remove pairings (with the bridge stopped). |
 | `folders` | The project folders a phone can start sessions in. |
+| `agents list` | Every agent and where it stands on this machine: ready (and from where), not installed, or removed. |
+| `agents install <agent>…` / `agents remove <agent>…` | Install agents at the version this build pins, or remove what CodeDeck installed of them. A running bridge sees the change once its agent host restarts; the phone's Install and Remove take effect at once. |
 | `version` | The bridge version and protocol version. |
 
 `--test-mode` (or `CODEDECK_TEST_MODE=1`) makes the agents answer canned
@@ -140,7 +154,7 @@ you need.
 | `workspaceRoots` | `CODEDECK_WORKSPACE_ROOTS` / `--workspace` | Directories sessions may run in (default: `workspaces/` in the bridge home, created on start; pass `--workspace .` to serve the working directory) |
 | `torProxyUrl` | `CODEDECK_TOR_PROXY_URL` / `--tor-proxy` | SOCKS5 proxy (e.g. `socks5h://127.0.0.1:9050`) for the relay connections |
 | `claudePath` | `CODEDECK_CLAUDE_PATH` / `--claude-path` | A specific `claude` binary instead of the bundled one |
-| `openCodeServerUrl`, `openCodeAutoStart`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_*` | The optional OpenCode agent — see [`OPENCODE.md`](OPENCODE.md) |
+| `openCodeServerUrl`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_*` | The optional OpenCode agent — see [`OPENCODE.md`](OPENCODE.md) |
 | `deepseekPath` | `CODEDECK_DEEPSEEK_PATH` / `--deepseek-path` | A DeepSeek Harness CLI to run instead of the one this build installs — see [`DEEPSEEK.md`](DEEPSEEK.md) |
 | `relayRegisterEndpoint` / `relayRegisterToken` | `CODEDECK_RELAY_REGISTER_ENDPOINT` / `..._TOKEN` | Register paired phones on a write-restricted relay (https only — the token is an admin secret) |
 | `blossomRegisterEndpoint` / `blossomRegisterToken` | `CODEDECK_BLOSSOM_REGISTER_ENDPOINT` / `..._TOKEN` | The same for a Blossom server, so a phone's attachments do not fall back to relay chunking |
