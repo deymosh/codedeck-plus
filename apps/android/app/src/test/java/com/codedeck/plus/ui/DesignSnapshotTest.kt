@@ -200,6 +200,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "plugins_opencode" to { PluginsContent(workstation, "opencode", dispatch = {}, onBack = {}) },
     "providers_opencode" to { ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}) },
+    "providers_opencode_open" to { ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}, openProfile = "home-gateway") },
     "providers_claude_empty" to { ProvidersContent(workstation, "claude-code", status = null, dispatch = {}, onBack = {}) },
     "providers_edit" to {
         ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}, startEditing = ProviderEditor.Existing("home-gateway"), validBaseUrl = { true })
@@ -290,6 +291,7 @@ class DesignSnapshotTest {
     @Test fun mcp_add() = paparazzi.page("mcp_add")
     @Test fun mcp_import() = paparazzi.page("mcp_import")
     @Test fun providers_opencode() = paparazzi.page("providers_opencode")
+    @Test fun providers_opencode_open() = paparazzi.page("providers_opencode_open")
     @Test fun providers_claude_empty() = paparazzi.page("providers_claude_empty")
     @Test fun providers_edit() = paparazzi.page("providers_edit")
     @Test fun providers_add() = paparazzi.page("providers_add")
