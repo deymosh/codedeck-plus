@@ -138,6 +138,17 @@ class TranscriptRowsParityTest {
         paparazzi.snapshot { Sheet { ToolSheetContent(group, live = true, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
     }
 
+    /** Reasoning is Markdown as often as not: it renders as such. */
+    @Test
+    fun tool_sheet_thinking_page() {
+        val thinking = ToolStep.Thinking(
+            7,
+            "The flake is **timing**, not logic:\n\n1. `reconnect()` races the close handler\n2. the test waits a fixed `200ms`\n\nSo the fix belongs in the test's wait.",
+        )
+        val group = DisplayEntry.ToolGroup(seq = 7, steps = listOf(thinking, ToolStep.Thinking(8, "Then run it.")), summary = "Thought")
+        paparazzi.snapshot { Sheet { ToolSheetContent(group, live = false, openPath = listOf(7), onOpenPath = {}, onClose = {}) } }
+    }
+
     @Test
     fun tool_sheet_plan_page() {
         val group = agentGroup()

@@ -52,6 +52,7 @@ import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.FileDiffView
 import com.codedeck.plus.ui.transcript.ToolStep
+import com.codedeck.plus.ui.transcript.TranscriptMarkdown
 
 /**
  * A tool group's details, over the conversation. A group of several steps
@@ -331,9 +332,9 @@ private fun StepPage(step: ToolStep, live: Boolean, onOpenChild: (Long) -> Unit)
         when (step) {
             is ToolStep.Call -> CallPage(step, live, onOpenChild)
             is ToolStep.Thinking -> Section(null) {
-                Prose(if (step.redacted) "The model's reasoning for this step was withheld by its provider." else step.text)
+                if (step.redacted) Prose("The model's reasoning for this step was withheld by its provider.") else ModelText(step.text)
             }
-            is ToolStep.Text -> Section(null) { Prose(step.text) }
+            is ToolStep.Text -> Section(null) { ModelText(step.text) }
             is ToolStep.Result -> Section("Output") { CodeBlock(step.text, color = if (step.isError) Tokens.Danger else Tokens.Text) }
         }
     }
@@ -347,7 +348,7 @@ private fun CallPage(call: ToolStep.Call, live: Boolean, onOpenChild: (Long) -> 
         call.toolKind == "execute" -> Section("Command") { CodeBlock(given) }
         call.toolKind == "agent" -> {
             Section("Task") { Prose(call.title) }
-            call.input?.let { Section("Instructions") { Prose(it) } }
+            call.input?.let { Section("Instructions") { ModelText(it) } }
             if (call.children.isNotEmpty()) {
                 Section(toolUses(call.children)?.let { "Steps, $it" } ?: "Steps") {
                     Column {
@@ -371,7 +372,7 @@ private fun CallPage(call: ToolStep.Call, live: Boolean, onOpenChild: (Long) -> 
                 else -> "Output"
             }
             Section(label) {
-                if (call.toolKind == "agent" && !result.isError) Prose(result.text)
+                if (call.toolKind == "agent" && !result.isError) ModelText(result.text)
                 else CodeBlock(result.text, color = if (result.isError) Tokens.Danger else Tokens.Text)
             }
         }
@@ -417,6 +418,12 @@ private fun Section(label: String?, content: @Composable () -> Unit) {
         content()
     }
 }
+
+/** What a model wrote — its reasoning, a sub-agent's instructions and
+ *  report — rendered as the Markdown models write, selectable like the
+ *  conversation's own text. */
+@Composable
+private fun ModelText(text: String) = TranscriptMarkdown(text)
 
 @Composable
 private fun Prose(text: String) {
