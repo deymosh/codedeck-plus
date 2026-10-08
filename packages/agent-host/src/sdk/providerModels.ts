@@ -36,14 +36,19 @@ export interface EndpointModel {
 export const MAX_ENDPOINT_MODELS = 200;
 
 /**
- * Where an endpoint lists its models: under `/v1` of its root, unless the
- * root already ends in `/v1` (both spellings are common, and every agent
- * that takes a base URL accepts one or the other).
+ * An endpoint's versioned API root: its base URL with `/v1` appended,
+ * unless it already ends in `/v1` (both spellings are common, and every
+ * agent that takes a base URL accepts one or the other). OpenAI-style
+ * clients post to `<root>/chat/completions`.
  */
-export function providerModelsUrl(baseUrl: string): string {
+export function providerApiRoot(baseUrl: string): string {
   const base = baseUrl.replace(/\/+$/, '');
-  const rooted = new URL(base).pathname.endsWith('/v1') ? base : `${base}/v1`;
-  return `${rooted}/models`;
+  return new URL(base).pathname.endsWith('/v1') ? base : `${base}/v1`;
+}
+
+/** Where an endpoint lists its models: `<root>/models`. */
+export function providerModelsUrl(baseUrl: string): string {
+  return `${providerApiRoot(baseUrl)}/models`;
 }
 
 /** claude-code-router's id for a model as it lists it to Claude Code:
