@@ -298,6 +298,9 @@ impl Engine {
             } else {
                 match profile {
                     None => Some(format!("Unknown provider profile '{id}' — it may have been deleted on this machine.")),
+                    Some(p) if p.agent != agent.id => {
+                        Some(format!("Provider profile '{}' is not one of {}'s.", p.label, agent.display_name))
+                    }
                     Some(p) if !is_valid_provider_base_url(&p.base_url) => Some(format!(
                         "Provider profile '{}' has an insecure base URL ({}) — {PROVIDER_BASE_URL_ERROR}. Its API token would travel in cleartext. Edit the profile in Settings and save it again.",
                         p.label, p.base_url

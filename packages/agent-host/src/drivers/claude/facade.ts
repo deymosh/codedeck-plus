@@ -19,6 +19,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { findInDirs, findOnPath, isFile } from '../../sdk/executable';
+import type { HttpGet } from '../../sdk/net';
+import { fetchProviderModels, type EndpointModel } from '../../sdk/providerModels';
 import type {
   CanUseTool,
   Options,
@@ -285,7 +287,7 @@ export const DISCOVERY_CACHE_MS = 10 * 60_000;
  * such a client in Anthropic's own `/v1/models` shape, which says how large
  * each model's context window is (when the router knows), and anyone else
  * with a plain list that does not. What it says about the 1M window is kept
- * for `modelSupports1mContext`; see `parseGatewayModels` for both shapes.
+ * for `modelSupports1mContext`; see `toGatewayModels`.
  */
 export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
   const baseUrl = process.env.ANTHROPIC_BASE_URL;
@@ -294,41 +296,32 @@ export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
     console.error('[SdkFacade] fetchGatewayModels: ANTHROPIC_BASE_URL or an auth token is not set');
     return [];
   }
-
-  try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/models`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'anthropic-version': '2023-06-01',
-        'User-Agent': GATEWAY_USER_AGENT,
-      },
-      // Generous relative to SUPPORTED_MODELS_TIMEOUT_MS: a cold gateway
-      // enumerating several upstream providers is slower than one live CLI
-      // answering a control request.
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) {
-      console.error(`[SdkFacade] fetchGatewayModels: gateway returned ${response.status} ${response.statusText}`);
-      return [];
-    }
-
-    const parsed = parseGatewayModels(await response.json());
-    if (!parsed) {
-      console.error('[SdkFacade] fetchGatewayModels: response has no "data" array');
-      return [];
-    }
-    for (const [id, oneMillion] of parsed.oneMillion) gatewayOneMillion.set(contextKey(id), oneMillion);
-    return parsed.models;
-  } catch (err) {
-    console.error('[SdkFacade] fetchGatewayModels: request failed:', err);
-    return [];
-  }
+  const models = await fetchProviderModels(baseUrl, {
+    token,
+    headers: { 'anthropic-version': '2023-06-01', 'user-agent': GATEWAY_USER_AGENT },
+    httpGet: gatewayGet,
+    log: (line) => console.error(line),
+    tag: '[SdkFacade] fetchGatewayModels:',
+  });
+  if (!models) return [];
+  const parsed = toGatewayModels(models);
+  for (const [id, oneMillion] of parsed.oneMillion) gatewayOneMillion.set(contextKey(id), oneMillion);
+  return parsed.models;
 }
 
 /** Any `claude-code/…` agent gets claude-code-router's Anthropic-shaped
  *  model list, the one that carries context-window sizes. */
 const GATEWAY_USER_AGENT = 'claude-code/1.0 (codedeck)';
+
+/** The gateway's list, read with a shorter timeout than the host's other
+ *  calls: a phone is waiting on it. Generous next to
+ *  SUPPORTED_MODELS_TIMEOUT_MS all the same — a cold gateway enumerating
+ *  several upstream providers is slower than one live CLI answering a
+ *  control request. */
+const gatewayGet: HttpGet = async (url, headers) => {
+  const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(5_000) });
+  return { status: res.status, text: await res.text() };
+};
 
 /** A model id compared without its `[1m]` marker or case. */
 const contextKey = (id: string): string => id.replace(/\[1m\]$/i, '').toLowerCase();
@@ -337,79 +330,35 @@ const contextKey = (id: string): string => id.replace(/\[1m\]$/i, '').toLowerCas
  *  itself last said (by `contextKey`). Filled by `fetchGatewayModels`. */
 const gatewayOneMillion = new Map<string, boolean>();
 
-/** claude-code-router's id for a model as it lists it to Claude Code:
- *  `anthropic/claude-ccr-h<hex>`, the hex being the router's own
- *  `<provider>/<model>` id in UTF-8. */
-const CCR_ENCODED_ID = /^(?:anthropic\/)?claude-ccr-h((?:[0-9a-f]{2})+)$/i;
-
 /** A window at least this large is the 1M tier (a provider's "1M" is not
  *  always exactly a million: 1 048 576, 1 050 000 and 1 310 720 all occur). */
 const ONE_MILLION_CONTEXT = 1_000_000;
 
-interface GatewayModelEntry {
-  id: string;
-  display_name?: unknown;
-  max_input_tokens?: unknown;
-  capabilities?: { context_window?: { supports_1m_context?: unknown; max_input_tokens?: unknown } };
-}
-
-/** Whether a gateway entry says it has the 1M window: its explicit flag,
- *  else a `[1m]` id, else its input-token limit. Undefined when it says
- *  nothing (a plain list, or a size the gateway does not know, sent as 0). */
-function entryOneMillion(m: GatewayModelEntry): boolean | undefined {
-  const window = m.capabilities?.context_window;
-  if (typeof window?.supports_1m_context === 'boolean') return window.supports_1m_context;
-  if (/\[1m\]$/i.test(m.id)) return true;
-  const max = [m.max_input_tokens, window?.max_input_tokens].find((n): n is number => typeof n === 'number' && n > 0);
-  return max === undefined ? undefined : max >= ONE_MILLION_CONTEXT;
-}
-
 /**
- * A gateway's `/v1/models` body as the phone's model list, plus what each
- * model's entry says about the 1M window. Null when there is no `data` list.
+ * A gateway's models (`sdk/providerModels`) as the phone's model list, plus
+ * what each says about the 1M window: its own word when it gives one (a flag,
+ * or a `[1m]` id), else its input-token limit; nothing for a plain list.
  *
- * Two shapes arrive. claude-code-router's plain list has the router's ids
- * (`Z.ai (Global) - Coding Plan/glm-5.3-flash`) and nothing on context. Its
- * Anthropic-shaped list, sent to a Claude Code client, encodes each id
- * (`CCR_ENCODED_ID`), marks a 1M model's id with `[1m]` and its
- * `display_name` with "(1M context)", and gives the window's size. The listed
- * id is always the router's own, decoded and without the marker: it is what
- * a session sends, and what the phone keeps as a machine's default. The label
- * drops the provider prefix, which the phone shows on its own.
+ * claude-code-router answers a Claude Code client with an Anthropic-shaped
+ * list whose ids it encodes and whose 1M models it marks; the shared parser
+ * decodes both, so the id here is always the router's own — what a session
+ * sends, and what the phone keeps as a machine's default. A model without a
+ * name of its own is labelled by the part after its provider, which the
+ * phone shows on its own.
  */
-export function parseGatewayModels(
-  body: unknown,
-): { models: SdkModelDescriptor[]; oneMillion: Map<string, boolean> } | null {
-  const list = (body as { data?: unknown } | null)?.data;
-  if (!Array.isArray(list)) return null;
-  const models: SdkModelDescriptor[] = [];
+export function toGatewayModels(models: EndpointModel[]): { models: SdkModelDescriptor[]; oneMillion: Map<string, boolean> } {
   const oneMillion = new Map<string, boolean>();
-  for (const m of list) {
-    if (typeof (m as { id?: unknown })?.id !== 'string') continue;
-    const entry = m as GatewayModelEntry;
-    const bare = entry.id.replace(/\[1m\]$/i, '');
-    const hex = CCR_ENCODED_ID.exec(bare)?.[1];
-    const id = (hex && Buffer.from(hex, 'hex').toString('utf8')) || bare;
-    if (models.some((known) => known.id === id)) continue;
-    // A router-prefixed id ("Claude Code API/claude-sonnet-5") names its
-    // channel before the first "/"; the model after it may hold a "/" of
-    // its own. The same model can come through several channels, so the
-    // channel is kept as the provider, and a label without display_name
-    // is the model part rather than the raw id.
-    const slash = id.indexOf('/');
-    const provider = slash > 0 ? id.slice(0, slash) : undefined;
-    const named = typeof entry.display_name === 'string' && provider && entry.display_name.startsWith(`${provider}/`)
-      ? entry.display_name.slice(provider.length + 1)
-      : entry.display_name;
-    models.push({
-      id,
-      label: (typeof named === 'string' && named) || (provider ? id.slice(slash + 1) : id),
-      ...(provider ? { provider } : {}),
-    });
-    const said = entryOneMillion(entry);
-    if (said !== undefined) oneMillion.set(id, said);
-  }
-  return { models, oneMillion };
+  const list = models.map((m) => {
+    const said =
+      m.oneMillionContext ?? (m.contextWindow !== undefined ? m.contextWindow >= ONE_MILLION_CONTEXT : undefined);
+    if (said !== undefined) oneMillion.set(m.id, said);
+    return {
+      id: m.id,
+      label: m.label ?? (m.provider ? m.id.slice(m.provider.length + 1) : m.id),
+      ...(m.provider ? { provider: m.provider } : {}),
+    };
+  });
+  return { models: list, oneMillion };
 }
 
 /**

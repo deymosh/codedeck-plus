@@ -6,12 +6,12 @@
 
 use agent_protocol::{AgentInfo, BridgeMessage, ProviderBinding, Secret};
 use protocol::commands::{SetCredentialsMsg, SetProviderProfileMsg};
-use protocol::common::{is_valid_provider_base_url, CredentialStatus, PROVIDER_BASE_URL_ERROR};
+use protocol::common::{is_valid_provider_base_url, CredentialStatus, ProviderModel, PROVIDER_BASE_URL_ERROR};
 use protocol::events::{BridgeToPhone, CredentialsAckMsg, ProviderProfileAckMsg, ProviderProfilesMsg};
 use protocol::tristate::Tristate;
 
 use super::{Engine, HostCall};
-use crate::io::{store_keys, Effect};
+use crate::io::store_keys;
 use crate::settings::{ProviderProfile, StoredProfiles, GITHUB_PAT, GITHUB_PAT_LABEL};
 
 /// A `credentials-ack` waiting on credential checks.
@@ -186,26 +186,22 @@ impl Engine {
 
     // --- provider profiles ---
 
-    /// What a session bound to profile `id` starts with. Refuses a deleted
-    /// profile, an insecure base URL and a missing token: each would
-    /// otherwise start the session on the wrong account or put the token on
-    /// a cleartext connection.
-    pub(super) fn provider_binding(&self, id: &str) -> Result<ProviderBinding, String> {
+    /// What a session of `agent` bound to profile `id` starts with. Refuses
+    /// a deleted profile, another agent's, an insecure base URL and a
+    /// missing token: each would otherwise start the session on the wrong
+    /// account or endpoint, or put the token on a cleartext connection.
+    pub(super) fn provider_binding(&self, id: &str, agent: &str) -> Result<ProviderBinding, String> {
         let profile = self.profiles.get(id).ok_or_else(|| format!("provider profile '{id}' was deleted"))?;
+        if profile.agent != agent {
+            return Err(format!("provider profile '{id}' is no longer one of {agent}'s"));
+        }
         if !is_valid_provider_base_url(&profile.base_url) {
             return Err(format!(
                 "provider profile '{id}' has an insecure base URL ({}) — {PROVIDER_BASE_URL_ERROR}. Its API token would travel in cleartext, so the session is refused.",
                 profile.base_url
             ));
         }
-        let auth_token = profile.auth_token.clone().ok_or_else(|| format!("provider profile '{id}' has no stored auth token"))?;
-        Ok(ProviderBinding {
-            id: id.to_string(),
-            base_url: profile.base_url.clone(),
-            auth_token,
-            models: profile.models.clone(),
-            default_model: profile.default_model.clone(),
-        })
+        profile.binding().ok_or_else(|| format!("provider profile '{id}' has no stored auth token"))
     }
 
     pub(super) fn provider_profiles_msg(&self) -> BridgeToPhone {
@@ -215,33 +211,75 @@ impl Engine {
         })
     }
 
-    /// Create, update or delete one profile. An upsert with a token checks it
-    /// against the profile's own endpoint before acking; every phone then
+    /// Hand an agent whose catalog entry `supports.provider_models` its
+    /// profiles — every usable one, so a deleted or emptied profile goes
+    /// away too.
+    pub(super) fn push_providers(&mut self, agent: &str) {
+        if !self.host.initialized || !self.catalog.get(agent).is_some_and(|a| a.supports.provider_models) {
+            return;
+        }
+        let providers: Vec<ProviderBinding> = self
+            .profiles
+            .values()
+            .filter(|p| p.agent == agent && is_valid_provider_base_url(&p.base_url))
+            .filter_map(ProviderProfile::binding)
+            .collect();
+        log::info!("[Engine] {agent} gets {} provider profile(s)", providers.len());
+        let message = BridgeMessage::SetProviders { agent: agent.to_string(), providers };
+        self.call(HostCall::SetProviders { agent: agent.to_string() }, message);
+    }
+
+    /// Every agent's profiles, once the host is (back) up.
+    pub(super) fn push_all_providers(&mut self) {
+        let agents: Vec<String> =
+            self.catalog.all().iter().filter(|a| a.supports.provider_models).map(|a| a.id.clone()).collect();
+        for agent in agents {
+            self.push_providers(&agent);
+        }
+    }
+
+    /// Create, update or delete one profile. An upsert whose models come
+    /// from the provider reads them first; one with a token then has it
+    /// checked, the way its agent uses it, before acking; every phone then
     /// gets the new (redacted) list.
     pub(super) fn on_set_provider_profile(&mut self, m: SetProviderProfileMsg, phone: &str) {
         let id = m.profile_id;
         log::info!("[Engine] set-provider-profile '{id}' from {}...", phone.get(..8).unwrap_or(phone));
-        let mut next = self.profiles.clone();
+        // The newest write of a profile is the one that stands: a model list
+        // still on its way for an older one is dropped.
+        self.model_fetches.retain(|_, (_, pending)| pending.id != id);
         let Some(write) = m.profile else {
             // Deleting is never refused, whatever the stored URL: a profile
             // that needs fixing must stay removable. Sessions bound to it
             // fail at their next start rather than fall back to another
             // account.
-            let existed = next.remove(&id).is_some();
+            let mut next = self.profiles.clone();
+            let removed = next.remove(&id);
             if let Err(err) = self.store_profiles(next) {
                 return self.send_profile_ack(phone, &id, Err(err));
             }
-            log::info!("[Engine] Provider profile '{id}' deleted (existed={existed})");
+            log::info!("[Engine] Provider profile '{id}' deleted (existed={})", removed.is_some());
             self.send_profile_ack(phone, &id, Ok(None));
+            if let Some(removed) = removed {
+                self.push_providers(&removed.agent);
+            }
             return;
         };
-        // The store never holds an insecure profile: the token check below
-        // sends the token to this URL.
+        // The store never holds an insecure profile: the token check and the
+        // model list send the token to this URL.
         if !is_valid_provider_base_url(&write.base_url) {
             log::info!("[Engine] Provider profile '{id}' refused: insecure base URL ({})", write.base_url);
             return self.send_profile_ack(phone, &id, Err(PROVIDER_BASE_URL_ERROR.into()));
         }
-        if write.models.is_empty() {
+        match self.catalog.known(&write.agent) {
+            Ok(agent) if agent.supports.providers || agent.supports.provider_models => {}
+            Ok(agent) => {
+                let reason = format!("{} takes no provider profiles.", agent.display_name);
+                return self.send_profile_ack(phone, &id, Err(reason));
+            }
+            Err(reason) => return self.send_profile_ack(phone, &id, Err(reason)),
+        }
+        if !write.models_from_provider && write.models.is_empty() {
             return self.send_profile_ack(phone, &id, Err("A provider profile needs at least one model.".into()));
         }
         let auth_token = match write.auth_token {
@@ -251,33 +289,91 @@ impl Engine {
         };
         let profile = ProviderProfile {
             id: id.clone(),
+            agent: write.agent,
             label: write.label,
             base_url: write.base_url,
             auth_token,
-            models: write.models,
+            models: if write.models_from_provider { Vec::new() } else { write.models },
+            models_from_provider: write.models_from_provider,
             default_model: write.default_model,
             updated_at: Some(self.now_iso()),
         };
-        next.insert(id.clone(), profile.clone());
+        if !profile.models_from_provider {
+            return self.save_profile(phone, profile);
+        }
+        let Some(token) = profile.auth_token.clone() else {
+            return self.send_profile_ack(phone, &id, Err("Reading the provider's models needs its API token.".into()));
+        };
+        self.next_ticket += 1;
+        let ticket = self.next_ticket;
+        let message =
+            BridgeMessage::ListProviderModels { agent: profile.agent.clone(), base_url: profile.base_url.clone(), auth_token: token };
+        if self.call(HostCall::ListProviderModels { ticket }, message).is_none() {
+            let reason = "The agent host is not running, so the provider's models cannot be read now.".to_string();
+            return self.send_profile_ack(phone, &id, Err(reason));
+        }
+        self.model_fetches.insert(ticket, (phone.to_string(), profile));
+    }
+
+    /// The provider's model list came back: store the profile with it, or
+    /// refuse the save when there is none to store.
+    pub(super) fn on_provider_models_fetched(&mut self, ticket: u64, models: Result<Vec<ProviderModel>, String>) {
+        let Some((phone, mut profile)) = self.model_fetches.remove(&ticket) else { return };
+        let models = match models {
+            Ok(models) if models.is_empty() => Err("it lists no models".to_string()),
+            other => other,
+        };
+        match models {
+            Ok(models) => {
+                // A default the provider no longer lists would start sessions
+                // on a model it cannot serve; its first one stands in.
+                if profile.default_model.as_ref().is_some_and(|d| !models.iter().any(|m| &m.id == d)) {
+                    profile.default_model = None;
+                }
+                profile.models = models;
+                self.save_profile(&phone, profile);
+            }
+            Err(reason) => {
+                log::info!("[Engine] Provider profile '{}' refused: no model list from {} ({reason})", profile.id, profile.base_url);
+                let error = format!("Could not read the models from {}: {reason}", profile.base_url);
+                self.send_profile_ack(&phone, &profile.id, Err(error));
+            }
+        }
+    }
+
+    /// Store an upserted profile, hand it to its agent (and take it from the
+    /// agent it was for before), then have its token checked before acking.
+    fn save_profile(&mut self, phone: &str, profile: ProviderProfile) {
+        let id = profile.id.clone();
+        let mut next = self.profiles.clone();
+        let previous = next.insert(id.clone(), profile.clone());
         if let Err(err) = self.store_profiles(next) {
             return self.send_profile_ack(phone, &id, Err(err));
         }
         log::info!(
-            "[Engine] Provider profile saved: '{id}' (\"{}\", {}, {} model(s), hasToken={})",
+            "[Engine] Provider profile saved: '{id}' for {} (\"{}\", {}, {} model(s){}, hasToken={})",
+            profile.agent,
             profile.label,
             profile.base_url,
             profile.models.len(),
+            if profile.models_from_provider { " from the provider" } else { "" },
             profile.auth_token.is_some()
         );
-        let model = profile.fallback_model().map(str::to_string);
-        match (profile.auth_token, model) {
-            (Some(token), Some(model)) => {
-                self.next_ticket += 1;
-                let ticket = self.next_ticket;
-                self.profile_acks.insert(ticket, (phone.to_string(), id));
-                self.out.push(Effect::CheckProviderToken { ticket, base_url: profile.base_url, token, model });
-            }
-            _ => self.send_profile_ack(phone, &id, Ok(None)),
+        self.push_providers(&profile.agent);
+        if let Some(previous) = previous.filter(|p| p.agent != profile.agent) {
+            self.push_providers(&previous.agent);
+        }
+        let check = profile.binding().zip(profile.fallback_model().map(str::to_string));
+        let Some((provider, model)) = check else {
+            return self.send_profile_ack(phone, &id, Ok(None));
+        };
+        self.next_ticket += 1;
+        let ticket = self.next_ticket;
+        let message = BridgeMessage::CheckProvider { agent: profile.agent.clone(), provider, model };
+        if self.call(HostCall::CheckProvider { ticket }, message).is_some() {
+            self.profile_acks.insert(ticket, (phone.to_string(), id));
+        } else {
+            self.send_profile_ack(phone, &id, Ok(None));
         }
     }
 

@@ -4458,6 +4458,11 @@ data class UniffiAgent (
     , 
     var `supportsProviders`: kotlin.Boolean
     , 
+    /**
+     * The agent's provider profiles add models to its own list.
+     */
+    var `supportsProviderModels`: kotlin.Boolean
+    , 
     var `supportsGsd`: kotlin.Boolean
     , 
     var `supportsInterrupt`: kotlin.Boolean
@@ -4505,6 +4510,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeUniffiCredentialStatus.read(buf),
         )
     }
@@ -4519,6 +4525,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.allocationSize(value.`supportsModels`) +
             FfiConverterBoolean.allocationSize(value.`supportsUsage`) +
             FfiConverterBoolean.allocationSize(value.`supportsProviders`) +
+            FfiConverterBoolean.allocationSize(value.`supportsProviderModels`) +
             FfiConverterBoolean.allocationSize(value.`supportsGsd`) +
             FfiConverterBoolean.allocationSize(value.`supportsInterrupt`) +
             FfiConverterBoolean.allocationSize(value.`supportsCommands`) +
@@ -4538,6 +4545,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.write(value.`supportsModels`, buf)
             FfiConverterBoolean.write(value.`supportsUsage`, buf)
             FfiConverterBoolean.write(value.`supportsProviders`, buf)
+            FfiConverterBoolean.write(value.`supportsProviderModels`, buf)
             FfiConverterBoolean.write(value.`supportsGsd`, buf)
             FfiConverterBoolean.write(value.`supportsInterrupt`, buf)
             FfiConverterBoolean.write(value.`supportsCommands`, buf)
@@ -6775,11 +6783,22 @@ public object FfiConverterTypeUniffiProviderProfileAck: FfiConverterRustBuffer<U
 data class UniffiProviderProfileInfo (
     var `id`: kotlin.String
     , 
+    /**
+     * The agent the profile is for; empty for one stored before profiles
+     * had one, which no agent uses until it is given one.
+     */
+    var `agent`: kotlin.String
+    , 
     var `label`: kotlin.String
     , 
     var `baseUrl`: kotlin.String
     , 
     var `models`: List<UniffiModelEntry>
+    , 
+    /**
+     * The models are the provider's own list.
+     */
+    var `modelsFromProvider`: kotlin.Boolean
     , 
     var `defaultModel`: kotlin.String?
     , 
@@ -6803,7 +6822,9 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterSequenceTypeUniffiModelEntry.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
         )
@@ -6811,18 +6832,22 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
 
     override fun allocationSize(value: UniffiProviderProfileInfo) = (
             FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`agent`) +
             FfiConverterString.allocationSize(value.`label`) +
             FfiConverterString.allocationSize(value.`baseUrl`) +
             FfiConverterSequenceTypeUniffiModelEntry.allocationSize(value.`models`) +
+            FfiConverterBoolean.allocationSize(value.`modelsFromProvider`) +
             FfiConverterOptionalString.allocationSize(value.`defaultModel`) +
             FfiConverterBoolean.allocationSize(value.`hasToken`)
     )
 
     override fun write(value: UniffiProviderProfileInfo, buf: ByteBuffer) {
             FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`agent`, buf)
             FfiConverterString.write(value.`label`, buf)
             FfiConverterString.write(value.`baseUrl`, buf)
             FfiConverterSequenceTypeUniffiModelEntry.write(value.`models`, buf)
+            FfiConverterBoolean.write(value.`modelsFromProvider`, buf)
             FfiConverterOptionalString.write(value.`defaultModel`, buf)
             FfiConverterBoolean.write(value.`hasToken`, buf)
     }
@@ -6834,6 +6859,8 @@ public object FfiConverterTypeUniffiProviderProfileInfo: FfiConverterRustBuffer<
  * UniFFI-crossable mirror of [`protocol::commands::ProviderProfileWrite`].
  */
 data class UniffiProviderProfileWrite (
+    var `agent`: kotlin.String
+    , 
     var `label`: kotlin.String
     , 
     var `baseUrl`: kotlin.String
@@ -6841,6 +6868,12 @@ data class UniffiProviderProfileWrite (
     var `authToken`: UniffiTristate
     , 
     var `models`: List<UniffiProviderModelWrite>
+    , 
+    /**
+     * The bridge reads the models from the provider instead (`models` is
+     * then ignored).
+     */
+    var `modelsFromProvider`: kotlin.Boolean
     , 
     var `defaultModel`: kotlin.String?
     
@@ -6861,25 +6894,31 @@ public object FfiConverterTypeUniffiProviderProfileWrite: FfiConverterRustBuffer
         return UniffiProviderProfileWrite(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterTypeUniffiTristate.read(buf),
             FfiConverterSequenceTypeUniffiProviderModelWrite.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: UniffiProviderProfileWrite) = (
+            FfiConverterString.allocationSize(value.`agent`) +
             FfiConverterString.allocationSize(value.`label`) +
             FfiConverterString.allocationSize(value.`baseUrl`) +
             FfiConverterTypeUniffiTristate.allocationSize(value.`authToken`) +
             FfiConverterSequenceTypeUniffiProviderModelWrite.allocationSize(value.`models`) +
+            FfiConverterBoolean.allocationSize(value.`modelsFromProvider`) +
             FfiConverterOptionalString.allocationSize(value.`defaultModel`)
     )
 
     override fun write(value: UniffiProviderProfileWrite, buf: ByteBuffer) {
+            FfiConverterString.write(value.`agent`, buf)
             FfiConverterString.write(value.`label`, buf)
             FfiConverterString.write(value.`baseUrl`, buf)
             FfiConverterTypeUniffiTristate.write(value.`authToken`, buf)
             FfiConverterSequenceTypeUniffiProviderModelWrite.write(value.`models`, buf)
+            FfiConverterBoolean.write(value.`modelsFromProvider`, buf)
             FfiConverterOptionalString.write(value.`defaultModel`, buf)
     }
 }

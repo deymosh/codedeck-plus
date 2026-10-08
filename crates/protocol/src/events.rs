@@ -545,7 +545,7 @@ mod tests {
         rt(&json!({"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
         rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
-        rt(&json!({"type":"provider-profiles","machine":"m","profiles":[{"id":"p","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
+        rt(&json!({"type":"provider-profiles","machine":"m","profiles":[{"id":"p","agent":"claude-code","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
         rt(&json!({"type":"provider-profile-ack","machine":"m","profileId":"p","success":true,"tokenValid":false}));
     }
 

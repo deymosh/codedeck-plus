@@ -73,6 +73,8 @@ export interface StartOpenCodeServerOptions {
 export interface OpenCodeServerHandle {
   url: string;
   pid: number | undefined;
+  /** Resolves when the process exits, however it ends. */
+  exited: Promise<void>;
   /** SIGTERM, wait, SIGKILL if it doesn't exit in time. Always resolves —
    *  best-effort, matching every other shutdown-path cleanup in this repo. */
   close(): Promise<void>;
@@ -128,6 +130,10 @@ export function startOpenCodeServer(opts: StartOpenCodeServerOptions): Promise<O
 
     let settled = false;
     let output = '';
+    const exited = new Promise<void>((done) => {
+      if ((proc.exitCode ?? null) !== null || (proc.signalCode ?? null) !== null) done();
+      else proc.once('exit', () => done());
+    });
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -150,6 +156,7 @@ export function startOpenCodeServer(opts: StartOpenCodeServerOptions): Promise<O
           resolve({
             url,
             pid: proc.pid,
+            exited,
             close: () => closeProcess(proc),
           });
           return;

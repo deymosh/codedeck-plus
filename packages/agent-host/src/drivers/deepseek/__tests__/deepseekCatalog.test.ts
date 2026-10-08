@@ -1,5 +1,5 @@
 /**
- * A gateway the harness is pointed at: reading the models it serves, and
+ * The endpoint the harness is pointed at: reading the models it serves, and
  * writing them into the harness's own profile as its catalog — beside the
  * block the MCP list owns, since both live in that one file.
  */
@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeepSeekMcp } from '../mcp';
-import { fetchGatewayCatalog, gatewayModelsUrl, parseModels, renderCatalogLayer, syncGatewayCatalog } from '../gateway';
+import { fetchEndpointCatalog, renderCatalogLayer, syncEndpointCatalog } from '../catalog';
 
 function profile(initial = '# Your patch layer for this dsh profile.\n[]\n'): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-gateway-'));
@@ -26,49 +26,28 @@ const answering = (body: unknown, status = 200, expectUrl?: string, expectKey?: 
     return { status, text: typeof body === 'string' ? body : JSON.stringify(body) };
   });
 
-describe('the model list a gateway serves', () => {
-  it('is read from the root the harness itself posts to', async () => {
-    expect(gatewayModelsUrl('http://gateway.example:3458')).toBe('http://gateway.example:3458/v1/models');
-    expect(gatewayModelsUrl('http://gateway.example:3458/')).toBe('http://gateway.example:3458/v1/models');
-    // The harness appends `/v1` unless the path already ends in it, and this
-    // mirrors that rule, so one setting configures both.
-    expect(gatewayModelsUrl('https://gateway.example/v1')).toBe('https://gateway.example/v1/models');
-  });
-
-  it('reads the shapes gateways answer with, and keeps what says something', () => {
-    expect(parseModels({ data: [{ id: 'kimi-k2' }, { id: 'glm-4.6', context_length: 200_000 }] })).toEqual([
-      { id: 'kimi-k2' },
-      { id: 'glm-4.6', contextWindow: 200_000 },
-    ]);
-    expect(parseModels(['a', 'b'])).toEqual([{ id: 'a' }, { id: 'b' }]);
-    expect(parseModels({ models: [{ id: 'x', name: 'X' }] })).toEqual([{ id: 'x', name: 'X' }]);
-    // Duplicates, blanks and anything that is not a model are dropped.
-    expect(parseModels({ data: [{ id: 'a' }, { id: 'a' }, { id: '  ' }, { no: 'id' }, 7] })).toEqual([{ id: 'a' }]);
-    expect(parseModels({ error: 'nope' })).toEqual([]);
-    expect(parseModels('not json at all')).toEqual([]);
-  });
-
+describe('the model list the endpoint serves', () => {
   it('is asked with the key, and answered with the endpoint as the harness reads it', async () => {
     const httpGet = answering({ data: [{ id: 'kimi-k2' }] }, 200, 'http://gw.example/v1/models', 'sk-1');
-    const catalog = await fetchGatewayCatalog('http://gw.example/', 'sk-1', httpGet, () => {});
+    const catalog = await fetchEndpointCatalog('http://gw.example/', 'sk-1', httpGet, () => {});
     expect(catalog).toEqual({ baseUrl: 'http://gw.example', models: [{ id: 'kimi-k2' }], defaultModel: 'kimi-k2' });
   });
 
-  it('answers nothing — and says so — when the gateway refuses, breaks or lists nothing', async () => {
+  it('answers nothing — and says so — when the endpoint refuses, breaks or lists nothing', async () => {
     const logs: string[] = [];
     const log = (line: string): void => {
       logs.push(line);
     };
-    expect(await fetchGatewayCatalog('http://gw.example', 'sk', answering({}, 401), log)).toBeUndefined();
-    expect(await fetchGatewayCatalog('http://gw.example', 'sk', answering('<html>', 200), log)).toBeUndefined();
-    expect(await fetchGatewayCatalog('http://gw.example', 'sk', answering({ data: [] }, 200), log)).toBeUndefined();
+    expect(await fetchEndpointCatalog('http://gw.example', 'sk', answering({}, 401), log)).toBeUndefined();
+    expect(await fetchEndpointCatalog('http://gw.example', 'sk', answering('<html>', 200), log)).toBeUndefined();
+    expect(await fetchEndpointCatalog('http://gw.example', 'sk', answering({ data: [] }, 200), log)).toBeUndefined();
     expect(
-      await fetchGatewayCatalog('http://gw.example', 'sk', async () => {
+      await fetchEndpointCatalog('http://gw.example', 'sk', async () => {
         throw new Error('ECONNREFUSED');
       }, log),
     ).toBeUndefined();
-    expect(logs.some((line) => /answered 401/.test(line))).toBe(true);
-    expect(logs.some((line) => /listed no models/.test(line))).toBe(true);
+    expect(logs.some((line) => /refused the token \(HTTP 401\)/.test(line))).toBe(true);
+    expect(logs.some((line) => /lists no models/.test(line))).toBe(true);
     expect(logs.some((line) => /ECONNREFUSED/.test(line))).toBe(true);
   });
 });
@@ -100,7 +79,7 @@ describe('the catalog the harness reads', () => {
   it('is written beside the MCP block without disturbing it, and taken back out again', async () => {
     const dir = profile();
     await new DeepSeekMcp({ profileDir: dir, log: () => {} }).act('add', [{ name: 'demo', setup: { type: 'stdio', command: '/usr/bin/demo' } }], []);
-    await syncGatewayCatalog({ profileDir: dir, log: () => {}, httpGet: answering({ data: [{ id: 'kimi-k2' }] }) }, 'http://gw.example', 'sk-1');
+    await syncEndpointCatalog({ profileDir: dir, log: () => {}, httpGet: answering({ data: [{ id: 'kimi-k2' }] }) }, 'http://gw.example', 'sk-1');
     const both = layerOf(dir);
     expect(both).toMatch(/CodeDeck\+ MCP servers/);
     expect(both).toMatch(/serverName: demo/);
@@ -112,16 +91,16 @@ describe('the catalog the harness reads', () => {
       { name: 'demo', transport: 'stdio', target: '/usr/bin/demo', enabled: true },
     ]);
 
-    // No gateway any more: its block goes, the MCP one stays.
-    await syncGatewayCatalog({ profileDir: dir, log: () => {} }, undefined, undefined);
+    // No endpoint any more: its block goes, the MCP one stays.
+    await syncEndpointCatalog({ profileDir: dir, log: () => {} }, undefined, undefined);
     const after = layerOf(dir);
     expect(after).not.toMatch(/gateway catalog/);
     expect(after).toMatch(/serverName: demo/);
   });
 
-  it('stays as it was when the gateway cannot be read', async () => {
+  it('stays as it was when the endpoint cannot be read', async () => {
     const dir = profile();
-    const wrote = await syncGatewayCatalog({ profileDir: dir, log: () => {} }, 'http://gw.example', 'sk-1');
+    const wrote = await syncEndpointCatalog({ profileDir: dir, log: () => {} }, 'http://gw.example', 'sk-1');
     expect(wrote).toBe(false);
     expect(layerOf(dir)).toBe('# Your patch layer for this dsh profile.\n[]\n');
   });
@@ -129,7 +108,7 @@ describe('the catalog the harness reads', () => {
   it('is written only when it changed', async () => {
     const dir = profile();
     const httpGet = answering({ data: [{ id: 'kimi-k2' }] });
-    expect(await syncGatewayCatalog({ profileDir: dir, log: () => {}, httpGet }, 'http://gw.example', 'sk-1')).toBe(true);
-    expect(await syncGatewayCatalog({ profileDir: dir, log: () => {}, httpGet }, 'http://gw.example', 'sk-1')).toBe(false);
+    expect(await syncEndpointCatalog({ profileDir: dir, log: () => {}, httpGet }, 'http://gw.example', 'sk-1')).toBe(true);
+    expect(await syncEndpointCatalog({ profileDir: dir, log: () => {}, httpGet }, 'http://gw.example', 'sk-1')).toBe(false);
   });
 });

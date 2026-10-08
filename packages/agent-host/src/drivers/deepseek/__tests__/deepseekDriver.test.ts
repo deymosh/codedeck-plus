@@ -155,7 +155,7 @@ describe('DeepSeekSession startup', () => {
     const ready = withDriver();
     const ctx = await started(ready, {
       model: 'kimi-k2',
-      provider: { id: 'p1', baseUrl: 'https://gateway.example/v1', authToken: 'sk-x', models: [] },
+      provider: { id: 'p1', label: 'p1', baseUrl: 'https://gateway.example/v1', authToken: 'sk-x', models: [] },
     });
     expect(ready.harness.setOptions.some((option) => option.configId === 'model')).toBe(true);
     expect(ctx.entries().some((entry) => entry.entryType === 'error' && /kimi-k2/.test(entry.text))).toBe(true);
@@ -192,7 +192,7 @@ describe('DeepSeekSession environment', () => {
   it('hands the session its provider binding, replacing the harness namespace', async () => {
     const ready = withDriver({ env: { PATH: '/bin', DEEPSEEK_API_KEY: 'native-key', KEEP: 'yes' } });
     await started(ready, {
-      provider: { id: 'p1', baseUrl: 'https://gateway.example/v1', authToken: 'sk-gateway', models: [] },
+      provider: { id: 'p1', label: 'p1', baseUrl: 'https://gateway.example/v1', authToken: 'sk-gateway', models: [] },
     });
     expect(ready.spawns[0]?.env.DEEPSEEK_BASE_URL).toBe('https://gateway.example/v1');
     expect(ready.spawns[0]?.env.DEEPSEEK_API_KEY).toBe('sk-gateway');
@@ -210,7 +210,7 @@ describe('DeepSeekSession environment', () => {
     const ctx = recordingContext();
     expect(() =>
       ready.driver.startSession(
-        start({ provider: { id: 'p1', baseUrl: 'http://gateway.example/v1', authToken: 'sk', models: [] } }),
+        start({ provider: { id: 'p1', label: 'p1', baseUrl: 'http://gateway.example/v1', authToken: 'sk', models: [] } }),
         ctx,
       ),
     ).toThrow(/insecure base URL/);
@@ -220,7 +220,7 @@ describe('DeepSeekSession environment', () => {
     const ready = withDriver();
     await started(ready, { sessionId: 'b1' });
     await started(ready, { sessionId: 'b2' });
-    const gateway = { id: 'p1', baseUrl: 'https://gateway.example/v1', authToken: 'sk', models: [] };
+    const gateway = { id: 'p1', label: 'p1', baseUrl: 'https://gateway.example/v1', authToken: 'sk', models: [] };
     await started(ready, { sessionId: 'b3', provider: gateway });
     expect(ready.spawns).toHaveLength(2);
   });

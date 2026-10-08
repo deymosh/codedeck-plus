@@ -97,8 +97,10 @@ fun SelectField(
     val current = options.firstOrNull { it.value == selected }
     val currentLabel = current?.label
         ?: if (selected.isEmpty()) placeholder else selected
-    // Groups are named only when there is more than one to tell apart.
-    val grouped = options.mapNotNull { it.group }.distinct().size > 1
+    // A list that says who offers its entries always shows it, even when
+    // one provider offers them all: which provider a model runs on is
+    // worth seeing whether or not there is another to choose.
+    val grouped = options.any { it.group != null }
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,

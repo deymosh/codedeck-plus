@@ -56,7 +56,7 @@ mod tests {
         let start = bridge_rt(json!({"v":1,"id":"2","kind":"start-session","payload":{
             "sessionId":"s1","agent":"claude-code","cwd":"/w","mode":"plan","effort":"high","model":"m",
             "resume":"native-1","credentials":{"anthropic_api_key":"sk"},"env":{"GITHUB_TOKEN":"gh"},
-            "provider":{"id":"p","baseUrl":"https://x","authToken":"t","models":[{"id":"k"}],"defaultModel":"k"}
+            "provider":{"id":"p","label":"P","baseUrl":"https://x","authToken":"t","models":[{"id":"k"}],"defaultModel":"k"}
         }}));
         let BridgeMessage::StartSession(s) = start.message else { panic!("start-session") };
         assert_eq!(s.credentials["anthropic_api_key"].expose(), "sk");
@@ -83,6 +83,12 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"16","kind":"session-mcp","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"17","kind":"session-mcp-toggle","payload":{"sessionId":"s","name":"gh","enabled":false}}));
         bridge_rt(json!({"v":1,"id":"10","kind":"check-credential","payload":{"agent":"claude-code","credential":"anthropic_api_key","value":"sk"}}));
+        bridge_rt(json!({"v":1,"id":"18","kind":"check-provider","payload":{"agent":"opencode","model":"m1",
+            "provider":{"id":"or","label":"OpenRouter","baseUrl":"https://openrouter.ai/api","authToken":"tok","models":[{"id":"m1"}]}}}));
+        bridge_rt(json!({"v":1,"id":"19","kind":"list-provider-models","payload":{"agent":"opencode","baseUrl":"https://openrouter.ai/api","authToken":"tok"}}));
+        bridge_rt(json!({"v":1,"id":"20","kind":"set-providers","payload":{"agent":"opencode","providers":[
+            {"id":"or","label":"OpenRouter","baseUrl":"https://openrouter.ai/api","authToken":"tok","models":[{"id":"a/b","label":"B"}],"defaultModel":"a/b"}]}}));
+        bridge_rt(json!({"v":1,"id":"21","kind":"set-providers","payload":{"agent":"opencode","providers":[]}}));
         bridge_rt(json!({"v":1,"id":"h1","kind":"permission-outcome","payload":{"outcome":"selected","optionId":"allow"}}));
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
         bridge_rt(json!({"v":1,"id":"h4","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"revise","feedback":"Fewer steps."}}));
@@ -95,11 +101,11 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true},
+            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"gsd":true,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}]
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"gsd":false,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"gsd":false,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false},
             "credentials":[],"unavailableReason":"opencode is not installed"
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
@@ -113,6 +119,7 @@ mod tests {
         host_rt(json!({"v":1,"id":"6","kind":"usage","payload":{"usage":{"available":true,"windows":[{"label":"5h","utilization":12.5,"resetsAt":null}],"fetchedAt":"t"}}}));
         host_rt(json!({"v":1,"id":"7","kind":"credential-checked","payload":{"valid":false}}));
         host_rt(json!({"v":1,"id":"8","kind":"credential-checked","payload":{}}));
+        host_rt(json!({"v":1,"id":"9","kind":"provider-models","payload":{"models":[{"id":"a/b","label":"B"},{"id":"c"}]}}));
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"ready"}}}));
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{
             "type":"info","nativeSessionId":"n","model":"m","mode":"plan","contextWindow":1000000,"contextPercentage":12.0}}}));
@@ -206,7 +213,7 @@ mod tests {
             &json!({"v":1,"id":"1","kind":"start-session","payload":{
                 "sessionId":"s","agent":"claude-code","cwd":"/w",
                 "credentials":{"anthropic_api_key":"sk-ant-SECRET"},"env":{"GITHUB_TOKEN":"ghp_SECRET"},
-                "provider":{"id":"p","baseUrl":"https://x","authToken":"tok-SECRET","models":[]}
+                "provider":{"id":"p","label":"P","baseUrl":"https://x","authToken":"tok-SECRET","models":[]}
             }})
             .to_string(),
         )

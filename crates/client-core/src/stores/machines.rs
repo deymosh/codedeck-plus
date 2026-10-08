@@ -1847,9 +1847,11 @@ mod tests {
                 machine: "pk".into(),
                 profiles: vec![ProviderProfileInfo {
                     id: "prof1".into(),
+                    agent: "claude-code".into(),
                     label: "Anthropic".into(),
                     base_url: "https://api.example".into(),
                     models: vec![],
+                    models_from_provider: false,
                     default_model: None,
                     has_token: true,
                 }],

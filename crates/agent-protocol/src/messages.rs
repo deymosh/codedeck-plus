@@ -115,11 +115,14 @@ impl From<McpServerSpec> for McpServerAdd {
 
 // --- starting a session ---
 
-/// A custom provider profile a session is bound to for its whole life.
+/// A provider profile, token included: one a session is bound to for its
+/// whole life, or one an agent offers the models of (`set-providers`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderBinding {
     pub id: String,
+    /// The name the user gave it, for showing where a model comes from.
+    pub label: String,
     pub base_url: String,
     pub auth_token: Secret,
     pub models: Vec<ProviderModel>,
@@ -395,6 +398,30 @@ pub enum BridgeMessage {
         credential: String,
         value: Secret,
     },
+    /// Check a provider profile's token with the endpoint, the way `agent`
+    /// would use it, on `model`. Reply: `credential-checked`.
+    CheckProvider {
+        agent: String,
+        provider: ProviderBinding,
+        model: String,
+    },
+    /// The models the endpoint at `base_url` lists, read with `auth_token`
+    /// the way `agent` speaks to it (a provider profile of `agent` being
+    /// saved). Reply: `provider-models`, or `error` saying why there is no
+    /// list.
+    ListProviderModels {
+        agent: String,
+        base_url: String,
+        auth_token: Secret,
+    },
+    /// The provider profiles of an agent whose catalog entry `supports`
+    /// `providerModels`, all of them: sent after `initialize` and whenever
+    /// one changes. The agent offers their models beside its own. Reply:
+    /// `ack`.
+    SetProviders {
+        agent: String,
+        providers: Vec<ProviderBinding>,
+    },
     /// Reply to `request-permission`.
     PermissionOutcome(SelectOutcome),
     /// Reply to `request-plan-approval`.
@@ -459,11 +486,14 @@ pub enum HostMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         project_wide: bool,
     },
-    /// Reply to `check-credential`; absent `valid` = it could not be checked.
+    /// Reply to `check-credential` and `check-provider`; absent `valid` = it
+    /// could not be checked.
     CredentialChecked {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         valid: Option<bool>,
     },
+    /// Reply to `list-provider-models`: never empty.
+    ProviderModels { models: Vec<ProviderModel> },
     /// A notification: no frame id, no reply.
     SessionEvent {
         session_id: String,

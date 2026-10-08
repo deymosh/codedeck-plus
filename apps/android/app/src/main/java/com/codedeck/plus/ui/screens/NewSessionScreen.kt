@@ -161,9 +161,10 @@ internal fun NewSessionBody(
     val newFolderPath = newFolder.trim()
     val canCreate = agent != null && (folderChoice != NEW_FOLDER || newFolderPath.isNotEmpty())
 
-    // Custom provider profiles only for an agent that can use them.
+    // The agent's own provider profiles, when a session can be bound to one
+    // (an agent whose profiles add models offers them in the model list).
     val providerProfiles: List<UniffiProviderProfileInfo> =
-        if (agent?.supportsProviders == true) machine.providerProfiles else emptyList()
+        if (agent?.supportsProviders == true) machine.providerProfiles.filter { it.agent == agentId } else emptyList()
     val activeProfile = if (providerId != "") providerProfiles.find { it.id == providerId } else null
     // Each agent has its own model list — the Model picker never mixes them.
     val agentModels = machine.models.firstOrNull { it.agent == agentId }
@@ -199,14 +200,12 @@ internal fun NewSessionBody(
         val name = choices.firstOrNull { it.first == id }?.second ?: id
         return "Default $kind ($name)"
     }
-    // The same model can come from more than one provider; then the
-    // default names its provider too.
-    val manyProviders = modelOptions.mapNotNull { it.provider }.distinct().size > 1
+    // The default names its provider too, as every entry in the list does.
     val defaultModelLabel = defaultLabel(
         "model",
         // A profile with no default of its own runs its first model.
         if (activeProfile != null) activeProfile.defaultModel ?: activeProfile.models.firstOrNull()?.id else agentModels?.defaultModel,
-        modelOptions.map { m -> m.id to (m.label ?: m.id) + (m.provider?.takeIf { manyProviders }?.let { " from $it" } ?: "") },
+        modelOptions.map { m -> m.id to (m.label ?: m.id) + (m.provider?.let { " from $it" } ?: "") },
     )
 
     fun create() {

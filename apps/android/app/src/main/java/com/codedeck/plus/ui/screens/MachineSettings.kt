@@ -111,9 +111,9 @@ internal fun shortKey(key: String): String = if (key.length <= 20) key else "${k
 /**
  * One machine's page: who it is and whether it is up, what its new sessions
  * start with, the relays it is reached over, its direct link, the
- * credentials and AI providers kept on it, its agents' plugins (each on a
- * page of its own, opened through [onOpenPlugins]; MCP servers through
- * [onOpenMcp]), and forgetting it. Pure — the
+ * credentials kept on it, its agents' AI providers, plugins and MCP
+ * servers (each agent's on a page of its own, opened through
+ * [onOpenProviders], [onOpenPlugins] and [onOpenMcp]), and forgetting it. Pure — the
  * caller supplies the machine and a dispatcher — so it renders the same in
  * a snapshot.
  */
@@ -126,14 +126,15 @@ fun MachineSettingsContent(
     now: Long,
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
+    onOpenProviders: (agent: String) -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
     onOpenMcp: (agent: String) -> Unit,
 ) {
-    // The model pickers need each agent's list, and the plugin rows their
-    // counts: ask for them on opening.
+    // The model pickers need each agent's list, and the provider and plugin
+    // rows their counts: ask for them on opening.
     LaunchedEffect(machine.pubkeyHex) {
         machine.agents.filter { it.supportsModels }.forEach { dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, it.id)) }
-        if (machine.agents.any { it.supportsProviders }) dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
+        if (providerAgents(machine).isNotEmpty()) dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
         machine.agents.filter { it.supportsPlugins }.forEach {
             dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, it.id, available = false))
         }
@@ -158,9 +159,14 @@ fun MachineSettingsContent(
                 GroupBody { MachineCredentials(machine, credentialsStatus, dispatch) }
             }
         }
-        if (machine.agents.any { it.supportsProviders }) {
-            Group(title = "AI providers") {
-                GroupBody { MachineProviders(machine, providerProfileStatus, dispatch) }
+        val providerAgents = providerAgents(machine)
+        if (providerAgents.isNotEmpty()) {
+            Group(title = "AI providers", footer = "API endpoints an agent can use: a service, or a gateway of your own. Each is kept for one agent.") {
+                providerAgents.forEachIndexed { i, agent ->
+                    if (i > 0) Divider()
+                    val count = machine.providerProfiles.count { it.agent == agent.id }
+                    NavRow(agent.displayName, onClick = { onOpenProviders(agent.id) }, value = if (count == 1) "1 provider" else "$count providers")
+                }
             }
         }
         val pluginAgents = machine.agents.filter { it.supportsPlugins }
@@ -411,6 +417,7 @@ fun MachineSettingsScreen(
     core: CoreHost,
     pubkey: String,
     onBack: () -> Unit,
+    onOpenProviders: (agent: String) -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
     onOpenMcp: (agent: String) -> Unit,
 ) {
@@ -426,6 +433,7 @@ fun MachineSettingsScreen(
         now = System.currentTimeMillis(),
         dispatch = { intent -> scope.launch { core.dispatch(intent) } },
         onBack = onBack,
+        onOpenProviders = onOpenProviders,
         onOpenPlugins = onOpenPlugins,
         onOpenMcp = onOpenMcp,
     )

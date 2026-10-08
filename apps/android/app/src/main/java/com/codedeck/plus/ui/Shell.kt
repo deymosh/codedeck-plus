@@ -28,6 +28,7 @@ import com.codedeck.plus.ui.screens.MachineSettingsScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.McpScreen
 import com.codedeck.plus.ui.screens.PluginsScreen
+import com.codedeck.plus.ui.screens.ProvidersScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
 import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
@@ -50,6 +51,7 @@ private sealed interface Screen {
     /** One agent's plugins on a machine, opened from the machine's page. */
     data class Plugins(val machine: String, val agent: String) : Screen
     data class Mcp(val machine: String, val agent: String) : Screen
+    data class Providers(val machine: String, val agent: String) : Screen
 }
 
 /** [Screen] as a flat string list: what [ScreenSaver] stores, and (joined)
@@ -64,6 +66,7 @@ private fun Screen.parts(): List<String> = when (this) {
     is Screen.Machine -> listOf("machine", machine)
     is Screen.Plugins -> listOf("plugins", machine, agent)
     is Screen.Mcp -> listOf("mcp", machine, agent)
+    is Screen.Providers -> listOf("providers", machine, agent)
 }
 
 private fun Screen.stateKey(): String = parts().joinToString("/")
@@ -72,7 +75,7 @@ private fun Screen.stateKey(): String = parts().joinToString("/")
  *  shallower one. */
 private fun Screen.depth(): Int = when (this) {
     Screen.Sessions -> 0
-    Screen.Logs, is Screen.Plugins, is Screen.Mcp -> 2
+    Screen.Logs, is Screen.Plugins, is Screen.Mcp, is Screen.Providers -> 2
     else -> 1
 }
 
@@ -90,6 +93,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "machine" -> Screen.Machine(saved[1])
             "plugins" -> Screen.Plugins(saved[1], saved[2])
             "mcp" -> Screen.Mcp(saved[1], saved[2])
+            "providers" -> Screen.Providers(saved[1], saved[2])
             else -> Screen.Sessions
         }
     },
@@ -242,6 +246,7 @@ fun Shell(
                         Screen.Logs -> Screen.Settings
                         is Screen.Plugins -> Screen.Machine(current.machine)
                         is Screen.Mcp -> Screen.Machine(current.machine)
+                        is Screen.Providers -> Screen.Machine(current.machine)
                         else -> Screen.Sessions
                     },
                 )
@@ -262,11 +267,13 @@ fun Shell(
                     core,
                     current.machine,
                     onBack = { go(Screen.Sessions) },
+                    onOpenProviders = { agent -> go(Screen.Providers(current.machine, agent)) },
                     onOpenPlugins = { agent -> go(Screen.Plugins(current.machine, agent)) },
                     onOpenMcp = { agent -> go(Screen.Mcp(current.machine, agent)) },
                 )
                 is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
                 is Screen.Mcp -> McpScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
+                is Screen.Providers -> ProvidersScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
                 Screen.Logs -> LogsScreen(onBack = { go(Screen.Settings) })
                 Screen.Pairing -> PairingScreen(core, onClose = { go(Screen.Sessions) })
                 is Screen.NewSession -> NewSessionScreen(

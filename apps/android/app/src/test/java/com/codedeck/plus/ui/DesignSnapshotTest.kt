@@ -28,6 +28,8 @@ import com.codedeck.plus.ui.screens.NewSessionBody
 import com.codedeck.plus.ui.screens.NotificationsPage
 import com.codedeck.plus.ui.screens.PairingBody
 import com.codedeck.plus.ui.screens.PluginsContent
+import com.codedeck.plus.ui.screens.ProviderEditor
+import com.codedeck.plus.ui.screens.ProvidersContent
 import com.codedeck.plus.ui.screens.UploadsPage
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.screens.AccountPage
@@ -175,7 +177,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "settings_machine" to {
         MachineSettingsContent(
             machine = workstation, connectedRelays = setOf("wss://relay.example.org"), credentialsStatus = null,
-            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenPlugins = {}, onOpenMcp = {},
+            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {},
         )
     },
     "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
@@ -197,6 +199,12 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         androidx.compose.foundation.layout.Box(Modifier.background(Tokens.SurfaceRaised)) { SessionMcpList(DesignFixtures.sessionMcp) { _, _ -> } }
     },
     "plugins_opencode" to { PluginsContent(workstation, "opencode", dispatch = {}, onBack = {}) },
+    "providers_opencode" to { ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}) },
+    "providers_claude_empty" to { ProvidersContent(workstation, "claude-code", status = null, dispatch = {}, onBack = {}) },
+    "providers_edit" to {
+        ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}, startEditing = ProviderEditor.Existing("home-gateway"), validBaseUrl = { true })
+    },
+    "providers_add" to { ProvidersContent(workstation, "claude-code", status = null, dispatch = {}, onBack = {}, startEditing = ProviderEditor.New, validBaseUrl = { true }) },
     "settings_appearance" to { AppearancePage(settings, {}, {}) },
     "settings_notifications" to { NotificationsPage(settings, {}, {}) },
     "settings_connection" to { ConnectionPage(settings, serviceForeground = true, dispatch = {}, onBack = {}) },
@@ -281,6 +289,10 @@ class DesignSnapshotTest {
     @Test fun mcp() = paparazzi.page("mcp")
     @Test fun mcp_add() = paparazzi.page("mcp_add")
     @Test fun mcp_import() = paparazzi.page("mcp_import")
+    @Test fun providers_opencode() = paparazzi.page("providers_opencode")
+    @Test fun providers_claude_empty() = paparazzi.page("providers_claude_empty")
+    @Test fun providers_edit() = paparazzi.page("providers_edit")
+    @Test fun providers_add() = paparazzi.page("providers_add")
     @Test fun session_mcp() = paparazzi.page("session_mcp")
     @Test fun settings_appearance() = paparazzi.page("settings_appearance")
     @Test fun settings_notifications() = paparazzi.page("settings_notifications")

@@ -14,6 +14,11 @@
  *    fabricated number would be worse than none. Context usage is reported
  *    only for models whose provider declares a context limit;
  *  - no effort levels; models are per prompt (`provider/model` ids).
+ *
+ * Provider profiles are added to the server this driver starts as
+ * providers of their own (providers.ts): their models join the list beside
+ * OpenCode Zen and the operator's providers, and a session picks one like
+ * any other.
  */
 import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
 import type {
@@ -37,6 +42,7 @@ import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
   ModelEntry,
+  ProviderBinding,
   QuestionSpec,
   SessionOption,
   SlashCommand,
@@ -47,7 +53,17 @@ import type {
 import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
-import { resolveOpenCodePath, startOpenCodeServer, type OpenCodeServerHandle } from './server';
+import { providersFingerprint, serverSetup } from './providers';
+import {
+  resolveOpenCodePath,
+  startOpenCodeServer,
+  type OpenCodeServerHandle,
+  type StartOpenCodeServerOptions,
+} from './server';
+import type { ProviderHttp } from '../../sdk/net';
+import { isValidProviderBaseUrl } from '../../sdk/provider';
+import { checkToken, listModels, OPENAI_API } from '../../sdk/providerApi';
+import type { EndpointModel } from '../../sdk/providerModels';
 
 export const OPENCODE_AGENT_ID = 'opencode';
 
@@ -319,15 +335,17 @@ export class OpenCodeSession implements DriverSession {
 
   /** Resolves once the OpenCode session exists server-side. */
   private readonly ready: Promise<{ client: OpencodeClient; session: Session }>;
+  private readonly catalog: () => Promise<OpenCodeCatalog>;
 
   constructor(
     params: StartSession,
     private readonly ctx: SessionContext,
     clientPromise: Promise<OpencodeClient>,
-    private readonly catalog: () => Promise<OpenCodeCatalog> = async () => ({ models: [] }),
+    options: OpenCodeSessionOptions = {},
   ) {
     this.cwd = params.cwd;
     this.mode = params.mode ?? DEFAULT_MODE;
+    this.catalog = options.catalog ?? (async () => ({ models: [] }));
     this.model = splitModelId(params.model ?? undefined);
     this.ready = this.init(clientPromise, params);
     // init() reports its own failure as `ended`; nothing else awaits this
@@ -927,6 +945,11 @@ export class OpenCodeSession implements DriverSession {
   }
 }
 
+export interface OpenCodeSessionOptions {
+  /** The models a session may choose from, and its default. */
+  catalog?: () => Promise<OpenCodeCatalog>;
+}
+
 export interface OpenCodeDriverOptions {
   /** An OpenCode server to connect to. Wins over `autoStart`. */
   serverUrl?: string;
@@ -941,6 +964,11 @@ export interface OpenCodeDriverOptions {
   lookupEnv?: NodeJS.ProcessEnv;
   port?: number;
   log: (message: string) => void;
+  /** Outbound HTTP to provider profiles' endpoints. */
+  providerHttp?: ProviderHttp;
+  /** Seams for tests: how the server is started and connected to. */
+  startServer?: (options: StartOpenCodeServerOptions) => Promise<OpenCodeServerHandle>;
+  connect?: (config: { baseUrl: string; headers?: Record<string, string> }) => OpencodeClient;
 }
 
 /** Why OpenCode cannot run, when it is enabled but unusable. */
@@ -951,19 +979,32 @@ export class OpenCodeDriver implements Driver {
   private clientPromise: Promise<OpencodeClient> | null = null;
   private server: OpenCodeServerHandle | null = null;
   private unavailable: string | undefined;
+  /** The `opencode` the server runs, once found or installed. */
+  private bin: string | null = null;
   /** Auto-start with no `opencode` on the machine: it is installed, then
    *  started, in the background; a failed attempt is retried by the next
    *  session. */
   private installs = false;
   private stopped = false;
+  /** The provider profiles the server should have, and those the running
+   *  one was started with. */
+  private providers: ProviderBinding[] = [];
+  private served = providersFingerprint([]);
+  /** Provider changes are applied one at a time, in order. */
+  private applying: Promise<void> = Promise.resolve();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
   readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
 
-  /** The server's client, starting an install that failed before over. */
+  /** The driver starts the server, so it decides the server's config. */
+  private get manages(): boolean {
+    return !this.options.serverUrl && Boolean(this.options.autoStart);
+  }
+
+  /** The server's client, starting it again when the last attempt failed. */
   private client(): Promise<OpencodeClient> {
-    if (!this.clientPromise && this.installs && !this.stopped) this.launchInstalled();
+    if (!this.clientPromise && !this.stopped && (this.bin || this.installs)) this.launch();
     return this.clientPromise ?? Promise.reject(new Error(this.unavailable ?? NOT_CONFIGURED));
   }
 
@@ -973,22 +1014,20 @@ export class OpenCodeDriver implements Driver {
     const driver = new OpenCodeDriver(options);
     if (options.serverUrl) {
       if (options.autoStart) options.log('[opencode] both a server URL and auto-start are configured — using the server URL');
-      driver.connect(options.serverUrl);
+      driver.clientPromise = Promise.resolve(driver.connect({ baseUrl: options.serverUrl }));
     } else if (options.autoStart) {
-      const bin = resolveOpenCodePath(options.binaryPath, options.lookupEnv);
-      if (!bin && options.installOpenCode) {
+      driver.bin = resolveOpenCodePath(options.binaryPath, options.lookupEnv);
+      if (!driver.bin && options.installOpenCode) {
         driver.installs = true;
-        driver.launchInstalled();
-      } else if (!bin) {
+        driver.launch();
+      } else if (!driver.bin) {
         driver.unavailable =
           'OpenCode auto-start is enabled but the `opencode` executable was not found (set CODEDECK_OPENCODE_PATH).';
       } else {
         try {
-          driver.server = await startOpenCodeServer({ command: bin, ...(options.port !== undefined ? { port: options.port } : {}) });
-          options.log(`[opencode] started ${driver.server.url} (pid ${driver.server.pid ?? '?'})`);
-          driver.connect(driver.server.url);
+          driver.clientPromise = Promise.resolve(await driver.startServer(driver.bin));
         } catch (err) {
-          driver.unavailable = `The OpenCode server failed to start: ${err instanceof Error ? err.message : String(err)}`;
+          driver.unavailable = err instanceof Error ? err.message : String(err);
         }
       }
     } else {
@@ -1005,35 +1044,83 @@ export class OpenCodeDriver implements Driver {
     return driver;
   }
 
-  private connect(baseUrl: string): void {
-    this.clientPromise = Promise.resolve(createOpencodeClient({ baseUrl }));
+  private connect(config: { baseUrl: string; headers?: Record<string, string> }): OpencodeClient {
+    return (this.options.connect ?? createOpencodeClient)(config);
   }
 
-  /** Install `opencode`, start its server and connect — sessions started
-   *  meanwhile wait on the same promise. */
-  private launchInstalled(): void {
-    const { installOpenCode, port, log } = this.options;
+  /** Start `opencode serve` with the provider profiles it should have, and
+   *  connect to it. */
+  private async startServer(bin: string): Promise<OpencodeClient> {
+    const profiles = this.providers;
+    const setup = serverSetup(profiles, process.env);
+    const start = this.options.startServer ?? startOpenCodeServer;
+    let server: OpenCodeServerHandle;
+    try {
+      server = await start({
+        command: bin,
+        env: { ...process.env, ...setup.env },
+        ...(this.options.port !== undefined ? { port: this.options.port } : {}),
+      });
+    } catch (err) {
+      throw new Error(`The OpenCode server failed to start: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (this.stopped) {
+      await server.close();
+      throw new Error('the agent host is shutting down');
+    }
+    this.server = server;
+    this.served = providersFingerprint(profiles);
+    const added = profiles.length > 0 ? `, with ${profiles.length} provider profile(s)` : '';
+    this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
+    return this.connect({ baseUrl: server.url, headers: setup.headers });
+  }
+
+  /** Find (or install) `opencode`, start its server and connect — sessions
+   *  started meanwhile wait on the same promise. */
+  private launch(): void {
     const attempt = (async (): Promise<OpencodeClient> => {
-      const bin = await installOpenCode!();
-      let server: OpenCodeServerHandle;
-      try {
-        server = await startOpenCodeServer({ command: bin, ...(port !== undefined ? { port } : {}) });
-      } catch (err) {
-        throw new Error(`The OpenCode server failed to start: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (this.stopped) {
-        await server.close();
-        throw new Error('the agent host is shutting down');
-      }
-      this.server = server;
-      log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})`);
-      return createOpencodeClient({ baseUrl: server.url });
+      this.bin ??= await this.options.installOpenCode!();
+      return this.startServer(this.bin);
     })();
     this.clientPromise = attempt;
-    attempt.catch((err: unknown) => {
-      log(`[opencode] unavailable: ${err instanceof Error ? err.message : String(err)}`);
-      if (this.clientPromise === attempt) this.clientPromise = null;
-    });
+    attempt.then(
+      () => {
+        this.unavailable = undefined;
+      },
+      (err: unknown) => {
+        this.options.log(`[opencode] unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        if (this.clientPromise === attempt) this.clientPromise = null;
+      },
+    );
+  }
+
+  /** The provider profiles to add to OpenCode's own providers. The server
+   *  reads its config only when it starts, so a changed list restarts it:
+   *  sessions on the old one end with an error and the bridge resumes them
+   *  on the new one. */
+  async setProviders(providers: ProviderBinding[]): Promise<void> {
+    if (!this.manages) {
+      throw new Error('OpenCode runs on a server this bridge does not start (CODEDECK_OPENCODE_SERVER_URL), so it cannot add provider profiles to it');
+    }
+    // A profile the bridge would not let a session use is not added either.
+    this.providers = providers.filter((p) => isValidProviderBaseUrl(p.baseUrl) && p.authToken !== '' && p.models.length > 0);
+    const apply = this.applying.then(() => this.applyProviders());
+    this.applying = apply.catch(() => {});
+    await apply;
+  }
+
+  private async applyProviders(): Promise<void> {
+    // A server still being installed or started is waited for: it may have
+    // read an older list.
+    await this.clientPromise?.catch(() => {});
+    if (this.stopped || !this.server || !this.bin || providersFingerprint(this.providers) === this.served) return;
+    this.options.log('[opencode] restarting the server: its provider profiles changed');
+    const old = this.server;
+    this.server = null;
+    this.clientPromise = null;
+    await old.close();
+    this.launch();
+    await this.clientPromise;
   }
 
   info(): AgentInfo {
@@ -1043,16 +1130,28 @@ export class OpenCodeDriver implements Driver {
       modes: OPENCODE_MODES,
       efforts: [],
       defaultMode: DEFAULT_MODE,
-      // No subscription usage; sessions always use the providers configured
-      // on the OpenCode server itself.
-      supports: { models: true, usage: false, providers: false, gsd: true, interrupt: true, commands: true, plugins: true, mcp: true, tasks: true },
+      // No subscription usage. Provider profiles add models to the server
+      // this driver starts; sessions are never bound to one.
+      supports: {
+        models: true,
+        usage: false,
+        providers: false,
+        providerModels: this.manages,
+        gsd: true,
+        interrupt: true,
+        commands: true,
+        plugins: true,
+        mcp: true,
+        tasks: true,
+      },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };
   }
 
   startSession(params: StartSession, ctx: SessionContext): DriverSession {
-    if (!this.clientPromise && this.installs && !this.stopped) this.launchInstalled();
+    if (params.provider) throw new Error('OpenCode offers provider profiles as models; a session is not bound to one');
+    if (!this.clientPromise && this.installs && !this.stopped) this.launch();
     if (!this.clientPromise) throw new Error(this.unavailable ?? NOT_CONFIGURED);
     if (params.mode !== undefined && !OPENCODE_MODES.some((m) => m.id === params.mode)) {
       throw new Error(`OpenCode has no mode '${params.mode}'`);
@@ -1060,7 +1159,18 @@ export class OpenCodeDriver implements Driver {
     if (params.model && !splitModelId(params.model)) {
       throw new Error(`'${params.model}' is not an OpenCode provider/model id — choose one from its model list.`);
     }
-    return new OpenCodeSession(params, ctx, this.clientPromise, () => this.listModels());
+    return new OpenCodeSession(params, ctx, this.clientPromise, { catalog: () => this.listModels() });
+  }
+
+  /** A profile is reached as an OpenAI-compatible provider: a session on
+   *  it posts chat completions. */
+  async checkProvider(provider: ProviderBinding, model: string): Promise<boolean | undefined> {
+    return this.options.providerHttp ? checkToken(OPENAI_API, provider, model, this.options.providerHttp.post) : undefined;
+  }
+
+  async listProviderModels(baseUrl: string, token: string): Promise<EndpointModel[]> {
+    if (!this.options.providerHttp) throw new Error('this host reads no provider endpoints');
+    return listModels(OPENAI_API, baseUrl, token, this.options.providerHttp.get);
   }
 
   /** Best-effort model list from OpenCode's configured providers, and the

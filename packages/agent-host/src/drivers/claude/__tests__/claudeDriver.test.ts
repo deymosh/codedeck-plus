@@ -471,12 +471,12 @@ describe('Claude options and setup', () => {
 
   it('a provider binding that must not be used refuses the session before anything starts', () => {
     const facade = new ScriptedFacade();
-    expect(() => start({ provider: { id: 'p', baseUrl: 'http://remote.example', authToken: 't', models: [] } }, {}, facade)).toThrow(/insecure base URL/);
+    expect(() => start({ provider: { id: 'p', label: 'p', baseUrl: 'http://remote.example', authToken: 't', models: [] } }, {}, facade)).toThrow(/insecure base URL/);
     expect(facade.sessions).toHaveLength(0);
   });
 
   it('a provider-bound session never falls back to an Anthropic model', () => {
-    const { facade } = start({ provider: { id: 'kimi', baseUrl: 'https://api.moonshot.ai/anthropic', authToken: 't', models: [{ id: 'kimi-k3' }] } });
+    const { facade } = start({ provider: { id: 'kimi', label: 'kimi', baseUrl: 'https://api.moonshot.ai/anthropic', authToken: 't', models: [{ id: 'kimi-k3' }] } });
     expect(facade.last.opts).toMatchObject({ providerId: 'kimi', fallbackModel: null });
     expect(facade.last.opts.env?.ANTHROPIC_AUTH_TOKEN).toBe('t');
   });
@@ -686,7 +686,7 @@ describe('Claude model discovery', () => {
     expect(chosen.facade.last.opts.model).toBe('claude-sonnet-5');
     expect(chosen.ctx.events.some((e) => e.type === 'info')).toBe(false);
 
-    const bound = start({ provider: { id: 'p', baseUrl: 'https://x', authToken: 't', models: [] } });
+    const bound = start({ provider: { id: 'p', label: 'p', baseUrl: 'https://x', authToken: 't', models: [] } });
     await bound.ctx.waitFor((e) => e.type === 'ready');
     expect(bound.facade.last.opts.model).toBeUndefined();
   });
@@ -717,7 +717,7 @@ describe('Claude model checks', () => {
   });
 
   it('holds a provider-bound session to its profile', () => {
-    const provider = { id: 'kimi', baseUrl: 'https://x', authToken: 't', models: [{ id: 'kimi-k3' }] };
+    const provider = { id: 'kimi', label: 'kimi', baseUrl: 'https://x', authToken: 't', models: [{ id: 'kimi-k3' }] };
     expect(unsupportedModelReason('kimi-k3', [], provider)).toBeUndefined();
     expect(unsupportedModelReason('claude-opus-5-5', known, provider)).toMatch(/profile 'kimi' does not offer/);
   });

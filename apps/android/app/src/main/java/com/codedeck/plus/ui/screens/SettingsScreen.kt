@@ -89,6 +89,8 @@ internal sealed interface SettingsPage {
     data class Plugins(val pubkey: String, val agent: String) : SettingsPage
     /** One agent's MCP servers on a machine, opened from the machine's page. */
     data class Mcp(val pubkey: String, val agent: String) : SettingsPage
+    /** One agent's AI providers on a machine, opened from the machine's page. */
+    data class Providers(val pubkey: String, val agent: String) : SettingsPage
     data object Appearance : SettingsPage
     data object Notifications : SettingsPage
     data object Connection : SettingsPage
@@ -102,6 +104,7 @@ internal sealed interface SettingsPage {
         is Machine -> "machine:$pubkey"
         is Plugins -> "plugins:$pubkey:$agent"
         is Mcp -> "mcp:$pubkey:$agent"
+        is Providers -> "providers:$pubkey:$agent"
         Appearance -> "appearance"
         Notifications -> "notifications"
         Connection -> "connection"
@@ -115,7 +118,7 @@ internal sealed interface SettingsPage {
     val depth: Int
         get() = when (this) {
             Hub -> 0
-            is Plugins, is Mcp -> 2
+            is Plugins, is Mcp, is Providers -> 2
             else -> 1
         }
 
@@ -124,6 +127,7 @@ internal sealed interface SettingsPage {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
             saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("mcp:") -> saved.split(':').let { Mcp(it[1], it.drop(2).joinToString(":")) }
+            saved.startsWith("providers:") -> saved.split(':').let { Providers(it[1], it.drop(2).joinToString(":")) }
             saved == "appearance" -> Appearance
             saved == "notifications" -> Notifications
             saved == "connection" -> Connection
@@ -227,6 +231,7 @@ fun SettingsScreen(
                         now = System.currentTimeMillis(),
                         dispatch = ::dispatch,
                         onBack = toHub,
+                        onOpenProviders = { agent -> open(SettingsPage.Providers(machine.pubkeyHex, agent)) },
                         onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
                         onOpenMcp = { agent -> open(SettingsPage.Mcp(machine.pubkeyHex, agent)) },
                     )
@@ -234,6 +239,7 @@ fun SettingsScreen(
             }
             is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
             is SettingsPage.Mcp -> McpScreen(core, page.pubkey, page.agent, onBack = back)
+            is SettingsPage.Providers -> ProvidersScreen(core, page.pubkey, page.agent, onBack = back)
             SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
             SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)
             SettingsPage.Connection -> {

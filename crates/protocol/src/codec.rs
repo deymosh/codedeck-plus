@@ -143,10 +143,12 @@ mod tests {
             version: VersionFields::default(),
             profile_id: "p".into(),
             profile: Some(ProviderProfileWrite {
+                agent: "claude-code".into(),
                 label: "L".into(),
                 base_url: "http://api.example.com".into(),
                 auth_token: Tristate::Set("tok".into()),
                 models: vec![],
+                models_from_provider: false,
                 default_model: None,
             }),
         });
@@ -159,10 +161,12 @@ mod tests {
             version: VersionFields::default(),
             profile_id: "p".into(),
             profile: Some(ProviderProfileWrite {
+                agent: "claude-code".into(),
                 label: "L".into(),
                 base_url: "http://localhost:11434/v1".into(),
                 auth_token: Tristate::Keep,
                 models: vec![],
+                models_from_provider: false,
                 default_model: None,
             }),
         });

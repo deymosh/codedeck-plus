@@ -6,7 +6,7 @@
  */
 import { installBinary } from '../../install/agentInstall';
 import type { DriverEnv, DriverModule } from '../../sdk/module';
-import { httpPost } from '../../sdk/net';
+import { httpPost, providerHttp } from '../../sdk/net';
 import { ClaudeDriver } from './driver';
 import { RealSdkFacade, resolveClaudeExecutable } from './facade';
 import { bundledClaudeExecutable, claudeBinary } from './install';
@@ -36,6 +36,7 @@ export const claudeModule: DriverModule = {
       // so the agent is listed right away and the first session waits for it.
       ...(!test && !claudePath ? { installClaude: () => install(ctx) } : {}),
       httpPost,
+      providerHttp,
       discoverModels: !test,
       managePlugins: !test,
       manageMcp: !test,

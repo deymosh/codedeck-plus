@@ -492,6 +492,7 @@ mod tests {
                 "type": "set-provider-profile",
                 "profileId": "p",
                 "profile": {
+                    "agent": "claude-code",
                     "label": "L",
                     "baseUrl": "http://api.example.com",
                     "authToken": "tok",

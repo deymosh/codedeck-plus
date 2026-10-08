@@ -16,6 +16,7 @@ const KIMI_TOKEN = 'sk-kimi-TESTSECRET-000';
 function kimi(over: Partial<ProviderBinding> = {}): ProviderBinding {
   return {
     id: 'kimi',
+    label: 'Kimi',
     baseUrl: 'https://api.moonshot.ai/anthropic',
     authToken: KIMI_TOKEN,
     models: [{ id: 'kimi-k3', label: 'Kimi K3' }, { id: 'kimi-k3-turbo' }],

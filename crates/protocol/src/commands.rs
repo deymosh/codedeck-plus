@@ -363,13 +363,23 @@ pub struct SessionKeyMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfileWrite {
+    /// The agent the profile is for (one whose catalog entry `supports`
+    /// `providers` or `providerModels`).
+    pub agent: String,
     pub label: String,
     /// CDX-071: https, or http ONLY on loopback — validated on egress
     /// ([`super::codec::encode_phone_to_bridge`]).
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Tristate::is_keep")]
     pub auth_token: Tristate<String>,
+    /// Ignored when `models_from_provider` is set.
     pub models: Vec<ProviderModel>,
+    /// Ask the provider for its models instead: the bridge reads its
+    /// `/v1/models` with the profile's token on every save, and stores
+    /// what it lists (or refuses the save when it lists nothing).
+    #[serde(default, skip_serializing_if = "super::common::is_false")]
+    pub models_from_provider: bool,
+    /// With `models_from_provider`, kept only when the provider lists it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
 }
@@ -521,7 +531,7 @@ mod tests {
         let m = rt(&json!({"type":"set-provider-profile","profileId":"p","profile":null}));
         assert!(matches!(m, PhoneToBridge::SetProviderProfile(SetProviderProfileMsg { profile: None, .. })));
         let m = rt(&json!({"type":"set-provider-profile","profileId":"p","profile":{
-            "label":"L","baseUrl":"https://api.x","authToken":"tok","models":[{"id":"m1"}]
+            "agent":"claude-code","label":"L","baseUrl":"https://api.x","authToken":"tok","models":[{"id":"m1"}]
         }}));
         match m {
             PhoneToBridge::SetProviderProfile(s) => {

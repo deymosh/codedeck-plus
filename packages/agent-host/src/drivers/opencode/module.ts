@@ -7,6 +7,7 @@
  */
 import { installBinary } from '../../install/agentInstall';
 import type { DriverEnv, DriverModule } from '../../sdk/module';
+import { providerHttp } from '../../sdk/net';
 import { OpenCodeDriver } from './driver';
 import { openCodeBinary } from './install';
 import { resolveOpenCodePath } from './server';
@@ -29,6 +30,7 @@ export const openCodeModule: DriverModule = {
       lookupEnv: ctx.lookupEnv,
       ...(port !== undefined && Number.isInteger(port) ? { port } : {}),
       log: ctx.log,
+      providerHttp,
     });
   },
   runtime: {

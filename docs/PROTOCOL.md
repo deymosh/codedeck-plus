@@ -61,7 +61,7 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, gsd, interrupt, commands, plugins, mcp, tasks}` and `credentials[]` status. Phones build every
+providers, providerModels, gsd, interrupt, commands, plugins, mcp, tasks}` and `credentials[]` status. Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -210,14 +210,40 @@ this message, inbound; status only ever goes out.**
 
 ### Custom provider profiles
 
-Phone-managed, bridge-stored profiles that point a session at an
-Anthropic-compatible backend. Only agents with `supports.providers` accept one.
+Phone-managed, bridge-stored profiles of another endpoint: a provider's own
+API, or a gateway in front of several. Each is for one `agent` — the
+endpoint must speak the API that agent uses, and one that speaks one
+agent's need not speak another's. What a profile does is the agent's
+catalog entry:
+
+- `supports.providers`: a session can be bound to one of the agent's
+  profiles (`create-session.providerId`), which then serves the whole
+  session;
+- `supports.providerModels`: the agent's profiles add their models to its
+  own model list, beside every provider it already has; a session picks one
+  as any other model, and is never bound.
+
+Messages:
 
 - `set-provider-profile {profileId, profile | null}`: upsert or delete (`null`
-  deletes). `profile.authToken` is tri-state: absent = keep, `null` = clear,
-  string = set. The base URL must be https (http only on loopback) — the
-  bridge never stores an insecure profile, and refuses to start a session on
-  one written before that rule.
+  deletes). `profile.agent` names an agent with either flag. `profile.authToken`
+  is tri-state: absent = keep, `null` = clear, string = set. The base URL must
+  be https, or http to this machine (`localhost`, `127.0.0.1`, `[::1]`) or to
+  an IP address of the user's own network (10/8, 172.16/12, 192.168/16,
+  100.64/10, fc00::/7 — addresses, never names) — the bridge never stores
+  another, and refuses to start a session on one written before that rule.
+- `profile.modelsFromProvider: true`: the phone lists no models; the agent
+  host reads them from the endpoint's `/v1/models` (`/models` when the base
+  URL already ends in `/v1`), signing in as the profile's agent does, with
+  the profile's token, on every save, and the bridge stores at most 200. No
+  redirect is followed, and the save is refused when the list cannot be read
+  or is empty. A `defaultModel` the list does not name is dropped. The stored
+  profile reports the flag back, so a later save (with the token kept) reads
+  the list again.
+- The token is checked by the profile's agent, with the smallest request on
+  the API it speaks (`tokenValid` in the ack).
+- A profile stored before profiles named their agent has an empty `agent`:
+  no agent uses it until a save names one.
 - `provider-profiles-request` → `provider-profiles {profiles[]}` to the asking
   phone; after every change the bridge broadcasts the new list to all phones.
 - `provider-profile-ack {profileId, success, tokenValid?, error?}`;
@@ -488,6 +514,9 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `session-mcp {sessionId}` | `session-mcp {servers, toggles, projectWide}` |
 | `session-mcp-toggle {sessionId, name, enabled}` | `session-mcp {…}` once done, or `error` |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
+| `check-provider {agent, provider, model}` | `credential-checked {valid?}`: a provider profile's token, checked on the API `agent` speaks |
+| `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty), read the way `agent` signs in; or `error` with the reason there is none |
+| `set-providers {agent, providers}` | `ack` once an agent with `supports.providerModels` offers these profiles' models (all of its profiles, sent after `initialize` and on every change), or `error` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds
 that), plus `credentials[].envVar` and `unavailableReason`.
@@ -534,6 +563,11 @@ restart.
    `requestPlanApproval()` when the user must decide.
 2. Translate the agent's own events into typed `OutputEntry` values in the
    driver — nothing agent-specific may reach the bridge.
+   For provider profiles, say in `supports` how the agent uses one
+   (`providers`: bound to a session through `StartSession.provider`;
+   `providerModels`: added to its models through `setProviders()`), and
+   implement `listProviderModels()` and `checkProvider()` with the API the
+   agent speaks to an endpoint (`src/sdk/providerApi.ts`).
 3. Export a `DriverModule` (`src/sdk/module.ts`) from the folder's
    `module.ts`: the agent's id, how its driver is built from the
    environment, and its runtime (what the machine already has, and how to
