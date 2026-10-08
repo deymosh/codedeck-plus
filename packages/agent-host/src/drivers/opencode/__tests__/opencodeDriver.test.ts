@@ -45,6 +45,27 @@ function start(client: FakeClient, overrides: Partial<StartSession> = {}, handle
   return ctx;
 }
 
+describe('OpenCode conversation delete', () => {
+  const deleting = (result: unknown) => {
+    const client = clientWith([]) as FakeClient & { session: { delete: ReturnType<typeof vi.fn> } };
+    client.session.delete = vi.fn().mockResolvedValue(result);
+    return { client, driver: OpenCodeDriver.withClient(client) };
+  };
+
+  it('deletes the session on the server, in its directory', async () => {
+    const { client, driver } = deleting({ data: true, error: undefined, response: { status: 200 } });
+    await driver.deleteConversation('ses_1', '/w');
+    expect(client.session.delete).toHaveBeenCalledWith({ sessionID: 'ses_1', directory: '/w' });
+  });
+
+  it('a session the server no longer knows is already deleted; another error is not', async () => {
+    const gone = deleting({ data: undefined, error: { name: 'NotFoundError' }, response: { status: 404 } });
+    await expect(gone.driver.deleteConversation('ses_1', '/w')).resolves.toBeUndefined();
+    const failed = deleting({ data: undefined, error: { name: 'BadRequest' }, response: { status: 400 } });
+    await expect(failed.driver.deleteConversation('ses_1', '/w')).rejects.toThrow(/could not delete session ses_1/);
+  });
+});
+
 describe('OpenCode session lifecycle', () => {
   it('reports its conversation id, becomes ready, and ends normally when the stream closes', async () => {
     const ctx = start(clientWith([]));

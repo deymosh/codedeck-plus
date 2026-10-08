@@ -13,7 +13,7 @@
  * adapter, the driver) import them from HERE, type-only, never from the SDK
  * package directly.
  */
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession, query } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -227,6 +227,9 @@ export interface SdkFacade {
    *  With `discovery` set and no live session to ask, a throwaway session is
    *  spawned to answer (never given a prompt) and closed again. */
   supportedModels(discovery?: ModelDiscoveryOptions): Promise<SdkModelDescriptor[]>;
+  /** Delete a conversation's transcript and its subagent transcripts.
+   *  Resolves also when it has none (it never had a turn). */
+  deleteSession(sessionId: string, cwd: string): Promise<void>;
 }
 
 // --- Model-list aggregation (CDX-022) ---
@@ -1064,5 +1067,17 @@ export class RealSdkFacade implements SdkFacade {
     // operator's own env, which flagged every Anthropic session on a machine
     // configured for an LLM gateway.)
     return firstSupportedModels([...this.handles].filter((h) => !h.customProvider));
+  }
+
+  async deleteSession(sessionId: string, cwd: string): Promise<void> {
+    try {
+      await deleteSession(sessionId, { dir: cwd });
+    } catch (err) {
+      // The SDK also throws when it finds no transcript, which a conversation
+      // that never had a turn does not have: only a transcript still there
+      // is a failure.
+      const left = claudeProjectDirs(cwd).some((dir) => fs.existsSync(path.join(dir, `${sessionId}.jsonl`)));
+      if (left) throw err;
+    }
   }
 }

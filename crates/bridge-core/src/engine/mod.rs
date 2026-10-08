@@ -45,7 +45,7 @@ use crate::settings::{load_or_default, ProviderProfile, StoredCredentials, Store
 use crate::sync::{SyncConfig, SyncServer, SyncTimer};
 use crate::time::iso;
 
-use host::HostCall;
+use host::{ConversationDelete, HostCall};
 
 pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 60_000;
 /// How often a session's `committed` flag is checked against git (catches
@@ -111,6 +111,10 @@ struct HostLink {
     initialized: bool,
     next_id: u64,
     calls: BTreeMap<String, HostCall>,
+    /// Conversations of deleted sessions the host has yet to delete: asked
+    /// while it was down, or in flight when it went down. Sent once it is
+    /// initialized again (deleting twice is harmless).
+    deletes: Vec<ConversationDelete>,
 }
 
 struct PairingWindow {

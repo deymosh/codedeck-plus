@@ -132,6 +132,11 @@ class ScriptedFacade implements SdkFacade {
     return [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }];
   }
 
+  readonly deleted: Array<[string, string]> = [];
+  async deleteSession(sessionId: string, cwd: string): Promise<void> {
+    this.deleted.push([sessionId, cwd]);
+  }
+
   get last(): { opts: SdkSessionOptions; handle: ScriptedHandle } {
     return this.sessions[this.sessions.length - 1]!;
   }
@@ -177,6 +182,27 @@ describe('Claude session lifecycle', () => {
     const { ctx, handle } = start();
     handle.push(init({ permissionMode: 'bypassPermissions' }));
     await ctx.waitFor((e) => e.type === 'info' && e.mode === 'default');
+  });
+
+  it('ending waits for the CLI to close its stream, so nothing writes after a delete', async () => {
+    const { ctx, session, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    let closed = false;
+    handle.end = async () => {
+      handle.ended = true;
+      setTimeout(() => {
+        closed = true;
+        handle.close();
+      }, 20);
+    };
+    await session.end();
+    expect(closed).toBe(true);
+  });
+
+  it('deleting a conversation deletes its transcript in its directory', async () => {
+    const facade = new ScriptedFacade();
+    await new ClaudeDriver({ facade }).deleteConversation('native-1', '/w');
+    expect(facade.deleted).toEqual([['native-1', '/w']]);
   });
 
   it('a clean stream end ends the session normally; before confirmation it is a failure', async () => {

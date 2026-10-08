@@ -173,6 +173,9 @@ export class ClaudeSession implements DriverSession {
   private queuedInput: string[] = [];
   private ready = false;
   private ended = false;
+  /** The loop reading the SDK's messages; it finishes once the CLI has
+   *  closed its stream, that is, has exited. */
+  private consuming: Promise<void> | null = null;
   /** Load the plugins as they are on disk now. */
   async reloadPlugins(): Promise<void> {
     if (!this.ended) await this.handle?.reloadPlugins();
@@ -273,7 +276,7 @@ export class ClaudeSession implements DriverSession {
         },
       );
     }
-    this.consume(handle).catch((err) => this.finish(`SDK stream consumer failed: ${err}`));
+    this.consuming = this.consume(handle).catch((err) => this.finish(`SDK stream consumer failed: ${err}`));
   }
 
   private markReady(): void {
@@ -695,8 +698,21 @@ export class ClaudeSession implements DriverSession {
   async end(): Promise<void> {
     this.ended = true;
     await this.handle?.end();
+    // Aborting does not wait for the CLI to exit, and until it has it may
+    // still write to the conversation's transcript — which would bring a
+    // deleted conversation back. Bounded: a wedged CLI must not hold up the
+    // reply.
+    if (this.consuming) {
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<void>((resolve) => (timer = setTimeout(resolve, CLI_EXIT_WAIT_MS)));
+      await Promise.race([this.consuming, timeout]);
+      clearTimeout(timer);
+    }
   }
 }
+
+/** How long ending a session waits for its CLI to exit. */
+const CLI_EXIT_WAIT_MS = 5_000;
 
 export class ClaudeDriver implements Driver {
   /** The on-demand install in progress or done; dropped when it fails, so
@@ -828,6 +844,10 @@ export class ClaudeDriver implements Driver {
     } catch {
       return undefined;
     }
+  }
+
+  deleteConversation(conversationId: string, cwd: string): Promise<void> {
+    return this.options.facade.deleteSession(conversationId, cwd);
   }
 }
 
