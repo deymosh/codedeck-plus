@@ -243,7 +243,7 @@ internal object DesignFixtures {
     val settings = UniffiSettingsView(
         uiScale = 1.0, stayConnected = true, torProxyEnabled = false, blossomServer = "", maxUploadBytes = 5_250_000uL,
         notificationsEnabled = true, showUsageBadge = true, showCommitBadge = true,
-        backup = UniffiBackupView(relay = null, savedAt = null, status = UniffiBackupStatus.Idle),
+        backup = UniffiBackupView(relay = null, savedAt = null, machines = null, status = UniffiBackupStatus.Idle),
     )
 
     val quickPrompts = listOf(

@@ -2591,25 +2591,36 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
             assert_eq!(saved.relay.as_deref(), Some(first.url.as_str()));
             assert!(saved.saved_at.is_some());
 
-            // A fresh phone with the same identity finds it and imports it.
+            // Another device with the same identity turns backup on: the
+            // machine is merged in at once, with no question asked.
             let mut second = mock_relay().await;
             let new_keys = MemoryKeyStore::default();
             let ports = CorePorts { session_keys: Some(Rc::new(new_keys.clone())), ..CorePorts::default() };
             let new = core_for_ports(&second, &phone, Rc::new(Spy::default()), ports).await;
             new.start();
-            assert_ne!(new_keys.ring().current.keypair.secret_hex(), old_secret);
             new.dispatch(Intent::SetBackupRelay(second.url.clone())).await;
             answer_backup_req(&mut second, &phone.pubkey_hex, &[event]).await;
             settle().await;
-            assert!(matches!(settings_backup(&new).await.status, crate::backup::BackupStatus::Found { machines: 1, .. }));
-            assert!(new.machines_view().await.machines.is_empty(), "nothing is imported before the user says so");
-
-            new.dispatch(Intent::ImportBackup).await;
             let machines = new.machines_view().await.machines;
             let restored = &machines[&machine.pubkey_hex];
             assert_eq!((restored.label.as_deref(), restored.relays.clone()), (Some("Work lab"), vec![first.url.clone()]));
-            // It granted nothing of its own yet, so it takes the old phone's session keys.
-            assert_eq!(new_keys.ring().current.keypair.secret_hex(), old_secret);
+            assert!(matches!(settings_backup(&new).await.status, crate::backup::BackupStatus::Idle));
+            // Its session keys stay its own: it is a client of its own.
+            assert_ne!(new_keys.ring().current.keypair.secret_hex(), old_secret);
+
+            // Its own edit goes into what it saves, the merged machine with it.
+            new.dispatch(Intent::SetDirectEndpoints {
+                machine: machine.pubkey_hex.clone(),
+                endpoints: vec!["wss://laptop.lan:7447".into()],
+            })
+            .await;
+            new.dispatch(Intent::BackupNow).await;
+            let saved = next_frame_of(&mut second, "EVENT").await[1].clone();
+            let plain = protocol::crypto::decrypt_from(&phone.secret_key, &phone.pubkey_hex, saved["content"].as_str().unwrap()).unwrap();
+            let doc = client_core::stores::backup::decode_backup(&plain).unwrap();
+            assert_eq!(doc.machines.len(), 1);
+            assert_eq!(doc.machines[0].direct_endpoints, ["wss://laptop.lan:7447"]);
+            assert!(!plain.contains(&old_secret) && !plain.contains("secretHex"), "no session keys in the backup");
         })
         .await;
 }

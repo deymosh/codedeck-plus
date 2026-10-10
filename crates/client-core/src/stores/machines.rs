@@ -737,6 +737,17 @@ impl MachinesState {
         })
     }
 
+    /// The name the user gave `machine`; `None` or blank clears it.
+    pub fn set_label(&mut self, machine_pubkey: &str, label: Option<String>) -> bool {
+        let label = label.map(|l| l.trim().to_string()).filter(|l| !l.is_empty());
+        self.with_machine(machine_pubkey, |m| m.label = label)
+    }
+
+    /// Replace every agent's new-session defaults for `machine` at once.
+    pub fn replace_agent_defaults(&mut self, machine_pubkey: &str, defaults: BTreeMap<String, AgentDefaults>) -> bool {
+        self.with_machine(machine_pubkey, |m| m.agent_defaults = defaults)
+    }
+
     pub fn remove_machine(&mut self, pubkey_hex: &str) -> bool {
         self.machines.remove(pubkey_hex).is_some()
     }

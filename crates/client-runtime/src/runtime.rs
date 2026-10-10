@@ -438,6 +438,10 @@ impl Core {
             backup_timer: None,
             backup_busy: false,
             backup_created_at: 0,
+            backup_sub: None,
+            backup_heard: false,
+            backup_seen_at: 0,
+            backup_own: None,
             machines_dirty: false,
             stored_seen_dirty: None,
             flush_timer: None,
@@ -721,9 +725,13 @@ enum Msg {
     BackupDue,
     /// A look on the backup relay finished.
     BackupFetched(backup::Fetched),
+    /// A version of the backup came in on its subscription.
+    BackupEvent(NostrEvent),
+    /// The backup relay sent all it has.
+    BackupEose,
     /// A backup save finished: when it was made and what it held, or why
     /// it failed.
-    BackupSaved(Result<(u64, String), String>),
+    BackupSaved(Result<backup::Saved, String>),
     /// The backup's deletion was sent (or given up on).
     BackupDeleted,
     /// A machine's direct link came up on an endpoint, or went down.
@@ -931,6 +939,17 @@ struct Loop {
     backup_busy: bool,
     /// The `created_at` (s) of the last backup event made.
     backup_created_at: u64,
+    /// The subscription following the backup on its relay, while backup is
+    /// on and the core runs.
+    backup_sub: Option<Box<dyn nostr_transport::TransportSub>>,
+    /// Whether the backup relay has said what it holds since subscribing:
+    /// nothing is saved before, so a device merges before it writes.
+    backup_heard: bool,
+    /// The newest version of the backup seen (`created_at`, seconds).
+    backup_seen_at: i64,
+    /// The event of this device's last save, which comes back on the
+    /// subscription and needs no opening.
+    backup_own: Option<String>,
     /// The machines store changed since it was last written.
     machines_dirty: bool,
     /// A stored-event cursor not written yet.
@@ -972,6 +991,7 @@ impl Loop {
                     self.arm_stale_watchdog();
                     self.links_on = true;
                     self.sync_direct_links();
+                    self.sync_backup_sub();
                 }
                 Msg::Stop => {
                     log::info!("core: Stop (status was {:?})", self.conn.status);
@@ -1112,7 +1132,9 @@ impl Loop {
                 }
                 Msg::DirectEvent(event) => self.nostr.deliver(&event),
                 Msg::BackupDue => self.on_backup_due(),
-                Msg::BackupFetched(found) => self.on_backup_fetched(found),
+                Msg::BackupFetched(found) => self.on_backup_fetched(found).await,
+                Msg::BackupEvent(event) => self.on_backup_event(event),
+                Msg::BackupEose => self.on_backup_eose(),
                 Msg::BackupSaved(saved) => self.on_backup_saved(saved).await,
                 Msg::BackupDeleted => self.forget_backup_relay().await,
                 Msg::DirectState { machine, endpoint } => {
@@ -1246,6 +1268,7 @@ impl Loop {
         abort(&mut self.stale_timer);
         self.links_on = false;
         self.sync_direct_links();
+        self.sync_backup_sub();
         self.flush_acks();
         self.flush_writes().await;
     }

@@ -126,6 +126,8 @@ pub struct BackupView {
     /// When a backup last reached the relay (ms).
     #[specta(type = Option<specta_typescript::Number>)]
     pub saved_at: Option<u64>,
+    /// How many machines the backup held when last seen or saved.
+    pub machines: Option<u32>,
     pub status: crate::backup::BackupStatus,
 }
 
@@ -136,6 +138,7 @@ impl SettingsView {
             backup: BackupView {
                 relay: s.backup.config.relay.clone(),
                 saved_at: s.backup.config.saved_at,
+                machines: s.backup.config.machines,
                 status: s.backup.status.clone(),
             },
         }

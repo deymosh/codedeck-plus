@@ -416,16 +416,12 @@ pub enum UniffiIntent {
     },
     DismissStagedPairing,
     ResetPairing,
-    /// Turn the config backup on with this relay (`wss://`), and look on it
-    /// for a backup this identity already saved.
+    /// Turn the config backup on with this relay (`wss://`): what this
+    /// identity's devices saved there is merged with this one's, and kept
+    /// in step from then on.
     SetBackupRelay {
         url: String,
     },
-    /// Merge the backup found on the relay into this phone.
-    ImportBackup,
-    /// Keep this phone's configuration over the backup found on the relay;
-    /// it replaces that backup.
-    KeepLocalConfig,
     /// Save the backup now, even if nothing changed.
     BackupNow,
     /// Turn the backup off; with `delete`, also ask the relay to delete it.
@@ -612,8 +608,6 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::DismissStagedPairing => Intent::DismissStagedPairing,
             UniffiIntent::ResetPairing => Intent::ResetPairing,
             UniffiIntent::SetBackupRelay { url } => Intent::SetBackupRelay(url),
-            UniffiIntent::ImportBackup => Intent::ImportBackup,
-            UniffiIntent::KeepLocalConfig => Intent::KeepLocalConfig,
             UniffiIntent::BackupNow => Intent::BackupNow,
             UniffiIntent::DisableBackup { delete } => Intent::DisableBackup { delete },
         })

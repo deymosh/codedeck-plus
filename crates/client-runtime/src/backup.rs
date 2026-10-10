@@ -26,16 +26,9 @@ pub enum BackupStatus {
     /// Nothing going on (backup off, or on and up to date).
     #[default]
     Idle,
-    /// Looking on the relay for a backup.
+    /// Waiting for the backup relay to say what it holds.
     Checking,
-    /// A backup is on the relay: import it, or keep this phone's.
-    Found {
-        #[specta(type = specta_typescript::Number)]
-        saved_at: u64,
-        machines: u32,
-    },
     Saving,
-    Importing,
     /// The last operation failed; `reason` says why, for the user.
     Failed { reason: String },
 }
@@ -103,20 +96,18 @@ mod tests {
     use crate::signer::LocalSigner;
     use client_core::stores::machines::{MachinesState, MergeOptions};
     use client_core::stores::quick_prompts::QuickPrompt;
-    use client_core::stores::settings::default_settings;
     use protocol::crypto::generate_keypair;
     use std::collections::BTreeMap;
 
     const MACHINE: &str = "4f3c2b1a09f8e7d6c5b4a3928170615f4e3d2c1b0a9f8e7d6c5b4a3928170615";
-    const SESSION_SECRET: &str = "7e57000000000000000000000000000000000000000000000000000000000001";
 
     fn backup() -> ConfigBackup {
         let mut machines = MachinesState::new(BTreeMap::new(), MergeOptions::default());
         machines.register_machine(MACHINE, "my laptop", Some("Secret lab".into()), None, &["wss://private.relay".to_string()]);
         let prompts = [QuickPrompt { id: "q".into(), label: "Deploy".into(), text: "ship it".into() }];
-        let stored = format!(r#"{{"current":{{"secretHex":"{SESSION_SECRET}","expiresAt":99999999999}}}}"#);
-        let ring = client_core::stores::session_key::SessionKeyRing::load(Some(&stored), 1_000).0;
-        client_core::stores::backup::build_backup(&machines, &default_settings(), &prompts, &ring, 42)
+        let mut sync = client_core::stores::backup::SyncRecord::default();
+        sync.note_local_changes(&machines, &prompts, 42);
+        client_core::stores::backup::build_backup(&machines, &prompts, &sync, 42)
     }
 
     fn as_received(e: &SignedEvent) -> NostrEvent {
@@ -134,7 +125,7 @@ mod tests {
         let wire = serde_json::to_string(&event).unwrap();
         // Each has a space or a dot, or is long: none can turn up by chance in
         // base64 ciphertext or a hex id.
-        for secret in ["Secret lab", "private.relay", "my laptop", "ship it", MACHINE, SESSION_SECRET] {
+        for secret in ["Secret lab", "private.relay", "my laptop", "ship it", MACHINE] {
             assert!(!wire.contains(secret), "{secret} is readable in {wire}");
         }
         assert_eq!(open_backup(&me, &as_received(&event)).await.unwrap(), backup());

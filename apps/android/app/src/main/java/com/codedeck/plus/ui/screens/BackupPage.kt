@@ -50,7 +50,10 @@ import java.util.Date
 
 /** What the backup holds, said once for the settings page and the restore step. */
 private const val BACKUP_HOLDS =
-    "Your paired machines, settings, quick prompts and this phone's session keys, encrypted to your key: only you can read it."
+    "Your paired machines and quick prompts, encrypted to your key: only you can read it."
+
+/** How the devices that share it keep in step. */
+private const val BACKUP_SHARED = "Your devices backing up here keep in step; each keeps its own settings."
 
 /** A relay address the backup may use: `wss://` with a host, `ws://` only to an onion service. */
 internal fun isBackupRelay(url: String): Boolean {
@@ -84,10 +87,29 @@ private fun machinesText(n: UInt): String = when (n) {
     else -> "$n machines"
 }
 
+/** What the backup on the relay holds, at a glance: when it was saved and
+ *  how many machines are in it. */
+@Composable
+private fun BackupSummary(backup: UniffiBackupView, relay: String, now: Long) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
+        Icon(Icons.Outlined.CloudSync, contentDescription = null, tint = Tokens.Text, modifier = Modifier.size(28.dp))
+        Column {
+            Text(
+                backup.savedAt?.let { "Saved ${whenSaved(it.toLong(), now)}" } ?: "Backup is on",
+                color = Tokens.Text,
+                fontSize = Tokens.TextMd,
+                fontWeight = FontWeight.Medium,
+            )
+            val held = backup.machines?.let { "${machinesText(it)}, on " }.orEmpty()
+            Text("$held${relayHost(relay)}", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+        }
+    }
+}
+
 /**
  * The config backup: off, it asks for a relay; on, it says when it last
- * saved and offers a save now and turning it off. A backup found on the
- * relay waits for a choice before anything is saved over it.
+ * saved and offers a save now and turning it off. Turning it on merges what
+ * the identity's other devices saved there with this one's.
  */
 @Composable
 internal fun BackupPage(
@@ -113,8 +135,8 @@ private fun BackupOff(status: UniffiBackupStatus, torOn: Boolean, dispatch: (Uni
     val valid = isBackupRelay(draft)
     Group(
         title = "Back up to a relay",
-        footer = "$BACKUP_HOLDS A new phone logged in as you restores it from the same relay. The relay only sees that " +
-            "you saved something, and when." + if (torOn) " It goes through Orbot, like your other relays." else "",
+        footer = "$BACKUP_HOLDS $BACKUP_SHARED The relay only sees that you saved something, and when." +
+            if (torOn) " It goes through Orbot, like your other relays." else "",
     ) {
         GroupBody {
             Field(
@@ -137,12 +159,8 @@ private fun BackupOff(status: UniffiBackupStatus, torOn: Boolean, dispatch: (Uni
 @Composable
 private fun BackupOn(relay: String, backup: UniffiBackupView, now: Long, dispatch: (UniffiIntent) -> Unit) {
     val status = backup.status
-    if (status is UniffiBackupStatus.Found) {
-        FoundBackup(status, relay, now, dispatch)
-        return
-    }
     var turningOff by remember { mutableStateOf(false) }
-    Group(footer = "$BACKUP_HOLDS It saves itself a little after each change.") {
+    Group(footer = "$BACKUP_HOLDS $BACKUP_SHARED It saves itself a little after each change.") {
         GroupBody { BackupStatusLine(status, backup.savedAt?.toLong(), now) }
         ValueRow("Relay", subtitle = relay, mono = true) {}
         GroupBody {
@@ -157,13 +175,13 @@ private fun BackupOn(relay: String, backup: UniffiBackupView, now: Long, dispatc
         if (turningOff) {
             GroupBody {
                 Text(
-                    "Turn off backup? This phone stops saving to ${relayHost(relay)}. You can also ask the relay to delete " +
-                        "what is there; relays usually do, but none has to.",
+                    "Turn off backup? This phone stops keeping in step with ${relayHost(relay)}; your other devices go on. " +
+                        "You can also ask the relay to delete the backup, for every device; relays usually do, but none has to.",
                     color = Tokens.Text,
                     fontSize = Tokens.TextSm,
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                    SecondaryButton("Turn off and delete it", danger = true, onClick = {
+                    SecondaryButton("Turn off and delete it everywhere", danger = true, onClick = {
                         turningOff = false
                         dispatch(UniffiIntent.DisableBackup(delete = true))
                     })
@@ -186,7 +204,7 @@ private fun BackupOn(relay: String, backup: UniffiBackupView, now: Long, dispatc
 @Composable
 private fun BackupStatusLine(status: UniffiBackupStatus, savedAt: Long?, now: Long) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-        val busy = status is UniffiBackupStatus.Checking || status is UniffiBackupStatus.Saving || status is UniffiBackupStatus.Importing
+        val busy = status is UniffiBackupStatus.Checking || status is UniffiBackupStatus.Saving
         if (busy) {
             CircularProgressIndicator(Modifier.size(12.dp), color = Tokens.TextMuted, strokeWidth = 1.5.dp)
         } else {
@@ -200,9 +218,8 @@ private fun BackupStatusLine(status: UniffiBackupStatus, savedAt: Long?, now: Lo
         }
         Text(
             when (status) {
-                UniffiBackupStatus.Checking -> "Looking for a backup…"
+                UniffiBackupStatus.Checking -> "Checking the backup…"
                 UniffiBackupStatus.Saving -> "Backing up…"
-                UniffiBackupStatus.Importing -> "Restoring…"
                 is UniffiBackupStatus.Failed -> "Not backed up"
                 else -> if (savedAt != null) "Backed up ${whenSaved(savedAt, now)}" else "Not backed up yet"
             },
@@ -213,56 +230,8 @@ private fun BackupStatusLine(status: UniffiBackupStatus, savedAt: Long?, now: Lo
     if (status is UniffiBackupStatus.Failed) ErrorNote(status.reason)
 }
 
-/** A backup is on the relay already: restore it, or let this phone's replace it. */
-@Composable
-private fun FoundBackup(found: UniffiBackupStatus.Found, relay: String, now: Long, dispatch: (UniffiIntent) -> Unit) {
-    var replacing by remember { mutableStateOf(false) }
-    Group(
-        title = "A backup is already there",
-        footer = "Restoring adds the machines this phone does not have and takes the backup's settings and quick " +
-            "prompts. Nothing is saved to the relay until you choose.",
-    ) {
-        GroupBody {
-            FoundSummary(found, relay, now)
-            if (replacing) {
-                Text(
-                    "Replace it with this phone's setup? What the backup holds and this phone lacks is lost.",
-                    color = Tokens.Danger,
-                    fontSize = Tokens.TextSm,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                    SecondaryButton("Replace it", danger = true, onClick = { dispatch(UniffiIntent.KeepLocalConfig) })
-                    QuietButton("Cancel", onClick = { replacing = false })
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2), verticalAlignment = Alignment.CenterVertically) {
-                    PrimaryButton("Restore", onClick = { dispatch(UniffiIntent.ImportBackup) })
-                    QuietButton("Keep this phone's", onClick = { replacing = true })
-                }
-            }
-        }
-    }
-}
-
-/** The found backup's date and size, the thing the choice is about. */
-@Composable
-private fun FoundSummary(found: UniffiBackupStatus.Found, relay: String, now: Long) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
-        Icon(Icons.Outlined.CloudSync, contentDescription = null, tint = Tokens.Text, modifier = Modifier.size(28.dp))
-        Column {
-            Text(
-                "Saved ${whenSaved(found.savedAt.toLong(), now)}",
-                color = Tokens.Text,
-                fontSize = Tokens.TextMd,
-                fontWeight = FontWeight.Medium,
-            )
-            Text("${machinesText(found.machines)}, on ${relayHost(relay)}", color = Tokens.TextMuted, fontSize = Tokens.TextSm)
-        }
-    }
-}
-
 /**
- * Right after logging in: restore a backup made on another phone, or skip.
+ * Right after logging in: join the backup another device keeps, or skip.
  * Shown once, before the app proper; [onDone] leaves for the app.
  */
 @Composable
@@ -274,9 +243,6 @@ internal fun RestoreContent(
     now: Long = System.currentTimeMillis(),
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
-    // Set once Restore is tapped, so the idle state after it reads as done
-    // rather than as "nothing was there".
-    var restoring by rememberSaveable { mutableStateOf(false) }
     val status = backup.status
     val relay = backup.relay
     val skip = {
@@ -298,44 +264,21 @@ internal fun RestoreContent(
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                 Text("Restore your setup?", color = Tokens.Text, fontSize = 28.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp)
                 Text(
-                    "If you backed up another phone, enter the relay it saved to: its machines, settings and quick " +
-                        "prompts come back here. The backup is encrypted to your key, so only you can read it.",
+                    "Enter the relay your other device backs up to: its machines and quick prompts come here, and " +
+                        "your devices keep in step. Only you can read it.",
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextMd,
                     lineHeight = 20.sp,
                 )
             }
             when {
-                status is UniffiBackupStatus.Found && relay != null -> Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
-                    FoundSummary(status, relay, now)
-                    Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space2), verticalAlignment = Alignment.CenterVertically) {
-                        PrimaryButton("Restore", onClick = {
-                            restoring = true
-                            dispatch(UniffiIntent.ImportBackup)
-                        })
-                        QuietButton("Skip", onClick = skip)
-                    }
-                }
-                status is UniffiBackupStatus.Checking || status is UniffiBackupStatus.Importing || status is UniffiBackupStatus.Saving ->
+                relay != null && (status is UniffiBackupStatus.Checking || status is UniffiBackupStatus.Saving) ->
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space3)) {
                         CircularProgressIndicator(Modifier.size(18.dp), color = Tokens.TextMuted, strokeWidth = 2.dp)
-                        Text(
-                            if (status is UniffiBackupStatus.Checking) "Looking on ${relayHost(relay.orEmpty())}…" else "Restoring…",
-                            color = Tokens.Text,
-                            fontSize = Tokens.TextMd,
-                        )
+                        Text("Looking on ${relayHost(relay)}…", color = Tokens.Text, fontSize = Tokens.TextMd)
                     }
                 relay != null && status !is UniffiBackupStatus.Failed -> Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space4)) {
-                    Text(
-                        if (restoring) {
-                            "Restored. Your machines reconnect as each one is heard from. Backup stays on, so this phone saves its changes there too."
-                        } else {
-                            "No backup on ${relayHost(relay)} yet. Backup is on, so this phone saves its setup there from now on."
-                        },
-                        color = Tokens.Text,
-                        fontSize = Tokens.TextMd,
-                        lineHeight = 20.sp,
-                    )
+                    BackupSummary(backup, relay, now)
                     PrimaryButton("Continue", onClick = onDone)
                 }
                 else -> Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space3)) {

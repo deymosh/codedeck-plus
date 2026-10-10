@@ -4941,6 +4941,11 @@ data class UniffiBackupView (
      */
     var `savedAt`: kotlin.ULong?
     , 
+    /**
+     * How many machines the backup held when last seen or saved.
+     */
+    var `machines`: kotlin.UInt?
+    , 
     var `status`: UniffiBackupStatus
     
 ){
@@ -4960,6 +4965,7 @@ public object FfiConverterTypeUniffiBackupView: FfiConverterRustBuffer<UniffiBac
         return UniffiBackupView(
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalUInt.read(buf),
             FfiConverterTypeUniffiBackupStatus.read(buf),
         )
     }
@@ -4967,12 +4973,14 @@ public object FfiConverterTypeUniffiBackupView: FfiConverterRustBuffer<UniffiBac
     override fun allocationSize(value: UniffiBackupView) = (
             FfiConverterOptionalString.allocationSize(value.`relay`) +
             FfiConverterOptionalULong.allocationSize(value.`savedAt`) +
+            FfiConverterOptionalUInt.allocationSize(value.`machines`) +
             FfiConverterTypeUniffiBackupStatus.allocationSize(value.`status`)
     )
 
     override fun write(value: UniffiBackupView, buf: ByteBuffer) {
             FfiConverterOptionalString.write(value.`relay`, buf)
             FfiConverterOptionalULong.write(value.`savedAt`, buf)
+            FfiConverterOptionalUInt.write(value.`machines`, buf)
             FfiConverterTypeUniffiBackupStatus.write(value.`status`, buf)
     }
 }
@@ -8181,28 +8189,12 @@ sealed class UniffiBackupStatus {
     
     
     /**
-     * Looking on the relay for a backup.
+     * Waiting for the backup relay to say what it holds.
      */
     object Checking : UniffiBackupStatus()
     
     
-    /**
-     * A backup is on the relay: import it, or keep this phone's.
-     */
-    data class Found(
-        val `savedAt`: kotlin.ULong, 
-        val `machines`: kotlin.UInt) : UniffiBackupStatus()
-        
-    {
-        
-
-        companion object
-    }
-    
     object Saving : UniffiBackupStatus()
-    
-    
-    object Importing : UniffiBackupStatus()
     
     
     /**
@@ -8235,13 +8227,8 @@ public object FfiConverterTypeUniffiBackupStatus : FfiConverterRustBuffer<Uniffi
         return when(buf.getInt()) {
             1 -> UniffiBackupStatus.Idle
             2 -> UniffiBackupStatus.Checking
-            3 -> UniffiBackupStatus.Found(
-                FfiConverterULong.read(buf),
-                FfiConverterUInt.read(buf),
-                )
-            4 -> UniffiBackupStatus.Saving
-            5 -> UniffiBackupStatus.Importing
-            6 -> UniffiBackupStatus.Failed(
+            3 -> UniffiBackupStatus.Saving
+            4 -> UniffiBackupStatus.Failed(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -8261,21 +8248,7 @@ public object FfiConverterTypeUniffiBackupStatus : FfiConverterRustBuffer<Uniffi
                 4UL
             )
         }
-        is UniffiBackupStatus.Found -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-                + FfiConverterULong.allocationSize(value.`savedAt`)
-                + FfiConverterUInt.allocationSize(value.`machines`)
-            )
-        }
         is UniffiBackupStatus.Saving -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-            )
-        }
-        is UniffiBackupStatus.Importing -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
@@ -8300,22 +8273,12 @@ public object FfiConverterTypeUniffiBackupStatus : FfiConverterRustBuffer<Uniffi
                 buf.putInt(2)
                 Unit
             }
-            is UniffiBackupStatus.Found -> {
-                buf.putInt(3)
-                FfiConverterULong.write(value.`savedAt`, buf)
-                FfiConverterUInt.write(value.`machines`, buf)
-                Unit
-            }
             is UniffiBackupStatus.Saving -> {
-                buf.putInt(4)
-                Unit
-            }
-            is UniffiBackupStatus.Importing -> {
-                buf.putInt(5)
+                buf.putInt(3)
                 Unit
             }
             is UniffiBackupStatus.Failed -> {
-                buf.putInt(6)
+                buf.putInt(4)
                 FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
@@ -9082,8 +9045,9 @@ sealed class UniffiIntent {
     
     
     /**
-     * Turn the config backup on with this relay (`wss://`), and look on it
-     * for a backup this identity already saved.
+     * Turn the config backup on with this relay (`wss://`): what this
+     * identity's devices saved there is merged with this one's, and kept
+     * in step from then on.
      */
     data class SetBackupRelay(
         val `url`: kotlin.String) : UniffiIntent()
@@ -9093,19 +9057,6 @@ sealed class UniffiIntent {
 
         companion object
     }
-    
-    /**
-     * Merge the backup found on the relay into this phone.
-     */
-    object ImportBackup : UniffiIntent()
-    
-    
-    /**
-     * Keep this phone's configuration over the backup found on the relay;
-     * it replaces that backup.
-     */
-    object KeepLocalConfig : UniffiIntent()
-    
     
     /**
      * Save the backup now, even if nothing changed.
@@ -9372,10 +9323,8 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             53 -> UniffiIntent.SetBackupRelay(
                 FfiConverterString.read(buf),
                 )
-            54 -> UniffiIntent.ImportBackup
-            55 -> UniffiIntent.KeepLocalConfig
-            56 -> UniffiIntent.BackupNow
-            57 -> UniffiIntent.DisableBackup(
+            54 -> UniffiIntent.BackupNow
+            55 -> UniffiIntent.DisableBackup(
                 FfiConverterBoolean.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -9829,18 +9778,6 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterString.allocationSize(value.`url`)
             )
         }
-        is UniffiIntent.ImportBackup -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-            )
-        }
-        is UniffiIntent.KeepLocalConfig -> {
-            // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (
-                4UL
-            )
-        }
         is UniffiIntent.BackupNow -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -10198,20 +10135,12 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterString.write(value.`url`, buf)
                 Unit
             }
-            is UniffiIntent.ImportBackup -> {
+            is UniffiIntent.BackupNow -> {
                 buf.putInt(54)
                 Unit
             }
-            is UniffiIntent.KeepLocalConfig -> {
-                buf.putInt(55)
-                Unit
-            }
-            is UniffiIntent.BackupNow -> {
-                buf.putInt(56)
-                Unit
-            }
             is UniffiIntent.DisableBackup -> {
-                buf.putInt(57)
+                buf.putInt(55)
                 FfiConverterBoolean.write(value.`delete`, buf)
                 Unit
             }
