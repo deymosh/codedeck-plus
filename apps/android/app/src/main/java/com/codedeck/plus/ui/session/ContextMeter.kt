@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -13,15 +14,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -42,6 +43,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.components.DeckSheet
 import com.codedeck.plus.ui.components.Dot
@@ -240,27 +242,60 @@ private fun Parts(breakdown: UniffiContextBreakdown) {
             }
             val share = if (part.kind == "deferred") "—" else percentText(part.tokens.toDouble() / window * 100.0)
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(horizontal = Tokens.Space4),
+                Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(PART_ROW_PADDING),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
             ) {
                 Dot(shade)
                 Text(part.name, color = Tokens.Text, fontSize = Tokens.TextMd, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text(formatTokens(part.tokens.toLong()), color = Tokens.TextMuted, fontSize = Tokens.TextMd, textAlign = TextAlign.End)
-                Text(share, color = Tokens.TextMuted, fontSize = Tokens.TextMd, textAlign = TextAlign.End, modifier = Modifier.widthIn(min = 48.dp))
+                PartFigures(formatTokens(part.tokens.toLong()), share)
             }
         }
         breakdown.groups.forEach { group ->
             HorizontalDivider(Modifier.padding(vertical = Tokens.Space1), thickness = 1.dp, color = Tokens.Border)
-            PartList(group)
+            PartList(group, window)
         }
     }
 }
 
-/** A list behind a part — "MCP tools", 88 of them — opening to its items,
- *  the first few at once and the rest on "Show more". */
+/** How wide a part's share of the window is set, so the shares line up. */
+private val SHARE_WIDTH = 48.dp
+
+/** How wide the list chevron's column is; a part without a list keeps it
+ *  empty, so every row's figures line up. */
+private val CHEVRON_WIDTH = 16.dp
+
+/** A row's figures at its end, in the columns every row of the parts
+ *  shares: tokens, the share of the window, and the list chevron when the
+ *  row opens to one ([open] says whether it is open). */
 @Composable
-private fun PartList(group: UniffiContextGroup) {
+private fun PartFigures(tokens: String, share: String?, open: Boolean? = null, fontSize: TextUnit = Tokens.TextMd) {
+    Text(tokens, color = Tokens.TextMuted, fontSize = fontSize, textAlign = TextAlign.End)
+    // The chevron close to the share, in the room the rows' smaller end
+    // padding leaves, so the names keep theirs.
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(share.orEmpty(), color = Tokens.TextMuted, fontSize = fontSize, textAlign = TextAlign.End, modifier = Modifier.width(SHARE_WIDTH))
+        Box(Modifier.width(CHEVRON_WIDTH), contentAlignment = Alignment.Center) {
+            if (open != null) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                    contentDescription = if (open) "Hide" else "Show",
+                    tint = Tokens.TextMuted,
+                    modifier = Modifier.size(CHEVRON_WIDTH).rotate(if (open) 90f else 0f),
+                )
+            }
+        }
+    }
+}
+
+/** The parts' rows' padding: a smaller end, where the chevron's column sits. */
+private val PART_ROW_PADDING = PaddingValues(start = Tokens.Space4, end = Tokens.Space2)
+
+/** A list behind a part — "MCP tools", 88 of them — with its tokens and
+ *  share of the [window] in the parts' columns, opening to its items: the
+ *  first few at once and the rest on "Show more". */
+@Composable
+private fun PartList(group: UniffiContextGroup, window: Double) {
     var open by rememberSaveable(group.name) { mutableStateOf(false) }
     var all by rememberSaveable(group.name) { mutableStateOf(false) }
     Row(
@@ -268,37 +303,33 @@ private fun PartList(group: UniffiContextGroup) {
             .fillMaxWidth()
             .heightIn(min = Tokens.TapMin)
             .clickable { open = !open }
-            .padding(horizontal = Tokens.Space4),
+            .padding(PART_ROW_PADDING),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
     ) {
-        Text(group.name, color = Tokens.Text, fontSize = Tokens.TextMd, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Text(
-            group.items.size.toString(),
-            color = Tokens.TextMuted,
-            fontSize = Tokens.TextXs,
-            modifier = Modifier
-                .clip(RoundedCornerShape(Tokens.RadiusPill))
-                .background(Tokens.BorderStrong)
-                .padding(horizontal = 7.dp, vertical = 1.dp),
-        )
-        Box(Modifier.weight(1f))
-        Text(formatTokens(group.tokens.toLong()), color = Tokens.TextMuted, fontSize = Tokens.TextMd)
-        Icon(
-            if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-            contentDescription = if (open) "Hide" else "Show",
-            tint = Tokens.TextMuted,
-        )
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
+            Text(group.name, color = Tokens.Text, fontSize = Tokens.TextMd, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(
+                group.items.size.toString(),
+                color = Tokens.TextMuted,
+                fontSize = Tokens.TextXs,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(Tokens.RadiusPill))
+                    .background(Tokens.BorderStrong)
+                    .padding(horizontal = 7.dp, vertical = 1.dp),
+            )
+        }
+        PartFigures(formatTokens(group.tokens.toLong()), percentText(group.tokens.toDouble() / window * 100.0), open = open)
     }
     if (!open) return
     val shown = if (all) group.items else group.items.take(SHORT_ITEM_LIST)
     shown.forEach { item ->
         Row(
-            Modifier.fillMaxWidth().padding(start = Tokens.Space4, end = Tokens.Space4 + 24.dp + Tokens.Space2, top = 3.dp, bottom = 3.dp),
+            Modifier.fillMaxWidth().padding(PART_ROW_PADDING).padding(vertical = 3.dp),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space3),
         ) {
             Text(item.name, color = Tokens.TextMuted, fontSize = Tokens.TextSm, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
-            Text(formatTokens(item.tokens.toLong()), color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+            PartFigures(formatTokens(item.tokens.toLong()), share = null, fontSize = Tokens.TextSm)
         }
     }
     val more = group.items.size - shown.size
