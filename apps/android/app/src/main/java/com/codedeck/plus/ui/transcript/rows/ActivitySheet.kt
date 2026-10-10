@@ -28,11 +28,8 @@ import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Terminal
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.components.QuietButton
 import com.codedeck.plus.ui.components.ThinkingGlyph
 import com.codedeck.plus.ui.components.pulsingAlpha
+import com.codedeck.plus.ui.components.DeckSheet
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.ActivityView
 import com.codedeck.plus.ui.transcript.AgentActivity
@@ -207,7 +205,6 @@ fun ActivityBar(activity: ActivityView, live: Boolean, onOpen: () -> Unit) {
 }
 
 /** The activity sheet over the conversation; see [ActivitySheetContent]. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActivitySheet(
     activity: ActivityView,
@@ -217,12 +214,7 @@ fun ActivitySheet(
     onStopTask: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        containerColor = Tokens.SurfaceRaised,
-        contentColor = Tokens.Text,
-    ) {
+    DeckSheet(onDismiss, skipPartiallyExpanded = false) {
         Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding()) {
             ActivitySheetContent(activity, live, canStop, onOpenAgent, onStopTask, onDismiss)
         }

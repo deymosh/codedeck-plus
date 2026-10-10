@@ -1,29 +1,17 @@
 package com.codedeck.plus.ui.session
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.components.BusyToggle
@@ -62,45 +50,19 @@ internal fun mcpStatusText(s: UniffiSessionMcpServer): String = when (s.status) 
 
 /**
  * A running session's MCP servers: each one's state, and a switch to turn
- * it off or on for this session. Adding and removing servers is the
- * machine's settings' job, for every session.
+ * it off or on for this session — a page of the session's options sheet.
+ * Adding and removing servers is the machine's settings' job, for every
+ * session.
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun SessionMcpSheet(mcp: UniffiSessionMcp, onToggle: (name: String, enabled: Boolean) -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Tokens.SurfaceRaised,
-        contentColor = Tokens.Text,
-    ) {
-        SessionMcpList(mcp, onToggle)
-    }
-}
-
-/** The sheet's content, apart so a snapshot can show it without a window. */
 @Composable
 internal fun SessionMcpList(mcp: UniffiSessionMcp, onToggle: (name: String, enabled: Boolean) -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .navigationBarsPadding()
-            .padding(bottom = Tokens.Space4),
-    ) {
-        Text(
-            "MCP servers",
-            color = Tokens.Text,
-            fontSize = Tokens.TextXl,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = Tokens.Space5),
-        )
+    Column(Modifier.fillMaxWidth()) {
         Text(
             if (mcp.projectWide) "A switch here applies to every session of this agent in the same project."
             else "A switch here applies to this session only. Add or remove servers in the machine's settings.",
             color = Tokens.TextMuted,
             fontSize = Tokens.TextSm,
-            modifier = Modifier.padding(horizontal = Tokens.Space5).padding(top = 2.dp, bottom = Tokens.Space3),
+            modifier = Modifier.padding(horizontal = Tokens.Space5).padding(bottom = Tokens.Space3),
         )
         mcp.error?.let {
             Text(it, color = Tokens.Danger, fontSize = Tokens.TextSm, modifier = Modifier.padding(horizontal = Tokens.Space5, vertical = Tokens.Space2))

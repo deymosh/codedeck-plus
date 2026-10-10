@@ -24,12 +24,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.components.CodeBlock
 import com.codedeck.plus.ui.components.DiffStat
 import com.codedeck.plus.ui.components.ThinkingGlyph
+import com.codedeck.plus.ui.components.DeckSheet
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.FileDiffView
@@ -73,7 +71,6 @@ import kotlinx.coroutines.withContext
  * on to [onBackOut] when it was opened from somewhere else (the activity
  * sheet). Only where there is nothing to go back to does it close.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolGroupSheet(
     group: DisplayEntry.ToolGroup,
@@ -82,12 +79,7 @@ fun ToolGroupSheet(
     onDismiss: () -> Unit,
     onBackOut: (() -> Unit)? = null,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        containerColor = Tokens.SurfaceRaised,
-        contentColor = Tokens.Text,
-    ) {
+    DeckSheet(onDismiss, skipPartiallyExpanded = false) {
         val start = openAt ?: listOfNotNull(loneStep(group)?.seq)
         var path by remember(group.seq, openAt) { mutableStateOf(start) }
         val back = sheetBack(group, path, entry = start, onBackOut) { path = it }
