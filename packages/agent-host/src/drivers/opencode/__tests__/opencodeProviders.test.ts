@@ -179,6 +179,8 @@ describe('serverSetup', () => {
     expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_SERVER_PASSWORD).not.toBe(password);
     // Web search for every model, not only OpenCode's own providers'.
     expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_ENABLE_EXA).toBe('1');
+    // The pinned version stays.
+    expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_DISABLE_AUTOUPDATE).toBe('1');
     // No profiles: the operator's config stands as it is.
     expect(serverSetup([], EMPTY_CATALOG, { OPENCODE_CONFIG_CONTENT: '{"theme":"x"}' }).env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
   });
