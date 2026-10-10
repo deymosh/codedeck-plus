@@ -35,6 +35,7 @@ use protocol::ranges::SeqRange;
 use protocol::nostr_event::SignedEvent;
 use protocol::events::BridgeToPhone;
 use protocol::kinds::SESSION_LIST_KIND;
+use protocol::recipients::RECIPIENT_TAG;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
@@ -373,6 +374,7 @@ impl Core {
         let host = Rc::new(LoopHost {
             tx: tx.clone(),
             machines: RefCell::new(initial_authors.clone()),
+            recipients: RefCell::new(recipients_of(&session, &keys.identity_pubkey_hex, &initial_authors, clock.now_ms())),
             cursor: RefCell::new(last_stored_seen),
         });
         let relay_set = hydrated.stores.relay_set();
@@ -813,9 +815,16 @@ enum ViewQuery {
 
 /// [`NostrClientHost`] that forwards every callback into the loop as a [`Msg`]
 /// (decoupling reentrancy — a callback fires inside the transport's task).
+/// The recipient tags of this client's copies from each of `machines`.
+fn recipients_of(session: &SessionKeyRing, identity: &str, machines: &[String], now_ms: u64) -> Vec<String> {
+    machines.iter().flat_map(|m| session.recipient_tags(m, identity, now_ms)).collect()
+}
+
 struct LoopHost {
     tx: mpsc::UnboundedSender<Msg>,
     machines: RefCell<Vec<String>>,
+    /// The recipient tags of this client's copies from `machines`.
+    recipients: RefCell<Vec<String>>,
     /// `last_stored_seen` cursor (seconds) — the in-memory copy `authors()`'s
     /// caller reads synchronously. `note_stored_seen` also fires
     /// `Msg::NoteStoredSeen` to persist it through the `Kv` port, so a restart
@@ -826,6 +835,9 @@ struct LoopHost {
 impl NostrClientHost for LoopHost {
     fn authors(&self) -> Vec<String> {
         self.machines.borrow().clone()
+    }
+    fn recipients(&self) -> Vec<String> {
+        self.recipients.borrow().clone()
     }
     fn on_event(&self, event: &NostrEvent) {
         let _ = self.tx.send(Msg::RelayEvent(event.clone()));
@@ -1198,6 +1210,17 @@ impl Loop {
 
     async fn on_relay_event(&mut self, event: NostrEvent) {
         let known = self.machines.iter().any(|m| m == &event.pubkey);
+        // Only this client's copies: another client's of the identity is
+        // encrypted to a key this one does not hold, so it would only cost
+        // the signer a decrypt in vain. The subscription already asks relays
+        // for these only; this holds whatever path the event took.
+        let identity = &self.keys.identity_pubkey_hex;
+        let ours = event.tag(RECIPIENT_TAG).is_some_and(|tag| {
+            self.session.recipient_tags(&event.pubkey, identity, self.clock.now_ms()).iter().any(|t| t == tag)
+        });
+        if !ours {
+            return;
+        }
 
         // A 30515 from a PAIRED machine IS a heartbeat — feed the FSM for
         // presence + CDX-020 whether or not the payload decodes (a chunked
@@ -1345,7 +1368,7 @@ impl Loop {
         self.on_send(
             machine.to_string(),
             PhoneToBridge::SessionKey(SessionKeyMsg {
-                session_key: self.keys.grant_for(machine),
+                session_key: self.keys.grant_for(machine, self.stores.machines.confirmed_session_key(machine)),
             }),
             None,
         );
@@ -1373,6 +1396,9 @@ impl Loop {
             // The old key's grant attempts say nothing about the new one.
             self.grant_attempts.clear();
         }
+        // The copies to read are those to the ring's keys now.
+        self.refresh_authors();
+        self.sync_direct_links();
         self.backup_changed();
     }
 
@@ -1564,7 +1590,8 @@ impl Loop {
     }
 
     /// Subscription authors = registered machines + the pairing candidate (its
-    /// pair-ack must pass the filter). Push them to the `LoopHost` and, if
+    /// pair-ack must pass the filter), and the recipient tags of this
+    /// client's copies from them. Push them to the `LoopHost` and, if
     /// connected, re-REQ.
     fn refresh_authors(&mut self) {
         let mut authors = self.stores.machines.machine_pubkeys();
@@ -1573,6 +1600,8 @@ impl Loop {
                 authors.push(candidate.pubkey_hex.clone());
             }
         }
+        *self.host.recipients.borrow_mut() =
+            recipients_of(&self.session, &self.keys.identity_pubkey_hex, &authors, self.clock.now_ms());
         *self.host.machines.borrow_mut() = authors.clone();
         self.machines = authors;
         if matches!(

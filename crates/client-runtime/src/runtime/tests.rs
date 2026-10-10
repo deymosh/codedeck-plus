@@ -417,6 +417,7 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -468,6 +469,7 @@ async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
             let push_raw = |plaintext: &str| {
                 let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone.pubkey_hex, plaintext).unwrap();
                 let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                     .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                     .unwrap();
                 mock.push(format!(r#"["EVENT","{sub}",{}]"#, <nostr::Event as nostr::JsonUtil>::as_json(&event)));
@@ -520,6 +522,7 @@ async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -573,6 +576,7 @@ async fn create_folder_round_trips_to_a_matching_folder_ack_core_event() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -651,6 +655,7 @@ async fn a_stored_kind_event_persists_the_cursor_to_kv() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             let created_at = event.created_at.as_secs();
@@ -826,6 +831,7 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
             .unwrap();
             let event =
                 nostr::EventBuilder::new(nostr::Kind::Custom(SESSION_LIST_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                     .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                     .unwrap();
             mock.push(format!(
@@ -1409,6 +1415,7 @@ async fn a_session_pending_message_populates_the_view_and_emits_a_state_changed_
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -1456,6 +1463,7 @@ async fn dismiss_pending_session_removes_it_and_emits_a_state_changed_event() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -1504,6 +1512,7 @@ async fn an_output_message_populates_the_transcript_view_and_emits_transcript_ap
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -1582,12 +1591,19 @@ fn push_bridge_to_phone_event(
     let ct = protocol::crypto::encrypt_to(&machine.secret_key, phone_pubkey_hex, &plaintext)
         .unwrap();
     let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(machine, phone_pubkey_hex))
         .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
         .unwrap();
     mock.push(format!(
         r#"["EVENT","{sub_id}",{}]"#,
         <nostr::Event as nostr::JsonUtil>::as_json(&event)
     ));
+}
+
+/// The recipient tag of a copy `bridge` encrypted to `key`.
+fn recipient(bridge: &protocol::crypto::Keypair, key: impl AsRef<str>) -> nostr::Tag {
+    let tag = protocol::recipients::recipient_tag(&bridge.pubkey_hex, key.as_ref());
+    nostr::Tag::custom(nostr::TagKind::custom(protocol::recipients::RECIPIENT_TAG), [tag])
 }
 
 /// A fresh phone has no relays at all: the pairing link's relays are the
@@ -2257,6 +2273,7 @@ async fn scripted_direct_bridge(
 
     let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone_pubkey, &encode_bridge_to_phone(&push)).unwrap();
     let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone_pubkey))
         .tag(nostr::Tag::public_key(nostr::PublicKey::from_hex(&phone_pubkey).unwrap()))
         .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
         .unwrap();

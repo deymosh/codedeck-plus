@@ -246,6 +246,12 @@ impl MachinesState {
             .map(|g| g.pubkey_hex.as_str())
     }
 
+    /// The key `machine` last confirmed holding, lapsed or not: what a
+    /// grant of a newer key to it replaces.
+    pub fn confirmed_session_key(&self, machine: &str) -> Option<&str> {
+        self.machine(machine).and_then(|m| m.session_grant.as_ref()).map(|g| g.pubkey_hex.as_str())
+    }
+
     /// Whether `machine` should be granted `current` (again): it honours
     /// session keys and has not confirmed a grant of `current` with more
     /// than [`RENEW_BEFORE_SECS`] left. Throttling repeats is the caller's.
