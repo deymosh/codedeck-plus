@@ -14,7 +14,9 @@ files you touch; the ones below are the contract.
   `ValueRow`, `ActionRow`, `ExpandableRow`, `GroupBody`), `Toggle`/`BusyToggle`,
   `RowSpinner`/`PageLoading`, `Note`/`ErrorNote`, `ConfirmDialog`, `Segmented`,
   buttons (`Primary`/`Secondary`/`QuietButton`), `Field`, `Chip`, `Dot`,
-  `EmptyState`. Also `components/SelectField.kt`.
+  `EmptyState`. Also `components/SelectField.kt`, and `components/Sheet.kt`:
+  `DeckSheet` is every bottom sheet (never a raw `ModalBottomSheet`). A sheet
+  with pages navigates inside itself, Back stepping to the page it came from.
 - `theme/Tokens.kt` — every colour, size, radius. No literal colours; colour
   means state (running/waiting/failed), white is the only accent.
 - Grep `components/` before writing a raw Material widget or a styled

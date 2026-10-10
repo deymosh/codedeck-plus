@@ -1,12 +1,12 @@
 # DeepSeek Harness backend
 
-CodeDeck+ runs sessions on any agent its agent host has a driver for: Claude
-Code, [OpenCode](https://opencode.ai), and the
+CodeDeck+ runs sessions on any agent its agent host has a driver for:
+[OpenCode](https://opencode.ai), Claude Code, and the
 [DeepSeek Harness](https://www.deepseek.com/en/harness/) (`dsh`). A phone picks
 the agent per session from the "New session" sheet, which lists what the
-bridge advertises in its heartbeat. The DeepSeek Harness is on by default and
-needs one thing: a DeepSeek API key (set from the phone, or exported on the
-bridge).
+bridge advertises in its heartbeat. The DeepSeek Harness is installed when
+someone chooses it, and needs one thing: a DeepSeek API key (set from the
+phone, or exported on the bridge).
 
 The driver (`packages/agent-host/src/drivers/deepseek/`) drives the harness's
 `acp` profile — `dsh --profile acp` — which is the only interface it exposes
@@ -20,9 +20,10 @@ Nothing to install by hand. The harness is a Node program — a few hundred MB
 of npm packages, with no single binary to ship — so the agent host installs
 it on demand, exactly like the other agents' binaries: at the version and
 sha512 this build pins in `pnpm-lock.yaml`, into `<home>/agents/`, from the
-npm registry (or `CODEDECK_NPM_REGISTRY`). The download starts as the bridge
-starts; a first session waits for it. An operator who already has a harness
-can point the bridge at it instead:
+npm registry (or `CODEDECK_NPM_REGISTRY`). It is downloaded when someone
+installs it — Install on the phone, or `codedeck-bridge agents install
+deepseek-harness` — and a session waiting on it starts once it is in. An
+operator who already has a harness can point the bridge at it instead:
 
 ```bash
 codedeck-bridge run --deepseek-path /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js
@@ -70,8 +71,8 @@ shape:
   started with a level such a model does not have reports that rather than
   refusing to start.
 
-The session header shows the model the harness actually resolved, and how
-full the context is (the harness reports its own usage).
+The session shows the model the harness actually resolved, and how full the
+context is (the harness reports that much; no breakdown of what fills it).
 
 ## Gateways and other providers
 

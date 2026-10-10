@@ -298,6 +298,21 @@ the bridge leaves checking a level to the agent. An empty list always comes with
 "no answer yet" from a lost message. Models are correlated by the machine that
 sent them (the event author), never by a payload field.
 
+### `usage`
+
+`usage-request {sessionId}` → `usage {sessionId, usage}`, for agents with
+`supports.usage`; the phone asks when a session opens, after each turn, and
+when the context sheet opens. `usage` is `{available, plan?, windows[]
+{label, utilization?, resetsAt?}, sessionCostUsd?, context?, fetchedAt}`:
+the plan's limits (`available` false when the agent has none to report), the
+session's cost, and `context` — what fills the window, as the agent counts
+it: `usedTokens`, `windowTokens`, `categories[] {name, tokens, kind: used |
+free | buffer | deferred}` in the agent's order (`buffer` is the reserve kept
+for compaction, `deferred` what loads only on demand and sits outside the
+window), and `groups[] {name, tokens, items[] {name, tokens}}`, the lists
+behind some parts (each MCP tool, each memory file). Provider-bound sessions
+get no `usage` (above).
+
 ### `commands`
 
 `commands-request {sessionId}` → `commands {sessionId, commands[], error?}`,

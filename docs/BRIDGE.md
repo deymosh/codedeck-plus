@@ -1,6 +1,6 @@
 # The bridge
 
-The bridge runs coding agents (Claude Code, OpenCode and the DeepSeek
+The bridge runs coding agents (OpenCode, Claude Code and the DeepSeek
 Harness) on your laptop or VPS and serves them to the CodeDeck+ Android app
 over end-to-end encrypted Nostr (NIP-44). No accounts and no central server: the phone and the
 bridge pair by scanning a QR code.
@@ -154,7 +154,7 @@ you need.
 | `workspaceRoots` | `CODEDECK_WORKSPACE_ROOTS` / `--workspace` | Directories sessions may run in (default: `workspaces/` in the bridge home, created on start; pass `--workspace .` to serve the working directory) |
 | `torProxyUrl` | `CODEDECK_TOR_PROXY_URL` / `--tor-proxy` | SOCKS5 proxy (e.g. `socks5h://127.0.0.1:9050`) for the relay connections |
 | `claudePath` | `CODEDECK_CLAUDE_PATH` / `--claude-path` | A specific `claude` binary instead of the bundled one |
-| `openCodeServerUrl`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_*` | The optional OpenCode agent — see [`OPENCODE.md`](OPENCODE.md) |
+| `openCodeServerUrl`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_*` | The OpenCode server: an external one, or how the bridge runs its own — see [`OPENCODE.md`](OPENCODE.md) |
 | `deepseekPath` | `CODEDECK_DEEPSEEK_PATH` / `--deepseek-path` | A DeepSeek Harness CLI to run instead of the one this build installs — see [`DEEPSEEK.md`](DEEPSEEK.md) |
 | `relayRegisterEndpoint` / `relayRegisterToken` | `CODEDECK_RELAY_REGISTER_ENDPOINT` / `..._TOKEN` | Register paired phones on a write-restricted relay (https only — the token is an admin secret) |
 | `blossomRegisterEndpoint` / `blossomRegisterToken` | `CODEDECK_BLOSSOM_REGISTER_ENDPOINT` / `..._TOKEN` | The same for a Blossom server, so a phone's attachments do not fall back to relay chunking |

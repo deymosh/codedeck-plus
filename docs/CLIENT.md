@@ -50,7 +50,9 @@ regenerates them and CI fails on drift.
   core (and the relay connection) alive while the app is in the background;
   its notification summarizes machines, sessions and relays.
 - `platform/` also holds the SQLite-backed ports, the notifier (one channel
-  per attention class; a tap opens the session) and the Blossom HTTP client.
+  per attention class; a tap opens the session, and a session's
+  notifications clear once it is in view — opened, or the app brought back
+  onto it — or deleted for good) and the Blossom HTTP client.
 - `ui/` is the Compose UI: the welcome (login) screen, the sessions list
   (home), the session screen and its transcript rows, pairing (QR scan),
   new session, settings (a hub with a page per machine and per phone

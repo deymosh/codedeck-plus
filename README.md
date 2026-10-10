@@ -4,10 +4,11 @@
 
 # CodeDeck+
 
-**Control coding agents (Claude Code, OpenCode, DeepSeek Harness) running on your laptop or VPS
-from your Android phone, over end-to-end encrypted Nostr.** No accounts and no
-CodeDeck server: the phone and the bridge pair by scanning a QR code and talk
-through ordinary Nostr relays — public ones, or your own.
+**Control coding agents (OpenCode, Claude Code, DeepSeek Harness) running on
+your laptop or VPS from your Android phone, over end-to-end encrypted
+Nostr.** No accounts and no CodeDeck server: the phone and the bridge pair by
+scanning a QR code and talk through ordinary Nostr relays — public ones, or
+your own.
 
 [![CI](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/deymosh/codedeck-plus/actions/workflows/ci.yml)
 [![latest release](https://img.shields.io/github/v/release/deymosh/codedeck-plus?sort=semver&label=release)](https://github.com/deymosh/codedeck-plus/releases/latest)
@@ -25,7 +26,7 @@ your sessions, and no account or CodeDeck-run service sits in between.
 
 - **The bridge** — `codedeck-bridge`, a headless service that runs agent
   sessions on the machine where your code lives and exposes them over encrypted
-  Nostr. It ships as a Docker image and as Linux archives
+  Nostr. It ships as a Docker image and as Linux and Windows archives
   ([`docs/BRIDGE.md`](docs/BRIDGE.md)).
 - **The Android app** — drives those sessions from your phone: review plans,
   approve tool permissions, answer the agent's questions, switch models, and
@@ -36,14 +37,21 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - Several concurrent sessions, switchable from one screen
 - Plan approval, permission cards and agent questions on the phone
 - Transcripts that survive restarts and offline gaps (ranged sync)
-- Per-session mode, model and effort, plus custom AI provider profiles (Kimi
-  K3, OpenRouter, any Anthropic-compatible endpoint)
-- Claude Code, [OpenCode](https://opencode.ai) and the
-  [DeepSeek Harness](https://www.deepseek.com/en/harness/), chosen per session
-  — the protocol is agent-neutral, so another agent is one driver away
+- Per-session mode, model and effort, plus custom AI provider profiles (any
+  OpenAI- or Anthropic-compatible endpoint or gateway, its models readable
+  from the endpoint)
+- What fills the context window, part by part, and Claude Code's plan limits
+- [OpenCode](https://opencode.ai) (the default, installed on first start),
+  Claude Code and the
+  [DeepSeek Harness](https://www.deepseek.com/en/harness/) (installed from
+  the phone when chosen), picked per session — the protocol is agent-neutral,
+  so another agent is one driver away
   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
+- Plugins and MCP servers of each agent, managed from the phone
 - File attachments (photos or any file), and project/folder management on every paired bridge
 - NIP-42 `AUTH` relays, and Tor on both ends (see below)
+- A direct link on your LAN or VPN: the phone talks to the bridge over its
+  own WebSocket, with the relays as the fallback
 
 ## About this fork
 
@@ -84,7 +92,7 @@ codedeck-plus/
 │   └── mobile/            # the former Tauri app — frozen (future desktop client)
 ├── docker/              # the bridge image (Dockerfile, entrypoint, helpers)
 ├── deploy/              # systemd unit for the bridge
-├── docs/                # PROTOCOL.md (contract) · BRIDGE.md · CLIENT.md · OPENCODE.md
+├── docs/                # PROTOCOL.md (contract), BRIDGE.md, CLIENT.md, one per agent, ROADMAP.md
 ├── scripts/             # toolchain installer (Linux), shared shell helpers
 ├── .github/workflows/   # ci.yml · release.yml (tag → release)
 ├── .claude/             # CLAUDE.md + skills for Claude Code
@@ -103,8 +111,8 @@ codedeck-plus/
   in its `config.json` (or `CODEDECK_TOR_PROXY_URL`) and every relay
   connection routes through it (the agents' own API traffic does not). See
   the optional `codedeck-tor` Compose service below.
-- **Orbot for the phone**: a settings toggle routes the app's relay and image
-  traffic through Orbot's SOCKS5 proxy — off by default.
+- **Orbot for the phone**: a settings toggle routes the app's relay and
+  Blossom traffic through Orbot's SOCKS5 proxy — off by default.
 
 ## Running the bridge with Docker
 
@@ -113,9 +121,9 @@ Other ways to run it (release archives, systemd, from source) are in
 
 Two files configure it:
 
-- **`.env`** (copy [`.env.example`](.env.example)) — what the container needs:
-  the Claude Code and GitHub tokens, the Git identity and repositories to
-  clone, and a few optional switches.
+- **`.env`** (copy [`.env.example`](.env.example)) — what the container needs,
+  all of it optional: the agents' and GitHub's tokens (or set them on the
+  phone), the Git identity and repositories to clone, and a few switches.
 
   ```env
   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
@@ -225,9 +233,10 @@ the full runbook.
 - [`docs/BRIDGE.md`](docs/BRIDGE.md) — the bridge: install, commands, config, files, systemd
 - [`docs/CLIENT.md`](docs/CLIENT.md) — the phone: the Rust client core, the Android app, transport rules, building the APK
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v11 wire contract, the driver protocol, adding an agent
-- [`docs/OPENCODE.md`](docs/OPENCODE.md) — the optional OpenCode session backend: external server vs. bridge-managed, config, Docker setup
-- [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness backend: API key, models and reasoning, gateways, MCP servers and plugins
-- [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how, and installing agents on demand
+- [`docs/OPENCODE.md`](docs/OPENCODE.md) — OpenCode, the default agent: the server it runs on, provider profiles, credentials
+- [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness: API key, models and reasoning, gateways, MCP servers and plugins
+- [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — work decided but not built yet
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 
 ## Upstream

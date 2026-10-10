@@ -165,10 +165,11 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
     │        │                   pure state machine (inputs in, effects out).
     │        └── crates/bridge-runtime   the `codedeck-bridge` binary: relays,
     │                            agent host process, state/transcript files,
-    │                            workspace, images, GSD, device tools, CLI.
+    │                            workspace, uploads, GSD, direct link, CLI.
     │                                 │ stdio (driver protocol)
     │                            packages/agent-host   Node: one driver per agent
-    │                            (claude, opencode, fake) around its SDK.
+    │                            (opencode, claude, deepseek, fake) around its
+    │                            SDK.
     │
     └── crates/client-core       the phone's pure core: stores, connection FSM,
              │                   sync/merge, presentation.

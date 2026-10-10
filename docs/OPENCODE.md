@@ -1,4 +1,4 @@
-# OpenCode backend
+# OpenCode
 
 CodeDeck+ runs sessions on any agent its agent host has a driver for, and
 [OpenCode](https://opencode.ai) is the default one: a bridge with no OpenCode
@@ -49,13 +49,16 @@ Settings for this mode:
   `<home>/agents/`. The phone shows it as installing meanwhile, and new
   sessions start on it once it is ready.
 - `CODEDECK_OPENCODE_PORT` / `"openCodePort"` (env/config-file only, no flag —
-  a rarely hand-typed knob) — fixes the port instead of the default OS-assigned
-  ephemeral one. Useful if you also want to point OpenCode's own TUI at the
-  same running instance for debugging.
+  a rarely hand-typed knob) — fixes the port instead of leaving the choice to
+  OpenCode (which takes 4096 when it is free). Useful if you also want to
+  point OpenCode's own TUI at the same running instance for debugging.
 
 The embedded server always binds to `127.0.0.1` only — it is spawned
 exclusively for the bridge's own use and is never configurable to listen on
-any wider interface.
+any wider interface — and is guarded by a password made for each start. It
+runs with self-updating off (its version is the one `pnpm-lock.yaml` pins)
+and with web search offered to every model, not only OpenCode's own
+providers' (`OPENCODE_ENABLE_EXA`).
 
 If an installed `opencode` fails to come up, the agent host logs one
 actionable line and reports OpenCode as unavailable (a session on it fails
@@ -85,6 +88,28 @@ under `/data`, the same volume the bridge's own identity lives in.
 ```bash
 docker compose exec codedeck-bridge opencode auth login
 ```
+
+## Provider profiles
+
+A provider profile made on the phone for OpenCode (any OpenAI-compatible
+endpoint or gateway) adds the endpoint's models to OpenCode's model list,
+beside every provider it already has; a session picks one like any other
+model. OpenCode's own catalog places each profile: an endpoint it knows
+(DeepSeek's, OpenRouter's) signs in to that provider, and a gateway's models
+get the catalog's limits, tool calls, image input and reasoning levels. A
+profile whose name one of OpenCode's providers already has is refused, with
+the reason.
+
+OpenCode reads its providers only when it starts, so a changed list restarts
+the bridge's server: its sessions end and the bridge resumes each on the new
+server, where OpenCode still has the conversation (the transcript shows a
+restart notice). An external server gets no profiles.
+
+## When a provider fails
+
+OpenCode retries a provider that fails, waiting longer each time (about a
+minute in all). Each retry shows in the transcript with the provider's
+reason, so a model that is down can be switched rather than waited out.
 
 ## What this does not do
 

@@ -6,8 +6,9 @@ whether agents should be installed one at a time instead of all at host
 start. Researched 2026-10-07; versions and licences are as published on that
 date and should be re-checked before an agent is implemented.
 
-Today the host runs three drivers: Claude Code (Agent SDK), OpenCode (its
-server SDK) and the DeepSeek Harness (Agent Client Protocol, ACP).
+Today the host runs three drivers: OpenCode (its server SDK; the default
+agent), Claude Code (Agent SDK) and the DeepSeek Harness (Agent Client
+Protocol, ACP). Other planned work is in [`ROADMAP.md`](ROADMAP.md).
 
 ## How agents can be integrated
 
@@ -196,9 +197,10 @@ module list names a driver.
 
 ## Order
 
-1. Release candidate of what is merged.
-2. Driver SDK layout and `DriverModule` registry (above), then install on
-   demand on top of it (both done).
-3. Extract the generic ACP driver from the DeepSeek driver into `acp/`.
-4. Codex (native), Pi (RPC, with the permission gate), Copilot (ACP).
-5. Tier 2 on the ACP driver, as users ask for them.
+1. Driver SDK layout and `DriverModule` registry (above), then install on
+   demand on top of it (done, in the v1.3.0 cycle).
+2. Extract the generic ACP driver from the DeepSeek driver into `acp/`,
+   together with the first other ACP agent (Copilot), so the base has two
+   users.
+3. Codex (native), Pi (RPC, with the permission gate).
+4. Tier 2 on the ACP driver, as users ask for them.

@@ -14,7 +14,7 @@ implementation of the protocol can test itself against.
 
 It is hand-curated on purpose: generated data cannot express the deliberate
 edge cases (tristate keep/clear/set, empty `models` plus `error`, the two
-`upload-image` shapes, a heartbeat with tombstones and `machineOffline`).
+`upload-file` shapes, a heartbeat with tombstones and `machineOffline`).
 
 ## Adding a message or field
 
