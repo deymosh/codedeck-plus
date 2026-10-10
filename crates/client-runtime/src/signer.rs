@@ -207,7 +207,7 @@ mod tests {
     use protocol::crypto::generate_keypair;
 
     fn refresh() -> PhoneToBridge {
-        PhoneToBridge::RefreshSessions(BareMsg { version: Default::default() })
+        PhoneToBridge::RefreshSessions(BareMsg {})
     }
 
     #[tokio::test]

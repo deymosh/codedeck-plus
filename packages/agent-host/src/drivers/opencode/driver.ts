@@ -47,6 +47,7 @@ import type {
   OptionChoice,
   PermissionOption,
   ProviderBinding,
+  QuestionReply,
   QuestionSpec,
   RefusedProvider,
   SessionOption,
@@ -331,21 +332,16 @@ export function toQuestionSpecs(questions: QuestionInfo[]): QuestionSpec[] {
 }
 
 /**
- * The user's answers (one string per question; a multi-select arrives as its
- * labels joined by ", ") back into OpenCode's per-question label arrays. A
- * multi-select string is split only when every piece is one of the offered
- * labels — otherwise it is a typed answer kept whole.
+ * The user's answers as OpenCode's per-question label arrays: the chosen
+ * labels, or what the user typed as the one entry (OpenCode takes a custom
+ * answer the same way).
  */
-export function toQuestionAnswers(questions: QuestionInfo[], answers: string[]): QuestionAnswer[] {
-  return questions.map((q, i) => {
-    const raw = answers[i];
-    if (raw === undefined || raw === '') return [];
-    if (q.multiple) {
-      const labels = new Set(q.options.map((o) => o.label));
-      const pieces = raw.split(', ');
-      if (pieces.every((p) => labels.has(p))) return pieces;
-    }
-    return [raw];
+export function toQuestionAnswers(questions: QuestionInfo[], answers: QuestionReply[]): QuestionAnswer[] {
+  return questions.map((_, i) => {
+    const reply = answers[i];
+    if (reply === undefined) return [];
+    if (reply.type === 'selected') return reply.labels;
+    return reply.text === '' ? [] : [reply.text];
   });
 }
 
@@ -852,7 +848,6 @@ export class OpenCodeSession implements DriverSession {
         title: toolTitle(permission.toolName, permission.input) || permission.toolName,
         description: permission.description ?? permission.title,
         locations: toolLocations(permission.input),
-        rawInput: permission.input,
         options: permission.always ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })

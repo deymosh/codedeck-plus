@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn a_short_message_or_one_that_would_not_shrink_goes_as_it_is() {
-        let short = r#"{"type":"input-ack","sessionId":"s","inputId":"i"}"#.to_string();
+        let short = r#"{"v":11,"type":"input-ack","sessionId":"s","inputId":"i"}"#.to_string();
         assert_eq!(pack(short.clone()), short);
         // Random bytes, as base64, do not shrink by what base64 costs.
         let mut x: u64 = 0x9e37_79b9_7f4a_7c15;

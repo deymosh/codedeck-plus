@@ -24,7 +24,6 @@ pub struct SessionListMsg {
     /// The bridge's own credentials (not tied to an agent), e.g. a GitHub token.
     #[serde(default)]
     pub credentials: Vec<CredentialStatus>,
-    pub protocol_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
     /// project folders per workspace root (relative). Valid `create-session.cwd`.
@@ -144,9 +143,9 @@ pub struct SessionFailedMsg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum InputFailedReason {
+    /// The bridge knows no session with this id.
     NoSession,
-    Expired,
-    Busy,
+    /// The session exists but is not running.
     Error,
 }
 
@@ -164,13 +163,6 @@ pub struct InputFailedMsg {
 pub struct CloseSessionAckMsg {
     pub session_id: String,
     pub success: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionReplacedMsg {
-    pub old_session_id: String,
-    pub new_session: RemoteSessionInfo,
 }
 
 /// A session option now has `value` — the reply to `set-option`, and also
@@ -434,7 +426,6 @@ pub enum BridgeToPhone {
     SessionFailed(SessionFailedMsg),
     InputFailed(InputFailedMsg),
     CloseSessionAck(CloseSessionAckMsg),
-    SessionReplaced(SessionReplacedMsg),
     OptionConfirmed(OptionConfirmedMsg),
     FolderAck(FolderAckMsg),
     Usage(UsageMsg),
@@ -485,20 +476,20 @@ mod tests {
 
     #[test]
     fn heartbeat_minimal_and_full() {
-        let m = rt(&json!({"type":"sessions","machine":"m","sessions":[],"agents":[],"protocolVersion":11}));
+        let m = rt(&json!({"v":11,"type":"sessions","machine":"m","sessions":[],"agents":[]}));
         match m {
             BridgeToPhone::Sessions(s) => {
-                assert_eq!(s.protocol_version, 11);
                 assert_eq!(s.host, None);
                 assert!(s.credentials.is_empty());
             }
             _ => panic!(),
         }
         let m = rt(&json!({
+            "v": 11,
             "type":"sessions","machine":"m","host":"service","sessions":[session()],
             "agents":[agent()],
             "credentials":[{"id":"github_pat","label":"GitHub token","present":false}],
-            "protocolVersion":11,"capabilities":["sync/1","files"],
+            "capabilities":["sync/1","files"],
             "folders":["a","b"],"roots":["/w"],"removedSessions":["old"],"machineOffline":true
         }));
         match m {
@@ -515,70 +506,69 @@ mod tests {
 
     #[test]
     fn a_heartbeat_without_its_agent_catalog_is_rejected() {
-        assert!(serde_json::from_value::<BridgeToPhone>(json!({"type":"sessions","machine":"m","sessions":[],"protocolVersion":11})).is_err());
+        assert!(serde_json::from_value::<BridgeToPhone>(json!({"v":11,"type":"sessions","machine":"m","sessions":[]})).is_err());
     }
 
     #[test]
     fn every_variant_decodes_from_a_representative_fixture() {
-        rt(&json!({"type":"output","sessionId":"s","seq":7,"entries":[entry(),entry()]}));
-        rt(&json!({"type":"input-ack","sessionId":"s","inputId":"i"}));
-        rt(&json!({"type":"sync-begin","sessionId":"s","syncId":"y","seqHigh":100,"ranges":[[1,50]]}));
-        rt(&json!({"type":"sync-chunk","sessionId":"s","syncId":"y","range":[1,2],"entries":[{"seq":1,"entry":entry()},{"seq":2,"entry":entry()}]}));
-        rt(&json!({"type":"sync-end","sessionId":"s","syncId":"y","deliveredRanges":[[1,50]]}));
-        rt(&json!({"type":"session-pending","pendingId":"p","machine":"m","createdAt":"t"}));
-        rt(&json!({"type":"session-ready","pendingId":"p","session":session()}));
-        rt(&json!({"type":"session-failed","pendingId":"p","reason":"boom"}));
-        rt(&json!({"type":"input-failed","sessionId":"s","reason":"no-session","inputId":"i"}));
-        rt(&json!({"type":"close-session-ack","sessionId":"s","success":true}));
-        rt(&json!({"type":"session-replaced","oldSessionId":"o","newSession":session()}));
-        rt(&json!({"type":"option-confirmed","sessionId":"s","option":"mode","value":"plan"}));
-        rt(&json!({"type":"folder-ack","requestId":"r","success":true,"path":"a/b"}));
-        rt(&json!({"type":"usage","sessionId":"s","usage":{"available":true,"plan":"max","windows":[{"label":"5h","utilization":42.0,"resetsAt":"t"}],"fetchedAt":"t"}}));
-        rt(&json!({"type":"gsd-state","sessionId":"s","gsd":{
+        rt(&json!({"v":11,"type":"output","sessionId":"s","seq":7,"entries":[entry(),entry()]}));
+        rt(&json!({"v":11,"type":"input-ack","sessionId":"s","inputId":"i"}));
+        rt(&json!({"v":11,"type":"sync-begin","sessionId":"s","syncId":"y","seqHigh":100,"ranges":[[1,50]]}));
+        rt(&json!({"v":11,"type":"sync-chunk","sessionId":"s","syncId":"y","range":[1,2],"entries":[{"seq":1,"entry":entry()},{"seq":2,"entry":entry()}]}));
+        rt(&json!({"v":11,"type":"sync-end","sessionId":"s","syncId":"y","deliveredRanges":[[1,50]]}));
+        rt(&json!({"v":11,"type":"session-pending","pendingId":"p","machine":"m","createdAt":"t"}));
+        rt(&json!({"v":11,"type":"session-ready","pendingId":"p","session":session()}));
+        rt(&json!({"v":11,"type":"session-failed","pendingId":"p","reason":"boom"}));
+        rt(&json!({"v":11,"type":"input-failed","sessionId":"s","reason":"no-session","inputId":"i"}));
+        rt(&json!({"v":11,"type":"close-session-ack","sessionId":"s","success":true}));
+        rt(&json!({"v":11,"type":"option-confirmed","sessionId":"s","option":"mode","value":"plan"}));
+        rt(&json!({"v":11,"type":"folder-ack","requestId":"r","success":true,"path":"a/b"}));
+        rt(&json!({"v":11,"type":"usage","sessionId":"s","usage":{"available":true,"plan":"max","windows":[{"label":"5h","utilization":42.0,"resetsAt":"t"}],"fetchedAt":"t"}}));
+        rt(&json!({"v":11,"type":"gsd-state","sessionId":"s","gsd":{
             "installed":true,"available":true,"hasGit":true,"situation":"x","summary":"y",
             "milestone":null,"currentPhase":null,"totalPhases":null,"percent":0.0,
             "phases":[],"actions":[],"recommended":null,"paused":false,"blockers":[],
             "verifyFailed":false,"execution":null
         }}));
-        rt(&json!({"type":"models","agent":"claude-code","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
-        rt(&json!({"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
-        rt(&json!({"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
-        rt(&json!({"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
-        rt(&json!({"type":"plugins","agent":"claude-code",
+        rt(&json!({"v":11,"type":"models","agent":"claude-code","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
+        rt(&json!({"v":11,"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
+        rt(&json!({"v":11,"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
+        rt(&json!({"v":11,"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
+        rt(&json!({"v":11,"type":"plugins","agent":"claude-code",
             "installed":[{"id":"c@m","name":"c","marketplace":"m","version":"1","description":"d","enabled":false}],
             "marketplaces":[{"name":"m","source":"me/skills"}],"toggles":true,
             "available":[{"id":"x@m","name":"x","marketplace":"m","installCount":12}]}));
-        rt(&json!({"type":"plugins","agent":"opencode","installed":[{"id":"opencode-wakatime","name":"opencode-wakatime","enabled":true}]}));
-        rt(&json!({"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
-        rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
-        rt(&json!({"type":"plugin-ack","agent":"claude-code","action":"update","target":"c@m","success":true,"message":"Updated from 0.1.0 to 0.2.0."}));
-        rt(&json!({"type":"agent-ack","agent":"opencode","action":"install","success":true}));
-        rt(&json!({"type":"agent-ack","agent":"claude-code","action":"remove","success":false,"error":"Claude Code is on this machine outside CodeDeck."}));
-        rt(&json!({"type":"mcp-servers","agent":"claude-code","servers":[
+        rt(&json!({"v":11,"type":"plugins","agent":"opencode","installed":[{"id":"opencode-wakatime","name":"opencode-wakatime","enabled":true}]}));
+        rt(&json!({"v":11,"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
+        rt(&json!({"v":11,"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
+        rt(&json!({"v":11,"type":"plugin-ack","agent":"claude-code","action":"update","target":"c@m","success":true,"message":"Updated from 0.1.0 to 0.2.0."}));
+        rt(&json!({"v":11,"type":"agent-ack","agent":"opencode","action":"install","success":true}));
+        rt(&json!({"v":11,"type":"agent-ack","agent":"claude-code","action":"remove","success":false,"error":"Claude Code is on this machine outside CodeDeck."}));
+        rt(&json!({"v":11,"type":"mcp-servers","agent":"claude-code","servers":[
             {"name":"github","transport":"http","target":"https://api.githubcopilot.com/mcp/","headerKeys":["Authorization"],"enabled":true},
             {"name":"fs","transport":"stdio","target":"npx","envKeys":["K"],"enabled":false}],"toggles":true}));
-        rt(&json!({"type":"mcp-servers","agent":"claude-code","servers":[],"error":"no claude"}));
-        rt(&json!({"type":"mcp-ack","agent":"claude-code","action":"add","names":["github"],"success":false,"error":"bad url"}));
-        rt(&json!({"type":"session-mcp","sessionId":"s","servers":[
+        rt(&json!({"v":11,"type":"mcp-servers","agent":"claude-code","servers":[],"error":"no claude"}));
+        rt(&json!({"v":11,"type":"mcp-ack","agent":"claude-code","action":"add","names":["github"],"success":false,"error":"bad url"}));
+        rt(&json!({"v":11,"type":"session-mcp","sessionId":"s","servers":[
             {"name":"github","status":"connected","tools":12},{"name":"x","status":"needs-auth"},
             {"name":"y","status":"failed","error":"exit 1"}],"toggles":true,"projectWide":true}));
-        rt(&json!({"type":"session-mcp","sessionId":"s","servers":[],"error":"not running"}));
-        rt(&json!({"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
+        rt(&json!({"v":11,"type":"session-mcp","sessionId":"s","servers":[],"error":"not running"}));
+        rt(&json!({"v":11,"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
-        rt(&json!({"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
-        rt(&json!({"type":"provider-profiles","machine":"m","profiles":[{"id":"p","agent":"claude-code","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
-        rt(&json!({"type":"provider-profile-ack","machine":"m","profileId":"p","success":true,"tokenValid":false}));
+        rt(&json!({"v":11,"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
+        rt(&json!({"v":11,"type":"provider-profiles","machine":"m","profiles":[{"id":"p","agent":"claude-code","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
+        rt(&json!({"v":11,"type":"provider-profile-ack","machine":"m","profileId":"p","success":true,"tokenValid":false}));
     }
 
     #[test]
     fn unknown_type_is_a_decode_error() {
-        assert!(serde_json::from_str::<BridgeToPhone>(r#"{"type":"warp","sessionId":"s"}"#).is_err());
-        assert!(serde_json::from_str::<BridgeToPhone>(r#"{"type":"mode-confirmed","sessionId":"s","mode":"plan"}"#).is_err());
+        assert!(serde_json::from_str::<BridgeToPhone>(r#"{"v":11,"type":"warp","sessionId":"s"}"#).is_err());
+        assert!(serde_json::from_str::<BridgeToPhone>(r#"{"v":11,"type":"mode-confirmed","sessionId":"s","mode":"plan"}"#).is_err());
     }
 
     #[test]
     fn a_typed_entry_survives_the_full_message() {
-        let m = rt(&json!({"type":"output","sessionId":"s","seq":1,"entries":[{
+        let m = rt(&json!({"v":11,"type":"output","sessionId":"s","seq":1,"entries":[{
             "timestamp":"t","entryType":"diff","path":"f","lines":[{"type":"add","text":"a"}],"truncated":true
         }]}));
         match m {

@@ -17,6 +17,7 @@ export type RefusedProvider = G.RefusedProvider;
 export type SelectOutcome = G.SelectOutcome;
 export type PlanOutcome = G.PlanOutcome_Serialize;
 export type QuestionOutcome = G.QuestionOutcome;
+export type QuestionReply = G.QuestionReply;
 export type SessionOption = G.SessionOption;
 export type McpAction = G.McpAction;
 export type McpServerAdd = G.McpServerAdd;

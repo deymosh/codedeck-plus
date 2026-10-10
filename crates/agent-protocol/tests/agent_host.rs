@@ -17,7 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use agent_protocol::{
-    decode_host_frame, encode_frame, BridgeMessage, Frame, HostFrame, HostMessage, PlanOutcome, QuestionOutcome,
+    decode_host_frame, encode_frame, BridgeMessage, Frame, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, QuestionReply,
     SelectOutcome, SessionEvent, StartSession,
 };
 use protocol::common::EntryBody;
@@ -204,7 +204,12 @@ fn the_agent_host_speaks_the_driver_protocol() {
     assert_eq!(q.questions.len(), 2);
     host.send(
         Some(req),
-        BridgeMessage::QuestionOutcome(QuestionOutcome::Answered { answers: vec!["Rust".into(), "Dev".into()] }),
+        BridgeMessage::QuestionOutcome(QuestionOutcome::Answered {
+            answers: vec![
+                QuestionReply::Selected { labels: vec!["Rust".into()] },
+                QuestionReply::Selected { labels: vec!["Dev".into()] },
+            ],
+        }),
     );
     host.text("c1", "received Rust, Dev");
 

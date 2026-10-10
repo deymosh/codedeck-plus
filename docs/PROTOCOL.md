@@ -196,8 +196,6 @@ question.
 |---|---|
 | `no-session` | The bridge knows no session with this id. |
 | `error` | The session exists but is not running. |
-| `busy` | Reserved; not emitted. |
-| `expired` | Reserved; not emitted. |
 
 The bridge writes the user's transcript entry itself (agents do not reliably
 echo input) and drops an agent's echo of it.
@@ -478,17 +476,32 @@ spec.
   `since` (seconds; it keeps an hour of it), then everything new. It takes
   only command events (4515) authored by the identity that said `HELLO`.
 
-### Capabilities
+### Version and capabilities
 
-The heartbeat carries `protocolVersion` + `capabilities[]`; phones stamp
-commands with `v` (+ optional `caps`). What an AGENT can do is catalog data
-(`supports`), not a capability. The bridge's capabilities:
+Every message, both ways, carries `v`: its sender's protocol version (11),
+first in the object. The codec stamps it and the decoder checks it before
+the body: a message of another version, or of none, is refused as such
+(`DecodeError::Version`) rather than read by the wrong version's rules. Two
+ends of different versions cannot talk; each says so instead of failing at
+random. A `chunk` fragment carries no `v` of its own — the message it
+reassembles into does.
 
-- **hard gates** — `files`: the phone shows the attach control only when present;
-  `session-keys`: the phone grants a session key only when present;
-- **presence markers** — `sync/1`, `folders`: the feature is detected from
-  payload data;
-- **transport beacon** — `chunked`: advertised on both sides, gated by neither.
+Within one version, additions do not break an older peer. Unknown fields are
+ignored. The open vocabularies a bridge or agent may grow decode an unknown
+value as a catch-all instead of failing the whole message: an entry type as
+`unsupported` (it keeps its seq; the phone says it needs an update to show
+it), a tool or task kind as `other`, a notice kind as `other` (its text still
+shows), and an MCP status, session state or install state as `unknown` (an
+agent in an unknown install state runs no session). A known value with a
+missing or mistyped field is still an error.
+
+The heartbeat carries `capabilities[]`, what this BRIDGE offers; what an
+AGENT can do is catalog data (`supports`). Each capability gates something
+a phone does, and a string is added only when a phone relying on it against
+a bridge without it would otherwise fail:
+
+- `files`: the phone shows the attach control only when present;
+- `session-keys`: the phone grants a session key only when present.
 
 ### Oversize-event fragmentation (`chunk`)
 
@@ -595,8 +608,11 @@ Requests the host makes (the bridge answers each exactly once):
 | `ask-question {sessionId, requestId, questions}` | `question-outcome {outcome: answered {answers} \| cancelled {reason}}` |
 | `request-plan-approval {sessionId, requestId, options, revise?}` | `plan-outcome {outcome: selected {optionId, feedback?} \| cancelled {reason}}` (`feedback` only with `revise`) |
 
-A `cancelled` outcome means nobody chose: the card timed out, the user
-interrupted, or the session is ending.
+`answers` holds one reply per question, in order: `{type: "selected",
+labels}` for the options chosen (in the order the question offers them), or
+`{type: "text", text}` for what the user typed instead. A `cancelled` outcome
+means nobody chose: the card timed out, the user interrupted, or the session
+is ending.
 
 ### Supervision
 

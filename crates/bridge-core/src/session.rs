@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::OnceLock;
 
-use agent_protocol::{QuestionSpec, TurnState};
+use agent_protocol::{QuestionReply, QuestionSpec, TurnState};
 use protocol::common::{OptionChoice, PermissionOption, PermissionOptionKind, SessionState};
 use regex::Regex;
 
@@ -166,7 +166,7 @@ pub(crate) enum CardKind {
     Permission { options: Vec<PermissionOption> },
     /// `revise` is the option the user's feedback may travel with.
     Plan { options: Vec<OptionChoice>, revise: Option<String> },
-    Question { questions: Vec<QuestionSpec>, answers: BTreeMap<u32, String> },
+    Question { questions: Vec<QuestionSpec>, answers: BTreeMap<u32, QuestionReply> },
 }
 
 /// How a chosen permission option reads in the transcript.
@@ -178,14 +178,19 @@ pub fn permission_summary(kind: PermissionOptionKind) -> &'static str {
     }
 }
 
-/// The answer text for chosen option indices: their labels joined with
-/// ", ". None when an index is out of range or nothing was chosen.
-pub fn option_answer(question: &QuestionSpec, selected: &[u32]) -> Option<String> {
-    let labels: Option<Vec<&str>> = selected
-        .iter()
-        .map(|&i| question.options.get(i as usize).map(|o| o.label.as_str()))
-        .collect();
-    labels.filter(|l| !l.is_empty()).map(|l| l.join(", "))
+/// The answer chosen option indices make: their labels, in the order the
+/// question offers them. None when an index is out of range, when nothing
+/// was chosen, or when a single-choice question got several.
+pub fn option_answer(question: &QuestionSpec, selected: &[u32]) -> Option<QuestionReply> {
+    let mut selected = selected.to_vec();
+    selected.sort_unstable();
+    selected.dedup();
+    if selected.is_empty() || (selected.len() > 1 && !question.multi_select) {
+        return None;
+    }
+    let labels: Option<Vec<String>> =
+        selected.iter().map(|&i| question.options.get(i as usize).map(|o| o.label.clone())).collect();
+    labels.map(|labels| QuestionReply::Selected { labels })
 }
 
 fn regex(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
@@ -292,16 +297,20 @@ mod tests {
     }
 
     #[test]
-    fn option_answers_join_labels() {
+    fn option_answers_are_the_chosen_labels() {
         let q = QuestionSpec {
             header: None,
             question: "Which?".into(),
             options: vec![QuestionOption { label: "Red".into(), description: None }, QuestionOption { label: "Blue".into(), description: None }],
             multi_select: true,
         };
-        assert_eq!(option_answer(&q, &[1, 0]).as_deref(), Some("Blue, Red"));
+        let selected = |labels: &[&str]| Some(QuestionReply::Selected { labels: labels.iter().map(|l| l.to_string()).collect() });
+        assert_eq!(option_answer(&q, &[1, 0, 1]), selected(&["Red", "Blue"]));
         assert_eq!(option_answer(&q, &[2]), None);
         assert_eq!(option_answer(&q, &[]), None);
+        let single = QuestionSpec { multi_select: false, ..q };
+        assert_eq!(option_answer(&single, &[1]), selected(&["Blue"]));
+        assert_eq!(option_answer(&single, &[0, 1]), None);
     }
 
     #[test]

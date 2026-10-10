@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use agent_protocol::{
-    AgentInfo, BridgeMessage, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, SelectOutcome, SessionEvent,
+    AgentInfo, BridgeMessage, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, QuestionReply, SelectOutcome, SessionEvent,
     StartSession,
 };
 use protocol::common::{AgentAction, AgentInstall, EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
@@ -906,7 +906,6 @@ impl Engine {
                     title: req.title,
                     description: req.description,
                     locations: req.locations,
-                    raw_input: req.raw_input,
                     options: req.options.clone(),
                     reason: req.reason,
                     hook: req.hook,
@@ -1015,7 +1014,7 @@ impl Engine {
 
     /// Record the answer to question `index`; the ask resolves once every
     /// question has one. False when there is no such pending question.
-    pub(super) fn answer_question(&mut self, session_id: &str, request_id: &str, index: u32, answer: String) -> bool {
+    pub(super) fn answer_question(&mut self, session_id: &str, request_id: &str, index: u32, answer: QuestionReply) -> bool {
         let Some(card) = self.run_mut(session_id).and_then(|r| r.cards.get_mut(request_id)) else { return false };
         let CardKind::Question { questions, answers } = &mut card.kind else { return false };
         if index as usize >= questions.len() {
@@ -1025,8 +1024,8 @@ impl Engine {
         if answers.len() < questions.len() {
             return true;
         }
-        let answers: Vec<String> = answers.values().cloned().collect();
-        let summary = answers.join(" · ");
+        let answers: Vec<QuestionReply> = answers.values().cloned().collect();
+        let summary = answers.iter().map(QuestionReply::summary).collect::<Vec<_>>().join(" · ");
         self.close_card(
             session_id,
             request_id,
@@ -1048,7 +1047,7 @@ impl Engine {
                 _ => None,
             })
             .unwrap_or(0);
-        self.answer_question(session_id, request_id, index, text)
+        self.answer_question(session_id, request_id, index, QuestionReply::Text { text })
     }
 }
 

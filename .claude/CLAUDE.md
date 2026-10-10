@@ -184,11 +184,11 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 - **The phone and the bridge share only `protocol` (and `nostr-transport`).**
   Neither core depends on the other.
 - **Capability negotiation** — see the note at the top of
-  `crates/protocol/src/capabilities.rs`. `files` and `session-keys` are
-  HARD GATES; `sync/1`, `folders` are PRESENCE MARKERS; `chunked` is a
-  TRANSPORT BEACON. What an agent can do is catalog data (`supports`), not a capability.
-  Do not add a new string as a "gate" unless a peer that has not seen it would
-  otherwise hard-fail.
+  `crates/protocol/src/capabilities.rs`. The only capabilities are `files`
+  and `session-keys`, both gates. What an agent can do is catalog data
+  (`supports`), not a capability. Do not add a new string unless a peer that
+  has not seen it would otherwise hard-fail. The protocol version is not a
+  capability: every message carries it as `v`.
 
 ## Absolute constraints (do not suggest workarounds)
 

@@ -14,7 +14,7 @@ const NOW_SECS: u64 = T0 / 1000;
 const DAY: u64 = 24 * 3600;
 
 fn grant_msg(bridge: &str, key: &str, expires_at: u64) -> serde_json::Value {
-    json!({"type":"session-key","sessionKey":{"pubkeyHex":key,"bridgePubkeyHex":bridge,"expiresAt":expires_at}})
+    json!({"v":11,"type":"session-key","sessionKey":{"pubkeyHex":key,"bridgePubkeyHex":bridge,"expiresAt":expires_at}})
 }
 
 /// The paired phone grants `key`; returns the effects.
@@ -45,7 +45,7 @@ fn to(phone: &Keypair, key: &Keypair) -> Vec<Vec<(String, String)>> {
 /// A refresh from the phone, its payload encrypted with `key`.
 fn refresh_via(rig: &mut Rig, key: &Keypair) {
     let phone = rig.phone.clone();
-    rig.phone_event_via_key(&phone, key, json!({"type":"refresh-sessions"}), Via::Commands);
+    rig.phone_event_via_key(&phone, key, json!({"v":11,"type":"refresh-sessions"}), Via::Commands);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn a_granted_key_encrypts_and_the_identity_stays_the_party() {
     refresh_via(&mut rig, &key);
     assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
     // So is one still encrypted with the identity.
-    rig.send(json!({"type":"refresh-sessions"}));
+    rig.send(json!({"v":11,"type":"refresh-sessions"}));
     assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
 }
 
@@ -73,7 +73,7 @@ fn an_event_signed_by_the_session_key_is_not_heard() {
     let mut rig = Rig::new();
     let key = generate_keypair();
     grant(&mut rig, &key, NOW_SECS + DAY);
-    rig.phone_event(&key, json!({"type":"refresh-sessions"}), Via::Commands);
+    rig.phone_event(&key, json!({"v":11,"type":"refresh-sessions"}), Via::Commands);
     assert!(heartbeats(&rig.take()).is_empty());
     let bridge = rig.bridge.pubkey_hex.clone();
     rig.phone_event(&key, grant_msg(&bridge, &generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Commands);
@@ -132,7 +132,7 @@ fn a_key_belongs_to_one_phone() {
                 _ => None,
             })
             .unwrap();
-        rig.phone_event(phone, json!({"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":token}), Via::Pairing);
+        rig.phone_event(phone, json!({"v":11,"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":token}), Via::Pairing);
     }
     let b_key = generate_keypair();
     let bridge = rig.bridge.pubkey_hex.clone();
@@ -148,7 +148,7 @@ fn a_key_belongs_to_one_phone() {
     let a_keys = &phones.iter().find(|p| p.pubkey_hex == a.pubkey_hex).unwrap().session_keys;
     assert!(a_keys.is_empty());
     // A's messages still go to A; B's to B's key.
-    rig.phone_event(&b, json!({"type":"refresh-sessions"}), Via::Commands);
+    rig.phone_event(&b, json!({"v":11,"type":"refresh-sessions"}), Via::Commands);
     let sent = heartbeats(&rig.take());
     assert_eq!(
         sent,
@@ -187,7 +187,7 @@ fn a_lapsed_key_falls_back_to_the_identity() {
     // Its payloads are unreadable once lapsed; the identity is used again.
     refresh_via(&mut rig, &key);
     assert!(heartbeats(&rig.take()).is_empty());
-    rig.send(json!({"type":"refresh-sessions"}));
+    rig.send(json!({"v":11,"type":"refresh-sessions"}));
     assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &rig.phone.clone()));
 }
 
@@ -205,6 +205,7 @@ fn a_pair_request_can_grant_the_first_key() {
         .unwrap();
     let (phone, key) = (generate_keypair(), generate_keypair());
     let req = json!({
+        "v": 11,
         "type":"pair-request","npub":"n","pubkeyHex":"x","label":"Pixel","token":token,
         "sessionKey":{"pubkeyHex":key.pubkey_hex,"bridgePubkeyHex":rig.bridge.pubkey_hex,"expiresAt":NOW_SECS + DAY}
     });

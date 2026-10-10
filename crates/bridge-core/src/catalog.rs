@@ -57,6 +57,7 @@ impl Catalog {
             }
             (AgentInstall::Installing {}, _) => Err(format!("{name} is still being installed.")),
             (AgentInstall::Failed { reason }, _) => Err(format!("{name} could not be installed: {reason}")),
+            (AgentInstall::Unknown, _) => Err(format!("{name} is in an install state this bridge does not know.")),
         }
     }
 

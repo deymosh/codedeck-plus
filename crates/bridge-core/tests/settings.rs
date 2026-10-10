@@ -38,7 +38,7 @@ fn pairing_a_phone_end_to_end() {
     let mut rig = Rig::with(RigOptions { paired: false, ..Default::default() });
     let token = open_pairing(&mut rig);
     let phone = generate_keypair();
-    let req = json!({"type":"pair-request","npub":"n","pubkeyHex":"spoofed","label":"Pixel","token":token});
+    let req = json!({"v":11,"type":"pair-request","npub":"n","pubkeyHex":"spoofed","label":"Pixel","token":token});
     rig.phone_event(&phone, req, Via::Pairing);
     let effects = rig.take();
     assert!(effects.iter().any(|e| matches!(e, Effect::PairingClosed { reason: PairingCloseReason::Paired, phone: Some(p) } if p.pubkey_hex == phone.pubkey_hex)));
@@ -73,7 +73,7 @@ fn a_bad_token_is_refused_the_window_stays_open_and_refusals_are_budgeted() {
     let mut rig = Rig::with(RigOptions { paired: false, ..Default::default() });
     open_pairing(&mut rig);
     let stranger = generate_keypair();
-    let bad = json!({"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":"wrong"});
+    let bad = json!({"v":11,"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":"wrong"});
     let mut answered = 0;
     for _ in 0..7 {
         rig.phone_event(&stranger, bad.clone(), Via::Pairing);
@@ -91,7 +91,7 @@ fn a_bad_token_is_refused_the_window_stays_open_and_refusals_are_budgeted() {
 fn without_a_window_a_pair_request_is_refused_and_a_window_expires() {
     let mut rig = Rig::with(RigOptions { paired: false, ..Default::default() });
     let stranger = generate_keypair();
-    rig.phone_event(&stranger, json!({"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":"t"}), Via::Pairing);
+    rig.phone_event(&stranger, json!({"v":11,"type":"pair-request","npub":"n","pubkeyHex":"x","label":"P","token":"t"}), Via::Pairing);
     assert_eq!(nack(&mut rig), Some(PairAckReason::WindowClosed));
     open_pairing(&mut rig);
     rig.advance(10 * 60_000);
@@ -105,7 +105,7 @@ fn unpaired_senders_are_not_heard_on_the_command_path() {
     rig.host_up();
     rig.take();
     let stranger = generate_keypair();
-    rig.phone_event(&stranger, json!({"type":"create-session","agent":"alpha"}), Via::Commands);
+    rig.phone_event(&stranger, json!({"v":11,"type":"create-session","agent":"alpha"}), Via::Commands);
     assert!(rig.take().is_empty());
 }
 
@@ -120,7 +120,7 @@ fn an_agent_credential_is_stored_checked_and_acked_but_never_sent_back() {
     let mut rig = Rig::new();
     rig.host_up();
     rig.take();
-    rig.send(json!({"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk-secret"}}));
+    rig.send(json!({"v":11,"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk-secret"}}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::CheckCredential { .. }));
     assert!(matches!(msg, BridgeMessage::CheckCredential { value, .. } if value.expose() == "sk-secret"));
     assert!(!rig.messages().iter().any(|m| matches!(m, BridgeToPhone::CredentialsAck(_))), "acked after the check");
@@ -136,7 +136,7 @@ fn an_agent_credential_is_stored_checked_and_acked_but_never_sent_back() {
     assert_eq!(last_heartbeat(&msgs).agents[0].credentials[0].valid, Some(true));
     assert!(!msgs.iter().any(|m| serde_json::to_string(m).unwrap().contains("sk-secret")));
 
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (_, p) = rig.start_request();
     assert_eq!(p.credentials["alpha_key"].expose(), "sk-secret");
     assert!(!all_published_json(&mut rig).contains("sk-secret"));
@@ -149,7 +149,7 @@ fn an_operator_env_credential_wins_and_is_not_checked() {
     rig.host_up();
     let hb = last_heartbeat(&rig.messages());
     assert!(hb.agents[0].credentials[0].present && hb.agents[0].credentials[0].from_env);
-    rig.send(json!({"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk-x"}}));
+    rig.send(json!({"v":11,"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk-x"}}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::CheckCredential { .. })));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::CredentialsAck(a) if a.success)));
 }
@@ -158,7 +158,7 @@ fn an_operator_env_credential_wins_and_is_not_checked() {
 fn a_credential_outside_the_scope_refuses_the_whole_write() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"set-credentials","agent":"alpha","values":{"alpha_key":"k","github_pat":"g"}}));
+    rig.send(json!({"v":11,"type":"set-credentials","agent":"alpha","values":{"alpha_key":"k","github_pat":"g"}}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::CredentialsAck(a)
         if !a.success && a.error.as_deref() == Some("Unknown credential: github_pat"))));
     assert!(!rig.store.snapshot().contains_key("credentials"));
@@ -168,21 +168,21 @@ fn a_credential_outside_the_scope_refuses_the_whole_write() {
 fn the_github_token_is_the_bridges_own_and_reaches_every_session() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"set-credentials","values":{"github_pat":"ghp_x"}}));
+    rig.send(json!({"v":11,"type":"set-credentials","values":{"github_pat":"ghp_x"}}));
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::CredentialsAck(a) if a.success && a.agent.is_none())));
     assert!(last_heartbeat(&msgs).credentials[0].present);
-    rig.send(json!({"type":"create-session","agent":"beta"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"beta"}));
     let (_, p) = rig.start_request();
     assert_eq!(p.env["GITHUB_TOKEN"].expose(), "ghp_x");
-    rig.send(json!({"type":"set-credentials","values":{"github_pat":null}}));
+    rig.send(json!({"v":11,"type":"set-credentials","values":{"github_pat":null}}));
     assert!(!last_heartbeat(&rig.messages()).credentials[0].present);
 }
 
 // --- provider profiles ---
 
 fn set_profile(rig: &mut Rig, profile: serde_json::Value) {
-    rig.send(json!({"type":"set-provider-profile","profileId":"kimi","profile":profile}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"kimi","profile":profile}));
 }
 
 fn kimi(token: Option<&str>) -> serde_json::Value {
@@ -289,7 +289,7 @@ fn the_token_is_kept_cleared_or_replaced_and_a_profile_can_be_deleted() {
     set_profile(&mut rig, kimi_cleared());
     assert!(!answer_token_check(&mut rig, None));
     assert_eq!(has_token(&mut rig), Some(false));
-    rig.send(json!({"type":"set-provider-profile","profileId":"kimi","profile":null}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"kimi","profile":null}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::ProviderProfiles(p) if p.profiles.is_empty())));
 }
 
@@ -306,7 +306,7 @@ fn router(agent: &str, token: Option<&str>, default_model: Option<&str>) -> serd
 }
 
 fn set_router(rig: &mut Rig, profile: serde_json::Value) {
-    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":profile}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"router","profile":profile}));
 }
 
 /// Take the pending model-list read: (request id, base URL, token).
@@ -391,7 +391,7 @@ fn a_newer_save_wins_over_a_model_list_still_on_its_way() {
     let mut rig = rig_with_providers();
     set_router(&mut rig, router("alpha", Some("t"), None));
     let (stale, ..) = take_model_fetch(&mut rig).unwrap();
-    rig.send(json!({"type":"set-provider-profile","profileId":"router","profile":null}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"router","profile":null}));
     rig.take();
     rig.host_reply(&stale, listed(&["a"]));
     assert!(rig.take().is_empty(), "the deleted profile is not brought back");
@@ -420,7 +420,7 @@ fn an_agent_that_adds_profile_models_gets_its_profiles_whenever_they_change() {
     assert_eq!(pushed_to_delta(&mut rig), Some(vec![]));
     set_profile(&mut rig, p);
     assert_eq!(pushed_to_delta(&mut rig), Some(vec!["kimi".to_string()]));
-    rig.send(json!({"type":"set-provider-profile","profileId":"kimi","profile":null}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"kimi","profile":null}));
     assert_eq!(pushed_to_delta(&mut rig), Some(vec![]));
 
     // A host restart hands them over again.
@@ -469,7 +469,7 @@ fn a_save_the_agent_leaves_out_is_undone_and_refused_with_its_reason() {
 
     // A new profile the agent leaves out is not stored at all.
     rig.take();
-    rig.send(json!({"type":"set-provider-profile","profileId":"other","profile":delta_kimi("DeepSeek")}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"other","profile":delta_kimi("DeepSeek")}));
     delta_takes(&mut rig, &[("other", reason)]);
     assert_eq!(ack_error(&mut rig).as_deref(), Some(reason));
     assert!(!rig.store.snapshot()["providerProfiles"].contains("\"other\""));
@@ -498,7 +498,7 @@ fn a_profile_the_agent_leaves_out_later_shows_why() {
 fn profiles_reach_an_agent_oldest_saved_first() {
     let mut rig = rig_with_providers();
     for id in ["zeta", "alpha-1"] {
-        rig.send(json!({"type":"set-provider-profile","profileId":id,"profile":delta_kimi(id)}));
+        rig.send(json!({"v":11,"type":"set-provider-profile","profileId":id,"profile":delta_kimi(id)}));
         delta_takes(&mut rig, &[]);
         answer_token_check(&mut rig, None);
         rig.advance(1_000);
@@ -530,7 +530,7 @@ fn failed_reason(rig: &mut Rig) -> String {
 #[test]
 fn a_provider_bound_session_starts_on_the_live_profile_with_its_model() {
     let mut rig = with_kimi();
-    rig.send(json!({"type":"create-session","agent":"alpha","providerId":"kimi"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","providerId":"kimi"}));
     let (id, p) = rig.start_request();
     let binding = p.provider.expect("bound");
     assert_eq!((binding.base_url.as_str(), binding.auth_token.expose()), ("https://api.kimi.test/anthropic", "tok"));
@@ -540,30 +540,30 @@ fn a_provider_bound_session_starts_on_the_live_profile_with_its_model() {
     let info = last_heartbeat(&rig.messages()).sessions[0].clone();
     assert_eq!((info.provider_id.as_deref(), info.provider_label.as_deref()), (Some("kimi"), Some("Kimi")));
 
-    rig.send(json!({"type":"usage-request","sessionId":p.session_id}));
+    rig.send(json!({"v":11,"type":"usage-request","sessionId":p.session_id}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::GetUsage { .. })), "provider usage is withheld");
-    rig.send(json!({"type":"set-option","sessionId":p.session_id,"option":"model","value":"claude-x"}));
+    rig.send(json!({"v":11,"type":"set-option","sessionId":p.session_id,"option":"model","value":"claude-x"}));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::SetOption { .. })));
-    rig.send(json!({"type":"set-option","sessionId":p.session_id,"option":"model","value":"k2"}));
+    rig.send(json!({"v":11,"type":"set-option","sessionId":p.session_id,"option":"model","value":"k2"}));
     assert!(rig.has_host_request(|m| matches!(m, BridgeMessage::SetOption { .. })));
 }
 
 #[test]
 fn a_provider_session_is_refused_for_an_unknown_profile_another_agents_or_an_agent_without_providers() {
     let mut rig = with_kimi();
-    rig.send(json!({"type":"create-session","agent":"alpha","providerId":"nope"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","providerId":"nope"}));
     assert!(failed_reason(&mut rig).contains("Unknown provider profile 'nope'"));
-    rig.send(json!({"type":"create-session","agent":"beta","providerId":"kimi"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"beta","providerId":"kimi"}));
     assert!(failed_reason(&mut rig).contains("Beta does not support custom provider profiles"));
     let mut p = kimi(None);
     p["agent"] = json!("delta");
     set_profile(&mut rig, p);
     rig.take();
-    rig.send(json!({"type":"create-session","agent":"alpha","providerId":"kimi"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","providerId":"kimi"}));
     assert!(failed_reason(&mut rig).contains("is not one of Alpha's"));
     set_profile(&mut rig, kimi_cleared());
     rig.take();
-    rig.send(json!({"type":"create-session","agent":"alpha","providerId":"kimi"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","providerId":"kimi"}));
     assert!(failed_reason(&mut rig).contains("has no API token stored"));
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::StartSession(_))));
 }
@@ -571,11 +571,11 @@ fn a_provider_session_is_refused_for_an_unknown_profile_another_agents_or_an_age
 #[test]
 fn a_session_whose_profile_was_deleted_ends_loudly_at_its_next_restart() {
     let mut rig = with_kimi();
-    rig.send(json!({"type":"create-session","agent":"alpha","providerId":"kimi"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","providerId":"kimi"}));
     let (id, p) = rig.start_request();
     rig.host_reply(&id, HostMessage::Ack);
     rig.host_event(&p.session_id, SessionEvent::Ready {});
-    rig.send(json!({"type":"set-provider-profile","profileId":"kimi","profile":null}));
+    rig.send(json!({"v":11,"type":"set-provider-profile","profileId":"kimi","profile":null}));
     rig.take();
     rig.host_event(&p.session_id, SessionEvent::Ended { error: Some("boom".into()), resume_lost: false });
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::StartSession(_))), "never a silent fallback");

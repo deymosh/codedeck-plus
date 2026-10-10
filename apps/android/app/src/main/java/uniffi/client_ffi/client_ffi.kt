@@ -5920,6 +5920,13 @@ data class UniffiMachineSummary (
      * What each agent's new sessions start with.
      */
     var `agentDefaults`: List<UniffiAgentDefaults>
+    , 
+    /**
+     * The bridge speaks another protocol version, so nothing it sends can be
+     * read: `app` when this app is the older side, `bridge` when the bridge
+     * is. `None` while they match.
+     */
+    var `updateNeeded`: kotlin.String? = null 
     
 ){
     
@@ -5959,6 +5966,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterSequenceTypeUniffiAgentDefaults.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -5985,7 +5993,8 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterOptionalULong.allocationSize(value.`lastHeartbeatAt`) +
             FfiConverterBoolean.allocationSize(value.`machineOffline`) +
             FfiConverterOptionalString.allocationSize(value.`defaultAgent`) +
-            FfiConverterSequenceTypeUniffiAgentDefaults.allocationSize(value.`agentDefaults`)
+            FfiConverterSequenceTypeUniffiAgentDefaults.allocationSize(value.`agentDefaults`) +
+            FfiConverterOptionalString.allocationSize(value.`updateNeeded`)
     )
 
     override fun write(value: UniffiMachineSummary, buf: ByteBuffer) {
@@ -6012,6 +6021,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterBoolean.write(value.`machineOffline`, buf)
             FfiConverterOptionalString.write(value.`defaultAgent`, buf)
             FfiConverterSequenceTypeUniffiAgentDefaults.write(value.`agentDefaults`, buf)
+            FfiConverterOptionalString.write(value.`updateNeeded`, buf)
     }
 }
 

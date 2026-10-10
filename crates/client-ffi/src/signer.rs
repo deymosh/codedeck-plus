@@ -187,7 +187,7 @@ mod tests {
         let machine = generate_keypair();
         let foreign = local_identity_signer(id.secret_hex()).unwrap();
         let adapter = SignerAdapter::new(foreign, id.pubkey_hex.clone());
-        let msg = PhoneToBridge::RefreshSessions(BareMsg { version: Default::default() });
+        let msg = PhoneToBridge::RefreshSessions(BareMsg {});
         let ev = build_command(&adapter, &Cipher::Identity, &machine.pubkey_hex, &msg, 1_000).await.unwrap();
         assert_eq!(ev.pubkey, id.pubkey_hex);
         assert!(decrypt_from(&machine.secret_key, &id.pubkey_hex, &ev.content).is_ok());

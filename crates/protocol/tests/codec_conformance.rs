@@ -115,7 +115,6 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::SessionFailed(_) => "session-failed",
         BridgeToPhone::InputFailed(_) => "input-failed",
         BridgeToPhone::CloseSessionAck(_) => "close-session-ack",
-        BridgeToPhone::SessionReplaced(_) => "session-replaced",
         BridgeToPhone::OptionConfirmed(_) => "option-confirmed",
         BridgeToPhone::FolderAck(_) => "folder-ack",
         BridgeToPhone::Usage(_) => "usage",
@@ -134,7 +133,7 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::ProviderProfileAck(_) => "provider-profile-ack",
     }
 }
-const B2P_TYPES: usize = 28;
+const B2P_TYPES: usize = 27;
 
 #[test]
 fn corpus_covers_every_message_type() {

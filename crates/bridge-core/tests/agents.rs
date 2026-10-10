@@ -56,7 +56,7 @@ fn an_agent_not_installed_is_listed_and_runs_no_session() {
     rig.advance(1_000);
     assert_eq!(listed_install(&rig.messages(), "omega"), AgentInstall::NotInstalled {});
 
-    rig.send(json!({"type":"create-session","agent":"omega"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"omega"}));
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::SessionFailed(f) if f.reason.contains("Omega is not installed"))), "{msgs:?}");
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::StartSession(_))));
@@ -68,7 +68,7 @@ fn installing_an_agent_shows_its_progress_then_runs_sessions() {
     rig.host_up_with(vec![alpha(), omega(AgentInstall::NotInstalled {})]);
     rig.take();
 
-    rig.send(json!({"type":"agent-action","agent":"omega","action":"install"}));
+    rig.send(json!({"v":11,"type":"agent-action","agent":"omega","action":"install"}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::InstallAgent { .. }));
     assert_eq!(msg, BridgeMessage::InstallAgent { agent: "omega".into() });
     rig.host_reply(&id, HostMessage::Ack);
@@ -124,7 +124,7 @@ fn a_refused_removal_is_reported_with_the_reason() {
     let mut rig = Rig::new();
     rig.host_up_with(vec![alpha(), omega_ready()]);
     rig.take();
-    rig.send(json!({"type":"agent-action","agent":"alpha","action":"remove"}));
+    rig.send(json!({"v":11,"type":"agent-action","agent":"alpha","action":"remove"}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::RemoveAgent { .. }));
     assert_eq!(msg, BridgeMessage::RemoveAgent { agent: "alpha".into() });
     rig.host_reply(&id, HostMessage::Error { message: "Alpha is on this machine outside CodeDeck.".into() });
@@ -134,13 +134,13 @@ fn a_refused_removal_is_reported_with_the_reason() {
 #[test]
 fn an_agent_action_without_a_host_is_refused() {
     let mut rig = Rig::new();
-    rig.send(json!({"type":"agent-action","agent":"omega","action":"install"}));
+    rig.send(json!({"v":11,"type":"agent-action","agent":"omega","action":"install"}));
     let (success, error) = agent_ack(&rig.messages());
     assert!(!success);
     assert!(error.unwrap().contains("not running yet"));
 
     rig.host_up_with(vec![alpha(), omega(AgentInstall::NotInstalled {})]);
-    rig.send(json!({"type":"agent-action","agent":"omega","action":"install"}));
+    rig.send(json!({"v":11,"type":"agent-action","agent":"omega","action":"install"}));
     rig.take();
     rig.input(Input::HostDown { reason: "exit 1".into() });
     let (success, error) = agent_ack(&rig.messages());

@@ -422,7 +422,9 @@ private fun MachineHeader(machine: UniffiMachineSummary, now: Long, first: Boole
                 Text(status, color = Tokens.TextMuted, fontSize = Tokens.TextXs)
             }
         }
-        NewSessionPill(enabled = machine.agents.isNotEmpty() || presence == MachinePresence.Online, onClick = onNewSession)
+        // A bridge that cannot be read cannot start a session either.
+        val reachable = presence != MachinePresence.Mismatched
+        NewSessionPill(enabled = reachable && (machine.agents.isNotEmpty() || presence == MachinePresence.Online), onClick = onNewSession)
     }
 }
 

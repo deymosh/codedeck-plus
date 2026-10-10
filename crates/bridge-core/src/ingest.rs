@@ -185,7 +185,7 @@ mod tests {
         }
     }
 
-    const INPUT: &str = r#"{"type":"input","sessionId":"s","text":"hi"}"#;
+    const INPUT: &str = r#"{"v":11,"type":"input","sessionId":"s","text":"hi"}"#;
 
     #[test]
     fn a_valid_command_decrypts_decodes_and_advances_the_cursor() {
@@ -199,7 +199,7 @@ mod tests {
     fn malformed_unknown_and_undecryptable_payloads_are_dropped() {
         let mut f = Fixture::new();
         let bad_json = f.event("{not json");
-        let unknown = f.event(r#"{"type":"teleport"}"#);
+        let unknown = f.event(r#"{"v":11,"type":"teleport"}"#);
         let mut garbage = f.event(INPUT);
         garbage.content = "AAAA".into();
         assert!(f.accept(&bad_json).is_none());
@@ -251,7 +251,7 @@ mod tests {
     fn the_pairing_path_hears_strangers_but_only_their_pair_requests() {
         let mut f = Fixture::new();
         let stranger = generate_keypair();
-        let pair = r#"{"type":"pair-request","npub":"n","pubkeyHex":"aa","label":"Pixel","token":"t"}"#;
+        let pair = r#"{"v":11,"type":"pair-request","npub":"n","pubkeyHex":"aa","label":"Pixel","token":"t"}"#;
         let ev = f.event_from(&stranger, pair, NOW);
         let req = f.ingest.accept_pairing(&ev, &f.bridge, NOW).unwrap();
         assert_eq!(req.label, "Pixel");

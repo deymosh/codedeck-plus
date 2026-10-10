@@ -537,7 +537,6 @@ mod tests {
             sessions: vec![],
             agents: vec![],
             credentials: vec![],
-            protocol_version: 11,
             capabilities: None,
             folders: None,
             roots: None,

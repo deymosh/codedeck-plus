@@ -406,7 +406,7 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
+                r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -434,6 +434,63 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
 }
 
 #[tokio::test]
+async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let spy = Rc::new(Spy::default());
+            let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+            core.set_machines(vec![machine.pubkey_hex.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+            // Paired, so the machines store knows it.
+            core.dispatch(Intent::BeginManualPairing {
+                npub: machine.npub.clone(),
+                token: "tok".into(),
+                relays: mock.url.clone(),
+                label: "laptop".into(),
+            })
+            .await;
+            let sub = drain_traffic_resubscribe(&mut mock).await;
+            let ack = BridgeToPhone::PairAck(protocol::events::PairAckMsg {
+                machine: "laptop".into(),
+                ok: true,
+                reason: None,
+                relays: None,
+                host: None,
+            });
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &ack);
+            settle().await;
+            let sub = drain_traffic_resubscribe(&mut mock).await;
+
+            let push_raw = |plaintext: &str| {
+                let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone.pubkey_hex, plaintext).unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(r#"["EVENT","{sub}",{}]"#, <nostr::Event as nostr::JsonUtil>::as_json(&event)));
+            };
+            let mark = || async {
+                core.machines_view().await.machines[&machine.pubkey_hex].incompatible.map(|i| i.theirs)
+            };
+            assert_eq!(mark().await, None);
+
+            push_raw(r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
+            settle().await;
+            assert_eq!(mark().await, Some(Some(12)));
+            let delivered = spy.messages.lock().unwrap().len();
+
+            push_raw(r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
+            settle().await;
+            assert_eq!(mark().await, None);
+            assert_eq!(spy.messages.lock().unwrap().len(), delivered + 1);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
     LocalSet::new()
         .run_until(async {
@@ -452,7 +509,7 @@ async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
             settle().await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
+                r#"{"v":11,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -505,7 +562,7 @@ async fn create_folder_round_trips_to_a_matching_folder_ack_core_event() {
             assert_eq!(v[0], "EVENT");
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"folder-ack","requestId":"req-1","success":true,"path":"sub/dir"}"#,
+                r#"{"v":11,"type":"folder-ack","requestId":"req-1","success":true,"path":"sub/dir"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -583,7 +640,7 @@ async fn a_stored_kind_event_persists_the_cursor_to_kv() {
             assert_eq!(kv.get(LAST_STORED_SEEN_KEY).await, None);
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
+                r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -758,7 +815,7 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
             // machines view — proving the subscription actually scopes to
             // it, not just that some vacuous socket opened.
             let sessions_json =
-                r#"{"type":"sessions","machine":"bridge","sessions":[],"agents":[],"protocolVersion":11}"#;
+                r#"{"v":11,"type":"sessions","machine":"bridge","sessions":[],"agents":[]}"#;
             let msg = protocol::codec::decode_bridge_to_phone(sessions_json).unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
             let ct = protocol::crypto::encrypt_to(
@@ -1341,7 +1398,7 @@ async fn a_session_pending_message_populates_the_view_and_emits_a_state_changed_
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"session-pending","pendingId":"p1","machine":"devbox","createdAt":"2026-01-01T00:00:00.000Z"}"#,
+                r#"{"v":11,"type":"session-pending","pendingId":"p1","machine":"devbox","createdAt":"2026-01-01T00:00:00.000Z"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1388,7 +1445,7 @@ async fn dismiss_pending_session_removes_it_and_emits_a_state_changed_event() {
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
+                r#"{"v":11,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1436,7 +1493,7 @@ async fn an_output_message_populates_the_transcript_view_and_emits_transcript_ap
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
+                r#"{"v":11,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1642,16 +1699,16 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
             // sessions to forget from `MachineView.sessions`, exactly
             // like the TS `removeMachine` it mirrors.
             let sessions_msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"sessions","machine":"laptop","sessions":[
+                r#"{"v":11,"type":"sessions","machine":"laptop","sessions":[
                     {"id":"s1","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
-                ],"agents":[],"protocolVersion":11}"#,
+                ],"agents":[]}"#,
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
             settle().await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
+                r#"{"v":11,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &msg);
@@ -1744,9 +1801,9 @@ async fn the_undo_toast_clears_itself_when_the_window_expires_without_a_tap() {
 
             let sub = drain_traffic_resubscribe(&mut mock).await;
             let sessions_msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"type":"sessions","machine":"laptop","sessions":[
+                r#"{"v":11,"type":"sessions","machine":"laptop","sessions":[
                     {"id":"s1","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
-                ],"agents":[],"protocolVersion":11}"#,
+                ],"agents":[]}"#,
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
@@ -1806,11 +1863,12 @@ fn heartbeat_listing(ids: &[&str]) -> BridgeToPhone {
         .collect();
     protocol::codec::decode_bridge_to_phone(
         &serde_json::json!({
+            "v": 11,
             "type": "sessions",
             "machine": "laptop",
             "sessions": sessions,
             "agents": [],
-            "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
+            "v": protocol::capabilities::PROTOCOL_VERSION,
         })
         .to_string(),
     )
@@ -1930,12 +1988,13 @@ async fn next_command_via(
 fn heartbeat_with(caps: &[&str]) -> BridgeToPhone {
     protocol::codec::decode_bridge_to_phone(
         &serde_json::json!({
+            "v": 11,
             "type": "sessions",
             "machine": "laptop",
             "sessions": [],
             "agents": [],
             "credentials": [],
-            "protocolVersion": protocol::capabilities::PROTOCOL_VERSION,
+            "v": protocol::capabilities::PROTOCOL_VERSION,
             "capabilities": caps,
         })
         .to_string(),
@@ -2233,7 +2292,7 @@ async fn a_direct_link_carries_messages_and_commands() {
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
             )]);
-            let push = protocol::codec::decode_bridge_to_phone(r#"{"type":"input-ack","sessionId":"s1","inputId":"i1"}"#).unwrap();
+            let push = protocol::codec::decode_bridge_to_phone(r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#).unwrap();
             let (commands_tx, mut commands) = mpsc::unbounded_channel();
             tokio::task::spawn_local(scripted_direct_bridge(
                 listener,
@@ -2335,11 +2394,13 @@ async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
             let decode = |v: serde_json::Value| protocol::codec::decode_bridge_to_phone(&v.to_string()).unwrap();
             let entry = serde_json::json!({ "timestamp": "t", "entryType": "turn_complete" });
             let begin = decode(serde_json::json!({
+                "v": 11,
                 "type": "sync-begin", "sessionId": "s1", "syncId": "y1", "seqHigh": 3, "ranges": [[1, 3]]
             }));
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &begin);
             for seq in 1..=3 {
                 let chunk = decode(serde_json::json!({
+                    "v": 11,
                     "type": "sync-chunk", "sessionId": "s1", "syncId": "y1", "range": [seq, seq],
                     "entries": [{ "seq": seq, "entry": entry }]
                 }));

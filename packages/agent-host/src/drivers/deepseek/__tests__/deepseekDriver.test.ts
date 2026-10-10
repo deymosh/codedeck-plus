@@ -317,7 +317,6 @@ describe('DeepSeekSession permissions', () => {
           toolName: 'bash',
           kind: 'execute',
           title: 'rm -rf build',
-          rawInput: { command: 'rm -rf build' },
           options: [
             { id: 'allow', label: 'Allow', kind: 'allow_once' },
             { id: 'deny', label: 'Deny', kind: 'reject_once' },
@@ -960,7 +959,7 @@ describe('the questions the model asks', () => {
         expect(questions).toEqual([
           { question: 'Which database?', options: [{ label: 'SQLite' }, { label: 'Postgres' }] },
         ]);
-        return { outcome: 'answered', answers: ['SQLite'] };
+        return { outcome: 'answered', answers: [{ type: 'selected', labels: ['SQLite'] }] };
       },
     });
     await started(ready, {}, ctx);

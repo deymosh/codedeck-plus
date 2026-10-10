@@ -364,7 +364,7 @@ describe('OpenCode questions', () => {
 
   it('asks the bridge and replies with the answers', async () => {
     const client = clientWith([asked]);
-    const ctx = start(client, {}, { question: () => ({ outcome: 'answered', answers: ['Blue', 'S, M'] }) });
+    const ctx = start(client, {}, { question: () => ({ outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }, { type: 'selected', labels: ['S', 'M'] }] }) });
     await ctx.ended();
     expect(ctx.questions).toEqual([{
       requestId: 'call_q',
@@ -399,7 +399,7 @@ describe('OpenCode questions', () => {
   });
 
   it('a typed answer to a multi-select question is kept whole', () => {
-    expect(toQuestionAnswers(questions, ['Green', 'XL, huge'])).toEqual([['Green'], ['XL, huge']]);
+    expect(toQuestionAnswers(questions, [{ type: 'text', text: 'Green' }, { type: 'text', text: 'XL, huge' }])).toEqual([['Green'], ['XL, huge']]);
   });
 });
 

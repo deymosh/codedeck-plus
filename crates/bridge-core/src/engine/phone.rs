@@ -1,6 +1,6 @@
 //! Commands from phones: ingest, then one handler per message type.
 
-use agent_protocol::{BridgeMessage, PlanOutcome, SelectOutcome};
+use agent_protocol::{BridgeMessage, PlanOutcome, QuestionReply, SelectOutcome};
 use protocol::commands::{
     CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PhoneToBridge, PlanResponseMsg,
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
@@ -213,7 +213,7 @@ impl Engine {
     fn on_question_response(&mut self, m: QuestionResponseMsg) {
         let card = self.run_ref(&m.session_id).and_then(|r| r.cards.get(&m.request_id));
         let answer = match (card.map(|c| &c.kind), m.answer) {
-            (Some(CardKind::Question { .. }), QuestionAnswer::Text { text }) => Some(text),
+            (Some(CardKind::Question { .. }), QuestionAnswer::Text { text }) => Some(QuestionReply::Text { text }),
             (Some(CardKind::Question { questions, .. }), QuestionAnswer::Options { selected }) => {
                 questions.get(m.index as usize).and_then(|q| option_answer(q, &selected))
             }

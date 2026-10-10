@@ -207,7 +207,12 @@ impl Rig {
     }
 
     /// An event written by `from` whose payload `key` encrypted.
-    pub fn phone_event_via_key(&mut self, from: &Keypair, key: &Keypair, msg: Value, via: Via) -> InboundEvent {
+    pub fn phone_event_via_key(&mut self, from: &Keypair, key: &Keypair, mut msg: Value, via: Via) -> InboundEvent {
+        // Versioned as the phone's codec does; a test that means another
+        // version names its own `v`.
+        if let Some(fields) = msg.as_object_mut() {
+            fields.entry("v").or_insert(Value::from(protocol::capabilities::PROTOCOL_VERSION));
+        }
         // Unique across rigs: a restarted engine remembers processed ids.
         static EVENTS: AtomicU64 = AtomicU64::new(0);
         let n = EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -315,7 +320,7 @@ impl Rig {
 
     /// Create a session on `agent` and take it through to ready. Returns its id.
     pub fn ready_session(&mut self, agent: &str) -> String {
-        self.send(json!({"type":"create-session","agent":agent}));
+        self.send(json!({"v":11,"type":"create-session","agent":agent}));
         let (id, params) = self.start_request();
         self.host_reply(&id, HostMessage::Ack);
         self.host_event(&params.session_id, SessionEvent::Ready {});
