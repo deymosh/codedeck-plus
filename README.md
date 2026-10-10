@@ -234,6 +234,7 @@ the full runbook.
 - [`docs/CLIENT.md`](docs/CLIENT.md) — the phone: the Rust client core, the Android app, transport rules, building the APK
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v11 wire contract, the driver protocol, adding an agent
 - [`docs/OPENCODE.md`](docs/OPENCODE.md) — OpenCode, the default agent: the server it runs on, provider profiles, credentials
+- [`docs/CLAUDE-CODE.md`](docs/CLAUDE-CODE.md) — Claude Code: sign-in, modes and models, the 1M window, gateways and provider profiles
 - [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness: API key, models and reasoning, gateways, MCP servers and plugins
 - [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — work decided but not built yet
