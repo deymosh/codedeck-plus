@@ -95,7 +95,25 @@ pub struct Hub {
 
 struct Conn {
     identity: String,
+    /// The recipient tags its `HELLO` named: only those copies go to it.
+    recipients: HashSet<String>,
     frames: mpsc::UnboundedSender<String>,
+}
+
+impl Conn {
+    fn reads(&self, identity: &str, event: &SignedEvent) -> bool {
+        self.identity == identity && recipient_of(event).is_some_and(|tag| self.recipients.contains(tag))
+    }
+}
+
+/// The recipient tag of a copy the bridge published.
+fn recipient_of(event: &SignedEvent) -> Option<&str> {
+    event
+        .tags
+        .iter()
+        .find(|t| t.first().map(String::as_str) == Some(protocol::recipients::RECIPIENT_TAG))
+        .and_then(|t| t.get(1))
+        .map(String::as_str)
 }
 
 impl Hub {
@@ -120,8 +138,8 @@ impl Hub {
         *self.paired.borrow_mut() = paired;
     }
 
-    /// `event`, published for `identity`: to its connections now, and to the
-    /// outbox for one that resumes later.
+    /// `event`, published for `identity`: to its connections that read its
+    /// copy now, and to the outbox for one that resumes later.
     pub fn deliver(&self, identity: &str, event: &SignedEvent) {
         let now = now_secs();
         {
@@ -132,26 +150,29 @@ impl Hub {
             outbox.push_back((identity.to_string(), event.clone()));
         }
         let frame = encode_direct_frame(&DirectFrame::Event(event.clone()));
-        for conn in self.conns.borrow().values().filter(|c| c.identity == identity) {
+        for conn in self.conns.borrow().values().filter(|c| c.reads(identity, event)) {
             let _ = conn.frames.send(frame.clone());
         }
     }
 
-    /// What was published for `identity` from `since` (seconds) on.
-    fn since(&self, identity: &str, since: u64) -> Vec<SignedEvent> {
+    /// What was published for connection `id` from `since` (seconds) on.
+    fn since(&self, id: u64, since: u64) -> Vec<SignedEvent> {
+        let conns = self.conns.borrow();
+        let Some(conn) = conns.get(&id) else { return Vec::new() };
         self.outbox
             .borrow()
             .iter()
-            .filter(|(i, e)| i == identity && e.created_at >= since)
+            .filter(|(i, e)| e.created_at >= since && conn.reads(i, e))
             .map(|(_, e)| e.clone())
             .collect()
     }
 
-    fn register(&self, identity: &str) -> (u64, mpsc::UnboundedReceiver<String>) {
+    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::UnboundedReceiver<String>) {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         let (frames, rx) = mpsc::unbounded_channel();
-        self.conns.borrow_mut().insert(id, Conn { identity: identity.to_string(), frames });
+        let conn = Conn { identity: identity.to_string(), recipients: recipients.into_iter().collect(), frames };
+        self.conns.borrow_mut().insert(id, conn);
         (id, rx)
     }
 
@@ -344,8 +365,8 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         return;
     }
     let hello = tokio::time::timeout(HELLO_TIMEOUT, next_text(&mut source)).await.ok().flatten();
-    let (auth, since) = match hello.as_deref().map(decode_direct_frame) {
-        Some(Ok(DirectFrame::Hello { auth, since })) => (auth, since),
+    let (auth, since, recipients) = match hello.as_deref().map(decode_direct_frame) {
+        Some(Ok(DirectFrame::Hello { auth, since, recipients })) => (auth, since, recipients),
         _ => {
             let _ = sink.send(send(&DirectFrame::Closed("expected HELLO".into()))).await;
             return;
@@ -363,10 +384,10 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         }
     };
 
-    let (id, mut outbound) = hub.register(&identity);
+    let (id, mut outbound) = hub.register(&identity, recipients);
     log::info!("[Direct] {}... connected", short(&identity));
     let mut ok = sink.send(send(&DirectFrame::Ready)).await.is_ok();
-    for event in hub.since(&identity, since) {
+    for event in hub.since(id, since) {
         ok = ok && sink.send(send(&DirectFrame::Event(event))).await.is_ok();
     }
     while ok {
@@ -509,20 +530,34 @@ mod tests {
         SignedEvent::from_nostr(&event)
     }
 
+    /// A copy for the client reading `recipient`.
+    fn copy_for(recipient: &str, created_at: u64) -> SignedEvent {
+        let mut event = command(&generate_keypair(), &generate_keypair().pubkey_hex);
+        event.tags.push(vec!["c".into(), recipient.into()]);
+        SignedEvent { created_at, ..event }
+    }
+
     #[test]
-    fn the_outbox_keeps_an_hour_per_identity() {
+    fn the_outbox_keeps_an_hour_per_identity_and_replays_a_client_its_own_copies() {
         let (inputs, _rx) = mpsc::unbounded_channel();
         let hub = Hub::new("b".into(), inputs);
         hub.set_paired(&["p".into(), "q".into()]);
-        let old = SignedEvent { created_at: now_secs() - OUTBOX_SECS - 5, ..command(&generate_keypair(), &generate_keypair().pubkey_hex) };
-        let new = command(&generate_keypair(), &generate_keypair().pubkey_hex);
-        hub.deliver("p", &old);
-        hub.deliver("p", &new);
-        hub.deliver("q", &new);
-        assert_eq!(hub.since("p", 0), std::slice::from_ref(&new), "the stale one was dropped");
-        assert!(hub.since("p", new.created_at + 1).is_empty());
+        let now = now_secs();
+        let old = copy_for("p1", now - OUTBOX_SECS - 5);
+        let (mine, other_client, untagged) = (copy_for("p1", now), copy_for("p2", now), command(&generate_keypair(), &generate_keypair().pubkey_hex));
+        for event in [&old, &mine, &other_client, &untagged] {
+            hub.deliver("p", event);
+        }
+        // Another identity naming p's tag reads nothing of p's.
+        hub.deliver("q", &copy_for("q1", now));
+        let (p1, _) = hub.register("p", vec!["p1".into()]);
+        let (q, _) = hub.register("q", vec!["p1".into()]);
+        assert_eq!(hub.since(p1, 0), std::slice::from_ref(&mine), "the stale one was dropped; only p1's copy");
+        assert!(hub.since(p1, mine.created_at + 1).is_empty());
+        assert!(hub.since(q, 0).is_empty());
         hub.set_paired(&["p".into()]);
-        assert!(hub.since("q", 0).is_empty(), "an unpaired identity's events go");
+        let (q1, _) = hub.register("q", vec!["q1".into()]);
+        assert!(hub.since(q1, 0).is_empty(), "an unpaired identity's events go");
     }
 
     #[test]

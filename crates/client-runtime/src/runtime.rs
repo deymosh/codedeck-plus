@@ -92,6 +92,8 @@ struct DirectTarget {
     endpoints: Vec<String>,
     pin: Option<String>,
     proxy: Option<String>,
+    /// The recipient tags the link asks for: a key rotating restarts it.
+    recipients: Vec<String>,
 }
 
 // --- clock and entropy ports -----------------------------------------------
@@ -1458,12 +1460,14 @@ impl Loop {
     /// can be reached now (and the Orbot proxy, and whether the core runs).
     fn sync_direct_links(&mut self) {
         let proxy = self.ws.current_proxy();
+        let now = self.clock.now_ms();
         let wanted: HashMap<String, DirectTarget> = if self.links_on {
             self.machines
                 .iter()
                 .filter_map(|m| {
                     let (endpoints, pin) = self.stores.machines.direct_target(m)?;
-                    Some((m.clone(), DirectTarget { endpoints, pin, proxy: proxy.clone() }))
+                    let recipients = self.session.recipient_tags(m, &self.keys.identity_pubkey_hex, now);
+                    Some((m.clone(), DirectTarget { endpoints, pin, proxy: proxy.clone(), recipients }))
                 })
                 .collect()
         } else {
@@ -1487,6 +1491,7 @@ impl Loop {
                     endpoints: target.endpoints.clone(),
                     cert_sha256: target.pin.clone(),
                     proxy: target.proxy.clone(),
+                    recipients: target.recipients.clone(),
                     auth: Rc::new(IdentityAuth(Rc::clone(&self.signer))),
                 },
                 DirectHandlers {

@@ -73,6 +73,9 @@ pub struct DirectConfig {
     /// SOCKS5 `host:port` (Orbot), used for `.onion` endpoints only; without
     /// it those are skipped.
     pub proxy: Option<String>,
+    /// The recipient tags of the copies this client reads (its `HELLO`
+    /// names them): the bridge sends it those only.
+    pub recipients: Vec<String>,
     /// Signs the HELLO with the identity.
     pub auth: Rc<dyn AuthSigner>,
 }
@@ -236,7 +239,7 @@ impl DirectLink {
             .await
             .map_err(|_| "the identity did not sign in time".to_string())??;
         let since = self.0.newest.get().saturating_sub(RESUME_GRACE_SECS);
-        ws.send(Message::Text(encode_direct_frame(&DirectFrame::Hello { auth, since })))
+        ws.send(Message::Text(encode_direct_frame(&DirectFrame::Hello { auth, since, recipients: self.0.config.recipients.clone() })))
             .await
             .map_err(|e| e.to_string())?;
         match next_frame(&mut ws, FRAME_TIMEOUT).await? {
@@ -462,6 +465,7 @@ mod tests {
                 endpoints: endpoints.iter().map(|e| e.to_string()).collect(),
                 cert_sha256: pin.map(str::to_string),
                 proxy: proxy.map(str::to_string),
+                recipients: Vec::new(),
                 auth: Rc::new(generate_keypair()),
             },
             handlers: DirectHandlers { on_event: Rc::new(|_| {}), on_state: Rc::new(|_| {}) },

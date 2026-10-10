@@ -13,7 +13,8 @@
 //!
 //! ```text
 //! bridge → phone  ["CHALLENGE", <challenge>]            on connect
-//! phone  → bridge ["HELLO", <auth event>, <since>]      auth: kind 22242,
+//! phone  → bridge ["HELLO", <auth event>, <since>, [<recipient tag>, ...]]
+//!                                                       auth: kind 22242,
 //!                                                       signed by the identity,
 //!                                                       tagged ["challenge", c]
 //! bridge → phone  ["READY"] | ["CLOSED", <reason>]
@@ -23,7 +24,10 @@
 //!
 //! After `READY` the bridge sends the events it published for that identity
 //! since `since` (seconds; it keeps [`OUTBOX_SECS`] of them), then new ones
-//! as it publishes them. It answers each phone `EVENT` with an `OK`.
+//! as it publishes them — only the copies whose recipient tag the `HELLO`
+//! named (see [`crate::recipients`]): the client's own, as its relay
+//! subscription asks for them, never another client's of the identity. It
+//! answers each phone `EVENT` with an `OK`.
 //!
 //! Where to connect rides the bridge's heartbeat ([`DirectInfo`]), which the
 //! bridge signs and encrypts to the phone: a `wss://` endpoint serves a
@@ -41,6 +45,9 @@ pub const DIRECT_AUTH_KIND: u16 = 22242;
 pub const AUTH_MAX_SKEW_SECS: u64 = 600;
 /// How long the bridge keeps what it published, for a phone resuming.
 pub const OUTBOX_SECS: u64 = 3600;
+/// The most recipient tags a `HELLO` may name: a client's keys and its
+/// identity, with room to spare.
+pub const MAX_HELLO_RECIPIENTS: usize = 8;
 
 /// How to reach a bridge directly, as its heartbeat advertises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -58,7 +65,8 @@ pub struct DirectInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectFrame {
     Challenge(String),
-    Hello { auth: SignedEvent, since: u64 },
+    /// `recipients`: the recipient tags of the copies this client reads.
+    Hello { auth: SignedEvent, since: u64, recipients: Vec<String> },
     Ready,
     Closed(String),
     Event(SignedEvent),
@@ -72,7 +80,7 @@ pub struct DirectDecodeError(pub String);
 pub fn encode_direct_frame(frame: &DirectFrame) -> String {
     let value = match frame {
         DirectFrame::Challenge(c) => json!(["CHALLENGE", c]),
-        DirectFrame::Hello { auth, since } => json!(["HELLO", auth, since]),
+        DirectFrame::Hello { auth, since, recipients } => json!(["HELLO", auth, since, recipients]),
         DirectFrame::Ready => json!(["READY"]),
         DirectFrame::Closed(reason) => json!(["CLOSED", reason]),
         DirectFrame::Event(event) => json!(["EVENT", event]),
@@ -101,9 +109,15 @@ pub fn decode_direct_frame(text: &str) -> Result<DirectFrame, DirectDecodeError>
             Ok(DirectFrame::Challenge(string(1).ok_or_else(|| bad("bad challenge"))?))
         }
         "HELLO" => {
-            arity(3)?;
+            arity(4)?;
             let since = items.get(2).and_then(Value::as_u64).ok_or_else(|| bad("bad since"))?;
-            Ok(DirectFrame::Hello { auth: event(1)?, since })
+            let recipients = items
+                .get(3)
+                .and_then(Value::as_array)
+                .filter(|tags| tags.len() <= MAX_HELLO_RECIPIENTS)
+                .and_then(|tags| tags.iter().map(|t| t.as_str().map(str::to_string)).collect::<Option<Vec<_>>>())
+                .ok_or_else(|| bad("bad recipients"))?;
+            Ok(DirectFrame::Hello { auth: event(1)?, since, recipients })
         }
         "READY" => {
             arity(1)?;
@@ -186,7 +200,7 @@ mod tests {
         let auth = build_auth_event(&id, "wss://10.0.0.2:7447", "c1", NOW * 1000).unwrap();
         for frame in [
             DirectFrame::Challenge("c1".into()),
-            DirectFrame::Hello { auth: auth.clone(), since: NOW - 60 },
+            DirectFrame::Hello { auth: auth.clone(), since: NOW - 60, recipients: vec!["c1".into(), "c2".into()] },
             DirectFrame::Ready,
             DirectFrame::Closed("not paired".into()),
             DirectFrame::Event(auth.clone()),
@@ -194,6 +208,18 @@ mod tests {
         ] {
             assert_eq!(decode_direct_frame(&encode_direct_frame(&frame)), Ok(frame));
         }
+    }
+
+    #[test]
+    fn a_hello_must_name_its_recipients_within_bounds() {
+        let auth = build_auth_event(&generate_keypair(), "wss://10.0.0.2:7447", "c1", NOW * 1000).unwrap();
+        let hello = |recipients: Value| json!(["HELLO", auth, NOW, recipients]).to_string();
+        assert!(decode_direct_frame(&hello(json!([]))).is_ok());
+        assert!(decode_direct_frame(&json!(["HELLO", auth, NOW]).to_string()).is_err(), "none named");
+        assert!(decode_direct_frame(&hello(json!(["c1", 2]))).is_err());
+        assert!(decode_direct_frame(&hello(json!("c1"))).is_err());
+        let too_many: Vec<String> = (0..=MAX_HELLO_RECIPIENTS).map(|i| i.to_string()).collect();
+        assert!(decode_direct_frame(&hello(json!(too_many))).is_err());
     }
 
     #[test]

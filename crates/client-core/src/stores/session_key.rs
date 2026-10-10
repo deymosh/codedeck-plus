@@ -200,6 +200,18 @@ impl SessionKeyRing {
         let now = now_ms / 1000;
         std::iter::once(&self.current).chain(self.previous.as_ref()).filter(move |k| k.live(now))
     }
+
+    /// The recipient tags of the copies `bridge` sends this client
+    /// (`protocol::recipients`): one per live key, and the `identity`'s, for
+    /// what a bridge holding none of this identity's keys sends — which is
+    /// also how a client learns its grant was lost.
+    pub fn recipient_tags(&self, bridge: &str, identity: &str, now_ms: u64) -> Vec<String> {
+        self.keys(now_ms)
+            .map(|k| k.pubkey_hex())
+            .chain(std::iter::once(identity))
+            .map(|key| protocol::recipients::recipient_tag(bridge, key))
+            .collect()
+    }
 }
 
 /// A grant of one session key to one bridge.
@@ -299,6 +311,17 @@ mod tests {
         let (fresh, changed) = SessionKeyRing::load(Some("not json"), NOW);
         assert!(changed);
         assert_ne!(fresh.current.pubkey_hex(), ring.current.pubkey_hex());
+    }
+
+    #[test]
+    fn a_client_reads_the_copies_to_its_live_keys_and_its_identity() {
+        let (mut ring, _) = SessionKeyRing::load(None, NOW);
+        let tag = |key: &str| protocol::recipients::recipient_tag("bridge", key);
+        assert_eq!(ring.recipient_tags("bridge", "me", NOW), [tag(ring.current.pubkey_hex()), tag("me")]);
+        let old = ring.current.pubkey_hex().to_string();
+        ring.rotate_if_due(NOW + (GRANT_LIFETIME_SECS - RENEW_BEFORE_SECS) * 1000 + DAY_MS);
+        let later = NOW + (GRANT_LIFETIME_SECS - RENEW_BEFORE_SECS) * 1000 + DAY_MS;
+        assert_eq!(ring.recipient_tags("bridge", "me", later), [tag(ring.current.pubkey_hex()), tag(&old), tag("me")]);
     }
 
     #[test]

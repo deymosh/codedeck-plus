@@ -47,12 +47,16 @@ async fn send(ws: &mut Ws, frame: DirectFrame) {
     ws.send(Message::Text(encode_direct_frame(&frame))).await.unwrap();
 }
 
-/// Connect as `phone` and say HELLO; returns the socket and the answer.
+/// The recipient tag the test client reads.
+const MINE: &str = "mine";
+
+/// Connect as `phone` and say HELLO, reading [`MINE`]; returns the socket
+/// and the answer.
 async fn hello(endpoint: &str, pin: &str, phone: &Keypair, since: u64) -> (Ws, DirectFrame) {
     let mut ws = connect(endpoint, pin).await.unwrap();
     let DirectFrame::Challenge(challenge) = next_frame(&mut ws).await else { panic!("expected a challenge") };
     let auth = build_auth_event(phone, endpoint, &challenge, now_secs() * 1000).unwrap();
-    send(&mut ws, DirectFrame::Hello { auth, since }).await;
+    send(&mut ws, DirectFrame::Hello { auth, since, recipients: vec![MINE.into()] }).await;
     let answer = next_frame(&mut ws).await;
     (ws, answer)
 }
@@ -62,9 +66,17 @@ fn now_secs() -> u64 {
 }
 
 fn event(from: &Keypair, kind: u16, to: &str, content: &str) -> SignedEvent {
+    copy(from, kind, to, MINE, content)
+}
+
+/// An event for `to`, the copy for the client reading `recipient`.
+fn copy(from: &Keypair, kind: u16, to: &str, recipient: &str, content: &str) -> SignedEvent {
     let keys = nostr::Keys::new(from.secret_key.clone());
-    let tag = nostr::Tag::public_key(nostr::PublicKey::from_hex(to).unwrap());
-    SignedEvent::from_nostr(&nostr::EventBuilder::new(nostr::Kind::Custom(kind), content).tag(tag).sign_with_keys(&keys).unwrap())
+    let tags = [
+        nostr::Tag::public_key(nostr::PublicKey::from_hex(to).unwrap()),
+        nostr::Tag::custom(nostr::TagKind::custom("c"), [recipient]),
+    ];
+    SignedEvent::from_nostr(&nostr::EventBuilder::new(nostr::Kind::Custom(kind), content).tags(tags).sign_with_keys(&keys).unwrap())
 }
 
 #[tokio::test]
@@ -88,14 +100,18 @@ async fn a_paired_phone_gets_its_events_and_sends_commands_over_the_pinned_link(
             let (_, answer) = hello(&endpoint, &pin, &stranger, 0).await;
             assert_eq!(answer, DirectFrame::Closed("not paired".into()));
 
-            // Published before it connects: replayed after READY.
+            // Published before it connects: replayed after READY — its own
+            // copy, not another client's of the same identity.
+            let theirs = copy(&bridge, 4516, &phone.pubkey_hex, "theirs", "earlier");
             let earlier = event(&bridge, 4516, &phone.pubkey_hex, "earlier");
+            link.hub.deliver(&phone.pubkey_hex, &theirs);
             link.hub.deliver(&phone.pubkey_hex, &earlier);
             let (mut ws, answer) = hello(&endpoint, &pin, &phone, now_secs() - 60).await;
             assert_eq!(answer, DirectFrame::Ready);
             assert_eq!(next_frame(&mut ws).await, DirectFrame::Event(earlier));
 
-            // Published while connected: pushed at once.
+            // Published while connected: pushed at once, again only its own.
+            link.hub.deliver(&phone.pubkey_hex, &copy(&bridge, 24515, &phone.pubkey_hex, "theirs", "live"));
             let live = event(&bridge, 24515, &phone.pubkey_hex, "live");
             link.hub.deliver(&phone.pubkey_hex, &live);
             assert_eq!(next_frame(&mut ws).await, DirectFrame::Event(live));
@@ -154,6 +170,7 @@ async fn the_phone_link_talks_to_the_bridge() {
                         endpoints: server.info.endpoints.clone(),
                         cert_sha256: Some(pin),
                         proxy: None,
+                        recipients: vec![MINE.into()],
                         auth: Rc::new(phone.clone()),
                     },
                     DirectHandlers {

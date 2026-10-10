@@ -186,7 +186,7 @@
   "directFrames": {
     "valid": [
       ["CHALLENGE", "c1"],
-      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1800000000, "kind": 22242, "tags": [["challenge", "c1"]], "content": "", "sig": "cc" }, 1799999000],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1800000000, "kind": 22242, "tags": [["challenge", "c1"]], "content": "", "sig": "cc" }, 1799999000, ["4a7ce9e7ef864a34441d699f45429335"]],
       ["READY"],
       ["CLOSED", "not paired"],
       ["EVENT", { "id": "aa", "pubkey": "bb", "created_at": 1800000000, "kind": 4515, "tags": [["p", "dd"]], "content": "x", "sig": "cc" }],
@@ -199,9 +199,11 @@
       ["NOTICE", "x"],
       ["CHALLENGE"],
       ["CHALLENGE", 1],
-      ["HELLO", { "id": "aa" }, 1],
+      ["HELLO", { "id": "aa" }, 1, []],
       ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }],
-      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }, -1],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }, -1, []],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }, 1],
+      ["HELLO", { "id": "aa", "pubkey": "bb", "created_at": 1, "kind": 22242, "tags": [], "content": "", "sig": "cc" }, 1, [7]],
       ["READY", 1],
       ["EVENT"],
       ["OK", "aa", "yes", ""],
