@@ -445,7 +445,7 @@ describe('Claude permission policy', () => {
 
   it('questions are answered by question text, alongside the original input', async () => {
     const input = { questions: [{ question: 'Which color?', header: 'Color', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false }, { question: 'Why?', options: [] }] };
-    const { ctx, canUseTool } = start({ mode: 'default' }, { question: () => ({ outcome: 'answered', answers: ['Blue', 'because'] }) });
+    const { ctx, canUseTool } = start({ mode: 'default' }, { question: () => ({ outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }, { type: 'text', text: 'because' }] }) });
     expect(await ask(canUseTool, 'AskUserQuestion', input)).toEqual({
       behavior: 'allow',
       updatedInput: { ...input, answers: { 'Which color?': 'Blue', 'Why?': 'because' } },

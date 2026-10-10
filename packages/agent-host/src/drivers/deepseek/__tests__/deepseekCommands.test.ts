@@ -322,7 +322,7 @@ describe('questions, through the plugin', () => {
     // The verdict travels back as the harness reads it: the chosen label.
     await askPlugin(
       socket,
-      { method: 'answer', callId: 'call-7', sessionId: 's1', answer: toAnswerItems(parsed.questions, ['Approve']) },
+      { method: 'answer', callId: 'call-7', sessionId: 's1', answer: toAnswerItems(parsed.questions, [{ type: 'selected', labels: ['Approve'] }]) },
       2_000,
       () => {},
     );
@@ -390,18 +390,23 @@ describe('what the host makes of a question', () => {
       { id: 'q2', question: 'Anything else?' },
       { id: 'q3', question: 'Which parts?', options: [{ label: 'api' }, { label: 'app' }], multiSelect: true },
     ];
-    expect(toAnswerItems(questions, ['SQLite', 'a note', 'api, app'])).toEqual([
+    expect(
+      toAnswerItems(questions, [
+        { type: 'selected', labels: ['SQLite'] },
+        { type: 'text', text: 'a note' },
+        { type: 'selected', labels: ['api', 'app'] },
+      ]),
+    ).toEqual([
       { id: 'q1', selected: ['SQLite'] },
       { id: 'q2', selected: [], custom: 'a note' },
       { id: 'q3', selected: ['api', 'app'] },
     ]);
-    // A multi-select answered with something that is not a list of its own
-    // labels is text the user typed, not labels.
-    expect(toAnswerItems(questions, ['Postgres', 'a, b', 'api, something else'])[2]).toEqual({
-      id: 'q3',
-      selected: [],
-      custom: 'api, something else',
-    });
+    // Typed text that looks like a list of labels stays what the user typed.
+    expect(toAnswerItems(questions, [{ type: 'selected', labels: ['Postgres'] }, { type: 'text', text: '' }, { type: 'text', text: 'api, app' }])).toEqual([
+      { id: 'q1', selected: ['Postgres'] },
+      { id: 'q2', selected: [] },
+      { id: 'q3', selected: [], custom: 'api, app' },
+    ]);
   });
 
   it('reads a pushed line, and ignores anything that is not one', () => {

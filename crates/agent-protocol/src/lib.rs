@@ -95,7 +95,7 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
         bridge_rt(json!({"v":1,"id":"h4","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"revise","feedback":"Fewer steps."}}));
         bridge_rt(json!({"v":1,"id":"h5","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"default"}}));
-        bridge_rt(json!({"v":1,"id":"h3","kind":"question-outcome","payload":{"outcome":"answered","answers":["Red","a, b"]}}));
+        bridge_rt(json!({"v":1,"id":"h3","kind":"question-outcome","payload":{"outcome":"answered","answers":[{"type":"selected","labels":["Red","Blue"]},{"type":"text","text":"a, b"}]}}));
     }
 
     #[test]

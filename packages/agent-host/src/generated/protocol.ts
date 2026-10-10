@@ -1443,11 +1443,22 @@ export type QuestionOption_Serialize = {
 };
 
 export type QuestionOutcome = 
+/**  One answer per question, in order. */
+{ outcome: "answered"; answers: QuestionReply[] } | { outcome: "cancelled"; reason: string };
+
 /**
- *  One answer per question, in order; a chosen option is its label
- *  (several joined with ", "), free text is the text.
+ *  The answer to one question. Chosen options and typed text stay apart, so
+ *  a driver never has to guess whether "A, B" is two labels or what the user
+ *  wrote.
  */
-{ outcome: "answered"; answers: string[] } | { outcome: "cancelled"; reason: string };
+export type QuestionReply = 
+/**
+ *  The labels of the options chosen, in the order they were offered
+ *  in; at least one, and only one unless the question is multi-select.
+ */
+{ type: "selected"; labels: string[] } | 
+/**  What the user typed instead of choosing. */
+{ type: "text"; text: string };
 
 export type QuestionRequest = QuestionRequest_Serialize | QuestionRequest_Deserialize;
 

@@ -959,7 +959,7 @@ describe('the questions the model asks', () => {
         expect(questions).toEqual([
           { question: 'Which database?', options: [{ label: 'SQLite' }, { label: 'Postgres' }] },
         ]);
-        return { outcome: 'answered', answers: ['SQLite'] };
+        return { outcome: 'answered', answers: [{ type: 'selected', labels: ['SQLite'] }] };
       },
     });
     await started(ready, {}, ctx);

@@ -4,8 +4,8 @@
 mod support;
 
 use agent_protocol::{
-    BridgeMessage, HostMessage, PermissionRequest, PlanApprovalRequest, PlanOutcome, QuestionOutcome, QuestionRequest,
-    QuestionSpec, SelectOutcome, SessionEvent,
+    BridgeMessage, HostMessage, PermissionRequest, PlanApprovalRequest, PlanOutcome, QuestionOutcome, QuestionReply,
+    QuestionRequest, QuestionSpec, SelectOutcome, SessionEvent,
 };
 use bridge_core::{Effect, Input};
 use protocol::common::{
@@ -14,6 +14,14 @@ use protocol::common::{
 use protocol::events::BridgeToPhone;
 use serde_json::json;
 use support::*;
+
+fn selected(label: &str) -> QuestionReply {
+    QuestionReply::Selected { labels: vec![label.into()] }
+}
+
+fn text(text: &str) -> QuestionReply {
+    QuestionReply::Text { text: text.into() }
+}
 
 fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
     PermissionOption { id: id.into(), label: id.into(), kind }
@@ -135,7 +143,7 @@ fn questions_are_answered_by_index_in_any_order_then_resolved_together() {
     rig.send(json!({"v":11,"type":"question-response","sessionId":s,"requestId":"q1","index":0,"answer":{"kind":"options","selected":[1]}}));
     assert_eq!(
         reply_to(&mut rig, &h),
-        BridgeMessage::QuestionOutcome(QuestionOutcome::Answered { answers: vec!["Blue".into(), "Dev".into()] })
+        BridgeMessage::QuestionOutcome(QuestionOutcome::Answered { answers: vec![selected("Blue"), text("Dev")] })
     );
     assert_eq!(resolved(&rig.messages()), ["Blue · Dev"]);
 }
@@ -150,7 +158,7 @@ fn plain_input_while_a_question_waits_answers_it() {
     assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::Prompt { .. })));
     assert_eq!(
         reply_to(&mut rig, &h),
-        BridgeMessage::QuestionOutcome(QuestionOutcome::Answered { answers: vec!["Green".into(), "Ops".into()] })
+        BridgeMessage::QuestionOutcome(QuestionOutcome::Answered { answers: vec![text("Green"), text("Ops")] })
     );
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::InputAck(_))));
 }

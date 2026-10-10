@@ -599,8 +599,11 @@ Requests the host makes (the bridge answers each exactly once):
 | `ask-question {sessionId, requestId, questions}` | `question-outcome {outcome: answered {answers} \| cancelled {reason}}` |
 | `request-plan-approval {sessionId, requestId, options, revise?}` | `plan-outcome {outcome: selected {optionId, feedback?} \| cancelled {reason}}` (`feedback` only with `revise`) |
 
-A `cancelled` outcome means nobody chose: the card timed out, the user
-interrupted, or the session is ending.
+`answers` holds one reply per question, in order: `{type: "selected",
+labels}` for the options chosen (in the order the question offers them), or
+`{type: "text", text}` for what the user typed instead. A `cancelled` outcome
+means nobody chose: the card timed out, the user interrupted, or the session
+is ending.
 
 ### Supervision
 

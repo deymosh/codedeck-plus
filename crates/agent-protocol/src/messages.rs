@@ -317,10 +317,32 @@ pub enum PlanOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "outcome", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum QuestionOutcome {
-    /// One answer per question, in order; a chosen option is its label
-    /// (several joined with ", "), free text is the text.
-    Answered { answers: Vec<String> },
+    /// One answer per question, in order.
+    Answered { answers: Vec<QuestionReply> },
     Cancelled { reason: String },
+}
+
+/// The answer to one question. Chosen options and typed text stay apart, so
+/// a driver never has to guess whether "A, B" is two labels or what the user
+/// wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum QuestionReply {
+    /// The labels of the options chosen, in the order they were offered
+    /// in; at least one, and only one unless the question is multi-select.
+    Selected { labels: Vec<String> },
+    /// What the user typed instead of choosing.
+    Text { text: String },
+}
+
+impl QuestionReply {
+    /// How the answer reads in the transcript.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Selected { labels } => labels.join(", "),
+            Self::Text { text } => text.clone(),
+        }
+    }
 }
 
 // --- the frames ---
