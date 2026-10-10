@@ -967,6 +967,13 @@ impl Loop {
                     self.set_link_ping(PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: true });
                     self.dispatch(ConnectionEvent::Resume);
+                    // Back on the session it showed: what came for it while
+                    // the app was hidden is seen now.
+                    let viewed = self.stores.ui.resume_viewing();
+                    if !viewed.is_empty() {
+                        self.state_changed(SliceId::Ui);
+                        self.apply_ui_effects(viewed);
+                    }
                 }
                 Msg::Keepalive(reply) => {
                     let (ws, tx) = (self.ws.clone(), self.self_tx.clone());
@@ -1657,15 +1664,7 @@ impl Loop {
         for (machine, session) in r.transcript_removed {
             self.transcript_store.remove(&machine, &session).await;
         }
-        // CDX-026c: opening a session the user was notified about clears
-        // every notification filed under its (coarser-than-delivery) tag.
-        for effect in r.ui_effects {
-            match effect {
-                UiEffect::SessionViewed { machine, session_id } => {
-                    self.notifier.cancel(&session_notify_tag(&machine, &session_id));
-                }
-            }
-        }
+        self.apply_ui_effects(r.ui_effects);
         if let Some(on) = r.tor_changed {
             let proxy = if on { self.tor_proxy_address.clone() } else { None };
             self.nostr.set_proxy(proxy.clone());
@@ -1741,6 +1740,18 @@ impl Loop {
     }
 
     /// The undo window elapsed — commit the delete (send `close-session`).
+    /// A session viewed or deleted clears every notification filed under its
+    /// (coarser-than-delivery) tag: what they said has been seen, or is gone.
+    fn apply_ui_effects(&self, effects: Vec<UiEffect>) {
+        for effect in effects {
+            match effect {
+                UiEffect::SessionViewed { machine, session_id } | UiEffect::SessionDeleted { machine, session_id } => {
+                    self.notifier.cancel(&session_notify_tag(&machine, &session_id));
+                }
+            }
+        }
+    }
+
     async fn on_undo_timer(&mut self) {
         let effects = self.stores.delete_controller.timer_fired();
         let mut r = IntentResult::default();
@@ -1752,15 +1763,21 @@ impl Loop {
                 client_core::delete_controller::DeleteEffect::SendCloseSession {
                     machine,
                     session_id,
-                } => r.sends.push(RouteSend {
-                    machine,
-                    msg: PhoneToBridge::CloseSession(
-                        protocol::commands::SessionIdMsg {
-                            version: Default::default(),
-                            session_id,
-                        },
-                    ),
-                }),
+                } => {
+                    r.ui_effects.push(UiEffect::SessionDeleted {
+                        machine: machine.clone(),
+                        session_id: session_id.clone(),
+                    });
+                    r.sends.push(RouteSend {
+                        machine,
+                        msg: PhoneToBridge::CloseSession(
+                            protocol::commands::SessionIdMsg {
+                                version: Default::default(),
+                                session_id,
+                            },
+                        ),
+                    })
+                }
                 client_core::delete_controller::DeleteEffect::ClearUndoTimer => {
                     abort(&mut self.undo_timer)
                 }
@@ -1773,6 +1790,7 @@ impl Loop {
         for RouteSend { machine, msg } in r.sends {
             self.on_send(machine, msg, None);
         }
+        self.apply_ui_effects(r.ui_effects);
         // `commit()` only ever emits ClearUndoTimer + SendCloseSession +
         // HideUndoToast (see delete_controller::commit) — never a card
         // effect. This was `SliceId::Cards`, which notified nothing that

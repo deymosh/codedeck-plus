@@ -1040,6 +1040,43 @@ async fn selecting_a_session_cancels_its_notification_tag() {
 }
 
 #[tokio::test]
+async fn coming_back_to_a_session_cancels_what_was_notified_while_away() {
+    LocalSet::new()
+        .run_until(async {
+            let mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let notifier = RecordingNotifier::new();
+            let ports = CorePorts {
+                notifier: Rc::new(notifier.clone()),
+                ..CorePorts::default()
+            };
+            let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+            core.dispatch(Intent::SelectSession {
+                machine: "m1".into(),
+                session_id: Some("s1".into()),
+            })
+            .await;
+            core.pause();
+            core.resume();
+            settle().await;
+            let tag = client_core::notifications::session_notify_tag("m1", "s1");
+            assert_eq!(notifier.cancelled(), [tag.clone(), tag]);
+
+            // Left for the list: coming back clears nothing.
+            core.dispatch(Intent::SelectSession {
+                machine: "m1".into(),
+                session_id: None,
+            })
+            .await;
+            core.pause();
+            core.resume();
+            settle().await;
+            assert_eq!(notifier.cancelled().len(), 2);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn set_plan_approval_choice_intent_updates_the_ui_view() {
     LocalSet::new()
         .run_until(async {
@@ -1798,7 +1835,8 @@ async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
             )]);
-            let ports = CorePorts { kv: Rc::new(kv), ..CorePorts::default() };
+            let notifier = RecordingNotifier::new();
+            let ports = CorePorts { kv: Rc::new(kv), notifier: Rc::new(notifier.clone()), ..CorePorts::default() };
             let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
             core.start();
             eose_all(&mut mock).await;
@@ -1852,6 +1890,10 @@ async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
             .expect("the pending delete is sent when the app is backgrounded");
             assert_eq!(closed(last), "s3");
             assert!(core.ui_view().await.undo_toast.is_none());
+            // Each one's notifications went with it — s3's only once it was
+            // deleted for good.
+            let tag = |id: &str| client_core::notifications::session_notify_tag(&machine.pubkey_hex, id);
+            assert_eq!(notifier.cancelled(), [tag("s1"), tag("s2"), tag("s3")]);
 
             // Nothing is left to undo, and nothing is sent twice.
             core.dispatch(Intent::UndoDelete).await;

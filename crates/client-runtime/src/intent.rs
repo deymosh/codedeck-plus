@@ -997,13 +997,19 @@ fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: 
                 stores.ui.set_undo_toast(None);
                 r.ui_changed = true;
             }
-            DeleteEffect::SendCloseSession { machine, session_id } => r.sends.push(Send {
-                machine,
-                msg: PhoneToBridge::CloseSession(SessionIdMsg {
-                    version: VersionFields::default(),
-                    session_id,
-                }),
-            }),
+            DeleteEffect::SendCloseSession { machine, session_id } => {
+                r.ui_effects.push(UiEffect::SessionDeleted {
+                    machine: machine.clone(),
+                    session_id: session_id.clone(),
+                });
+                r.sends.push(Send {
+                    machine,
+                    msg: PhoneToBridge::CloseSession(SessionIdMsg {
+                        version: VersionFields::default(),
+                        session_id,
+                    }),
+                })
+            }
             DeleteEffect::RestoreSnapshot { machine, snapshot } => {
                 stores.machines.restore_session(&machine, *snapshot);
                 r.persist(StoreId::Machines);
