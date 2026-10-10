@@ -1,5 +1,7 @@
 package com.codedeck.plus.ui.components
 
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
@@ -9,6 +11,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
@@ -47,6 +50,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -54,8 +59,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -66,12 +73,14 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import com.codedeck.plus.ui.theme.Tokens
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 /** A strip of the screen a full sheet leaves free below the status bar, so
  *  it still reads as a sheet over the page. */
@@ -90,6 +99,10 @@ private val SHEET_VELOCITY_THRESHOLD = 125.dp
 
 /** Critically damped, so the sheet comes to rest at a stop without passing it. */
 private val SHEET_MOTION = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+
+/** How much a back gesture narrows and shortens the sheet at its end. */
+private val BACK_SHRINK_X = 48.dp
+private val BACK_SHRINK_Y = 24.dp
 
 /** Where a sheet rests: off the screen, at half of it, or whole. */
 private enum class SheetStop { Hidden, Half, Full }
@@ -113,8 +126,9 @@ private enum class SheetStop { Hidden, Half, Full }
  * [skipPartiallyExpanded] opens it whole at once, for a sheet the user came
  * to act in; a long read can start at half the screen. The content handles
  * its own bottom inset (`navigationBarsPadding`) so it scrolls behind the
- * navigation bar. System Back closes the sheet unless the content's own
- * `BackHandler` takes it first.
+ * navigation bar. System Back, which the sheet follows as a predictive
+ * gesture, takes a whole sheet with a half stop to it and otherwise closes
+ * the sheet, unless the content's own `BackHandler` takes it first.
  */
 @Composable
 fun DeckSheet(
@@ -130,7 +144,8 @@ fun DeckSheet(
 
     Dialog(
         onDismissRequest = sheet::close,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        // Back is the predictive handler's below, so the sheet follows the gesture.
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, dismissOnBackPress = false),
     ) {
         // The scrim below is the sheet's own; the platform dim and the
         // window's own enter animation would double it.
@@ -138,6 +153,19 @@ fun DeckSheet(
         SideEffect {
             window?.setDimAmount(0f)
             window?.setWindowAnimations(0)
+        }
+        // A back gesture shrinks the sheet as it goes; let go, it steps
+        // back (a whole sheet that also has a half stop goes to it) or
+        // closes. A page's own BackHandler in the content comes first.
+        val back = remember { Animatable(0f) }
+        PredictiveBackHandler { events ->
+            try {
+                events.collect { back.snapTo(it.progress) }
+                if (sheet.back()) back.animateTo(0f)
+            } catch (cancelled: CancellationException) {
+                scope.launch { back.animateTo(0f) }
+                throw cancelled
+            }
         }
         Box(Modifier.fillMaxSize()) {
             val scrim by animateFloatAsState(
@@ -185,22 +213,60 @@ fun DeckSheet(
                         .semantics {
                             paneTitle = "Sheet"
                             dismiss { sheet.close(); true }
+                            when (sheet.stop) {
+                                SheetStop.Half -> expand { sheet.expand(); true }
+                                SheetStop.Full -> if (sheet.hasHalf) collapse { sheet.back(); true }
+                                SheetStop.Hidden -> Unit
+                            }
+                        }
+                        .graphicsLayer {
+                            val p = back.value
+                            if (p > 0f && size.width > 0f && size.height > 0f) {
+                                scaleX = 1f - min(BACK_SHRINK_X.toPx(), size.width) * p / size.width
+                                scaleY = 1f - min(BACK_SHRINK_Y.toPx(), size.height) * p / size.height
+                                // Shrinks towards the bottom of the screen, where the sheet stands.
+                                val visible = sheet.region - sheet.state.offset
+                                transformOrigin = TransformOrigin(0.5f, if (visible.isNaN()) 1f else visible / size.height)
+                            }
                         }
                         .clip(RoundedCornerShape(topStart = Tokens.RadiusXl, topEnd = Tokens.RadiusXl))
                         .background(Tokens.SurfaceRaised),
                 ) {
-                    Box(
-                        Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(vertical = 22.dp)
-                            .size(width = 32.dp, height = 4.dp)
-                            .clip(RoundedCornerShape(Tokens.RadiusPill))
-                            .background(Tokens.TextDim),
-                    )
-                    // Nothing in a sheet stretches past an end: the sheet is
-                    // what moves there.
-                    CompositionLocalProvider(LocalOverscrollFactory provides null, LocalContentColor provides Tokens.Text) {
-                        content()
+                    // The content keeps its proportions while the sheet shrinks.
+                    Column(
+                        Modifier.graphicsLayer {
+                            val p = back.value
+                            if (p > 0f && size.width > 0f && size.height > 0f) {
+                                val sx = 1f - min(BACK_SHRINK_X.toPx(), size.width) * p / size.width
+                                val sy = 1f - min(BACK_SHRINK_Y.toPx(), size.height) * p / size.height
+                                scaleY = sx / sy
+                                transformOrigin = TransformOrigin(0.5f, 0f)
+                            }
+                        },
+                    ) {
+                        // A tap on the handle opens a half sheet whole, and closes a whole one.
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .clip(RoundedCornerShape(Tokens.RadiusPill))
+                                .clickable(onClickLabel = if (sheet.stop == SheetStop.Half) "Expand" else "Close") {
+                                    if (sheet.stop == SheetStop.Half) sheet.expand() else sheet.close()
+                                }
+                                .semantics { contentDescription = "Drag handle" }
+                                .padding(horizontal = Tokens.Space2, vertical = 22.dp),
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(width = 32.dp, height = 4.dp)
+                                    .clip(RoundedCornerShape(Tokens.RadiusPill))
+                                    .background(Tokens.TextDim),
+                            )
+                        }
+                        // Nothing in a sheet stretches past an end: the sheet is
+                        // what moves there.
+                        CompositionLocalProvider(LocalOverscrollFactory provides null, LocalContentColor provides Tokens.Text) {
+                            content()
+                        }
                     }
                 }
             }
@@ -227,8 +293,15 @@ private class SheetMotion(density: Density, private val scope: CoroutineScope, p
     private var pending: DraggableAnchors<SheetStop>? = null
     private var closing = false
 
+    /** How tall the screen the sheet lives in is, as last measured. */
+    var region = Float.NaN
+        private set
+
+    val hasHalf: Boolean get() = state.anchors.hasPositionFor(SheetStop.Half)
+
     /** The sheet was measured: [region] tall to live in, [height] tall itself. */
     fun measured(region: Float, height: Int, half: Boolean) {
+        this.region = region
         val anchors = DraggableAnchors {
             SheetStop.Hidden at region
             if (half && height > region / 2) SheetStop.Half at region / 2
@@ -251,6 +324,21 @@ private class SheetMotion(density: Density, private val scope: CoroutineScope, p
             moveTo(SheetStop.Hidden)
             onClosed()
         }
+    }
+
+    /** Back: a whole sheet with a half stop goes to it, else the sheet
+     *  closes. Whether it stayed open. */
+    fun back(): Boolean {
+        if (stop == SheetStop.Full && hasHalf) {
+            scope.launch { moveTo(SheetStop.Half) }
+            return true
+        }
+        close()
+        return false
+    }
+
+    fun expand() {
+        if (!closing) scope.launch { moveTo(SheetStop.Full) }
     }
 
     fun drag(delta: Float) {
