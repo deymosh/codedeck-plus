@@ -246,6 +246,9 @@ pub enum McpStatus {
     /// The server wants an OAuth sign-in, done on the machine itself.
     NeedsAuth,
     Disabled,
+    /// A status this client does not know (a newer bridge's).
+    #[serde(other)]
+    Unknown,
 }
 
 /// One MCP server of a running session.
@@ -393,6 +396,10 @@ pub enum AgentInstall {
     /// The last install did not finish, for `reason`; installing again
     /// retries.
     Failed { reason: String },
+    /// A state this client does not know (a newer bridge's). Not ready, so
+    /// no session starts on it.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Default for AgentInstall {
@@ -429,6 +436,9 @@ pub enum SessionState {
     WaitingQuestion,
     /// Set on every session when the bridge shuts down cleanly.
     Offline,
+    /// A state this client does not know (a newer bridge's).
+    #[serde(other)]
+    Unknown,
 }
 
 /// The per-session options `set-option` changes and `option-confirmed`
@@ -668,6 +678,8 @@ pub enum ToolKind {
     SwitchMode,
     /// Hands a task to a sub-agent, which works on its own and reports back.
     Agent,
+    /// Anything else, including a kind this client does not know.
+    #[serde(other)]
     Other,
 }
 
@@ -708,6 +720,10 @@ pub enum NoticeKind {
     SessionFailed,
     /// The agent rejected its credentials.
     AuthError,
+    /// A notice this client does not know (a newer bridge's); its text still
+    /// says what happened.
+    #[serde(other)]
+    Other,
 }
 
 /// What a transcript entry is. Tagged by `entryType`.
@@ -845,6 +861,11 @@ pub enum EntryBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         call_id: Option<String>,
     },
+    /// An entry this client does not know (a newer bridge's or agent's). It
+    /// keeps its place in the transcript, so seqs and the rest of its batch
+    /// stay intact; a client shows that something is there it cannot show.
+    #[serde(other)]
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -854,6 +875,8 @@ pub enum TaskKind {
     Shell,
     /// A sub-agent.
     Agent,
+    /// Anything else, including a kind this client does not know.
+    #[serde(other)]
     Other,
 }
 
@@ -1134,9 +1157,25 @@ mod tests {
     }
 
     #[test]
-    fn unknown_enum_value_is_a_decode_error() {
-        assert!(serde_json::from_str::<SessionState>(r#""paused""#).is_err());
-        assert!(serde_json::from_str::<ToolKind>(r#""teleport""#).is_err());
+    fn an_open_vocabulary_takes_an_unknown_value_as_its_catch_all() {
+        let de = |s: &str| serde_json::from_str::<SessionState>(s).unwrap();
+        assert_eq!(de(r#""paused""#), SessionState::Unknown);
+        assert_eq!(serde_json::from_str::<ToolKind>(r#""teleport""#).unwrap(), ToolKind::Other);
+        assert_eq!(serde_json::from_str::<TaskKind>(r#""cron""#).unwrap(), TaskKind::Other);
+        assert_eq!(serde_json::from_str::<NoticeKind>(r#""session_paused""#).unwrap(), NoticeKind::Other);
+        assert_eq!(serde_json::from_str::<McpStatus>(r#""rate-limited""#).unwrap(), McpStatus::Unknown);
+        let install: AgentInstall = serde_json::from_value(json!({"state":"upgrading","progress":0.5})).unwrap();
+        assert_eq!(install, AgentInstall::Unknown);
+        assert!(!install.is_ready());
+        // A known state still needs its fields.
+        assert!(serde_json::from_value::<AgentInstall>(json!({"state":"failed"})).is_err());
+    }
+
+    #[test]
+    fn a_closed_vocabulary_refuses_an_unknown_value() {
+        assert!(serde_json::from_str::<PermissionOptionKind>(r#""allow_maybe""#).is_err());
+        assert!(serde_json::from_str::<SessionOption>(r#""temperature""#).is_err());
+        assert!(serde_json::from_str::<TaskStatus>(r#""paused""#).is_err());
     }
 
     #[test]
@@ -1274,8 +1313,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_entry_type_is_a_decode_error() {
-        assert!(serde_json::from_value::<OutputEntry>(json!({"timestamp":"t","entryType":"hologram"})).is_err());
+    fn an_unknown_entry_type_keeps_its_place_as_unsupported() {
+        let e: OutputEntry = serde_json::from_value(
+            json!({"timestamp":"t","entryType":"hologram","frames":3,"subagent":{"label":"explorer"}}),
+        )
+        .unwrap();
+        assert_eq!(e.body, EntryBody::Unsupported);
+        assert!(e.subagent.is_some());
+        // A known type still needs its fields.
+        assert!(serde_json::from_value::<OutputEntry>(json!({"timestamp":"t","entryType":"text","content":"x"})).is_err());
     }
 
     #[test]

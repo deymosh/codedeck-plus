@@ -196,7 +196,7 @@ mod tests {
             r#"{"v":1,"kind":"teleport","payload":{}}"#,
             r#"{"v":1,"kind":"ack","payload":{"x":1}}"#,
             r#"{"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"exploded"}}}"#,
-            r#"{"v":1,"kind":"request-permission","payload":{"sessionId":"s","requestId":"r","toolName":"X","kind":"teleport","title":"","options":[]}}"#,
+            r#"{"v":1,"kind":"request-permission","payload":{"sessionId":"s","requestId":"r","toolName":"X","kind":"read","title":"","options":[{"id":"a","label":"A","kind":"allow_maybe"}]}}"#,
         ] {
             assert!(matches!(decode_host_frame(line), Err(FrameError::Malformed(_))), "{line}");
         }

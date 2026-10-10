@@ -541,6 +541,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>) -> Un
         AgentInstall::NotInstalled {} => ("not_installed", false, None),
         AgentInstall::Installing {} => ("installing", false, None),
         AgentInstall::Failed { reason } => ("failed", false, Some(reason.clone())),
+        AgentInstall::Unknown => ("unknown", false, None),
     };
     UniffiAgent {
         id: a.id.clone(),

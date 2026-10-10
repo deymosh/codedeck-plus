@@ -8,7 +8,9 @@ implementation of the protocol can test itself against.
 - `phoneToBridge.valid` / `bridgeToPhone.valid` — each decodes, and
   `encode(decode(x))` re-decodes to an equal value (semantic round-trip).
 - `phoneToBridge.rejected` / `bridgeToPhone.rejected` — each is a decode error.
-- `forwardCompatible` — each still decodes (unknown fields are ignored).
+- `forwardCompatible` — each still decodes: unknown fields are ignored, and
+  an unknown value of an open vocabulary (entry type, tool, task and notice
+  kind, MCP status, session state, install state) decodes as its catch-all.
 - Every message carries `"v": 11`, the protocol version the codec stamps
   and checks first; a message of another version, or none, is rejected.
 - **Complete:** the test asserts the `valid` fixtures cover every message

@@ -169,7 +169,6 @@
       { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "background_task", "taskId": "b1", "kind": "shell", "title": "x", "status": "paused" }] },
       { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "todos", "items": [{ "text": "x", "status": "doing" }] }] },
       { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "text", "content": "v10 shape" }] },
-      { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "tool_call", "callId": "c", "toolName": "X", "kind": "teleport", "title": "t" }] },
       { "v": 11, "type": "sessions", "machine": "m", "sessions": [] },
       { "v": 11, "type": "sessions", "machine": "m", "sessions": [], "agents": [], "direct": { "certSha256": "00ff" } },
       { "v": 11, "type": "sessions", "machine": "m", "sessions": [], "agents": [], "rev": -1 },
@@ -212,6 +211,12 @@
     { "dir": "p2b", "msg": { "v": 11, "type": "input", "sessionId": "s", "text": "hi", "unknownFutureField": 1 } },
     { "dir": "b2p", "msg": { "v": 11, "type": "input-ack", "sessionId": "s", "inputId": "i", "somethingNew": { "a": 1 } } },
     { "dir": "b2p", "msg": { "v": 11, "type": "sessions", "machine": "m", "sessions": [], "agents": [{ "id": "pi", "displayName": "Pi", "futureField": true }], "capabilities": ["files", "future-cap"] } },
-    { "dir": "b2p", "msg": { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "status", "text": "x", "futureEnvelopeField": 1 }] } }
+    { "dir": "b2p", "msg": { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "status", "text": "x", "futureEnvelopeField": 1 }] } },
+    { "dir": "b2p", "msg": { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "hologram", "frames": 3 }, { "timestamp": "t", "entryType": "turn_complete" }] } },
+    { "dir": "b2p", "msg": { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "tool_call", "callId": "c", "toolName": "X", "kind": "teleport", "title": "t" }] } },
+    { "dir": "b2p", "msg": { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "notice", "kind": "session_paused", "text": "x" }] } },
+    { "dir": "b2p", "msg": { "v": 11, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "background_task", "taskId": "b1", "kind": "cron", "title": "x", "status": "running" }] } },
+    { "dir": "b2p", "msg": { "v": 11, "type": "session-mcp", "sessionId": "s", "servers": [{ "name": "github", "status": "rate-limited" }] } },
+    { "dir": "b2p", "msg": { "v": 11, "type": "sessions", "machine": "m", "sessions": [{ "id": "s", "agent": "opencode", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "state": "waiting_plan" }], "agents": [{ "id": "pi", "displayName": "Pi", "install": { "state": "upgrading", "progress": 0.5 } }] } }
   ]
 }

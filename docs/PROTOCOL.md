@@ -486,6 +486,15 @@ ends of different versions cannot talk; each says so instead of failing at
 random. A `chunk` fragment carries no `v` of its own — the message it
 reassembles into does.
 
+Within one version, additions do not break an older peer. Unknown fields are
+ignored. The open vocabularies a bridge or agent may grow decode an unknown
+value as a catch-all instead of failing the whole message: an entry type as
+`unsupported` (it keeps its seq; the phone says it needs an update to show
+it), a tool or task kind as `other`, a notice kind as `other` (its text still
+shows), and an MCP status, session state or install state as `unknown` (an
+agent in an unknown install state runs no session). A known value with a
+missing or mistyped field is still an error.
+
 The heartbeat carries `capabilities[]`, what this BRIDGE offers; what an
 AGENT can do is catalog data (`supports`). Each capability gates something
 a phone does, and a string is added only when a phone relying on it against

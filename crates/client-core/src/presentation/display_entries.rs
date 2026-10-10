@@ -43,6 +43,9 @@ use serde::Serialize;
 // Kotlin's polymorphic decoder a discriminant to match its sealed classes on,
 // which is why the tool / notice kinds are named `toolKind` / `notice` here.
 
+/// The status line an entry this app does not know reads as.
+pub const UNSUPPORTED_ENTRY: &str = "Something here needs a newer version of the app to show.";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SeqEntry {
     pub seq: u64,
@@ -662,6 +665,15 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     summary: summary.clone(),
                 });
             }
+            // Something a newer bridge or agent sent: said once for a run of
+            // them, so the user knows there is more than they can see here.
+            EntryBody::Unsupported => {
+                b.flush_all();
+                let said = matches!(b.display.last(), Some(DisplayEntry::Status { text, .. }) if text == UNSUPPORTED_ENTRY);
+                if !said {
+                    b.display.push(DisplayEntry::Status { seq, text: UNSUPPORTED_ENTRY.to_string() });
+                }
+            }
             // Filtered above; listed so a new entry kind is a compile error here.
             EntryBody::Resolved { .. } | EntryBody::TurnComplete {} => {}
         }
@@ -802,6 +814,21 @@ mod tests {
     fn summary_of(d: &DisplayEntry) -> (String, Option<String>) {
         let DisplayEntry::ToolGroup { summary, subject, .. } = d else { panic!("{d:?}") };
         (summary.clone(), subject.clone())
+    }
+
+    #[test]
+    fn entries_from_a_newer_bridge_say_once_that_the_app_is_behind() {
+        let d = build_display_entries(&seq(&[
+            json!({"entryType":"text","role":"user","text":"go"}),
+            json!({"entryType":"hologram","frames":3}),
+            json!({"entryType":"hologram","frames":4}),
+            json!({"entryType":"notice","kind":"session_paused","text":"Paused by the bridge"}),
+            call("c1"),
+            json!({"entryType":"hologram"}),
+        ]));
+        assert_eq!(kinds(&d), ["user", "status", "notice", "tools", "status"]);
+        assert!(matches!(&d[1], DisplayEntry::Status { seq: 2, text } if text == UNSUPPORTED_ENTRY));
+        assert!(matches!(&d[2], DisplayEntry::Notice { notice: NoticeKind::Other, text, .. } if text == "Paused by the bridge"));
     }
 
     #[test]
