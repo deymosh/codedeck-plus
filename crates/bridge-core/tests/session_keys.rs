@@ -5,7 +5,7 @@
 mod support;
 
 use bridge_core::{Effect, Input, Via, MAX_CLIENTS};
-use protocol::commands::SESSION_KEY_MAX_LIFETIME_SECS;
+use protocol::commands::{PRESENCE_LEASE_SECS, SESSION_KEY_MAX_LIFETIME_SECS};
 use protocol::crypto::{generate_keypair, Keypair};
 use protocol::events::BridgeToPhone;
 use serde_json::json;
@@ -13,6 +13,7 @@ use support::*;
 
 const NOW_SECS: u64 = T0 / 1000;
 const DAY: u64 = 24 * 3600;
+const HEARTBEAT_MS: u64 = bridge_core::DEFAULT_HEARTBEAT_INTERVAL_MS;
 
 fn grant_msg(bridge: &str, key: &str, expires_at: u64) -> serde_json::Value {
     json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":key,"bridgePubkeyHex":bridge,"expiresAt":expires_at}})
@@ -73,9 +74,10 @@ fn a_granted_key_encrypts_and_the_identity_stays_the_party() {
     // A command the identity signed with the payload under the key is heard.
     refresh_via(&mut rig, &key);
     assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
-    // So is one still encrypted with the identity.
+    // So is one still encrypted with the identity: it names no client, so
+    // the answer goes under the identity too.
     rig.send(json!({"v":12,"type":"refresh-sessions"}));
-    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &rig.phone.clone()));
 }
 
 #[test]
@@ -158,7 +160,7 @@ fn a_key_belongs_to_one_phone() {
     let a_clients = &phones.iter().find(|p| p.pubkey_hex == a.pubkey_hex).unwrap().clients;
     assert!(a_clients.is_empty());
     // A's messages still go to A; B's to B's key.
-    rig.phone_event(&b, json!({"v":12,"type":"refresh-sessions"}), Via::Commands);
+    rig.advance(HEARTBEAT_MS);
     let sent = heartbeats(&rig.take());
     assert_eq!(
         sent,
@@ -178,11 +180,14 @@ fn every_client_of_an_identity_gets_its_own_copy() {
         grant(&mut rig, k, NOW_SECS + DAY);
     }
     let all: Vec<(String, String)> = keys.iter().map(|k| (rig.phone.pubkey_hex.clone(), k.pubkey_hex.clone())).collect();
-    // A command from any of them is read, and answered to all of them.
+    // A command from any of them is read, and answered to it alone.
     for k in &keys {
         refresh_via(&mut rig, k);
-        assert_eq!(heartbeats(&rig.take()), vec![all.clone()]);
+        assert_eq!(heartbeats(&rig.take()), to(&rig.phone, k));
     }
+    // What is for everyone goes to each.
+    rig.advance(HEARTBEAT_MS);
+    assert_eq!(heartbeats(&rig.take()), vec![all.clone()]);
     // Granting the same key again renews it: still three clients.
     grant(&mut rig, &keys[1], NOW_SECS + 2 * DAY);
     assert_eq!(client_keys(&rig).len(), 3);
@@ -290,4 +295,75 @@ fn a_pair_request_can_grant_the_first_key() {
     assert!(!effects
         .iter()
         .any(|e| matches!(e, Effect::RegisterPhone { pubkey_hex, .. } if *pubkey_hex == key.pubkey_hex)));
+}
+
+fn presence(rig: &mut Rig, key: &Keypair, away: bool) -> Vec<Effect> {
+    let phone = rig.phone.clone();
+    rig.take();
+    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"presence","away":away}), Via::Commands);
+    rig.take()
+}
+
+#[test]
+fn a_client_away_gets_nothing_and_a_heartbeat_of_its_own_when_back() {
+    let mut rig = Rig::new();
+    let (desk, pocket) = (generate_keypair(), generate_keypair());
+    grant(&mut rig, &desk, NOW_SECS + DAY);
+    grant(&mut rig, &pocket, NOW_SECS + DAY);
+    assert!(heartbeats(&presence(&mut rig, &pocket, true)).is_empty());
+    rig.advance(HEARTBEAT_MS);
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &desk), "only the client present");
+    // Back: a heartbeat for it alone, then it is among everyone again.
+    assert_eq!(heartbeats(&presence(&mut rig, &pocket, false)), to(&rig.phone, &pocket));
+    rig.advance(HEARTBEAT_MS);
+    assert_eq!(heartbeats(&rig.take())[0].len(), 2);
+}
+
+#[test]
+fn a_lease_not_renewed_runs_out_and_any_command_renews_it() {
+    let mut rig = Rig::new();
+    let key = generate_keypair();
+    grant(&mut rig, &key, NOW_SECS + DAY);
+    rig.advance(PRESENCE_LEASE_SECS * 1000 + HEARTBEAT_MS);
+    rig.take();
+    rig.advance(HEARTBEAT_MS);
+    assert!(heartbeats(&rig.take()).is_empty(), "nobody is listening: nothing goes out");
+    // Whatever it sends next says it is back.
+    refresh_via(&mut rig, &key);
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
+    rig.advance(HEARTBEAT_MS);
+    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &key));
+}
+
+#[test]
+fn a_restarted_bridge_counts_every_client_present() {
+    let mut rig = Rig::new();
+    let (a, b) = (generate_keypair(), generate_keypair());
+    grant(&mut rig, &a, NOW_SECS + DAY);
+    grant(&mut rig, &b, NOW_SECS + DAY);
+    presence(&mut rig, &b, true);
+    let mut rig = rig.restart();
+    assert_eq!(heartbeats(&rig.take())[0].len(), 2, "until each renews or says it is away");
+}
+
+#[test]
+fn a_sync_goes_to_the_client_that_asked_alone() {
+    let mut rig = Rig::new();
+    let (asking, other) = (generate_keypair(), generate_keypair());
+    grant(&mut rig, &asking, NOW_SECS + DAY);
+    grant(&mut rig, &other, NOW_SECS + DAY);
+    rig.take();
+    let phone = rig.phone.clone();
+    rig.phone_event_via_key(&phone, &asking, json!({"v":12,"type":"sync-request","sessionId":"s","haveRanges":[]}), Via::Commands);
+    let sync: Vec<Vec<String>> = rig
+        .take()
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Publish { to, message: BridgeToPhone::SyncBegin(_) | BridgeToPhone::SyncEnd(_) } => {
+                Some(to.iter().map(|a| a.key.clone()).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sync, vec![vec![asking.pubkey_hex.clone()]; 2]);
 }

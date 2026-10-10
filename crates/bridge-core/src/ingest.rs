@@ -80,14 +80,15 @@ impl Ingest {
     /// An event from the standing subscription, whose author the caller has
     /// already found paired. `session_keys` are the author's live session
     /// keys, newest first: the payload is encrypted with one of them or with
-    /// the author's identity.
+    /// the author's identity. Returns the command and the key it was
+    /// encrypted with: which client sent it.
     pub fn accept(
         &mut self,
         event: &InboundEvent,
         keys: &Keypair,
         session_keys: &[String],
         now_secs: u64,
-    ) -> Option<PhoneToBridge> {
+    ) -> Option<(PhoneToBridge, String)> {
         if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
             log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
             return None;
@@ -95,11 +96,11 @@ impl Ingest {
         if !self.mark(&event.id) {
             return None;
         }
-        let plaintext = session_keys
+        let opened = session_keys
             .iter()
             .chain(std::iter::once(&event.pubkey))
-            .find_map(|peer| decrypt_from(&keys.secret_key, peer, &event.content).ok());
-        let Some(plaintext) = plaintext else {
+            .find_map(|peer| decrypt_from(&keys.secret_key, peer, &event.content).ok().map(|p| (p, peer.clone())));
+        let Some((plaintext, key)) = opened else {
             log::info!("[Ingest] Failed to decrypt event {}...", short(&event.id));
             return None;
         };
@@ -111,7 +112,7 @@ impl Ingest {
             }
         };
         self.last_seen = self.last_seen.max(event.created_at);
-        Some(msg)
+        Some((msg, key))
     }
 
     /// An event from the pairing window's subscription.
@@ -181,7 +182,7 @@ mod tests {
             self.event_from(&phone, json, NOW)
         }
         fn accept(&mut self, event: &InboundEvent) -> Option<PhoneToBridge> {
-            self.ingest.accept(event, &self.bridge, &[], NOW)
+            self.ingest.accept(event, &self.bridge, &[], NOW).map(|(msg, _)| msg)
         }
     }
 

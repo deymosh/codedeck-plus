@@ -36,7 +36,7 @@ use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg};
 
 use crate::catalog::Catalog;
 use crate::ingest::{since_for_connect, CommandsFilter, Ingest};
-use crate::io::{store_keys, Effect, Input, PairedPhone};
+use crate::io::{store_keys, Addressee, Effect, Input, PairedPhone};
 use crate::out::{Out, TimerKind};
 use crate::pairing::{NackBudget, DEFAULT_PAIRING_WINDOW_MS};
 use crate::ports::{Ports, Store, System, Transcripts, Workspace};
@@ -167,6 +167,12 @@ pub struct Engine {
     stopped: bool,
     /// Publish the heartbeat once the current input is handled.
     list_dirty: bool,
+    /// Clients that want a heartbeat of their own once the current input is
+    /// handled (back from away, or asking), when no heartbeat for everyone
+    /// goes out anyway.
+    list_wanted: Vec<Addressee>,
+    /// The client whose command is being handled: a reply goes to it alone.
+    requester: Option<Addressee>,
     /// The last session list's `rev`.
     list_rev: u64,
     /// Store the registry once the current input is handled.
@@ -212,6 +218,8 @@ impl Engine {
             started: false,
             stopped: false,
             list_dirty: false,
+            list_wanted: Vec::new(),
+            requester: None,
             list_rev: 0,
             registry_dirty: false,
             activity_dirty: false,
@@ -251,6 +259,8 @@ impl Engine {
         self.flush();
         let mut effects = std::mem::take(&mut self.out.effects);
         self.address_publishes(&mut effects);
+        // A publish every one of whose clients is away goes nowhere.
+        effects.retain(|e| !matches!(e, Effect::Publish { to, .. } if to.is_empty()));
         effects
     }
 
@@ -287,6 +297,7 @@ impl Engine {
     fn start(&mut self) {
         self.started = true;
         self.paired = load_or_default(self.store.get(store_keys::PAIRED_PHONES), "paired phones");
+        self.presume_present();
         self.credentials = load_or_default(self.store.get(store_keys::CREDENTIALS), "credentials");
         let profiles: StoredProfiles = load_or_default(self.store.get(store_keys::PROVIDER_PROFILES), "provider profiles");
         self.profiles = profiles.profiles.into_iter().map(|p| (p.id.clone(), p)).collect();
@@ -335,7 +346,7 @@ impl Engine {
         }
         self.persist_cursor();
         self.persist_registry();
-        self.publish_list(true);
+        self.publish_list(true, None);
         self.stopped = true;
         self.out.push(Effect::Stopped);
     }
@@ -453,13 +464,26 @@ impl Engine {
         self.paired.iter().map(|p| p.pubkey_hex.clone()).collect()
     }
 
+    /// `client` wants a heartbeat of its own (once, however many ask).
+    fn want_list(&mut self, client: Addressee) {
+        if !self.list_wanted.contains(&client) {
+            self.list_wanted.push(client);
+        }
+    }
+
     fn publish_all(&mut self, message: BridgeToPhone) {
         let to = self.phones();
         self.out.publish(to, message);
     }
 
+    /// Publish to `phone`: to the client whose command is being handled, if
+    /// it is one of `phone`'s (a reply), else to every present client.
     fn publish_to(&mut self, phone: &str, message: BridgeToPhone) {
-        self.out.publish(vec![phone.to_string()], message);
+        let to = match &self.requester {
+            Some(requester) if requester.phone == phone => requester.clone(),
+            _ => Addressee::identity(phone),
+        };
+        self.out.publish_addressed(vec![to], message);
     }
 
     /// Give entries their seqs, store them and send them live. A store
@@ -496,8 +520,15 @@ impl Engine {
         if self.registry_dirty {
             self.persist_registry();
         }
-        if self.list_dirty && !self.stopped {
-            self.publish_list(false);
+        if self.stopped {
+            return;
+        }
+        if self.list_dirty {
+            self.list_wanted.clear();
+            self.publish_list(false, None);
+        } else if !self.list_wanted.is_empty() {
+            let to = std::mem::take(&mut self.list_wanted);
+            self.publish_list(false, Some(to));
         }
     }
 
@@ -536,8 +567,9 @@ impl Engine {
     }
 
     /// The session-list heartbeat: sessions, agents, credentials,
-    /// capabilities, folders and tombstones.
-    fn publish_list(&mut self, offline: bool) {
+    /// capabilities, folders and tombstones. To every present client, or
+    /// only to `to`.
+    fn publish_list(&mut self, offline: bool, to: Option<Vec<Addressee>>) {
         self.list_dirty = false;
         if self.paired.is_empty() {
             return;
@@ -567,7 +599,10 @@ impl Engine {
             direct: self.config.direct.clone(),
             rev: Some(rev),
         });
-        self.publish_all(message);
+        match to {
+            Some(to) => self.out.publish_addressed(to, message),
+            None => self.publish_all(message),
+        }
     }
 
     /// The next session list's `rev`: the clock in ms, or one past the last

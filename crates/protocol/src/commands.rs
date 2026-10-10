@@ -355,6 +355,26 @@ pub struct SessionKeyGrant {
     pub replaces: Option<String>,
 }
 
+/// `presence`: this client is running and wants the identity's shared
+/// updates (the heartbeat, live output, cards, session changes) for the
+/// next [`PRESENCE_LEASE_SECS`]. A bridge sends those only to clients
+/// present now; a reply to a command goes to the client that sent it, and
+/// any command counts as presence too. A running client renews every
+/// [`PRESENCE_RENEW_SECS`]. `away` ends the lease at once: the client is
+/// stopping and wants nothing more until it says so again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PresenceMsg {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub away: bool,
+}
+
+/// How long a `presence` (or any command) keeps a client present: two
+/// renewals and some, so one lost renewal does not drop it.
+pub const PRESENCE_LEASE_SECS: u64 = 25 * 60;
+/// How often a running client renews its presence.
+pub const PRESENCE_RENEW_SECS: u64 = 10 * 60;
+
 /// The longest a [`SessionKeyGrant`] may run.
 pub const SESSION_KEY_MAX_LIFETIME_SECS: u64 = 90 * 24 * 3600;
 
@@ -441,6 +461,7 @@ pub enum PhoneToBridge {
     SetProviderProfile(SetProviderProfileMsg),
     ProviderProfilesRequest(BareMsg),
     SessionKey(SessionKeyMsg),
+    Presence(PresenceMsg),
 }
 
 #[cfg(test)]

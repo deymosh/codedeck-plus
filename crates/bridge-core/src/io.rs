@@ -61,6 +61,12 @@ pub struct PhoneClient {
     /// it, until it lapses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<protocol::commands::SessionKeyGrant>,
+    /// Until when (ms) the client is present: it gets the identity's shared
+    /// updates (see `protocol::commands::PresenceMsg`). Not stored: a
+    /// restarted bridge counts every client present for a lease, so none
+    /// misses what happens before it renews.
+    #[serde(skip)]
+    pub present_until_ms: u64,
 }
 
 /// One copy of a message: for one client of an identity.
@@ -70,8 +76,17 @@ pub struct Addressee {
     pub phone: String,
     /// The key the payload is NIP-44 encrypted to (hex): the client's
     /// session key, or the identity when it has granted none. The copy's
-    /// recipient tag is derived from it (`protocol::recipients`).
+    /// recipient tag is derived from it (`protocol::recipients`). Inside the
+    /// engine only, an empty key stands for every present client of the
+    /// identity, until it is addressed.
     pub key: String,
+}
+
+impl Addressee {
+    /// Every present client of `phone`.
+    pub(crate) fn identity(phone: &str) -> Self {
+        Self { phone: phone.to_string(), key: String::new() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

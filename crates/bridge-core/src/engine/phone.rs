@@ -15,7 +15,7 @@ use protocol::events::{
 
 use super::{ConversationDelete, Engine, HostCall};
 use crate::catalog::{is_effort, is_mode};
-use crate::io::{Effect, InboundEvent, Via};
+use crate::io::{Addressee, Effect, InboundEvent, Via};
 use crate::registry::{project_of, SessionRecord};
 use crate::session::{option_answer, permission_summary, CardKind, Phase, Runner, Session, StartKind};
 
@@ -53,6 +53,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
         PhoneToBridge::SessionKey(_) => "session-key",
+        PhoneToBridge::Presence(_) => "presence",
     }
 }
 
@@ -75,14 +76,24 @@ impl Engine {
                     return;
                 }
                 let keys = self.payload_keys(&event.pubkey, now_secs);
-                let Some(msg) = self.ingest.accept(event, &self.config.keys, &keys, now_secs) else { return };
+                let Some((msg, key)) = self.ingest.accept(event, &self.config.keys, &keys, now_secs) else { return };
                 log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
+                let client = Addressee { phone: event.pubkey.clone(), key: key.clone() };
+                // Any command says its client is running; `presence` says
+                // whether it still wants the shared updates.
+                let away = matches!(&msg, PhoneToBridge::Presence(m) if m.away);
+                if self.note_presence(&event.pubkey, &key, away) {
+                    self.want_list(client.clone());
+                }
+                self.requester = Some(client);
                 match msg {
                     PhoneToBridge::SessionKey(m) => {
                         self.grant_session_key(&event.pubkey, m.session_key);
                     }
+                    PhoneToBridge::Presence(_) => {}
                     msg => self.dispatch(msg, &event.pubkey),
                 }
+                self.requester = None;
             }
         }
     }
@@ -97,19 +108,26 @@ impl Engine {
             PhoneToBridge::SyncRequest(m) => {
                 let sync_id = self.system.new_id();
                 let seq_high = self.seq_highs.get(&m.session_id).copied().unwrap_or(0);
+                // The chunks go to the client that asked, alone.
+                let to = self.requester.clone().unwrap_or_else(|| Addressee::identity(phone));
                 self.sync.request(
                     &mut self.out,
                     self.transcripts.as_ref(),
                     sync_id,
                     &m.session_id,
-                    phone,
+                    &to,
                     &m.have_ranges,
                     seq_high,
                 );
             }
             PhoneToBridge::SyncAck(m) => self.sync.ack(&mut self.out, &m.sync_id, &m.ranges),
             PhoneToBridge::CreateSession(m) => self.on_create_session(m),
-            PhoneToBridge::RefreshSessions(_) => self.list_dirty = true,
+            // Only the asking client: the others' lists did not go stale.
+            PhoneToBridge::RefreshSessions(_) => {
+                if let Some(client) = self.requester.clone() {
+                    self.want_list(client);
+                }
+            }
             PhoneToBridge::CloseSession(m) => self.on_close_session(&m.session_id),
             PhoneToBridge::Interrupt(m) => self.interrupt(&m.session_id),
             PhoneToBridge::StopTask(m) => self.stop_task(&m.session_id, &m.task_id),
@@ -136,7 +154,7 @@ impl Engine {
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
             // Handled on arrival.
-            PhoneToBridge::SessionKey(_) => {}
+            PhoneToBridge::SessionKey(_) | PhoneToBridge::Presence(_) => {}
             PhoneToBridge::SetProviderProfile(m) => self.on_set_provider_profile(m, phone),
             PhoneToBridge::ProviderProfilesRequest(_) => {
                 let msg = self.provider_profiles_msg();

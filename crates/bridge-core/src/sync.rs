@@ -13,7 +13,7 @@
 //! 5. `sync-end { deliveredRanges }` names ONLY the acked chunks — the phone
 //!    asks again for whatever is still missing on its next connect.
 //!
-//! One sync per (session, phone): a newer request replaces the older one,
+//! One sync per (session, client): a newer request replaces the older one,
 //! which ends without a `sync-end`. A sync with no activity for
 //! [`SyncConfig::idle_timeout_ms`] is closed.
 
@@ -23,6 +23,7 @@ use std::num::NonZeroU64;
 use protocol::events::{BridgeToPhone, SyncBeginMsg, SyncChunkMsg, SyncEndMsg};
 use protocol::ranges::{chunk_ranges, missing_ranges, union_ranges, SeqRange};
 
+use crate::io::Addressee;
 use crate::out::{Out, TimerKind};
 use crate::ports::Transcripts;
 
@@ -57,7 +58,8 @@ struct Chunk {
 
 struct Sync {
     session_id: String,
-    phone: String,
+    /// The client that asked: the chunks go to it alone.
+    to: Addressee,
     chunks: Vec<Chunk>,
     /// 0 = the first send; 1..=max_retries = resend passes.
     pass: u32,
@@ -69,7 +71,8 @@ struct Sync {
 pub struct SyncServer {
     config: SyncConfig,
     by_id: BTreeMap<String, Sync>,
-    by_key: BTreeMap<(String, String), String>,
+    /// The sync under way per (session, client).
+    by_key: BTreeMap<(String, String, String), String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,7 +92,8 @@ impl SyncServer {
         self.by_id.len()
     }
 
-    /// Start a sync for `phone`, superseding its previous one for this session.
+    /// Start a sync for the client `to`, superseding its previous one for
+    /// this session.
     #[allow(clippy::too_many_arguments)]
     pub fn request(
         &mut self,
@@ -97,11 +101,11 @@ impl SyncServer {
         transcripts: &dyn Transcripts,
         sync_id: String,
         session_id: &str,
-        phone: &str,
+        to: &Addressee,
         have: &[SeqRange],
         seq_high: u64,
     ) {
-        let key = (session_id.to_string(), phone.to_string());
+        let key = (session_id.to_string(), to.phone.clone(), to.key.clone());
         if let Some(old) = self.by_key.get(&key).cloned() {
             log::info!("[Sync] {old}: superseded by a new sync-request for {session_id}");
             self.abort(out, &old);
@@ -117,15 +121,15 @@ impl SyncServer {
             sync_id.clone(),
             Sync {
                 session_id: session_id.to_string(),
-                phone: phone.to_string(),
+                to: to.clone(),
                 chunks,
                 pass: 0,
                 ack_timer: None,
                 idle_timer: None,
             },
         );
-        out.publish(
-            vec![phone.to_string()],
+        out.publish_addressed(
+            vec![to.clone()],
             BridgeToPhone::SyncBegin(SyncBeginMsg {
                 session_id: session_id.to_string(),
                 sync_id: sync_id.clone(),
@@ -221,7 +225,7 @@ impl SyncServer {
     /// Send every unacked chunk, then wait for acks.
     fn send_pass(&mut self, out: &mut Out, transcripts: &dyn Transcripts, sync_id: &str) {
         let Some(sync) = self.by_id.get(sync_id) else { return };
-        let (session_id, phone) = (sync.session_id.clone(), sync.phone.clone());
+        let (session_id, to) = (sync.session_id.clone(), sync.to.clone());
         let ranges: Vec<SeqRange> = sync.chunks.iter().filter(|c| !c.acked).map(|c| c.range).collect();
         if ranges.is_empty() {
             self.finish(out, sync_id, "complete");
@@ -236,8 +240,8 @@ impl SyncServer {
                     return;
                 }
             };
-            out.publish(
-                vec![phone.clone()],
+            out.publish_addressed(
+                vec![to.clone()],
                 BridgeToPhone::SyncChunk(SyncChunkMsg {
                     session_id: session_id.clone(),
                     sync_id: sync_id.to_string(),
@@ -272,8 +276,8 @@ impl SyncServer {
         let Some(sync) = self.remove(out, sync_id) else { return };
         let acked: Vec<SeqRange> = sync.chunks.iter().filter(|c| c.acked).map(|c| c.range).collect();
         log::info!("[Sync] {sync_id}: done ({reason})");
-        out.publish(
-            vec![sync.phone.clone()],
+        out.publish_addressed(
+            vec![sync.to.clone()],
             BridgeToPhone::SyncEnd(SyncEndMsg {
                 session_id: sync.session_id,
                 sync_id: sync_id.to_string(),
@@ -288,7 +292,7 @@ impl SyncServer {
 
     fn remove(&mut self, out: &mut Out, sync_id: &str) -> Option<Sync> {
         let sync = self.by_id.remove(sync_id)?;
-        let key = (sync.session_id.clone(), sync.phone.clone());
+        let key = (sync.session_id.clone(), sync.to.phone.clone(), sync.to.key.clone());
         if self.by_key.get(&key).is_some_and(|id| id == sync_id) {
             self.by_key.remove(&key);
         }
@@ -327,7 +331,7 @@ mod tests {
         fn request(&mut self, phone: &str, have: &[SeqRange], seq_high: u64) -> String {
             self.n += 1;
             let id = format!("sync{}", self.n);
-            self.server.request(&mut self.out, &self.transcripts, id.clone(), "s", phone, have, seq_high);
+            self.server.request(&mut self.out, &self.transcripts, id.clone(), "s", &Addressee::identity(phone), have, seq_high);
             id
         }
 

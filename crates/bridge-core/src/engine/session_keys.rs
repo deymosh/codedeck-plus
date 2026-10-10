@@ -10,10 +10,16 @@
 //! signed, so it can never act as the identity on its own.
 //!
 //! An identity may have any number of clients — phones, desktops — and each
-//! holds its own key, so a client is known by its key. Every message goes
-//! to each client: one copy per client, encrypted to its newest key (to the
-//! identity itself when no client has granted one), each with its own
-//! recipient tag (`protocol::recipients`).
+//! holds its own key, so a client is known by its key. A message goes once
+//! per client it is for, encrypted to that client's newest key, each copy
+//! with its own recipient tag (`protocol::recipients`):
+//! - a reply to a command, to the client that sent it (the key it was
+//!   encrypted with says which);
+//! - everything else (the heartbeat, live output, cards, session changes),
+//!   to each client present now: one whose lease, renewed by any command
+//!   and by `presence`, has not run out. A client away gets nothing; when
+//!   it is back it says so, and gets a heartbeat of its own;
+//! - to the identity itself while it has no client at all.
 //!
 //! Rules:
 //! - a grant arrives in a command, which only the paired identity can sign;
@@ -30,7 +36,7 @@
 //!   identity's client, the bridge's own) or that a client already rotated
 //!   away from is refused: a session key belongs to one client.
 
-use protocol::commands::{SessionKeyGrant, SESSION_KEY_MAX_LIFETIME_SECS};
+use protocol::commands::{SessionKeyGrant, PRESENCE_LEASE_SECS, SESSION_KEY_MAX_LIFETIME_SECS};
 use protocol::crypto::npub_from_hex;
 
 use super::Engine;
@@ -73,6 +79,7 @@ impl Engine {
             log::warn!("[Engine] Refusing session key {key}...: {why}");
             return false;
         }
+        let present_until_ms = self.now() + PRESENCE_LEASE_SECS * 1000;
         let Some(phone) = self.paired.iter_mut().find(|p| p.pubkey_hex == identity) else { return false };
         phone.clients.retain(|c| c.key.expires_at > now);
         let renewed = phone.clients.iter().position(|c| c.key.pubkey_hex == grant.pubkey_hex);
@@ -82,10 +89,12 @@ impl Engine {
             .and_then(|old| phone.clients.iter().position(|c| c.key.pubkey_hex == old));
         if let Some(i) = renewed {
             phone.clients[i].key = grant;
+            phone.clients[i].present_until_ms = present_until_ms;
             log::info!("[Engine] Session key {key}... renewed for {}...", short(identity));
         } else if let Some(i) = rotated {
             let client = &mut phone.clients[i];
             client.previous = Some(std::mem::replace(&mut client.key, grant));
+            client.present_until_ms = present_until_ms;
             log::info!("[Engine] A client of {}... rotated to session key {key}...", short(identity));
         } else {
             if phone.clients.len() >= MAX_CLIENTS {
@@ -99,7 +108,7 @@ impl Engine {
                 let dropped = phone.clients.remove(soonest);
                 log::info!("[Engine] {}... has too many clients; dropping {}...", short(identity), short(&dropped.key.pubkey_hex));
             }
-            phone.clients.push(PhoneClient { key: grant, previous: None });
+            phone.clients.push(PhoneClient { key: grant, previous: None, present_until_ms });
             log::info!("[Engine] Session key {key}... granted for a new client of {}...", short(identity));
         }
         self.store_paired();
@@ -161,32 +170,60 @@ impl Engine {
         newest.chain(previous).filter(|k| k.expires_at > now_secs).map(|k| k.pubkey_hex.clone()).collect()
     }
 
-    /// The keys a message to `identity` is encrypted to, a copy each: its
-    /// clients' newest live keys, or the identity itself when it has none.
-    fn copy_keys(&self, identity: &str, now_secs: u64) -> Vec<String> {
-        let keys: Vec<String> = self
-            .paired
-            .iter()
-            .find(|p| p.pubkey_hex == identity)
-            .map(|p| p.clients.iter().filter(|c| c.key.expires_at > now_secs).map(|c| c.key.pubkey_hex.clone()).collect())
-            .unwrap_or_default();
-        if keys.is_empty() {
-            vec![identity.to_string()]
-        } else {
-            keys
+    /// The client of `identity` holding `key` (its newest key or the one
+    /// it replaced) is present for a lease from now, or, `away`, no longer.
+    /// Returns whether it was away until now, so wants a heartbeat of its
+    /// own. A command under the identity's own key names no client.
+    pub(super) fn note_presence(&mut self, identity: &str, key: &str, away: bool) -> bool {
+        let now = self.now();
+        let Some(phone) = self.paired.iter_mut().find(|p| p.pubkey_hex == identity) else { return false };
+        let holds = |c: &&mut PhoneClient| c.key.pubkey_hex == key || c.previous.as_ref().is_some_and(|k| k.pubkey_hex == key);
+        let Some(client) = phone.clients.iter_mut().find(holds) else { return false };
+        let was_present = client.present_until_ms > now;
+        client.present_until_ms = if away { 0 } else { now + PRESENCE_LEASE_SECS * 1000 };
+        if away && was_present {
+            log::info!("[Engine] A client of {}... is away", short(identity));
+        }
+        !away && !was_present
+    }
+
+    /// Every client counts as present for a lease: what a restarted bridge
+    /// assumes, so no running client misses what happens before it renews.
+    pub(super) fn presume_present(&mut self) {
+        let until = self.now() + PRESENCE_LEASE_SECS * 1000;
+        for client in self.paired.iter_mut().flat_map(|p| p.clients.iter_mut()) {
+            client.present_until_ms = until;
         }
     }
 
-    /// Turn every publish in `effects` into a copy for each client of each
-    /// identity it goes to.
+    /// The keys a message to `identity`'s clients is encrypted to, a copy
+    /// each: its present clients' newest live keys — none when every client
+    /// is away — or the identity itself when it has no client at all (an
+    /// identity not paired, refused a pairing, included).
+    fn copy_keys(&self, identity: &str, now_ms: u64) -> Vec<String> {
+        let now_secs = now_ms / 1000;
+        let Some(phone) = self.paired.iter().find(|p| p.pubkey_hex == identity) else { return vec![identity.to_string()] };
+        let live: Vec<&PhoneClient> = phone.clients.iter().filter(|c| c.key.expires_at > now_secs).collect();
+        if live.is_empty() {
+            return vec![identity.to_string()];
+        }
+        live.into_iter().filter(|c| c.present_until_ms > now_ms).map(|c| c.key.pubkey_hex.clone()).collect()
+    }
+
+    /// Turn every publish in `effects` to an identity into a copy for each
+    /// of its present clients; one already for a client stays as it is.
     pub(super) fn address_publishes(&self, effects: &mut [Effect]) {
-        let now = self.now_secs();
+        let now = self.now();
         for effect in effects {
             if let Effect::Publish { to, .. } = effect {
                 *to = to
                     .iter()
                     .flat_map(|a| {
-                        self.copy_keys(&a.phone, now).into_iter().map(|key| Addressee { phone: a.phone.clone(), key })
+                        if a.key.is_empty() {
+                            self.copy_keys(&a.phone, now).into_iter().map(|key| Addressee { phone: a.phone.clone(), key }).collect()
+                        } else {
+                            vec![a.clone()]
+                        }
                     })
                     .collect();
             }
