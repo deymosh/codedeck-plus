@@ -4980,6 +4980,183 @@ public object FfiConverterTypeUniffiBackupView: FfiConverterRustBuffer<UniffiBac
 
 
 /**
+ * What fills a session's context window — mirrors
+ * `protocol::common::ContextBreakdown`; a category's `kind` is the wire's
+ * own word (`used`, `free`, `buffer`, `deferred`).
+ */
+data class UniffiContextBreakdown (
+    var `usedTokens`: kotlin.UInt
+    , 
+    var `windowTokens`: kotlin.UInt
+    , 
+    var `categories`: List<UniffiContextCategory>
+    , 
+    var `groups`: List<UniffiContextGroup>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiContextBreakdown: FfiConverterRustBuffer<UniffiContextBreakdown> {
+    override fun read(buf: ByteBuffer): UniffiContextBreakdown {
+        return UniffiContextBreakdown(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterSequenceTypeUniffiContextCategory.read(buf),
+            FfiConverterSequenceTypeUniffiContextGroup.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiContextBreakdown) = (
+            FfiConverterUInt.allocationSize(value.`usedTokens`) +
+            FfiConverterUInt.allocationSize(value.`windowTokens`) +
+            FfiConverterSequenceTypeUniffiContextCategory.allocationSize(value.`categories`) +
+            FfiConverterSequenceTypeUniffiContextGroup.allocationSize(value.`groups`)
+    )
+
+    override fun write(value: UniffiContextBreakdown, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`usedTokens`, buf)
+            FfiConverterUInt.write(value.`windowTokens`, buf)
+            FfiConverterSequenceTypeUniffiContextCategory.write(value.`categories`, buf)
+            FfiConverterSequenceTypeUniffiContextGroup.write(value.`groups`, buf)
+    }
+}
+
+
+
+data class UniffiContextCategory (
+    var `name`: kotlin.String
+    , 
+    var `tokens`: kotlin.UInt
+    , 
+    var `kind`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiContextCategory: FfiConverterRustBuffer<UniffiContextCategory> {
+    override fun read(buf: ByteBuffer): UniffiContextCategory {
+        return UniffiContextCategory(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiContextCategory) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterUInt.allocationSize(value.`tokens`) +
+            FfiConverterString.allocationSize(value.`kind`)
+    )
+
+    override fun write(value: UniffiContextCategory, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterUInt.write(value.`tokens`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+    }
+}
+
+
+
+data class UniffiContextGroup (
+    var `name`: kotlin.String
+    , 
+    var `tokens`: kotlin.UInt
+    , 
+    var `items`: List<UniffiContextItem>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiContextGroup: FfiConverterRustBuffer<UniffiContextGroup> {
+    override fun read(buf: ByteBuffer): UniffiContextGroup {
+        return UniffiContextGroup(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterSequenceTypeUniffiContextItem.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiContextGroup) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterUInt.allocationSize(value.`tokens`) +
+            FfiConverterSequenceTypeUniffiContextItem.allocationSize(value.`items`)
+    )
+
+    override fun write(value: UniffiContextGroup, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterUInt.write(value.`tokens`, buf)
+            FfiConverterSequenceTypeUniffiContextItem.write(value.`items`, buf)
+    }
+}
+
+
+
+data class UniffiContextItem (
+    var `name`: kotlin.String
+    , 
+    var `tokens`: kotlin.UInt
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiContextItem: FfiConverterRustBuffer<UniffiContextItem> {
+    override fun read(buf: ByteBuffer): UniffiContextItem {
+        return UniffiContextItem(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiContextItem) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterUInt.allocationSize(value.`tokens`)
+    )
+
+    override fun write(value: UniffiContextItem, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterUInt.write(value.`tokens`, buf)
+    }
+}
+
+
+
+/**
  * A credential's status — the secret itself never crosses.
  */
 data class UniffiCredentialStatus (
@@ -7770,6 +7947,8 @@ data class UniffiUsageData (
     , 
     var `sessionCostUsd`: kotlin.Double?
     , 
+    var `context`: UniffiContextBreakdown? = null 
+    , 
     var `fetchedAt`: kotlin.String
     
 ){
@@ -7791,6 +7970,7 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
             FfiConverterOptionalString.read(buf),
             FfiConverterSequenceTypeUniffiUsageWindow.read(buf),
             FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalTypeUniffiContextBreakdown.read(buf),
             FfiConverterString.read(buf),
         )
     }
@@ -7800,6 +7980,7 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
             FfiConverterOptionalString.allocationSize(value.`plan`) +
             FfiConverterSequenceTypeUniffiUsageWindow.allocationSize(value.`windows`) +
             FfiConverterOptionalDouble.allocationSize(value.`sessionCostUsd`) +
+            FfiConverterOptionalTypeUniffiContextBreakdown.allocationSize(value.`context`) +
             FfiConverterString.allocationSize(value.`fetchedAt`)
     )
 
@@ -7808,6 +7989,7 @@ public object FfiConverterTypeUniffiUsageData: FfiConverterRustBuffer<UniffiUsag
             FfiConverterOptionalString.write(value.`plan`, buf)
             FfiConverterSequenceTypeUniffiUsageWindow.write(value.`windows`, buf)
             FfiConverterOptionalDouble.write(value.`sessionCostUsd`, buf)
+            FfiConverterOptionalTypeUniffiContextBreakdown.write(value.`context`, buf)
             FfiConverterString.write(value.`fetchedAt`, buf)
     }
 }
@@ -10514,6 +10696,38 @@ public object FfiConverterOptionalTypeUniffiSessionKeyStore: FfiConverterRustBuf
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeUniffiContextBreakdown: FfiConverterRustBuffer<UniffiContextBreakdown?> {
+    override fun read(buf: ByteBuffer): UniffiContextBreakdown? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiContextBreakdown.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiContextBreakdown?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiContextBreakdown.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiContextBreakdown?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiContextBreakdown.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeUniffiGsdExecution: FfiConverterRustBuffer<UniffiGsdExecution?> {
     override fun read(buf: ByteBuffer): UniffiGsdExecution? {
         if (buf.get().toInt() == 0) {
@@ -11268,6 +11482,90 @@ public object FfiConverterSequenceTypeUniffiAvailablePlugin: FfiConverterRustBuf
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiAvailablePlugin.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiContextCategory: FfiConverterRustBuffer<List<UniffiContextCategory>> {
+    override fun read(buf: ByteBuffer): List<UniffiContextCategory> {
+        val len = buf.getInt()
+        return List<UniffiContextCategory>(len) {
+            FfiConverterTypeUniffiContextCategory.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiContextCategory>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiContextCategory.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiContextCategory>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiContextCategory.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiContextGroup: FfiConverterRustBuffer<List<UniffiContextGroup>> {
+    override fun read(buf: ByteBuffer): List<UniffiContextGroup> {
+        val len = buf.getInt()
+        return List<UniffiContextGroup>(len) {
+            FfiConverterTypeUniffiContextGroup.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiContextGroup>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiContextGroup.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiContextGroup>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiContextGroup.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeUniffiContextItem: FfiConverterRustBuffer<List<UniffiContextItem>> {
+    override fun read(buf: ByteBuffer): List<UniffiContextItem> {
+        val len = buf.getInt()
+        return List<UniffiContextItem>(len) {
+            FfiConverterTypeUniffiContextItem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiContextItem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiContextItem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiContextItem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiContextItem.write(it, buf)
         }
     }
 }

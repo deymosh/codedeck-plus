@@ -314,7 +314,7 @@ fn usage_is_asked_only_of_agents_that_report_it() {
     let s = ready(&mut rig);
     rig.send(json!({"type":"usage-request","sessionId":s}));
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::GetUsage { .. }));
-    let usage = UsageData { available: true, plan: None, windows: vec![], session_cost_usd: None, fetched_at: "t".into() };
+    let usage = UsageData { available: true, plan: None, windows: vec![], session_cost_usd: None, context: None, fetched_at: "t".into() };
     rig.host_reply(&id, HostMessage::Usage { usage: Some(usage) });
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::Usage(u) if u.session_id == s)));
 

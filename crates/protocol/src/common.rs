@@ -955,7 +955,68 @@ pub struct UsageData {
     pub windows: Vec<UsageWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_cost_usd: Option<f64>,
+    /// What fills the session's context window, when its agent can say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextBreakdown>,
     pub fetched_at: String,
+}
+
+/// What fills a session's context window, part by part, as its agent counts
+/// it — the same picture the agent's own context view gives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextBreakdown {
+    /// Tokens in the window now.
+    pub used_tokens: u32,
+    /// The window's size.
+    pub window_tokens: u32,
+    /// The parts, in the agent's order: "Messages", "System prompt", "MCP
+    /// tools", the free rest.
+    #[serde(default)]
+    pub categories: Vec<ContextCategory>,
+    /// Lists behind some parts, item by item (each MCP tool, each memory
+    /// file), when the agent names them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<ContextGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextCategory {
+    pub name: String,
+    pub tokens: u32,
+    pub kind: ContextKind,
+}
+
+/// Where a [`ContextCategory`] stands against the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ContextKind {
+    /// Content in the window.
+    Used,
+    /// The window's unused rest.
+    Free,
+    /// Kept free for compaction.
+    Buffer,
+    /// Loaded only when needed: outside the window until then.
+    Deferred,
+}
+
+/// A part of the context listed item by item: "MCP tools" and each tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextGroup {
+    pub name: String,
+    pub tokens: u32,
+    #[serde(default)]
+    pub items: Vec<ContextItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextItem {
+    pub name: String,
+    pub tokens: u32,
 }
 
 /// Credential writes by id: a string sets it, `null` clears it, an absent

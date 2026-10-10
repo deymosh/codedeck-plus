@@ -542,6 +542,83 @@ export type BridgeMessage_Serialize =
 { kind: "question-outcome"; payload: QuestionOutcome };
 
 /**
+ *  What fills a session's context window, part by part, as its agent counts
+ *  it — the same picture the agent's own context view gives.
+ */
+export type ContextBreakdown = ContextBreakdown_Serialize | ContextBreakdown_Deserialize;
+
+/**
+ *  What fills a session's context window, part by part, as its agent counts
+ *  it — the same picture the agent's own context view gives.
+ */
+export type ContextBreakdown_Deserialize = {
+	/**  Tokens in the window now. */
+	usedTokens: number,
+	/**  The window's size. */
+	windowTokens: number,
+	/**
+	 *  The parts, in the agent's order: "Messages", "System prompt", "MCP
+	 *  tools", the free rest.
+	 */
+	categories?: ContextCategory[],
+	/**
+	 *  Lists behind some parts, item by item (each MCP tool, each memory
+	 *  file), when the agent names them.
+	 */
+	groups?: ContextGroup[],
+};
+
+/**
+ *  What fills a session's context window, part by part, as its agent counts
+ *  it — the same picture the agent's own context view gives.
+ */
+export type ContextBreakdown_Serialize = {
+	/**  Tokens in the window now. */
+	usedTokens: number,
+	/**  The window's size. */
+	windowTokens: number,
+	/**
+	 *  The parts, in the agent's order: "Messages", "System prompt", "MCP
+	 *  tools", the free rest.
+	 */
+	categories: ContextCategory[],
+	/**
+	 *  Lists behind some parts, item by item (each MCP tool, each memory
+	 *  file), when the agent names them.
+	 */
+	groups?: ContextGroup[],
+};
+
+export type ContextCategory = {
+	name: string,
+	tokens: number,
+	kind: ContextKind,
+};
+
+/**  A part of the context listed item by item: "MCP tools" and each tool. */
+export type ContextGroup = {
+	name: string,
+	tokens: number,
+	items?: ContextItem[],
+};
+
+export type ContextItem = {
+	name: string,
+	tokens: number,
+};
+
+/**  Where a [`ContextCategory`] stands against the window. */
+export type ContextKind = 
+/**  Content in the window. */
+"used" | 
+/**  The window's unused rest. */
+"free" | 
+/**  Kept free for compaction. */
+"buffer" | 
+/**  Loaded only when needed: outside the window until then. */
+"deferred";
+
+/**
  *  A credential an agent can use. The bridge stores the value and reports
  *  its status to the phone; the host decides how the agent consumes it.
  */
@@ -1707,6 +1784,8 @@ export type UsageData_Deserialize = {
 	plan?: string | null,
 	windows?: UsageWindow[],
 	sessionCostUsd?: number | null,
+	/**  What fills the session's context window, when its agent can say. */
+	context?: ContextBreakdown_Deserialize | null,
 	fetchedAt: string,
 };
 
@@ -1716,6 +1795,8 @@ export type UsageData_Serialize = {
 	plan?: string | null,
 	windows: UsageWindow[],
 	sessionCostUsd?: number | null,
+	/**  What fills the session's context window, when its agent can say. */
+	context?: ContextBreakdown_Serialize | null,
 	fetchedAt: string,
 };
 
