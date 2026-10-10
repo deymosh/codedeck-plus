@@ -83,6 +83,9 @@ object Tokens {
     val TextMuted = Color(0xFFA0A0A8)
     val TextDim = Color(0xFF5E5E66)
 
+    /** Over the page behind a sheet: dims it without hiding it. */
+    val Scrim = Color(0x52000000)
+
     // --- Accent: inversion-as-emphasis identity ---
     val Accent = Color(0xFFFFFFFF)
     val AccentContrast = Color(0xFF000000)
