@@ -1,6 +1,7 @@
 /**
  * Every agent this host can run — the one place that names them. The order
- * is the catalog's.
+ * is the catalog's, which the phone lists agents in: the default agent
+ * (OpenCode) first.
  */
 import { claudeModule } from '../drivers/claude/module';
 import { deepSeekModule } from '../drivers/deepseek/module';
@@ -8,7 +9,7 @@ import { fakeModule } from '../drivers/fake/module';
 import { openCodeModule } from '../drivers/opencode/module';
 import type { DriverModule } from '../sdk/module';
 
-export const DRIVER_MODULES: readonly DriverModule[] = [claudeModule, openCodeModule, deepSeekModule, fakeModule];
+export const DRIVER_MODULES: readonly DriverModule[] = [openCodeModule, claudeModule, deepSeekModule, fakeModule];
 
 /**
  * The modules `CODEDECK_AGENT_HOST_DRIVERS` (comma-separated ids) asks for,

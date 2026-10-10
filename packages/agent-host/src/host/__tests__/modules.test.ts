@@ -6,7 +6,7 @@ import { DRIVER_MODULES, selectModules } from '../modules';
 
 describe('selectModules', () => {
   it('loads every agent but the test ones by default, in catalog order', () => {
-    expect(selectModules({}, () => {}).map((m) => m.id)).toEqual(['claude-code', 'opencode', 'deepseek-harness']);
+    expect(selectModules({}, () => {}).map((m) => m.id)).toEqual(['opencode', 'claude-code', 'deepseek-harness']);
   });
 
   it('loads what CODEDECK_AGENT_HOST_DRIVERS names, in its order, and skips an unknown id', () => {
