@@ -1192,6 +1192,7 @@ fn project_event(raw: Value) -> Option<NostrEvent> {
         kind: ev.kind.as_u16(),
         created_at: ev.created_at.as_secs() as i64,
         pubkey: ev.pubkey.to_hex(),
+        tags: ev.tags.iter().map(|t| t.as_slice().to_vec()).collect(),
         content: ev.content,
     })
 }
@@ -1530,6 +1531,7 @@ mod tests {
             authors: vec!["a".repeat(64)],
             p_tags: vec![phone.pubkey_hex.clone()],
             d_tags: vec![],
+            c_tags: vec![],
             since: None,
         }
     }

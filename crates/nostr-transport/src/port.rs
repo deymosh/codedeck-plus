@@ -45,20 +45,32 @@ pub struct Filter {
     pub p_tags: Vec<String>,
     /// the `#d` tag filter (an addressable event's identifier).
     pub d_tags: Vec<String>,
+    /// the `#c` tag filter: the recipient tags of the copies meant for this
+    /// client (`protocol::recipients`).
+    pub c_tags: Vec<String>,
     pub since: Option<i64>,
 }
 
 /// A Nostr event. Subscription logic only routes / dedups / advances cursors
-/// on `id` / `kind` / `created_at` / `pubkey`; `content` is carried through
-/// untouched for the layer above (decrypt + decode).
+/// on `id` / `kind` / `created_at` / `pubkey`; `tags` and `content` are
+/// carried through untouched for the layer above (address check, decrypt,
+/// decode).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NostrEvent {
     pub id: String,
     pub kind: u16,
     pub created_at: i64,
     pub pubkey: String,
+    pub tags: Vec<Vec<String>>,
     /// `event.content`: `base64(NIP-44(json))`, or a `chunk` fragment.
     pub content: String,
+}
+
+impl NostrEvent {
+    /// The first value of the event's first `name` tag.
+    pub fn tag(&self, name: &str) -> Option<&str> {
+        self.tags.iter().find(|t| t.first().is_some_and(|n| n == name)).and_then(|t| t.get(1)).map(String::as_str)
+    }
 }
 
 /// Callbacks a `Transport` invokes for one subscription. `Rc` (not `Box`) so
@@ -88,4 +100,25 @@ pub trait Transport {
     /// redial every relay through it. Default: no-op (in-memory test
     /// transports have no real socket to redial).
     fn set_proxy(&self, _proxy: Option<String>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_reads_the_first_value_of_the_first_tag_so_named() {
+        let tags = [vec!["p", "aa"], vec!["c", "c1"], vec!["c", "c2"], vec!["d"]];
+        let event = NostrEvent {
+            id: "e".into(),
+            kind: 30515,
+            created_at: 1,
+            pubkey: "b".into(),
+            tags: tags.iter().map(|t| t.iter().map(|s| s.to_string()).collect()).collect(),
+            content: String::new(),
+        };
+        assert_eq!(event.tag("c"), Some("c1"));
+        assert_eq!(event.tag("d"), None);
+        assert_eq!(event.tag("x"), None);
+    }
 }

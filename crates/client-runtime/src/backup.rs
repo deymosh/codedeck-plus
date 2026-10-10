@@ -120,7 +120,7 @@ mod tests {
     }
 
     fn as_received(e: &SignedEvent) -> NostrEvent {
-        NostrEvent { id: e.id.clone(), kind: e.kind, created_at: e.created_at as i64, pubkey: e.pubkey.clone(), content: e.content.clone() }
+        NostrEvent { id: e.id.clone(), kind: e.kind, created_at: e.created_at as i64, pubkey: e.pubkey.clone(), tags: e.tags.clone(), content: e.content.clone() }
     }
 
     #[tokio::test]

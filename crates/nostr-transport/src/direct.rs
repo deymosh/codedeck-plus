@@ -305,6 +305,7 @@ impl DirectLink {
                         kind: event.kind,
                         created_at: event.created_at as i64,
                         pubkey: event.pubkey,
+                        tags: event.tags,
                         content: event.content,
                     };
                     (self.0.handlers.on_event)(event);

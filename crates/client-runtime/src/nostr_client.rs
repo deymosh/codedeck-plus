@@ -55,6 +55,7 @@ pub fn build_phone_filters(phone_pubkey: &str, authors: &[String], last_stored_s
         authors: authors.to_vec(),
         p_tags: vec![phone_pubkey.to_string()],
         d_tags: vec![],
+        c_tags: vec![],
         since,
     };
     vec![
@@ -375,6 +376,7 @@ mod tests {
             kind,
             created_at,
             pubkey: "b1".into(),
+            tags: Vec::new(),
             content: String::new(),
         }
     }
