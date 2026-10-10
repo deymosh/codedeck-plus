@@ -37,6 +37,9 @@ pub use nostr_transport::port::{Filter, NostrEvent, SubCallbacks, Transport, Tra
 pub trait NostrClientHost {
     /// Bridge pubkeys to subscribe to: paired machines + any pairing candidate.
     fn authors(&self) -> Vec<String>;
+    /// The recipient tags of this client's copies from those bridges
+    /// (`protocol::recipients`): a relay hands it those only.
+    fn recipients(&self) -> Vec<String>;
     fn on_event(&self, event: &NostrEvent);
     /// All subscriptions of the current epoch reached EOSE.
     fn on_socket_open(&self);
@@ -48,13 +51,20 @@ pub trait NostrClientHost {
     fn log(&self, _msg: &str) {}
 }
 
-/// The three per-class filters. Pure.
-pub fn build_phone_filters(phone_pubkey: &str, authors: &[String], last_stored_seen: i64) -> Vec<Filter> {
+/// The three per-class filters, each for this client's own copies
+/// (`recipients`) only — never another client's of the identity. Pure.
+pub fn build_phone_filters(
+    phone_pubkey: &str,
+    authors: &[String],
+    recipients: &[String],
+    last_stored_seen: i64,
+) -> Vec<Filter> {
     let f = |kinds: Vec<u16>, since: Option<i64>| Filter {
         kinds,
         authors: authors.to_vec(),
         p_tags: vec![phone_pubkey.to_string()],
         d_tags: vec![],
+        c_tags: recipients.to_vec(),
         since,
     };
     vec![
@@ -185,7 +195,8 @@ impl<T: Transport, H: NostrClientHost + 'static> NostrClient<T, H> {
             return;
         }
 
-        let filters = build_phone_filters(&self.phone_pubkey, &authors, self.host.last_stored_seen());
+        let filters =
+            build_phone_filters(&self.phone_pubkey, &authors, &self.host.recipients(), self.host.last_stored_seen());
         {
             let mut i = self.inner.borrow_mut();
             i.eose_count = 0;
@@ -352,6 +363,9 @@ mod tests {
         fn authors(&self) -> Vec<String> {
             self.authors.clone()
         }
+        fn recipients(&self) -> Vec<String> {
+            vec!["c1".into()]
+        }
         fn on_event(&self, event: &NostrEvent) {
             self.events.borrow_mut().push(event.id.clone());
         }
@@ -375,6 +389,7 @@ mod tests {
             kind,
             created_at,
             pubkey: "b1".into(),
+            tags: Vec::new(),
             content: String::new(),
         }
     }
@@ -390,7 +405,7 @@ mod tests {
 
     #[test]
     fn builds_exactly_three_filters() {
-        let f = build_phone_filters("phone-pk", &["b1".into(), "b2".into()], 0);
+        let f = build_phone_filters("phone-pk", &["b1".into(), "b2".into()], &["c1".into(), "c2".into()], 0);
         assert_eq!(f.iter().map(|x| x.kinds.clone()).collect::<Vec<_>>(), vec![
             vec![SESSION_LIST_KIND],
             vec![RESPONSE_KIND],
@@ -399,13 +414,14 @@ mod tests {
         for x in &f {
             assert_eq!(x.authors, vec!["b1".to_string(), "b2".to_string()]);
             assert_eq!(x.p_tags, vec!["phone-pk".to_string()]);
+            assert_eq!(x.c_tags, vec!["c1".to_string(), "c2".to_string()], "this client's copies only");
         }
     }
 
     #[test]
     fn heartbeat_and_live_never_carry_since() {
         for last in [0, 1_234_567] {
-            let f = build_phone_filters("p", &["b1".into()], last);
+            let f = build_phone_filters("p", &["b1".into()], &[], last);
             assert_eq!(f[0].since, None);
             assert_eq!(f[2].since, None);
         }
@@ -413,9 +429,9 @@ mod tests {
 
     #[test]
     fn response_filter_resumes_from_cursor_minus_grace_and_omits_on_first_run() {
-        assert_eq!(build_phone_filters("p", &["b1".into()], 0)[1].since, None);
+        assert_eq!(build_phone_filters("p", &["b1".into()], &[], 0)[1].since, None);
         assert_eq!(
-            build_phone_filters("p", &["b1".into()], 10_000)[1].since,
+            build_phone_filters("p", &["b1".into()], &[], 10_000)[1].since,
             Some(10_000 - STORED_SINCE_GRACE_SECONDS)
         );
     }

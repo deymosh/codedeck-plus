@@ -4,8 +4,11 @@
 //! stays low-frequency: high-frequency live output never advances the
 //! stored-event `since` cursor past a response the phone still needs.
 
-/// Session-list heartbeat. NIP-33 parameterized replaceable (`d` = machine
-/// name). Subscribers always fetch current — never with a `since` filter.
+/// Session-list heartbeat. NIP-33 parameterized replaceable, one per client:
+/// `d` = the copy's recipient tag (see [`crate::recipients`]), so one
+/// client's heartbeat never replaces another's. NIP-40 expiry:
+/// [`SESSION_LIST_EXPIRY_SECONDS`]. Subscribers always fetch current —
+/// never with a `since` filter.
 pub const SESSION_LIST_KIND: u16 = 30515;
 
 /// Phone → bridge commands. Stored, so a briefly-offline bridge still receives
@@ -27,6 +30,12 @@ pub const COMMAND_EXPIRY_SECONDS: u64 = 60 * 60;
 
 /// NIP-40 expiration applied to [`RESPONSE_KIND`] events (seconds).
 pub const RESPONSE_EXPIRY_SECONDS: u64 = 60 * 60;
+
+/// NIP-40 expiration applied to [`SESSION_LIST_KIND`] events (seconds). A
+/// running bridge replaces its heartbeat every minute, so this only clears
+/// what nothing replaces any more: the heartbeat of a bridge gone for a day,
+/// of a client it no longer serves, and fragments a shorter heartbeat left.
+pub const SESSION_LIST_EXPIRY_SECONDS: u64 = 24 * 60 * 60;
 
 /// All kinds a CodeDeck relay must accept from registered agents.
 pub const CODEDECK_KINDS: [u16; 4] =

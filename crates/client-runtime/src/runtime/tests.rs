@@ -406,7 +406,7 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
+                r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -417,6 +417,7 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -468,6 +469,7 @@ async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
             let push_raw = |plaintext: &str| {
                 let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone.pubkey_hex, plaintext).unwrap();
                 let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                     .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                     .unwrap();
                 mock.push(format!(r#"["EVENT","{sub}",{}]"#, <nostr::Event as nostr::JsonUtil>::as_json(&event)));
@@ -477,12 +479,12 @@ async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
             };
             assert_eq!(mark().await, None);
 
-            push_raw(r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
+            push_raw(r#"{"v":13,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
             settle().await;
-            assert_eq!(mark().await, Some(Some(12)));
+            assert_eq!(mark().await, Some(Some(13)));
             let delivered = spy.messages.lock().unwrap().len();
 
-            push_raw(r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
+            push_raw(r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
             settle().await;
             assert_eq!(mark().await, None);
             assert_eq!(spy.messages.lock().unwrap().len(), delivered + 1);
@@ -509,7 +511,7 @@ async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
             settle().await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
+                r#"{"v":12,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -520,6 +522,7 @@ async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -562,7 +565,7 @@ async fn create_folder_round_trips_to_a_matching_folder_ack_core_event() {
             assert_eq!(v[0], "EVENT");
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"folder-ack","requestId":"req-1","success":true,"path":"sub/dir"}"#,
+                r#"{"v":12,"type":"folder-ack","requestId":"req-1","success":true,"path":"sub/dir"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -573,6 +576,7 @@ async fn create_folder_round_trips_to_a_matching_folder_ack_core_event() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -640,7 +644,7 @@ async fn a_stored_kind_event_persists_the_cursor_to_kv() {
             assert_eq!(kv.get(LAST_STORED_SEEN_KEY).await, None);
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
+                r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -651,6 +655,7 @@ async fn a_stored_kind_event_persists_the_cursor_to_kv() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(RESPONSE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             let created_at = event.created_at.as_secs();
@@ -815,7 +820,7 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
             // machines view — proving the subscription actually scopes to
             // it, not just that some vacuous socket opened.
             let sessions_json =
-                r#"{"v":11,"type":"sessions","machine":"bridge","sessions":[],"agents":[]}"#;
+                r#"{"v":12,"type":"sessions","machine":"bridge","sessions":[],"agents":[]}"#;
             let msg = protocol::codec::decode_bridge_to_phone(sessions_json).unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
             let ct = protocol::crypto::encrypt_to(
@@ -826,6 +831,7 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
             .unwrap();
             let event =
                 nostr::EventBuilder::new(nostr::Kind::Custom(SESSION_LIST_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                     .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                     .unwrap();
             mock.push(format!(
@@ -1398,7 +1404,7 @@ async fn a_session_pending_message_populates_the_view_and_emits_a_state_changed_
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"session-pending","pendingId":"p1","machine":"devbox","createdAt":"2026-01-01T00:00:00.000Z"}"#,
+                r#"{"v":12,"type":"session-pending","pendingId":"p1","machine":"devbox","createdAt":"2026-01-01T00:00:00.000Z"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1409,6 +1415,7 @@ async fn a_session_pending_message_populates_the_view_and_emits_a_state_changed_
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -1445,7 +1452,7 @@ async fn dismiss_pending_session_removes_it_and_emits_a_state_changed_event() {
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
+                r#"{"v":12,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1456,6 +1463,7 @@ async fn dismiss_pending_session_removes_it_and_emits_a_state_changed_event() {
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -1493,7 +1501,7 @@ async fn an_output_message_populates_the_transcript_view_and_emits_transcript_ap
             eose_all(&mut mock).await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
+                r#"{"v":12,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             let plaintext = encode_bridge_to_phone(&msg);
@@ -1504,6 +1512,7 @@ async fn an_output_message_populates_the_transcript_view_and_emits_transcript_ap
             )
             .unwrap();
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone.pubkey_hex))
                 .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
                 .unwrap();
             mock.push(format!(
@@ -1582,12 +1591,19 @@ fn push_bridge_to_phone_event(
     let ct = protocol::crypto::encrypt_to(&machine.secret_key, phone_pubkey_hex, &plaintext)
         .unwrap();
     let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(machine, phone_pubkey_hex))
         .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
         .unwrap();
     mock.push(format!(
         r#"["EVENT","{sub_id}",{}]"#,
         <nostr::Event as nostr::JsonUtil>::as_json(&event)
     ));
+}
+
+/// The recipient tag of a copy `bridge` encrypted to `key`.
+fn recipient(bridge: &protocol::crypto::Keypair, key: impl AsRef<str>) -> nostr::Tag {
+    let tag = protocol::recipients::recipient_tag(&bridge.pubkey_hex, key.as_ref());
+    nostr::Tag::custom(nostr::TagKind::custom(protocol::recipients::RECIPIENT_TAG), [tag])
 }
 
 /// A fresh phone has no relays at all: the pairing link's relays are the
@@ -1699,7 +1715,7 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
             // sessions to forget from `MachineView.sessions`, exactly
             // like the TS `removeMachine` it mirrors.
             let sessions_msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"sessions","machine":"laptop","sessions":[
+                r#"{"v":12,"type":"sessions","machine":"laptop","sessions":[
                     {"id":"s1","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
                 ],"agents":[]}"#,
             )
@@ -1708,7 +1724,7 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
             settle().await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
+                r#"{"v":12,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &msg);
@@ -1801,7 +1817,7 @@ async fn the_undo_toast_clears_itself_when_the_window_expires_without_a_tap() {
 
             let sub = drain_traffic_resubscribe(&mut mock).await;
             let sessions_msg = protocol::codec::decode_bridge_to_phone(
-                r#"{"v":11,"type":"sessions","machine":"laptop","sessions":[
+                r#"{"v":12,"type":"sessions","machine":"laptop","sessions":[
                     {"id":"s1","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":0,"title":null,"project":"p"}
                 ],"agents":[]}"#,
             )
@@ -1863,7 +1879,7 @@ fn heartbeat_listing(ids: &[&str]) -> BridgeToPhone {
         .collect();
     protocol::codec::decode_bridge_to_phone(
         &serde_json::json!({
-            "v": 11,
+            "v": 12,
             "type": "sessions",
             "machine": "laptop",
             "sessions": sessions,
@@ -1988,7 +2004,7 @@ async fn next_command_via(
 fn heartbeat_with(caps: &[&str]) -> BridgeToPhone {
     protocol::codec::decode_bridge_to_phone(
         &serde_json::json!({
-            "v": 11,
+            "v": 12,
             "type": "sessions",
             "machine": "laptop",
             "sessions": [],
@@ -2106,6 +2122,68 @@ async fn with_a_host_key_store_the_kv_holds_no_session_key() {
         .await;
 }
 
+/// A client a bridge knows by its session key stays present there: after
+/// a quiet [`PRESENCE_RENEW_SECS`] it renews with a `presence`, and a stop
+/// tells the bridge it is away before it disconnects.
+#[tokio::test]
+async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
+    use client_core::stores::session_key::{SessionGrant, SessionKey};
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let start_ms: u64 = 1_000_000;
+            let key = SessionKey { keypair: generate_keypair(), expires_at: start_ms / 1000 + 80 * 24 * 3600 };
+            let store = MemoryKeyStore::default();
+            *store.0.borrow_mut() = Some(SessionKeyRing { current: key.clone(), previous: None }.encode());
+            let mut state = client_core::stores::machines::MachinesState::default();
+            state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            state.machines.get_mut(&machine.pubkey_hex).unwrap().session_grant = Some(SessionGrant {
+                pubkey_hex: key.pubkey_hex().to_string(),
+                expires_at: key.expires_at,
+                sent_at: start_ms / 1000 - 100,
+            });
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let clock = Rc::new(FixedClock(RefCell::new(start_ms)));
+            let core = Core::spawn(
+                CoreConfig {
+                    identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                    proxy: None,
+                    tor: false,
+                    reconnect: fast_reconnect(),
+                },
+                CorePorts { kv: Rc::new(kv), session_keys: Some(Rc::new(store.clone())), ..CorePorts::default() },
+                Rc::new(Spy::default()),
+                Rc::clone(&clock) as Rc<dyn Clock>,
+                Rc::new(ZeroEntropy),
+            )
+            .await;
+            core.set_relays(vec![mock.url.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+            // Connecting says it is here already.
+            let refresh = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
+            assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+
+            // Quiet for the renewal period: the next check sends a presence.
+            *clock.0.borrow_mut() += PRESENCE_RENEW_SECS * 1000;
+            tokio::time::pause();
+            tokio::time::advance(STALE_WATCHDOG_EVERY + Duration::from_secs(1)).await;
+            tokio::time::resume();
+            let renewal = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
+            assert!(matches!(renewal, Some(PhoneToBridge::Presence(PresenceMsg { away: false }))), "{renewal:?}");
+
+            core.stop();
+            let away = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
+            assert!(matches!(away, Some(PhoneToBridge::Presence(PresenceMsg { away: true }))), "{away:?}");
+        })
+        .await;
+}
+
 /// A key a month from lapsing is replaced at boot. The bridge on it keeps
 /// using it until it confirms the new one, which it is granted under the
 /// old one; then the old key is gone from the phone's store.
@@ -2157,6 +2235,7 @@ async fn a_rotated_key_is_granted_and_the_old_one_dropped_once_confirmed() {
                 other => panic!("expected a grant, got {other:?}"),
             };
             assert_eq!(grant.pubkey_hex, new);
+            assert_eq!(grant.replaces.as_deref(), Some(old.pubkey_hex()), "it moves this client, not adds one");
             assert_eq!(grant.bridge_pubkey_hex, machine.pubkey_hex);
             assert_eq!(grant.expires_at, ring.current.expires_at);
 
@@ -2257,6 +2336,7 @@ async fn scripted_direct_bridge(
 
     let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone_pubkey, &encode_bridge_to_phone(&push)).unwrap();
     let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                .tag(recipient(&machine, &phone_pubkey))
         .tag(nostr::Tag::public_key(nostr::PublicKey::from_hex(&phone_pubkey).unwrap()))
         .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
         .unwrap();
@@ -2292,7 +2372,7 @@ async fn a_direct_link_carries_messages_and_commands() {
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
             )]);
-            let push = protocol::codec::decode_bridge_to_phone(r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#).unwrap();
+            let push = protocol::codec::decode_bridge_to_phone(r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#).unwrap();
             let (commands_tx, mut commands) = mpsc::unbounded_channel();
             tokio::task::spawn_local(scripted_direct_bridge(
                 listener,
@@ -2394,13 +2474,13 @@ async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
             let decode = |v: serde_json::Value| protocol::codec::decode_bridge_to_phone(&v.to_string()).unwrap();
             let entry = serde_json::json!({ "timestamp": "t", "entryType": "turn_complete" });
             let begin = decode(serde_json::json!({
-                "v": 11,
+                "v": 12,
                 "type": "sync-begin", "sessionId": "s1", "syncId": "y1", "seqHigh": 3, "ranges": [[1, 3]]
             }));
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &begin);
             for seq in 1..=3 {
                 let chunk = decode(serde_json::json!({
-                    "v": 11,
+                    "v": 12,
                     "type": "sync-chunk", "sessionId": "s1", "syncId": "y1", "range": [seq, seq],
                     "entries": [{ "seq": seq, "entry": entry }]
                 }));

@@ -1,5 +1,5 @@
 //! The wire contract — the AUTHORITATIVE definition of the CodeDeck+ agent
-//! control protocol (v11). Every other implementation mirrors this crate;
+//! control protocol (v12). Every other implementation mirrors this crate;
 //! the corpus `fixtures/corpus.json`, run by `tests/codec_conformance.rs`,
 //! is the executable spec they can be checked against. Strict: an unknown message `type` or an unknown enum value is a
 //! decode error; unknown extra fields are ignored.
@@ -25,6 +25,7 @@ pub mod nip42;
 pub mod nostr_event;
 pub mod packing;
 pub mod ranges;
+pub mod recipients;
 pub mod relays;
 pub mod tristate;
 

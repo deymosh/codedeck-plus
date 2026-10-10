@@ -1173,7 +1173,7 @@ mod tests {
     /// keeps the test honest against the wire schema.
     fn list(sessions: &[RemoteSessionInfo], extra: serde_json::Value) -> SessionListMsg {
         let mut obj = json!({
-            "v": 11,
+            "v": 12,
             "type": "sessions",
             "machine": "m1",
             "sessions": sessions,

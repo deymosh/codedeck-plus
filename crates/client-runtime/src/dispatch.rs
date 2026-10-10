@@ -740,7 +740,7 @@ pub fn apply_pairing_effects(
                         pubkey_hex: keys.identity_pubkey_hex.clone(),
                         label,
                         token,
-                        session_key: Some(keys.grant_for(&to)),
+                        session_key: Some(keys.grant_for(&to, None)),
                     }),
                 });
             }

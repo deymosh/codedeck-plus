@@ -11,7 +11,7 @@ implementation of the protocol can test itself against.
 - `forwardCompatible` — each still decodes: unknown fields are ignored, and
   an unknown value of an open vocabulary (entry type, tool, task and notice
   kind, MCP status, session state, install state) decodes as its catch-all.
-- Every message carries `"v": 11`, the protocol version the codec stamps
+- Every message carries `"v": 12`, the protocol version the codec stamps
   and checks first; a message of another version, or none, is rejected.
 - **Complete:** the test asserts the `valid` fixtures cover every message
   type, so adding a message type fails until it has a fixture here.

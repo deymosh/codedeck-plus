@@ -97,9 +97,10 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
         PhoneToBridge::SessionKey(_) => "session-key",
+        PhoneToBridge::Presence(_) => "presence",
     }
 }
-const P2B_TYPES: usize = 30;
+const P2B_TYPES: usize = 31;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {

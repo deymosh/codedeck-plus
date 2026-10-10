@@ -290,6 +290,7 @@ async fn fetch_event(ws: &WsTransport, relay: &str, me: &str) -> Result<Option<N
             authors: vec![me.to_string()],
             p_tags: vec![],
             d_tags: vec![backup_d_tag(me)],
+            c_tags: vec![],
             since: None,
         },
         SubCallbacks {

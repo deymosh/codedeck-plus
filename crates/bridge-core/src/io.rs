@@ -44,21 +44,49 @@ pub struct PairedPhone {
     pub pubkey_hex: String,
     pub label: String,
     pub paired_at: String,
-    /// Session keys this identity granted, oldest first: the keys its
-    /// messages' payloads are encrypted with (see the engine's
-    /// `session_keys` module).
+    /// The identity's clients (phones, desktops), each by the session key it
+    /// granted, in the order they first did: every message goes to each of
+    /// them (see the engine's `session_keys` module).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub session_keys: Vec<protocol::commands::SessionKeyGrant>,
+    pub clients: Vec<PhoneClient>,
 }
 
-/// One phone a message goes to.
+/// One client of a paired identity, known by its session key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneClient {
+    /// The client's newest key: what its copy of a message is encrypted to.
+    pub key: protocol::commands::SessionKeyGrant,
+    /// The key it replaced, kept only to read commands still encrypted with
+    /// it, until it lapses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<protocol::commands::SessionKeyGrant>,
+    /// Until when (ms) the client is present: it gets the identity's shared
+    /// updates (see `protocol::commands::PresenceMsg`). Not stored: a
+    /// restarted bridge counts every client present for a lease, so none
+    /// misses what happens before it renews.
+    #[serde(skip)]
+    pub present_until_ms: u64,
+}
+
+/// One copy of a message: for one client of an identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Addressee {
     /// The phone's identity (hex): the event's `p` tag.
     pub phone: String,
-    /// The key the payload is NIP-44 encrypted to (hex): the phone's newest
-    /// live session key, else its identity.
+    /// The key the payload is NIP-44 encrypted to (hex): the client's
+    /// session key, or the identity when it has granted none. The copy's
+    /// recipient tag is derived from it (`protocol::recipients`). Inside the
+    /// engine only, an empty key stands for every present client of the
+    /// identity, until it is addressed.
     pub key: String,
+}
+
+impl Addressee {
+    /// Every present client of `phone`.
+    pub(crate) fn identity(phone: &str) -> Self {
+        Self { phone: phone.to_string(), key: String::new() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

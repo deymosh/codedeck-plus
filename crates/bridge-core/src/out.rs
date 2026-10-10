@@ -34,11 +34,15 @@ impl Out {
         self.effects.push(effect);
     }
 
-    /// Publish to the phones (identities) in `to`, each encrypted to the
-    /// identity itself until the engine addresses it to a session key.
+    /// Publish to the phones (identities) in `to`: the engine addresses a
+    /// copy to each of their present clients.
     pub fn publish(&mut self, to: Vec<String>, message: BridgeToPhone) {
+        self.publish_addressed(to.iter().map(|phone| Addressee::identity(phone)).collect(), message);
+    }
+
+    /// Publish to `to`: identities, or single clients (see [`Addressee`]).
+    pub fn publish_addressed(&mut self, to: Vec<Addressee>, message: BridgeToPhone) {
         if !to.is_empty() {
-            let to = to.into_iter().map(|phone| Addressee { key: phone.clone(), phone }).collect();
             self.effects.push(Effect::Publish { to, message });
         }
     }

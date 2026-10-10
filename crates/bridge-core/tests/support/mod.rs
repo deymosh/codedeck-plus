@@ -124,7 +124,7 @@ impl Rig {
                 pubkey_hex: phone.pubkey_hex.clone(),
                 label: "Pixel".into(),
                 paired_at: "t".into(),
-                session_keys: Vec::new(),
+                clients: Vec::new(),
             }];
             options.store.put("pairedPhones", &serde_json::to_string(&paired).unwrap());
         }
@@ -320,7 +320,7 @@ impl Rig {
 
     /// Create a session on `agent` and take it through to ready. Returns its id.
     pub fn ready_session(&mut self, agent: &str) -> String {
-        self.send(json!({"v":11,"type":"create-session","agent":agent}));
+        self.send(json!({"v":12,"type":"create-session","agent":agent}));
         let (id, params) = self.start_request();
         self.host_reply(&id, HostMessage::Ack);
         self.host_event(&params.session_id, SessionEvent::Ready {});

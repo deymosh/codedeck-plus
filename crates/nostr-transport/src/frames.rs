@@ -110,6 +110,9 @@ pub fn filter_to_json(filter: &Filter) -> Value {
     if !filter.d_tags.is_empty() {
         map.insert("#d".to_string(), json!(filter.d_tags));
     }
+    if !filter.c_tags.is_empty() {
+        map.insert("#c".to_string(), json!(filter.c_tags));
+    }
     if let Some(since) = filter.since {
         map.insert("since".to_string(), json!(since));
     }
@@ -218,11 +221,12 @@ mod tests {
             authors: vec!["a1".into()],
             p_tags: vec!["p1".into()],
             d_tags: vec!["d1".into()],
+            c_tags: vec!["c1".into()],
             since: Some(1000),
         };
         assert_eq!(
             filter_to_json(&full),
-            json!({ "kinds": [4516], "authors": ["a1"], "#p": ["p1"], "#d": ["d1"], "since": 1000 })
+            json!({ "kinds": [4516], "authors": ["a1"], "#p": ["p1"], "#d": ["d1"], "#c": ["c1"], "since": 1000 })
         );
 
         let no_since = Filter {
@@ -230,13 +234,14 @@ mod tests {
             authors: vec!["a1".into()],
             p_tags: vec!["p1".into()],
             d_tags: vec![],
+            c_tags: vec![],
             since: None,
         };
         let v = filter_to_json(&no_since);
         assert!(v.get("since").is_none());
         assert_eq!(v["kinds"], json!([30515]));
 
-        let empty = Filter { kinds: vec![], authors: vec![], p_tags: vec![], d_tags: vec![], since: None };
+        let empty = Filter { kinds: vec![], authors: vec![], p_tags: vec![], d_tags: vec![], c_tags: vec![], since: None };
         assert_eq!(filter_to_json(&empty), json!({}));
     }
 

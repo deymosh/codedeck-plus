@@ -11,12 +11,13 @@ use protocol::events::{BridgeToPhone, CredentialsAckMsg, ProviderProfileAckMsg, 
 use protocol::tristate::Tristate;
 
 use super::{Engine, HostCall};
-use crate::io::store_keys;
+use crate::io::{store_keys, Addressee};
 use crate::settings::{ProviderProfile, StoredProfiles, GITHUB_PAT, GITHUB_PAT_LABEL};
 
 /// A saved provider profile waiting on its agent to take it.
 pub(crate) struct ProfileSave {
-    phone: String,
+    /// The client that asked: the ack goes to it.
+    to: Addressee,
     profile: ProviderProfile,
     /// What the profile was before, restored if the agent leaves it out.
     previous: Option<ProviderProfile>,
@@ -24,7 +25,8 @@ pub(crate) struct ProfileSave {
 
 /// A `credentials-ack` waiting on credential checks.
 pub(crate) struct CredentialAck {
-    phone: String,
+    /// The client that asked: the ack goes to it.
+    to: Addressee,
     scope: Option<String>,
     outstanding: usize,
 }
@@ -139,7 +141,7 @@ impl Engine {
         if outstanding == 0 {
             self.send_credentials_ack(phone, scope.as_deref(), None);
         } else {
-            self.credential_acks.insert(ticket, CredentialAck { phone: phone.to_string(), scope, outstanding });
+            self.credential_acks.insert(ticket, CredentialAck { to: self.reply_to(phone), scope, outstanding });
         }
     }
 
@@ -158,7 +160,8 @@ impl Engine {
         ack.outstanding -= 1;
         if ack.outstanding == 0 {
             let ack = self.credential_acks.remove(&ticket).expect("present");
-            self.send_credentials_ack(&ack.phone, ack.scope.as_deref(), None);
+            self.requester = Some(ack.to.clone());
+            self.send_credentials_ack(&ack.to.phone, ack.scope.as_deref(), None);
         }
     }
 
@@ -251,12 +254,15 @@ impl Engine {
     /// to its token check.
     pub(super) fn on_providers_set(&mut self, agent: &str, save: Option<u64>, refused: Result<Vec<RefusedProvider>, String>) {
         let save = save.and_then(|ticket| self.profile_saves.remove(&ticket));
+        if let Some(save) = &save {
+            self.requester = Some(save.to.clone());
+        }
         let refused = match refused {
             Ok(refused) => refused,
             Err(err) => {
                 log::warn!("[Engine] {agent} did not take its provider profiles: {err}");
                 if let Some(save) = save {
-                    self.check_saved_profile(&save.phone, &save.profile);
+                    self.check_saved_profile(&save.to.phone, &save.profile);
                 }
                 return;
             }
@@ -277,7 +283,7 @@ impl Engine {
         };
         let id = save.profile.id.clone();
         let Some(reason) = refused.into_iter().find(|r| r.id == id).map(|r| r.reason) else {
-            return self.check_saved_profile(&save.phone, &save.profile);
+            return self.check_saved_profile(&save.to.phone, &save.profile);
         };
         let moved_from = save.previous.as_ref().map(|p| p.agent.clone()).filter(|a| a != agent);
         let mut next = self.profiles.clone();
@@ -293,7 +299,7 @@ impl Engine {
         if let Some(moved_from) = moved_from {
             self.push_providers(&moved_from, None);
         }
-        self.send_profile_ack(&save.phone, &id, Err(reason));
+        self.send_profile_ack(&save.to.phone, &id, Err(reason));
     }
 
     /// Create, update or delete one profile. An upsert whose models come
@@ -372,13 +378,15 @@ impl Engine {
             let reason = "The agent host is not running, so the provider's models cannot be read now.".to_string();
             return self.send_profile_ack(phone, &id, Err(reason));
         }
-        self.model_fetches.insert(ticket, (phone.to_string(), profile));
+        self.model_fetches.insert(ticket, (self.reply_to(phone), profile));
     }
 
     /// The provider's model list came back: store the profile with it, or
     /// refuse the save when there is none to store.
     pub(super) fn on_provider_models_fetched(&mut self, ticket: u64, models: Result<Vec<ProviderModel>, String>) {
-        let Some((phone, mut profile)) = self.model_fetches.remove(&ticket) else { return };
+        let Some((to, mut profile)) = self.model_fetches.remove(&ticket) else { return };
+        let phone = to.phone.clone();
+        self.requester = Some(to);
         let models = match models {
             Ok(models) if models.is_empty() => Err("it lists no models".to_string()),
             other => other,
@@ -427,7 +435,7 @@ impl Engine {
         self.next_ticket += 1;
         let ticket = self.next_ticket;
         if self.push_providers(&profile.agent, Some(ticket)) {
-            self.profile_saves.insert(ticket, ProfileSave { phone: phone.to_string(), profile, previous });
+            self.profile_saves.insert(ticket, ProfileSave { to: self.reply_to(phone), profile, previous });
         } else {
             self.check_saved_profile(phone, &profile);
         }
@@ -444,16 +452,17 @@ impl Engine {
         let ticket = self.next_ticket;
         let message = BridgeMessage::CheckProvider { agent: profile.agent.clone(), provider, model };
         if self.call(HostCall::CheckProvider { ticket }, message).is_some() {
-            self.profile_acks.insert(ticket, (phone.to_string(), id));
+            self.profile_acks.insert(ticket, (self.reply_to(phone), id));
         } else {
             self.send_profile_ack(phone, &id, Ok(None));
         }
     }
 
     pub(super) fn on_provider_token_checked(&mut self, ticket: u64, valid: Option<bool>) {
-        let Some((phone, id)) = self.profile_acks.remove(&ticket) else { return };
+        let Some((to, id)) = self.profile_acks.remove(&ticket) else { return };
         log::info!("[Engine] Provider token of '{id}' checked: {valid:?}");
-        self.send_profile_ack(&phone, &id, Ok(valid));
+        self.requester = Some(to.clone());
+        self.send_profile_ack(&to.phone, &id, Ok(valid));
     }
 
     fn store_profiles(&mut self, next: std::collections::BTreeMap<String, ProviderProfile>) -> Result<(), String> {

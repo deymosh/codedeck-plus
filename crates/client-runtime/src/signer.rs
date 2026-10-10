@@ -101,11 +101,15 @@ impl PhoneKeys {
     }
 
     /// A grant of the current session key to `bridge`, for the wire.
-    pub fn grant_for(&self, bridge: &str) -> SessionKeyGrant {
+    /// `replaces` is the key the bridge confirmed before, if another: the
+    /// bridge then moves this client to the new key rather than counting a
+    /// new client.
+    pub fn grant_for(&self, bridge: &str, replaces: Option<&str>) -> SessionKeyGrant {
         SessionKeyGrant {
             pubkey_hex: self.session_pubkey_hex.clone(),
             bridge_pubkey_hex: bridge.to_string(),
             expires_at: self.session_expires_at,
+            replaces: replaces.filter(|old| *old != self.session_pubkey_hex).map(str::to_string),
         }
     }
 

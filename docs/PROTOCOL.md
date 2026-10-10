@@ -1,4 +1,4 @@
-# CodeDeck protocol v11 — contributor contract
+# CodeDeck protocol v12 — contributor contract
 
 Two protocols meet in the bridge:
 
@@ -14,8 +14,10 @@ Two protocols meet in the bridge:
 This document covers what the types alone cannot tell you: conventions,
 invariants, and why.
 
-v11 is a clean break from v10: no compatibility in either direction, and no
-v10 data is carried over (a v11 bridge and app are a fresh install).
+Each version is a clean break from the one before: no compatibility in
+either direction. v11 made the protocol agent-neutral (and carried no v10
+data over); v12 sends a copy of each message per client of an identity (see
+[Clients and copies](#clients-and-copies)).
 
 ---
 
@@ -25,7 +27,7 @@ v10 data is carried over (a v11 bridge and app are a fresh install).
 
 | Purpose | Kind | Storage |
 |---|---|---|
-| Session-list heartbeat (`sessions`) | **30515** | NIP-33 replaceable (d = machine name) — relay keeps exactly one |
+| Session-list heartbeat (`sessions`) | **30515** | NIP-33 replaceable, one per client (`d` = the copy's recipient tag); NIP-40 expiry 1 day |
 | Live output / usage / gsd-state | **24515** | ephemeral — broadcast, never stored; loss is recoverable (sync / re-request) |
 | Phone→bridge commands | **4515** | stored, NIP-40 expiry 1 h |
 | Bridge→phone responses (sync chunks, acks, lifecycle, pairing) | **4516** | stored, NIP-40 expiry 1 h |
@@ -33,18 +35,20 @@ v10 data is carried over (a v11 bridge and app are a fresh install).
 All content is NIP-44 encrypted between the bridge keypair and the phone
 keypair — the phone's identity, or a session key it granted (see
 [Session keys](#session-keys)). Every event the phone writes is signed by its
-identity, and every event for the phone is `p`-tagged to its identity: identity
-is ALWAYS the event author's pubkey — payload claims (e.g.
+identity, and every event for the phone is `p`-tagged to its identity and
+`c`-tagged with its recipient tag (see [Clients and copies](#clients-and-copies)):
+identity is ALWAYS the event author's pubkey — payload claims (e.g.
 `pair-request.pubkeyHex`) are display-only.
 
 ### Traffic-class subscription rules
 
-The phone opens **three separate subscriptions**, one per storage class, with
-deliberately different `since` filters:
+The phone opens **three separate subscriptions**, one per storage class,
+each for the bridges it is paired with (`authors`), its identity (`#p`) and
+its own recipient tags (`#c`), with deliberately different `since` filters:
 
 | Kind | `since` | Why |
 |---|---|---|
-| 30515 | **none** | Replaceable — the relay always has exactly the current heartbeat; any `since` risks filtering it out and falsely marking the machine offline. |
+| 30515 | **none** | Replaceable — the relay always has exactly this client's current heartbeat; any `since` risks filtering it out and falsely marking the machine offline. |
 | 4516 | **`lastStoredSeen − 60s`** | `lastStoredSeen` is a persisted high-water mark advanced ONLY by stored (4516) events. High-frequency live output can never push it past a response the phone still needs. |
 | 24515 | **none** | Ephemeral — the relay stores nothing, so `since` filters nothing. |
 
@@ -410,11 +414,46 @@ Only a `pair-request` echoing the window's one-time token pairs. A successful
 `pair-request` may carry `sessionKey` to grant the first session key with
 the pairing; the `pair-ack` is then already encrypted to that key.
 
+### Clients and copies
+
+An identity may run any number of clients — phones, desktops, several of
+each — and each holds its own session key, so a bridge knows a client by its
+key. A bridge encrypts a message once per client it is for, to that client's
+newest key, and tags each copy with its **recipient tag**: `c` = the first 16
+bytes, in hex, of `sha256("codedeck/recipient\0" + bridge pubkey + "\0" +
+key + "\0")` (`crates/protocol/src/recipients.rs` pins it). Both ends derive
+it; a relay can link neither the tags of one client at two bridges nor a
+client's tags before and after a key rotation.
+
+- **Who gets a copy.** A reply to a command (an ack, a list, the heartbeat a
+  `refresh-sessions` asks for, a sync's begin, chunks and end) goes to the
+  client whose key encrypted the command, alone. Everything else (the
+  heartbeat, live output, cards, session changes) goes to each client
+  *present* now. An identity that has granted no key (or is not paired) is
+  addressed as itself, with the identity's own tag.
+- **Presence.** Any command keeps its client present for 25 minutes
+  (`PRESENCE_LEASE_SECS`); a running client with nothing else to say sends
+  `presence {}` every 10 (`PRESENCE_RENEW_SECS`), and `presence {away: true}`
+  when it stops, which ends its lease at once. A client away gets nothing;
+  when it is back its first command (or `presence`) earns it a heartbeat of
+  its own, and it syncs what it missed. A restarted bridge counts every
+  client present for the renewal period and a minute.
+- **Reading.** A client subscribes with the tags of its live keys and of its
+  identity, and drops any copy tagged otherwise, before decrypting it.
+- **The heartbeat** is addressable per copy: `d` = its recipient tag, so a
+  client's latest heartbeat stays on the relay whatever the others get; a
+  heartbeat split into fragments gives fragment `i` the `d`
+  `sha256("codedeck/fragment\0" + tag + "\0" + i + "\0")[..16]`, so it
+  replaces fragment `i` of the previous one. Heartbeats expire after a day,
+  clearing a gone client's or bridge's and the fragments a shorter one left.
+- An identity keeps at most 16 clients; a new one past that drops the client
+  heard from least recently.
+
 ### Session keys
 
 A phone whose identity key lives in an external signer (NIP-55) should not
 ask it to decrypt every message. It grants a local key, once:
-`session-key {sessionKey: {pubkeyHex, bridgePubkeyHex, expiresAt}}` (or
+`session-key {sessionKey: {pubkeyHex, bridgePubkeyHex, expiresAt, replaces?}}` (or
 `sessionKey` on its `pair-request`). `bridgePubkeyHex` names the one bridge
 the grant is for; a bridge refuses a grant naming another, so a grant one
 bridge saw cannot be replayed to a second. A session key only ever keys NIP-44 payloads; it never
@@ -423,17 +462,23 @@ publishes (commands, grants, relay AUTH, image-server auth) with its
 identity, and the bridge `p`-tags everything to the identity — so allowlists
 on relays and image servers only ever see the identity. From the grant on:
 
-- the bridge reads a command's payload encrypted with any of the identity's
-  live keys, or with the identity itself;
-- it encrypts everything for that phone to its newest live key. The first
-  heartbeat after the grant is the phone's confirmation;
-- `expiresAt` (seconds) is at most 90 days ahead; a lapsed key is dropped
-  and the identity is encrypted to again. The phone grants a new key before
-  then; each identity keeps its two newest keys, so commands encrypted with
-  the previous one while rotating are still read;
+- the bridge reads a command's payload encrypted with any live key of the
+  identity's clients (a client's newest, or the one it replaced), or with
+  the identity itself;
+- a grant of a key the bridge does not know adds a client; one naming the
+  key it `replaces`, sent encrypted with that key, moves that client to the
+  new key (only the client holding a key can retire it; a `replaces` sent
+  otherwise is ignored). Granting a key again may move its lapse later,
+  never earlier. Each client's copy is
+  encrypted to its newest key; the first heartbeat after the grant is the
+  client's confirmation;
+- `expiresAt` (seconds) is at most 90 days ahead; a client whose key lapses
+  is dropped, and an identity left with none is encrypted to again. The
+  phone grants a new key before then;
 - an event authored by a session key is not heard (only paired identities
   are); a grant naming a key the bridge already knows for anyone (a paired
-  identity, another phone's key, its own) is refused.
+  identity, another identity's client, its own) or that a client rotated
+  away from is refused.
 
 A phone grants a session key only to a bridge advertising `session-keys`. A
 phone that can decrypt a message from a bridge it granted a key only with
@@ -443,9 +488,10 @@ Renewal is rotation: a phone never extends a key's life by granting it
 again. Every grant of a key runs until the same `expiresAt`, the key's own;
 a month before it, the phone makes a fresh key and grants that to each
 bridge (under the key the bridge holds, so the grant itself stays
-readable). It keeps the previous key, and keeps encrypting to a bridge with
-it, until that bridge confirms the new one by encrypting to it; once every
-bridge has, or its grants lapsed, the previous key is deleted.
+readable), naming the key it replaces. It keeps the previous key, and keeps
+encrypting to a bridge with it, until that bridge confirms the new one by
+encrypting to it; once every bridge has, or its grants lapsed, the previous
+key is deleted.
 
 ### Direct link
 
@@ -466,19 +512,22 @@ spec.
   is as authentic as the pairing. While the phone routes through Orbot it
   only uses `.onion` endpoints.
 - **Frames**, each a JSON array in one text message:
-  `["CHALLENGE", c]` (bridge, on connect) → `["HELLO", auth, since]` (phone,
-  within a minute:
+  `["CHALLENGE", c]` (bridge, on connect) → `["HELLO", auth, since,
+  recipients]` (phone, within a minute:
   `auth` a kind-22242 event signed by its identity, tagged
-  `["challenge", c]`, `created_at` within 10 minutes) → `["READY"]` or
+  `["challenge", c]`, `created_at` within 10 minutes; `recipients` the
+  recipient tags it reads, at most 8) → `["READY"]` or
   `["CLOSED", reason]`. Then `["EVENT", event]` both ways, each phone event
   answered with `["OK", id, accepted, message]`.
 - After `READY` the bridge sends what it published for that identity since
-  `since` (seconds; it keeps an hour of it), then everything new. It takes
-  only command events (4515) authored by the identity that said `HELLO`.
+  `since` (seconds; it keeps an hour of it), then everything new — only the
+  copies tagged with one of the `recipients`, never another client's. It
+  takes only command events (4515) authored by the identity that said
+  `HELLO`.
 
 ### Version and capabilities
 
-Every message, both ways, carries `v`: its sender's protocol version (11),
+Every message, both ways, carries `v`: its sender's protocol version (12),
 first in the object. The codec stamps it and the decoder checks it before
 the body: a message of another version, or of none, is refused as such
 (`DecodeError::Version`) rather than read by the wrong version's rules. Two
@@ -508,8 +557,9 @@ a bridge without it would otherwise fail:
 A bridge→phone message whose encoded JSON would exceed one event's `content`
 cap (65535 B) is split into N independently encrypted `chunk` events
 (`{cid, i, n, part}`) and reassembled by the receiver *before* decode — `seq`
-and every semantic field are identical to the unfragmented form. `chunk` is
-not a message type (`crates/protocol/src/chunking.rs`).
+and every semantic field are identical to the unfragmented form. Each
+fragment carries the copy's recipient tag (and, for a heartbeat, its own
+`d`). `chunk` is not a message type (`crates/protocol/src/chunking.rs`).
 
 ### Packed payloads
 

@@ -103,11 +103,22 @@ The core keeps the keys through a `SessionKeyStore` port (the Keystore on
 Android). See
 [`PROTOCOL.md`](PROTOCOL.md#session-keys).
 
+**Several clients.** One identity may run on any number of devices; a
+bridge knows each by its session key and sends each its own copy, tagged
+for it. The core subscribes only to its own copies (the recipient tags of
+its keys and of its identity) and drops any other before decrypting, so
+another device's traffic never reaches the signer. A bridge sends the
+shared updates only to clients present: any command keeps this one present,
+the core sends `presence` after ten quiet minutes, and `presence {away}`
+when it stops (waiting at most 2 s for it to go out). See
+[`PROTOCOL.md`](PROTOCOL.md#clients-and-copies).
+
 Unprompted by the user, the core asks the identity to sign only: one
 `refresh-sessions` per machine on each (re)connect; the `sync-request`s for
 sessions with gaps and their `sync-ack`s (held 500 ms, so a sync's chunks
 cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
-connection that challenges; and a grant, rarely. Everything else it signs —
+connection that challenges; a `presence` per machine after ten quiet
+minutes, and an `away` when it stops; and a grant, rarely. Everything else it signs —
 commands, Blossom upload auth — follows a user action.
 
 **Config backup.** Opt-in, in Settings → Backup, and offered once right
@@ -129,7 +140,8 @@ machines the phone lacks are added, the ones it has keep their own setup,
 and the settings and quick prompts become the backup's. The phone takes the
 backup's session keys only while it has granted none of its own, so a
 restored phone reads its bridges' messages at once without asking the
-signer to grant every bridge again; a session key never signs, so it can
+signer to grant every bridge again (until either rotates, a bridge counts
+the two installs as one client); a session key never signs, so it can
 read payloads but never command a bridge, and only the identity can open
 the backup. Turning backup off can also send a NIP-09 deletion. The backup
 relay is used for nothing else, and the Tor and AUTH rules of every relay

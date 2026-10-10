@@ -80,14 +80,15 @@ impl Ingest {
     /// An event from the standing subscription, whose author the caller has
     /// already found paired. `session_keys` are the author's live session
     /// keys, newest first: the payload is encrypted with one of them or with
-    /// the author's identity.
+    /// the author's identity. Returns the command and the key it was
+    /// encrypted with: which client sent it.
     pub fn accept(
         &mut self,
         event: &InboundEvent,
         keys: &Keypair,
         session_keys: &[String],
         now_secs: u64,
-    ) -> Option<PhoneToBridge> {
+    ) -> Option<(PhoneToBridge, String)> {
         if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
             log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
             return None;
@@ -95,11 +96,11 @@ impl Ingest {
         if !self.mark(&event.id) {
             return None;
         }
-        let plaintext = session_keys
+        let opened = session_keys
             .iter()
             .chain(std::iter::once(&event.pubkey))
-            .find_map(|peer| decrypt_from(&keys.secret_key, peer, &event.content).ok());
-        let Some(plaintext) = plaintext else {
+            .find_map(|peer| decrypt_from(&keys.secret_key, peer, &event.content).ok().map(|p| (p, peer.clone())));
+        let Some((plaintext, key)) = opened else {
             log::info!("[Ingest] Failed to decrypt event {}...", short(&event.id));
             return None;
         };
@@ -111,7 +112,7 @@ impl Ingest {
             }
         };
         self.last_seen = self.last_seen.max(event.created_at);
-        Some(msg)
+        Some((msg, key))
     }
 
     /// An event from the pairing window's subscription.
@@ -181,11 +182,11 @@ mod tests {
             self.event_from(&phone, json, NOW)
         }
         fn accept(&mut self, event: &InboundEvent) -> Option<PhoneToBridge> {
-            self.ingest.accept(event, &self.bridge, &[], NOW)
+            self.ingest.accept(event, &self.bridge, &[], NOW).map(|(msg, _)| msg)
         }
     }
 
-    const INPUT: &str = r#"{"v":11,"type":"input","sessionId":"s","text":"hi"}"#;
+    const INPUT: &str = r#"{"v":12,"type":"input","sessionId":"s","text":"hi"}"#;
 
     #[test]
     fn a_valid_command_decrypts_decodes_and_advances_the_cursor() {
@@ -199,7 +200,7 @@ mod tests {
     fn malformed_unknown_and_undecryptable_payloads_are_dropped() {
         let mut f = Fixture::new();
         let bad_json = f.event("{not json");
-        let unknown = f.event(r#"{"v":11,"type":"teleport"}"#);
+        let unknown = f.event(r#"{"v":12,"type":"teleport"}"#);
         let mut garbage = f.event(INPUT);
         garbage.content = "AAAA".into();
         assert!(f.accept(&bad_json).is_none());
@@ -251,7 +252,7 @@ mod tests {
     fn the_pairing_path_hears_strangers_but_only_their_pair_requests() {
         let mut f = Fixture::new();
         let stranger = generate_keypair();
-        let pair = r#"{"v":11,"type":"pair-request","npub":"n","pubkeyHex":"aa","label":"Pixel","token":"t"}"#;
+        let pair = r#"{"v":12,"type":"pair-request","npub":"n","pubkeyHex":"aa","label":"Pixel","token":"t"}"#;
         let ev = f.event_from(&stranger, pair, NOW);
         let req = f.ingest.accept_pairing(&ev, &f.bridge, NOW).unwrap();
         assert_eq!(req.label, "Pixel");
