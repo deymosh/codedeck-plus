@@ -185,12 +185,15 @@ fun SettingsScreen(
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
-    // A plugins or MCP page goes back to its machine's page, every other to the hub.
-    val back = when (page) {
-        is SettingsPage.Plugins -> { { open(SettingsPage.Machine(page.pubkey)) } }
-        is SettingsPage.Mcp -> { { open(SettingsPage.Machine(page.pubkey)) } }
-        else -> toHub
+    // A page of a machine's (its providers, plugins or MCP servers) goes back
+    // to the machine's page, where it was left; every other to the hub.
+    val machineOf = when (page) {
+        is SettingsPage.Plugins -> page.pubkey
+        is SettingsPage.Mcp -> page.pubkey
+        is SettingsPage.Providers -> page.pubkey
+        else -> null
     }
+    val back = machineOf?.let { pubkey -> { open(SettingsPage.Machine(pubkey)) } } ?: toHub
     if (page != SettingsPage.Hub) BackHandler(onBack = back)
 
     val view = settings

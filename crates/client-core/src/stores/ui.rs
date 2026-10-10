@@ -67,11 +67,15 @@ pub struct UndoToast {
     pub label: String,
 }
 
-/// CDX-026c seam: the user opened a session in view (same visible-app gate as
-/// the unread clear) — cancel its delivered OS notifications.
+/// A session's delivered OS notifications are obsolete — the runtime cancels
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
+    /// The user has the session in view (same visible-app gate as the unread
+    /// clear): opened, or the app brought back to it.
     SessionViewed { machine: String, session_id: String },
+    /// The session was deleted for good (its undo window closed).
+    SessionDeleted { machine: String, session_id: String },
 }
 
 /// Inputs for `set-credentials` / `set-provider-profile`
@@ -145,6 +149,16 @@ impl UiState {
             machine: machine_pubkey.to_string(),
             session_id: session_id.to_string(),
         }]
+    }
+
+    /// The app came back into view: the session it shows (if any) is viewed
+    /// again, as when it was opened — what arrived for it while the app was
+    /// hidden has now been seen.
+    pub fn resume_viewing(&mut self) -> Vec<UiEffect> {
+        match (self.selected_machine.clone(), self.selected_session.clone()) {
+            (Some(machine), Some(session)) => self.select_session(&machine, Some(&session), true),
+            _ => vec![],
+        }
     }
 
     pub fn mark_session_unread(&mut self, machine: &str, session_id: &str) {

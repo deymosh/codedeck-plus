@@ -178,6 +178,19 @@ describe('Claude session lifecycle', () => {
     expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'status' }));
   });
 
+  it("init's 1M-window marker is not a model of its own: the catalog id stays the session's", async () => {
+    const { ctx, handle } = start({ model: 'Gateway/glm-9' });
+    handle.push(init({ model: 'Gateway/glm-9[1m]' }));
+    await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
+    expect(ctx.events.filter((e) => e.type === 'info' && 'model' in e)).toEqual([]);
+
+    // A model it resolved to is reported, without the marker.
+    const other = start();
+    other.handle.push(init({ model: 'claude-sonnet-5[1m]' }));
+    await other.ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
+    expect(other.ctx.events).toContainEqual(expect.objectContaining({ type: 'info', model: 'claude-sonnet-5' }));
+  });
+
   it('a non-prompting mode the catalog does not list is the auto-approve mode', async () => {
     const { ctx, handle } = start();
     handle.push(init({ permissionMode: 'bypassPermissions' }));
@@ -288,6 +301,21 @@ describe('Claude turn state and context', () => {
     handle.push({ type: 'result', subtype: 'success', num_turns: 1, total_cost_usd: 0, duration_ms: 1, modelUsage: { 'claude-sonnet-5': { contextWindow: 1_000_000 } } });
     await ctx.waitFor((e) => e.type === 'info' && e.contextPercentage === 37);
     expect(ctx.events).toContainEqual({ type: 'info', contextWindow: 1_000_000 });
+  });
+
+  it("usage says what fills the context window, even with no plan limits to report", async () => {
+    const { ctx, session, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(await session.getUsage()).toBeNull();
+    handle.contextUsage = {
+      percentage: 1,
+      details: { totalTokens: 2_000, maxTokens: 200_000, categories: [{ name: 'Messages', tokens: 2_000, kind: 'used' }] },
+    };
+    expect(await session.getUsage()).toMatchObject({
+      available: false,
+      windows: [],
+      context: { usedTokens: 2_000, windowTokens: 200_000, categories: [{ name: 'Messages', tokens: 2_000, kind: 'used' }] },
+    });
   });
 
   const step = (parent: string | null = null) => ({

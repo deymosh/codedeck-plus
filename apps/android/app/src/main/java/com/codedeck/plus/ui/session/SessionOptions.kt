@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -22,15 +23,14 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -38,12 +38,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import com.codedeck.plus.ui.components.DeckSheet
 import com.codedeck.plus.ui.components.Dot
 import com.codedeck.plus.ui.components.pulsingAlpha
 import com.codedeck.plus.ui.theme.Tokens
@@ -183,29 +186,40 @@ private fun ChipLayout(mode: (@Composable () -> Unit)?, model: @Composable () ->
 }
 
 /** The pages of [SessionOptionsList]: the main one, and one per longer choice. */
-internal enum class OptionsPage { Main, Models, Effort, Mode }
+internal enum class OptionsPage { Main, Models, Effort, Mode, Mcp }
 
 /** [SessionOptionsList] in a bottom sheet. Back from one of its pages
- *  returns to the main page; only there does it close the sheet. */
-@OptIn(ExperimentalMaterial3Api::class)
+ *  returns to the main page; only there does it close the sheet. A page
+ *  keeps the main page's height, so the sheet does not jump when one opens
+ *  and a longer list scrolls inside it. */
 @Composable
 internal fun SessionOptionsSheet(
     options: SessionOptions,
     onMode: (String) -> Unit,
     onEffort: (String) -> Unit,
     onModel: (String) -> Unit,
-    onMcp: () -> Unit,
+    /** The MCP page opened: the servers' state is asked for again. */
+    onMcpOpen: () -> Unit,
+    onMcpToggle: (name: String, enabled: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = Tokens.SurfaceRaised,
-        contentColor = Tokens.Text,
-    ) {
+    DeckSheet(onDismiss) {
         var page by rememberSaveable { mutableStateOf(OptionsPage.Main) }
         BackHandler(enabled = page != OptionsPage.Main) { page = OptionsPage.Main }
-        SessionOptionsList(options, page, onPage = { page = it }, onMode, onEffort, onModel, onMcp, onClose = onDismiss)
+        LaunchedEffect(page) { if (page == OptionsPage.Mcp) onMcpOpen() }
+        var mainHeight by remember { mutableStateOf<Int?>(null) }
+        val pageHeight = mainHeight?.takeIf { page != OptionsPage.Main }?.let { with(LocalDensity.current) { it.toDp() } }
+        SessionOptionsList(
+            options,
+            page,
+            onPage = { page = it },
+            onMode,
+            onEffort,
+            onModel,
+            onMcpToggle,
+            onClose = onDismiss,
+            modifier = if (pageHeight != null) Modifier.height(pageHeight) else Modifier.onSizeChanged { mainHeight = it.height },
+        )
     }
 }
 
@@ -227,11 +241,12 @@ internal fun SessionOptionsList(
     onMode: (String) -> Unit,
     onEffort: (String) -> Unit,
     onModel: (String) -> Unit,
-    onMcp: () -> Unit,
+    onMcpToggle: (name: String, enabled: Boolean) -> Unit,
     onClose: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
@@ -256,7 +271,7 @@ internal fun SessionOptionsList(
                     if (options.models.size > SHORT_MODEL_LIST) add { NavigationRow("More models", null) { onPage(OptionsPage.Models) } }
                     if (options.efforts.isNotEmpty()) add { NavigationRow("Effort", options.effortLabel) { onPage(OptionsPage.Effort) } }
                     if (options.modes.size >= 2) add { NavigationRow("Mode", options.modeLabel) { onPage(OptionsPage.Mode) } }
-                    options.mcp?.let { mcp -> add { McpRow(mcp, onMcp) } }
+                    options.mcp?.let { mcp -> add { McpRow(mcp) { onPage(OptionsPage.Mcp) } } }
                 }
                 if (rows.isNotEmpty()) {
                     Column(
@@ -275,8 +290,13 @@ internal fun SessionOptionsList(
             }
             OptionsPage.Models -> {
                 SheetHeader("Models", null, back)
-                options.models.forEach { m ->
-                    ModelRow(m.label ?: m.id, m.provider, selected = m.id == options.model) { onModel(m.id) }
+                // Grouped by who serves them, each group named once.
+                options.models.groupBy { it.provider }.entries.forEachIndexed { i, (provider, models) ->
+                    if (i > 0) HorizontalDivider(Modifier.padding(top = Tokens.Space2), thickness = 1.dp, color = Tokens.Border)
+                    provider?.let { ProviderLabel(it) }
+                    models.forEach { m ->
+                        ModelRow(m.label ?: m.id, provider = null, selected = m.id == options.model) { onModel(m.id) }
+                    }
                 }
             }
             OptionsPage.Effort -> {
@@ -297,8 +317,26 @@ internal fun SessionOptionsList(
                     }
                 }
             }
+            OptionsPage.Mcp -> {
+                SheetHeader("MCP servers", null, back)
+                options.mcp?.let { SessionMcpList(it, onMcpToggle) }
+            }
         }
     }
+}
+
+/** The name over a group of models: who serves them. */
+@Composable
+private fun ProviderLabel(name: String) {
+    Text(
+        name,
+        color = Tokens.TextMuted,
+        fontSize = Tokens.TextSm,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = Tokens.Space5).padding(top = Tokens.Space3, bottom = Tokens.Space1),
+    )
 }
 
 @Composable

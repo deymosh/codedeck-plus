@@ -49,6 +49,11 @@ export type SessionMcpServer = G.SessionMcpServer_Deserialize;
 export type McpStatus = G.McpStatus;
 export type UsageData = G.UsageData_Deserialize;
 export type UsageWindow = G.UsageWindow;
+export type ContextBreakdown = G.ContextBreakdown_Deserialize;
+export type ContextCategory = G.ContextCategory;
+export type ContextGroup = G.ContextGroup;
+export type ContextItem = G.ContextItem;
+export type ContextKind = G.ContextKind;
 export type PermissionRequest = G.PermissionRequest_Deserialize;
 
 /** Version of the driver protocol this host speaks (the frame `v`). */

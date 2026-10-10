@@ -41,6 +41,8 @@ import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf,
 import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
+  ContextBreakdown,
+  ContextCategory,
   ModelEntry,
   OptionChoice,
   PermissionOption,
@@ -173,6 +175,37 @@ export interface OpenCodeCatalog {
 export function contextTokens(message: AssistantMessage): number {
   const t = message.tokens;
   return t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
+}
+
+/** A provider retry as the phone shows it: why, which attempt, and when
+ *  the next one goes. */
+export function retryText(status: { attempt: number; message: string; next: number }, now: number): string {
+  const wait = Math.max(0, Math.round((status.next - now) / 1000));
+  const why = status.message.trim() || 'the provider failed';
+  return `${why} — retrying (attempt ${status.attempt}${wait > 0 ? `, in ${wait} s` : ''})`;
+}
+
+/**
+ * What the context window held at a session's last step, as far as OpenCode
+ * counts it: the prompt (the part the provider had cached, and the rest)
+ * and the reply (its reasoning, its text), which the next step reads as part
+ * of its prompt. Nothing without the window's size.
+ */
+export function openCodeContext(tokens: AssistantMessage['tokens'], window: number | undefined): ContextBreakdown | undefined {
+  if (!window || window <= 0) return undefined;
+  const parts: Array<[string, number]> = [
+    ['Cached prompt', tokens.cache.read],
+    ['New prompt', tokens.input + tokens.cache.write],
+    ['Reasoning', tokens.reasoning],
+    ['Reply', tokens.output],
+  ];
+  const whole = (n: number) => Math.min(Math.max(0, Math.round(n)), 0xffff_ffff);
+  const used = whole(parts.reduce((sum, [, n]) => sum + n, 0));
+  const categories: ContextCategory[] = parts
+    .filter(([, n]) => n > 0)
+    .map(([name, n]) => ({ name, tokens: whole(n), kind: 'used' as const }));
+  categories.push({ name: 'Free space', tokens: whole(window - used), kind: 'free' });
+  return { usedTokens: used, windowTokens: whole(window), categories };
 }
 
 /** The provider OpenCode Zen serves under — the one provider every OpenCode
@@ -374,6 +407,13 @@ export class OpenCodeSession implements DriverSession {
   private contextLimits?: Promise<Record<string, number>>;
   private contextWindow?: number;
   private contextPercentage?: number;
+  /** The turn was reported complete, and no new one has started since. */
+  private turnCompleted = false;
+  /** The error last reported in this turn: OpenCode reports a failed
+   *  turn's error both on its message and on the session. */
+  private lastError?: string;
+  /** The last main-agent step's token counts: what the context held then. */
+  private lastTokens?: AssistantMessage['tokens'];
   /** Names of the session's commands, from the last list fetched: a typed
    *  `/name` runs as that command only when OpenCode has one by that name.
    *  Dropped again when the fetch failed, so the next one asks again. */
@@ -408,6 +448,16 @@ export class OpenCodeSession implements DriverSession {
     if (entries.length > 0) this.ctx.emit({ type: 'entries', entries });
   }
 
+  get isEnded(): boolean {
+    return this.ended;
+  }
+
+  /** The server this session runs on was replaced: it ends with the
+   *  reason, which the bridge answers by resuming it. */
+  serverReplaced(): void {
+    this.finish('The OpenCode server restarted to load changed provider profiles.');
+  }
+
   private finish(error?: string): void {
     if (this.ended) return;
     this.ended = true;
@@ -426,21 +476,25 @@ export class OpenCodeSession implements DriverSession {
       // its own (the last model used, possibly one with no credential).
       // A resumed conversation already ran on its model; only a new start is
       // checked against what the providers offer.
-      const catalog = !params.model || !params.resume ? await this.catalog() : { models: [] };
+      const catalogRead: Promise<OpenCodeCatalog> = !params.model || !params.resume ? this.catalog() : Promise.resolve({ models: [] });
+      // Subscribe BEFORE resolving/creating the session so no event in the gap
+      // between "session exists" and "we started listening" is missed. The
+      // stream is directory-scoped (a server can host multiple projects); this
+      // session further filters by sessionID once it is known. Opened while
+      // the catalog is read, so a new session waits for one round trip, not
+      // two; a refused model closes it again (the abort in `finish`).
+      const [catalog, { stream }] = await Promise.all([
+        catalogRead,
+        client.event.subscribe({ directory: this.cwd }, { signal: this.abortController.signal }),
+      ]);
       if (params.model && !params.resume) {
         const refused = unsupportedModelReason(params.model, catalog.models);
         if (refused) throw new Error(refused);
       }
+      // The context meter's window sizes come from the same catalog.
+      if (catalog.models.length > 0) this.contextLimits ??= Promise.resolve(catalog.contextLimits ?? {});
       const model = params.model ?? catalog.defaultModel;
       if (!params.model) this.model = splitModelId(model);
-      // Subscribe BEFORE resolving/creating the session so no event in the gap
-      // between "session exists" and "we started listening" is missed. The
-      // stream is directory-scoped (a server can host multiple projects); this
-      // session further filters by sessionID once it is known.
-      const { stream } = await client.event.subscribe(
-        { directory: this.cwd },
-        { signal: this.abortController.signal },
-      );
       const { session, resumeLost } = await this.resolveSession(client, params);
       // The "memory was lost" notice goes ahead of "session started".
       if (resumeLost) this.deliver({ type: 'resume-lost' });
@@ -514,9 +568,7 @@ export class OpenCodeSession implements DriverSession {
             continue;
           }
           this.roles.set(info.id, info.role);
-          if (info.role === 'assistant' && info.error) {
-            this.deliver({ type: 'error', content: formatOpenCodeError(info.error) });
-          }
+          if (info.role === 'assistant' && info.error) this.reportError(formatOpenCodeError(info.error));
           if (info.role === 'assistant') this.reportContext(info);
           break;
         }
@@ -542,7 +594,10 @@ export class OpenCodeSession implements DriverSession {
             this.childEnded(event.properties.sessionID, 'completed');
             continue;
           }
-          this.deliver({ type: 'idle' });
+          // OpenCode can say a turn is over more than once (after a
+          // failed one, say): the turn is complete once.
+          if (!this.turnCompleted) this.deliver({ type: 'idle' });
+          this.turnCompleted = true;
           if (!this.ended) this.ctx.emit({ type: 'turn', state: 'idle' });
           break;
         }
@@ -553,9 +608,20 @@ export class OpenCodeSession implements DriverSession {
             if (event.properties.status.type === 'idle') this.childEnded(event.properties.sessionID, 'completed');
             continue;
           }
-          const status = event.properties.status.type;
-          if (status !== 'busy' && status !== 'idle') break;
-          if (!this.ended) this.ctx.emit({ type: 'turn', state: status === 'busy' ? 'running' : 'idle' });
+          const status = event.properties.status;
+          if (status.type === 'retry') {
+            // The provider failed and OpenCode tries again, waiting longer
+            // each time: said on the phone, rather than a turn that only
+            // seems slow until the last attempt's error.
+            this.deliver({ type: 'status', text: retryText(status, Date.now()) });
+            break;
+          }
+          if (status.type !== 'busy' && status.type !== 'idle') break;
+          if (status.type === 'busy') {
+            this.turnCompleted = false;
+            this.lastError = undefined;
+          }
+          if (!this.ended) this.ctx.emit({ type: 'turn', state: status.type === 'busy' ? 'running' : 'idle' });
           break;
         }
         case 'session.updated': {
@@ -573,9 +639,7 @@ export class OpenCodeSession implements DriverSession {
             this.childEnded(event.properties.sessionID, 'failed');
             continue;
           }
-          if (event.properties.error) {
-            this.deliver({ type: 'error', content: formatOpenCodeError(event.properties.error) });
-          }
+          if (event.properties.error) this.reportError(formatOpenCodeError(event.properties.error));
           break;
         }
         case 'permission.asked': {
@@ -610,6 +674,7 @@ export class OpenCodeSession implements DriverSession {
   private reportContext(message: AssistantMessage): void {
     const used = contextTokens(message);
     if (used <= 0) return;
+    this.lastTokens = message.tokens;
     this.contextLimits ??= this.catalog().then((c) => {
       if (c.models.length === 0) this.contextLimits = undefined;
       return c.contextLimits ?? {};
@@ -629,6 +694,12 @@ export class OpenCodeSession implements DriverSession {
         ...(changedCw ? { contextWindow: window } : {}),
       });
     });
+  }
+
+  private reportError(content: string): void {
+    if (content === this.lastError) return;
+    this.lastError = content;
+    this.deliver({ type: 'error', content });
   }
 
   private pushPart(part: Part, child?: ChildSession): void {
@@ -880,6 +951,8 @@ export class OpenCodeSession implements DriverSession {
    */
   prompt(text: string): void {
     const command = parseSlashCommand(text);
+    this.turnCompleted = false;
+    this.lastError = undefined;
     this.ready
       .then(async ({ client, session }) => {
         const listed = command ? await this.knownCommands(client) : new Set<string>();
@@ -1049,7 +1122,14 @@ export class OpenCodeSession implements DriverSession {
     const { client, session } = await this.ready;
     const { data, error } = await client.session.get({ sessionID: session.id, directory: this.cwd });
     if (error || !data) return null;
-    return { available: true, windows: [], ...(data.cost ? { sessionCostUsd: data.cost } : {}), fetchedAt: new Date().toISOString() };
+    const context = this.lastTokens ? openCodeContext(this.lastTokens, this.contextWindow) : undefined;
+    return {
+      available: true,
+      windows: [],
+      ...(data.cost ? { sessionCostUsd: data.cost } : {}),
+      ...(context ? { context } : {}),
+      fetchedAt: new Date().toISOString(),
+    };
   }
 
   async end(): Promise<void> {
@@ -1116,6 +1196,9 @@ export class OpenCodeDriver implements Driver {
   private serving: Served = NOTHING_SERVED;
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
+  /** Sessions on the running server, ended when it is replaced; ended
+   *  ones are dropped. */
+  private readonly sessions = new Set<OpenCodeSession>();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
   readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
 
@@ -1254,6 +1337,13 @@ export class OpenCodeDriver implements Driver {
     const old = this.server;
     this.server = null;
     this.launch(() => old.close());
+    // A session holds the old server's client: its password stops working
+    // and its event stream reconnects for ever to the new server, so it
+    // would never end on its own. Ended now, the bridge resumes it on the
+    // new server (OpenCode keeps the conversation on disk).
+    const stale = [...this.sessions];
+    this.sessions.clear();
+    for (const session of stale) session.serverReplaced();
     await this.clientPromise;
     return refused;
   }
@@ -1310,7 +1400,10 @@ export class OpenCodeDriver implements Driver {
     if (params.model && !splitModelId(params.model)) {
       throw new Error(`'${params.model}' is not an OpenCode provider/model id — choose one from its model list.`);
     }
-    return new OpenCodeSession(params, ctx, this.clientPromise, { catalog: () => this.listModels() });
+    const session = new OpenCodeSession(params, ctx, this.clientPromise, { catalog: () => this.listModels() });
+    for (const s of this.sessions) if (s.isEnded) this.sessions.delete(s);
+    this.sessions.add(session);
+    return session;
   }
 
   /** A profile is reached as an OpenAI-compatible provider: a session on

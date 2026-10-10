@@ -10,6 +10,7 @@ import { type Catalog, EMPTY_CATALOG } from '../catalog';
 import { placeProfiles, profileModelGroup, profileProviderId, providersConfig, servedBy, serverSetup } from '../providers';
 import type { StartOpenCodeServerOptions } from '../server';
 import type { ProviderBinding } from '../../../sdk/types';
+import { recordingContext } from '../../../sdk/__tests__/context';
 
 const router = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
   id: 'router',
@@ -178,6 +179,8 @@ describe('serverSetup', () => {
     expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_SERVER_PASSWORD).not.toBe(password);
     // Web search for every model, not only OpenCode's own providers'.
     expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_ENABLE_EXA).toBe('1');
+    // The pinned version stays.
+    expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_DISABLE_AUTOUPDATE).toBe('1');
     // No profiles: the operator's config stands as it is.
     expect(serverSetup([], EMPTY_CATALOG, { OPENCODE_CONFIG_CONTENT: '{"theme":"x"}' }).env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
   });
@@ -237,6 +240,35 @@ describe('an OpenCode driver given provider profiles', () => {
     expect(starts[2]!.env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
     await driver.shutdown();
     expect(closed).toEqual([1, 2, 3]);
+  });
+
+  it('ends the sessions on the server it replaces, so the bridge resumes them on the new one', async () => {
+    // Its event stream never opens: a session stays on the server it started on.
+    const client = {
+      event: { subscribe: () => new Promise(() => {}) },
+      provider: { list: async () => ({ error: 'no catalog' }) },
+    } as unknown as OpencodeClient;
+    let starts = 0;
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      startServer: async () => {
+        const n = ++starts;
+        return { url: `http://127.0.0.1:${4100 + n}`, pid: n, exited: new Promise(() => {}), close: async () => {} };
+      },
+      connect: () => client,
+    });
+    const ctx = recordingContext();
+    driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'zen/m1', resume: 'n1' }, ctx);
+    await driver.setProviders([router()]);
+    expect((await ctx.ended()).error).toMatch(/server restarted/);
+    // A session started on the new server is not ended by an unchanged list.
+    const next = recordingContext();
+    driver.startSession({ sessionId: 's2', agent: 'opencode', cwd: '/tmp', model: 'zen/m1', resume: 'n2' }, next);
+    await driver.setProviders([router()]);
+    expect(next.events.some((e) => e.type === 'ended' && /server restarted/.test(e.error ?? ''))).toBe(false);
+    await driver.shutdown();
   });
 
   it('has a model list asked for during the restart wait for the new server', async () => {

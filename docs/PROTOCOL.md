@@ -537,7 +537,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `stop-task {sessionId, taskId}` | `ack` once asked (the task's next `background_task` entry says it stopped), or `error` |
 | `set-option {sessionId, option, value}` | `ack` when applied, else `error` |
 | `list-models {agent}` | `models {models, defaultModel?}` |
-| `get-usage {sessionId}` | `usage {usage?}` |
+| `get-usage {sessionId}` | `usage {usage?}`: plan limits, the session's cost, and `context?` — what fills its window (`usedTokens`, `windowTokens`, `categories[{name, tokens, kind: used\|free\|buffer\|deferred}]`, `groups[{name, tokens, items[{name, tokens}]}]`) when the agent can say |
 | `list-commands {sessionId}` | `commands {commands}` |
 | `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, available?}` |
 | `plugin-action {agent, action, target}` | `plugins {…}` once done (`available?` after a marketplace change, `message?` saying what was done), or `error` with the agent's reason |

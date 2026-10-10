@@ -79,6 +79,7 @@ import {
   fetchGatewayModels,
   isProviderBoundSession,
   modelSupports1mContext,
+  modelToSend,
   toGatewayModels,
   type SdkSessionOptions,
 } from '../facade';
@@ -379,6 +380,12 @@ describe('buildQueryOptions (1M-context beta)', () => {
     const options = buildQueryOptions(baseOpts({ model: 'claude-sonnet-5' }));
     expect(options.betas).toEqual(['context-1m-2025-08-07']);
     expect(options.model).toBe('claude-sonnet-5[1m]');
+  });
+
+  it('marks a model switched to mid-session the same way, so the 1M window survives the switch', () => {
+    expect(modelToSend('claude-opus-5')).toBe('claude-opus-5[1m]');
+    expect(modelToSend('claude-opus-5[1m]')).toBe('claude-opus-5[1m]');
+    expect(modelToSend('claude-haiku-4-5')).toBe('claude-haiku-4-5');
   });
 
   it('does not double-suffix a model id that already carries the marker', () => {

@@ -53,6 +53,7 @@ import {
 } from './facade';
 import { ClaudeMcp } from './mcp';
 import { ClaudePlugins, execCli, hookPluginOf, type CliRunner, type LoadedPlugin } from './plugins';
+import { contextBreakdown } from './context';
 import { normalizeUsage } from './usage';
 
 export const CLAUDE_CODE_AGENT_ID = 'claude-code';
@@ -102,7 +103,8 @@ const KEEP_PLANNING_WITH_FEEDBACK = 'The user wants to keep planning. Revise the
 
 /** A model id compared the way the CLI would: case aside, and without the
  *  `[1m]` context marker it strips before sending. */
-const modelKey = (id: string): string => id.replace(/\[1m\]$/i, '').toLowerCase();
+const modelKey = (id: string): string => withoutContextMarker(id).toLowerCase();
+const withoutContextMarker = (id: string): string => id.replace(/\[1m\]$/i, '');
 /** A gateway's `<channel>/<model>` id without its channel. */
 const lastSegment = (id: string): string => id.slice(id.lastIndexOf('/') + 1);
 
@@ -364,13 +366,17 @@ export class ClaudeSession implements DriverSession {
       // default model otherwise reports none at all.
       for (const name of init.terminal_slash_commands ?? []) this.terminalCommands.add(name);
       this.plugins = (init.plugins ?? []).filter((p) => typeof p?.name === 'string' && typeof p.path === 'string');
-      const modelChanged = typeof init.model === 'string' && init.model !== '' && init.model !== this.model;
-      if (modelChanged) this.model = init.model;
+      // `init` names the model as it was sent, with the `[1m]` marker the
+      // facade adds for the 1M window: the same model as the catalog id the
+      // session asked for, which is what the phone matches against its list.
+      const initModel = typeof init.model === 'string' ? withoutContextMarker(init.model) : '';
+      const modelChanged = initModel !== '' && modelKey(initModel) !== modelKey(this.model ?? '');
+      if (modelChanged) this.model = initModel;
       this.ctx.emit({
         type: 'info',
         nativeSessionId: init.session_id,
         mode: this.mode,
-        ...(modelChanged ? { model: init.model } : {}),
+        ...(modelChanged ? { model: initModel } : {}),
       });
       this.markReady();
     }
@@ -689,15 +695,22 @@ export class ClaudeSession implements DriverSession {
     return this.mcpStatus();
   }
 
+  /** The plan's limits and the session's cost, and what fills its context
+   *  window — either may be missing when the CLI cannot say. */
   async getUsage(): Promise<UsageData | null> {
     if (!this.handle || this.ended) return null;
-    try {
-      const raw = await this.handle.getUsageSnapshot();
-      return raw === null || raw === undefined ? null : normalizeUsage(raw);
-    } catch (err) {
-      this.ctx.log(`[claude] usage failed for ${this.ctx.sessionId}: ${err}`);
-      return null;
-    }
+    const [usage, context] = await Promise.all([
+      this.handle.getUsageSnapshot().then(
+        (raw) => (raw === null || raw === undefined ? null : normalizeUsage(raw)),
+        (err) => {
+          this.ctx.log(`[claude] usage failed for ${this.ctx.sessionId}: ${err}`);
+          return null;
+        },
+      ),
+      this.handle.getContextUsage().then((res) => contextBreakdown(res?.details), () => undefined),
+    ]);
+    if (!usage && !context) return null;
+    return { ...(usage ?? { available: false, windows: [], fetchedAt: new Date().toISOString() }), ...(context ? { context } : {}) };
   }
 
   async end(): Promise<void> {

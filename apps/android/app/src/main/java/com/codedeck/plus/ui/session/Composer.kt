@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -42,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
@@ -60,10 +60,12 @@ import uniffi.client_ffi.UniffiQuickPrompt
 /**
  * The message input, one rounded surface: the text on top, and under it one
  * row of controls — `+` (a photo or any file), [options] (what the next
- * turn runs with), then on the right [meter] (how full the context is) and
- * one round button for the rest: Send once something is typed; while a
- * turn runs and nothing is, Stop; otherwise dictation. A long press on it
- * dictates whatever it shows, so the microphone takes no room of its own.
+ * turn runs with), then on the right one round button for the rest: Send
+ * once something is typed; while a turn runs and nothing is, Stop;
+ * otherwise dictation. A long press on it dictates whatever it shows, so
+ * the microphone takes no room of its own. Every control but the text
+ * takes the focus off it first: the keyboard goes, and a sheet it opens
+ * does not bring it back on closing.
  */
 @Composable
 internal fun Composer(
@@ -81,8 +83,8 @@ internal fun Composer(
     onSend: () -> Unit,
     focusRequester: FocusRequester = FocusRequester(),
     options: (@Composable () -> Unit)? = null,
-    meter: (@Composable RowScope.() -> Unit)? = null,
 ) {
+    val focus = LocalFocusManager.current
     val shape = RoundedCornerShape(26.dp)
     // The field keeps its own cursor; a draft replaced from outside (a quick
     // prompt, a picked command, a sent message) puts it at the end, so what
@@ -119,11 +121,10 @@ internal fun Composer(
             )
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            if (canAttach) AddMenu(uploading, onAttachPhoto, onAttachFile)
+            if (canAttach) AddMenu(uploading, onAttachPhoto, onAttachFile, onOpen = { focus.clearFocus() })
             // The options take what the buttons leave, so on a narrow phone
             // the chip shortens rather than pushing Send off the edge.
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { options?.invoke() }
-            meter?.invoke(this)
             Spacer(Modifier.width(Tokens.Space1))
             // While a turn runs the button stops it — until something is typed:
             // then it sends, and the agent reads the message when it can.
@@ -169,7 +170,7 @@ internal fun Composer(
 /** The `+` button and what it adds: a photo or a file, both dimmed while
  *  one uploads. */
 @Composable
-private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile: () -> Unit) {
+private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile: () -> Unit, onOpen: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         Box(
@@ -177,7 +178,10 @@ private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile:
                 .size(40.dp)
                 .clip(CircleShape)
                 .border(1.dp, Tokens.BorderStrong, CircleShape)
-                .clickable { open = true }
+                .clickable {
+                    onOpen()
+                    open = true
+                }
                 .semantics { contentDescription = "Add" },
             contentAlignment = Alignment.Center,
         ) {

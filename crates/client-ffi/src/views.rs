@@ -42,7 +42,7 @@ use client_runtime::{
 use client_runtime::view::TranscriptSyncView;
 use protocol::common::{
     AgentDescriptor, AgentInstall, CredentialStatus, GsdAction, GsdExecution, GsdPhase, GsdState, OptionChoice,
-    UsageData, UsageWindow,
+    ContextBreakdown, UsageData, UsageWindow,
 };
 use serde::Deserialize;
 
@@ -183,7 +183,40 @@ pub struct UniffiUsageData {
     pub plan: Option<String>,
     pub windows: Vec<UniffiUsageWindow>,
     pub session_cost_usd: Option<f64>,
+    #[uniffi(default = None)]
+    pub context: Option<UniffiContextBreakdown>,
     pub fetched_at: String,
+}
+
+/// What fills a session's context window — mirrors
+/// `protocol::common::ContextBreakdown`; a category's `kind` is the wire's
+/// own word (`used`, `free`, `buffer`, `deferred`).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiContextBreakdown {
+    pub used_tokens: u32,
+    pub window_tokens: u32,
+    pub categories: Vec<UniffiContextCategory>,
+    pub groups: Vec<UniffiContextGroup>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiContextCategory {
+    pub name: String,
+    pub tokens: u32,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiContextGroup {
+    pub name: String,
+    pub tokens: u32,
+    pub items: Vec<UniffiContextItem>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiContextItem {
+    pub name: String,
+    pub tokens: u32,
 }
 
 /// One GSD workflow phase — mirrors `protocol::common::GsdPhase` field for
@@ -261,7 +294,33 @@ fn to_uniffi_usage_data(u: &UsageData) -> UniffiUsageData {
         plan: u.plan.clone(),
         windows: u.windows.iter().map(to_uniffi_usage_window).collect(),
         session_cost_usd: u.session_cost_usd,
+        context: u.context.as_ref().map(to_uniffi_context),
         fetched_at: u.fetched_at.clone(),
+    }
+}
+
+fn to_uniffi_context(c: &ContextBreakdown) -> UniffiContextBreakdown {
+    UniffiContextBreakdown {
+        used_tokens: c.used_tokens,
+        window_tokens: c.window_tokens,
+        categories: c
+            .categories
+            .iter()
+            .map(|k| UniffiContextCategory {
+                name: k.name.clone(),
+                tokens: k.tokens,
+                kind: wire_str(&k.kind),
+            })
+            .collect(),
+        groups: c
+            .groups
+            .iter()
+            .map(|g| UniffiContextGroup {
+                name: g.name.clone(),
+                tokens: g.tokens,
+                items: g.items.iter().map(|i| UniffiContextItem { name: i.name.clone(), tokens: i.tokens }).collect(),
+            })
+            .collect(),
     }
 }
 

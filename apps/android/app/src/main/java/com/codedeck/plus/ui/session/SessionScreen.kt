@@ -13,6 +13,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -55,11 +56,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -169,9 +172,9 @@ private const val SESSION_FILE_SEND_BACKSTOP_MS = SESSION_FILE_SEND_BUDGET_MS + 
  * running turn is doing), the always-visible pending-permission bar, the
  * staged image-attachment strip, quick prompts, the [SendFailedBar] with
  * Retry, and the [Composer]: the text over one row of controls — attach,
- * the options chip (mode, model, effort: [SessionOptionsSheet]), the context
- * ring ([ContextDetails]), dictation and Send, which is Stop while a turn
- * runs and nothing is typed. Port of `SessionScreen.tsx`,
+ * the options chip (mode, model, effort, MCP servers: [SessionOptionsSheet]),
+ * dictation and Send, which is Stop while a turn runs and nothing is typed.
+ * The context ring ([ContextDetails]) sits in the top bar's corner. Port of `SessionScreen.tsx`,
  * including the image flow.
  *
  * While the session waits on a question, text sent from the input bar is
@@ -520,13 +523,21 @@ fun SessionScreen(
     }
 
     // MCP servers: the agent reports them once the session runs, so they
-    // are asked for then, and again whenever the sheet opens.
+    // are asked for then, and again whenever their page opens.
     val supportsMcp = agent?.supportsMcp == true
     val sessionLive = session?.state in setOf("running", "idle", "waiting_permission", "waiting_question")
-    var mcpSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
-    LaunchedEffect(machine, sessionId, supportsMcp, sessionLive, mcpSheetOpen) {
-        if (supportsMcp && sessionLive) core.dispatch(UniffiIntent.RequestSessionMcp(machine = machine, sessionId = sessionId))
+    fun requestMcp() {
+        if (supportsMcp && sessionLive) dispatch(UniffiIntent.RequestSessionMcp(machine = machine, sessionId = sessionId))
     }
+    LaunchedEffect(machine, sessionId, supportsMcp, sessionLive) { requestMcp() }
+
+    // A tap on any control but the input takes the focus off it: the
+    // keyboard goes, and a sheet that opens does not bring it back.
+    val focusManager = LocalFocusManager.current
+    var contextSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+    // A usage limit running out marks the context ring, when the user
+    // asked for that warning; the ring's details always list every limit.
+    val limitAlert = if (settings?.showUsageBadge == true) usageAlert(usageWindows(session?.usage, System.currentTimeMillis())) else null
 
     // --- Outbox: the "send failed" bar shows this session's oldest failed
     // item; Retry re-publishes it (the transcript's per-row Retry covers the
@@ -550,6 +561,14 @@ fun SessionScreen(
             workspace = session?.cwd,
             sessionState = session?.state,
             onBack = onBack,
+            trailing = {
+                ContextRing(session?.contextPercentage, limitAlert) {
+                    focusManager.clearFocus()
+                    contextSheetOpen = true
+                    // What fills the context is asked for afresh each time.
+                    if (supportsUsage) dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
+                }
+            },
         )
 
         GsdStrip(
@@ -574,7 +593,9 @@ fun SessionScreen(
             activity = transcript?.activity,
             canStopTasks = agent?.supportsTasks == true,
             dispatch = ::dispatch,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) },
         )
 
         pendingPermission?.let { pending ->
@@ -675,11 +696,13 @@ fun SessionScreen(
         val agentModels = machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models
         val agentProfiles = machineSummary?.providerProfiles.orEmpty().filter { it.agent == session?.agent }
         val boundProfile = session?.providerId?.let { id -> agentProfiles.firstOrNull { it.id == id } }
+        val modelLists = listOfNotNull(agentModels) + agentProfiles.map { it.models }
+        // The session's model as its list names it: an agent may report it
+        // with a context marker (`[1m]`) the list's id does not carry.
+        val sessionModel = session?.model?.let { m -> listedModelId(m, modelLists) ?: m }
         val sessionOptions = SessionOptions(
-            modelName = session?.model?.let { m ->
-                listedModelName(m, listOfNotNull(agentModels) + agentProfiles.map { it.models }) ?: modelLabel(m)
-            },
-            model = session?.model,
+            modelName = sessionModel?.let { m -> listedModelName(m, modelLists) ?: modelLabel(m) },
+            model = sessionModel,
             models = when {
                 boundProfile != null -> boundProfile.models
                 agent?.supportsModels == true -> agentModels.orEmpty()
@@ -691,7 +714,7 @@ fun SessionScreen(
             defaultMode = agent?.defaultMode,
             // The session model's own levels, for an agent whose levels
             // differ by model; else the agent's.
-            efforts = agentModels?.firstOrNull { it.id == session?.model }?.efforts?.takeIf { it.isNotEmpty() }
+            efforts = agentModels?.firstOrNull { it.id == sessionModel }?.efforts?.takeIf { it.isNotEmpty() }
                 ?: agent?.efforts.orEmpty(),
             effort = session?.effort,
             mcp = session?.mcp?.takeIf { supportsMcp && it.servers.isNotEmpty() },
@@ -708,18 +731,17 @@ fun SessionScreen(
                 },
                 onModel = { id ->
                     optionsSheetOpen = false
-                    if (id != session?.model) {
+                    if (id != sessionModel) {
                         dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "model", value = id))
                     }
                 },
-                onMcp = {
-                    optionsSheetOpen = false
-                    mcpSheetOpen = true
+                onMcpOpen = ::requestMcp,
+                onMcpToggle = { name, enabled ->
+                    dispatch(UniffiIntent.ToggleSessionMcp(machine = machine, sessionId = sessionId, name = name, enabled = enabled))
                 },
                 onDismiss = { optionsSheetOpen = false },
             )
         }
-        var contextSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
         if (contextSheetOpen) {
             ContextSheet(
                 percentage = session?.contextPercentage,
@@ -729,20 +751,6 @@ fun SessionScreen(
                 onDismiss = { contextSheetOpen = false },
             )
         }
-        val sessionMcp = session?.mcp
-        if (mcpSheetOpen && sessionMcp != null) {
-            SessionMcpSheet(
-                sessionMcp,
-                onToggle = { name, enabled ->
-                    dispatch(UniffiIntent.ToggleSessionMcp(machine = machine, sessionId = sessionId, name = name, enabled = enabled))
-                },
-                onDismiss = { mcpSheetOpen = false },
-            )
-        }
-        // A usage limit running out marks the context ring, when the user
-        // asked for that warning; the ring's details always list every limit.
-        val limitAlert = if (settings?.showUsageBadge == true) usageAlert(usageWindows(session?.usage, System.currentTimeMillis())) else null
-
         Composer(
             draft = draft,
             onDraftChange = { draft = it },
@@ -760,8 +768,12 @@ fun SessionScreen(
             onDictate = ::dictate,
             onSend = ::send,
             focusRequester = inputFocus,
-            options = { SessionOptionsChip(sessionOptions) { optionsSheetOpen = true } },
-            meter = { ContextRing(session?.contextPercentage, limitAlert) { contextSheetOpen = true } },
+            options = {
+                SessionOptionsChip(sessionOptions) {
+                    focusManager.clearFocus()
+                    optionsSheetOpen = true
+                }
+            },
         )
     }
 }
@@ -816,6 +828,8 @@ internal fun SessionTopBar(
     workspace: String?,
     sessionState: String?,
     onBack: (() -> Unit)?,
+    /** At the right end: the context ring. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -856,6 +870,7 @@ internal fun SessionTopBar(
                 )
             }
         }
+        trailing?.invoke()
     }
 }
 
@@ -984,6 +999,15 @@ internal fun modelLabel(id: String?): String {
     val base = stripContextMarker(id)
     MODEL_TAGS.firstOrNull { (modelId) -> modelId == base }?.let { return it.second }
     return base.replace(Regex("^claude-"), "").replace(Regex("-\\d{8}$"), "")
+}
+
+/** The id a model list has for the session's model [id], which an agent
+ *  may report with a context marker the list's id does not carry; null
+ *  when no list has it. */
+internal fun listedModelId(id: String, lists: List<List<UniffiModelEntry>>): String? {
+    lists.firstNotNullOfOrNull { list -> list.firstOrNull { it.id == id } }?.let { return it.id }
+    val key = stripContextMarker(id)
+    return lists.firstNotNullOfOrNull { list -> list.firstOrNull { stripContextMarker(it.id) == key } }?.id
 }
 
 /**

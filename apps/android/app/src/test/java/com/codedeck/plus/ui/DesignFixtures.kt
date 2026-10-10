@@ -28,6 +28,10 @@ import uniffi.client_ffi.UniffiMcpImport
 import uniffi.client_ffi.UniffiMcpImportProblem
 import uniffi.client_ffi.UniffiMcpServer
 import uniffi.client_ffi.UniffiMcpServerSpec
+import uniffi.client_ffi.UniffiContextBreakdown
+import uniffi.client_ffi.UniffiContextCategory
+import uniffi.client_ffi.UniffiContextGroup
+import uniffi.client_ffi.UniffiContextItem
 import uniffi.client_ffi.UniffiSessionMcp
 import uniffi.client_ffi.UniffiSessionMcpServer
 import uniffi.client_ffi.UniffiPluginFailure
@@ -325,6 +329,30 @@ internal object DesignFixtures {
     }
 
     /** A Claude Code session in plan mode, on Opus at high effort, with MCP servers. */
+    /** What fills a Claude Code session's window, as its context view says. */
+    val contextBreakdown = UniffiContextBreakdown(
+        usedTokens = 84_200u,
+        windowTokens = 200_000u,
+        categories = listOf(
+            UniffiContextCategory("Messages", 41_600u, "used"),
+            UniffiContextCategory("System tools", 23_200u, "used"),
+            UniffiContextCategory("MCP tools", 8_100u, "used"),
+            UniffiContextCategory("System prompt", 6_200u, "used"),
+            UniffiContextCategory("Memory files", 5_100u, "used"),
+            UniffiContextCategory("Autocompact buffer", 33_000u, "buffer"),
+            UniffiContextCategory("Free space", 82_800u, "free"),
+            UniffiContextCategory("MCP tools (deferred)", 22_900u, "deferred"),
+        ),
+        groups = listOf(
+            UniffiContextGroup(
+                "MCP tools", 8_100u,
+                listOf("create_issue" to 1_500u, "list_issues" to 1_200u, "get_pull_request" to 900u).map { (n, t) -> UniffiContextItem("github · $n", t) } +
+                    (1..14).map { UniffiContextItem("linear · tool_$it", 321u) },
+            ),
+            UniffiContextGroup("Memory files", 5_100u, listOf(UniffiContextItem("/home/me/.claude/CLAUDE.md", 5_100u))),
+        ),
+    )
+
     val claudeOptions by lazy {
         SessionOptions(
             modelName = "Opus", model = "opus", models = workstation.models.first { it.agent == "claude-code" }.models,

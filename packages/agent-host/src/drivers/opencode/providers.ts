@@ -172,6 +172,9 @@ export function serverSetup(placed: Placement[], catalog: Catalog, baseEnv: Node
     // is set; with it, every model can search (Exa's keyless endpoint,
     // still behind the `websearch` permission).
     OPENCODE_ENABLE_EXA: '1',
+    // Its version is the one pnpm-lock.yaml pins: it must not replace
+    // itself, nor spend its start looking for a newer one.
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
   };
   if (placed.length > 0) {
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify(providersConfig(placed, catalog, operatorConfig(baseEnv)));

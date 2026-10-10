@@ -195,6 +195,15 @@ describe('sdkMessageToEntries', () => {
       ]);
     });
 
+    it("shows a local command's report as a status line, not as the user's message", () => {
+      expect(translate(user('<local-command-stdout>Set model to \u001b[1m`Gateway/glm-9[1m]`\u001b[22m</local-command-stdout>'))).toEqual([
+        { entryType: 'status', text: 'Set model to Gateway/glm-9[1m]', timestamp: expect.any(String) },
+      ]);
+      expect(translate(user([{ type: 'text', text: '<local-command-stderr></local-command-stderr>' }]))).toEqual([]);
+      // Only a whole message in the wrapper is one.
+      expect(translate(user('what does <local-command-stdout>x</local-command-stdout> mean?'))[0]).toMatchObject({ entryType: 'text', role: 'user' });
+    });
+
     it('converts tool_result blocks, paired to their call id', () => {
       const entries = translate(user([
         { type: 'tool_result', tool_use_id: 'tool_01', content: 'file1.ts\nfile2.ts' },

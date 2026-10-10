@@ -45,6 +45,7 @@ class SessionChromeSnapshotTest {
                             workspace = "/home/dev/projects/codedeck-docker",
                             sessionState = "running",
                             onBack = {},
+                            trailing = { ContextRing(82.0, alert = Tokens.Warn) {} },
                         )
                         Spacer(Modifier.height(120.dp))
                         SendFailedBar(
@@ -66,7 +67,6 @@ class SessionChromeSnapshotTest {
                                     ),
                                 ) {}
                             },
-                            meter = { ContextRing(82.0, alert = Tokens.Warn) {} },
                         )
                     }
                 }
