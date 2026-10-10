@@ -82,10 +82,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/** A strip of the screen a full sheet leaves free below the status bar, so
- *  it still reads as a sheet over the page. */
-private val SHEET_TOP_ROOM = 24.dp
-
 /** As wide as a sheet grows, on a tablet or in landscape. */
 private val SHEET_MAX_WIDTH = 640.dp
 
@@ -113,7 +109,7 @@ private enum class SheetStop { Hidden, Half, Full }
  * stops and whose surface follows the status bar's inset as it rises:
  *
  * - it lives in the screen below the status bar (and above the keyboard),
- *   less a strip, so a tall sheet stops under the status bar and its
+ *   so a tall sheet stops right under the status bar and its
  *   content scrolls inside it;
  * - it comes to rest at a stop without passing it, and a drag past the top
  *   does not move it at all;
@@ -186,7 +182,6 @@ fun DeckSheet(
                 Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
-                    .padding(top = SHEET_TOP_ROOM)
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                     .imePadding(),
             ) {
