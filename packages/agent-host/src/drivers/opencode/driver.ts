@@ -41,6 +41,8 @@ import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf,
 import { newTranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
+  ContextBreakdown,
+  ContextCategory,
   ModelEntry,
   OptionChoice,
   PermissionOption,
@@ -173,6 +175,29 @@ export interface OpenCodeCatalog {
 export function contextTokens(message: AssistantMessage): number {
   const t = message.tokens;
   return t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
+}
+
+/**
+ * What the context window held at a session's last step, as far as OpenCode
+ * counts it: the prompt (the part the provider had cached, and the rest)
+ * and the reply (its reasoning, its text), which the next step reads as part
+ * of its prompt. Nothing without the window's size.
+ */
+export function openCodeContext(tokens: AssistantMessage['tokens'], window: number | undefined): ContextBreakdown | undefined {
+  if (!window || window <= 0) return undefined;
+  const parts: Array<[string, number]> = [
+    ['Cached prompt', tokens.cache.read],
+    ['New prompt', tokens.input + tokens.cache.write],
+    ['Reasoning', tokens.reasoning],
+    ['Reply', tokens.output],
+  ];
+  const whole = (n: number) => Math.min(Math.max(0, Math.round(n)), 0xffff_ffff);
+  const used = whole(parts.reduce((sum, [, n]) => sum + n, 0));
+  const categories: ContextCategory[] = parts
+    .filter(([, n]) => n > 0)
+    .map(([name, n]) => ({ name, tokens: whole(n), kind: 'used' as const }));
+  categories.push({ name: 'Free space', tokens: whole(window - used), kind: 'free' });
+  return { usedTokens: used, windowTokens: whole(window), categories };
 }
 
 /** The provider OpenCode Zen serves under — the one provider every OpenCode
@@ -374,6 +399,8 @@ export class OpenCodeSession implements DriverSession {
   private contextLimits?: Promise<Record<string, number>>;
   private contextWindow?: number;
   private contextPercentage?: number;
+  /** The last main-agent step's token counts: what the context held then. */
+  private lastTokens?: AssistantMessage['tokens'];
   /** Names of the session's commands, from the last list fetched: a typed
    *  `/name` runs as that command only when OpenCode has one by that name.
    *  Dropped again when the fetch failed, so the next one asks again. */
@@ -620,6 +647,7 @@ export class OpenCodeSession implements DriverSession {
   private reportContext(message: AssistantMessage): void {
     const used = contextTokens(message);
     if (used <= 0) return;
+    this.lastTokens = message.tokens;
     this.contextLimits ??= this.catalog().then((c) => {
       if (c.models.length === 0) this.contextLimits = undefined;
       return c.contextLimits ?? {};
@@ -1059,7 +1087,14 @@ export class OpenCodeSession implements DriverSession {
     const { client, session } = await this.ready;
     const { data, error } = await client.session.get({ sessionID: session.id, directory: this.cwd });
     if (error || !data) return null;
-    return { available: true, windows: [], ...(data.cost ? { sessionCostUsd: data.cost } : {}), fetchedAt: new Date().toISOString() };
+    const context = this.lastTokens ? openCodeContext(this.lastTokens, this.contextWindow) : undefined;
+    return {
+      available: true,
+      windows: [],
+      ...(data.cost ? { sessionCostUsd: data.cost } : {}),
+      ...(context ? { context } : {}),
+      fetchedAt: new Date().toISOString(),
+    };
   }
 
   async end(): Promise<void> {

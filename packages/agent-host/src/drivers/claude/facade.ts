@@ -146,6 +146,9 @@ export interface SdkContextUsage {
   percentage?: number;
   /** Real context-window size in tokens (honest denominator, incl. 1M beta). */
   contextWindow?: number;
+  /** The whole answer, unchecked: what fills the window, part by part
+   *  (`contextBreakdown` reads it). */
+  details?: unknown;
 }
 
 /** One slash command as `query.supportedCommands()` lists it. */
@@ -861,6 +864,7 @@ class RealSdkSessionHandle implements SdkSessionHandle {
         ...(typeof res?.maxTokens === 'number' && res.maxTokens > 0
           ? { contextWindow: res.maxTokens }
           : {}),
+        details: res,
       };
     } catch {
       return null;

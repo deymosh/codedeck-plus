@@ -53,6 +53,7 @@ import {
 } from './facade';
 import { ClaudeMcp } from './mcp';
 import { ClaudePlugins, execCli, hookPluginOf, type CliRunner, type LoadedPlugin } from './plugins';
+import { contextBreakdown } from './context';
 import { normalizeUsage } from './usage';
 
 export const CLAUDE_CODE_AGENT_ID = 'claude-code';
@@ -694,15 +695,22 @@ export class ClaudeSession implements DriverSession {
     return this.mcpStatus();
   }
 
+  /** The plan's limits and the session's cost, and what fills its context
+   *  window — either may be missing when the CLI cannot say. */
   async getUsage(): Promise<UsageData | null> {
     if (!this.handle || this.ended) return null;
-    try {
-      const raw = await this.handle.getUsageSnapshot();
-      return raw === null || raw === undefined ? null : normalizeUsage(raw);
-    } catch (err) {
-      this.ctx.log(`[claude] usage failed for ${this.ctx.sessionId}: ${err}`);
-      return null;
-    }
+    const [usage, context] = await Promise.all([
+      this.handle.getUsageSnapshot().then(
+        (raw) => (raw === null || raw === undefined ? null : normalizeUsage(raw)),
+        (err) => {
+          this.ctx.log(`[claude] usage failed for ${this.ctx.sessionId}: ${err}`);
+          return null;
+        },
+      ),
+      this.handle.getContextUsage().then((res) => contextBreakdown(res?.details), () => undefined),
+    ]);
+    if (!usage && !context) return null;
+    return { ...(usage ?? { available: false, windows: [], fetchedAt: new Date().toISOString() }), ...(context ? { context } : {}) };
   }
 
   async end(): Promise<void> {

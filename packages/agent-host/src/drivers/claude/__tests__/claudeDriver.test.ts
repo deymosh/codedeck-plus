@@ -303,6 +303,21 @@ describe('Claude turn state and context', () => {
     expect(ctx.events).toContainEqual({ type: 'info', contextWindow: 1_000_000 });
   });
 
+  it("usage says what fills the context window, even with no plan limits to report", async () => {
+    const { ctx, session, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(await session.getUsage()).toBeNull();
+    handle.contextUsage = {
+      percentage: 1,
+      details: { totalTokens: 2_000, maxTokens: 200_000, categories: [{ name: 'Messages', tokens: 2_000, kind: 'used' }] },
+    };
+    expect(await session.getUsage()).toMatchObject({
+      available: false,
+      windows: [],
+      context: { usedTokens: 2_000, windowTokens: 200_000, categories: [{ name: 'Messages', tokens: 2_000, kind: 'used' }] },
+    });
+  });
+
   const step = (parent: string | null = null) => ({
     type: 'assistant', parent_tool_use_id: parent,
     message: { content: [{ type: 'text', text: 'working' }] },

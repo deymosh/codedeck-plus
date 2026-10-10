@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { Event, OpencodeClient, Provider, Session } from '@opencode-ai/sdk/v2/client';
-import { OpenCodeDriver, reasoningLevels, pickDefaultModel, toQuestionAnswers } from '../driver';
+import { OpenCodeDriver, openCodeContext, reasoningLevels, pickDefaultModel, toQuestionAnswers } from '../driver';
 import type { StartSession } from '../../../sdk/types';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
@@ -598,6 +598,22 @@ describe('OpenCode context usage', () => {
       { type: 'info', contextPercentage: 25, contextWindow: 200_000 },
       { type: 'info', contextPercentage: 50 },
     ]);
+  });
+
+  it("breaks the last step's tokens down into what the window held", () => {
+    const tokens = { input: 4_000, output: 1_000, reasoning: 500, cache: { read: 90_000, write: 500 } };
+    expect(openCodeContext(tokens, 200_000)).toEqual({
+      usedTokens: 96_000,
+      windowTokens: 200_000,
+      categories: [
+        { name: 'Cached prompt', tokens: 90_000, kind: 'used' },
+        { name: 'New prompt', tokens: 4_500, kind: 'used' },
+        { name: 'Reasoning', tokens: 500, kind: 'used' },
+        { name: 'Reply', tokens: 1_000, kind: 'used' },
+        { name: 'Free space', tokens: 104_000, kind: 'free' },
+      ],
+    });
+    expect(openCodeContext(tokens, undefined)).toBeUndefined();
   });
 
   it('reports nothing for a model whose provider declares no limit', async () => {
