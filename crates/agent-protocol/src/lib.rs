@@ -95,7 +95,7 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"h2","kind":"plan-outcome","payload":{"outcome":"cancelled","reason":"Timed out"}}));
         bridge_rt(json!({"v":1,"id":"h4","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"revise","feedback":"Fewer steps."}}));
         bridge_rt(json!({"v":1,"id":"h5","kind":"plan-outcome","payload":{"outcome":"selected","optionId":"default"}}));
-        bridge_rt(json!({"v":1,"id":"h3","kind":"question-outcome","payload":{"outcome":"answered","answers":["Red","a, b"]}}));
+        bridge_rt(json!({"v":1,"id":"h3","kind":"question-outcome","payload":{"outcome":"answered","answers":[{"type":"selected","labels":["Red","Blue"]},{"type":"text","text":"a, b"}]}}));
     }
 
     #[test]
@@ -157,7 +157,7 @@ mod tests {
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"ended","error":"exit 1","resumeLost":true}}}));
         let perm = host_rt(json!({"v":1,"id":"h1","kind":"request-permission","payload":{
             "sessionId":"s","requestId":"toolu_1","toolName":"Bash","kind":"execute","title":"rm -rf build",
-            "description":"clean","locations":["/w/build"],"rawInput":{"command":"rm -rf build"},
+            "description":"clean","locations":["/w/build"],
             "options":[{"id":"allow","label":"Allow","kind":"allow_once"},{"id":"deny","label":"Deny","kind":"reject_once"}],
             "subagent":{"label":"Plan"}
         }}));
@@ -196,7 +196,7 @@ mod tests {
             r#"{"v":1,"kind":"teleport","payload":{}}"#,
             r#"{"v":1,"kind":"ack","payload":{"x":1}}"#,
             r#"{"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"exploded"}}}"#,
-            r#"{"v":1,"kind":"request-permission","payload":{"sessionId":"s","requestId":"r","toolName":"X","kind":"teleport","title":"","options":[]}}"#,
+            r#"{"v":1,"kind":"request-permission","payload":{"sessionId":"s","requestId":"r","toolName":"X","kind":"read","title":"","options":[{"id":"a","label":"A","kind":"allow_maybe"}]}}"#,
         ] {
             assert!(matches!(decode_host_frame(line), Err(FrameError::Malformed(_))), "{line}");
         }

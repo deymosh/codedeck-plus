@@ -100,7 +100,7 @@ describe('AgentHost', () => {
     await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });
     await h.send('prompt', { sessionId: 's1', text: 'question' });
     await h.until(() => h.out.some((f) => f.kind === 'ask-question'));
-    await h.send('question-outcome', { outcome: 'answered', answers: ['Blue'] }, h.out.find((f) => f.kind === 'ask-question')!.id);
+    await h.send('question-outcome', { outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }] }, h.out.find((f) => f.kind === 'ask-question')!.id);
     await h.until(() => h.texts().length === 1);
 
     await h.send('prompt', { sessionId: 's1', text: 'plan' });

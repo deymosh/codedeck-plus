@@ -525,7 +525,6 @@ export class ClaudeSession implements DriverSession {
       title: toolTitle(toolName, input) || toolName,
       ...(description ? { description } : {}),
       locations,
-      rawInput: input,
       options: hook ? [PERMISSION_ALLOW, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],
       ...(reason ? { reason } : {}),
       ...(hook ? { hook: hook.name } : {}),
@@ -565,6 +564,8 @@ export class ClaudeSession implements DriverSession {
    * AskUserQuestion answers go back in `updatedInput.answers`, keyed by the
    * FULL question text (the SDK's result builder looks them up that way —
    * keyed by the short header, it crashes), alongside the original input.
+   * The tool takes one string per question: the chosen labels joined by
+   * ", ", or what the user typed.
    */
   private async askQuestions(requestId: string, input: Record<string, unknown>): Promise<SdkPermissionResult> {
     const questions = Array.isArray(input.questions) ? (input.questions as Array<Record<string, unknown>>) : [];
@@ -581,7 +582,8 @@ export class ClaudeSession implements DriverSession {
     if (outcome.outcome === 'cancelled') return { behavior: 'deny', message: outcome.reason };
     const answers: Record<string, string> = {};
     specs.forEach((q, i) => {
-      answers[q.question] = outcome.answers[i] ?? '';
+      const reply = outcome.answers[i];
+      answers[q.question] = reply === undefined ? '' : reply.type === 'selected' ? reply.labels.join(', ') : reply.text;
     });
     return { behavior: 'allow', updatedInput: { ...input, answers } };
   }

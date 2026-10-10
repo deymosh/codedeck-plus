@@ -20,7 +20,7 @@ use protocol::commands::{
     AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
-    StopTaskMsg, VersionFields,
+    StopTaskMsg,
 };
 use protocol::common::{AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
@@ -440,7 +440,6 @@ pub fn apply(
     ctx: IntentCtx,
 ) -> IntentResult {
     let mut r = IntentResult::default();
-    let v = VersionFields::default;
     match intent {
         Intent::SendInput {
             machine,
@@ -465,7 +464,6 @@ pub fn apply(
                 id: input_id.clone(),
                 machine,
                 msg: PhoneToBridge::Input(InputMsg {
-                    version: v(),
                     session_id,
                     text,
                     input_id: Some(input_id),
@@ -481,7 +479,6 @@ pub fn apply(
                     id,
                     machine,
                     msg: PhoneToBridge::Input(InputMsg {
-                        version: v(),
                         session_id: item.session_id,
                         text: item.text,
                         input_id: Some(item.id),
@@ -592,7 +589,6 @@ pub fn apply(
             r.send(
                 &machine,
                 PhoneToBridge::PermissionResponse(PermissionResponseMsg {
-                    version: v(),
                     session_id,
                     request_id,
                     option_id,
@@ -615,7 +611,6 @@ pub fn apply(
             r.send(
                 &machine,
                 PhoneToBridge::QuestionResponse(QuestionResponseMsg {
-                    version: v(),
                     session_id,
                     request_id,
                     index,
@@ -637,7 +632,6 @@ pub fn apply(
             r.send(
                 &machine,
                 PhoneToBridge::PlanResponse(PlanResponseMsg {
-                    version: v(),
                     session_id,
                     request_id,
                     option_id,
@@ -653,7 +647,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::SetOption(SetOptionMsg {
-                version: v(),
                 session_id,
                 option,
                 value,
@@ -665,7 +658,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::Interrupt(SessionIdMsg {
-                version: v(),
                 session_id,
             }),
         ),
@@ -676,7 +668,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::StopTask(StopTaskMsg {
-                version: v(),
                 session_id,
                 task_id,
             }),
@@ -687,7 +678,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::CloseSession(SessionIdMsg {
-                version: v(),
                 session_id,
             }),
         ),
@@ -703,7 +693,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::CreateSession(CreateSessionMsg {
-                version: v(),
                 agent,
                 mode,
                 effort,
@@ -714,14 +703,13 @@ pub fn apply(
             }),
         ),
         Intent::RefreshSessions { machine } => {
-            r.send(&machine, PhoneToBridge::RefreshSessions(BareMsg { version: v() }))
+            r.send(&machine, PhoneToBridge::RefreshSessions(BareMsg {}))
         }
         Intent::RequestModels { machine, agent } => {
             if stores.machines.fetches.should_request(&machine, Fetch::Models(agent.clone()), ctx.now) {
                 r.send(
                     &machine,
                     PhoneToBridge::ModelsRequest(ModelsRequestMsg {
-                        version: v(),
                         agent,
                     }),
                 )
@@ -733,7 +721,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::UsageRequest(SessionIdMsg {
-                version: v(),
                 session_id,
             }),
         ),
@@ -743,29 +730,28 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::CommandsRequest(SessionIdMsg {
-                version: v(),
                 session_id,
             }),
         ),
         Intent::RequestPlugins { machine, agent, available } => r.send(
             &machine,
-            PhoneToBridge::PluginsRequest(PluginsRequestMsg { version: v(), agent, available }),
+            PhoneToBridge::PluginsRequest(PluginsRequestMsg { agent, available }),
         ),
         Intent::PluginAction { machine, agent, action, target } => {
             let target = target.trim().to_string();
             if !target.is_empty() {
                 stores.machines.plugin_action_sent(&machine, &agent, &target);
                 r.persist(StoreId::Machines);
-                r.send(&machine, PhoneToBridge::PluginAction(PluginActionMsg { version: v(), agent, action, target }));
+                r.send(&machine, PhoneToBridge::PluginAction(PluginActionMsg { agent, action, target }));
             }
         }
         Intent::AgentAction { machine, agent, action } => {
             stores.machines.agent_action_sent(&machine, &agent, action);
             r.persist(StoreId::Machines);
-            r.send(&machine, PhoneToBridge::AgentAction(AgentActionMsg { version: v(), agent, action }));
+            r.send(&machine, PhoneToBridge::AgentAction(AgentActionMsg { agent, action }));
         }
         Intent::RequestMcp { machine, agent } => {
-            r.send(&machine, PhoneToBridge::McpRequest(McpRequestMsg { version: v(), agent }))
+            r.send(&machine, PhoneToBridge::McpRequest(McpRequestMsg { agent }))
         }
         Intent::McpAction { machine, agent, action, servers, names } => {
             let names = match action {
@@ -778,20 +764,20 @@ pub fn apply(
                 stores.machines.apply_mcp_ack(&machine, &ack);
             } else if !names.is_empty() {
                 stores.machines.mcp_action_sent(&machine, &agent, &names);
-                r.send(&machine, PhoneToBridge::McpAction(McpActionMsg { version: v(), agent, action, servers, names }));
+                r.send(&machine, PhoneToBridge::McpAction(McpActionMsg { agent, action, servers, names }));
             }
             r.persist(StoreId::Machines);
         }
         Intent::RequestSessionMcp { machine, session_id } => r.send(
             &machine,
-            PhoneToBridge::SessionMcpRequest(SessionIdMsg { version: v(), session_id }),
+            PhoneToBridge::SessionMcpRequest(SessionIdMsg { session_id }),
         ),
         Intent::ToggleSessionMcp { machine, session_id, name, enabled } => {
             stores.machines.session_mcp_toggle_sent(&machine, &session_id, &name);
             r.persist(StoreId::Machines);
             r.send(
                 &machine,
-                PhoneToBridge::SessionMcpToggle(SessionMcpToggleMsg { version: v(), session_id, name, enabled }),
+                PhoneToBridge::SessionMcpToggle(SessionMcpToggleMsg { session_id, name, enabled }),
             );
         }
         Intent::RequestGsd {
@@ -800,7 +786,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::GsdRequest(SessionIdMsg {
-                version: v(),
                 session_id,
             }),
         ),
@@ -816,7 +801,6 @@ pub fn apply(
             r.send(
                 &machine,
                 PhoneToBridge::SetCredentials(SetCredentialsMsg {
-                    version: v(),
                     agent,
                     values,
                 }),
@@ -829,14 +813,13 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::SetProviderProfile(SetProviderProfileMsg {
-                version: v(),
                 profile_id,
                 profile,
             }),
         ),
         Intent::RequestProviderProfiles { machine } => {
             if stores.machines.fetches.should_request(&machine, Fetch::ProviderProfiles, ctx.now) {
-                r.send(&machine, PhoneToBridge::ProviderProfilesRequest(BareMsg { version: v() }))
+                r.send(&machine, PhoneToBridge::ProviderProfilesRequest(BareMsg {}))
             }
         }
         Intent::CreateFolder {
@@ -847,7 +830,6 @@ pub fn apply(
         } => r.send(
             &machine,
             PhoneToBridge::CreateFolder(CreateFolderMsg {
-                version: v(),
                 path,
                 root,
                 request_id,
@@ -1005,7 +987,6 @@ fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: 
                 r.sends.push(Send {
                     machine,
                     msg: PhoneToBridge::CloseSession(SessionIdMsg {
-                        version: VersionFields::default(),
                         session_id,
                     }),
                 })

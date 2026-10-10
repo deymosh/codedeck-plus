@@ -28,7 +28,7 @@ mod settings;
 
 use std::collections::BTreeMap;
 
-use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES, PROTOCOL_VERSION};
+use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES};
 use protocol::common::{OutputEntry, RemoteSessionInfo};
 use protocol::crypto::Keypair;
 use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg};
@@ -558,7 +558,6 @@ impl Engine {
             sessions,
             agents,
             credentials,
-            protocol_version: PROTOCOL_VERSION,
             capabilities: Some(ALL_BRIDGE_CAPABILITIES.iter().map(|c| c.to_string()).collect()),
             folders: Some(self.workspace.folders()),
             roots: Some(self.workspace.roots()),

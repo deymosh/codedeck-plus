@@ -541,6 +541,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>) -> Un
         AgentInstall::NotInstalled {} => ("not_installed", false, None),
         AgentInstall::Installing {} => ("installing", false, None),
         AgentInstall::Failed { reason } => ("failed", false, Some(reason.clone())),
+        AgentInstall::Unknown => ("unknown", false, None),
     };
     UniffiAgent {
         id: a.id.clone(),
@@ -611,6 +612,11 @@ pub struct UniffiMachineSummary {
     pub default_agent: Option<String>,
     /// What each agent's new sessions start with.
     pub agent_defaults: Vec<UniffiAgentDefaults>,
+    /// The bridge speaks another protocol version, so nothing it sends can be
+    /// read: `app` when this app is the older side, `bridge` when the bridge
+    /// is. `None` while they match.
+    #[uniffi(default = None)]
+    pub update_needed: Option<String>,
 }
 
 /// A plugin installed for an agent on a machine.
@@ -910,6 +916,9 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         model: d.model.clone(),
                     })
                     .collect(),
+                update_needed: m
+                    .incompatible
+                    .map(|i| if i.app_is_older() { "app" } else { "bridge" }.to_string()),
             })
             .collect(),
     }

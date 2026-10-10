@@ -68,18 +68,26 @@ import uniffi.client_ffi.isRelayUrl
 internal enum class MachinePresence(val label: String, val color: Color) {
     Online("Online", Tokens.PresenceLive),
     Offline("Offline", Tokens.PresenceOffline),
+
+    /** Heard from, but in another protocol version: nothing it says can be read. */
+    Mismatched("Update needed", Tokens.Warn),
 }
 
 /** A heartbeat older than this means the bridge is not running (it beats every 30 s). */
 private const val HEARTBEAT_FRESH_MS = 90_000L
 
 internal fun machinePresence(machine: UniffiMachineSummary, now: Long): MachinePresence {
+    if (machine.updateNeeded != null) return MachinePresence.Mismatched
     val at = machine.lastHeartbeatAt?.toLong()
     return if (!machine.machineOffline && at != null && now - at < HEARTBEAT_FRESH_MS) MachinePresence.Online else MachinePresence.Offline
 }
 
-/** "Online", or when it was last heard from. */
+/** "Online", which side to update, or when it was last heard from. */
 internal fun machineStatusText(machine: UniffiMachineSummary, now: Long): String {
+    when (machine.updateNeeded) {
+        "app" -> return "Update the app"
+        "bridge" -> return "Update the bridge"
+    }
     if (machinePresence(machine, now) == MachinePresence.Online) return "Online"
     val at = machine.lastHeartbeatAt?.toLong() ?: return "Offline"
     val minutes = (now - at) / 60_000

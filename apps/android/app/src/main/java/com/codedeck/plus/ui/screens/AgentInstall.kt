@@ -21,11 +21,16 @@ import uniffi.client_ffi.UniffiAgent
 /** Sessions start only on an agent that is installed. */
 internal val UniffiAgent.ready: Boolean get() = installState == "ready"
 
+/** A state a newer bridge reports and this app does not know: nothing to
+ *  offer for it but an update. */
+private val UniffiAgent.stateUnknown: Boolean get() = installState == "unknown"
+
 /** The agent's name in a picker, with why it cannot run a session yet. */
 internal fun agentPickerLabel(agent: UniffiAgent): String = when (agent.installState) {
     "ready" -> agent.displayName
     "installing" -> "${agent.displayName} (installing)"
     "failed" -> "${agent.displayName} (install failed)"
+    "unknown" -> "${agent.displayName} (update the app)"
     else -> "${agent.displayName} (not installed)"
 }
 
@@ -37,6 +42,7 @@ private fun installLine(agent: UniffiAgent): Pair<String, Boolean> {
         agent.actionBusy == "install" || agent.installState == "installing" -> "Installing…" to false
         agent.installState == "failed" -> "Install failed: ${agent.installError.orEmpty()}" to true
         agent.installState == "not_installed" -> "Not installed" to false
+        agent.stateUnknown -> "Update the app to see where it stands" to false
         agent.removable -> "Installed by CodeDeck" to false
         else -> "On the machine" to false
     }
@@ -63,7 +69,7 @@ internal fun AgentInstallRow(agent: UniffiAgent, onInstall: () -> Unit, onRemove
         }
         when {
             working -> RowSpinner()
-            !agent.ready -> SecondaryButton(if (agent.installState == "failed") "Retry" else "Install", onClick = onInstall)
+            !agent.ready && !agent.stateUnknown -> SecondaryButton(if (agent.installState == "failed") "Retry" else "Install", onClick = onInstall)
             agent.removable && onRemove != null -> QuietButton("Remove", onClick = onRemove, danger = true)
         }
     }

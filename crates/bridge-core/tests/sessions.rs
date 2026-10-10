@@ -24,8 +24,8 @@ fn notices(msgs: &[BridgeToPhone]) -> Vec<(NoticeKind, String)> {
 fn start_publishes_a_heartbeat_then_the_catalog_once_the_host_reports() {
     let mut rig = Rig::new();
     let hb = last_heartbeat(&rig.messages());
-    assert_eq!((hb.machine.as_str(), hb.protocol_version), ("laptop", 11));
-    assert!(hb.capabilities.unwrap().contains(&"sync/1".to_string()));
+    assert_eq!(hb.machine, "laptop");
+    assert!(hb.capabilities.unwrap().contains(&"files".to_string()));
     assert_eq!(hb.folders.unwrap(), ["app", "lib"]);
     assert_eq!(hb.roots.unwrap(), ["/w"]);
     assert!(hb.agents.is_empty());
@@ -65,7 +65,7 @@ fn every_session_list_has_a_greater_rev_than_the_last_even_across_a_restart() {
     let second = last_heartbeat(&rig.messages()).rev.unwrap();
     assert!(second > first, "{second} > {first}");
     rig.advance(60_000);
-    rig.send(serde_json::json!({ "type": "refresh-sessions" }));
+    rig.send(serde_json::json!({ "v": 11, "type": "refresh-sessions" }));
     let third = last_heartbeat(&rig.messages()).rev.unwrap();
     assert!(third > second, "{third} > {second}");
     // A restarted bridge whose clock starts behind keeps counting up.
@@ -93,7 +93,7 @@ fn create_session_is_pending_then_ready_then_listed() {
     let mut rig = Rig::new();
     rig.host_up();
     rig.take();
-    rig.send(json!({"type":"create-session","agent":"alpha","cwd":"app","effort":"high","model":"m1"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","cwd":"app","effort":"high","model":"m1"}));
     let msgs = rig.messages();
     let BridgeToPhone::SessionPending(pending) = &msgs[0] else { panic!("{msgs:?}") };
     let (id, p) = rig.start_request();
@@ -122,7 +122,7 @@ fn a_session_on_an_agent_that_cannot_run_fails_at_once() {
     rig.host_up();
     for (agent, why) in [("nope", "no agent 'nope'"), ("gamma", "not configured")] {
         rig.take();
-        rig.send(json!({"type":"create-session","agent":agent}));
+        rig.send(json!({"v":11,"type":"create-session","agent":agent}));
         let msgs = rig.messages();
         assert!(matches!(&msgs[0], BridgeToPhone::SessionPending(_)));
         assert!(matches!(&msgs[1], BridgeToPhone::SessionFailed(f) if f.reason.contains(why)), "{msgs:?}");
@@ -134,7 +134,7 @@ fn a_session_on_an_agent_that_cannot_run_fails_at_once() {
 fn before_the_host_reports_a_session_fails_with_a_reason() {
     let mut rig = Rig::new();
     rig.take();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::SessionFailed(f) if f.reason.contains("not running"))));
 }
 
@@ -142,7 +142,7 @@ fn before_the_host_reports_a_session_fails_with_a_reason() {
 fn a_start_the_host_refuses_fails_the_session_with_its_reason() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (id, p) = rig.start_request();
     rig.take();
     rig.host_reply(&id, HostMessage::Error { message: "bad cwd".into() });
@@ -156,7 +156,7 @@ fn a_start_the_host_refuses_fails_the_session_with_its_reason() {
 fn an_agent_that_stops_before_ready_fails_the_session() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (id, p) = rig.start_request();
     rig.host_reply(&id, HostMessage::Ack);
     rig.take();
@@ -168,7 +168,7 @@ fn an_agent_that_stops_before_ready_fails_the_session() {
 fn an_unknown_mode_or_effort_falls_back_to_the_agent_default() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha","mode":"warp","effort":"max"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha","mode":"warp","effort":"max"}));
     let (_, p) = rig.start_request();
     assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
 }
@@ -177,11 +177,11 @@ fn an_unknown_mode_or_effort_falls_back_to_the_agent_default() {
 fn a_session_without_mode_or_effort_records_the_agent_defaults() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (_, p) = rig.start_request();
     assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
     // An agent with no default effort leaves it unset.
-    rig.send(json!({"type":"create-session","agent":"beta"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"beta"}));
     let (_, p) = rig.start_request();
     assert_eq!((p.mode.as_deref(), p.effort), (Some("ask"), None));
 }
@@ -190,7 +190,7 @@ fn a_session_without_mode_or_effort_records_the_agent_defaults() {
 fn a_session_started_on_the_default_model_is_listed_with_it() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (id, p) = rig.start_request();
     assert_eq!(p.model, None);
     rig.host_reply(&id, HostMessage::Ack);
@@ -237,7 +237,7 @@ fn input_is_written_acked_and_prompted_with_the_meta_request_once() {
     let mut rig = Rig::new();
     rig.host_up();
     let s = rig.ready_session("alpha");
-    rig.send(json!({"type":"input","sessionId":s,"text":"fix the build","inputId":"i1"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"fix the build","inputId":"i1"}));
     let first = prompt_text(&mut rig);
     assert!(first.starts_with("fix the build") && first.contains("emit-session-meta"));
     let msgs = rig.messages();
@@ -247,7 +247,7 @@ fn input_is_written_acked_and_prompted_with_the_meta_request_once() {
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::InputAck(a) if a.input_id == "i1")));
     assert_eq!(last_heartbeat(&msgs).sessions[0].title.as_deref(), Some("fix the build"));
 
-    rig.send(json!({"type":"input","sessionId":s,"text":"second"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"second"}));
     assert_eq!(prompt_text(&mut rig), "second");
 }
 
@@ -256,9 +256,9 @@ fn a_slash_command_is_never_given_the_meta_request() {
     let mut rig = Rig::new();
     rig.host_up();
     let s = rig.ready_session("alpha");
-    rig.send(json!({"type":"input","sessionId":s,"text":"/compact"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"/compact"}));
     assert_eq!(prompt_text(&mut rig), "/compact");
-    rig.send(json!({"type":"input","sessionId":s,"text":"hello"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"hello"}));
     assert!(prompt_text(&mut rig).contains("emit-session-meta"));
 }
 
@@ -267,7 +267,7 @@ fn an_echo_of_sent_input_is_dropped() {
     let mut rig = Rig::new();
     rig.host_up();
     let s = rig.ready_session("alpha");
-    rig.send(json!({"type":"input","sessionId":s,"text":"hi"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"hi"}));
     let sent = prompt_text(&mut rig);
     rig.take();
     let echo = protocol::common::OutputEntry::new("t", EntryBody::Text { role: Role::User, text: sent });
@@ -320,11 +320,11 @@ fn a_title_the_agent_gives_wins_over_the_meta_topic() {
 fn input_to_an_unknown_session_is_no_session_and_to_an_ended_one_error() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"input","sessionId":"ghost","text":"x"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":"ghost","text":"x"}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::InputFailed(f) if f.reason == InputFailedReason::NoSession)));
     let s = rig.ready_session("alpha");
     rig.host_event(&s, SessionEvent::Ended { error: None, resume_lost: false });
-    rig.send(json!({"type":"input","sessionId":s,"text":"x"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"x"}));
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::InputFailed(f) if f.reason == InputFailedReason::Error)));
     assert_eq!(last_heartbeat(&msgs).sessions.len(), 1, "a clean end keeps the session listed");
@@ -396,7 +396,7 @@ fn when_the_host_dies_sessions_restart_once_it_is_back_and_queued_input_follows(
     rig.host_up();
     let s = rig.ready_session("alpha");
     info_native(&mut rig, &s, "n1");
-    rig.send(json!({"type":"create-session","agent":"beta"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"beta"}));
     let (id, pending) = rig.start_request();
     rig.host_reply(&id, HostMessage::Ack);
     rig.take();
@@ -407,7 +407,7 @@ fn when_the_host_dies_sessions_restart_once_it_is_back_and_queued_input_follows(
     assert_eq!(notices(&msgs).iter().filter(|(k, _)| *k == NoticeKind::SessionRestart).count(), 1);
     assert!(rig.host_frames().is_empty());
 
-    rig.send(json!({"type":"input","sessionId":s,"text":"later","inputId":"i"}));
+    rig.send(json!({"v":11,"type":"input","sessionId":s,"text":"later","inputId":"i"}));
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::InputAck(_))));
     assert!(rig.host_frames().is_empty(), "queued while the host is down");
 
@@ -423,7 +423,7 @@ fn when_the_host_dies_sessions_restart_once_it_is_back_and_queued_input_follows(
 fn requests_in_flight_when_the_host_dies_are_answered() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"models-request","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"models-request","agent":"alpha"}));
     rig.take();
     rig.input(Input::HostDown { reason: "exit 1".into() });
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::Models(x) if x.error.as_deref().is_some_and(|e| e.contains("stopped")))));
@@ -433,7 +433,7 @@ fn requests_in_flight_when_the_host_dies_are_answered() {
 fn a_restarted_bridge_resumes_every_session_and_seqs_continue() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (id, p) = rig.start_request();
     rig.host_reply(&id, HostMessage::Ack);
     rig.host_event(&p.session_id, SessionEvent::Ready {});
@@ -471,7 +471,7 @@ fn close_session_ends_it_tombstones_it_and_forgets_its_transcript() {
     rig.host_up();
     let s = rig.ready_session("alpha");
     rig.say(&s, "x");
-    rig.send(json!({"type":"close-session","sessionId":s}));
+    rig.send(json!({"v":11,"type":"close-session","sessionId":s}));
     assert!(rig.has_host_request(|m| matches!(m, BridgeMessage::EndSession { .. })));
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::CloseSessionAck(a) if a.success)));
@@ -500,7 +500,7 @@ fn closing_a_session_deletes_its_conversation_after_ending_it() {
     let s = rig.ready_session("alpha");
     info_native(&mut rig, &s, "n1");
     rig.take();
-    rig.send(json!({"type":"close-session","sessionId":s}));
+    rig.send(json!({"v":11,"type":"close-session","sessionId":s}));
     let frames = rig.host_frames();
     let end = frames.iter().position(|f| matches!(f.message, BridgeMessage::EndSession { .. }));
     let delete = frames.iter().position(|f| matches!(f.message, BridgeMessage::DeleteConversation { .. }));
@@ -514,7 +514,7 @@ fn closing_a_session_with_no_conversation_deletes_nothing() {
     rig.host_up();
     let s = rig.ready_session("alpha");
     rig.take();
-    rig.send(json!({"type":"close-session","sessionId":s}));
+    rig.send(json!({"v":11,"type":"close-session","sessionId":s}));
     assert!(conversation_deletes(&rig.host_frames()).is_empty());
 }
 
@@ -529,11 +529,11 @@ fn a_conversation_delete_waits_for_the_host_and_survives_its_death() {
     rig.take();
 
     // In flight when the host dies: sent again once it is back.
-    rig.send(json!({"type":"close-session","sessionId":a}));
+    rig.send(json!({"v":11,"type":"close-session","sessionId":a}));
     assert_eq!(conversation_deletes(&rig.host_frames()).len(), 1);
     rig.input(Input::HostDown { reason: "exit 1".into() });
     // Asked while it is down: held until then.
-    rig.send(json!({"type":"close-session","sessionId":b}));
+    rig.send(json!({"v":11,"type":"close-session","sessionId":b}));
     assert!(conversation_deletes(&rig.host_frames()).is_empty());
 
     rig.host_up();
@@ -550,14 +550,14 @@ fn closing_sessions_in_a_row_ends_each_and_late_host_events_bring_none_back() {
         rig.say(s, "x");
     }
     // One more that the host has not answered yet: closed while starting.
-    rig.send(json!({"type":"create-session","agent":"alpha"}));
+    rig.send(json!({"v":11,"type":"create-session","agent":"alpha"}));
     let (start_id, starting) = rig.start_request();
     rig.take();
 
     let mut all = ready.clone();
     all.push(starting.session_id.clone());
     for s in &all {
-        rig.send(json!({"type":"close-session","sessionId":s}));
+        rig.send(json!({"v":11,"type":"close-session","sessionId":s}));
     }
 
     let ended: Vec<String> = rig
@@ -625,7 +625,7 @@ fn shutdown_publishes_every_session_offline_and_stops() {
         .expect("offline heartbeat");
     assert_eq!(hb.machine_offline, Some(true));
     assert_eq!((hb.sessions[0].id.as_str(), hb.sessions[0].state), (s.as_str(), Some(SessionState::Offline)));
-    rig.send(json!({"type":"refresh-sessions"}));
+    rig.send(json!({"v":11,"type":"refresh-sessions"}));
     assert!(rig.take().is_empty(), "a stopped engine does nothing");
 }
 

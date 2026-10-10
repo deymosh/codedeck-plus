@@ -19,7 +19,9 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
+use client_core::stores::machines::Incompatible;
 use client_core::stores::session_key::{Recipient, SessionKeyRing, REGRANT_EVERY_MS};
+use protocol::capabilities::PROTOCOL_VERSION;
 use nostr_transport::direct::{DirectConfig as LinkConfig, DirectHandlers, DirectLink};
 use nostr_transport::{PublishResult, PublishVerdict};
 use client_core::connection::{
@@ -1240,6 +1242,11 @@ impl Loop {
                 // out its effects. The raw `bridge_message` observer callback
                 // below is kept for hosts that want the decoded message too.
                 let machine = event.pubkey.clone();
+                let written = u64::try_from(event.created_at).unwrap_or(0);
+                // It reads: a version mismatch no newer than this is over.
+                if self.stores.machines.note_read(&machine, written) {
+                    self.persist_store(StoreId::Machines).await;
+                }
                 let now = self.clock.now_ms();
                 let visible = self.conn.visible;
                 let notify_enabled = self.stores.settings.data.notifications_enabled;
@@ -1295,6 +1302,22 @@ impl Loop {
                     kind: ActionFailedKind::DecodeFailed,
                 });
             }
+            Ingested::VersionMismatch { theirs } => {
+                let machine = &event.pubkey;
+                let written = u64::try_from(event.created_at).unwrap_or(0);
+                if self.stores.machines.note_unreadable(machine, theirs, written) {
+                    let app_is_older = Incompatible { theirs, at: written }.app_is_older();
+                    log::warn!(
+                        "{} speaks protocol {}, this app {PROTOCOL_VERSION}: update {}",
+                        machine.get(..8).unwrap_or(machine),
+                        theirs.map_or_else(|| "without a version".to_string(), |v| format!("v{v}")),
+                        if app_is_older { "the app" } else { "the bridge" },
+                    );
+                    // Persisting is how the machines view is told; the mark
+                    // itself is stripped from what is written.
+                    self.persist_store(StoreId::Machines).await;
+                }
+            }
             Ingested::Buffered | Ingested::UnknownMachine => {}
         }
     }
@@ -1320,7 +1343,6 @@ impl Loop {
         self.on_send(
             machine.to_string(),
             PhoneToBridge::SessionKey(SessionKeyMsg {
-                version: Default::default(),
                 session_key: self.keys.grant_for(machine),
             }),
             None,
@@ -1700,9 +1722,7 @@ impl Loop {
                 // goes stale — CDX-008).
                 self.on_send(
                     machine.clone(),
-                    PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {
-                        version: Default::default(),
-                    }),
+                    PhoneToBridge::RefreshSessions(protocol::commands::BareMsg {}),
                     None,
                 );
             }
@@ -1772,7 +1792,6 @@ impl Loop {
                         machine,
                         msg: PhoneToBridge::CloseSession(
                             protocol::commands::SessionIdMsg {
-                                version: Default::default(),
                                 session_id,
                             },
                         ),
@@ -1896,7 +1915,7 @@ impl Loop {
     fn flush_acks(&mut self) {
         abort(&mut self.ack_timer);
         for (machine, sync_id, ranges) in std::mem::take(&mut self.pending_acks) {
-            let ack = SyncAckMsg { version: Default::default(), sync_id, ranges };
+            let ack = SyncAckMsg { sync_id, ranges };
             self.publish_command(machine, PhoneToBridge::SyncAck(ack), None, None);
         }
     }
@@ -2072,7 +2091,7 @@ impl FileSendCtx {
         let SessionFileSend { machine, session_id, text, data, filename, mime_type } = send;
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
         use protocol::commands::{
-            UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg, VersionFields,
+            UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg,
         };
 
         /// Overall wall clock for the whole send, all stages together.
@@ -2106,7 +2125,6 @@ impl FileSendCtx {
             // --- Stage 2: the reference ---
             let hash = client_core::image_chunks::blossom_hash_from_url(&reference.url).to_string();
             let msg = PhoneToBridge::UploadFile(UploadFileMsg::Blossom(UploadFileBlossomMsg {
-                version: VersionFields::default(),
                 session_id,
                 hash,
                 url: reference.url,
@@ -2146,7 +2164,6 @@ impl FileSendCtx {
                 return;
             }
             let msg = PhoneToBridge::UploadFile(UploadFileMsg::Chunk(UploadFileChunkMsg {
-                version: VersionFields::default(),
                 session_id: session_id.clone(),
                 upload_id: upload_id.clone(),
                 filename: filename.clone(),

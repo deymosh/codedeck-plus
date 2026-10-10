@@ -16,7 +16,7 @@
  * what makes the round trip exact: option labels are what a selected answer
  * carries, and free text is what a typed one does.
  */
-import type { QuestionSpec } from '../../sdk/types';
+import type { QuestionReply, QuestionSpec } from '../../sdk/types';
 
 /** One question as the plugin pushes it. */
 export interface PushedQuestion {
@@ -155,25 +155,17 @@ export function toQuestionSpecs(questions: PushedQuestion[]): QuestionSpec[] {
 
 /**
  * The phone's answers as the harness takes them: one item per question, keyed
- * by the question's id. The phone answers with one string per question; a
- * multi-select arrives as its labels joined by ", ", and is split into them
- * only when every piece is one of the offered labels — anything else is what
- * the user typed, which the harness takes as custom text.
+ * by the question's id — the chosen labels, or what the user typed as custom
+ * text.
  */
 export function toAnswerItems(
   questions: PushedQuestion[],
-  answers: string[],
+  answers: QuestionReply[],
 ): Array<{ id: string; selected: string[]; custom?: string }> {
   return questions.map((question, index) => {
-    const raw = answers[index] ?? '';
-    if (raw === '') return { id: question.id, selected: [] };
-    if (question.multiSelect) {
-      const labels = new Set((question.options ?? []).map((option) => option.label));
-      const pieces = raw.split(', ');
-      if (pieces.length > 0 && pieces.every((piece) => labels.has(piece))) return { id: question.id, selected: pieces };
-      return { id: question.id, selected: [], custom: raw };
-    }
-    const labels = new Set((question.options ?? []).map((option) => option.label));
-    return labels.has(raw) ? { id: question.id, selected: [raw] } : { id: question.id, selected: [], custom: raw };
+    const reply = answers[index];
+    if (reply === undefined) return { id: question.id, selected: [] };
+    if (reply.type === 'selected') return { id: question.id, selected: reply.labels };
+    return reply.text === '' ? { id: question.id, selected: [] } : { id: question.id, selected: [], custom: reply.text };
   });
 }

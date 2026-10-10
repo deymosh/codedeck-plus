@@ -245,6 +245,13 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {},
         )
     },
+    "settings_machine_update_needed" to {
+        MachineSettingsContent(
+            machine = workstation.copy(updateNeeded = "bridge"), connectedRelays = setOf("wss://relay.example.org"),
+            credentialsStatus = null, providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {},
+            onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {},
+        )
+    },
     "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
     "plugins_browse" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}, startOnBrowse = true) },
     "mcp" to { McpContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
@@ -353,6 +360,7 @@ class DesignSnapshotTest {
     @Test fun new_session_install() = paparazzi.page("new_session_install")
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
+    @Test fun settings_machine_update_needed() = paparazzi.page("settings_machine_update_needed")
     @Test fun plugins() = paparazzi.page("plugins")
     @Test fun plugins_browse() = paparazzi.page("plugins_browse")
     @Test fun plugins_opencode() = paparazzi.page("plugins_opencode")
