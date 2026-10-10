@@ -177,6 +177,14 @@ export function contextTokens(message: AssistantMessage): number {
   return t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
 }
 
+/** A provider retry as the phone shows it: why, which attempt, and when
+ *  the next one goes. */
+export function retryText(status: { attempt: number; message: string; next: number }, now: number): string {
+  const wait = Math.max(0, Math.round((status.next - now) / 1000));
+  const why = status.message.trim() || 'the provider failed';
+  return `${why} — retrying (attempt ${status.attempt}${wait > 0 ? `, in ${wait} s` : ''})`;
+}
+
 /**
  * What the context window held at a session's last step, as far as OpenCode
  * counts it: the prompt (the part the provider had cached, and the rest)
@@ -399,6 +407,11 @@ export class OpenCodeSession implements DriverSession {
   private contextLimits?: Promise<Record<string, number>>;
   private contextWindow?: number;
   private contextPercentage?: number;
+  /** The turn was reported complete, and no new one has started since. */
+  private turnCompleted = false;
+  /** The error last reported in this turn: OpenCode reports a failed
+   *  turn's error both on its message and on the session. */
+  private lastError?: string;
   /** The last main-agent step's token counts: what the context held then. */
   private lastTokens?: AssistantMessage['tokens'];
   /** Names of the session's commands, from the last list fetched: a typed
@@ -463,21 +476,25 @@ export class OpenCodeSession implements DriverSession {
       // its own (the last model used, possibly one with no credential).
       // A resumed conversation already ran on its model; only a new start is
       // checked against what the providers offer.
-      const catalog = !params.model || !params.resume ? await this.catalog() : { models: [] };
+      const catalogRead: Promise<OpenCodeCatalog> = !params.model || !params.resume ? this.catalog() : Promise.resolve({ models: [] });
+      // Subscribe BEFORE resolving/creating the session so no event in the gap
+      // between "session exists" and "we started listening" is missed. The
+      // stream is directory-scoped (a server can host multiple projects); this
+      // session further filters by sessionID once it is known. Opened while
+      // the catalog is read, so a new session waits for one round trip, not
+      // two; a refused model closes it again (the abort in `finish`).
+      const [catalog, { stream }] = await Promise.all([
+        catalogRead,
+        client.event.subscribe({ directory: this.cwd }, { signal: this.abortController.signal }),
+      ]);
       if (params.model && !params.resume) {
         const refused = unsupportedModelReason(params.model, catalog.models);
         if (refused) throw new Error(refused);
       }
+      // The context meter's window sizes come from the same catalog.
+      if (catalog.models.length > 0) this.contextLimits ??= Promise.resolve(catalog.contextLimits ?? {});
       const model = params.model ?? catalog.defaultModel;
       if (!params.model) this.model = splitModelId(model);
-      // Subscribe BEFORE resolving/creating the session so no event in the gap
-      // between "session exists" and "we started listening" is missed. The
-      // stream is directory-scoped (a server can host multiple projects); this
-      // session further filters by sessionID once it is known.
-      const { stream } = await client.event.subscribe(
-        { directory: this.cwd },
-        { signal: this.abortController.signal },
-      );
       const { session, resumeLost } = await this.resolveSession(client, params);
       // The "memory was lost" notice goes ahead of "session started".
       if (resumeLost) this.deliver({ type: 'resume-lost' });
@@ -551,9 +568,7 @@ export class OpenCodeSession implements DriverSession {
             continue;
           }
           this.roles.set(info.id, info.role);
-          if (info.role === 'assistant' && info.error) {
-            this.deliver({ type: 'error', content: formatOpenCodeError(info.error) });
-          }
+          if (info.role === 'assistant' && info.error) this.reportError(formatOpenCodeError(info.error));
           if (info.role === 'assistant') this.reportContext(info);
           break;
         }
@@ -579,7 +594,10 @@ export class OpenCodeSession implements DriverSession {
             this.childEnded(event.properties.sessionID, 'completed');
             continue;
           }
-          this.deliver({ type: 'idle' });
+          // OpenCode can say a turn is over more than once (after a
+          // failed one, say): the turn is complete once.
+          if (!this.turnCompleted) this.deliver({ type: 'idle' });
+          this.turnCompleted = true;
           if (!this.ended) this.ctx.emit({ type: 'turn', state: 'idle' });
           break;
         }
@@ -590,9 +608,20 @@ export class OpenCodeSession implements DriverSession {
             if (event.properties.status.type === 'idle') this.childEnded(event.properties.sessionID, 'completed');
             continue;
           }
-          const status = event.properties.status.type;
-          if (status !== 'busy' && status !== 'idle') break;
-          if (!this.ended) this.ctx.emit({ type: 'turn', state: status === 'busy' ? 'running' : 'idle' });
+          const status = event.properties.status;
+          if (status.type === 'retry') {
+            // The provider failed and OpenCode tries again, waiting longer
+            // each time: said on the phone, rather than a turn that only
+            // seems slow until the last attempt's error.
+            this.deliver({ type: 'status', text: retryText(status, Date.now()) });
+            break;
+          }
+          if (status.type !== 'busy' && status.type !== 'idle') break;
+          if (status.type === 'busy') {
+            this.turnCompleted = false;
+            this.lastError = undefined;
+          }
+          if (!this.ended) this.ctx.emit({ type: 'turn', state: status.type === 'busy' ? 'running' : 'idle' });
           break;
         }
         case 'session.updated': {
@@ -610,9 +639,7 @@ export class OpenCodeSession implements DriverSession {
             this.childEnded(event.properties.sessionID, 'failed');
             continue;
           }
-          if (event.properties.error) {
-            this.deliver({ type: 'error', content: formatOpenCodeError(event.properties.error) });
-          }
+          if (event.properties.error) this.reportError(formatOpenCodeError(event.properties.error));
           break;
         }
         case 'permission.asked': {
@@ -667,6 +694,12 @@ export class OpenCodeSession implements DriverSession {
         ...(changedCw ? { contextWindow: window } : {}),
       });
     });
+  }
+
+  private reportError(content: string): void {
+    if (content === this.lastError) return;
+    this.lastError = content;
+    this.deliver({ type: 'error', content });
   }
 
   private pushPart(part: Part, child?: ChildSession): void {
@@ -918,6 +951,8 @@ export class OpenCodeSession implements DriverSession {
    */
   prompt(text: string): void {
     const command = parseSlashCommand(text);
+    this.turnCompleted = false;
+    this.lastError = undefined;
     this.ready
       .then(async ({ client, session }) => {
         const listed = command ? await this.knownCommands(client) : new Set<string>();

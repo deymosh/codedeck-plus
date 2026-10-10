@@ -127,6 +127,24 @@ describe('OpenCode session lifecycle', () => {
     expect(ctx.entries().some((e) => e.entryType === 'turn_complete')).toBe(true);
   });
 
+  it('a failed turn reads once: one error, one turn complete, and every retry before it', async () => {
+    const failed = { name: 'APIError', data: { message: 'Model is unavailable.' } };
+    const ctx = start(clientWith([
+      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'busy' } } },
+      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'retry', attempt: 1, message: 'Model is unavailable.', next: Date.now() + 2_000 } } },
+      { type: 'message.updated', properties: { info: { id: 'msg_1', sessionID: 'ses_1', role: 'assistant', error: failed, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } } },
+      { type: 'session.error', properties: { sessionID: 'ses_1', error: failed } },
+      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'idle' } } },
+      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    ]));
+    await ctx.ended();
+    const kinds = ctx.entries().map((e) => e.entryType);
+    expect(kinds.filter((t) => t === 'error')).toHaveLength(1);
+    expect(kinds.filter((t) => t === 'turn_complete')).toHaveLength(1);
+    expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'status', text: expect.stringMatching(/^Model is unavailable\. — retrying \(attempt 1, in [12] s\)$/) }));
+  });
+
   it('a busy status starts a turn and idle ends it', async () => {
     const ctx = start(clientWith([
       { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'busy' } } },
