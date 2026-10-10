@@ -434,6 +434,63 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
 }
 
 #[tokio::test]
+async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let spy = Rc::new(Spy::default());
+            let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+            core.set_machines(vec![machine.pubkey_hex.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+            // Paired, so the machines store knows it.
+            core.dispatch(Intent::BeginManualPairing {
+                npub: machine.npub.clone(),
+                token: "tok".into(),
+                relays: mock.url.clone(),
+                label: "laptop".into(),
+            })
+            .await;
+            let sub = drain_traffic_resubscribe(&mut mock).await;
+            let ack = BridgeToPhone::PairAck(protocol::events::PairAckMsg {
+                machine: "laptop".into(),
+                ok: true,
+                reason: None,
+                relays: None,
+                host: None,
+            });
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &ack);
+            settle().await;
+            let sub = drain_traffic_resubscribe(&mut mock).await;
+
+            let push_raw = |plaintext: &str| {
+                let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone.pubkey_hex, plaintext).unwrap();
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
+                    .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
+                    .unwrap();
+                mock.push(format!(r#"["EVENT","{sub}",{}]"#, <nostr::Event as nostr::JsonUtil>::as_json(&event)));
+            };
+            let mark = || async {
+                core.machines_view().await.machines[&machine.pubkey_hex].incompatible.map(|i| i.theirs)
+            };
+            assert_eq!(mark().await, None);
+
+            push_raw(r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
+            settle().await;
+            assert_eq!(mark().await, Some(Some(12)));
+            let delivered = spy.messages.lock().unwrap().len();
+
+            push_raw(r#"{"v":11,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
+            settle().await;
+            assert_eq!(mark().await, None);
+            assert_eq!(spy.messages.lock().unwrap().len(), delivered + 1);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
     LocalSet::new()
         .run_until(async {

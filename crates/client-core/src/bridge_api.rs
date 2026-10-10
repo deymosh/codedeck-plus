@@ -26,7 +26,7 @@ use nostr::{EventBuilder, Kind, Tag, Timestamp, UnsignedEvent};
 use protocol::chunking::{AssemblerResult, ChunkAssembler};
 use protocol::crypto::{decrypt_from, encrypt_to, CryptoError, Keypair};
 use protocol::nostr_event::SignedEvent;
-use protocol::codec::encode_phone_to_bridge;
+use protocol::codec::{encode_phone_to_bridge, DecodeError};
 use protocol::commands::PhoneToBridge;
 use protocol::events::BridgeToPhone;
 use protocol::kinds::{COMMAND_EXPIRY_SECONDS, COMMAND_KIND};
@@ -173,6 +173,9 @@ pub enum Ingested {
     Buffered,
     /// The plaintext (whole or reassembled) is not a valid bridge→phone message.
     DecodeFailed,
+    /// The message is of another protocol version (`theirs`; `None` when it
+    /// carries none): the bridge and this app must be updated to match.
+    VersionMismatch { theirs: Option<u64> },
     /// A decoded message for the runtime to dispatch to the handlers.
     Message(Box<BridgeToPhone>),
 }
@@ -255,7 +258,10 @@ impl BridgeApi {
             Err(error) => {
                 self.record_invalid(event, InvalidStage::Decode, error.to_string());
                 self.diagnostics.decode_failures += 1;
-                Ingested::DecodeFailed
+                match error {
+                    DecodeError::Version(theirs) => Ingested::VersionMismatch { theirs },
+                    _ => Ingested::DecodeFailed,
+                }
             }
         }
     }
@@ -558,6 +564,17 @@ mod tests {
         assert_eq!(api.diagnostics().decrypt_failures, 0);
     }
 
+    #[test]
+    fn a_message_of_another_version_says_which() {
+        let mut api = BridgeApi::new();
+        let (id, mac) = (phone(), machine());
+        let newer = event_content(r#"{"v":12,"type":"warp"}"#, &mac, &id);
+        assert_eq!(deliver(&mut api, &id, &mac, &newer), Ingested::VersionMismatch { theirs: Some(12) });
+        let unversioned = event_content(r#"{"type":"input-ack","sessionId":"s","inputId":"i"}"#, &mac, &id);
+        assert_eq!(deliver(&mut api, &id, &mac, &unversioned), Ingested::VersionMismatch { theirs: None });
+        assert_eq!(api.diagnostics().decode_failures, 2);
+    }
+
     // --- inbound: chunk reassembly (ported from bridgeApiChunk.test.ts) ---
 
     fn cid_factory() -> impl FnMut() -> String {
@@ -686,8 +703,9 @@ mod tests {
     fn an_invalid_chunk_envelope_is_recorded_and_dropped() {
         let mut api = BridgeApi::new();
         let (id, mac) = (phone(), machine());
-        let bad = json!({ "type": "chunk", "cid": "x", "i": 9, "n": 3, "part": "p" }).to_string();
-        let content = event_content(&bad, &mac, &id);
+        // Written out: the envelope is recognised by `type` coming first.
+        let bad = r#"{"type":"chunk","cid":"x","i":9,"n":3,"part":"p"}"#;
+        let content = event_content(bad, &mac, &id);
         assert_eq!(deliver(&mut api, &id, &mac, &content), Ingested::DecodeFailed);
         assert_eq!(api.diagnostics().decode_failures, 1);
     }

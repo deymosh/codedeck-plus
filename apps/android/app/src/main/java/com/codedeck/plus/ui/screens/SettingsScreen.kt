@@ -287,10 +287,15 @@ internal fun SettingsHub(
         Group(title = "Machines", footer = "Relays, agents and defaults are kept per machine.") {
             machines.forEach { machine ->
                 key(machine.pubkeyHex) {
+                    val tint = when (machinePresence(machine, now)) {
+                        MachinePresence.Online -> Tokens.PresenceLive
+                        MachinePresence.Mismatched -> Tokens.Warn
+                        MachinePresence.Offline -> Tokens.TextMuted
+                    }
                     NavRow(
                         title = machineLabel(machine.name),
                         subtitle = machineStatusText(machine, now) + sessionCount(machine),
-                        icon = { RowIcon(DeckIcons.Machine, tint = if (machinePresence(machine, now) == MachinePresence.Online) Tokens.PresenceLive else Tokens.TextMuted) },
+                        icon = { RowIcon(DeckIcons.Machine, tint = tint) },
                         onClick = { onOpen(SettingsPage.Machine(machine.pubkeyHex)) },
                     )
                     Divider(inset = 68.dp)

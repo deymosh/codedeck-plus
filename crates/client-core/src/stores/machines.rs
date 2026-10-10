@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use protocol::capabilities::BridgeHostKind;
+use protocol::capabilities::{BridgeHostKind, PROTOCOL_VERSION};
 use protocol::common::{
     AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
@@ -329,6 +329,31 @@ pub struct MachineView {
     /// Per agent id, what a new session on this machine starts with.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_defaults: BTreeMap<String, AgentDefaults>,
+    /// The bridge's newest message was refused for its protocol version:
+    /// nothing it sends can be read until one side is updated. Cleared by a
+    /// message as new that decodes; never persisted, like `plugins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incompatible: Option<Incompatible>,
+}
+
+/// A bridge speaking another protocol version than this app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Incompatible {
+    /// The version its messages carry; `None` when they carry none (a bridge
+    /// from before messages carried one).
+    #[specta(type = Option<specta_typescript::Number>)]
+    pub theirs: Option<u64>,
+    /// When the refused message was written (its event's `created_at`).
+    #[specta(type = specta_typescript::Number)]
+    pub at: u64,
+}
+
+impl Incompatible {
+    /// The bridge is the newer side, so it is this app that needs updating.
+    pub fn app_is_older(&self) -> bool {
+        self.theirs.is_some_and(|v| v > u64::from(PROTOCOL_VERSION))
+    }
 }
 
 /// The mode / effort / model a new session of one agent starts with, as that
@@ -489,6 +514,7 @@ impl MachineView {
             relays: Vec::new(),
             default_agent: None,
             agent_defaults: BTreeMap::new(),
+            incompatible: None,
         }
     }
 }
@@ -509,6 +535,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
             m.plugins.clear();
             m.mcp.clear();
             m.agent_actions.clear();
+            m.incompatible = None;
             for s in m.sessions.values_mut() {
                 s.commands = None;
                 s.mcp = None;
@@ -572,6 +599,9 @@ pub struct MachinesState {
     pub merge_options: MergeOptions,
     /// The model lists and provider profiles answered on this connection.
     pub fetches: Fetches,
+    /// Per machine, when the newest message read from it was written: a
+    /// relay replaying something older says nothing about it now.
+    pub read_at: BTreeMap<String, u64>,
 }
 
 impl MachinesState {
@@ -581,6 +611,7 @@ impl MachinesState {
             dismissed_sessions: BTreeMap::new(),
             merge_options,
             fetches: Fetches::default(),
+            read_at: BTreeMap::new(),
         }
     }
 
@@ -654,6 +685,36 @@ impl MachinesState {
     }
 
     /// The agent `machine`'s new sessions start on; `None` clears it.
+    /// A message `machine` wrote at `at` was read. True when that cleared a
+    /// version mismatch no newer than it.
+    pub fn note_read(&mut self, machine_pubkey: &str, at: u64) -> bool {
+        let Some(m) = self.machines.get_mut(machine_pubkey) else { return false };
+        let read = self.read_at.entry(machine_pubkey.to_string()).or_default();
+        *read = (*read).max(at);
+        match m.incompatible {
+            Some(i) if i.at <= at => {
+                m.incompatible = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A message `machine` wrote at `at` was refused for its version
+    /// (`theirs`). Only one newer than everything read from it counts. True
+    /// when that changed which side needs updating.
+    pub fn note_unreadable(&mut self, machine_pubkey: &str, theirs: Option<u64>, at: u64) -> bool {
+        let Some(m) = self.machines.get_mut(machine_pubkey) else { return false };
+        if self.read_at.get(machine_pubkey).is_some_and(|read| at <= *read) {
+            return false;
+        }
+        let changed = m.incompatible.is_none_or(|i| i.theirs != theirs);
+        if m.incompatible.is_none_or(|i| i.at <= at) {
+            m.incompatible = Some(Incompatible { theirs, at });
+        }
+        changed
+    }
+
     pub fn set_default_agent(&mut self, machine_pubkey: &str, agent: Option<String>) -> bool {
         let agent = agent.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
         self.with_machine(machine_pubkey, |m| m.default_agent = agent)
@@ -1147,6 +1208,32 @@ mod tests {
     }
 
     const NONE: fn() -> serde_json::Value = || json!({});
+
+    #[test]
+    fn an_incompatible_bridge_is_marked_until_it_is_read_and_never_persisted() {
+        let mut st = MachinesState::default();
+        st.machines.insert("pk".into(), MachineView::new("pk".into(), "m".into()));
+        let next = u64::from(PROTOCOL_VERSION) + 1;
+        assert!(Incompatible { theirs: Some(next), at: 0 }.app_is_older());
+        assert!(!Incompatible { theirs: None, at: 0 }.app_is_older());
+        assert!(!Incompatible { theirs: Some(10), at: 0 }.app_is_older());
+        let mark = |st: &MachinesState| st.machine("pk").unwrap().incompatible.map(|i| i.theirs);
+
+        assert!(!st.note_read("pk", 100));
+        // A relay replaying a message from before the last one read.
+        assert!(!st.note_unreadable("pk", None, 90));
+        assert_eq!(mark(&st), None);
+
+        assert!(st.note_unreadable("pk", Some(next), 110));
+        assert!(!st.note_unreadable("pk", Some(next), 120), "no change, nothing to tell");
+        assert_eq!(mark(&st), Some(Some(next)));
+        assert!(!serialize_machines(&st.machines).contains("incompatible"));
+        // An older readable message does not take the mark away; a newer one does.
+        assert!(!st.note_read("pk", 115));
+        assert!(st.note_read("pk", 120));
+        assert_eq!(mark(&st), None);
+        assert!(!st.note_unreadable("nobody", None, 200));
+    }
 
     #[test]
     fn upserts_listed_sessions_as_live() {

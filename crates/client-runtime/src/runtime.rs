@@ -19,7 +19,9 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
+use client_core::stores::machines::Incompatible;
 use client_core::stores::session_key::{Recipient, SessionKeyRing, REGRANT_EVERY_MS};
+use protocol::capabilities::PROTOCOL_VERSION;
 use nostr_transport::direct::{DirectConfig as LinkConfig, DirectHandlers, DirectLink};
 use nostr_transport::{PublishResult, PublishVerdict};
 use client_core::connection::{
@@ -1240,6 +1242,11 @@ impl Loop {
                 // out its effects. The raw `bridge_message` observer callback
                 // below is kept for hosts that want the decoded message too.
                 let machine = event.pubkey.clone();
+                let written = u64::try_from(event.created_at).unwrap_or(0);
+                // It reads: a version mismatch no newer than this is over.
+                if self.stores.machines.note_read(&machine, written) {
+                    self.persist_store(StoreId::Machines).await;
+                }
                 let now = self.clock.now_ms();
                 let visible = self.conn.visible;
                 let notify_enabled = self.stores.settings.data.notifications_enabled;
@@ -1294,6 +1301,22 @@ impl Loop {
                 self.emit(CoreEvent::ActionFailed {
                     kind: ActionFailedKind::DecodeFailed,
                 });
+            }
+            Ingested::VersionMismatch { theirs } => {
+                let machine = &event.pubkey;
+                let written = u64::try_from(event.created_at).unwrap_or(0);
+                if self.stores.machines.note_unreadable(machine, theirs, written) {
+                    let app_is_older = Incompatible { theirs, at: written }.app_is_older();
+                    log::warn!(
+                        "{} speaks protocol {}, this app {PROTOCOL_VERSION}: update {}",
+                        machine.get(..8).unwrap_or(machine),
+                        theirs.map_or_else(|| "without a version".to_string(), |v| format!("v{v}")),
+                        if app_is_older { "the app" } else { "the bridge" },
+                    );
+                    // Persisting is how the machines view is told; the mark
+                    // itself is stripped from what is written.
+                    self.persist_store(StoreId::Machines).await;
+                }
             }
             Ingested::Buffered | Ingested::UnknownMachine => {}
         }
