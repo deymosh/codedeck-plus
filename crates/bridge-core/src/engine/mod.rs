@@ -148,10 +148,10 @@ pub struct Engine {
     /// set-credentials waiting on checks: ticket → the ack to send.
     credential_acks: BTreeMap<u64, settings::CredentialAck>,
     /// set-provider-profile waiting on the token check: ticket → (phone, profile id).
-    profile_acks: BTreeMap<u64, (String, String)>,
+    profile_acks: BTreeMap<u64, (Addressee, String)>,
     /// set-provider-profile waiting on the provider's model list: ticket →
     /// (phone, the profile to store once its models are in).
-    model_fetches: BTreeMap<u64, (String, ProviderProfile)>,
+    model_fetches: BTreeMap<u64, (Addressee, ProviderProfile)>,
     /// set-provider-profile waiting on its agent taking the new list:
     /// ticket → the save, undone if the agent leaves the profile out.
     profile_saves: BTreeMap<u64, settings::ProfileSave>,
@@ -171,7 +171,8 @@ pub struct Engine {
     /// handled (back from away, or asking), when no heartbeat for everyone
     /// goes out anyway.
     list_wanted: Vec<Addressee>,
-    /// The client whose command is being handled: a reply goes to it alone.
+    /// The client a reply goes to alone: whose command is being handled,
+    /// or whose request a host answer completes. Cleared after each input.
     requester: Option<Addressee>,
     /// The last session list's `rev`.
     list_rev: u64,
@@ -256,6 +257,7 @@ impl Engine {
             Input::WorkspaceChanged => self.list_dirty = true,
             Input::Shutdown => self.shutdown(),
         }
+        self.requester = None;
         self.flush();
         let mut effects = std::mem::take(&mut self.out.effects);
         self.address_publishes(&mut effects);
@@ -476,13 +478,19 @@ impl Engine {
         self.out.publish(to, message);
     }
 
-    /// Publish to `phone`: to the client whose command is being handled, if
-    /// it is one of `phone`'s (a reply), else to every present client.
-    fn publish_to(&mut self, phone: &str, message: BridgeToPhone) {
-        let to = match &self.requester {
+    /// Who a reply to `phone` goes to: the client being answered, if it is
+    /// one of `phone`'s, else every present client of `phone`. A request
+    /// answered later keeps this, so its answer goes to the same client.
+    fn reply_to(&self, phone: &str) -> Addressee {
+        match &self.requester {
             Some(requester) if requester.phone == phone => requester.clone(),
             _ => Addressee::identity(phone),
-        };
+        }
+    }
+
+    /// Publish to `phone`: see [`Self::reply_to`].
+    fn publish_to(&mut self, phone: &str, message: BridgeToPhone) {
+        let to = self.reply_to(phone);
         self.out.publish_addressed(vec![to], message);
     }
 

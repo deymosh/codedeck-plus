@@ -13,9 +13,11 @@
 //!   each fragment its own `d` ([`fragment_d`]).
 //!
 //! A tag is a hash of the bridge and the recipient key, so it is the same on
-//! both ends and tells a relay nothing it does not already see: tags for
-//! different bridges, or for a client's key before and after it rotates,
-//! cannot be told to belong together.
+//! both ends, and tags for different bridges, or for a client's key before
+//! and after it rotates, cannot be told to belong together. What a relay
+//! does learn is what copies inherently show: how many clients of an
+//! identity a bridge is serving, and while each heartbeat is renewed, when
+//! each is listening.
 
 use nostr::hashes::{sha256, Hash};
 

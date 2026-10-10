@@ -88,7 +88,7 @@ impl Engine {
                 self.requester = Some(client);
                 match msg {
                     PhoneToBridge::SessionKey(m) => {
-                        self.grant_session_key(&event.pubkey, m.session_key);
+                        self.grant_session_key(&event.pubkey, m.session_key, &key);
                     }
                     PhoneToBridge::Presence(_) => {}
                     msg => self.dispatch(msg, &event.pubkey),

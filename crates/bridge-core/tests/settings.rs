@@ -606,3 +606,29 @@ fn retention_removes_orphaned_transcripts_and_caps_live_ones_without_renumbering
     rig.say("live", "next");
     assert_eq!(outputs(&rig.messages())[0].0, 11, "seqs continue after pruning");
 }
+
+#[test]
+fn an_ack_that_waits_on_a_check_still_goes_to_the_client_that_asked() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let (asking, other) = (generate_keypair(), generate_keypair());
+    let bridge = rig.bridge.pubkey_hex.clone();
+    for key in [&asking, &other] {
+        rig.send(json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":key.pubkey_hex,"bridgePubkeyHex":bridge,"expiresAt":T0 / 1000 + 3600}}));
+    }
+    rig.take();
+    let phone = rig.phone.clone();
+    rig.phone_event_via_key(&phone, &asking, json!({"v":12,"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk"}}), Via::Commands);
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::CheckCredential { .. }));
+    rig.take();
+    rig.host_reply(&id, HostMessage::CredentialChecked { valid: Some(true) });
+    let acks: Vec<Vec<String>> = rig
+        .take()
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Publish { to, message: BridgeToPhone::CredentialsAck(_) } => Some(to.iter().map(|a| a.key.clone()).collect()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(acks, vec![vec![asking.pubkey_hex.clone()]]);
+}

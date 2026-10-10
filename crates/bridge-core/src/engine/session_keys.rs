@@ -18,7 +18,8 @@
 //! - everything else (the heartbeat, live output, cards, session changes),
 //!   to each client present now: one whose lease, renewed by any command
 //!   and by `presence`, has not run out. A client away gets nothing; when
-//!   it is back it says so, and gets a heartbeat of its own;
+//!   it is back it says so, and gets a heartbeat of its own. A restarted
+//!   bridge counts every client present until a running one has renewed;
 //! - to the identity itself while it has no client at all.
 //!
 //! Rules:
@@ -27,16 +28,20 @@
 //!   so a grant seen by one bridge cannot be replayed to another;
 //! - a grant lapses at its `expiresAt`, at most
 //!   [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead, and its client with it;
-//! - a grant naming the key it `replaces` moves that client to the new key;
-//!   the old one is still read (commands the client sent while rotating)
-//!   until it lapses, but no longer written to. Any other grant of a new
-//!   key adds a client, up to [`MAX_CLIENTS`]: past that, the client whose
-//!   key lapses soonest is dropped;
+//! - a grant naming the key it `replaces`, sent encrypted with that very
+//!   key, moves that client to the new key: only the client holding a key
+//!   can retire it, so no other client of the identity can redirect its
+//!   copies. The old key is still read (commands the client sent while
+//!   rotating) until it lapses, but no longer written to. Any other grant of
+//!   a new key adds a client, up to [`MAX_CLIENTS`]: past that, the client
+//!   heard from least recently is dropped;
+//! - granting a key the bridge holds again may move its lapse later, never
+//!   earlier;
 //! - a key the bridge already knows for anyone (a paired identity, another
 //!   identity's client, the bridge's own) or that a client already rotated
 //!   away from is refused: a session key belongs to one client.
 
-use protocol::commands::{SessionKeyGrant, PRESENCE_LEASE_SECS, SESSION_KEY_MAX_LIFETIME_SECS};
+use protocol::commands::{SessionKeyGrant, PRESENCE_LEASE_SECS, PRESENCE_RENEW_SECS, SESSION_KEY_MAX_LIFETIME_SECS};
 use protocol::crypto::npub_from_hex;
 
 use super::Engine;
@@ -58,8 +63,10 @@ impl Engine {
         self.now() / 1000
     }
 
-    /// Accept `grant` for the paired `identity`. Returns whether it took.
-    pub(super) fn grant_session_key(&mut self, identity: &str, grant: SessionKeyGrant) -> bool {
+    /// Accept `grant` for the paired `identity`, sent encrypted with
+    /// `encrypted_with` (a session key, or the identity). Returns whether it
+    /// took.
+    pub(super) fn grant_session_key(&mut self, identity: &str, grant: SessionKeyGrant, encrypted_with: &str) -> bool {
         let now = self.now_secs();
         let refusal = if npub_from_hex(&grant.pubkey_hex).is_err() {
             Some("not a valid public key")
@@ -86,10 +93,12 @@ impl Engine {
         let rotated = grant
             .replaces
             .as_deref()
+            .filter(|old| *old == encrypted_with)
             .and_then(|old| phone.clients.iter().position(|c| c.key.pubkey_hex == old));
         if let Some(i) = renewed {
-            phone.clients[i].key = grant;
-            phone.clients[i].present_until_ms = present_until_ms;
+            let client = &mut phone.clients[i];
+            client.key.expires_at = client.key.expires_at.max(grant.expires_at);
+            client.present_until_ms = present_until_ms;
             log::info!("[Engine] Session key {key}... renewed for {}...", short(identity));
         } else if let Some(i) = rotated {
             let client = &mut phone.clients[i];
@@ -98,14 +107,14 @@ impl Engine {
             log::info!("[Engine] A client of {}... rotated to session key {key}...", short(identity));
         } else {
             if phone.clients.len() >= MAX_CLIENTS {
-                let soonest = phone
+                let quietest = phone
                     .clients
                     .iter()
                     .enumerate()
-                    .min_by_key(|(_, c)| c.key.expires_at)
+                    .min_by_key(|(_, c)| (c.present_until_ms, c.key.expires_at))
                     .map(|(i, _)| i)
                     .unwrap_or(0);
-                let dropped = phone.clients.remove(soonest);
+                let dropped = phone.clients.remove(quietest);
                 log::info!("[Engine] {}... has too many clients; dropping {}...", short(identity), short(&dropped.key.pubkey_hex));
             }
             phone.clients.push(PhoneClient { key: grant, previous: None, present_until_ms });
@@ -187,10 +196,12 @@ impl Engine {
         !away && !was_present
     }
 
-    /// Every client counts as present for a lease: what a restarted bridge
-    /// assumes, so no running client misses what happens before it renews.
+    /// Every client counts as present until a running one has renewed: what
+    /// a restarted bridge assumes, so none misses what happens meanwhile. A
+    /// running client is heard from at least every [`PRESENCE_RENEW_SECS`],
+    /// so one silent past that and a minute is not running.
     pub(super) fn presume_present(&mut self) {
-        let until = self.now() + PRESENCE_LEASE_SECS * 1000;
+        let until = self.now() + (PRESENCE_RENEW_SECS + 60) * 1000;
         for client in self.paired.iter_mut().flat_map(|p| p.clients.iter_mut()) {
             client.present_until_ms = until;
         }

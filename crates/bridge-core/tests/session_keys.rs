@@ -188,9 +188,12 @@ fn every_client_of_an_identity_gets_its_own_copy() {
     // What is for everyone goes to each.
     rig.advance(HEARTBEAT_MS);
     assert_eq!(heartbeats(&rig.take()), vec![all.clone()]);
-    // Granting the same key again renews it: still three clients.
+    // Granting the same key again renews it: still three clients, and its
+    // lapse can move later, never earlier.
     grant(&mut rig, &keys[1], NOW_SECS + 2 * DAY);
     assert_eq!(client_keys(&rig).len(), 3);
+    grant(&mut rig, &keys[1], NOW_SECS + 60);
+    assert_eq!(rig.engine.paired_phones()[0].clients[1].key.expires_at, NOW_SECS + 2 * DAY);
 }
 
 #[test]
@@ -201,9 +204,11 @@ fn a_rotation_moves_its_client_to_the_new_key() {
     grant(&mut rig, &phone_b, NOW_SECS + DAY);
     rig.take();
     let bridge = rig.bridge.pubkey_hex.clone();
-    rig.send(rotate_msg(&bridge, &a_next.pubkey_hex, &phone_a.pubkey_hex, NOW_SECS + 2 * DAY));
-    let sent = heartbeats(&rig.take());
+    // Sent under the key it retires, as a client rotating does.
     let phone = rig.phone.pubkey_hex.clone();
+    let rig_phone = rig.phone.clone();
+    rig.phone_event_via_key(&rig_phone, &phone_a, rotate_msg(&bridge, &a_next.pubkey_hex, &phone_a.pubkey_hex, NOW_SECS + 2 * DAY), Via::Commands);
+    let sent = heartbeats(&rig.take());
     assert_eq!(sent, vec![vec![(phone.clone(), a_next.pubkey_hex.clone()), (phone.clone(), phone_b.pubkey_hex.clone())]]);
     // A command still under the old key is read while the client rotates.
     refresh_via(&mut rig, &phone_a);
@@ -220,6 +225,25 @@ fn a_rotation_moves_its_client_to_the_new_key() {
 }
 
 #[test]
+fn only_the_client_holding_a_key_can_retire_it() {
+    let mut rig = Rig::new();
+    let (victim, other, intruder) = (generate_keypair(), generate_keypair(), generate_keypair());
+    grant(&mut rig, &victim, NOW_SECS + DAY);
+    grant(&mut rig, &other, NOW_SECS + DAY);
+    let bridge = rig.bridge.pubkey_hex.clone();
+    let phone = rig.phone.clone();
+    // Another client of the identity names the victim's key, under its own
+    // key and under the identity: neither moves the victim's copies.
+    let takeover = rotate_msg(&bridge, &intruder.pubkey_hex, &victim.pubkey_hex, NOW_SECS + DAY);
+    rig.phone_event_via_key(&phone, &other, takeover.clone(), Via::Commands);
+    rig.send(takeover);
+    rig.take();
+    let keys = client_keys(&rig);
+    assert!(keys.contains(&victim.pubkey_hex) && keys.contains(&intruder.pubkey_hex), "{keys:?}");
+    assert!(rig.engine.paired_phones()[0].clients.iter().all(|c| c.previous.is_none()));
+}
+
+#[test]
 fn a_rotation_from_an_unknown_key_adds_a_client() {
     let mut rig = Rig::new();
     let (known, fresh) = (generate_keypair(), generate_keypair());
@@ -231,13 +255,15 @@ fn a_rotation_from_an_unknown_key_adds_a_client() {
 }
 
 #[test]
-fn past_the_most_clients_the_one_lapsing_soonest_goes() {
+fn past_the_most_clients_the_one_heard_from_least_recently_goes() {
     let mut rig = Rig::new();
     let keys: Vec<Keypair> = (0..=MAX_CLIENTS).map(|_| generate_keypair()).collect();
     for (i, k) in keys.iter().enumerate() {
-        // The second client's key lapses soonest.
-        let expires = if i == 1 { NOW_SECS + DAY } else { NOW_SECS + 10 * DAY + i as u64 };
-        grant(&mut rig, k, expires);
+        grant(&mut rig, k, NOW_SECS + 10 * DAY + i as u64);
+        // The second client went away before the last one came.
+        if i == 1 {
+            presence(&mut rig, k, true);
+        }
     }
     let kept = client_keys(&rig);
     assert_eq!(kept.len(), MAX_CLIENTS);

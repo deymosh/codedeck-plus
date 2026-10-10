@@ -104,7 +104,7 @@ impl Engine {
         // Granted before the pair-ack goes out, so the ack already travels
         // to the session key the phone will be listening with.
         if let Some(grant) = m.session_key {
-            self.grant_session_key(from, grant);
+            self.grant_session_key(from, grant, from);
         }
         self.out.push(Effect::Resubscribe);
         self.list_dirty = true;
