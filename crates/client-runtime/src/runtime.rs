@@ -30,7 +30,7 @@ use client_core::connection::{
     TOR_RECONNECT_CONFIG,
 };
 use client_core::notifications::NotifyEffect;
-use protocol::commands::{PhoneToBridge, SessionKeyMsg, SyncAckMsg};
+use protocol::commands::{PhoneToBridge, PresenceMsg, SessionKeyMsg, SyncAckMsg, PRESENCE_RENEW_SECS};
 use protocol::ranges::SeqRange;
 use protocol::nostr_event::SignedEvent;
 use protocol::events::BridgeToPhone;
@@ -63,6 +63,8 @@ use crate::view::{
 const RESUME_HEARD_WITHIN_MS: u64 = 90_000;
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
+/// The longest a stop waits for its `away` to go out.
+const AWAY_WAIT: Duration = Duration::from_secs(2);
 /// Relay ping interval while the app is in the background. Every ping is a
 /// radio wake-up per relay round; in the background the host's periodic
 /// [`Core::keepalive`] is what checks the sockets.
@@ -414,6 +416,8 @@ impl Core {
             keys,
             signer_jobs,
             grant_attempts: HashMap::new(),
+            last_command_ms: HashMap::new(),
+            stop_epoch: 0,
             tor_proxy_address: config.proxy,
             clock,
             entropy,
@@ -706,7 +710,11 @@ enum Msg {
         event: Result<SignedEvent, EgressError>,
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
+        quiet: bool,
     },
+    /// The `away` sent on a stop settled (or ran out of time): stop now,
+    /// unless a start since (`epoch`) took it back.
+    Stopped { epoch: u64 },
     /// A bridge's direct link delivered an event.
     DirectEvent(NostrEvent),
     /// Time to save the config backup.
@@ -737,6 +745,8 @@ enum SignerJob {
         now: u64,
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
+        /// Housekeeping the user did not ask for: a failure is not shown.
+        quiet: bool,
     },
     /// Decrypt a message the session key could not.
     Decrypt(NostrEvent),
@@ -765,11 +775,12 @@ async fn run_signer(
 ) {
     while let Some(job) = jobs.recv().await {
         let msg = match job {
-            SignerJob::Command { machine, msg, cipher, now, reply, outbox_id } => Msg::CommandSigned {
+            SignerJob::Command { machine, msg, cipher, now, reply, outbox_id, quiet } => Msg::CommandSigned {
                 event: crate::signer::build_command(signer.as_ref(), &cipher, &machine, &msg, now).await,
                 machine,
                 reply,
                 outbox_id,
+                quiet,
             },
             SignerJob::Decrypt(event) => Msg::IdentityDecrypted {
                 plaintext: signer.nip44_decrypt(&event.pubkey, &event.content).await,
@@ -873,6 +884,13 @@ struct Loop {
     /// When each machine was last granted the session key (ms), to space
     /// out grants a bridge does not confirm.
     grant_attempts: HashMap<String, u64>,
+    /// When a command last went to each machine (ms): any command keeps
+    /// this client present there, so a `presence` is only sent after a
+    /// quiet [`PRESENCE_RENEW_SECS`].
+    last_command_ms: HashMap<String, u64>,
+    /// Bumped by each start and stop: a stop's deferred end (after its
+    /// `away`) only goes ahead if nothing came since.
+    stop_epoch: u64,
     /// The SOCKS5 address to dial through WHEN Tor is on — remembered
     /// regardless of whether it's currently in use, so `Intent::SetTorEnabled`
     /// can toggle `self.ws`'s live proxy without the phone resending it.
@@ -948,6 +966,8 @@ impl Loop {
             match msg {
                 Msg::Start => {
                     log::info!("core: Start (status was {:?})", self.conn.status);
+                    // A stop still waiting on its `away` is taken back.
+                    self.stop_epoch += 1;
                     self.dispatch(ConnectionEvent::ConnectRequested);
                     self.arm_stale_watchdog();
                     self.links_on = true;
@@ -955,12 +975,7 @@ impl Loop {
                 }
                 Msg::Stop => {
                     log::info!("core: Stop (status was {:?})", self.conn.status);
-                    self.dispatch(ConnectionEvent::DisconnectRequested);
-                    abort(&mut self.stale_timer);
-                    self.links_on = false;
-                    self.sync_direct_links();
-                    self.flush_acks();
-                    self.flush_writes().await;
+                    self.say_away();
                 }
                 Msg::Pause => {
                     // Backgrounded: the OS may kill the process from here on.
@@ -1053,6 +1068,7 @@ impl Loop {
                 Msg::StaleWatchdog => {
                     self.check_stale_heartbeats();
                     self.check_connected_relays_changed();
+                    self.renew_presence();
                     if self.conn.status != ConnectionStatus::Stopped {
                         self.arm_stale_watchdog();
                     }
@@ -1086,7 +1102,14 @@ impl Loop {
                     };
                     self.on_ingested(&event, ingested, &Recipient::Identity).await;
                 }
-                Msg::CommandSigned { machine, event, reply, outbox_id } => self.publish_built(&machine, event, reply, outbox_id),
+                Msg::CommandSigned { machine, event, reply, outbox_id, quiet } => {
+                    self.publish_built(&machine, event, reply, outbox_id, quiet)
+                }
+                Msg::Stopped { epoch } => {
+                    if epoch == self.stop_epoch {
+                        self.stop_now().await;
+                    }
+                }
                 Msg::DirectEvent(event) => self.nostr.deliver(&event),
                 Msg::BackupDue => self.on_backup_due(),
                 Msg::BackupFetched(found) => self.on_backup_fetched(found),
@@ -1185,6 +1208,46 @@ impl Loop {
                 let _ = self.self_tx.send(Msg::RefreshReconcile { reconnected: false });
             }
         }
+    }
+
+    /// Tell each bridge that knows this client by its session key that it
+    /// is going away, so they stop sending it the shared updates now rather
+    /// than when its lease runs out; then stop, once those went out or after
+    /// [`AWAY_WAIT`]. Best effort: a stop that cannot wait (the process
+    /// killed) leaves the leases to run out.
+    fn say_away(&mut self) {
+        self.stop_epoch += 1;
+        let epoch = self.stop_epoch;
+        let mut sent = Vec::new();
+        if self.conn.status == ConnectionStatus::Connected {
+            for machine in self.stores.machines.machine_pubkeys() {
+                if matches!(self.cipher_for(&machine), Cipher::SessionKey(_)) {
+                    let (tx, rx) = oneshot::channel();
+                    let away = PhoneToBridge::Presence(PresenceMsg { away: true });
+                    self.sign_and_publish(machine, away, Some(tx), None, true);
+                    sent.push(rx);
+                }
+            }
+        }
+        let tx = self.self_tx.clone();
+        tokio::task::spawn_local(async move {
+            let settled = async {
+                for reply in sent {
+                    let _ = reply.await;
+                }
+            };
+            let _ = tokio::time::timeout(AWAY_WAIT, settled).await;
+            let _ = tx.send(Msg::Stopped { epoch });
+        });
+    }
+
+    async fn stop_now(&mut self) {
+        self.dispatch(ConnectionEvent::DisconnectRequested);
+        abort(&mut self.stale_timer);
+        self.links_on = false;
+        self.sync_direct_links();
+        self.flush_acks();
+        self.flush_writes().await;
     }
 
     fn arm(&self, delay_ms: u64, msg: Msg) -> AbortHandle {
@@ -1977,6 +2040,17 @@ impl Loop {
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
     ) {
+        self.sign_and_publish(machine, msg, reply, outbox_id, false);
+    }
+
+    fn sign_and_publish(
+        &mut self,
+        machine: String,
+        msg: PhoneToBridge,
+        reply: Option<oneshot::Sender<PublishResult>>,
+        outbox_id: Option<String>,
+        quiet: bool,
+    ) {
         // Every command is signed by the identity, in order, through the
         // signer; `publish_built` takes it from there.
         let now = self.clock.now_ms();
@@ -1985,7 +2059,32 @@ impl Loop {
             PhoneToBridge::PairRequest(_) => Cipher::Identity,
             _ => self.cipher_for(&machine),
         };
-        let _ = self.signer_jobs.send(SignerJob::Command { machine, msg: Box::new(msg), cipher, now, reply, outbox_id });
+        // Any command keeps this client present at the bridge.
+        self.last_command_ms.insert(machine.clone(), now);
+        let job = SignerJob::Command { machine, msg: Box::new(msg), cipher, now, reply, outbox_id, quiet };
+        let _ = self.signer_jobs.send(job);
+    }
+
+    /// The bridges that know this client by its session key and have heard
+    /// nothing from it for [`PRESENCE_RENEW_SECS`]: they get a `presence`,
+    /// so they keep sending it the shared updates. Quiet: a renewal that
+    /// does not get through is retried on the next check.
+    fn renew_presence(&mut self) {
+        if self.conn.status != ConnectionStatus::Connected {
+            return;
+        }
+        let now = self.clock.now_ms();
+        let due: Vec<String> = self
+            .stores
+            .machines
+            .machine_pubkeys()
+            .into_iter()
+            .filter(|m| matches!(self.cipher_for(m), Cipher::SessionKey(_)))
+            .filter(|m| self.last_command_ms.get(m).is_none_or(|at| now.saturating_sub(*at) >= PRESENCE_RENEW_SECS * 1000))
+            .collect();
+        for machine in due {
+            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false }), None, None, true);
+        }
     }
 
     /// Publish a built command, or report why it could not be built. It goes
@@ -1997,11 +2096,14 @@ impl Loop {
         event: Result<SignedEvent, EgressError>,
         reply: Option<oneshot::Sender<PublishResult>>,
         outbox_id: Option<String>,
+        quiet: bool,
     ) {
         let event = match event {
             Ok(event) => event,
             Err(err) => {
-                self.observer.action_failed(ActionFailedKind::PublishRejected);
+                if !quiet {
+                    self.observer.action_failed(ActionFailedKind::PublishRejected);
+                }
                 let result = PublishResult {
                     verdict: PublishVerdict::Rejected,
                     detail: Some(egress_detail(&err)),
@@ -2033,6 +2135,7 @@ impl Loop {
                 None => ws.publish_confirmed_to(&event, &relays, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS).await,
             };
             let failed = match result.verdict {
+                _ if quiet => None,
                 PublishVerdict::Rejected => Some(ActionFailedKind::PublishRejected),
                 PublishVerdict::Unreachable => Some(ActionFailedKind::PublishUnreachable),
                 PublishVerdict::Accepted | PublishVerdict::Unconfirmed => None,

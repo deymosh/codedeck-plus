@@ -2122,6 +2122,68 @@ async fn with_a_host_key_store_the_kv_holds_no_session_key() {
         .await;
 }
 
+/// A client a bridge knows by its session key stays present there: after
+/// a quiet [`PRESENCE_RENEW_SECS`] it renews with a `presence`, and a stop
+/// tells the bridge it is away before it disconnects.
+#[tokio::test]
+async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
+    use client_core::stores::session_key::{SessionGrant, SessionKey};
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let start_ms: u64 = 1_000_000;
+            let key = SessionKey { keypair: generate_keypair(), expires_at: start_ms / 1000 + 80 * 24 * 3600 };
+            let store = MemoryKeyStore::default();
+            *store.0.borrow_mut() = Some(SessionKeyRing { current: key.clone(), previous: None }.encode());
+            let mut state = client_core::stores::machines::MachinesState::default();
+            state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            state.machines.get_mut(&machine.pubkey_hex).unwrap().session_grant = Some(SessionGrant {
+                pubkey_hex: key.pubkey_hex().to_string(),
+                expires_at: key.expires_at,
+                sent_at: start_ms / 1000 - 100,
+            });
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let clock = Rc::new(FixedClock(RefCell::new(start_ms)));
+            let core = Core::spawn(
+                CoreConfig {
+                    identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                    proxy: None,
+                    tor: false,
+                    reconnect: fast_reconnect(),
+                },
+                CorePorts { kv: Rc::new(kv), session_keys: Some(Rc::new(store.clone())), ..CorePorts::default() },
+                Rc::new(Spy::default()),
+                Rc::clone(&clock) as Rc<dyn Clock>,
+                Rc::new(ZeroEntropy),
+            )
+            .await;
+            core.set_relays(vec![mock.url.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+            // Connecting says it is here already.
+            let refresh = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
+            assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+
+            // Quiet for the renewal period: the next check sends a presence.
+            *clock.0.borrow_mut() += PRESENCE_RENEW_SECS * 1000;
+            tokio::time::pause();
+            tokio::time::advance(STALE_WATCHDOG_EVERY + Duration::from_secs(1)).await;
+            tokio::time::resume();
+            let renewal = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
+            assert!(matches!(renewal, Some(PhoneToBridge::Presence(PresenceMsg { away: false }))), "{renewal:?}");
+
+            core.stop();
+            let away = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
+            assert!(matches!(away, Some(PhoneToBridge::Presence(PresenceMsg { away: true }))), "{away:?}");
+        })
+        .await;
+}
+
 /// A key a month from lapsing is replaced at boot. The bridge on it keeps
 /// using it until it confirms the new one, which it is granted under the
 /// old one; then the old key is gone from the phone's store.
@@ -2173,6 +2235,7 @@ async fn a_rotated_key_is_granted_and_the_old_one_dropped_once_confirmed() {
                 other => panic!("expected a grant, got {other:?}"),
             };
             assert_eq!(grant.pubkey_hex, new);
+            assert_eq!(grant.replaces.as_deref(), Some(old.pubkey_hex()), "it moves this client, not adds one");
             assert_eq!(grant.bridge_pubkey_hex, machine.pubkey_hex);
             assert_eq!(grant.expires_at, ring.current.expires_at);
 
