@@ -19,10 +19,12 @@
 //! * [`SESSION_KEYS`]: the phone grants a session key only to a bridge that
 //!   honours one.
 
-/// v11 = the agent-neutral protocol: per-agent catalog, typed transcript
-/// entries, typed answers, `set-option`. Clean break from v10 — no v10
-/// compatibility.
-pub const PROTOCOL_VERSION: u32 = 11;
+/// v12 = one copy of each message per client of an identity, each tagged
+/// with its recipient (see [`crate::recipients`]); a session-key grant names
+/// the key it replaces. v11 introduced the agent-neutral protocol (per-agent
+/// catalog, typed transcript entries, typed answers, `set-option`). Each is
+/// a clean break — no compatibility with an earlier version.
+pub const PROTOCOL_VERSION: u32 = 12;
 
 // Session attachments of any kind (`upload-file`); the attach control shows
 // only when this is in the machine's heartbeat capabilities.
@@ -66,8 +68,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_version_is_11() {
-        assert_eq!(PROTOCOL_VERSION, 11);
+    fn protocol_version_is_12() {
+        assert_eq!(PROTOCOL_VERSION, 12);
     }
 
     #[test]

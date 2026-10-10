@@ -106,6 +106,7 @@ impl PhoneKeys {
             pubkey_hex: self.session_pubkey_hex.clone(),
             bridge_pubkey_hex: bridge.to_string(),
             expires_at: self.session_expires_at,
+            replaces: None,
         }
     }
 

@@ -329,6 +329,11 @@ impl std::fmt::Debug for PairRequestMsg {
 /// external signer. It never signs: every event stays authored by (and, from
 /// the bridge, `p`-tagged to) the identity, so the key can only read and
 /// write payloads inside events the identity signed.
+///
+/// Each client of an identity holds its own key, and the bridge sends every
+/// message once per client, to its newest key (see
+/// [`recipients`](crate::recipients)). A grant without [`replaces`]
+/// (Self::replaces) adds a client; one with it rotates that client's key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKeyGrant {
@@ -343,6 +348,11 @@ pub struct SessionKeyGrant {
     /// before this one lapses.
     #[specta(type = specta_typescript::Number)]
     pub expires_at: u64,
+    /// The key this one takes over from (its public half, lowercase hex):
+    /// the same client's previous key, which the bridge keeps only to read
+    /// commands still encrypted with it. Absent for a client's first key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
 }
 
 /// The longest a [`SessionKeyGrant`] may run.
@@ -448,64 +458,64 @@ mod tests {
 
     #[test]
     fn input_decodes_with_and_without_its_id() {
-        let m = rt(&json!({"v":11,"type":"input","sessionId":"s","text":"hi","inputId":"i1"}));
+        let m = rt(&json!({"v":12,"type":"input","sessionId":"s","text":"hi","inputId":"i1"}));
         assert!(matches!(m, PhoneToBridge::Input(InputMsg { ref session_id, .. }) if session_id == "s"));
-        let m = rt(&json!({"v":11,"type":"input","sessionId":"s","text":""}));
+        let m = rt(&json!({"v":12,"type":"input","sessionId":"s","text":""}));
         assert!(matches!(m, PhoneToBridge::Input(InputMsg { input_id: None, .. })));
     }
 
     #[test]
     fn every_variant_decodes_from_a_representative_fixture() {
-        rt(&json!({"v":11,"type":"permission-response","sessionId":"s","requestId":"r","optionId":"allow_always"}));
-        rt(&json!({"v":11,"type":"question-response","sessionId":"s","requestId":"q","index":1,"answer":{"kind":"options","selected":[0,2]}}));
-        rt(&json!({"v":11,"type":"question-response","sessionId":"s","requestId":"q","index":0,"answer":{"kind":"text","text":"blue"}}));
-        rt(&json!({"v":11,"type":"plan-response","sessionId":"s","requestId":"p","optionId":"approve"}));
-        rt(&json!({"v":11,"type":"set-option","sessionId":"s","option":"mode","value":"plan"}));
-        rt(&json!({"v":11,"type":"set-option","sessionId":"s","option":"model","value":"anthropic/claude-x"}));
-        rt(&json!({"v":11,"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]}));
-        rt(&json!({"v":11,"type":"sync-ack","syncId":"y","ranges":[[1,50],[51,100]]}));
-        rt(&json!({"v":11,"type":"create-session","agent":"opencode","effort":"high","cwd":"proj","createCwd":true,"providerId":"p"}));
-        rt(&json!({"v":11,"type":"refresh-sessions"}));
-        rt(&json!({"v":11,"type":"close-session","sessionId":"s"}));
-        rt(&json!({"v":11,"type":"interrupt","sessionId":"s"}));
-        rt(&json!({"v":11,"type":"create-folder","path":"a/b","root":"/w","requestId":"r"}));
-        rt(&json!({"v":11,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":123}));
-        rt(&json!({"v":11,"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"","chunkIndex":0,"totalChunks":2}));
-        rt(&json!({"v":11,"type":"usage-request","sessionId":"s"}));
-        rt(&json!({"v":11,"type":"gsd-request","sessionId":"s"}));
-        rt(&json!({"v":11,"type":"models-request","agent":"opencode"}));
-        rt(&json!({"v":11,"type":"commands-request","sessionId":"s"}));
-        rt(&json!({"v":11,"type":"plugins-request","agent":"claude-code"}));
-        rt(&json!({"v":11,"type":"plugins-request","agent":"claude-code","available":true}));
-        rt(&json!({"v":11,"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));
-        rt(&json!({"v":11,"type":"plugin-action","agent":"claude-code","action":"update","target":"c@m"}));
-        rt(&json!({"v":11,"type":"agent-action","agent":"opencode","action":"install"}));
-        rt(&json!({"v":11,"type":"agent-action","agent":"opencode","action":"remove"}));
-        rt(&json!({"v":11,"type":"mcp-request","agent":"claude-code"}));
-        rt(&json!({"v":11,"type":"mcp-action","agent":"claude-code","action":"add","servers":[
+        rt(&json!({"v":12,"type":"permission-response","sessionId":"s","requestId":"r","optionId":"allow_always"}));
+        rt(&json!({"v":12,"type":"question-response","sessionId":"s","requestId":"q","index":1,"answer":{"kind":"options","selected":[0,2]}}));
+        rt(&json!({"v":12,"type":"question-response","sessionId":"s","requestId":"q","index":0,"answer":{"kind":"text","text":"blue"}}));
+        rt(&json!({"v":12,"type":"plan-response","sessionId":"s","requestId":"p","optionId":"approve"}));
+        rt(&json!({"v":12,"type":"set-option","sessionId":"s","option":"mode","value":"plan"}));
+        rt(&json!({"v":12,"type":"set-option","sessionId":"s","option":"model","value":"anthropic/claude-x"}));
+        rt(&json!({"v":12,"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]}));
+        rt(&json!({"v":12,"type":"sync-ack","syncId":"y","ranges":[[1,50],[51,100]]}));
+        rt(&json!({"v":12,"type":"create-session","agent":"opencode","effort":"high","cwd":"proj","createCwd":true,"providerId":"p"}));
+        rt(&json!({"v":12,"type":"refresh-sessions"}));
+        rt(&json!({"v":12,"type":"close-session","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"interrupt","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"create-folder","path":"a/b","root":"/w","requestId":"r"}));
+        rt(&json!({"v":12,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":123}));
+        rt(&json!({"v":12,"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"","chunkIndex":0,"totalChunks":2}));
+        rt(&json!({"v":12,"type":"usage-request","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"gsd-request","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"models-request","agent":"opencode"}));
+        rt(&json!({"v":12,"type":"commands-request","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code"}));
+        rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code","available":true}));
+        rt(&json!({"v":12,"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));
+        rt(&json!({"v":12,"type":"plugin-action","agent":"claude-code","action":"update","target":"c@m"}));
+        rt(&json!({"v":12,"type":"agent-action","agent":"opencode","action":"install"}));
+        rt(&json!({"v":12,"type":"agent-action","agent":"opencode","action":"remove"}));
+        rt(&json!({"v":12,"type":"mcp-request","agent":"claude-code"}));
+        rt(&json!({"v":12,"type":"mcp-action","agent":"claude-code","action":"add","servers":[
             {"name":"github","transport":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer t"}}},
             {"name":"fs","transport":{"type":"stdio","command":"npx","args":["-y","server-fs","/w"],"env":{"K":"v"}}},
             {"name":"old","transport":{"type":"sse","url":"https://x/sse"}}]}));
-        rt(&json!({"v":11,"type":"mcp-action","agent":"opencode","action":"disable","names":["github"]}));
-        rt(&json!({"v":11,"type":"session-mcp-request","sessionId":"s"}));
-        rt(&json!({"v":11,"type":"session-mcp-toggle","sessionId":"s","name":"github","enabled":false}));
-        rt(&json!({"v":11,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
-        rt(&json!({"v":11,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
-        rt(&json!({"v":11,"type":"provider-profiles-request"}));
-        rt(&json!({"v":11,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
+        rt(&json!({"v":12,"type":"mcp-action","agent":"opencode","action":"disable","names":["github"]}));
+        rt(&json!({"v":12,"type":"session-mcp-request","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"session-mcp-toggle","sessionId":"s","name":"github","enabled":false}));
+        rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
+        rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
+        rt(&json!({"v":12,"type":"provider-profiles-request"}));
+        rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
     }
 
     #[test]
     fn upload_image_union_disambiguates_by_shape() {
-        let m = rt(&json!({"v":11,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"t","sizeBytes":1}));
+        let m = rt(&json!({"v":12,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"t","sizeBytes":1}));
         assert!(matches!(m, PhoneToBridge::UploadFile(UploadFileMsg::Blossom(_))));
-        let m = rt(&json!({"v":11,"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"t","chunkIndex":1,"totalChunks":4}));
+        let m = rt(&json!({"v":12,"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"t","chunkIndex":1,"totalChunks":4}));
         assert!(matches!(m, PhoneToBridge::UploadFile(UploadFileMsg::Chunk(_))));
     }
 
     #[test]
     fn set_credentials_set_clear_and_keep() {
-        let m = rt(&json!({"v":11,"type":"set-credentials","agent":"claude-code","values":{"anthropic_api_key":"sk-x","other":null}}));
+        let m = rt(&json!({"v":12,"type":"set-credentials","agent":"claude-code","values":{"anthropic_api_key":"sk-x","other":null}}));
         match m {
             PhoneToBridge::SetCredentials(c) => {
                 assert_eq!(c.agent.as_deref(), Some("claude-code"));
@@ -516,30 +526,30 @@ mod tests {
             _ => panic!(),
         }
         // No agent = the bridge's own credentials.
-        let m = rt(&json!({"v":11,"type":"set-credentials","values":{"github_pat":"ghp_x"}}));
+        let m = rt(&json!({"v":12,"type":"set-credentials","values":{"github_pat":"ghp_x"}}));
         assert!(matches!(m, PhoneToBridge::SetCredentials(SetCredentialsMsg { agent: None, .. })));
     }
 
     #[test]
     fn logging_a_command_never_prints_its_secrets() {
         for v in [
-            json!({"v":11,"type":"set-credentials","agent":"claude-code","values":{"anthropic_api_key":"sk-SECRET","other":null}}),
-            json!({"v":11,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"SECRET-key","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":1}),
-            json!({"v":11,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"SECRET-token"}),
-            json!({"v":11,"type":"set-provider-profile","profileId":"p","profile":{"agent":"opencode","label":"L","baseUrl":"https://x","authToken":"tok-SECRET","models":[]}}),
+            json!({"v":12,"type":"set-credentials","agent":"claude-code","values":{"anthropic_api_key":"sk-SECRET","other":null}}),
+            json!({"v":12,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"SECRET-key","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":1}),
+            json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"SECRET-token"}),
+            json!({"v":12,"type":"set-provider-profile","profileId":"p","profile":{"agent":"opencode","label":"L","baseUrl":"https://x","authToken":"tok-SECRET","models":[]}}),
         ] {
             let shown = format!("{:?}", rt(&v));
             assert!(!shown.contains("SECRET"), "{shown}");
         }
-        let shown = format!("{:?}", rt(&json!({"v":11,"type":"set-credentials","values":{"github_pat":"x","old":null}})));
+        let shown = format!("{:?}", rt(&json!({"v":12,"type":"set-credentials","values":{"github_pat":"x","old":null}})));
         assert!(shown.contains("github_pat") && shown.contains("<set>") && shown.contains("<clear>"), "{shown}");
     }
 
     #[test]
     fn set_provider_profile_null_deletes() {
-        let m = rt(&json!({"v":11,"type":"set-provider-profile","profileId":"p","profile":null}));
+        let m = rt(&json!({"v":12,"type":"set-provider-profile","profileId":"p","profile":null}));
         assert!(matches!(m, PhoneToBridge::SetProviderProfile(SetProviderProfileMsg { profile: None, .. })));
-        let m = rt(&json!({"v":11,"type":"set-provider-profile","profileId":"p","profile":{
+        let m = rt(&json!({"v":12,"type":"set-provider-profile","profileId":"p","profile":{
             "agent":"claude-code","label":"L","baseUrl":"https://api.x","authToken":"tok","models":[{"id":"m1"}]
         }}));
         match m {
@@ -554,14 +564,14 @@ mod tests {
 
     #[test]
     fn create_session_and_models_request_must_name_the_agent() {
-        assert!(serde_json::from_value::<PhoneToBridge>(json!({"v":11,"type":"create-session"})).is_err());
-        assert!(serde_json::from_value::<PhoneToBridge>(json!({"v":11,"type":"models-request"})).is_err());
+        assert!(serde_json::from_value::<PhoneToBridge>(json!({"v":12,"type":"create-session"})).is_err());
+        assert!(serde_json::from_value::<PhoneToBridge>(json!({"v":12,"type":"models-request"})).is_err());
     }
 
     #[test]
     fn unknown_type_is_a_decode_error() {
-        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":11,"type":"teleport","sessionId":"s"}"#).is_err());
+        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"teleport","sessionId":"s"}"#).is_err());
         // v10 terminal-emulation commands are gone.
-        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":11,"type":"keypress","sessionId":"s","key":"1"}"#).is_err());
+        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"keypress","sessionId":"s","key":"1"}"#).is_err());
     }
 }

@@ -320,7 +320,7 @@ impl Rig {
 
     /// Create a session on `agent` and take it through to ready. Returns its id.
     pub fn ready_session(&mut self, agent: &str) -> String {
-        self.send(json!({"v":11,"type":"create-session","agent":agent}));
+        self.send(json!({"v":12,"type":"create-session","agent":agent}));
         let (id, params) = self.start_request();
         self.host_reply(&id, HostMessage::Ack);
         self.host_event(&params.session_id, SessionEvent::Ready {});

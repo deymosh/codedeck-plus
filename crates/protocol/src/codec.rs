@@ -113,16 +113,16 @@ mod tests {
 
     #[test]
     fn decode_phone_ok_and_error() {
-        let ok = decode_phone_to_bridge(r#"{"v":11,"type":"input","sessionId":"s","text":"hi"}"#);
+        let ok = decode_phone_to_bridge(r#"{"v":12,"type":"input","sessionId":"s","text":"hi"}"#);
         assert!(ok.is_ok());
 
         let bad_json = decode_phone_to_bridge("{not json").unwrap_err().to_string();
         assert!(bad_json.starts_with("invalid JSON:"));
 
-        let bad_schema = decode_phone_to_bridge(r#"{"v":11,"type":"input","text":"hi"}"#); // no sessionId
+        let bad_schema = decode_phone_to_bridge(r#"{"v":12,"type":"input","text":"hi"}"#); // no sessionId
         assert!(bad_schema.unwrap_err().to_string().starts_with(r#"schema mismatch for type "input":"#));
 
-        let unknown = decode_phone_to_bridge(r#"{"v":11,"type":"teleport"}"#);
+        let unknown = decode_phone_to_bridge(r#"{"v":12,"type":"teleport"}"#);
         assert!(unknown.unwrap_err().to_string().contains(r#"type "teleport""#));
     }
 
@@ -131,19 +131,19 @@ mod tests {
     #[test]
     fn a_message_of_another_version_or_none_is_refused_as_such() {
         let input = |v: &str| format!(r#"{{{v}"type":"input","sessionId":"s","text":"hi"}}"#);
-        assert_eq!(decode_phone_to_bridge(&input(r#""v":12,"#)), Err(DecodeError::Version(Some(12))));
+        assert_eq!(decode_phone_to_bridge(&input(r#""v":13,"#)), Err(DecodeError::Version(Some(13))));
         assert_eq!(decode_phone_to_bridge(&input("")), Err(DecodeError::Version(None)));
         assert_eq!(decode_phone_to_bridge(&input(r#""v":"11","#)), Err(DecodeError::Version(None)));
         assert_eq!(decode_bridge_to_phone(r#"{"v":10,"type":"warp"}"#), Err(DecodeError::Version(Some(10))));
         assert_eq!(
-            DecodeError::Version(Some(12)).to_string(),
-            format!("the sender speaks protocol v12, not v{PROTOCOL_VERSION}")
+            DecodeError::Version(Some(13)).to_string(),
+            format!("the sender speaks protocol v13, not v{PROTOCOL_VERSION}")
         );
     }
 
     #[test]
     fn every_encoded_message_opens_with_its_version() {
-        let wire = encode_bridge_to_phone(&decode_bridge_to_phone(r#"{"v":11,"type":"input-ack","sessionId":"s","inputId":"i"}"#).unwrap());
+        let wire = encode_bridge_to_phone(&decode_bridge_to_phone(r#"{"v":12,"type":"input-ack","sessionId":"s","inputId":"i"}"#).unwrap());
         assert!(wire.starts_with(&format!(r#"{{"v":{PROTOCOL_VERSION},"type":"input-ack""#)), "{wire}");
     }
 
@@ -151,30 +151,30 @@ mod tests {
     /// a leading space (so the signer files it as text); it must decode as is.
     #[test]
     fn a_message_with_leading_whitespace_decodes() {
-        assert!(decode_phone_to_bridge(r#" {"v":11,"type":"input","sessionId":"s","text":"hi"}"#).is_ok());
+        assert!(decode_phone_to_bridge(r#" {"v":12,"type":"input","sessionId":"s","text":"hi"}"#).is_ok());
     }
 
     #[test]
     fn decode_errors_escape_and_cap_the_senders_bytes() {
-        let forged = json!({"v":11,"type":"x\n[Engine] Paired phone attacker\u{1b}[2J"}).to_string();
+        let forged = json!({"v":12,"type":"x\n[Engine] Paired phone attacker\u{1b}[2J"}).to_string();
         let err = decode_phone_to_bridge(&forged).unwrap_err().to_string();
         assert!(!err.chars().any(char::is_control), "{err:?}");
         assert!(err.contains(r"x\n[Engine]"), "{err}");
 
-        let long = json!({"v":11,"type": "t".repeat(10_000)}).to_string();
+        let long = json!({"v":12,"type": "t".repeat(10_000)}).to_string();
         let err = decode_phone_to_bridge(&long).unwrap_err().to_string();
         assert!(err.len() < 600, "{} bytes", err.len());
     }
 
     #[test]
     fn decode_bridge_ok_and_error() {
-        assert!(decode_bridge_to_phone(r#"{"v":11,"type":"input-ack","sessionId":"s","inputId":"i"}"#).is_ok());
-        assert!(decode_bridge_to_phone(r#"{"v":11,"type":"output","sessionId":"s"}"#).unwrap_err().to_string().contains("output"));
+        assert!(decode_bridge_to_phone(r#"{"v":12,"type":"input-ack","sessionId":"s","inputId":"i"}"#).is_ok());
+        assert!(decode_bridge_to_phone(r#"{"v":12,"type":"output","sessionId":"s"}"#).unwrap_err().to_string().contains("output"));
     }
 
     #[test]
     fn round_trip_via_encode_decode() {
-        let src = json!({"v":11,"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]});
+        let src = json!({"v":12,"type":"sync-request","sessionId":"s","haveRanges":[[1,40],[61,80]]});
         let msg = decode_phone_to_bridge(&src.to_string()).unwrap();
         let wire = encode_phone_to_bridge(&msg).unwrap();
         assert_eq!(decode_phone_to_bridge(&wire).unwrap(), msg);
@@ -184,7 +184,7 @@ mod tests {
     fn extra_unknown_field_still_decodes_forward_compat() {
         // serde ignores unknown fields by default: an added optional field
         // reaches an older peer as nothing, not as an error.
-        let with_extra = r#"{"v":11,"type":"input","sessionId":"s","text":"hi","futureField":123}"#;
+        let with_extra = r#"{"v":12,"type":"input","sessionId":"s","text":"hi","futureField":123}"#;
         assert!(decode_phone_to_bridge(with_extra).is_ok());
     }
 
