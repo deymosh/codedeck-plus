@@ -1,9 +1,10 @@
 //! Session keys through the engine: granting, commands encrypted with one,
-//! how messages are encrypted and addressed, and every refusal.
+//! how messages are encrypted and addressed to each client of an identity,
+//! rotation, and every refusal.
 
 mod support;
 
-use bridge_core::{Effect, Input, Via};
+use bridge_core::{Effect, Input, Via, MAX_CLIENTS};
 use protocol::commands::SESSION_KEY_MAX_LIFETIME_SECS;
 use protocol::crypto::{generate_keypair, Keypair};
 use protocol::events::BridgeToPhone;
@@ -15,6 +16,15 @@ const DAY: u64 = 24 * 3600;
 
 fn grant_msg(bridge: &str, key: &str, expires_at: u64) -> serde_json::Value {
     json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":key,"bridgePubkeyHex":bridge,"expiresAt":expires_at}})
+}
+
+fn rotate_msg(bridge: &str, key: &str, replaces: &str, expires_at: u64) -> serde_json::Value {
+    json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":key,"bridgePubkeyHex":bridge,"expiresAt":expires_at,"replaces":replaces}})
+}
+
+/// The keys of the paired phone's clients.
+fn client_keys(rig: &Rig) -> Vec<String> {
+    rig.engine.paired_phones()[0].clients.iter().map(|c| c.key.pubkey_hex.clone()).collect()
 }
 
 /// The paired phone grants `key`; returns the effects.
@@ -77,7 +87,7 @@ fn an_event_signed_by_the_session_key_is_not_heard() {
     assert!(heartbeats(&rig.take()).is_empty());
     let bridge = rig.bridge.pubkey_hex.clone();
     rig.phone_event(&key, grant_msg(&bridge, &generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Commands);
-    assert_eq!(rig.engine.paired_phones()[0].session_keys.len(), 1, "a key cannot grant a key");
+    assert_eq!(client_keys(&rig).len(), 1, "a key cannot grant a key");
 }
 
 #[test]
@@ -105,7 +115,7 @@ fn bad_grants_are_refused() {
     for (why, key, expires_at) in cases {
         rig.send(grant_msg(&bridge, &key, expires_at));
         rig.take();
-        assert!(rig.engine.paired_phones()[0].session_keys.is_empty(), "{why}: refused");
+        assert!(client_keys(&rig).is_empty(), "{why}: refused");
     }
 }
 
@@ -115,7 +125,7 @@ fn a_grant_for_another_bridge_is_refused() {
     let other_bridge = generate_keypair();
     rig.send(grant_msg(&other_bridge.pubkey_hex, &generate_keypair().pubkey_hex, NOW_SECS + DAY));
     rig.take();
-    assert!(rig.engine.paired_phones()[0].session_keys.is_empty());
+    assert!(client_keys(&rig).is_empty());
 }
 
 #[test]
@@ -145,8 +155,8 @@ fn a_key_belongs_to_one_phone() {
         rig.take();
     }
     let phones = rig.engine.paired_phones();
-    let a_keys = &phones.iter().find(|p| p.pubkey_hex == a.pubkey_hex).unwrap().session_keys;
-    assert!(a_keys.is_empty());
+    let a_clients = &phones.iter().find(|p| p.pubkey_hex == a.pubkey_hex).unwrap().clients;
+    assert!(a_clients.is_empty());
     // A's messages still go to A; B's to B's key.
     rig.phone_event(&b, json!({"v":12,"type":"refresh-sessions"}), Via::Commands);
     let sent = heartbeats(&rig.take());
@@ -160,19 +170,74 @@ fn a_key_belongs_to_one_phone() {
 }
 
 #[test]
-fn the_ring_keeps_the_two_newest_keys_and_encrypts_to_the_newest() {
+fn every_client_of_an_identity_gets_its_own_copy() {
     let mut rig = Rig::new();
-    let (k1, k2, k3) = (generate_keypair(), generate_keypair(), generate_keypair());
-    for k in [&k1, &k2, &k3] {
+    // Two phones and a desktop, each with its own key.
+    let keys = [generate_keypair(), generate_keypair(), generate_keypair()];
+    for k in &keys {
         grant(&mut rig, k, NOW_SECS + DAY);
     }
-    // The oldest left the ring: its payloads are unreadable.
-    refresh_via(&mut rig, &k1);
+    let all: Vec<(String, String)> = keys.iter().map(|k| (rig.phone.pubkey_hex.clone(), k.pubkey_hex.clone())).collect();
+    // A command from any of them is read, and answered to all of them.
+    for k in &keys {
+        refresh_via(&mut rig, k);
+        assert_eq!(heartbeats(&rig.take()), vec![all.clone()]);
+    }
+    // Granting the same key again renews it: still three clients.
+    grant(&mut rig, &keys[1], NOW_SECS + 2 * DAY);
+    assert_eq!(client_keys(&rig).len(), 3);
+}
+
+#[test]
+fn a_rotation_moves_its_client_to_the_new_key() {
+    let mut rig = Rig::new();
+    let (phone_a, phone_b, a_next) = (generate_keypair(), generate_keypair(), generate_keypair());
+    grant(&mut rig, &phone_a, NOW_SECS + DAY);
+    grant(&mut rig, &phone_b, NOW_SECS + DAY);
+    rig.take();
+    let bridge = rig.bridge.pubkey_hex.clone();
+    rig.send(rotate_msg(&bridge, &a_next.pubkey_hex, &phone_a.pubkey_hex, NOW_SECS + 2 * DAY));
+    let sent = heartbeats(&rig.take());
+    let phone = rig.phone.pubkey_hex.clone();
+    assert_eq!(sent, vec![vec![(phone.clone(), a_next.pubkey_hex.clone()), (phone.clone(), phone_b.pubkey_hex.clone())]]);
+    // A command still under the old key is read while the client rotates.
+    refresh_via(&mut rig, &phone_a);
+    assert_eq!(heartbeats(&rig.take()).len(), 1);
+    // The old key cannot come back as a client of its own.
+    grant(&mut rig, &phone_a, NOW_SECS + DAY);
+    assert_eq!(client_keys(&rig), vec![a_next.pubkey_hex.clone(), phone_b.pubkey_hex.clone()]);
+    // Once it lapses it is not read any more.
+    rig.advance((DAY + 60) * 1000);
+    rig.take();
+    refresh_via(&mut rig, &phone_a);
     assert!(heartbeats(&rig.take()).is_empty());
-    // The previous key is still read while the phone rotates...
-    refresh_via(&mut rig, &k2);
-    // ...but messages are encrypted to the newest.
-    assert_eq!(heartbeats(&rig.take()), to(&rig.phone, &k3));
+    assert!(rig.engine.paired_phones()[0].clients[0].previous.is_none(), "pruned");
+}
+
+#[test]
+fn a_rotation_from_an_unknown_key_adds_a_client() {
+    let mut rig = Rig::new();
+    let (known, fresh) = (generate_keypair(), generate_keypair());
+    grant(&mut rig, &known, NOW_SECS + DAY);
+    let bridge = rig.bridge.pubkey_hex.clone();
+    rig.send(rotate_msg(&bridge, &fresh.pubkey_hex, &generate_keypair().pubkey_hex, NOW_SECS + DAY));
+    rig.take();
+    assert_eq!(client_keys(&rig), vec![known.pubkey_hex.clone(), fresh.pubkey_hex.clone()]);
+}
+
+#[test]
+fn past_the_most_clients_the_one_lapsing_soonest_goes() {
+    let mut rig = Rig::new();
+    let keys: Vec<Keypair> = (0..=MAX_CLIENTS).map(|_| generate_keypair()).collect();
+    for (i, k) in keys.iter().enumerate() {
+        // The second client's key lapses soonest.
+        let expires = if i == 1 { NOW_SECS + DAY } else { NOW_SECS + 10 * DAY + i as u64 };
+        grant(&mut rig, k, expires);
+    }
+    let kept = client_keys(&rig);
+    assert_eq!(kept.len(), MAX_CLIENTS);
+    assert!(!kept.contains(&keys[1].pubkey_hex));
+    assert!(kept.contains(&keys[MAX_CLIENTS].pubkey_hex), "the newest client is kept");
 }
 
 #[test]
@@ -182,7 +247,7 @@ fn a_lapsed_key_falls_back_to_the_identity() {
     grant(&mut rig, &key, NOW_SECS + 90);
     rig.advance(120_000);
     rig.take();
-    assert!(rig.engine.paired_phones()[0].session_keys.is_empty(), "pruned at the heartbeat");
+    assert!(client_keys(&rig).is_empty(), "pruned at the heartbeat");
 
     // Its payloads are unreadable once lapsed; the identity is used again.
     refresh_via(&mut rig, &key);

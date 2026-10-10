@@ -124,7 +124,7 @@ impl Rig {
                 pubkey_hex: phone.pubkey_hex.clone(),
                 label: "Pixel".into(),
                 paired_at: "t".into(),
-                session_keys: Vec::new(),
+                clients: Vec::new(),
             }];
             options.store.put("pairedPhones", &serde_json::to_string(&paired).unwrap());
         }

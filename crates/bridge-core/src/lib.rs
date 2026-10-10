@@ -31,6 +31,6 @@ pub mod settings;
 mod sync;
 pub mod time;
 
-pub use engine::{Config, Engine};
+pub use engine::{Config, Engine, MAX_CLIENTS};
 pub use sync::SyncConfig;
 pub use io::*;

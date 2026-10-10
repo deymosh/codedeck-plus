@@ -1,38 +1,51 @@
-//! Session keys: keys a paired phone's identity lets encrypt its traffic.
+//! Session keys: keys a paired identity's clients encrypt their traffic with.
 //!
-//! A phone whose identity key lives in an external signer should not ask it
+//! A client whose identity key lives in an external signer should not ask it
 //! to decrypt every message. It grants the bridge a local key
 //! (`session-key`, or with its `pair-request`), and from then on the NIP-44
 //! payload of every message between them is encrypted with that key. The
-//! events themselves never change hands: the phone signs every command with
-//! its identity, and the bridge `p`-tags every message to the identity. A
+//! events themselves never change hands: the client signs every command with
+//! the identity, and the bridge `p`-tags every message to the identity. A
 //! session key can only read and write payloads inside events the identity
-//! signed, so it can never act as the phone on its own.
+//! signed, so it can never act as the identity on its own.
+//!
+//! An identity may have any number of clients — phones, desktops — and each
+//! holds its own key, so a client is known by its key. Every message goes
+//! to each client: one copy per client, encrypted to its newest key (to the
+//! identity itself when no client has granted one), each with its own
+//! recipient tag (`protocol::recipients`).
 //!
 //! Rules:
 //! - a grant arrives in a command, which only the paired identity can sign;
 //! - a grant names the one bridge it is for; one naming another is refused,
 //!   so a grant seen by one bridge cannot be replayed to another;
 //! - a grant lapses at its `expiresAt`, at most
-//!   [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead;
-//! - each identity keeps its [`KEY_RING`] newest keys; commands encrypted
-//!   with either are read, so commands the phone sent while rotating still
-//!   land, and messages are encrypted to the newest;
+//!   [`SESSION_KEY_MAX_LIFETIME_SECS`] ahead, and its client with it;
+//! - a grant naming the key it `replaces` moves that client to the new key;
+//!   the old one is still read (commands the client sent while rotating)
+//!   until it lapses, but no longer written to. Any other grant of a new
+//!   key adds a client, up to [`MAX_CLIENTS`]: past that, the client whose
+//!   key lapses soonest is dropped;
 //! - a key the bridge already knows for anyone (a paired identity, another
-//!   phone's key, the bridge's own) is refused: a session key belongs to
-//!   one phone.
+//!   identity's client, the bridge's own) or that a client already rotated
+//!   away from is refused: a session key belongs to one client.
 
 use protocol::commands::{SessionKeyGrant, SESSION_KEY_MAX_LIFETIME_SECS};
 use protocol::crypto::npub_from_hex;
 
 use super::Engine;
-use crate::io::{store_keys, Effect};
+use crate::io::{store_keys, Addressee, Effect, PhoneClient};
 
-/// Keys kept per identity.
-pub const KEY_RING: usize = 2;
+/// The most clients an identity keeps. Each costs a copy of every message,
+/// so a client that keeps granting fresh keys cannot grow that without end.
+pub const MAX_CLIENTS: usize = 16;
 
 /// Clock skew allowed on a grant's `expiresAt`.
 const SKEW_SECS: u64 = 300;
+
+fn short(key: &str) -> &str {
+    key.get(..8).unwrap_or(key)
+}
 
 impl Engine {
     fn now_secs(&self) -> u64 {
@@ -41,7 +54,6 @@ impl Engine {
 
     /// Accept `grant` for the paired `identity`. Returns whether it took.
     pub(super) fn grant_session_key(&mut self, identity: &str, grant: SessionKeyGrant) -> bool {
-        let short = grant.pubkey_hex.get(..8).unwrap_or(&grant.pubkey_hex).to_string();
         let now = self.now_secs();
         let refusal = if npub_from_hex(&grant.pubkey_hex).is_err() {
             Some("not a valid public key")
@@ -56,40 +68,76 @@ impl Engine {
         } else {
             None
         };
+        let key = short(&grant.pubkey_hex).to_string();
         if let Some(why) = refusal {
-            log::warn!("[Engine] Refusing session key {short}...: {why}");
+            log::warn!("[Engine] Refusing session key {key}...: {why}");
             return false;
         }
         let Some(phone) = self.paired.iter_mut().find(|p| p.pubkey_hex == identity) else { return false };
-        phone.session_keys.retain(|k| k.pubkey_hex != grant.pubkey_hex && k.expires_at > now);
-        phone.session_keys.push(grant);
-        let excess = phone.session_keys.len().saturating_sub(KEY_RING);
-        phone.session_keys.drain(..excess);
-        log::info!("[Engine] Session key {short}... granted for {}...", identity.get(..8).unwrap_or(identity));
+        phone.clients.retain(|c| c.key.expires_at > now);
+        let renewed = phone.clients.iter().position(|c| c.key.pubkey_hex == grant.pubkey_hex);
+        let rotated = grant
+            .replaces
+            .as_deref()
+            .and_then(|old| phone.clients.iter().position(|c| c.key.pubkey_hex == old));
+        if let Some(i) = renewed {
+            phone.clients[i].key = grant;
+            log::info!("[Engine] Session key {key}... renewed for {}...", short(identity));
+        } else if let Some(i) = rotated {
+            let client = &mut phone.clients[i];
+            client.previous = Some(std::mem::replace(&mut client.key, grant));
+            log::info!("[Engine] A client of {}... rotated to session key {key}...", short(identity));
+        } else {
+            if phone.clients.len() >= MAX_CLIENTS {
+                let soonest = phone
+                    .clients
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, c)| c.key.expires_at)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                let dropped = phone.clients.remove(soonest);
+                log::info!("[Engine] {}... has too many clients; dropping {}...", short(identity), short(&dropped.key.pubkey_hex));
+            }
+            phone.clients.push(PhoneClient { key: grant, previous: None });
+            log::info!("[Engine] Session key {key}... granted for a new client of {}...", short(identity));
+        }
         self.store_paired();
-        // The heartbeat that follows is encrypted to the key: the phone's
+        // The heartbeat that follows is encrypted to the key: the client's
         // confirmation.
         self.list_dirty = true;
         true
     }
 
-    /// Whether `key` already stands for someone other than `identity`'s own
-    /// ring: any paired identity, or another phone's session key.
+    /// Whether `key` already stands for someone other than a client of
+    /// `identity` granting it again: any paired identity, another
+    /// identity's client, or a key one of `identity`'s clients rotated away
+    /// from.
     fn key_taken(&self, identity: &str, key: &str) -> bool {
         self.paired.iter().any(|p| {
-            p.pubkey_hex == key || (p.pubkey_hex != identity && p.session_keys.iter().any(|k| k.pubkey_hex == key))
+            p.pubkey_hex == key
+                || p.clients.iter().any(|c| {
+                    let previous = c.previous.as_ref().is_some_and(|k| k.pubkey_hex == key);
+                    previous || (p.pubkey_hex != identity && c.key.pubkey_hex == key)
+                })
         })
     }
 
-    /// Drop lapsed keys; they would be skipped anyway, this keeps the
-    /// stored list tidy.
+    /// Drop lapsed keys, and the clients whose newest key lapsed; they would
+    /// be skipped anyway, this keeps the stored list tidy.
     pub(super) fn prune_session_keys(&mut self) {
         let now = self.now_secs();
         let mut changed = false;
         for phone in &mut self.paired {
-            let before = phone.session_keys.len();
-            phone.session_keys.retain(|k| k.expires_at > now);
-            changed |= phone.session_keys.len() != before;
+            let before = phone.clients.len();
+            phone.clients.retain(|c| c.key.expires_at > now);
+            changed |= phone.clients.len() != before;
+            for client in &mut phone.clients {
+                if client.previous.as_ref().is_some_and(|k| k.expires_at <= now) {
+                    client.previous = None;
+                    changed = true;
+                }
+            }
         }
         if changed {
             self.store_paired();
@@ -103,34 +151,44 @@ impl Engine {
         }
     }
 
-    /// `identity`'s live session keys, newest first: what its command
-    /// payloads may be encrypted with, besides the identity itself.
+    /// Every live session key of `identity`'s clients, newest keys first:
+    /// what its command payloads may be encrypted with, besides the identity
+    /// itself.
     pub(super) fn payload_keys(&self, identity: &str, now_secs: u64) -> Vec<String> {
-        self.paired
-            .iter()
-            .find(|p| p.pubkey_hex == identity)
-            .map(|p| {
-                p.session_keys
-                    .iter()
-                    .rev()
-                    .filter(|k| k.expires_at > now_secs)
-                    .map(|k| k.pubkey_hex.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(phone) = self.paired.iter().find(|p| p.pubkey_hex == identity) else { return Vec::new() };
+        let newest = phone.clients.iter().map(|c| &c.key);
+        let previous = phone.clients.iter().filter_map(|c| c.previous.as_ref());
+        newest.chain(previous).filter(|k| k.expires_at > now_secs).map(|k| k.pubkey_hex.clone()).collect()
     }
 
-    /// Encrypt every publish in `effects` to its phone's newest live
-    /// session key, where it has one.
+    /// The keys a message to `identity` is encrypted to, a copy each: its
+    /// clients' newest live keys, or the identity itself when it has none.
+    fn copy_keys(&self, identity: &str, now_secs: u64) -> Vec<String> {
+        let keys: Vec<String> = self
+            .paired
+            .iter()
+            .find(|p| p.pubkey_hex == identity)
+            .map(|p| p.clients.iter().filter(|c| c.key.expires_at > now_secs).map(|c| c.key.pubkey_hex.clone()).collect())
+            .unwrap_or_default();
+        if keys.is_empty() {
+            vec![identity.to_string()]
+        } else {
+            keys
+        }
+    }
+
+    /// Turn every publish in `effects` into a copy for each client of each
+    /// identity it goes to.
     pub(super) fn address_publishes(&self, effects: &mut [Effect]) {
         let now = self.now_secs();
         for effect in effects {
             if let Effect::Publish { to, .. } = effect {
-                for addressee in to.iter_mut() {
-                    if let Some(key) = self.payload_keys(&addressee.phone, now).into_iter().next() {
-                        addressee.key = key;
-                    }
-                }
+                *to = to
+                    .iter()
+                    .flat_map(|a| {
+                        self.copy_keys(&a.phone, now).into_iter().map(|key| Addressee { phone: a.phone.clone(), key })
+                    })
+                    .collect();
             }
         }
     }

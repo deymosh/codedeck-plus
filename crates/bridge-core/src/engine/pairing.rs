@@ -93,7 +93,7 @@ impl Engine {
             pubkey_hex: from.to_string(),
             label: label.clone(),
             paired_at: iso(self.now()),
-            session_keys: Vec::new(),
+            clients: Vec::new(),
         };
         log::info!("[Engine] Pairing phone \"{label}\" ({short}...)");
         self.close_pairing(PairingCloseReason::Paired, Some(phone.clone()));

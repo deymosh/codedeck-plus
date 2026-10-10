@@ -34,8 +34,9 @@ impl Out {
         self.effects.push(effect);
     }
 
-    /// Publish to the phones (identities) in `to`, each encrypted to the
-    /// identity itself until the engine addresses it to a session key.
+    /// Publish to the phones (identities) in `to`, each addressed to the
+    /// identity itself until the engine addresses a copy to each of its
+    /// clients.
     pub fn publish(&mut self, to: Vec<String>, message: BridgeToPhone) {
         if !to.is_empty() {
             let to = to.into_iter().map(|phone| Addressee { key: phone.clone(), phone }).collect();

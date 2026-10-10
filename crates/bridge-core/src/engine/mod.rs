@@ -24,6 +24,7 @@ mod mcp;
 mod pairing;
 mod phone;
 mod session_keys;
+pub use session_keys::MAX_CLIENTS;
 mod settings;
 
 use std::collections::BTreeMap;
