@@ -19,7 +19,6 @@ import com.codedeck.plus.ui.screens.AddView
 import com.codedeck.plus.ui.screens.AppearancePage
 import com.codedeck.plus.ui.screens.SessionsContent
 import com.codedeck.plus.ui.screens.McpContent
-import com.codedeck.plus.ui.session.SessionMcpList
 import com.codedeck.plus.ui.screens.ConnectionPage
 import com.codedeck.plus.ui.screens.LogsContent
 import com.codedeck.plus.ui.screens.MachineSettingsContent
@@ -83,7 +82,10 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "session" to {
         Column(Modifier.background(Tokens.Bg)) {
-            SessionTopBar(title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "running", onBack = {})
+            SessionTopBar(
+                title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "running", onBack = {},
+                trailing = { ContextRing(42.0, alert = Tokens.Danger) {} },
+            )
             TranscriptList(
                 displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
                 syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = true,
@@ -94,7 +96,6 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
                 canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
                 options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
-                meter = { ContextRing(42.0, alert = Tokens.Danger) {} },
             )
         }
     },
@@ -104,23 +105,32 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 draft = "Run the migration again and tell me what changed in the schema", onDraftChange = {}, placeholder = "Message…",
                 canAttach = false, uploading = false, canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
                 options = { SessionOptionsChip(DesignFixtures.opencodeOptions) {} },
-                meter = { ContextRing(92.0) {} },
             )
         }
     },
     "session_options" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_options_more" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, {})
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, { _, _ -> }, {})
+        }
+    },
+    "session_options_models" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Models, {}, {}, {}, {}, { _, _ -> }, {})
+        }
+    },
+    "session_options_mcp" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Mcp, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_options_effort" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, {}, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_context" to {
@@ -133,7 +143,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                         UniffiUsageWindow("5h", 61.0, java.time.Instant.ofEpochMilli(NOW + 134 * 60_000).toString()),
                         UniffiUsageWindow("7d", 92.0, java.time.Instant.ofEpochMilli(NOW + 2 * 86_400_000 + 5 * 3_600_000).toString()),
                     ),
-                    sessionCostUsd = 0.0371, fetchedAt = "2026-10-08T10:00:00Z",
+                    sessionCostUsd = 0.0371, context = DesignFixtures.contextBreakdown, fetchedAt = "2026-10-08T10:00:00Z",
                 ),
                 nowMs = NOW,
                 onClose = {},
@@ -142,7 +152,10 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "session_commands" to {
         Column(Modifier.background(Tokens.Bg)) {
-            SessionTopBar(title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "idle", onBack = {})
+            SessionTopBar(
+                title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "idle", onBack = {},
+                trailing = { ContextRing(42.0) {} },
+            )
             TranscriptList(
                 displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
                 syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = false,
@@ -153,7 +166,6 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 draft = "/co", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
                 canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
                 options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
-                meter = { ContextRing(42.0) {} },
             )
         }
     },
@@ -247,9 +259,6 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
 }}""",
             parse = { DesignFixtures.mcpImport },
         )
-    },
-    "session_mcp" to {
-        androidx.compose.foundation.layout.Box(Modifier.background(Tokens.SurfaceRaised)) { SessionMcpList(DesignFixtures.sessionMcp) { _, _ -> } }
     },
     "plugins_opencode" to { PluginsContent(workstation, "opencode", dispatch = {}, onBack = {}) },
     "providers_opencode" to { ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}) },
@@ -355,7 +364,8 @@ class DesignSnapshotTest {
     @Test fun providers_claude_empty() = paparazzi.page("providers_claude_empty")
     @Test fun providers_edit() = paparazzi.page("providers_edit")
     @Test fun providers_add() = paparazzi.page("providers_add")
-    @Test fun session_mcp() = paparazzi.page("session_mcp")
+    @Test fun session_options_models() = paparazzi.page("session_options_models")
+    @Test fun session_options_mcp() = paparazzi.page("session_options_mcp")
     @Test fun settings_appearance() = paparazzi.page("settings_appearance")
     @Test fun settings_notifications() = paparazzi.page("settings_notifications")
     @Test fun settings_connection() = paparazzi.page("settings_connection")
