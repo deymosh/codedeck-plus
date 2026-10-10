@@ -132,7 +132,6 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     let relays = Relays::start(
         config.relays.clone(),
         keys,
-        config.machine.clone(),
         config.tor_proxy.clone(),
         inputs.clone(),
         direct.as_ref().map(|d| Rc::clone(&d.hub)),

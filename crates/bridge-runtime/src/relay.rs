@@ -1,15 +1,19 @@
 //! The relays: the command and pairing subscriptions, and publishing.
 //!
 //! Publishing turns one bridge→phone message into one signed, NIP-44
-//! encrypted event per phone, of the kind its type calls for:
-//! - `sessions` → the replaceable heartbeat (`d` = machine name);
+//! encrypted event per copy (one per client of each phone, see
+//! `bridge_core::Addressee`), tagged with the copy's recipient tag (`c`,
+//! `protocol::recipients`), of the kind its type calls for:
+//! - `sessions` → the replaceable heartbeat (`d` = the recipient tag, so
+//!   each client keeps its own; each fragment of a split one its own `d`),
+//!   expiring after a day;
 //! - `output`, `usage`, `gsd-state` → ephemeral live events (loss is
 //!   recovered by sync or a re-request);
 //! - everything else → stored responses expiring after an hour, so a phone
 //!   that was briefly away still gets them.
 //!
 //! A message too big for one event is split into `chunk` fragments below the
-//! message layer. Publishes go out one at a time, in the order the engine
+//! message layer; every fragment carries the copy's recipient tag. Publishes go out one at a time, in the order the engine
 //! produced them. Each event also goes to the phone's direct link, if it has
 //! one open (see `crate::direct`), ahead of the relays.
 
@@ -22,7 +26,10 @@ use nostr_transport::{Filter, NostrEvent, SubCallbacks, Transport, TransportSub,
 use protocol::chunking::frame_encoded_message;
 use protocol::crypto::{encrypt_to, Keypair};
 use protocol::events::BridgeToPhone;
-use protocol::kinds::{COMMAND_KIND, LIVE_KIND, RESPONSE_EXPIRY_SECONDS, RESPONSE_KIND, SESSION_LIST_KIND};
+use protocol::kinds::{
+    COMMAND_KIND, LIVE_KIND, RESPONSE_EXPIRY_SECONDS, RESPONSE_KIND, SESSION_LIST_EXPIRY_SECONDS, SESSION_LIST_KIND,
+};
+use protocol::recipients::{self, fragment_d};
 use protocol::nostr_event::SignedEvent;
 use protocol::events::OutputMsg;
 use futures_util::future::LocalBoxFuture;
@@ -33,19 +40,24 @@ use tokio::sync::{mpsc, oneshot};
 /// Which kind a message rides, and whether it expires.
 pub fn kind_for(message: &BridgeToPhone) -> (u16, Option<u64>) {
     match message {
-        BridgeToPhone::Sessions(_) => (SESSION_LIST_KIND, None),
+        BridgeToPhone::Sessions(_) => (SESSION_LIST_KIND, Some(SESSION_LIST_EXPIRY_SECONDS)),
         BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) | BridgeToPhone::GsdState(_) => (LIVE_KIND, None),
         _ => (RESPONSE_KIND, Some(RESPONSE_EXPIRY_SECONDS)),
     }
 }
 
-fn tags_for(message: &BridgeToPhone, machine: &str, chunked: bool) -> Vec<(&'static str, String)> {
-    if chunked {
+/// The tags of fragment `index` of a copy for `recipient` (its recipient
+/// tag), besides `p`, `c` and the expiry.
+fn tags_for(message: &BridgeToPhone, recipient: &str, fragment: Option<usize>) -> Vec<(&'static str, String)> {
+    if let BridgeToPhone::Sessions(_) = message {
+        // Addressable per client, and per fragment when split.
+        return vec![("d", fragment.map_or_else(|| recipient.to_string(), |i| fragment_d(recipient, i)))];
+    }
+    if fragment.is_some() {
         // A fragment has no seq of its own; the reassembled message has it.
         return Vec::new();
     }
     match message {
-        BridgeToPhone::Sessions(_) => vec![("d", machine.to_string())],
         BridgeToPhone::Output(o) => vec![("s", o.session_id.clone()), ("seq", o.seq.to_string())],
         BridgeToPhone::SyncBegin(m) => vec![("s", m.session_id.clone())],
         BridgeToPhone::SyncChunk(m) => vec![("s", m.session_id.clone())],
@@ -57,15 +69,14 @@ fn tags_for(message: &BridgeToPhone, machine: &str, chunked: bool) -> Vec<(&'sta
 /// Builds the signed events for one message.
 pub struct EventFactory {
     keys: Keypair,
-    machine: String,
     /// Strictly increasing `created_at`, so a replaceable heartbeat published
     /// twice in one second is never refused as older.
     last_created_at: u64,
 }
 
 impl EventFactory {
-    pub fn new(keys: Keypair, machine: String) -> Self {
-        Self { keys, machine, last_created_at: 0 }
+    pub fn new(keys: Keypair) -> Self {
+        Self { keys, last_created_at: 0 }
     }
 
     fn next_created_at(&mut self, now_secs: u64) -> u64 {
@@ -73,9 +84,9 @@ impl EventFactory {
         self.last_created_at
     }
 
-    /// Every event `message` becomes for `phone`, in order.
-    /// The signed events carrying `message` to `to`: `p`-tagged to the
-    /// phone's identity, the payload encrypted to `to.key`.
+    /// The signed events carrying `message` to `to`, in order: `p`-tagged to
+    /// the phone's identity and `c`-tagged with the copy's recipient tag, the
+    /// payload encrypted to `to.key`.
     pub fn events(&mut self, message: &BridgeToPhone, to: &Addressee, now_secs: u64) -> Result<Vec<SignedEvent>, String> {
         let json = protocol::packing::pack(protocol::encode_bridge_to_phone(message));
         let (kind, expiry) = kind_for(message);
@@ -84,12 +95,17 @@ impl EventFactory {
         let created_at = self.next_created_at(now_secs);
         let recipient = PublicKey::from_hex(&to.phone).map_err(|e| format!("bad phone key: {e}"))?;
         let signer = Keys::new(self.keys.secret_key.clone());
+        let recipient_tag = recipients::recipient_tag(&self.keys.pubkey_hex, &to.key);
         frames
             .iter()
-            .map(|frame| {
+            .enumerate()
+            .map(|(i, frame)| {
                 let content = encrypt_to(&self.keys.secret_key, &to.key, frame).map_err(|e| e.to_string())?;
-                let mut tags = vec![Tag::public_key(recipient)];
-                for (name, value) in tags_for(message, &self.machine, chunked) {
+                let mut tags = vec![
+                    Tag::public_key(recipient),
+                    Tag::custom(TagKind::custom(recipients::RECIPIENT_TAG), [recipient_tag.clone()]),
+                ];
+                for (name, value) in tags_for(message, &recipient_tag, chunked.then_some(i)) {
                     tags.push(Tag::custom(TagKind::custom(name), [value]));
                 }
                 if let Some(expiry) = expiry {
@@ -332,7 +348,6 @@ impl Relays {
     pub fn start(
         relays: Vec<String>,
         keys: Keypair,
-        machine: String,
         proxy: Option<String>,
         inputs: mpsc::UnboundedSender<Input>,
         direct: Option<Rc<crate::direct::Hub>>,
@@ -348,7 +363,7 @@ impl Relays {
         transport.ensure_connected();
         let publisher = transport.clone();
         tokio::task::spawn_local(async move {
-            let mut factory = EventFactory::new(keys, machine);
+            let mut factory = EventFactory::new(keys);
             let mut flight = Flight::default();
             // Jobs taken off the queue but not yet done: the outputs queued
             // behind a publish go out together with it.
@@ -562,7 +577,7 @@ mod tests {
                 let (inputs, _events) = mpsc::unbounded_channel();
                 let bridge = generate_keypair();
                 let phone = generate_keypair();
-                let relays = Relays::start(vec![url], bridge, "laptop".into(), None, inputs, None);
+                let relays = Relays::start(vec![url], bridge, None, inputs, None);
                 relays.publish(vec![to(&phone.pubkey_hex)], heartbeat());
                 relays.flush().await;
 
@@ -588,14 +603,19 @@ mod tests {
     fn each_message_type_rides_its_kind_with_its_tags() {
         let bridge = generate_keypair();
         let phone = generate_keypair();
-        let mut f = EventFactory::new(bridge.clone(), "laptop".into());
+        let mut f = EventFactory::new(bridge.clone());
         let hb = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
-        assert_eq!((hb.kind, tag(&hb, "d"), tag(&hb, "p")), (SESSION_LIST_KIND, Some("laptop"), Some(phone.pubkey_hex.as_str())));
-        assert_eq!(tag(&hb, "expiration"), None);
+        let recipient = recipients::recipient_tag(&bridge.pubkey_hex, &phone.pubkey_hex);
+        assert_eq!(
+            (hb.kind, tag(&hb, "d"), tag(&hb, "c"), tag(&hb, "p")),
+            (SESSION_LIST_KIND, Some(recipient.as_str()), Some(recipient.as_str()), Some(phone.pubkey_hex.as_str()))
+        );
+        assert_eq!(tag(&hb, "expiration").unwrap().parse::<u64>().unwrap(), hb.created_at + SESSION_LIST_EXPIRY_SECONDS);
 
         let out = BridgeToPhone::Output(OutputMsg { session_id: "s".into(), seq: 7, entries: vec![OutputEntry::new("t", EntryBody::Status { text: "x".into() })] });
         let ev = f.events(&out, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!((ev.kind, tag(&ev, "s"), tag(&ev, "seq")), (LIVE_KIND, Some("s"), Some("7")));
+        assert_eq!((tag(&ev, "c"), tag(&ev, "d")), (Some(recipient.as_str()), None));
         let plain = decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).unwrap();
         assert_eq!(protocol::decode_bridge_to_phone(&plain).unwrap(), out);
 
@@ -613,10 +633,13 @@ mod tests {
     fn a_session_key_encrypts_the_payload_and_the_identity_stays_the_recipient() {
         let bridge = generate_keypair();
         let (phone, session) = (generate_keypair(), generate_keypair());
-        let mut f = EventFactory::new(bridge.clone(), "laptop".into());
+        let mut f = EventFactory::new(bridge.clone());
         let addressee = Addressee { phone: phone.pubkey_hex.clone(), key: session.pubkey_hex.clone() };
         let ev = f.events(&heartbeat(), &addressee, 1000).unwrap().remove(0);
         assert_eq!(tag(&ev, "p"), Some(phone.pubkey_hex.as_str()));
+        // The copy is the session key's: its tag and `d` are the key's.
+        let recipient = recipients::recipient_tag(&bridge.pubkey_hex, &session.pubkey_hex);
+        assert_eq!((tag(&ev, "c"), tag(&ev, "d")), (Some(recipient.as_str()), Some(recipient.as_str())));
         assert!(decrypt_from(&session.secret_key, &bridge.pubkey_hex, &ev.content).is_ok());
         assert!(decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).is_err());
     }
@@ -624,7 +647,7 @@ mod tests {
     #[test]
     fn created_at_strictly_increases_within_a_second() {
         let phone = generate_keypair();
-        let mut f = EventFactory::new(generate_keypair(), "m".into());
+        let mut f = EventFactory::new(generate_keypair());
         let a = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap()[0].created_at;
         let b = f.events(&heartbeat(), &to(&phone.pubkey_hex), 1000).unwrap()[0].created_at;
         assert!(b > a);
@@ -697,7 +720,7 @@ mod tests {
     fn a_long_message_that_packs_small_goes_whole() {
         let phone = generate_keypair();
         let bridge = generate_keypair();
-        let mut f = EventFactory::new(bridge.clone(), "m".into());
+        let mut f = EventFactory::new(bridge.clone());
         let message = status("x".repeat(100_000));
         let events = f.events(&message, &to(&phone.pubkey_hex), 1000).unwrap();
         assert_eq!(events.len(), 1);
@@ -745,23 +768,45 @@ mod tests {
         assert!(!rate_limited(&PublishResult { verdict: PublishVerdict::Accepted, detail: None }));
     }
 
-    #[test]
-    fn an_oversize_message_is_split_into_untagged_fragments() {
-        let phone = generate_keypair();
-        let mut f = EventFactory::new(generate_keypair(), "m".into());
-        // Text that does not compress: it stays past what one event holds.
+    /// Text that does not compress: it stays past what one event holds.
+    fn noise() -> String {
         let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
-        let noise: String = (0..100_000)
+        (0..100_000)
             .map(|_| {
                 x ^= x << 13;
                 x ^= x >> 7;
                 x ^= x << 17;
                 char::from(b'a' + (x % 26) as u8)
             })
-            .collect();
-        let events = f.events(&status(noise), &to(&phone.pubkey_hex), 1000).unwrap();
+            .collect()
+    }
+
+    #[test]
+    fn an_oversize_message_is_split_into_fragments_tagged_only_with_their_recipient() {
+        let (bridge, phone) = (generate_keypair(), generate_keypair());
+        let mut f = EventFactory::new(bridge.clone());
+        let events = f.events(&status(noise()), &to(&phone.pubkey_hex), 1000).unwrap();
         assert!(events.len() >= 3);
-        assert!(events.iter().all(|e| tag(e, "seq").is_none() && e.content.len() <= 65_535));
+        assert!(events.iter().all(|e| tag(e, "seq").is_none() && tag(e, "d").is_none() && e.content.len() <= 65_535));
         assert!(events.iter().all(|e| e.created_at == events[0].created_at));
+        let recipient = recipients::recipient_tag(&bridge.pubkey_hex, &phone.pubkey_hex);
+        assert!(events.iter().all(|e| tag(e, "c") == Some(recipient.as_str())));
+    }
+
+    #[test]
+    fn each_fragment_of_a_split_heartbeat_has_its_own_d() {
+        let (bridge, phone) = (generate_keypair(), generate_keypair());
+        let mut f = EventFactory::new(bridge.clone());
+        let BridgeToPhone::Sessions(mut list) = heartbeat() else { unreachable!() };
+        list.machine = noise();
+        let events = f.events(&BridgeToPhone::Sessions(list), &to(&phone.pubkey_hex), 1000).unwrap();
+        assert!(events.len() >= 3);
+        let recipient = recipients::recipient_tag(&bridge.pubkey_hex, &phone.pubkey_hex);
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.kind, SESSION_LIST_KIND);
+            assert_eq!(tag(e, "d"), Some(fragment_d(&recipient, i).as_str()));
+            assert_eq!(tag(e, "c"), Some(recipient.as_str()));
+            assert_eq!(tag(e, "expiration").unwrap().parse::<u64>().unwrap(), e.created_at + SESSION_LIST_EXPIRY_SECONDS);
+        }
     }
 }
