@@ -6,7 +6,8 @@
 //! DATA the bridge advertises per agent ([`AgentDescriptor`]); what a session
 //! produced is a typed [`OutputEntry`] whose [`EntryBody`] variant says what it
 //! is, instead of a loose metadata record interpreted by convention. An
-//! unknown enum value is a decode error.
+//! unknown value of a closed vocabulary is a decode error; one of an open
+//! vocabulary (a set a newer peer may grow) decodes as its catch-all.
 
 use std::collections::BTreeMap;
 
@@ -14,6 +15,29 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// `Deserialize` for a string-valued open vocabulary: a value this build does
+/// not know becomes `$fallback` instead of failing the whole message. Written
+/// out rather than `#[serde(other)]`, which the TypeScript exporter refuses
+/// on an enum of plain strings. Every variant is listed, and a variant left
+/// out does not compile; the wire names are the derived `Serialize`'s.
+macro_rules! open_vocabulary {
+    ($ty:ident, $fallback:ident, [$($variant:ident),+ $(,)?]) => {
+        const _: fn($ty) = |v| match v {
+            $($ty::$variant)|+ => {}
+        };
+
+        impl<'de> Deserialize<'de> for $ty {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let wire = String::deserialize(d)?;
+                Ok([$($ty::$variant),+]
+                    .into_iter()
+                    .find(|v| serde_json::to_value(v).ok().as_ref().and_then(serde_json::Value::as_str) == Some(wire.as_str()))
+                    .unwrap_or($ty::$fallback))
+            }
+        }
+    };
 }
 
 // --- agents ---
@@ -236,7 +260,7 @@ pub enum McpAction {
 }
 
 /// Where one MCP server stands in a running session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub enum McpStatus {
     Connected,
@@ -247,9 +271,10 @@ pub enum McpStatus {
     NeedsAuth,
     Disabled,
     /// A status this client does not know (a newer bridge's).
-    #[serde(other)]
     Unknown,
 }
+
+open_vocabulary!(McpStatus, Unknown, [Connected, Pending, Failed, NeedsAuth, Disabled, Unknown]);
 
 /// One MCP server of a running session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -399,6 +424,7 @@ pub enum AgentInstall {
     /// A state this client does not know (a newer bridge's). Not ready, so
     /// no session starts on it.
     #[serde(other)]
+    #[specta(skip)]
     Unknown,
 }
 
@@ -427,7 +453,7 @@ pub enum AgentAction {
 
 // --- sessions ---
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Idle,
@@ -437,9 +463,10 @@ pub enum SessionState {
     /// Set on every session when the bridge shuts down cleanly.
     Offline,
     /// A state this client does not know (a newer bridge's).
-    #[serde(other)]
     Unknown,
 }
+
+open_vocabulary!(SessionState, Unknown, [Idle, Running, WaitingPermission, WaitingQuestion, Offline, Unknown]);
 
 /// The per-session options `set-option` changes and `option-confirmed`
 /// reports. Values are agent-defined strings (see [`AgentDescriptor`]).
@@ -664,7 +691,7 @@ pub enum Role {
 /// What a tool call does, normalized across agents (the Agent Client
 /// Protocol's tool kinds, plus `agent`). Clients pick icons and summaries
 /// from this rather than from agent-specific tool names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     Read,
@@ -679,9 +706,10 @@ pub enum ToolKind {
     /// Hands a task to a sub-agent, which works on its own and reports back.
     Agent,
     /// Anything else, including a kind this client does not know.
-    #[serde(other)]
     Other,
 }
+
+open_vocabulary!(ToolKind, Other, [Read, Edit, Delete, Move, Search, Execute, Think, Fetch, SwitchMode, Agent, Other]);
 
 /// What choosing a permission option does — lets a client style and order
 /// the choices without knowing the agent.
@@ -709,7 +737,7 @@ pub struct QuestionOption {
 }
 
 /// Session lifecycle notices a client shows as a marker line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeKind {
     /// The agent process was restarted; the conversation may continue fresh.
@@ -722,9 +750,10 @@ pub enum NoticeKind {
     AuthError,
     /// A notice this client does not know (a newer bridge's); its text still
     /// says what happened.
-    #[serde(other)]
     Other,
 }
+
+open_vocabulary!(NoticeKind, Other, [SessionRestart, SessionDied, SessionFailed, AuthError, Other]);
 
 /// What a transcript entry is. Tagged by `entryType`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -865,10 +894,11 @@ pub enum EntryBody {
     /// keeps its place in the transcript, so seqs and the rest of its batch
     /// stay intact; a client shows that something is there it cannot show.
     #[serde(other)]
+    #[specta(skip)]
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     /// A shell command.
@@ -876,9 +906,10 @@ pub enum TaskKind {
     /// A sub-agent.
     Agent,
     /// Anything else, including a kind this client does not know.
-    #[serde(other)]
     Other,
 }
+
+open_vocabulary!(TaskKind, Other, [Shell, Agent, Other]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
