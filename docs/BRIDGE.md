@@ -47,7 +47,8 @@ Upgrading is extracting the new archive over the old one.
   Task Scheduler. Under WSL2, the Linux archive works as on Linux.
 
 Claude Code authenticates with `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
-an existing `claude` login, or a key set from the phone. The DeepSeek Harness
+an existing `claude` login, or a key set from the phone; see
+[`CLAUDE-CODE.md`](CLAUDE-CODE.md). The DeepSeek Harness
 uses `DEEPSEEK_API_KEY` — or a session's provider profile, for a gateway — and
 keeps its own state under `<home>/dsh`; see [`DEEPSEEK.md`](DEEPSEEK.md).
 
