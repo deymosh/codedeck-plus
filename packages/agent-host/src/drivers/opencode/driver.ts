@@ -408,6 +408,16 @@ export class OpenCodeSession implements DriverSession {
     if (entries.length > 0) this.ctx.emit({ type: 'entries', entries });
   }
 
+  get isEnded(): boolean {
+    return this.ended;
+  }
+
+  /** The server this session runs on was replaced: it ends with the
+   *  reason, which the bridge answers by resuming it. */
+  serverReplaced(): void {
+    this.finish('The OpenCode server restarted to load changed provider profiles.');
+  }
+
   private finish(error?: string): void {
     if (this.ended) return;
     this.ended = true;
@@ -1116,6 +1126,9 @@ export class OpenCodeDriver implements Driver {
   private serving: Served = NOTHING_SERVED;
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
+  /** Sessions on the running server, ended when it is replaced; ended
+   *  ones are dropped. */
+  private readonly sessions = new Set<OpenCodeSession>();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
   readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
 
@@ -1254,6 +1267,13 @@ export class OpenCodeDriver implements Driver {
     const old = this.server;
     this.server = null;
     this.launch(() => old.close());
+    // A session holds the old server's client: its password stops working
+    // and its event stream reconnects for ever to the new server, so it
+    // would never end on its own. Ended now, the bridge resumes it on the
+    // new server (OpenCode keeps the conversation on disk).
+    const stale = [...this.sessions];
+    this.sessions.clear();
+    for (const session of stale) session.serverReplaced();
     await this.clientPromise;
     return refused;
   }
@@ -1310,7 +1330,10 @@ export class OpenCodeDriver implements Driver {
     if (params.model && !splitModelId(params.model)) {
       throw new Error(`'${params.model}' is not an OpenCode provider/model id — choose one from its model list.`);
     }
-    return new OpenCodeSession(params, ctx, this.clientPromise, { catalog: () => this.listModels() });
+    const session = new OpenCodeSession(params, ctx, this.clientPromise, { catalog: () => this.listModels() });
+    for (const s of this.sessions) if (s.isEnded) this.sessions.delete(s);
+    this.sessions.add(session);
+    return session;
   }
 
   /** A profile is reached as an OpenAI-compatible provider: a session on
