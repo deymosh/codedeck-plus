@@ -1,12 +1,12 @@
 //! Protocol version + capabilities.
 //!
-//! The bridge advertises `protocol_version` + `capabilities` on the session-list
-//! heartbeat; commands carry neither. Feature gating is on capability
-//! **strings** and on the per-agent catalog (`AgentDescriptor::supports`),
-//! never on version comparisons — a new feature is one new string or one new
-//! `supports` flag, not a version-ladder entry. A different
-//! `protocol_version` means the two ends cannot talk at all, and a phone says
-//! so rather than guessing.
+//! Every message carries its sender's [`PROTOCOL_VERSION`] as `v`; the
+//! bridge advertises `capabilities` on the session-list heartbeat. Feature
+//! gating is on capability **strings** and on the per-agent catalog
+//! (`AgentDescriptor::supports`), never on version comparisons — a new
+//! feature is one new string or one new `supports` flag, not a version-ladder
+//! entry. A different `v` means the two ends cannot talk at all, and the
+//! decoder refuses the message rather than guessing.
 //!
 //! What an individual AGENT can do (models, usage, custom providers, GSD) is
 //! catalog data, not a capability: capabilities describe the BRIDGE. Every
