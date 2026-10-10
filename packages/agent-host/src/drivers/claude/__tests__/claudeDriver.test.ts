@@ -178,6 +178,19 @@ describe('Claude session lifecycle', () => {
     expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'status' }));
   });
 
+  it("init's 1M-window marker is not a model of its own: the catalog id stays the session's", async () => {
+    const { ctx, handle } = start({ model: 'Gateway/glm-9' });
+    handle.push(init({ model: 'Gateway/glm-9[1m]' }));
+    await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
+    expect(ctx.events.filter((e) => e.type === 'info' && 'model' in e)).toEqual([]);
+
+    // A model it resolved to is reported, without the marker.
+    const other = start();
+    other.handle.push(init({ model: 'claude-sonnet-5[1m]' }));
+    await other.ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
+    expect(other.ctx.events).toContainEqual(expect.objectContaining({ type: 'info', model: 'claude-sonnet-5' }));
+  });
+
   it('a non-prompting mode the catalog does not list is the auto-approve mode', async () => {
     const { ctx, handle } = start();
     handle.push(init({ permissionMode: 'bypassPermissions' }));

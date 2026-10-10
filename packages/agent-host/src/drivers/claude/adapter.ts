@@ -144,8 +144,12 @@ function parseUser(msg: SdkUserMessage, ctx: TranslateContext): OutputEntry[] {
   // A sub-agent's prompt comes from the main agent, not the user, and its
   // call already carries it as input: it is not shown again.
   const isSubAgent = !!msg.parent_tool_use_id;
-  const text = (t: string): OutputEntry[] =>
-    isSubAgent ? [] : [{ entryType: 'text', role: 'user', text: t, timestamp: ts }];
+  const text = (t: string): OutputEntry[] => {
+    if (isSubAgent) return [];
+    const output = localCommandOutput(t);
+    if (output !== undefined) return output ? [{ entryType: 'status', text: output, timestamp: ts }] : [];
+    return [{ entryType: 'text', role: 'user', text: t, timestamp: ts }];
+  };
 
   if (typeof content === 'string') {
     entries.push(...text(content));
@@ -177,6 +181,17 @@ function parseUser(msg: SdkUserMessage, ctx: TranslateContext): OutputEntry[] {
   }
 
   return entries;
+}
+
+/** A local command's report — what Claude Code's own commands (a model
+ *  switch, `/cost`) answer, as a user message wrapped in
+ *  `<local-command-stdout>` or `-stderr>` — as plain text, without terminal
+ *  escapes or Markdown backticks; undefined for anything else. The user did
+ *  not write it, so it is no message of theirs. */
+export function localCommandOutput(text: string): string | undefined {
+  const m = /^\s*<local-command-(stdout|stderr)>([\s\S]*)<\/local-command-\1>\s*$/.exec(text);
+  if (!m) return undefined;
+  return m[2]!.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/`/g, '').trim();
 }
 
 function parseResult(msg: SdkResultMessage): OutputEntry[] {

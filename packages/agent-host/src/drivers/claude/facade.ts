@@ -649,6 +649,12 @@ function with1mSuffix(model: string): string {
   return /\[1m\]$/i.test(model) ? model : `${model}[1m]`;
 }
 
+/** `model` as Claude Code is asked for it: marked for the 1M window when
+ *  it has one. */
+export function modelToSend(model: string): string {
+  return modelSupports1mContext(model) ? with1mSuffix(model) : model;
+}
+
 /**
  * Build the SDK `Options` for one session spawn — extracted pure from the
  * RealSdkSessionHandle constructor so the mapping (notably the CDX-062
@@ -705,9 +711,7 @@ export function buildQueryOptions(
   // Forwarded whenever `requestedModel` is defined, not just when the caller
   // supplied `opts.model` — a "Default model" session is exactly as eligible
   // for the 1M window as one that named Sonnet explicitly.
-  const modelToSend = requestedModel === undefined
-    ? undefined
-    : wants1m ? with1mSuffix(requestedModel) : requestedModel;
+  const sentModel = requestedModel === undefined ? undefined : modelToSend(requestedModel);
   return {
     ...(opts.resume ? { resume: opts.resume } : claimOwnId ? { sessionId: opts.sessionId } : {}),
     cwd: opts.cwd,
@@ -721,7 +725,7 @@ export function buildQueryOptions(
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     tools: { type: 'preset', preset: 'claude_code' },
     ...(fallbackModel !== null ? { fallbackModel } : {}),
-    ...(modelToSend ? { model: modelToSend } : {}),
+    ...(sentModel ? { model: sentModel } : {}),
     ...(optionsEffort ? { effort: optionsEffort } : {}),
     ...(opts.pathToClaudeCodeExecutable
       ? { pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable }
@@ -813,8 +817,11 @@ class RealSdkSessionHandle implements SdkSessionHandle {
     await this.q.setPermissionMode(toClaudePermissionMode(mode));
   }
 
+  /** Sent like a spawn's model (`buildQueryOptions`): with the `[1m]`
+   *  marker when the model has the 1M window, or a switch would leave the
+   *  session on the 200k one. */
   async setModel(model: string): Promise<void> {
-    await this.q.setModel(model);
+    await this.q.setModel(modelToSend(model));
   }
 
   async setEffort(level: EffortLevel): Promise<void> {
