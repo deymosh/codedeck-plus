@@ -13,7 +13,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -53,14 +55,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
@@ -530,9 +537,12 @@ fun SessionScreen(
     }
     LaunchedEffect(machine, sessionId, supportsMcp, sessionLive) { requestMcp() }
 
-    // A tap on any control but the input takes the focus off it: the
-    // keyboard goes, and a sheet that opens does not bring it back.
+    // A tap anywhere but the input takes the focus off it, before whatever
+    // was tapped acts: the keyboard goes, and a sheet that opens does not
+    // bring it back on closing (a quick prompt or a picked command, which
+    // edit the draft, put it back).
     val focusManager = LocalFocusManager.current
+    val tapArea = remember { TapArea() }
     var contextSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
     // A usage limit running out marks the context ring, when the user
     // asked for that warning; the ring's details always list every limit.
@@ -551,7 +561,7 @@ fun SessionScreen(
         }
     }
 
-    Column(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize().unfocusOnTapOutside(focusManager, tapArea)) {
         SessionTopBar(
             title = session?.title?.takeIf { it.isNotBlank() }
                 ?: session?.project?.takeIf { it.isNotBlank() }
@@ -562,7 +572,6 @@ fun SessionScreen(
             onBack = onBack,
             trailing = {
                 ContextRing(session?.contextPercentage, limitAlert) {
-                    focusManager.clearFocus()
                     contextSheetOpen = true
                     // What fills the context is asked for afresh each time.
                     if (supportsUsage) dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
@@ -583,9 +592,7 @@ fun SessionScreen(
             activity = transcript?.activity,
             canStopTasks = agent?.supportsTasks == true,
             dispatch = ::dispatch,
-            modifier = Modifier
-                .weight(1f)
-                .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) },
+            modifier = Modifier.weight(1f),
         )
 
         pendingPermission?.let { pending ->
@@ -758,15 +765,37 @@ fun SessionScreen(
             onDictate = ::dictate,
             onSend = ::send,
             focusRequester = inputFocus,
+            onInputBounds = { tapArea.input = it },
             options = {
-                SessionOptionsChip(sessionOptions) {
-                    focusManager.clearFocus()
-                    optionsSheetOpen = true
-                }
+                SessionOptionsChip(sessionOptions) { optionsSheetOpen = true }
             },
         )
     }
 }
+
+/** Where the session screen and its text input are, for [unfocusOnTapOutside]. */
+private class TapArea {
+    var screen: LayoutCoordinates? = null
+    /** The input's bounds in the window. */
+    var input: Rect? = null
+}
+
+/**
+ * Takes the focus off the text input on any tap that does not land in it.
+ * It sees the tap before the control tapped handles it (a transcript row
+ * that opens a sheet, a button), consuming nothing; a drag — a scroll — is
+ * not a tap and leaves the focus where it is.
+ */
+private fun Modifier.unfocusOnTapOutside(focusManager: FocusManager, area: TapArea): Modifier =
+    onGloballyPositioned { area.screen = it }.pointerInput(focusManager, area) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val up = waitForUpOrCancellation(PointerEventPass.Initial) ?: return@awaitEachGesture
+            if ((up.position - down.position).getDistance() > viewConfiguration.touchSlop) return@awaitEachGesture
+            val at = area.screen?.takeIf { it.isAttached }?.localToWindow(down.position)
+            if (at == null || area.input?.contains(at) != true) focusManager.clearFocus()
+        }
+    }
 
 /** Mode-request display state: what the chip shows is the pending request
  *  while one is in flight, else the last confirmed mode. */
