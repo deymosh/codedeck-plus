@@ -876,6 +876,7 @@ impl WsTransport {
             st.router.relay_connected(relay);
             st.subs
                 .iter()
+                .filter(|(id, _)| st.router.sub_carried_on(id, relay))
                 .map(|(id, e)| frames::req_frame(id, std::slice::from_ref(&e.filter)))
                 .collect()
         };
@@ -1064,6 +1065,10 @@ impl WsTransport {
 
 impl Transport for WsTransport {
     fn subscribe(&self, filter: Filter, callbacks: SubCallbacks) -> Box<dyn TransportSub> {
+        self.subscribe_to(&[], filter, callbacks)
+    }
+
+    fn subscribe_to(&self, only: &[String], filter: Filter, callbacks: SubCallbacks) -> Box<dyn TransportSub> {
         let filter_json = frames::filter_to_json(&filter);
         let (sub_id, targets, frame) = {
             let mut st = self.state.borrow_mut();
@@ -1074,12 +1079,16 @@ impl Transport for WsTransport {
                 SubEntry { callbacks, filter: filter_json.clone() },
             );
             let relays = st.relays.clone();
-            st.router.open_sub(&sub_id, &relays);
+            if only.is_empty() {
+                st.router.open_sub(&sub_id, &relays);
+            } else {
+                st.router.open_sub_on(&sub_id, &relays, only);
+            }
             let frame = frames::req_frame(&sub_id, std::slice::from_ref(&filter_json));
             let targets: Vec<String> = st
                 .conns
                 .iter()
-                .filter(|(_, c)| c.up)
+                .filter(|(r, c)| c.up && (only.is_empty() || only.contains(r)))
                 .map(|(r, _)| r.clone())
                 .collect();
             (sub_id, targets, frame)

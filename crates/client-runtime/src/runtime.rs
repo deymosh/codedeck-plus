@@ -377,6 +377,7 @@ impl Core {
             tx: tx.clone(),
             machines: RefCell::new(initial_authors.clone()),
             recipients: RefCell::new(recipients_of(&session, &keys.identity_pubkey_hex, &initial_authors, clock.now_ms())),
+            relays: RefCell::new(hydrated.stores.bridge_relays()),
             cursor: RefCell::new(last_stored_seen),
         });
         let relay_set = hydrated.stores.relay_set();
@@ -438,6 +439,18 @@ impl Core {
             backup_timer: None,
             backup_busy: false,
             backup_created_at: 0,
+            backup_sub: None,
+            backup_sub_seq: 0,
+            backup_heard: false,
+            backup_found: false,
+            backup_seen_at: 0,
+            backup_seen_ids: Vec::new(),
+            backup_opening: 0,
+            backup_epoch: 0,
+            backup_unreadable: false,
+            backup_wait_timer: None,
+            backup_retry_timer: None,
+            backup_retry_ms: 0,
             machines_dirty: false,
             stored_seen_dirty: None,
             flush_timer: None,
@@ -720,10 +733,21 @@ enum Msg {
     /// Time to save the config backup.
     BackupDue,
     /// A look on the backup relay finished.
-    BackupFetched(backup::Fetched),
+    BackupFetched { epoch: u64, found: backup::Fetched },
+    /// A version of the backup came in on its subscription.
+    BackupEvent(NostrEvent),
+    /// The backup relay sent all it has, on subscription `sub`.
+    BackupEose { sub: u64 },
+    /// The backup relay ended subscription `sub`, or every socket to it dropped.
+    BackupClosed { sub: u64, reason: Option<String> },
+    /// The backup relay has not said what it holds a while after
+    /// subscription `sub` was made.
+    BackupNoAnswer { sub: u64 },
+    /// Time to subscribe to the backup again after it was closed.
+    BackupRetry,
     /// A backup save finished: when it was made and what it held, or why
     /// it failed.
-    BackupSaved(Result<(u64, String), String>),
+    BackupSaved { epoch: u64, saved: Result<backup::Saved, String> },
     /// The backup's deletion was sent (or given up on).
     BackupDeleted,
     /// A machine's direct link came up on an endpoint, or went down.
@@ -766,6 +790,11 @@ enum SignerJob {
         created_at: u64,
         reply: oneshot::Sender<Result<SignedEvent, String>>,
     },
+    /// Sign the empty version that replaces a deleted config backup.
+    SealRemoved {
+        created_at: u64,
+        reply: oneshot::Sender<Result<SignedEvent, String>>,
+    },
 }
 
 async fn run_signer(
@@ -797,6 +826,10 @@ async fn run_signer(
             }
             SignerJob::SealDeletion { created_at, reply } => {
                 let _ = reply.send(crate::backup::seal_deletion(signer.as_ref(), created_at).await);
+                continue;
+            }
+            SignerJob::SealRemoved { created_at, reply } => {
+                let _ = reply.send(crate::backup::seal_removed(signer.as_ref(), created_at).await);
                 continue;
             }
         };
@@ -836,6 +869,8 @@ struct LoopHost {
     machines: RefCell<Vec<String>>,
     /// The recipient tags of this client's copies from `machines`.
     recipients: RefCell<Vec<String>>,
+    /// The relays `machines` use, which their subscriptions go to.
+    relays: RefCell<Vec<String>>,
     /// `last_stored_seen` cursor (seconds) — the in-memory copy `authors()`'s
     /// caller reads synchronously. `note_stored_seen` also fires
     /// `Msg::NoteStoredSeen` to persist it through the `Kv` port, so a restart
@@ -849,6 +884,9 @@ impl NostrClientHost for LoopHost {
     }
     fn recipients(&self) -> Vec<String> {
         self.recipients.borrow().clone()
+    }
+    fn relays(&self) -> Vec<String> {
+        self.relays.borrow().clone()
     }
     fn on_event(&self, event: &NostrEvent) {
         let _ = self.tx.send(Msg::RelayEvent(event.clone()));
@@ -931,6 +969,36 @@ struct Loop {
     backup_busy: bool,
     /// The `created_at` (s) of the last backup event made.
     backup_created_at: u64,
+    /// The subscription following the backup on its relay, while backup is
+    /// on and the core runs.
+    backup_sub: Option<Box<dyn nostr_transport::TransportSub>>,
+    /// Counts the backup subscriptions made, so what an old one reports is
+    /// told apart.
+    backup_sub_seq: u64,
+    /// Whether the backup relay has said what it holds since subscribing:
+    /// nothing is saved before, so a device merges before it writes.
+    backup_heard: bool,
+    /// Whether the relay holds a backup, as far as this subscription heard.
+    backup_found: bool,
+    /// The newest version of the backup seen (`created_at`, seconds), and
+    /// the events of that second seen: another device may save in the same
+    /// second as this one.
+    backup_seen_at: i64,
+    backup_seen_ids: Vec<String>,
+    /// Versions of the backup being opened: nothing is saved meanwhile.
+    backup_opening: u32,
+    /// Counts the backup relays set (and turnings off), so an opening or a
+    /// save started for an earlier one is dropped when it ends.
+    backup_epoch: u64,
+    /// The newest version could not be opened (another key, a newer app):
+    /// nothing is saved over it.
+    backup_unreadable: bool,
+    /// Gives up waiting for the backup relay to say what it holds.
+    backup_wait_timer: Option<AbortHandle>,
+    /// Subscribes again after the backup relay closed the subscription, and
+    /// how long the next wait is.
+    backup_retry_timer: Option<AbortHandle>,
+    backup_retry_ms: u64,
     /// The machines store changed since it was last written.
     machines_dirty: bool,
     /// A stored-event cursor not written yet.
@@ -972,6 +1040,7 @@ impl Loop {
                     self.arm_stale_watchdog();
                     self.links_on = true;
                     self.sync_direct_links();
+                    self.sync_backup_sub();
                 }
                 Msg::Stop => {
                     log::info!("core: Stop (status was {:?})", self.conn.status);
@@ -1112,8 +1181,16 @@ impl Loop {
                 }
                 Msg::DirectEvent(event) => self.nostr.deliver(&event),
                 Msg::BackupDue => self.on_backup_due(),
-                Msg::BackupFetched(found) => self.on_backup_fetched(found),
-                Msg::BackupSaved(saved) => self.on_backup_saved(saved).await,
+                Msg::BackupFetched { epoch, found } => self.on_backup_fetched(epoch, found).await,
+                Msg::BackupEvent(event) => self.on_backup_event(event).await,
+                Msg::BackupEose { sub } => self.on_backup_eose(sub),
+                Msg::BackupClosed { sub, reason } => self.on_backup_closed(sub, reason),
+                Msg::BackupNoAnswer { sub } => self.on_backup_no_answer(sub),
+                Msg::BackupRetry => {
+                    self.backup_retry_timer = None;
+                    self.sync_backup_sub();
+                }
+                Msg::BackupSaved { epoch, saved } => self.on_backup_saved(epoch, saved).await,
                 Msg::BackupDeleted => self.forget_backup_relay().await,
                 Msg::DirectState { machine, endpoint } => {
                     let changed = match endpoint {
@@ -1246,6 +1323,9 @@ impl Loop {
         abort(&mut self.stale_timer);
         self.links_on = false;
         self.sync_direct_links();
+        // A change not saved yet is saved after the next start's merge.
+        abort(&mut self.backup_timer);
+        self.sync_backup_sub();
         self.flush_acks();
         self.flush_writes().await;
     }
@@ -1644,6 +1724,7 @@ impl Loop {
     /// pairing began or ended, a machine was added or removed, or its relays
     /// were edited.
     fn sync_relays(&mut self) {
+        *self.host.relays.borrow_mut() = self.stores.bridge_relays();
         let relays = self.stores.relay_set();
         if relays != self.relay_set {
             log::info!("relays: {relays:?}");
@@ -1666,6 +1747,7 @@ impl Loop {
         *self.host.recipients.borrow_mut() =
             recipients_of(&self.session, &self.keys.identity_pubkey_hex, &authors, self.clock.now_ms());
         *self.host.machines.borrow_mut() = authors.clone();
+        *self.host.relays.borrow_mut() = self.stores.bridge_relays();
         self.machines = authors;
         if matches!(
             self.conn.status,

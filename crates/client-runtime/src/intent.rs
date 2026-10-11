@@ -395,13 +395,9 @@ pub enum Intent {
     SetShowCommitBadge(bool),
 
     // --- config backup (the loop's, see `runtime::backup`) ---
-    /// Turn the backup on with this relay (or move it there), then look for
-    /// a backup already on it.
+    /// Turn the backup on with this relay (or move it there): what is on it
+    /// is merged with what this device has, and the result saved.
     SetBackupRelay(String),
-    /// Merge the backup found on the relay into this phone.
-    ImportBackup,
-    /// Leave the backup found on the relay and save this phone's over it.
-    KeepLocalConfig,
     /// Save the backup now.
     BackupNow,
     /// Turn the backup off; `delete` also asks the relay to delete it.
@@ -879,8 +875,6 @@ pub fn apply(
         }
         // Taken by the loop before the stores see an intent.
         Intent::SetBackupRelay(_)
-        | Intent::ImportBackup
-        | Intent::KeepLocalConfig
         | Intent::BackupNow
         | Intent::DisableBackup { .. } => {}
         Intent::AddQuickPrompt { id, label, text } => {

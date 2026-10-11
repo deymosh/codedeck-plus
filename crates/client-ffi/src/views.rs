@@ -1099,6 +1099,8 @@ pub struct UniffiBackupView {
     pub relay: Option<String>,
     /// When a backup last reached the relay (ms since the epoch).
     pub saved_at: Option<u64>,
+    /// How many machines the backup held when last seen or saved.
+    pub machines: Option<u32>,
     pub status: UniffiBackupStatus,
 }
 
@@ -1106,12 +1108,9 @@ pub struct UniffiBackupView {
 pub enum UniffiBackupStatus {
     /// Nothing going on (off, or on and up to date).
     Idle,
-    /// Looking on the relay for a backup.
+    /// Waiting for the backup relay to say what it holds.
     Checking,
-    /// A backup is on the relay: import it, or keep this phone's.
-    Found { saved_at: u64, machines: u32 },
     Saving,
-    Importing,
     /// The last operation failed; `reason` is for the user.
     Failed { reason: String },
 }
@@ -1121,9 +1120,7 @@ fn build_uniffi_backup_status(s: &client_runtime::backup::BackupStatus) -> Uniff
     match s {
         BackupStatus::Idle => UniffiBackupStatus::Idle,
         BackupStatus::Checking => UniffiBackupStatus::Checking,
-        BackupStatus::Found { saved_at, machines } => UniffiBackupStatus::Found { saved_at: *saved_at, machines: *machines },
         BackupStatus::Saving => UniffiBackupStatus::Saving,
-        BackupStatus::Importing => UniffiBackupStatus::Importing,
         BackupStatus::Failed { reason } => UniffiBackupStatus::Failed { reason: reason.clone() },
     }
 }
@@ -1142,6 +1139,7 @@ pub fn build_uniffi_settings_view(v: &SettingsView) -> UniffiSettingsView {
         backup: UniffiBackupView {
             relay: v.backup.relay.clone(),
             saved_at: v.backup.saved_at,
+            machines: v.backup.machines,
             status: build_uniffi_backup_status(&v.backup.status),
         },
     }

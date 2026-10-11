@@ -18,7 +18,7 @@ use client_core::stores::pending_sessions::PendingSessionsState;
 use client_core::stores::quick_prompts::{
     hydrate_quick_prompts, serialize_quick_prompts, QuickPromptsState, QUICK_PROMPTS_STORAGE_KEY,
 };
-use client_core::stores::backup::{hydrate_backup_config, serialize_backup_config, BackupConfig, ConfigBackup, BACKUP_STORAGE_KEY};
+use client_core::stores::backup::{hydrate_backup_config, serialize_backup_config, BackupConfig, BACKUP_STORAGE_KEY};
 use client_core::stores::settings::{hydrate_settings, serialize_settings, SettingsState};
 
 use crate::backup::BackupStatus;
@@ -46,14 +46,12 @@ pub const OLD_SESSION_KEY_KEY: &str = "session.secretKey";
 /// resumes its since-window.
 pub const LAST_STORED_SEEN_KEY: &str = "client.lastStoredSeen";
 
-/// The config backup: its relay (persisted), where the current operation
-/// stands, and a backup found on the relay the user has not decided on yet
-/// (in memory only, never written down).
+/// The config backup: its relay and this device's part in it (persisted),
+/// and where the current operation stands.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BackupState {
     pub config: BackupConfig,
     pub status: BackupStatus,
-    pub found: Option<ConfigBackup>,
 }
 
 /// Boot options for the store bundle.
@@ -85,9 +83,20 @@ impl CoreStores {
     /// config backup's. Dialled like the others, so through Tor when it is
     /// on, and answering the relay's AUTH with the identity.
     pub fn relay_set(&self) -> Vec<String> {
+        let mut relays = self.bridge_relays();
+        if let Some(relay) = &self.backup.config.relay {
+            if !relays.contains(relay) {
+                relays.push(relay.clone());
+            }
+        }
+        relays
+    }
+
+    /// The relays the bridges use: every paired machine's and a pairing
+    /// candidate's. The subscriptions to them go to these only.
+    pub fn bridge_relays(&self) -> Vec<String> {
         let mut relays = self.machines.relay_set();
-        let candidate = self.pairing.candidate.iter().flat_map(|c| &c.relays);
-        for relay in candidate.chain(self.backup.config.relay.as_ref()) {
+        for relay in self.pairing.candidate.iter().flat_map(|c| &c.relays) {
             if !relays.contains(relay) {
                 relays.push(relay.clone());
             }

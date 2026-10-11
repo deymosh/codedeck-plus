@@ -332,8 +332,9 @@ impl std::fmt::Debug for PairRequestMsg {
 ///
 /// Each client of an identity holds its own key, and the bridge sends every
 /// message once per client, to its newest key (see
-/// [`recipients`](crate::recipients)). A grant without [`replaces`]
-/// (Self::replaces) adds a client; one with it rotates that client's key.
+/// [`recipients`](crate::recipients)). A grant without
+/// [`replaces`](Self::replaces) adds a client; one with it rotates that
+/// client's key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionKeyGrant {

@@ -368,11 +368,10 @@ internal fun SettingsHub(
     }
 }
 
-/** The hub's line for the backup: off, waiting on a choice, failing, or when it last saved. */
+/** The hub's line for the backup: off, failing, or when it last saved. */
 private fun backupSummary(backup: UniffiBackupView, now: Long): String {
     val relay = backup.relay ?: return "Off"
-    return when (val status = backup.status) {
-        is UniffiBackupStatus.Found -> "A backup on ${relayHost(relay)} waits for you"
+    return when (backup.status) {
         is UniffiBackupStatus.Failed -> "Not backed up"
         else -> backup.savedAt?.let { "Backed up ${whenSaved(it.toLong(), now)}" } ?: "On, to ${relayHost(relay)}"
     }

@@ -26,16 +26,9 @@ pub enum BackupStatus {
     /// Nothing going on (backup off, or on and up to date).
     #[default]
     Idle,
-    /// Looking on the relay for a backup.
+    /// Waiting for the backup relay to say what it holds.
     Checking,
-    /// A backup is on the relay: import it, or keep this phone's.
-    Found {
-        #[specta(type = specta_typescript::Number)]
-        saved_at: u64,
-        machines: u32,
-    },
     Saving,
-    Importing,
     /// The last operation failed; `reason` says why, for the user.
     Failed { reason: String },
 }
@@ -85,6 +78,23 @@ pub fn newest_backup<'a>(events: &'a [NostrEvent], me: &str) -> Option<&'a Nostr
         .max_by_key(|e| e.created_at)
 }
 
+/// The version that replaces a deleted backup, dated `created_at`: the same
+/// address with no content. A relay keeps only the newest version, so this
+/// wipes the backup even on a relay that ignores NIP-09; and each other
+/// device following the backup sees it and turns backup off, rather than
+/// saving the backup again.
+pub async fn seal_removed(signer: &dyn IdentitySigner, created_at: u64) -> Result<SignedEvent, String> {
+    let me = signer.pubkey_hex();
+    let event = unsigned(signer, BACKUP_KIND, String::new(), vec![Tag::identifier(backup_d_tag(&me))], created_at)?;
+    let signed = sign(signer, event).await.map_err(|e| e.to_string())?;
+    Ok(SignedEvent::from_nostr(&signed))
+}
+
+/// Whether `event` is the empty version a deletion leaves.
+pub fn is_removed(event: &NostrEvent) -> bool {
+    event.content.is_empty()
+}
+
 /// A NIP-09 deletion of the identity's backup, dated `created_at`.
 pub async fn seal_deletion(signer: &dyn IdentitySigner, created_at: u64) -> Result<SignedEvent, String> {
     let me = signer.pubkey_hex();
@@ -103,20 +113,18 @@ mod tests {
     use crate::signer::LocalSigner;
     use client_core::stores::machines::{MachinesState, MergeOptions};
     use client_core::stores::quick_prompts::QuickPrompt;
-    use client_core::stores::settings::default_settings;
     use protocol::crypto::generate_keypair;
     use std::collections::BTreeMap;
 
     const MACHINE: &str = "4f3c2b1a09f8e7d6c5b4a3928170615f4e3d2c1b0a9f8e7d6c5b4a3928170615";
-    const SESSION_SECRET: &str = "7e57000000000000000000000000000000000000000000000000000000000001";
 
     fn backup() -> ConfigBackup {
         let mut machines = MachinesState::new(BTreeMap::new(), MergeOptions::default());
         machines.register_machine(MACHINE, "my laptop", Some("Secret lab".into()), None, &["wss://private.relay".to_string()]);
         let prompts = [QuickPrompt { id: "q".into(), label: "Deploy".into(), text: "ship it".into() }];
-        let stored = format!(r#"{{"current":{{"secretHex":"{SESSION_SECRET}","expiresAt":99999999999}}}}"#);
-        let ring = client_core::stores::session_key::SessionKeyRing::load(Some(&stored), 1_000).0;
-        client_core::stores::backup::build_backup(&machines, &default_settings(), &prompts, &ring, 42)
+        let mut sync = client_core::stores::backup::SyncRecord::default();
+        sync.note_local_changes(&machines, &prompts, 42);
+        client_core::stores::backup::build_backup(&machines, &prompts, &sync, 42)
     }
 
     fn as_received(e: &SignedEvent) -> NostrEvent {
@@ -134,7 +142,7 @@ mod tests {
         let wire = serde_json::to_string(&event).unwrap();
         // Each has a space or a dot, or is long: none can turn up by chance in
         // base64 ciphertext or a hex id.
-        for secret in ["Secret lab", "private.relay", "my laptop", "ship it", MACHINE, SESSION_SECRET] {
+        for secret in ["Secret lab", "private.relay", "my laptop", "ship it", MACHINE] {
             assert!(!wire.contains(secret), "{secret} is readable in {wire}");
         }
         assert_eq!(open_backup(&me, &as_received(&event)).await.unwrap(), backup());
@@ -164,5 +172,16 @@ mod tests {
         assert_eq!(event.kind, DELETION_KIND);
         assert!(event.tags.contains(&vec!["a".to_string(), backup_address(&me.pubkey_hex())]));
         assert!(event.tags.contains(&vec!["k".to_string(), "30078".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn the_removed_version_takes_the_backups_address_and_holds_nothing() {
+        let me = LocalSigner(generate_keypair());
+        let removed = seal_removed(&me, 6).await.unwrap();
+        assert_eq!((removed.kind, removed.created_at), (BACKUP_KIND, 6));
+        assert_eq!(removed.tags, vec![vec!["d".to_string(), backup_d_tag(&me.pubkey_hex())]]);
+        assert!(is_removed(&as_received(&removed)));
+        let saved = seal_backup(&me, &backup(), 7).await.unwrap();
+        assert!(!is_removed(&as_received(&saved)));
     }
 }
