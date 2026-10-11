@@ -440,9 +440,16 @@ impl Core {
             backup_busy: false,
             backup_created_at: 0,
             backup_sub: None,
+            backup_sub_seq: 0,
             backup_heard: false,
+            backup_found: false,
             backup_seen_at: 0,
-            backup_own: None,
+            backup_seen_ids: Vec::new(),
+            backup_opening: 0,
+            backup_unreadable: false,
+            backup_wait_timer: None,
+            backup_retry_timer: None,
+            backup_retry_ms: 0,
             machines_dirty: false,
             stored_seen_dirty: None,
             flush_timer: None,
@@ -728,8 +735,15 @@ enum Msg {
     BackupFetched(backup::Fetched),
     /// A version of the backup came in on its subscription.
     BackupEvent(NostrEvent),
-    /// The backup relay sent all it has.
-    BackupEose,
+    /// The backup relay sent all it has, on subscription `sub`.
+    BackupEose { sub: u64 },
+    /// The backup relay ended subscription `sub`, or every socket to it dropped.
+    BackupClosed { sub: u64, reason: Option<String> },
+    /// The backup relay has not said what it holds a while after
+    /// subscription `sub` was made.
+    BackupNoAnswer { sub: u64 },
+    /// Time to subscribe to the backup again after it was closed.
+    BackupRetry,
     /// A backup save finished: when it was made and what it held, or why
     /// it failed.
     BackupSaved(Result<backup::Saved, String>),
@@ -775,6 +789,11 @@ enum SignerJob {
         created_at: u64,
         reply: oneshot::Sender<Result<SignedEvent, String>>,
     },
+    /// Sign the empty version that replaces a deleted config backup.
+    SealRemoved {
+        created_at: u64,
+        reply: oneshot::Sender<Result<SignedEvent, String>>,
+    },
 }
 
 async fn run_signer(
@@ -806,6 +825,10 @@ async fn run_signer(
             }
             SignerJob::SealDeletion { created_at, reply } => {
                 let _ = reply.send(crate::backup::seal_deletion(signer.as_ref(), created_at).await);
+                continue;
+            }
+            SignerJob::SealRemoved { created_at, reply } => {
+                let _ = reply.send(crate::backup::seal_removed(signer.as_ref(), created_at).await);
                 continue;
             }
         };
@@ -948,14 +971,30 @@ struct Loop {
     /// The subscription following the backup on its relay, while backup is
     /// on and the core runs.
     backup_sub: Option<Box<dyn nostr_transport::TransportSub>>,
+    /// Counts the backup subscriptions made, so what an old one reports is
+    /// told apart.
+    backup_sub_seq: u64,
     /// Whether the backup relay has said what it holds since subscribing:
     /// nothing is saved before, so a device merges before it writes.
     backup_heard: bool,
-    /// The newest version of the backup seen (`created_at`, seconds).
+    /// Whether the relay holds a backup, as far as this subscription heard.
+    backup_found: bool,
+    /// The newest version of the backup seen (`created_at`, seconds), and
+    /// the events of that second seen: another device may save in the same
+    /// second as this one.
     backup_seen_at: i64,
-    /// The event of this device's last save, which comes back on the
-    /// subscription and needs no opening.
-    backup_own: Option<String>,
+    backup_seen_ids: Vec<String>,
+    /// Versions of the backup being opened: nothing is saved meanwhile.
+    backup_opening: u32,
+    /// The newest version could not be opened (another key, a newer app):
+    /// nothing is saved over it.
+    backup_unreadable: bool,
+    /// Gives up waiting for the backup relay to say what it holds.
+    backup_wait_timer: Option<AbortHandle>,
+    /// Subscribes again after the backup relay closed the subscription, and
+    /// how long the next wait is.
+    backup_retry_timer: Option<AbortHandle>,
+    backup_retry_ms: u64,
     /// The machines store changed since it was last written.
     machines_dirty: bool,
     /// A stored-event cursor not written yet.
@@ -1139,8 +1178,14 @@ impl Loop {
                 Msg::DirectEvent(event) => self.nostr.deliver(&event),
                 Msg::BackupDue => self.on_backup_due(),
                 Msg::BackupFetched(found) => self.on_backup_fetched(found).await,
-                Msg::BackupEvent(event) => self.on_backup_event(event),
-                Msg::BackupEose => self.on_backup_eose(),
+                Msg::BackupEvent(event) => self.on_backup_event(event).await,
+                Msg::BackupEose { sub } => self.on_backup_eose(sub),
+                Msg::BackupClosed { sub, reason } => self.on_backup_closed(sub, reason),
+                Msg::BackupNoAnswer { sub } => self.on_backup_no_answer(sub),
+                Msg::BackupRetry => {
+                    self.backup_retry_timer = None;
+                    self.sync_backup_sub();
+                }
                 Msg::BackupSaved(saved) => self.on_backup_saved(saved).await,
                 Msg::BackupDeleted => self.forget_backup_relay().await,
                 Msg::DirectState { machine, endpoint } => {
@@ -1274,6 +1319,8 @@ impl Loop {
         abort(&mut self.stale_timer);
         self.links_on = false;
         self.sync_direct_links();
+        // A change not saved yet is saved after the next start's merge.
+        abort(&mut self.backup_timer);
         self.sync_backup_sub();
         self.flush_acks();
         self.flush_writes().await;

@@ -2534,8 +2534,9 @@ async fn next_frame_of(mock: &mut MockRelay, kind: &str) -> Vec<serde_json::Valu
     panic!("no {kind} frame");
 }
 
-/// The backup look's REQ: answered with `events` then EOSE.
-async fn answer_backup_req(mock: &mut MockRelay, me: &str, events: &[serde_json::Value]) {
+/// The backup look's REQ: answered with `events` then EOSE. Returns the
+/// subscription's id.
+async fn answer_backup_req(mock: &mut MockRelay, me: &str, events: &[serde_json::Value]) -> String {
     loop {
         let req = next_frame_of(mock, "REQ").await;
         let sub = req[1].as_str().unwrap().to_string();
@@ -2546,10 +2547,116 @@ async fn answer_backup_req(mock: &mut MockRelay, me: &str, events: &[serde_json:
                 mock.push(serde_json::json!(["EVENT", sub, e]).to_string());
             }
             mock.push(format!(r#"["EOSE","{sub}"]"#));
-            return;
+            return sub;
         }
         mock.push(format!(r#"["EOSE","{sub}"]"#));
     }
+}
+
+/// Backup turned on with `mock` as its relay, holding nothing yet: the
+/// core saves its own, which the relay takes. Returns the backup
+/// subscription's id.
+async fn backup_on(core: &Core, mock: &mut MockRelay, me: &str) -> String {
+    core.dispatch(Intent::SetBackupRelay(mock.url.clone())).await;
+    let sub = answer_backup_req(mock, me, &[]).await;
+    let event = next_frame_of(mock, "EVENT").await[1].clone();
+    mock.push(serde_json::json!(["OK", event["id"], true, ""]).to_string());
+    settle().await;
+    sub
+}
+
+#[tokio::test]
+async fn the_backup_relay_hears_only_the_backup_and_the_bridge_relays_never_do() {
+    LocalSet::new()
+        .run_until(async {
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let mut bridge_relay = mock_relay().await;
+            let mut backup_relay = mock_relay().await;
+            let mut state = client_core::stores::machines::MachinesState::default();
+            state.register_machine(&machine.pubkey_hex, "laptop", None, None, &[bridge_relay.url.clone()]);
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let ports = CorePorts { kv: Rc::new(kv), ..CorePorts::default() };
+            let core = core_for_ports(&bridge_relay, &phone, Rc::new(Spy::default()), ports).await;
+            core.start();
+            core.dispatch(Intent::SetBackupRelay(backup_relay.url.clone())).await;
+            let req = next_frame_of(&mut backup_relay, "REQ").await;
+            assert!(req[2]["#d"].is_array(), "the backup relay is asked for the backup: {req:?}");
+            let sub = req[1].as_str().unwrap();
+            backup_relay.push(format!(r#"["EOSE","{sub}"]"#));
+            while let Some(frame) = backup_relay.frame_within(Duration::from_millis(400)).await {
+                assert!(!frame.starts_with(r#"["REQ""#), "the backup relay sees what the phone follows: {frame}");
+            }
+            while let Some(frame) = bridge_relay.frame_within(Duration::from_millis(200)).await {
+                let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                assert!(v[0] != "REQ" || v[2].get("#d").is_none(), "a bridge relay sees the backup's REQ: {frame}");
+            }
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_deletion_on_another_device_turns_backup_off_here() {
+    LocalSet::new()
+        .run_until(async {
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let mut mock = mock_relay().await;
+            let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+            core.start();
+            let sub = backup_on(&core, &mut mock, &phone.pubkey_hex).await;
+            assert!(settings_backup(&core).await.relay.is_some());
+            // Another device deletes it: the empty version takes its place.
+            let signer = crate::signer::LocalSigner(phone.clone());
+            let removed = crate::backup::seal_removed(&signer, 5_000).await.unwrap();
+            mock.push(serde_json::json!(["EVENT", sub, removed]).to_string());
+            settle().await;
+            let backup = settings_backup(&core).await;
+            assert_eq!(backup.relay, None);
+            assert!(matches!(backup.status, crate::backup::BackupStatus::Failed { reason } if reason.contains("another device")));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_device_joining_after_a_deletion_saves_its_own() {
+    LocalSet::new()
+        .run_until(async {
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let mut mock = mock_relay().await;
+            let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+            core.start();
+            let signer = crate::signer::LocalSigner(phone.clone());
+            let removed = crate::backup::seal_removed(&signer, 900).await.unwrap();
+            core.dispatch(Intent::SetBackupRelay(mock.url.clone())).await;
+            answer_backup_req(&mut mock, &phone.pubkey_hex, &[serde_json::to_value(&removed).unwrap()]).await;
+            let saved = next_frame_of(&mut mock, "EVENT").await[1].clone();
+            assert_eq!(saved["kind"], 30078);
+            assert!(!saved["content"].as_str().unwrap().is_empty());
+            assert!(saved["created_at"].as_u64().unwrap() > 900, "dated past the empty version");
+            assert!(settings_backup(&core).await.relay.is_some());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_backup_relay_ending_the_subscription_shows_as_a_failure() {
+    LocalSet::new()
+        .run_until(async {
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let mut mock = mock_relay().await;
+            let core = core_for(&mock, &phone, Rc::new(Spy::default())).await;
+            core.start();
+            let sub = backup_on(&core, &mut mock, &phone.pubkey_hex).await;
+            mock.push(serde_json::json!(["CLOSED", sub, "restricted: members only"]).to_string());
+            settle().await;
+            let backup = settings_backup(&core).await;
+            assert!(backup.relay.is_some(), "backup stays on, and is asked for again later");
+            assert!(matches!(backup.status, crate::backup::BackupStatus::Failed { reason } if reason.contains("members only")));
+        })
+        .await;
 }
 
 async fn settings_backup(core: &Core) -> crate::view::BackupView {

@@ -138,16 +138,28 @@ Every device of the identity that backs up to the same relay keeps in step
 (`client_core::stores::backup`): while the core runs it follows the backup
 on the relay, merges each version another device saves at once, and saves
 when it holds anything newer. Each machine carries when its shared fields
-last changed and a removed machine leaves a tombstone (kept 180 days); per
-machine the newest wins, so a machine paired, edited or removed on one
-device is on all of them, and pairing it again later brings it back. The
-quick prompts go as one list, the newest wins. What a device had before it
-first joined counts as older than what the backup holds. A save follows
-30 s after the last change worth backing up, and only when the content
-changed; "Back up now" forces one. Turning backup off on a device leaves the
-others going; it can also send a NIP-09 deletion, which removes the backup
-for every device. The backup relay is used for nothing else, and the Tor and
-AUTH rules of every relay apply to it. A login kept on the phone can show and copy its `nsec`
+last changed and a removed machine leaves a tombstone (kept 30 days); per
+machine the newest wins, a tie going to the backup's side, so a machine
+paired, edited or removed on one device is on all of them, and pairing it
+again later brings it back. The quick prompts go as one list, the newest
+wins. What a device had before it first joined counts as older than what
+the backup holds. Stamps come from each device's clock, but an edit is
+stamped after the newest stamp the device has seen, so an edit made after
+seeing another device's change wins over it whatever the clocks say. A save
+follows 30 s after the last change worth backing up (a merge that leaves
+this device newer included), and only when the content changed; "Back up
+now" forces one. Nothing is saved before the relay said what it holds,
+while a version is being opened, or over a version that could not be
+opened. A relay that does not answer within 20 s, or ends the
+subscription, shows as a failure; the subscription is made again, waiting
+longer each time. Turning backup off on a device leaves the others going;
+deleting it sends a NIP-09 deletion and then an empty version at the same
+address, which replaces the backup even on a relay that ignores NIP-09: a
+device that took part before it turns backup off when it sees it, and one
+joining later finds no backup. The backup relay gets the backup's
+subscription and nothing else, and the bridges' relays never get it (each
+subscription goes to its own relays only); the Tor and AUTH rules of every
+relay apply to it. A login kept on the phone can show and copy its `nsec`
 (Settings → Account), the one thing a backup cannot hold.
 
 **Orbot.** A settings toggle routes the relay connections *and* Blossom

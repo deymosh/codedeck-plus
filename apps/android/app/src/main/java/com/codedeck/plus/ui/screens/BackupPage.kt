@@ -176,7 +176,7 @@ private fun BackupOn(relay: String, backup: UniffiBackupView, now: Long, dispatc
             GroupBody {
                 Text(
                     "Turn off backup? This phone stops keeping in step with ${relayHost(relay)}; your other devices go on. " +
-                        "You can also ask the relay to delete the backup, for every device; relays usually do, but none has to.",
+                        "Or delete the backup: your other devices turn backup off too.",
                     color = Tokens.Text,
                     fontSize = Tokens.TextSm,
                 )

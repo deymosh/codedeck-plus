@@ -78,6 +78,23 @@ pub fn newest_backup<'a>(events: &'a [NostrEvent], me: &str) -> Option<&'a Nostr
         .max_by_key(|e| e.created_at)
 }
 
+/// The version that replaces a deleted backup, dated `created_at`: the same
+/// address with no content. A relay keeps only the newest version, so this
+/// wipes the backup even on a relay that ignores NIP-09; and each other
+/// device following the backup sees it and turns backup off, rather than
+/// saving the backup again.
+pub async fn seal_removed(signer: &dyn IdentitySigner, created_at: u64) -> Result<SignedEvent, String> {
+    let me = signer.pubkey_hex();
+    let event = unsigned(signer, BACKUP_KIND, String::new(), vec![Tag::identifier(backup_d_tag(&me))], created_at)?;
+    let signed = sign(signer, event).await.map_err(|e| e.to_string())?;
+    Ok(SignedEvent::from_nostr(&signed))
+}
+
+/// Whether `event` is the empty version a deletion leaves.
+pub fn is_removed(event: &NostrEvent) -> bool {
+    event.content.is_empty()
+}
+
 /// A NIP-09 deletion of the identity's backup, dated `created_at`.
 pub async fn seal_deletion(signer: &dyn IdentitySigner, created_at: u64) -> Result<SignedEvent, String> {
     let me = signer.pubkey_hex();
@@ -155,5 +172,16 @@ mod tests {
         assert_eq!(event.kind, DELETION_KIND);
         assert!(event.tags.contains(&vec!["a".to_string(), backup_address(&me.pubkey_hex())]));
         assert!(event.tags.contains(&vec!["k".to_string(), "30078".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn the_removed_version_takes_the_backups_address_and_holds_nothing() {
+        let me = LocalSigner(generate_keypair());
+        let removed = seal_removed(&me, 6).await.unwrap();
+        assert_eq!((removed.kind, removed.created_at), (BACKUP_KIND, 6));
+        assert_eq!(removed.tags, vec![vec!["d".to_string(), backup_d_tag(&me.pubkey_hex())]]);
+        assert!(is_removed(&as_received(&removed)));
+        let saved = seal_backup(&me, &backup(), 7).await.unwrap();
+        assert!(!is_removed(&as_received(&saved)));
     }
 }
