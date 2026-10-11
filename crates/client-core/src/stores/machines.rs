@@ -41,13 +41,33 @@ pub fn is_direct_endpoint(url: &str) -> bool {
     }
 }
 
-/// A user-dismissed session id keeps suppressing incoming lists and live
-/// output for this long (then the bridge is trusted again — it has had ample
-/// time to process the close-session). It must outlast the direct link's
-/// resume window: a reconnecting link re-sends what the bridge published in
-/// its last [`protocol::direct::OUTBOX_SECS`], including the deleted
-/// session's final output, which would otherwise read as news.
+/// A user-deleted session keeps suppressing incoming lists and live output
+/// while its bridge still lists it, and for this long after: both since its
+/// bridge last listed it, by that bridge's heartbeats, and by the phone's
+/// clock. Counted in heartbeats too, so a bridge that was offline for a day
+/// does not bring it back when it returns before it has heard the close. It
+/// must outlast the direct link's resume window: a reconnecting link
+/// re-sends what the bridge published in its last
+/// [`protocol::direct::OUTBOX_SECS`], including the deleted session's final
+/// output, which would otherwise read as news.
 pub const DISMISSED_TTL_MS: u64 = 2 * protocol::direct::OUTBOX_SECS * 1000;
+
+/// How often a `close-session` is sent again while the bridge still lists
+/// the session it closes (the first went out when the delete committed).
+pub const CLOSE_RETRY_MS: u64 = 5 * 60 * 1000;
+
+/// A session the user deleted, kept until its bridge has dropped it too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dismissed {
+    /// The machine it was on.
+    pub machine: String,
+    /// When it was deleted, or later last listed by its machine (ms).
+    pub at: u64,
+    /// The bridge acknowledged the `close-session`: nothing to send again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+}
 
 /// The three honest presence states for a listed session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -223,18 +243,6 @@ pub fn title_from_first_message(text: &str) -> String {
     }
 }
 
-/// Drop dismissed-session ids older than [`DISMISSED_TTL_MS`].
-///
-/// The TS returns the same object identity when nothing expired (a cheap
-/// no-change signal for `zustand.set`); the Rust caller compares values, so
-/// this just returns the pruned map.
-pub fn prune_dismissed(dismissed: &BTreeMap<String, u64>, now: u64) -> BTreeMap<String, u64> {
-    dismissed
-        .iter()
-        .filter(|(_, &at)| now.saturating_sub(at) < DISMISSED_TTL_MS)
-        .map(|(id, &at)| (id.clone(), at))
-        .collect()
-}
 
 // --- MachineView + the store's pure transforms --------------------------------
 
@@ -575,13 +583,17 @@ pub fn hydrate_machines(raw: Option<&str>) -> BTreeMap<String, MachineView> {
 
 /// `dismissed_sessions` for the KV. Kept apart from the machines so a
 /// deleted session stays shielded across an app restart.
-pub fn serialize_dismissed(dismissed: &BTreeMap<String, u64>) -> String {
-    serde_json::to_string(dismissed).expect("a string-to-number map always serializes")
+pub fn serialize_dismissed(dismissed: &BTreeMap<String, Dismissed>) -> String {
+    serde_json::to_string(dismissed).expect("dismissed sessions serialize")
 }
 
-/// Tolerant parse of [`serialize_dismissed`]: garbage yields an empty map.
-pub fn hydrate_dismissed(raw: Option<&str>) -> BTreeMap<String, u64> {
-    raw.and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default()
+/// Tolerant parse of [`serialize_dismissed`]: garbage yields an empty map,
+/// an unreadable entry is skipped.
+pub fn hydrate_dismissed(raw: Option<&str>) -> BTreeMap<String, Dismissed> {
+    let Some(map) = raw.and_then(|r| serde_json::from_str::<BTreeMap<String, serde_json::Value>>(r).ok()) else {
+        return BTreeMap::new();
+    };
+    map.into_iter().filter_map(|(id, v)| Some((id, serde_json::from_value(v).ok()?))).collect()
 }
 
 /// The machines store as a pure state machine. Every method mutates
@@ -591,7 +603,10 @@ pub fn hydrate_dismissed(raw: Option<&str>) -> BTreeMap<String, u64> {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MachinesState {
     pub machines: BTreeMap<String, MachineView>,
-    pub dismissed_sessions: BTreeMap<String, u64>,
+    pub dismissed_sessions: BTreeMap<String, Dismissed>,
+    /// When a `close-session` last went to a dismissed session's bridge
+    /// (ms); in memory only, so a restart sends it again at the first chance.
+    pub close_sent: BTreeMap<String, u64>,
     pub merge_options: MergeOptions,
     /// The model lists and provider profiles answered on this connection.
     pub fetches: Fetches,
@@ -605,6 +620,7 @@ impl MachinesState {
         Self {
             machines,
             dismissed_sessions: BTreeMap::new(),
+            close_sent: BTreeMap::new(),
             merge_options,
             fetches: Fetches::default(),
             read_at: BTreeMap::new(),
@@ -744,15 +760,28 @@ impl MachinesState {
         self.with_machine(machine_pubkey, |m| m.agent_defaults = defaults)
     }
 
+    /// Forget a machine, and the sessions deleted on it: with the machine
+    /// gone no heartbeat of it can bring them back.
     pub fn remove_machine(&mut self, pubkey_hex: &str) -> bool {
-        self.machines.remove(pubkey_hex).is_some()
+        let removed = self.machines.remove(pubkey_hex).is_some();
+        self.prune_dismissed(0);
+        removed
     }
 
-    /// The heartbeat path. CDX-022: the record is SPREAD from the existing one,
-    /// never rebuilt — a field the wire omits (`models`, `host`, …) keeps its
-    /// stored value; a field the wire carries always wins. The resurrection
-    /// shield filters non-expired user-dismissed session ids out of `msg`
-    /// BEFORE the merge.
+    /// Forget the dismissals that are over: the machine is gone, or it has
+    /// not listed the session for [`DISMISSED_TTL_MS`] of its heartbeats and
+    /// as long by `now`.
+    fn prune_dismissed(&mut self, now: u64) {
+        let machines = &self.machines;
+        self.dismissed_sessions.retain(|_, d| {
+            let Some(m) = machines.get(&d.machine) else { return false };
+            let quiet = m.last_heartbeat_at.map_or(0, |hb| hb.saturating_sub(d.at));
+            quiet < DISMISSED_TTL_MS || now.saturating_sub(d.at) < DISMISSED_TTL_MS
+        });
+        let dismissed = &self.dismissed_sessions;
+        self.close_sent.retain(|id, _| dismissed.contains_key(id));
+    }
+
     /// Whether `msg` is no newer than the newest list applied for
     /// `machine_pubkey`, so applying it would step the machine back.
     pub fn is_outdated_list(&self, machine_pubkey: &str, msg: &SessionListMsg) -> bool {
@@ -760,8 +789,25 @@ impl MachinesState {
         matches!((msg.rev, applied), (Some(rev), Some(applied)) if rev <= applied)
     }
 
-    pub fn apply_session_list(&mut self, machine_pubkey: &str, msg: &SessionListMsg, at: u64) {
-        self.dismissed_sessions = prune_dismissed(&self.dismissed_sessions, at);
+    /// The heartbeat path. CDX-022: the record is SPREAD from the existing one,
+    /// never rebuilt — a field the wire omits (`models`, `host`, …) keeps its
+    /// stored value; a field the wire carries always wins. The resurrection
+    /// shield filters user-deleted sessions out of `msg` BEFORE the merge.
+    ///
+    /// Returns the deleted sessions the bridge still lists whose
+    /// `close-session` it has not acknowledged: it never heard it, so the
+    /// caller sends it again (see [`Self::closes_due`]). Each one listed stays
+    /// dismissed for as long as it is listed.
+    pub fn apply_session_list(&mut self, machine_pubkey: &str, msg: &SessionListMsg, at: u64) -> Vec<String> {
+        let mut unclosed = Vec::new();
+        for info in &msg.sessions {
+            if let Some(d) = self.dismissed_sessions.get_mut(&info.id).filter(|d| d.machine == machine_pubkey) {
+                d.at = d.at.max(at);
+                if !d.closed {
+                    unclosed.push(info.id.clone());
+                }
+            }
+        }
         let dismissed = &self.dismissed_sessions;
 
         let prev_sessions = self
@@ -805,6 +851,35 @@ impl MachinesState {
         }
         entry.last_heartbeat_at = Some(at);
         entry.sessions = sessions;
+        self.prune_dismissed(at);
+        unclosed
+    }
+
+    /// Of `sessions` (deleted ones their bridge still lists), those whose
+    /// `close-session` is due again, noted as sent `now`.
+    pub fn closes_due(&mut self, sessions: &[String], now: u64) -> Vec<String> {
+        let mut due = Vec::new();
+        for id in sessions {
+            if self.close_sent.get(id).is_none_or(|at| now.saturating_sub(*at) >= CLOSE_RETRY_MS) {
+                self.close_sent.insert(id.clone(), now);
+                due.push(id.clone());
+            }
+        }
+        due
+    }
+
+    /// A `close-session` for `session_id` went out `now`.
+    pub fn note_close_sent(&mut self, session_id: &str, now: u64) {
+        self.close_sent.insert(session_id.to_string(), now);
+    }
+
+    /// The bridge acknowledged closing `session_id`: it is not sent again.
+    /// The session stays dismissed (a replay of its output is not news).
+    pub fn note_closed(&mut self, session_id: &str) {
+        if let Some(d) = self.dismissed_sessions.get_mut(session_id) {
+            d.closed = true;
+        }
+        self.close_sent.remove(session_id);
     }
 
     /// Where to reach `machine` directly: the endpoints to try, in order,
@@ -897,22 +972,24 @@ impl MachinesState {
         });
     }
 
-    /// Shield a user-deleted session from resurrection by stale heartbeats.
-    pub fn dismiss_session(&mut self, session_id: &str, at: u64) {
-        self.dismissed_sessions = prune_dismissed(&self.dismissed_sessions, at);
-        self.dismissed_sessions.insert(session_id.to_string(), at);
+    /// Shield a user-deleted session on `machine_pubkey` from resurrection
+    /// by heartbeats that still list it.
+    pub fn dismiss_session(&mut self, machine_pubkey: &str, session_id: &str, at: u64) {
+        self.prune_dismissed(at);
+        self.dismissed_sessions
+            .insert(session_id.to_string(), Dismissed { machine: machine_pubkey.to_string(), at, closed: false });
     }
 
-    /// The user deleted `session_id` less than [`DISMISSED_TTL_MS`] ago.
-    pub fn is_dismissed(&self, session_id: &str, now: u64) -> bool {
-        self.dismissed_sessions
-            .get(session_id)
-            .is_some_and(|&at| now.saturating_sub(at) < DISMISSED_TTL_MS)
+    /// The user deleted `session_id`, and its bridge may still have it or
+    /// have just dropped it (see [`DISMISSED_TTL_MS`]).
+    pub fn is_dismissed(&self, session_id: &str) -> bool {
+        self.dismissed_sessions.contains_key(session_id)
     }
 
     /// Undo a delete: un-dismiss and re-insert the exact snapshotted view.
     pub fn restore_session(&mut self, machine_pubkey: &str, view: SessionView) {
         self.dismissed_sessions.remove(&view.info.id);
+        self.close_sent.remove(&view.info.id);
         self.with_machine(machine_pubkey, |m| {
             m.sessions.insert(view.info.id.clone(), view);
         });
@@ -1404,34 +1481,74 @@ mod tests {
         assert_eq!(title_from_first_message("  \n \n "), "");
     }
 
-    // --- prune_dismissed ---
+    // --- dismissed sessions ---
 
     #[test]
-    fn prune_dismissed_drops_only_expired_entries() {
-        let d: BTreeMap<String, u64> = [("old".to_string(), 0u64), ("fresh".to_string(), 1_000_000)]
-            .into_iter()
-            .collect();
-        let pruned = prune_dismissed(&d, DISMISSED_TTL_MS + 500);
-        assert_eq!(pruned.keys().cloned().collect::<Vec<_>>(), vec!["fresh"]);
-        // exactly at the TTL boundary the entry is dropped (`>=`)
-        assert!(!prune_dismissed(&d, DISMISSED_TTL_MS).contains_key("old"));
+    fn a_dismissal_ends_once_its_bridge_has_not_listed_it_for_a_while() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[info("a")], NONE()), 1);
+        st.user_remove_session("pk", "a");
+        st.dismiss_session("pk", "a", 1_000);
+        // Dropped by the bridge: still dismissed through the resume window.
+        st.apply_session_list("pk", &list(&[], NONE()), 1_000 + protocol::direct::OUTBOX_SECS * 1000);
+        assert!(st.is_dismissed("a"));
+        st.apply_session_list("pk", &list(&[], NONE()), 1_000 + DISMISSED_TTL_MS);
+        assert!(!st.is_dismissed("a"));
+        assert!(!st.is_dismissed("other"));
     }
 
     #[test]
-    fn the_dismissal_outlasts_the_direct_links_resume_window() {
+    fn a_bridge_back_after_a_long_absence_does_not_bring_a_deleted_session_back() {
         let mut st = MachinesState::default();
-        st.dismiss_session("s", 1_000);
-        assert!(st.is_dismissed("s", 1_000 + protocol::direct::OUTBOX_SECS * 1000));
-        assert!(!st.is_dismissed("s", 1_000 + DISMISSED_TTL_MS));
-        assert!(!st.is_dismissed("other", 1_000));
+        st.apply_session_list("pk", &list(&[info("a")], NONE()), 1);
+        st.user_remove_session("pk", "a");
+        st.dismiss_session("pk", "a", 1_000);
+        // No heartbeat for a day: by the bridge's heartbeats no time passed.
+        let day = 24 * 3600 * 1000;
+        st.apply_session_list("other", &list(&[], NONE()), day);
+        assert!(st.is_dismissed("a"));
+        // It comes back still listing it: still hidden, and the close is due.
+        assert_eq!(st.apply_session_list("pk", &list(&[info("a")], NONE()), day + 1), ["a"]);
+        assert!(st.session("pk", "a").is_none());
+    }
+
+    #[test]
+    fn a_close_is_sent_again_while_the_bridge_lists_the_session_until_it_acks() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[info("a")], NONE()), 1);
+        st.user_remove_session("pk", "a");
+        st.dismiss_session("pk", "a", 1_000);
+        st.note_close_sent("a", 1_000);
+        let unclosed = st.apply_session_list("pk", &list(&[info("a")], NONE()), 2_000);
+        assert!(st.closes_due(&unclosed, 2_000).is_empty(), "not again right away");
+        let unclosed = st.apply_session_list("pk", &list(&[info("a")], NONE()), 1_000 + CLOSE_RETRY_MS);
+        assert_eq!(st.closes_due(&unclosed, 1_000 + CLOSE_RETRY_MS), ["a"]);
+        // Acknowledged: never sent again, and still kept out.
+        st.note_closed("a");
+        assert!(st.apply_session_list("pk", &list(&[info("a")], NONE()), 3 * CLOSE_RETRY_MS).is_empty());
+        assert!(st.session("pk", "a").is_none());
+    }
+
+    #[test]
+    fn removing_a_machine_forgets_the_sessions_deleted_on_it() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[info("a")], NONE()), 1);
+        st.user_remove_session("pk", "a");
+        st.dismiss_session("pk", "a", 1_000);
+        st.remove_machine("pk");
+        assert!(!st.is_dismissed("a"));
     }
 
     #[test]
     fn dismissed_sessions_round_trip_and_garbage_is_empty() {
-        let d: BTreeMap<String, u64> = [("s".to_string(), 42u64)].into_iter().collect();
+        let d: BTreeMap<String, Dismissed> =
+            [("s".to_string(), Dismissed { machine: "pk".into(), at: 42, closed: true })].into_iter().collect();
         assert_eq!(hydrate_dismissed(Some(&serialize_dismissed(&d))), d);
         assert!(hydrate_dismissed(Some("[not a map")).is_empty());
         assert!(hydrate_dismissed(None).is_empty());
+        // An entry it cannot read is skipped, not the whole map.
+        let mixed = r#"{"old":42,"s":{"machine":"pk","at":42,"closed":true}}"#;
+        assert_eq!(hydrate_dismissed(Some(mixed)), d);
     }
 
     // --- property: sessions are lost ONLY to tombstones ---
@@ -1796,15 +1913,14 @@ mod tests {
         st.apply_session_list("pk", &list(&[info("a"), info("b")], NONE()), 1);
         // deleteController does both: remove now + shield against resurrection.
         st.user_remove_session("pk", "a");
-        st.dismiss_session("a", 2);
+        st.dismiss_session("pk", "a", 2);
         // a stale heartbeat still lists `a` — the shield filters it BEFORE the
-        // merge, so it does not come back.
+        // merge, so it does not come back, however long that goes on.
         st.apply_session_list("pk", &list(&[info("a"), info("b")], NONE()), 3);
         assert!(st.session("pk", "a").is_none());
         assert!(st.session("pk", "b").is_some());
-        // past the TTL the bridge is trusted again.
         st.apply_session_list("pk", &list(&[info("a")], NONE()), DISMISSED_TTL_MS + 4);
-        assert!(st.session("pk", "a").is_some());
+        assert!(st.session("pk", "a").is_none());
     }
 
     #[test]

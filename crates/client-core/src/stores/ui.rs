@@ -181,6 +181,14 @@ impl UiState {
             .insert(card_id.to_string());
     }
 
+    /// Forget what is kept about a session that is gone: its unread dot and
+    /// the cards answered in it. Whether there was any.
+    pub fn forget_session(&mut self, machine: &str, session_id: &str) -> bool {
+        let key = session_key_of(machine, session_id);
+        let unread = self.unread_sessions.remove(&key);
+        self.responded_cards.remove(&key).is_some() || unread
+    }
+
     pub fn is_card_responded(&self, machine: &str, session_id: &str, card_id: &str) -> bool {
         self.responded_cards
             .get(&session_key_of(machine, session_id))

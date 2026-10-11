@@ -1588,6 +1588,7 @@ impl Loop {
         for (machine, session) in r.transcript_removed {
             self.transcript_store.remove(&machine, &session).await;
         }
+        self.apply_ui_effects(r.ui_effects);
         for (id, delivered) in r.outbox_settled {
             self.emit(CoreEvent::OutboxSettled { id, delivered });
         }
@@ -1951,52 +1952,13 @@ impl Loop {
         }
     }
 
+    /// The undo window closed (or the app is going to the background): the
+    /// pending delete commits, through the same interpreter as an intent.
     async fn on_undo_timer(&mut self) {
         let effects = self.stores.delete_controller.timer_fired();
         let mut r = IntentResult::default();
-        // The delete-controller's timer_fired only emits ClearUndoTimer +
-        // SendCloseSession + HideUndoToast; route them through the same
-        // interpreter path.
-        for effect in effects {
-            match effect {
-                client_core::delete_controller::DeleteEffect::SendCloseSession {
-                    machine,
-                    session_id,
-                } => {
-                    r.ui_effects.push(UiEffect::SessionDeleted {
-                        machine: machine.clone(),
-                        session_id: session_id.clone(),
-                    });
-                    r.sends.push(RouteSend {
-                        machine,
-                        msg: PhoneToBridge::CloseSession(
-                            protocol::commands::SessionIdMsg {
-                                session_id,
-                            },
-                        ),
-                    })
-                }
-                client_core::delete_controller::DeleteEffect::ClearUndoTimer => {
-                    abort(&mut self.undo_timer)
-                }
-                client_core::delete_controller::DeleteEffect::HideUndoToast => {
-                    self.stores.ui.set_undo_toast(None)
-                }
-                _ => {}
-            }
-        }
-        for RouteSend { machine, msg } in r.sends {
-            self.on_send(machine, msg, None);
-        }
-        self.apply_ui_effects(r.ui_effects);
-        // `commit()` only ever emits ClearUndoTimer + SendCloseSession +
-        // HideUndoToast (see delete_controller::commit) — never a card
-        // effect. This was `SliceId::Cards`, which notified nothing that
-        // could see `stores.ui.undo_toast` had just been cleared: the undo
-        // toast would silently outlive its own window forever once the user
-        // let it expire instead of tapping undo (a `UiView` consumer never
-        // learns to re-fetch).
-        self.state_changed(SliceId::Ui);
+        crate::intent::apply_delete_effects(&mut self.stores, effects, self.clock.now_ms(), &mut r);
+        self.interpret_intent(r).await;
     }
 
     async fn answer_view(&self, query: ViewQuery) {

@@ -77,7 +77,25 @@ pub struct CoreStores {
     pub delete_controller: DeleteController,
 }
 
+/// What [`CoreStores::forget_session`] dropped: anything of the UI's (a dot,
+/// answered cards) and anything of the outbox's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Forgot {
+    pub ui: bool,
+    pub outbox: bool,
+}
+
 impl CoreStores {
+    /// Forget what the phone keeps about a session that is gone (deleted
+    /// here, on another device, or with its machine): its unread dot, the
+    /// cards answered in it, its unsent messages and its transcript's
+    /// in-memory coverage. The caller also drops its stored rows and any
+    /// notification it posted.
+    pub fn forget_session(&mut self, machine: &str, session_id: &str) -> Forgot {
+        self.transcript.remove_session(machine, session_id);
+        Forgot { ui: self.ui.forget_session(machine, session_id), outbox: self.outbox.forget_session(machine, session_id) }
+    }
+
     /// The relays the transport dials: every paired machine's, plus a pairing
     /// candidate's, which its pair-request and pair-ack travel over, plus the
     /// config backup's. Dialled like the others, so through Tor when it is

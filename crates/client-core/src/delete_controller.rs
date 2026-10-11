@@ -22,7 +22,7 @@ pub const UNDO_DELAY_MS: u64 = 4_000;
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeleteEffect {
     /// Dismiss the session locally (heartbeat-resurrection shield), stamped `now`.
-    DismissSession { session_id: String, now: u64 },
+    DismissSession { machine: String, session_id: String, now: u64 },
     /// Remove the session row from the machines store now.
     RemoveSession { machine: String, session_id: String },
     /// Clear any unread dot for the session (undo does not resurrect dots).
@@ -86,6 +86,12 @@ impl DeleteController {
         self.pending.is_some()
     }
 
+    /// The session whose delete can still be undone: its `close-session`
+    /// has not gone out yet, and must not.
+    pub fn pending_session(&self) -> Option<&str> {
+        self.pending.as_ref().map(|p| p.session_id.as_str())
+    }
+
     /// Commit any pending delete: clear its timer, send `close-session`, drop
     /// the toast. A no-op with nothing pending.
     fn commit(&mut self) -> Vec<DeleteEffect> {
@@ -132,6 +138,7 @@ impl DeleteController {
         };
 
         effects.push(DeleteEffect::DismissSession {
+            machine: machine.to_string(),
             session_id: session_id.to_string(),
             now,
         });
@@ -235,7 +242,7 @@ mod tests {
         assert_eq!(
             e,
             vec![
-                E::DismissSession { session_id: "s1".into(), now: 1_000 },
+                E::DismissSession { machine: "m".into(), session_id: "s1".into(), now: 1_000 },
                 E::RemoveSession { machine: "m".into(), session_id: "s1".into() },
                 E::ClearSessionUnread { machine: "m".into(), session_id: "s1".into() },
                 E::DeselectSession { machine: "m".into(), session_id: "s1".into() },
