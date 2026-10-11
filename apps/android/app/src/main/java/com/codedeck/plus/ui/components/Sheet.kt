@@ -58,6 +58,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.contentDescription
@@ -125,6 +126,10 @@ private enum class SheetStop { Hidden, Half, Full }
  * navigation bar. System Back, which the sheet follows as a predictive
  * gesture, takes a whole sheet with a half stop to it and otherwise closes
  * the sheet, unless the content's own `BackHandler` takes it first.
+ *
+ * Opening it takes the focus off whatever text field had it, however it was
+ * opened: the keyboard goes, and closing the sheet does not bring it back —
+ * a keyboard back after a sheet would take the next Back for itself.
  */
 @Composable
 fun DeckSheet(
@@ -136,7 +141,11 @@ fun DeckSheet(
     val scope = rememberCoroutineScope()
     val dismiss by rememberUpdatedState(onDismiss)
     val sheet = remember { SheetMotion(density, scope) { dismiss() } }
-    LaunchedEffect(sheet) { sheet.open() }
+    val focus = LocalFocusManager.current
+    LaunchedEffect(sheet) {
+        focus.clearFocus()
+        sheet.open()
+    }
 
     Dialog(
         onDismissRequest = sheet::close,

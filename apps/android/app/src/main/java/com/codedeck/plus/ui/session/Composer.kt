@@ -41,9 +41,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -63,9 +65,9 @@ import uniffi.client_ffi.UniffiQuickPrompt
  * turn runs with), then on the right one round button for the rest: Send
  * once something is typed; while a turn runs and nothing is, Stop;
  * otherwise dictation. A long press on it dictates whatever it shows, so
- * the microphone takes no room of its own. Every control but the text
- * takes the focus off it first: the keyboard goes, and a sheet it opens
- * does not bring it back on closing.
+ * the microphone takes no room of its own. [onInputBounds] hears where the
+ * text's area is in the window, for the screen to tell a tap on it from a
+ * tap elsewhere (which takes the focus off it).
  */
 @Composable
 internal fun Composer(
@@ -82,9 +84,9 @@ internal fun Composer(
     onDictate: () -> Unit,
     onSend: () -> Unit,
     focusRequester: FocusRequester = FocusRequester(),
+    onInputBounds: (Rect) -> Unit = {},
     options: (@Composable () -> Unit)? = null,
 ) {
-    val focus = LocalFocusManager.current
     val shape = RoundedCornerShape(26.dp)
     // The field keeps its own cursor; a draft replaced from outside (a quick
     // prompt, a picked command, a sent message) puts it at the end, so what
@@ -101,7 +103,7 @@ internal fun Composer(
             .padding(6.dp),
     ) {
         Box(
-            Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
+            Modifier.fillMaxWidth().heightIn(min = 40.dp).onGloballyPositioned { onInputBounds(it.boundsInWindow()) }.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             if (draft.isEmpty()) {
@@ -121,7 +123,7 @@ internal fun Composer(
             )
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            if (canAttach) AddMenu(uploading, onAttachPhoto, onAttachFile, onOpen = { focus.clearFocus() })
+            if (canAttach) AddMenu(uploading, onAttachPhoto, onAttachFile)
             // The options take what the buttons leave, so on a narrow phone
             // the chip shortens rather than pushing Send off the edge.
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { options?.invoke() }
@@ -170,7 +172,7 @@ internal fun Composer(
 /** The `+` button and what it adds: a photo or a file, both dimmed while
  *  one uploads. */
 @Composable
-private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile: () -> Unit, onOpen: () -> Unit) {
+private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         Box(
@@ -178,10 +180,7 @@ private fun AddMenu(uploading: Boolean, onAttachPhoto: () -> Unit, onAttachFile:
                 .size(40.dp)
                 .clip(CircleShape)
                 .border(1.dp, Tokens.BorderStrong, CircleShape)
-                .clickable {
-                    onOpen()
-                    open = true
-                }
+                .clickable { open = true }
                 .semantics { contentDescription = "Add" },
             contentAlignment = Alignment.Center,
         ) {
