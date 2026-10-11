@@ -446,6 +446,7 @@ impl Core {
             backup_seen_at: 0,
             backup_seen_ids: Vec::new(),
             backup_opening: 0,
+            backup_epoch: 0,
             backup_unreadable: false,
             backup_wait_timer: None,
             backup_retry_timer: None,
@@ -732,7 +733,7 @@ enum Msg {
     /// Time to save the config backup.
     BackupDue,
     /// A look on the backup relay finished.
-    BackupFetched(backup::Fetched),
+    BackupFetched { epoch: u64, found: backup::Fetched },
     /// A version of the backup came in on its subscription.
     BackupEvent(NostrEvent),
     /// The backup relay sent all it has, on subscription `sub`.
@@ -746,7 +747,7 @@ enum Msg {
     BackupRetry,
     /// A backup save finished: when it was made and what it held, or why
     /// it failed.
-    BackupSaved(Result<backup::Saved, String>),
+    BackupSaved { epoch: u64, saved: Result<backup::Saved, String> },
     /// The backup's deletion was sent (or given up on).
     BackupDeleted,
     /// A machine's direct link came up on an endpoint, or went down.
@@ -986,6 +987,9 @@ struct Loop {
     backup_seen_ids: Vec<String>,
     /// Versions of the backup being opened: nothing is saved meanwhile.
     backup_opening: u32,
+    /// Counts the backup relays set (and turnings off), so an opening or a
+    /// save started for an earlier one is dropped when it ends.
+    backup_epoch: u64,
     /// The newest version could not be opened (another key, a newer app):
     /// nothing is saved over it.
     backup_unreadable: bool,
@@ -1177,7 +1181,7 @@ impl Loop {
                 }
                 Msg::DirectEvent(event) => self.nostr.deliver(&event),
                 Msg::BackupDue => self.on_backup_due(),
-                Msg::BackupFetched(found) => self.on_backup_fetched(found).await,
+                Msg::BackupFetched { epoch, found } => self.on_backup_fetched(epoch, found).await,
                 Msg::BackupEvent(event) => self.on_backup_event(event).await,
                 Msg::BackupEose { sub } => self.on_backup_eose(sub),
                 Msg::BackupClosed { sub, reason } => self.on_backup_closed(sub, reason),
@@ -1186,7 +1190,7 @@ impl Loop {
                     self.backup_retry_timer = None;
                     self.sync_backup_sub();
                 }
-                Msg::BackupSaved(saved) => self.on_backup_saved(saved).await,
+                Msg::BackupSaved { epoch, saved } => self.on_backup_saved(epoch, saved).await,
                 Msg::BackupDeleted => self.forget_backup_relay().await,
                 Msg::DirectState { machine, endpoint } => {
                     let changed = match endpoint {

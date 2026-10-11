@@ -397,8 +397,17 @@ pub struct BackupConfig {
     /// How many machines that backup held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machines: Option<u32>,
+    /// The newest version of the backup this device has seen or saved
+    /// (`created_at`, seconds): a deletion dated after it is news to this
+    /// device, whatever the clocks say.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub seen_at: i64,
     #[serde(default)]
     pub sync: SyncRecord,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 /// Tolerant hydrate: anything unreadable is backup off.

@@ -86,6 +86,7 @@ impl Loop {
         backup.config.relay = Some(relay.to_string());
         backup.config.saved_at = None;
         backup.config.fingerprint = None;
+        backup.config.seen_at = 0;
         Persister::new(self.kv.as_ref()).save_backup(&self.stores.backup).await;
         self.forget_backup_seen();
         self.sync_relays();
@@ -130,6 +131,8 @@ impl Loop {
         let me = self.signer.pubkey_hex();
         self.stores.backup.status = BackupStatus::Checking;
         self.backup_found = false;
+        // What an earlier run saw is not news (nor opened again).
+        self.backup_seen_at = self.backup_seen_at.max(self.stores.backup.config.seen_at);
         self.backup_sub_seq += 1;
         let sub = self.backup_sub_seq;
         let (events, eose, closed) = (self.self_tx.clone(), self.self_tx.clone(), self.self_tx.clone());
@@ -166,8 +169,11 @@ impl Loop {
         }
     }
 
-    /// Forget which versions were seen: the relay is another one.
+    /// Forget which versions were seen, and drop what is being opened or
+    /// saved: the relay is another one, or none.
     fn forget_backup_seen(&mut self) {
+        self.backup_epoch += 1;
+        self.backup_opening = 0;
         self.backup_seen_at = 0;
         self.backup_seen_ids.clear();
         self.backup_unreadable = false;
@@ -175,7 +181,10 @@ impl Loop {
 
     /// A version of the backup arrived: open it, unless it was seen already
     /// (this device's own save among them). The empty version a deletion
-    /// leaves turns backup off here, if this device took part before it.
+    /// leaves turns backup off here, if this device took part before it:
+    /// it has taken part, and the deletion is newer than every version it
+    /// has seen. A device joining afterwards sees it as the newest it knows
+    /// and saves its own over it.
     pub(super) async fn on_backup_event(&mut self, event: NostrEvent) {
         let me = self.signer.pubkey_hex();
         if event.kind != BACKUP_KIND || !event.pubkey.eq_ignore_ascii_case(&me) {
@@ -187,9 +196,7 @@ impl Loop {
             return;
         }
         if removed {
-            let since = self.stores.backup.config.sync.since;
-            let at_ms = u64::try_from(event.created_at).unwrap_or(0).saturating_mul(1000);
-            if since.is_some_and(|since| at_ms >= since) {
+            if self.stores.backup.config.sync.since.is_some() {
                 log::info!("backup: deleted on another device; turning it off here");
                 abort(&mut self.backup_timer);
                 self.forget_backup_relay().await;
@@ -202,11 +209,12 @@ impl Loop {
         self.backup_opening += 1;
         let jobs = self.signer_jobs.clone();
         let tx = self.self_tx.clone();
+        let epoch = self.backup_epoch;
         tokio::task::spawn_local(async move {
             let (reply, answer) = oneshot::channel();
             let _ = jobs.send(SignerJob::OpenBackup { event, reply });
-            let opened = answer.await.unwrap_or_else(|_| Err("The backup could not be read.".into()));
-            let _ = tx.send(Msg::BackupFetched(opened));
+            let found = answer.await.unwrap_or_else(|_| Err("The backup could not be read.".into()));
+            let _ = tx.send(Msg::BackupFetched { epoch, found });
         });
     }
 
@@ -219,6 +227,7 @@ impl Loop {
         if created_at > self.backup_seen_at {
             self.backup_seen_at = created_at;
             self.backup_seen_ids.clear();
+            self.stores.backup.config.seen_at = created_at;
         }
         self.backup_seen_ids.push(id.to_string());
         true
@@ -248,10 +257,10 @@ impl Loop {
     }
 
     pub(super) fn on_backup_no_answer(&mut self, sub: u64) {
-        self.backup_wait_timer = None;
         if sub != self.backup_sub_seq || self.backup_heard || self.backup_sub.is_none() {
             return;
         }
+        self.backup_wait_timer = None;
         self.stores.backup.status = BackupStatus::Failed { reason: "The backup relay does not answer.".into() };
         self.state_changed(SliceId::Settings);
     }
@@ -283,7 +292,10 @@ impl Loop {
 
     /// Merge a version another device saved; what this device then holds
     /// newer is saved in a while.
-    pub(super) async fn on_backup_fetched(&mut self, found: Fetched) {
+    pub(super) async fn on_backup_fetched(&mut self, epoch: u64, found: Fetched) {
+        if epoch != self.backup_epoch {
+            return;
+        }
         self.backup_opening = self.backup_opening.saturating_sub(1);
         let backup = match found {
             Ok(backup) => backup,
@@ -351,6 +363,8 @@ impl Loop {
                 // dated after it.
                 let deletion_at = self.next_backup_created_at();
                 let removed_at = self.next_backup_created_at();
+                // What was being opened or saved is dropped when it ends.
+                self.forget_backup_seen();
                 tokio::task::spawn_local(async move {
                     let (reply, answer) = oneshot::channel();
                     let _ = jobs.send(SignerJob::SealDeletion { created_at: deletion_at, reply });
@@ -429,6 +443,7 @@ impl Loop {
         let ws = self.ws.clone();
         let jobs = self.signer_jobs.clone();
         let tx = self.self_tx.clone();
+        let epoch = self.backup_epoch;
         tokio::task::spawn_local(async move {
             let (reply, answer) = oneshot::channel();
             let _ = jobs.send(SignerJob::SealBackup { backup: Box::new(backup), created_at, reply });
@@ -446,11 +461,14 @@ impl Loop {
                 }
                 Err(reason) => Err(reason),
             };
-            let _ = tx.send(Msg::BackupSaved(saved));
+            let _ = tx.send(Msg::BackupSaved { epoch, saved });
         });
     }
 
-    pub(super) async fn on_backup_saved(&mut self, saved: Result<Saved, String>) {
+    pub(super) async fn on_backup_saved(&mut self, epoch: u64, saved: Result<Saved, String>) {
+        if epoch != self.backup_epoch {
+            return;
+        }
         self.backup_busy = false;
         match saved {
             Ok(saved) => {
