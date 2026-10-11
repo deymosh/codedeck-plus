@@ -30,9 +30,17 @@ export interface RecordingContext extends SessionContext {
   entries(): OutputEntry[];
   /** Resolves with the `ended` event (rejects after `timeoutMs`). */
   ended(timeoutMs?: number): Promise<Extract<SessionEvent, { type: 'ended' }>>;
-  /** Resolves once an event matching `pred` has been reported. */
+  /** Resolves once an event matching `pred` has been reported (rejects
+   *  after `timeoutMs`, by default `WAIT_FOR_MS`). */
   waitFor(pred: (e: SessionEvent) => boolean, timeoutMs?: number): Promise<SessionEvent>;
 }
+
+/** How long `waitFor` waits by default. An event usually comes within
+ *  milliseconds, but a driver that spawns a process and opens a socket (a
+ *  named pipe on Windows) has been seen taking over 2 s on a busy CI runner;
+ *  a real hang still fails, with this message, before the test's own
+ *  timeout (see vitest.config.mjs). */
+export const WAIT_FOR_MS = 15_000;
 
 const DENY: SelectOutcome = { outcome: 'selected', optionId: 'deny' };
 
@@ -72,7 +80,7 @@ export function recordingContext(handlers: Handlers = {}, sessionId = 's1'): Rec
     entries() {
       return ctx.events.flatMap((e) => (e.type === 'entries' ? e.entries : []));
     },
-    waitFor(pred, timeoutMs = 2000) {
+    waitFor(pred, timeoutMs = WAIT_FOR_MS) {
       const seen = ctx.events.find(pred);
       if (seen) return Promise.resolve(seen);
       return new Promise((resolve, reject) => {
