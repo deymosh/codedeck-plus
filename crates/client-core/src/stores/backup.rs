@@ -19,7 +19,9 @@
 //! removed: per machine, the newest of an entry and a tombstone wins, so a
 //! machine removed on one device is removed on every device, and pairing it
 //! again later brings it back. The quick prompts go as one list, the newest
-//! wins. Tombstones are kept [`TOMBSTONE_KEEP_MS`].
+//! wins. On a tie the backup's side wins, in every comparison, so two
+//! devices never each keep their own. Tombstones are kept
+//! [`TOMBSTONE_KEEP_MS`].
 //!
 //! A device learns of its own edits by comparing what it has with what it
 //! last agreed with the backup ([`SyncRecord`], kept on the device, never in
@@ -27,6 +29,13 @@
 //! gone was removed now. What a device had before it first took part
 //! counts as older than anything in the backup, so turning backup on never
 //! overrides another device's newer edits with stale ones.
+//!
+//! **Clocks.** Stamps come from each device's wall clock, which may be off.
+//! So an edit is stamped no earlier than just after the newest stamp the
+//! device has seen ([`SyncRecord::latest`]): an edit made after seeing
+//! another device's change always wins over it, however far ahead that
+//! device's clock ran. A clock running ahead only moves every device's
+//! stamps forward with it; it never makes a later edit lose.
 //!
 //! The event is NIP-78 application data: kind [`BACKUP_KIND`], addressable,
 //! so a relay keeps only the latest one per `d` tag. The `d` tag
@@ -60,8 +69,10 @@ const D_TAG_CONTEXT: &str = "codedeck-plus/config-backup/v2";
 /// Where the backup relay is kept on the phone (never in the backup).
 pub const BACKUP_STORAGE_KEY: &str = "backup";
 /// How long a removed machine's tombstone is kept: long enough for every
-/// device of the identity to have been opened since.
-pub const TOMBSTONE_KEEP_MS: u64 = 180 * 24 * 3600 * 1000;
+/// device of the identity in use to have been opened since. A device left
+/// unopened for longer can bring a machine removed meanwhile back; removing
+/// it again removes it everywhere.
+pub const TOMBSTONE_KEEP_MS: u64 = 30 * 24 * 3600 * 1000;
 
 /// The backup's `d` tag for identity `pubkey_hex`: hex sha256 of the
 /// context, a colon and the pubkey (lowercase). Deterministic, so a new phone
@@ -135,6 +146,10 @@ pub struct SyncRecord {
     pub removed_machines: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompts: Option<Stamp>,
+    /// The newest stamp this device has made or seen (ms): its next edit
+    /// is stamped after it.
+    #[serde(default)]
+    pub latest: u64,
 }
 
 /// The fields of `m` the identity's devices share, as a fingerprint.
@@ -169,7 +184,8 @@ impl SyncRecord {
     /// anything was stamped.
     pub fn note_local_changes(&mut self, machines: &MachinesState, prompts: &[QuickPrompt], now_ms: u64) -> bool {
         let first = self.since.is_none();
-        let stamp_at = if first { 0 } else { now_ms };
+        let edit_at = now_ms.max(self.latest + 1);
+        let stamp_at = if first { 0 } else { edit_at };
         self.since.get_or_insert(now_ms);
         let mut changed = first;
         for (pubkey, m) in &machines.machines {
@@ -183,7 +199,7 @@ impl SyncRecord {
         let gone: Vec<String> = self.machines.keys().filter(|p| !machines.machines.contains_key(*p)).cloned().collect();
         for pubkey in gone {
             self.machines.remove(&pubkey);
-            self.removed_machines.insert(pubkey, now_ms);
+            self.removed_machines.insert(pubkey, edit_at);
             changed = true;
         }
         let fingerprint = prompts_fingerprint(prompts);
@@ -191,7 +207,15 @@ impl SyncRecord {
             self.prompts = Some(Stamp { fingerprint, changed_at: stamp_at });
             changed = true;
         }
+        if changed && !first {
+            self.latest = edit_at;
+        }
         changed
+    }
+
+    /// Note a stamp seen in the backup.
+    fn saw(&mut self, stamp: u64) {
+        self.latest = self.latest.max(stamp);
     }
 
     /// Forget tombstones older than [`TOMBSTONE_KEEP_MS`].
@@ -235,10 +259,16 @@ pub fn encode_backup(backup: &ConfigBackup) -> String {
     serde_json::to_string(backup).expect("ConfigBackup serializes")
 }
 
-/// What the backup holds, whenever it was made: two backups with the same
-/// fingerprint need not both be saved.
+/// What the backup holds, whenever it was made and whatever each device
+/// last heard its machines call themselves: two backups with the same
+/// fingerprint need not both be saved. A machine's name is not merged (its
+/// heartbeat says it again), so two devices may hold different ones; were it
+/// counted, each would save over the other's for ever.
 pub fn backup_fingerprint(backup: &ConfigBackup) -> String {
-    let content = ConfigBackup { saved_at: 0, ..backup.clone() };
+    let mut content = ConfigBackup { saved_at: 0, ..backup.clone() };
+    for m in &mut content.machines {
+        m.name.clear();
+    }
     sha256::Hash::hash(encode_backup(&content).as_bytes()).to_string()
 }
 
@@ -278,12 +308,13 @@ pub struct MergeOutcome {
 }
 
 /// Merge `backup` into this device: per machine, whichever of the device's
-/// entry, the backup's entry and the backup's tombstone changed last wins;
-/// the quick prompts likewise as one list. On a tie the backup's wins, so a
-/// device joining with what it had before (stamped as older than anything)
-/// takes what the others share. `sync` is brought up to date.
-/// Afterwards, [`build_backup`] gives what to save if it differs from
-/// `backup`.
+/// entry or tombstone, the backup's entry and the backup's tombstone changed
+/// last wins; the quick prompts likewise as one list. On a tie the backup's
+/// wins, every time: so a device joining with what it had before (stamped
+/// as older than anything) takes what the others share, and two devices
+/// whose sides tie end up with the same one, never each with its own.
+/// `sync` is brought up to date. Afterwards, [`build_backup`] gives what to
+/// save if it differs from `backup`.
 pub fn merge_backup(
     backup: &ConfigBackup,
     machines: &mut MachinesState,
@@ -292,10 +323,14 @@ pub fn merge_backup(
     now_ms: u64,
 ) -> MergeOutcome {
     sync.note_local_changes(machines, &prompts.prompts, now_ms);
+    let stamps = backup.machines.iter().map(|m| m.changed_at).chain(backup.removed_machines.values().copied());
+    for stamp in stamps.chain([backup.prompts_changed_at]) {
+        sync.saw(stamp);
+    }
     let mut outcome = MergeOutcome::default();
     for theirs in &backup.machines {
         let pubkey = &theirs.pubkey_hex;
-        let removed_here = sync.removed_machines.get(pubkey).is_some_and(|at| *at >= theirs.changed_at);
+        let removed_here = sync.removed_machines.get(pubkey).is_some_and(|at| *at > theirs.changed_at);
         let newer_here = machines.machine(pubkey).is_some()
             && sync.machines.get(pubkey).is_some_and(|s| {
                 s.changed_at > theirs.changed_at
@@ -323,7 +358,7 @@ pub fn merge_backup(
     for (pubkey, removed_at) in &backup.removed_machines {
         let here = sync.machines.get(pubkey).map(|s| s.changed_at);
         match here {
-            Some(changed_at) if changed_at >= *removed_at => continue,
+            Some(changed_at) if changed_at > *removed_at => continue,
             Some(_) if machines.machine(pubkey).is_some() => outcome.removed.push(pubkey.clone()),
             _ => {}
         }
@@ -551,6 +586,62 @@ mod tests {
         let (outcome, saved) = phone.sync(Some(&removal), NOW + 3 * MIN);
         assert!(outcome.removed.is_empty());
         assert!(saved.machines.iter().any(|m| m.pubkey_hex == "m1"));
+    }
+
+    #[test]
+    fn devices_that_heard_different_names_have_nothing_to_save() {
+        let (mut phone, mut desk) = (Device::new(), Device::new());
+        phone.pair("m1", "Laptop");
+        let (_, saved) = phone.sync(None, NOW);
+        desk.sync(Some(&saved), NOW + MIN);
+        // Each heard the bridge call itself something else since.
+        phone.machines.machines.get_mut("m1").unwrap().name = "laptop-old".into();
+        desk.machines.machines.get_mut("m1").unwrap().name = "laptop-new".into();
+        let (_, phones) = phone.sync(Some(&saved), NOW + 2 * MIN);
+        let (_, desks) = desk.sync(Some(&phones), NOW + 3 * MIN);
+        assert_ne!(phones.machines[0].name, desks.machines[0].name);
+        assert_eq!(backup_fingerprint(&phones), backup_fingerprint(&desks), "neither saves over the other");
+    }
+
+    #[test]
+    fn a_removal_and_an_edit_at_the_same_moment_settle_on_one() {
+        let (mut phone, mut desk) = (Device::new(), Device::new());
+        phone.pair("m1", "Laptop");
+        let (_, saved) = phone.sync(None, NOW);
+        desk.sync(Some(&saved), NOW + MIN);
+        // At the same millisecond: the phone renames it, the desktop removes it.
+        phone.machines.set_label("m1", Some("Renamed".into()));
+        let (_, edit) = phone.sync(None, NOW + 2 * MIN);
+        desk.machines.remove_machine("m1");
+        let (_, removal) = desk.sync(None, NOW + 2 * MIN);
+        assert_eq!(edit.machines[0].changed_at, removal.removed_machines["m1"]);
+        // Each takes the other's side: whichever the relay keeps, the device
+        // that reads it agrees with it and has nothing to save.
+        let (_, phones) = phone.sync(Some(&removal), NOW + 3 * MIN);
+        assert!(phone.machines.machine("m1").is_none());
+        assert_eq!(backup_fingerprint(&phones), backup_fingerprint(&removal));
+        let (_, desks) = desk.sync(Some(&edit), NOW + 3 * MIN);
+        assert_eq!(desk.label("m1"), Some("Renamed"));
+        assert_eq!(backup_fingerprint(&desks), backup_fingerprint(&edit));
+    }
+
+    #[test]
+    fn an_edit_after_seeing_a_change_wins_however_far_ahead_its_clock_ran() {
+        let (mut phone, mut desk) = (Device::new(), Device::new());
+        phone.pair("m1", "Laptop");
+        let (_, saved) = phone.sync(None, NOW);
+        desk.sync(Some(&saved), NOW + MIN);
+        // The desktop's clock runs a day ahead.
+        let ahead = NOW + 24 * 60 * MIN;
+        desk.machines.set_label("m1", Some("From the desk".into()));
+        let (_, saved) = desk.sync(Some(&saved), ahead);
+        // The phone takes it, and renames it a minute later by its own clock.
+        phone.sync(Some(&saved), NOW + 2 * MIN);
+        phone.machines.set_label("m1", Some("From the phone".into()));
+        let (_, saved) = phone.sync(Some(&saved), NOW + 3 * MIN);
+        assert!(saved.machines[0].changed_at > ahead);
+        let (outcome, _) = desk.sync(Some(&saved), ahead + MIN);
+        assert_eq!((outcome.updated, desk.label("m1")), (1, Some("From the phone")));
     }
 
     #[test]
