@@ -23,7 +23,7 @@ use client_core::stores::fetches::Fetch;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, PairRequestMsg, PhoneToBridge, SyncAckMsg, SyncRequestMsg,
+    BareMsg, PairRequestMsg, PhoneToBridge, SessionIdMsg, SyncAckMsg, SyncRequestMsg,
 };
 use protocol::common::{SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
@@ -31,6 +31,7 @@ use protocol::events::BridgeToPhone;
 use crate::ports::{TranscriptRow, TranscriptStore};
 use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
+use client_core::stores::ui::UiEffect;
 
 /// A `client_core` store the runtime must re-serialize to the `Kv` after a
 /// route mutated it.
@@ -99,6 +100,8 @@ pub struct RouteResult {
     /// caller matches it by `request_id` off the `CoreEvent` stream, same
     /// shape as `outbox_settled`/`pairing_settled` above.
     pub folder_ack: Option<protocol::events::FolderAckMsg>,
+    /// Effects of sessions gone: cancel what was notified for them.
+    pub ui_effects: Vec<UiEffect>,
 }
 
 impl RouteResult {
@@ -228,9 +231,10 @@ impl<'a> Router<'a> {
             }
             BridgeToPhone::CloseSessionAck(m) => {
                 self.stores.machines.user_remove_session(machine, &m.session_id);
-                self.stores.transcript.remove_session(machine, &m.session_id);
-                r.transcript_removed
-                    .push((machine.to_string(), m.session_id.clone()));
+                if m.success {
+                    self.stores.machines.note_closed(&m.session_id);
+                }
+                self.forget_session(machine, &m.session_id, &mut r);
                 r.persist(StoreId::Machines);
             }
 
@@ -246,7 +250,7 @@ impl<'a> Router<'a> {
                 // resuming re-sends the last hour), and its transcript is gone
                 // with the close-session-ack: storing it would bring the rows
                 // back and its final entry would notify as if new.
-                if self.stores.machines.is_dismissed(&m.session_id, self.now) {
+                if self.stores.machines.is_dismissed(&m.session_id) {
                     return r;
                 }
                 let rows = m.numbered().map(|(seq, e)| (seq, to_value(e))).collect();
@@ -498,6 +502,20 @@ impl<'a> Router<'a> {
     }
 
     /// The heartbeat. Port of `createPhoneCore`'s `onSessions` handler.
+    /// A session of `machine` is gone: forget what is kept about it, drop
+    /// its stored rows, and cancel what was notified for it.
+    fn forget_session(&mut self, machine: &str, session_id: &str, r: &mut RouteResult) {
+        let forgot = self.stores.forget_session(machine, session_id);
+        if forgot.outbox {
+            r.persist(StoreId::Outbox);
+        }
+        if forgot.ui {
+            r.ui_changed = true;
+            r.ui_effects.push(UiEffect::SessionDeleted { machine: machine.to_string(), session_id: session_id.to_string() });
+        }
+        r.transcript_removed.push((machine.to_string(), session_id.to_string()));
+    }
+
     async fn on_sessions(
         &mut self,
         machine: &str,
@@ -533,9 +551,19 @@ impl<'a> Router<'a> {
             })
             .unwrap_or_default();
 
-        self.stores.machines.apply_session_list(machine, m, self.now);
+        let unclosed = self.stores.machines.apply_session_list(machine, m, self.now);
         r.persist(StoreId::Machines);
         r.heartbeat = Some((machine.to_string(), self.now));
+
+        // A deleted session the bridge still lists never got its
+        // `close-session` (sent while offline, or past the relays' hour):
+        // send it again, now and then, until the bridge acknowledges it. Not
+        // one whose delete can still be undone.
+        let undoable = self.stores.delete_controller.pending_session().map(str::to_string);
+        let unclosed: Vec<String> = unclosed.into_iter().filter(|id| undoable.as_deref() != Some(id.as_str())).collect();
+        for session_id in self.stores.machines.closes_due(&unclosed, self.now) {
+            r.send(machine, PhoneToBridge::CloseSession(SessionIdMsg { session_id }));
+        }
 
         let is_waiting = |s: Option<SessionState>| {
             matches!(
@@ -582,9 +610,12 @@ impl<'a> Router<'a> {
             r.notifies.extend(fx);
         }
 
+        // Deleted on the bridge (from another device, or by the bridge
+        // itself): gone here with everything kept about it. The tombstones
+        // ride every heartbeat, so a session already forgotten costs only a
+        // row-store removal.
         for id in m.removed_sessions.iter().flatten() {
-            self.stores.transcript.remove_session(machine, id);
-            r.transcript_removed.push((machine.to_string(), id.clone()));
+            self.forget_session(machine, id, r);
         }
 
         // A pending placeholder whose session shows up in the list is resolved
@@ -786,8 +817,9 @@ mod tests {
     use crate::stores::{hydrate, StoresConfig};
     use crate::ports::MemoryKv;
     use client_core::stores::outbox::{OutboxItemState, OutboxState};
+    use client_core::stores::machines::CLOSE_RETRY_MS;
     use protocol::events::{
-        InputAckMsg, InputFailedMsg, OutputMsg, SessionListMsg, SessionReadyMsg, SyncChunkMsg,
+        CloseSessionAckMsg, InputAckMsg, InputFailedMsg, OutputMsg, SessionListMsg, SessionReadyMsg, SyncChunkMsg,
         SyncEndMsg,
     };
     use protocol::common::{EntryBody, OutputEntry, RemoteSessionInfo, SessionState};
@@ -954,7 +986,7 @@ mod tests {
 
         // Deleted (and acked: no rows left), then the app was killed.
         let mut before = hydrate(&kv, &ts, &StoresConfig::default()).await.stores;
-        before.machines.dismiss_session("s1", 1_000);
+        before.machines.dismiss_session(MACHINE, "s1", 1_000);
         crate::stores::Persister::new(&kv).save_machines(&before.machines).await;
 
         // A fresh start; the direct link resumes and re-sends the turn end.
@@ -1386,5 +1418,76 @@ mod tests {
         assert_eq!(out.persist, vec![StoreId::Outbox]);
         assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Failed);
         assert_eq!(s.outbox.items["in-1"].error.as_deref(), Some("no-session"));
+    }
+
+    fn closes_of(out: &RouteResult, session: &str) -> usize {
+        out.sends.iter().filter(|x| matches!(&x.msg, PhoneToBridge::CloseSession(m) if m.session_id == session)).count()
+    }
+
+    /// `s1` listed by MACHINE, then deleted here at 1 000 (removed, dismissed,
+    /// its close sent).
+    async fn deleted_while_listed() -> (CoreStores, MemoryTranscriptStore, PhoneKeys) {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        s.machines.apply_session_list(MACHINE, &sessions_msg(vec![info("s1", None, None)]), 500);
+        s.machines.user_remove_session(MACHINE, "s1");
+        s.machines.dismiss_session(MACHINE, "s1", 1_000);
+        s.machines.note_close_sent("s1", 1_000);
+        (s, ts, kp)
+    }
+
+    #[tokio::test]
+    async fn a_deleted_session_its_bridge_still_lists_gets_its_close_again_until_acked() {
+        let (mut s, ts, kp) = deleted_while_listed().await;
+        let heartbeat = BridgeToPhone::Sessions(sessions_msg(vec![info("s1", None, None)]));
+        let out = Router::new(&mut s, &ts, &kp, 2_000).route(MACHINE, &heartbeat).await;
+        assert_eq!(closes_of(&out, "s1"), 0, "it just went");
+        let later = 1_000 + CLOSE_RETRY_MS;
+        let out = Router::new(&mut s, &ts, &kp, later).route(MACHINE, &heartbeat).await;
+        assert_eq!(closes_of(&out, "s1"), 1, "the bridge never heard it");
+        assert!(s.machines.session(MACHINE, "s1").is_none());
+        // A failed close is tried again; a done one is not.
+        let ack = |success| BridgeToPhone::CloseSessionAck(CloseSessionAckMsg { session_id: "s1".into(), success });
+        Router::new(&mut s, &ts, &kp, later + 1).route(MACHINE, &ack(false)).await;
+        let out = Router::new(&mut s, &ts, &kp, later + CLOSE_RETRY_MS).route(MACHINE, &heartbeat).await;
+        assert_eq!(closes_of(&out, "s1"), 1);
+        Router::new(&mut s, &ts, &kp, later + CLOSE_RETRY_MS + 1).route(MACHINE, &ack(true)).await;
+        let out = Router::new(&mut s, &ts, &kp, later + 3 * CLOSE_RETRY_MS).route(MACHINE, &heartbeat).await;
+        assert_eq!(closes_of(&out, "s1"), 0);
+        assert!(s.machines.session(MACHINE, "s1").is_none());
+    }
+
+    #[tokio::test]
+    async fn no_close_goes_out_while_the_delete_can_be_undone() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        s.machines.apply_session_list(MACHINE, &sessions_msg(vec![info("s1", None, None)]), 500);
+        let snapshot = s.machines.session(MACHINE, "s1").cloned();
+        let effects = s.delete_controller.request_delete(MACHINE, "s1", snapshot, None, 1_000);
+        crate::intent::apply_delete_effects(&mut s, effects, 1_000, &mut crate::intent::IntentResult::default());
+        let heartbeat = BridgeToPhone::Sessions(sessions_msg(vec![info("s1", None, None)]));
+        let out = Router::new(&mut s, &ts, &kp, 1_000 + CLOSE_RETRY_MS).route(MACHINE, &heartbeat).await;
+        assert_eq!(closes_of(&out, "s1"), 0);
+        assert!(s.machines.session(MACHINE, "s1").is_none(), "hidden all the same");
+    }
+
+    #[tokio::test]
+    async fn a_session_deleted_on_the_bridge_leaves_no_dot_unsent_message_or_notification() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        s.machines.apply_session_list(MACHINE, &sessions_msg(vec![info("s1", None, None)]), 500);
+        s.ui.mark_session_unread(MACHINE, "s1");
+        s.outbox.begin_publish(OutboxState::new_input("in-1", MACHINE, "s1", "hi", 600));
+        let mut gone = sessions_msg(vec![]);
+        gone.removed_sessions = Some(vec!["s1".into()]);
+        let out = Router::new(&mut s, &ts, &kp, 1_000).route(MACHINE, &BridgeToPhone::Sessions(gone.clone())).await;
+        assert!(s.machines.session(MACHINE, "s1").is_none());
+        assert!(!s.ui.is_session_unread(MACHINE, "s1"));
+        assert!(s.outbox.items.is_empty());
+        assert!(out.persist.contains(&StoreId::Outbox));
+        assert_eq!(out.ui_effects, vec![UiEffect::SessionDeleted { machine: MACHINE.into(), session_id: "s1".into() }]);
+        // The tombstone rides the next heartbeat too: nothing left to cancel.
+        let out = Router::new(&mut s, &ts, &kp, 2_000).route(MACHINE, &BridgeToPhone::Sessions(gone)).await;
+        assert!(out.ui_effects.is_empty());
     }
 }

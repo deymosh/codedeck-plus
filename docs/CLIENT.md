@@ -118,8 +118,22 @@ Unprompted by the user, the core asks the identity to sign only: one
 sessions with gaps and their `sync-ack`s (held 500 ms, so a sync's chunks
 cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
 connection that challenges; a `presence` per machine after ten quiet
-minutes, and an `away` when it stops; and a grant, rarely. Everything else it signs —
-commands, Blossom upload auth — follows a user action.
+minutes, and an `away` when it stops; a `close-session` again, at most every
+five minutes, for a session the user deleted that its bridge still lists;
+and a grant, rarely. Everything else it signs — commands, Blossom upload
+auth — follows a user action.
+
+**Deleting a session.** A delete hides the session at once and can be undone
+for 4 s; then (or as the app goes to the background) the `close-session`
+goes out. The session stays hidden while its bridge still lists it, and the
+close is sent again while it does, until the bridge acknowledges it: one
+sent while offline, or one the bridge did not fetch within the relays' hour,
+is not lost. It stays hidden for two hours after the bridge stops listing
+it, counted in that bridge's heartbeats as well as by the clock, so a
+bridge offline for a day does not bring it back. A session gone — deleted
+here, on another device (a tombstone in the heartbeat), or with its
+machine — takes with it its unread dot, its answered cards, its unsent
+messages, its stored transcript and any notification it posted.
 
 **Config backup.** Opt-in, in Settings → Backup, and offered once right
 after logging in with an existing key. It holds what the identity's devices

@@ -496,11 +496,11 @@ pub fn apply(
                 label.as_deref(),
                 ctx.now,
             );
-            apply_delete_effects(stores, effects, &mut r);
+            apply_delete_effects(stores, effects, ctx.now, &mut r);
         }
         Intent::UndoDelete => {
             let effects = stores.delete_controller.undo();
-            apply_delete_effects(stores, effects, &mut r);
+            apply_delete_effects(stores, effects, ctx.now, &mut r);
         }
 
         Intent::BeginPairing { url, label } => match parse_pairing_url(&url) {
@@ -532,14 +532,18 @@ pub fn apply(
                 r.persist(StoreId::Machines);
                 r.resubscribe = true;
                 for session_id in session_ids {
-                    stores.ui.clear_session_unread(&pubkey_hex, &session_id);
-                    // Drop the in-memory coverage bookkeeping too, not just
-                    // the persisted rows below — otherwise a stale local_high
-                    // would make `TranscriptRowsView::load` believe rows still
-                    // exist right up until the next sync cycle re-derives it.
-                    stores.transcript.remove_session(&pubkey_hex, &session_id);
+                    // Everything kept about each session goes, the in-memory
+                    // transcript coverage included (a stale local_high would
+                    // make `TranscriptRowsView::load` believe rows still exist
+                    // until the next sync cycle re-derives it), and what was
+                    // notified for it.
+                    stores.forget_session(&pubkey_hex, &session_id);
+                    r.ui_effects.push(UiEffect::SessionDeleted { machine: pubkey_hex.clone(), session_id: session_id.clone() });
                     r.transcript_removed.push((pubkey_hex.clone(), session_id));
                 }
+                // Unsent messages for sessions it no longer listed, too.
+                stores.outbox.forget_machine(&pubkey_hex);
+                r.persist(StoreId::Outbox);
                 r.ui_changed = true;
                 if stores.ui.selected_machine.as_deref() == Some(pubkey_hex.as_str()) {
                     stores.ui.select_machine(None);
@@ -919,11 +923,11 @@ fn begin_pairing(
 
 /// Interpret the delete-controller's effects: the store mutations happen here,
 /// the undo timer and the `close-session` send are surfaced on the result.
-fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: &mut IntentResult) {
+pub(crate) fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, now: u64, r: &mut IntentResult) {
     for effect in effects {
         match effect {
-            DeleteEffect::DismissSession { session_id, now } => {
-                stores.machines.dismiss_session(&session_id, now);
+            DeleteEffect::DismissSession { machine, session_id, now } => {
+                stores.machines.dismiss_session(&machine, &session_id, now);
                 r.persist(StoreId::Machines);
             }
             DeleteEffect::RemoveSession { machine, session_id } => {
@@ -965,6 +969,13 @@ fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteEffect>, r: 
                     machine: machine.clone(),
                     session_id: session_id.clone(),
                 });
+                // What was kept for it goes now; its transcript rows go
+                // with the bridge's ack, or when it stops listing it.
+                if stores.forget_session(&machine, &session_id).outbox {
+                    r.persist(StoreId::Outbox);
+                }
+                r.ui_changed = true;
+                stores.machines.note_close_sent(&session_id, now);
                 r.sends.push(Send {
                     machine,
                     msg: PhoneToBridge::CloseSession(SessionIdMsg {
@@ -1192,6 +1203,11 @@ mod tests {
         );
         s.ui.select_machine(Some("m"));
         s.ui.mark_session_unread("m", "s1");
+        // Unsent messages: to a listed session, and to one no longer listed.
+        use client_core::stores::outbox::OutboxState;
+        s.outbox.begin_publish(OutboxState::new_input("in-1", "m", "s1", "hi", 1));
+        s.outbox.begin_publish(OutboxState::new_input("in-2", "m", "gone", "hi", 1));
+        s.outbox.begin_publish(OutboxState::new_input("in-3", "other", "s9", "hi", 1));
 
         let out = apply(
             &mut s,
@@ -1207,6 +1223,9 @@ mod tests {
         assert_eq!(out.transcript_removed, vec![("m".to_string(), "s1".to_string())]);
         assert!(!s.ui.is_session_unread("m", "s1"));
         assert_eq!(s.ui.selected_machine, None);
+        assert_eq!(s.outbox.items.keys().collect::<Vec<_>>(), ["in-3"]);
+        assert!(out.persist.contains(&StoreId::Outbox));
+        assert_eq!(out.ui_effects, vec![UiEffect::SessionDeleted { machine: "m".into(), session_id: "s1".into() }]);
     }
 
     #[tokio::test]

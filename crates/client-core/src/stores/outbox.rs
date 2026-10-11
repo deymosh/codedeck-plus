@@ -135,6 +135,20 @@ impl OutboxState {
         out
     }
 
+    /// Drop every item for a session that is gone. Whether any was dropped.
+    pub fn forget_session(&mut self, machine: &str, session_id: &str) -> bool {
+        let before = self.items.len();
+        self.items.retain(|_, i| !(i.machine == machine && i.session_id == session_id));
+        self.items.len() != before
+    }
+
+    /// Drop every item for a machine that is gone. Whether any was dropped.
+    pub fn forget_machine(&mut self, machine: &str) -> bool {
+        let before = self.items.len();
+        self.items.retain(|_, i| i.machine != machine);
+        self.items.len() != before
+    }
+
     /// Pending / Published items (nothing the user sent has landed yet).
     pub fn unresolved(&self) -> Vec<&OutboxItem> {
         self.items.values().filter(|i| i.state.is_unresolved()).collect()
