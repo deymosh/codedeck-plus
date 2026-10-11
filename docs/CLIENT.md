@@ -12,7 +12,7 @@ and is shared by any future client.
 |---|---|---|
 | `crates/protocol` | the phone wire: messages, total codec, kinds, ranges, chunking, NIP-44/NIP-42 | depends on nothing internal; shared with the bridge |
 | `crates/nostr-transport` | relay WebSocket + SOCKS5 driver, NIP-42 `AUTH`, publish verdicts | shared with the bridge |
-| `crates/client-core` | reducers and stores as pure state machines: connection FSM, machines/sessions merge, outbox, pairing, transcript sync, settings, UI state, notification decisions, presentation (`display_entries`, GSD stages) | **no tokio, no sockets, no I/O**; clock and entropy injected; deterministic tests |
+| `crates/client-core` | reducers and stores as pure state machines: connection FSM, machines/sessions merge, outbox, pairing, transcript sync, settings, UI state, notification decisions, presentation (`display_entries`) | **no tokio, no sockets, no I/O**; clock and entropy injected; deterministic tests |
 | `crates/client-runtime` | the async host: one tokio event loop composing the core's stores with the transport, the subscription client, timers and the platform ports — the `Core` handle | bindings attach here, never to `client-core` |
 | `crates/client-ffi` | the UniFFI surface over `Core`, compiled to the `.so` the app loads | the only crate that knows UniFFI |
 | `apps/android` | Compose UI, the foreground service, platform ports (SQLite, notifications, HTTP) | no protocol knowledge |

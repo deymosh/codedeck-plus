@@ -33,7 +33,7 @@ fn omega_ready() -> AgentInfo {
 }
 
 fn agent_changed(rig: &mut Rig, agent: AgentInfo) {
-    rig.input(Input::HostFrame(Frame::notification(HostMessage::AgentChanged { agent })));
+    rig.input(Input::HostFrame(Box::new(Frame::notification(HostMessage::AgentChanged { agent }))));
 }
 
 fn listed_install(msgs: &[BridgeToPhone], id: &str) -> AgentInstall {

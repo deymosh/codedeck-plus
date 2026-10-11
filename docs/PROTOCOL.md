@@ -28,7 +28,7 @@ data over); v12 sends a copy of each message per client of an identity (see
 | Purpose | Kind | Storage |
 |---|---|---|
 | Session-list heartbeat (`sessions`) | **30515** | NIP-33 replaceable, one per client (`d` = the copy's recipient tag); NIP-40 expiry 1 day |
-| Live output / usage / gsd-state | **24515** | ephemeral — broadcast, never stored; loss is recoverable (sync / re-request) |
+| Live output / usage | **24515** | ephemeral — broadcast, never stored; loss is recoverable (sync / re-request) |
 | Phone→bridge commands | **4515** | stored, NIP-40 expiry 1 h |
 | Bridge→phone responses (sync chunks, acks, lifecycle, pairing) | **4516** | stored, NIP-40 expiry 1 h |
 
@@ -65,7 +65,7 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, providerModels, gsd, interrupt, commands, plugins, mcp, tasks}`, `credentials[]` status and
+providers, providerModels, interrupt, commands, plugins, mcp, tasks}`, `credentials[]` status and
 `install` (below). Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates

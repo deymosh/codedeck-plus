@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::capabilities::BridgeHostKind;
 use super::common::{
-    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
+    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     SessionMcpServer,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     UsageData,
@@ -191,13 +191,6 @@ pub struct FolderAckMsg {
 pub struct UsageMsg {
     pub session_id: String,
     pub usage: UsageData,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct GsdStateMsg {
-    pub session_id: String,
-    pub gsd: GsdState,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -429,7 +422,6 @@ pub enum BridgeToPhone {
     OptionConfirmed(OptionConfirmedMsg),
     FolderAck(FolderAckMsg),
     Usage(UsageMsg),
-    GsdState(GsdStateMsg),
     Models(ModelsMsg),
     Commands(CommandsMsg),
     Plugins(PluginsMsg),
@@ -469,7 +461,7 @@ mod tests {
             "modes":[{"id":"default","label":"Default"},{"id":"plan","label":"Plan"}],
             "efforts":[{"id":"high","label":"High"}],
             "defaultMode":"default","defaultEffort":"high",
-            "supports":{"models":true,"usage":true,"providers":true,"gsd":true,"interrupt":true,"commands":true,"plugins":true},
+            "supports":{"models":true,"usage":true,"providers":true,"interrupt":true,"commands":true,"plugins":true},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"fromEnv":true}]
         })
     }
@@ -524,12 +516,6 @@ mod tests {
         rt(&json!({"v":12,"type":"option-confirmed","sessionId":"s","option":"mode","value":"plan"}));
         rt(&json!({"v":12,"type":"folder-ack","requestId":"r","success":true,"path":"a/b"}));
         rt(&json!({"v":12,"type":"usage","sessionId":"s","usage":{"available":true,"plan":"max","windows":[{"label":"5h","utilization":42.0,"resetsAt":"t"}],"fetchedAt":"t"}}));
-        rt(&json!({"v":12,"type":"gsd-state","sessionId":"s","gsd":{
-            "installed":true,"available":true,"hasGit":true,"situation":"x","summary":"y",
-            "milestone":null,"currentPhase":null,"totalPhases":null,"percent":0.0,
-            "phases":[],"actions":[],"recommended":null,"paused":false,"blockers":[],
-            "verifyFailed":false,"execution":null
-        }}));
         rt(&json!({"v":12,"type":"models","agent":"claude-code","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
         rt(&json!({"v":12,"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
         rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));

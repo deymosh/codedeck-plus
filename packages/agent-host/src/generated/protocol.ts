@@ -124,8 +124,6 @@ export type AgentSupports = {
 	 *  them as it would any other model.
 	 */
 	providerModels?: boolean,
-	/**  `gsd-request` returns GSD workflow state for this agent's sessions. */
-	gsd?: boolean,
 	/**  `interrupt` stops the running turn. */
 	interrupt?: boolean,
 	/**

@@ -151,7 +151,7 @@ async fn serve(
             line = stdout.next_line() => match line {
                 Ok(Some(Ok(line))) => match decode_host_frame(&line) {
                     Ok(frame) => {
-                        let _ = inputs.send(Input::HostFrame(frame));
+                        let _ = inputs.send(Input::HostFrame(Box::new(frame)));
                     }
                     Err(err) => log::warn!("[Host] Undecodable frame from the agent host ({err}) — dropped"),
                 },

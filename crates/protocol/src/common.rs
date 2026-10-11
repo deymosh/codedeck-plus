@@ -72,9 +72,6 @@ pub struct AgentSupports {
     /// them as it would any other model.
     #[serde(default)]
     pub provider_models: bool,
-    /// `gsd-request` returns GSD workflow state for this agent's sessions.
-    #[serde(default)]
-    pub gsd: bool,
     /// `interrupt` stops the running turn.
     #[serde(default)]
     pub interrupt: bool,
@@ -1073,73 +1070,6 @@ pub struct ContextItem {
 /// Credential writes by id: a string sets it, `null` clears it, an absent
 /// id is left unchanged.
 pub type CredentialValues = BTreeMap<String, Option<String>>;
-
-// --- GSD workflow state ---
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct GsdPhase {
-    pub number: String,
-    pub name: String,
-    pub disk_status: String,
-    #[specta(type = specta_typescript::Number)]
-    pub plans: u64,
-    #[specta(type = specta_typescript::Number)]
-    pub summaries: u64,
-    pub recently_touched: bool,
-    pub action: Option<String>,
-    pub command: Option<String>,
-    #[specta(type = Option<specta_typescript::Number>)]
-    pub plan_count: Option<i64>,
-    #[specta(type = Option<specta_typescript::Number>)]
-    pub needs_you: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct GsdExecution {
-    pub phase: String,
-    #[specta(type = specta_typescript::Number)]
-    pub plans_total: u64,
-    #[specta(type = specta_typescript::Number)]
-    pub plans_done: u64,
-    pub current_plan: Option<String>,
-    #[specta(type = specta_typescript::Number)]
-    pub tasks_done: u64,
-    #[specta(type = Option<specta_typescript::Number>)]
-    pub tasks_total: Option<i64>,
-    pub last_task: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct GsdAction {
-    pub id: String,
-    pub label: String,
-    pub command: String,
-    pub recommended: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct GsdState {
-    pub installed: bool,
-    pub available: bool,
-    pub has_git: bool,
-    pub situation: String,
-    pub summary: String,
-    pub milestone: Option<String>,
-    pub current_phase: Option<String>,
-    #[specta(type = Option<specta_typescript::Number>)]
-    pub total_phases: Option<i64>,
-    pub percent: f64,
-    pub phases: Vec<GsdPhase>,
-    pub actions: Vec<GsdAction>,
-    pub recommended: Option<String>,
-    pub paused: bool,
-    pub blockers: Vec<String>,
-    pub verify_failed: bool,
-    pub execution: Option<GsdExecution>,
-}
 
 #[cfg(test)]
 mod tests {

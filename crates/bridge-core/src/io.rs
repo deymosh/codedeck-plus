@@ -8,7 +8,6 @@
 
 use agent_protocol::{BridgeFrame, HostFrame};
 use protocol::commands::UploadFileMsg;
-use protocol::common::GsdState;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
 
@@ -121,15 +120,14 @@ pub enum Input {
     RelayEvent { event: InboundEvent, via: Via },
     /// The agent host process is running and reading frames.
     HostUp,
-    HostFrame(HostFrame),
+    /// Boxed: a frame is far larger than every other input.
+    HostFrame(Box<HostFrame>),
     /// The agent host process exited (or its pipe broke). Everything it was
     /// doing is gone; the runtime restarts it and sends [`Input::HostUp`].
     HostDown { reason: String },
     Timer(TimerId),
     /// Answer to [`Effect::ReadGitHead`]; `None` when `cwd` is not a repo.
     GitHead { session_id: String, head: Option<String> },
-    /// Answer to [`Effect::ReadGsd`].
-    Gsd { session_id: String, gsd: GsdState },
     /// An [`Effect::HandleFileUpload`] finished: the image is on disk and
     /// `text` (the user's words plus its path) is the session's next input.
     FileReady { session_id: String, text: String },
@@ -174,8 +172,6 @@ pub enum Effect {
     RegisterPhone { pubkey_hex: String, label: String },
     /// Read `git rev-parse HEAD` in `cwd`; answer with [`Input::GitHead`].
     ReadGitHead { session_id: String, cwd: String },
-    /// Read the GSD workflow state of `cwd`; answer with [`Input::Gsd`].
-    ReadGsd { session_id: String, cwd: String },
     /// Fetch / reassemble an uploaded image into the workspace; answer with
     /// [`Input::FileReady`] once it is on disk.
     HandleFileUpload(UploadFileMsg),

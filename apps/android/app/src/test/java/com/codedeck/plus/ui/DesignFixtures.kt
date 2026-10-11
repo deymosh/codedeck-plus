@@ -57,7 +57,7 @@ internal object DesignFixtures {
         UniffiSessionSummary(
             id = id, title = title, slug = id, cwd = "/home/me/code/$project", project = project, state = state,
             presence = "live", lastActivity = "2026-09-27T10:00:00Z", agent = agent, model = null, mode = null, effort = null,
-            contextPercentage = null, contextWindow = null, committed = committed, seqHigh = null, usage = null, gsd = null, commands = null, mcp = null,
+            contextPercentage = null, contextWindow = null, committed = committed, seqHigh = null, usage = null, commands = null, mcp = null,
         )
 
     /** A Claude Code session's commands, a plugin's among them. */
@@ -78,7 +78,7 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
         installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null,
     )
@@ -86,7 +86,7 @@ internal object DesignFixtures {
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsGsd = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = emptyList(),
         installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null,
     )
@@ -94,7 +94,7 @@ internal object DesignFixtures {
     val deepseek = UniffiAgent(
         id = "deepseek-harness", displayName = "DeepSeek Harness",
         modes = emptyList(), efforts = emptyList(), defaultMode = null, defaultEffort = null,
-        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsGsd = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false,
+        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false,
         credentials = emptyList(),
         installState = "not_installed", removable = false, installError = null, actionBusy = null, actionFailure = null,
     )

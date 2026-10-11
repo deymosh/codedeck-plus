@@ -290,10 +290,6 @@ pub enum Intent {
         machine: String,
         session_id: String,
     },
-    RequestGsd {
-        machine: String,
-        session_id: String,
-    },
     /// Ask for the slash commands a session understands right now.
     RequestCommands {
         machine: String,
@@ -776,15 +772,6 @@ pub fn apply(
                 PhoneToBridge::SessionMcpToggle(SessionMcpToggleMsg { session_id, name, enabled }),
             );
         }
-        Intent::RequestGsd {
-            machine,
-            session_id,
-        } => r.send(
-            &machine,
-            PhoneToBridge::GsdRequest(SessionIdMsg {
-                session_id,
-            }),
-        ),
         Intent::SetCredentials {
             machine,
             agent,

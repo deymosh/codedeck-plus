@@ -41,7 +41,7 @@ use client_runtime::{
 };
 use client_runtime::view::TranscriptSyncView;
 use protocol::common::{
-    AgentDescriptor, AgentInstall, CredentialStatus, GsdAction, GsdExecution, GsdPhase, GsdState, OptionChoice,
+    AgentDescriptor, AgentInstall, CredentialStatus, OptionChoice,
     ContextBreakdown, UsageData, UsageWindow,
 };
 use serde::Deserialize;
@@ -90,9 +90,6 @@ pub struct UniffiSessionSummary {
     /// Usage snapshot (5h/7d limits, cost) — requested via
     /// `UniffiIntent::RequestUsage`, absent until the bridge answers.
     pub usage: Option<UniffiUsageData>,
-    /// GSD workflow state — requested via `UniffiIntent::RequestGsd`,
-    /// absent until the bridge answers.
-    pub gsd: Option<UniffiGsdState>,
     /// Slash commands — requested via `UniffiIntent::RequestCommands`,
     /// absent until the bridge answers.
     pub commands: Option<UniffiSessionCommands>,
@@ -219,67 +216,6 @@ pub struct UniffiContextItem {
     pub tokens: u32,
 }
 
-/// One GSD workflow phase — mirrors `protocol::common::GsdPhase` field for
-/// field.
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct UniffiGsdPhase {
-    pub number: String,
-    pub name: String,
-    pub disk_status: String,
-    pub plans: u64,
-    pub summaries: u64,
-    pub recently_touched: bool,
-    pub action: Option<String>,
-    pub command: Option<String>,
-    pub plan_count: Option<i64>,
-    pub needs_you: Option<i64>,
-}
-
-/// GSD's in-flight execution line — mirrors `protocol::common::GsdExecution`
-/// field for field.
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct UniffiGsdExecution {
-    pub phase: String,
-    pub plans_total: u64,
-    pub plans_done: u64,
-    pub current_plan: Option<String>,
-    pub tasks_done: u64,
-    pub tasks_total: Option<i64>,
-    pub last_task: Option<String>,
-}
-
-/// One GSD recovery/action chip — mirrors `protocol::common::GsdAction`
-/// field for field.
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct UniffiGsdAction {
-    pub id: String,
-    pub label: String,
-    pub command: String,
-    pub recommended: bool,
-}
-
-/// A session's GSD workflow state — mirrors `protocol::common::GsdState`
-/// field for field.
-#[derive(Debug, Clone, uniffi::Record)]
-pub struct UniffiGsdState {
-    pub installed: bool,
-    pub available: bool,
-    pub has_git: bool,
-    pub situation: String,
-    pub summary: String,
-    pub milestone: Option<String>,
-    pub current_phase: Option<String>,
-    pub total_phases: Option<i64>,
-    pub percent: f64,
-    pub phases: Vec<UniffiGsdPhase>,
-    pub actions: Vec<UniffiGsdAction>,
-    pub recommended: Option<String>,
-    pub paused: bool,
-    pub blockers: Vec<String>,
-    pub verify_failed: bool,
-    pub execution: Option<UniffiGsdExecution>,
-}
-
 fn to_uniffi_usage_window(w: &UsageWindow) -> UniffiUsageWindow {
     UniffiUsageWindow {
         label: w.label.clone(),
@@ -321,63 +257,6 @@ fn to_uniffi_context(c: &ContextBreakdown) -> UniffiContextBreakdown {
                 items: g.items.iter().map(|i| UniffiContextItem { name: i.name.clone(), tokens: i.tokens }).collect(),
             })
             .collect(),
-    }
-}
-
-fn to_uniffi_gsd_phase(p: &GsdPhase) -> UniffiGsdPhase {
-    UniffiGsdPhase {
-        number: p.number.clone(),
-        name: p.name.clone(),
-        disk_status: p.disk_status.clone(),
-        plans: p.plans,
-        summaries: p.summaries,
-        recently_touched: p.recently_touched,
-        action: p.action.clone(),
-        command: p.command.clone(),
-        plan_count: p.plan_count,
-        needs_you: p.needs_you,
-    }
-}
-
-fn to_uniffi_gsd_execution(e: &GsdExecution) -> UniffiGsdExecution {
-    UniffiGsdExecution {
-        phase: e.phase.clone(),
-        plans_total: e.plans_total,
-        plans_done: e.plans_done,
-        current_plan: e.current_plan.clone(),
-        tasks_done: e.tasks_done,
-        tasks_total: e.tasks_total,
-        last_task: e.last_task.clone(),
-    }
-}
-
-fn to_uniffi_gsd_action(a: &GsdAction) -> UniffiGsdAction {
-    UniffiGsdAction {
-        id: a.id.clone(),
-        label: a.label.clone(),
-        command: a.command.clone(),
-        recommended: a.recommended,
-    }
-}
-
-fn to_uniffi_gsd_state(g: &GsdState) -> UniffiGsdState {
-    UniffiGsdState {
-        installed: g.installed,
-        available: g.available,
-        has_git: g.has_git,
-        situation: g.situation.clone(),
-        summary: g.summary.clone(),
-        milestone: g.milestone.clone(),
-        current_phase: g.current_phase.clone(),
-        total_phases: g.total_phases,
-        percent: g.percent,
-        phases: g.phases.iter().map(to_uniffi_gsd_phase).collect(),
-        actions: g.actions.iter().map(to_uniffi_gsd_action).collect(),
-        recommended: g.recommended.clone(),
-        paused: g.paused,
-        blockers: g.blockers.clone(),
-        verify_failed: g.verify_failed,
-        execution: g.execution.as_ref().map(to_uniffi_gsd_execution),
     }
 }
 
@@ -486,7 +365,6 @@ pub struct UniffiAgent {
     pub supports_providers: bool,
     /// The agent's provider profiles add models to its own list.
     pub supports_provider_models: bool,
-    pub supports_gsd: bool,
     pub supports_interrupt: bool,
     pub supports_commands: bool,
     pub supports_plugins: bool,
@@ -554,7 +432,6 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>) -> Un
         supports_usage: a.supports.usage,
         supports_providers: a.supports.providers,
         supports_provider_models: a.supports.provider_models,
-        supports_gsd: a.supports.gsd,
         supports_interrupt: a.supports.interrupt,
         supports_commands: a.supports.commands,
         supports_plugins: a.supports.plugins,
@@ -846,7 +723,6 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             seq_high: info.seq_high,
                             provider_id: info.provider_id.clone(),
                             usage: s.usage.as_ref().map(to_uniffi_usage_data),
-                            gsd: s.gsd.as_ref().map(to_uniffi_gsd_state),
                             commands: s.commands.as_ref().map(|c| UniffiSessionCommands {
                                 commands: c
                                     .commands

@@ -582,11 +582,3 @@ fn a_sync_request_is_answered_to_that_phone_only() {
     assert!(matches!(&published[0].1, BridgeToPhone::SyncBegin(b) if b.ranges == [(2, 3)] && b.seq_high == 3));
     assert!(matches!(&published[1].1, BridgeToPhone::SyncChunk(c) if c.entries.len() == 2));
 }
-
-#[test]
-fn gsd_state_is_read_in_the_session_directory() {
-    let mut rig = Rig::new();
-    let s = ready(&mut rig);
-    rig.send(json!({"v":12,"type":"gsd-request","sessionId":s}));
-    assert!(rig.take().iter().any(|e| matches!(e, Effect::ReadGsd { cwd, .. } if cwd == "/w")));
-}

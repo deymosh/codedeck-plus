@@ -378,12 +378,6 @@ impl<'a> Router<'a> {
                 self.stores.machines.apply_commands(machine, m);
                 r.persist(StoreId::Machines);
             }
-            BridgeToPhone::GsdState(m) => {
-                self.stores
-                    .machines
-                    .apply_gsd(machine, &m.session_id, m.gsd.clone());
-                r.persist(StoreId::Machines);
-            }
             BridgeToPhone::OptionConfirmed(m) => {
                 let value = m.value.clone();
                 let option = m.option;

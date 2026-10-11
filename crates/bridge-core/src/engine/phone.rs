@@ -38,7 +38,6 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::CreateFolder(_) => "create-folder",
         PhoneToBridge::UploadFile(_) => "upload-file",
         PhoneToBridge::UsageRequest(_) => "usage-request",
-        PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
         PhoneToBridge::CommandsRequest(_) => "commands-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
@@ -134,14 +133,6 @@ impl Engine {
             PhoneToBridge::CreateFolder(m) => self.on_create_folder(m),
             PhoneToBridge::UploadFile(m) => self.on_upload_file(m),
             PhoneToBridge::UsageRequest(m) => self.on_usage_request(&m.session_id),
-            PhoneToBridge::GsdRequest(m) => {
-                // Always answered, `available: false` included, so the phone
-                // can retire a stale strip when a session leaves a GSD project.
-                if let Some(session) = self.sessions.get(&m.session_id) {
-                    let cwd = session.rec.cwd.clone();
-                    self.out.push(Effect::ReadGsd { session_id: m.session_id, cwd });
-                }
-            }
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
             PhoneToBridge::PluginsRequest(m) => self.on_plugins_request(m.agent, m.available),

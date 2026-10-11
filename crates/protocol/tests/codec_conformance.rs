@@ -82,7 +82,6 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::CreateFolder(_) => "create-folder",
         PhoneToBridge::UploadFile(_) => "upload-file",
         PhoneToBridge::UsageRequest(_) => "usage-request",
-        PhoneToBridge::GsdRequest(_) => "gsd-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
         PhoneToBridge::CommandsRequest(_) => "commands-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
@@ -100,7 +99,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::Presence(_) => "presence",
     }
 }
-const P2B_TYPES: usize = 31;
+const P2B_TYPES: usize = 30;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {
@@ -119,7 +118,6 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::OptionConfirmed(_) => "option-confirmed",
         BridgeToPhone::FolderAck(_) => "folder-ack",
         BridgeToPhone::Usage(_) => "usage",
-        BridgeToPhone::GsdState(_) => "gsd-state",
         BridgeToPhone::Models(_) => "models",
         BridgeToPhone::Commands(_) => "commands",
         BridgeToPhone::Plugins(_) => "plugins",
@@ -134,7 +132,7 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::ProviderProfileAck(_) => "provider-profile-ack",
     }
 }
-const B2P_TYPES: usize = 27;
+const B2P_TYPES: usize = 26;
 
 #[test]
 fn corpus_covers_every_message_type() {
