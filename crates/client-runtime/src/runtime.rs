@@ -377,6 +377,7 @@ impl Core {
             tx: tx.clone(),
             machines: RefCell::new(initial_authors.clone()),
             recipients: RefCell::new(recipients_of(&session, &keys.identity_pubkey_hex, &initial_authors, clock.now_ms())),
+            relays: RefCell::new(hydrated.stores.bridge_relays()),
             cursor: RefCell::new(last_stored_seen),
         });
         let relay_set = hydrated.stores.relay_set();
@@ -844,6 +845,8 @@ struct LoopHost {
     machines: RefCell<Vec<String>>,
     /// The recipient tags of this client's copies from `machines`.
     recipients: RefCell<Vec<String>>,
+    /// The relays `machines` use, which their subscriptions go to.
+    relays: RefCell<Vec<String>>,
     /// `last_stored_seen` cursor (seconds) — the in-memory copy `authors()`'s
     /// caller reads synchronously. `note_stored_seen` also fires
     /// `Msg::NoteStoredSeen` to persist it through the `Kv` port, so a restart
@@ -857,6 +860,9 @@ impl NostrClientHost for LoopHost {
     }
     fn recipients(&self) -> Vec<String> {
         self.recipients.borrow().clone()
+    }
+    fn relays(&self) -> Vec<String> {
+        self.relays.borrow().clone()
     }
     fn on_event(&self, event: &NostrEvent) {
         let _ = self.tx.send(Msg::RelayEvent(event.clone()));
@@ -1667,6 +1673,7 @@ impl Loop {
     /// pairing began or ended, a machine was added or removed, or its relays
     /// were edited.
     fn sync_relays(&mut self) {
+        *self.host.relays.borrow_mut() = self.stores.bridge_relays();
         let relays = self.stores.relay_set();
         if relays != self.relay_set {
             log::info!("relays: {relays:?}");
@@ -1689,6 +1696,7 @@ impl Loop {
         *self.host.recipients.borrow_mut() =
             recipients_of(&self.session, &self.keys.identity_pubkey_hex, &authors, self.clock.now_ms());
         *self.host.machines.borrow_mut() = authors.clone();
+        *self.host.relays.borrow_mut() = self.stores.bridge_relays();
         self.machines = authors;
         if matches!(
             self.conn.status,

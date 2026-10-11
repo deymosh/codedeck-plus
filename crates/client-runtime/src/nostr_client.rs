@@ -40,6 +40,12 @@ pub trait NostrClientHost {
     /// The recipient tags of this client's copies from those bridges
     /// (`protocol::recipients`): a relay hands it those only.
     fn recipients(&self) -> Vec<String>;
+    /// The relays to subscribe on: those the bridges use, so no other relay
+    /// the transport holds (the config backup's) sees what this client
+    /// follows. Empty: every relay.
+    fn relays(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn on_event(&self, event: &NostrEvent);
     /// All subscriptions of the current epoch reached EOSE.
     fn on_socket_open(&self);
@@ -203,12 +209,14 @@ impl<T: Transport, H: NostrClientHost + 'static> NostrClient<T, H> {
             i.filter_count = filters.len();
         }
 
+        let relays = self.host.relays();
         let mut subs = Vec::with_capacity(filters.len());
         for filter in filters {
             let (i_ev, h_ev) = (Rc::clone(&self.inner), Rc::clone(&self.host));
             let (i_eo, h_eo) = (Rc::clone(&self.inner), Rc::clone(&self.host));
             let (i_cl, h_cl) = (Rc::clone(&self.inner), Rc::clone(&self.host));
-            let sub = self.transport.subscribe(
+            let sub = self.transport.subscribe_to(
+                &relays,
                 filter,
                 SubCallbacks {
                     on_event: Rc::new(move |ev| {

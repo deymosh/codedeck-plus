@@ -83,9 +83,20 @@ impl CoreStores {
     /// config backup's. Dialled like the others, so through Tor when it is
     /// on, and answering the relay's AUTH with the identity.
     pub fn relay_set(&self) -> Vec<String> {
+        let mut relays = self.bridge_relays();
+        if let Some(relay) = &self.backup.config.relay {
+            if !relays.contains(relay) {
+                relays.push(relay.clone());
+            }
+        }
+        relays
+    }
+
+    /// The relays the bridges use: every paired machine's and a pairing
+    /// candidate's. The subscriptions to them go to these only.
+    pub fn bridge_relays(&self) -> Vec<String> {
         let mut relays = self.machines.relay_set();
-        let candidate = self.pairing.candidate.iter().flat_map(|c| &c.relays);
-        for relay in candidate.chain(self.backup.config.relay.as_ref()) {
+        for relay in self.pairing.candidate.iter().flat_map(|c| &c.relays) {
             if !relays.contains(relay) {
                 relays.push(relay.clone());
             }

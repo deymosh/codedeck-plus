@@ -93,7 +93,16 @@ pub trait TransportSub {
 /// The socket seam. Production: a WS pool over the configured relay list.
 /// Tests: a scriptable fake.
 pub trait Transport {
+    /// Subscribe on every relay, those added later included.
     fn subscribe(&self, filter: Filter, callbacks: SubCallbacks) -> Box<dyn TransportSub>;
+    /// Subscribe on `relays` only (of those configured; every relay when
+    /// empty): no other relay sees the REQ, and `on_eose` / `on_close`
+    /// speak for these relays alone. Default: [`Self::subscribe`] (test
+    /// transports with no relays of their own).
+    fn subscribe_to(&self, relays: &[String], filter: Filter, callbacks: SubCallbacks) -> Box<dyn TransportSub> {
+        let _ = relays;
+        self.subscribe(filter, callbacks)
+    }
     /// Replace the relay list. Default: no-op (in-memory test transports).
     fn set_relays(&self, _urls: &[String]) {}
     /// Replace the SOCKS5 proxy (Tor on/off, or a different host:port) and

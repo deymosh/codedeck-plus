@@ -8,8 +8,9 @@
 //! It holds no sockets. It is deterministic and fully unit-tested.
 //!
 //! Fan-out model — one logical subscription (`sub_id`, one per
-//! `Transport::subscribe` call) is REQ'd to every relay, and re-REQ'd to a
-//! relay each time it (re)connects:
+//! `Transport::subscribe` call) is REQ'd to every relay (or, from
+//! `Transport::subscribe_to`, to the relays it is pinned to, and no other),
+//! and re-REQ'd to a relay each time it (re)connects:
 //! * `on_event` fires once per event id per subscription: the copies other
 //!   relays send are dropped before anyone parses or verifies them (see
 //!   [`Router::note_delivered`]).
@@ -107,6 +108,15 @@ struct SubState {
     delivered: RecentIds,
     eose_fired: bool,
     closed_fired: bool,
+    /// The only relays this sub is carried on, if it is pinned to some: a
+    /// relay outside them that connects does not get it.
+    only: Option<HashSet<String>>,
+}
+
+impl SubState {
+    fn carried_on(&self, relay: &str) -> bool {
+        self.only.as_ref().is_none_or(|only| only.contains(relay))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -153,7 +163,7 @@ impl Router {
     pub fn relay_connected(&mut self, relay: &str) {
         self.connected.insert(relay.to_string());
         self.auth.insert(relay.to_string(), RelayAuth::default());
-        for s in self.subs.values_mut() {
+        for s in self.subs.values_mut().filter(|s| s.carried_on(relay)) {
             s.reqd.insert(relay.to_string());
             s.eosed.remove(relay);
             s.dead_on.remove(relay);
@@ -232,6 +242,25 @@ impl Router {
                 ..SubState::default()
             },
         );
+    }
+
+    /// Register a subscription carried on `only` and nowhere else; its REQ
+    /// is about to go to those of them in `relays`.
+    pub fn open_sub_on(&mut self, sub_id: &str, relays: &[String], only: &[String]) {
+        self.subs.insert(
+            sub_id.to_string(),
+            SubState {
+                reqd: relays.iter().filter(|r| only.contains(r)).cloned().collect(),
+                only: Some(only.iter().cloned().collect()),
+                ..SubState::default()
+            },
+        );
+    }
+
+    /// Whether `sub_id` is carried on `relay` (its REQ is replayed there
+    /// when it connects).
+    pub fn sub_carried_on(&self, sub_id: &str, relay: &str) -> bool {
+        self.subs.get(sub_id).is_some_and(|s| s.carried_on(relay))
     }
 
     /// The subscription was closed locally (`TransportSub::close()`) — forget it
@@ -600,6 +629,22 @@ mod tests {
         );
         // no second fire
         assert!(r.route(R1, RelayMessage::Eose { sub_id: "s1".into() }).is_empty());
+    }
+
+    #[test]
+    fn a_sub_pinned_to_a_relay_answers_for_that_relay_alone() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub_on("s1", &[R1.to_string()], &[R2.to_string()]);
+        // R1 is up but not the sub's: its EOSE neither counts nor completes.
+        assert!(r.route(R1, RelayMessage::Eose { sub_id: "s1".into() }).is_empty());
+        assert!(!r.sub_carried_on("s1", R1) && r.sub_carried_on("s1", R2));
+        // R2 connects: it carries the sub, and its EOSE is the one.
+        r.relay_connected(R2);
+        assert_eq!(r.route(R2, RelayMessage::Eose { sub_id: "s1".into() }), vec![RouterAction::Eose { sub_id: "s1".into() }]);
+        // R1 dropping does not touch it; R2 dropping closes it.
+        assert!(r.relay_disconnected(R1).is_empty());
+        assert!(r.relay_disconnected(R2).iter().any(|a| matches!(a, RouterAction::SubClosed { .. })));
     }
 
     #[test]
