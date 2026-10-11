@@ -53,6 +53,7 @@ import uniffi.client_ffi.UniffiContextBreakdown
 import uniffi.client_ffi.UniffiContextGroup
 import uniffi.client_ffi.UniffiUsageData
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** How full the context is, as a colour: the text colour until 75 %, then
@@ -157,17 +158,28 @@ private fun partShade(index: Int): Color = Tokens.Text.copy(alpha = PART_SHADES[
 /** How many items a list shows before "Show more". */
 private const val SHORT_ITEM_LIST = 12
 
+/**
+ * How full the context is (0–100, or null when unknown), and the breakdown
+ * to show with it. The session's own [percentage] moves with every step of
+ * a turn and leads; the [snapshot] of what fills the context is asked for
+ * again each time it moves, so until the new one comes the old one is left
+ * out rather than shown disagreeing with the figure above it.
+ */
+internal fun contextFigures(percentage: Double?, snapshot: UniffiContextBreakdown?): Pair<Double?, UniffiContextBreakdown?> {
+    val parts = snapshot?.takeIf { it.windowTokens > 0u }
+    val partsPct = parts?.let { it.usedTokens.toDouble() / it.windowTokens.toDouble() * 100.0 }
+    val live = percentage?.takeIf { it.isFinite() }
+    val agrees = live == null || (partsPct != null && abs(partsPct - live) < 1.0)
+    return (live ?: partsPct)?.coerceIn(0.0, 100.0) to parts?.takeIf { agrees }
+}
+
 @Composable
 private fun ContextFigures(percentage: Double?, window: Long?, usage: UniffiUsageData?, nowMs: Long) {
-    val breakdown = usage?.context?.takeIf { it.windowTokens > 0u }
+    val (shown, breakdown) = contextFigures(percentage, usage?.context)
     Column(
         Modifier.fillMaxWidth().padding(start = Tokens.Space5, end = Tokens.Space5, bottom = Tokens.Space5),
         verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
     ) {
-        // The breakdown is the newer, exacter figure when there is one.
-        val pct = breakdown?.let { it.usedTokens.toDouble() / it.windowTokens.toDouble() * 100.0 }
-            ?: percentage?.takeIf { it.isFinite() }
-        val shown = pct?.coerceIn(0.0, 100.0)
         if (shown == null) {
             Text("The agent has not said how full the context is yet.", color = Tokens.TextMuted, fontSize = Tokens.TextMd)
         } else {

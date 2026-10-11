@@ -544,6 +544,11 @@ fun SessionScreen(
     val focusManager = LocalFocusManager.current
     val tapArea = remember { TapArea() }
     var contextSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+    // While the context's details are open they follow the context as it
+    // fills: each new figure asks again for what fills it.
+    LaunchedEffect(machine, sessionId, contextSheetOpen, supportsUsage, session?.contextPercentage) {
+        if (contextSheetOpen && supportsUsage) core.dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
+    }
     // A usage limit running out marks the context ring, when the user
     // asked for that warning; the ring's details always list every limit.
     val limitAlert = if (settings?.showUsageBadge == true) usageAlert(usageWindows(session?.usage, System.currentTimeMillis())) else null
@@ -571,11 +576,7 @@ fun SessionScreen(
             sessionState = session?.state,
             onBack = onBack,
             trailing = {
-                ContextRing(session?.contextPercentage, limitAlert) {
-                    contextSheetOpen = true
-                    // What fills the context is asked for afresh each time.
-                    if (supportsUsage) dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
-                }
+                ContextRing(session?.contextPercentage, limitAlert) { contextSheetOpen = true }
             },
         )
 
