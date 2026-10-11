@@ -800,7 +800,6 @@ export class ClaudeDriver implements Driver {
         models: true,
         usage: true,
         providers: true,
-        gsd: true,
         interrupt: true,
         commands: true,
         plugins: this.plugins !== undefined,

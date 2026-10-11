@@ -40,7 +40,6 @@ const NOTHING_SUPPORTED: AgentInfo['supports'] = {
   usage: false,
   providers: false,
   providerModels: false,
-  gsd: false,
   interrupt: false,
   commands: false,
   plugins: false,

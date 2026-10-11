@@ -30,7 +30,7 @@ function stubDriver(id: string, events: string[] = []): Driver {
       displayName: id.toUpperCase(),
       modes: [{ id: 'default', label: 'Default' }],
       efforts: [],
-      supports: { models: true, usage: false, providers: false, gsd: false, interrupt: true, commands: false, plugins: false, mcp: false, tasks: false },
+      supports: { models: true, usage: false, providers: false, interrupt: true, commands: false, plugins: false, mcp: false, tasks: false },
       credentials: [],
     }),
     startSession: () => {
