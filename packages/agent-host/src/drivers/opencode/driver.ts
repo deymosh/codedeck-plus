@@ -1373,7 +1373,6 @@ export class OpenCodeDriver implements Driver {
         usage: true,
         providers: false,
         providerModels: this.manages,
-        gsd: true,
         interrupt: true,
         commands: true,
         plugins: true,

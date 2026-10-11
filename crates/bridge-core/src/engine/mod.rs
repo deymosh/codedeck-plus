@@ -240,13 +240,10 @@ impl Engine {
             Input::Start => {}
             Input::RelayEvent { event, via } => self.on_relay_event(&event, via),
             Input::HostUp => self.on_host_up(),
-            Input::HostFrame(frame) => self.on_host_frame(frame),
+            Input::HostFrame(frame) => self.on_host_frame(*frame),
             Input::HostDown { reason } => self.on_host_down(&reason),
             Input::Timer(id) => self.on_timer(id),
             Input::GitHead { session_id, head } => self.on_git_head(&session_id, head),
-            Input::Gsd { session_id, gsd } => {
-                self.publish_all(BridgeToPhone::GsdState(protocol::events::GsdStateMsg { session_id, gsd }));
-            }
             Input::FileReady { session_id, text } => {
                 if !self.send_input(&session_id, text) {
                     log::warn!("[Engine] Uploaded image for {session_id} could not be delivered: no live session");

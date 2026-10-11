@@ -114,7 +114,7 @@ ARG GROUP_ID=1000
 # git/gh/python3/curl are for the agent's own tool use inside sessions. The
 # GitHub CLI keyring is served already dearmored, so no gnupg is needed.
 # yarn and corepack ship with the node image and nothing here uses them (npm
-# stays: the entrypoint's opt-in GSD install runs through npx).
+# stays, for the agents' own use in sessions).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git python3 \
     && install -d -m 0755 /etc/apt/keyrings \

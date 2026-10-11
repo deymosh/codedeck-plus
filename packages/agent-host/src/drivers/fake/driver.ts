@@ -245,7 +245,7 @@ export class FakeDriver implements Driver {
         { id: 'high', label: 'High' },
       ],
       defaultMode: 'default',
-      supports: { models: true, usage: true, providers: false, gsd: false, interrupt: true, commands: true, plugins: true, mcp: true, tasks: false },
+      supports: { models: true, usage: true, providers: false, interrupt: true, commands: true, plugins: true, mcp: true, tasks: false },
       credentials: [{ id: 'fake_token', label: 'Fake token', envVar: 'FAKE_AGENT_TOKEN' }],
     };
   }

@@ -232,12 +232,6 @@ pub enum UniffiIntent {
         name: String,
         enabled: bool,
     },
-    /// Ask the bridge for this session's GSD workflow state; the answer
-    /// lands in `UniffiSessionSummary.gsd`.
-    RequestGsd {
-        machine: String,
-        session_id: String,
-    },
     RequestProviderProfiles {
         machine: String,
     },
@@ -503,9 +497,6 @@ impl TryFrom<UniffiIntent> for Intent {
             },
             UniffiIntent::RequestCommands { machine, session_id } => {
                 Intent::RequestCommands { machine, session_id }
-            }
-            UniffiIntent::RequestGsd { machine, session_id } => {
-                Intent::RequestGsd { machine, session_id }
             }
             UniffiIntent::RequestMcp { machine, agent } => Intent::RequestMcp { machine, agent },
             UniffiIntent::McpAction { machine, agent, action, servers, names } => Intent::McpAction {

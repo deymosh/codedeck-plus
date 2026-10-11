@@ -7,7 +7,7 @@
 //! - `sessions` → the replaceable heartbeat (`d` = the recipient tag, so
 //!   each client keeps its own; each fragment of a split one its own `d`),
 //!   expiring after a day;
-//! - `output`, `usage`, `gsd-state` → ephemeral live events (loss is
+//! - `output`, `usage` → ephemeral live events (loss is
 //!   recovered by sync or a re-request);
 //! - everything else → stored responses expiring after an hour, so a phone
 //!   that was briefly away still gets them.
@@ -41,7 +41,7 @@ use tokio::sync::{mpsc, oneshot};
 pub fn kind_for(message: &BridgeToPhone) -> (u16, Option<u64>) {
     match message {
         BridgeToPhone::Sessions(_) => (SESSION_LIST_KIND, Some(SESSION_LIST_EXPIRY_SECONDS)),
-        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) | BridgeToPhone::GsdState(_) => (LIVE_KIND, None),
+        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) => (LIVE_KIND, None),
         _ => (RESPONSE_KIND, Some(RESPONSE_EXPIRY_SECONDS)),
     }
 }

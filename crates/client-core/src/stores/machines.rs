@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::{BridgeHostKind, PROTOCOL_VERSION};
 use protocol::common::{
-    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, GsdState, InstalledPlugin, McpAction, McpServerInfo,
+    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
@@ -59,7 +59,7 @@ pub enum ListingPresence {
 }
 
 /// One session as the machines store holds it. The per-session extras (`usage`,
-/// `gsd`, `commands`) survive every heartbeat — the merge spreads the previous
+/// `commands`) survive every heartbeat — the merge spreads the previous
 /// view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -71,8 +71,6 @@ pub struct SessionView {
     pub last_listed_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<UsageData>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gsd: Option<GsdState>,
     /// Never persisted (see [`serialize_machines`]): the list is only good
     /// while the session runs, and the phone asks again when it needs it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,7 +118,6 @@ impl SessionView {
             presence,
             last_listed_at: now,
             usage: None,
-            gsd: None,
             commands: None,
             mcp: None,
         }
@@ -178,7 +175,6 @@ pub fn merge_session_list(
                 last_listed_at: now,
                 // per-session extras survive every heartbeat
                 usage: prior.and_then(|p| p.usage.clone()),
-                gsd: prior.and_then(|p| p.gsd.clone()),
                 commands: prior.and_then(|p| p.commands.clone()),
                 mcp: prior.and_then(|p| p.mcp.clone()),
             },
@@ -855,7 +851,6 @@ impl MachinesState {
                 presence: ListingPresence::Live,
                 last_listed_at: at,
                 usage: prior.and_then(|p| p.usage.clone()),
-                gsd: prior.and_then(|p| p.gsd.clone()),
                 commands: prior.and_then(|p| p.commands.clone()),
                 mcp: prior.and_then(|p| p.mcp.clone()),
             };
@@ -1087,14 +1082,6 @@ impl MachinesState {
         });
     }
 
-    pub fn apply_gsd(&mut self, machine_pubkey: &str, session_id: &str, gsd: GsdState) {
-        self.with_machine(machine_pubkey, |m| {
-            if let Some(s) = m.sessions.get_mut(session_id) {
-                s.gsd = Some(gsd);
-            }
-        });
-    }
-
     /// CDX-035: an EMPTY `models` is a "could not answer" report (it carries a
     /// reason) — it must never overwrite a good list. A non-empty answer is
     /// always authoritative and clears any stored reason. Applies only to the
@@ -1208,7 +1195,6 @@ mod tests {
             presence,
             last_listed_at,
             usage: None,
-            gsd: None,
             commands: None,
             mcp: None,
         }
@@ -1389,7 +1375,7 @@ mod tests {
     }
 
     #[test]
-    fn per_session_usage_and_gsd_survive_a_heartbeat() {
+    fn per_session_usage_survives_a_heartbeat() {
         let usage: UsageData = serde_json::from_value(json!({
             "available": true,
             "subscriptionType": null,

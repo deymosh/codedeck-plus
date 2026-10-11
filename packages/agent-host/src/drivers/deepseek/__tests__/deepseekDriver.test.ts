@@ -105,7 +105,6 @@ describe('DeepSeekDriver.info', () => {
       models: true,
       usage: false,
       providers: true,
-      gsd: true,
       interrupt: true,
       commands: true,
       plugins: true,

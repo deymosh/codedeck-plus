@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The container's start: optional conveniences first (GSD, Git identity and
+# The container's start: optional conveniences first (Git identity and
 # credentials, repositories to clone), then the bridge.
 #
 # Only what the bridge cannot run without stops the container: a /data it
@@ -46,22 +46,7 @@ if [ ! -e "$CONFIG_FILE" ]; then
   info "created $CONFIG_FILE with the direct link on; see config.example.json for every setting"
 fi
 
-# 1. Optionally install gsd-core globally for Claude integration. Off by
-#    default (this is a real network call to the npm registry on every
-#    container boot, and the bridge's GSD strip already degrades to a blank
-#    snapshot when gsd-tools is missing). Opt in with
-#    CODEDECK_GSD_AUTO_INSTALL=1. An unset/empty value (Compose's `${VAR:-}`
-#    default for every operator who never touched it) and an explicit
-#    "0"/"false" both mean disabled.
-case "${CODEDECK_GSD_AUTO_INSTALL:-}" in
-  ''|0|false) ;;
-  *)
-    npx --yes @opengsd/gsd-core@1.12.0 --claude --global \
-      || warn "installing gsd-core failed; sessions run without GSD"
-    ;;
-esac
-
-# 2. Make Git authentication available to Claude and interactive shells via a
+# 1. Make Git authentication available to Claude and interactive shells via a
 # helper that reads the runtime secret without persisting the token.
 
 normalize_repository_url() {
@@ -77,7 +62,7 @@ else
   info "no GitHub token set: Git over HTTPS works for public repositories only"
 fi
 
-# 3. Setup Git user identity
+# 2. Setup Git user identity
 if [ -n "${GIT_USER:-}" ]; then
   git config --global user.name "$GIT_USER"
 fi
@@ -88,7 +73,7 @@ if [ -z "${GIT_USER:-}" ] || [ -z "${GIT_EMAIL:-}" ]; then
   info "GIT_USER/GIT_EMAIL not both set: commits made in sessions need an identity configured some other way"
 fi
 
-# 4. Clone or update the repositories in GIT_REPO (comma-separated). Each
+# 3. Clone or update the repositories in GIT_REPO (comma-separated). Each
 # entry stands alone: one that is invalid, or fails to clone or update, is
 # skipped with a warning and the rest still are.
 # The bridge's default workspace root (`workspaces/` in its home, /data).
@@ -164,6 +149,6 @@ if [ -n "${GIT_REPO:-}" ]; then
   done
 fi
 
-# 5. Start the CodeDeck bridge
+# 4. Start the CodeDeck bridge
 info "starting the CodeDeck bridge"
 exec /app/codedeck-bridge run

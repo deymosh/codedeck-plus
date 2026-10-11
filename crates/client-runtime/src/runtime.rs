@@ -72,7 +72,7 @@ const BACKGROUND_PING_EVERY: Duration = Duration::from_secs(150);
 /// How long [`Core::keepalive`] waits for the relays to answer its ping.
 const KEEPALIVE_PROBE: Duration = Duration::from_secs(10);
 /// How long the machines store and the stored-event cursor may stay dirty in
-/// memory. Heartbeats, usage and GSD updates each change the machines store,
+/// memory. Heartbeats and usage updates each change the machines store,
 /// and every stored event moves the cursor; writing each one through
 /// (serialize the whole store, then a database write) cost more than the
 /// event itself. Both are flushed at once when the app is backgrounded or

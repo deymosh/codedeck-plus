@@ -17,11 +17,10 @@ services:
       - no-new-privileges:true
     environment:
       - NODE_ENV=production
-      # For the entrypoint: Git identity, repositories to clone, GSD.
+      # For the entrypoint: Git identity, repositories to clone.
       - GIT_USER=${GIT_USER:-}
       - GIT_EMAIL=${GIT_EMAIL:-}
       - GIT_REPO=${GIT_REPO:-}
-      - CODEDECK_GSD_AUTO_INSTALL=${CODEDECK_GSD_AUTO_INSTALL:-}
       # Claude Code's own settings, for an LLM gateway / router.
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}

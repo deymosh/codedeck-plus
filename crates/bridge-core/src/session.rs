@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn slash_commands_are_recognized() {
         assert!(is_slash_command("/compact"));
-        assert!(is_slash_command("/gsd:plan-phase 3"));
+        assert!(is_slash_command("/review:security 3"));
         assert!(!is_slash_command("/ path"));
         assert!(!is_slash_command("please /compact"));
         assert!(!is_slash_command("/etc/hosts is broken"));

@@ -8,7 +8,7 @@
 //! entry. A different `v` means the two ends cannot talk at all, and the
 //! decoder refuses the message rather than guessing.
 //!
-//! What an individual AGENT can do (models, usage, custom providers, GSD) is
+//! What an individual AGENT can do (models, usage, custom providers, tasks) is
 //! catalog data, not a capability: capabilities describe the BRIDGE. Every
 //! capability is a gate — absence changes what a phone does — and a string
 //! is added only when a phone that relied on it against a bridge without it

@@ -18,8 +18,7 @@ const SKIP: [&str; 8] = ["node_modules", "target", "dist", "build", "out", "venv
 pub const FOLDER_LIMIT: usize = 200;
 /// A build file marks a directory as a project in its own right; its
 /// subdirectories are modules of it and are not listed.
-const SELF_CONTAINED: [&str; 10] = [
-    ".planning",
+const SELF_CONTAINED: [&str; 9] = [
     "package.json",
     "Cargo.toml",
     "go.mod",

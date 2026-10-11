@@ -8,7 +8,6 @@
 
 pub mod config;
 pub mod direct;
-pub mod gsd;
 pub mod host;
 pub mod uploads;
 pub mod qr;

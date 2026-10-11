@@ -924,7 +924,6 @@ export class DeepSeekDriver implements Driver {
         models: true,
         usage: false,
         providers: true,
-        gsd: true,
         interrupt: true,
         // Through the plugin this driver installs into the profile
         // (plugin.ts): the harness's command registry is reachable from

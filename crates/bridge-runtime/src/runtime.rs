@@ -24,7 +24,6 @@ use crate::relay::Relays;
 use crate::state::StateFile;
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
-use crate::gsd::Gsd;
 use crate::uploads::{self, Uploads};
 use crate::{qr, work};
 
@@ -95,7 +94,6 @@ struct Runtime {
     nostr_http: work::NostrHttp,
     outcome: Outcome,
     uploads: Rc<RefCell<Uploads>>,
-    gsd: Rc<Gsd>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
     direct: Option<crate::direct::Direct>,
 }
@@ -114,7 +112,6 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     engine_config.host_kind = Some(config.host_kind);
     engine_config.relays = config.relays.clone();
     engine_config.bridge_version = crate::version().to_string();
-    let user_home = crate::config::user_home();
     let first_root = config.workspace_roots[0].clone();
     if let Some(keep) = config.transcript_keep_last {
         engine_config.transcript_keep_last = keep;
@@ -151,7 +148,6 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         });
     }
 
-    let gsd = Gsd::new(config.node_path.clone(), &user_home);
     let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
@@ -165,7 +161,6 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         nostr_http,
         outcome: Outcome::Stopped,
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
-        gsd: Rc::new(gsd),
         pairing_urls: options.pairing_urls,
         direct,
     };
@@ -278,13 +273,6 @@ impl Runtime {
                 tokio::task::spawn_local(async move {
                     let head = work::git_head(std::path::Path::new(&cwd)).await;
                     let _ = inputs.send(Input::GitHead { session_id, head });
-                });
-            }
-            Effect::ReadGsd { session_id, cwd } => {
-                let (inputs, gsd) = (self.inputs.clone(), Rc::clone(&self.gsd));
-                tokio::task::spawn_local(async move {
-                    let gsd = gsd.state(&cwd).await;
-                    let _ = inputs.send(Input::Gsd { session_id, gsd });
                 });
             }
             Effect::HandleFileUpload(UploadFileMsg::Chunk(chunk)) => {

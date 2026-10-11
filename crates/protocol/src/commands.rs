@@ -443,7 +443,6 @@ pub enum PhoneToBridge {
     CreateFolder(CreateFolderMsg),
     UploadFile(UploadFileMsg),
     UsageRequest(SessionIdMsg),
-    GsdRequest(SessionIdMsg),
     ModelsRequest(ModelsRequestMsg),
     /// The slash commands a session understands (agents with
     /// `supports.commands`). Reply: `commands`.
@@ -504,7 +503,6 @@ mod tests {
         rt(&json!({"v":12,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"k","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":123}));
         rt(&json!({"v":12,"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"","chunkIndex":0,"totalChunks":2}));
         rt(&json!({"v":12,"type":"usage-request","sessionId":"s"}));
-        rt(&json!({"v":12,"type":"gsd-request","sessionId":"s"}));
         rt(&json!({"v":12,"type":"models-request","agent":"opencode"}));
         rt(&json!({"v":12,"type":"commands-request","sessionId":"s"}));
         rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code"}));

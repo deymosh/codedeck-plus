@@ -72,7 +72,6 @@ import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.pulsingAlpha
-import com.codedeck.plus.ui.gsd.GsdStrip
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.ActivityView
 import com.codedeck.plus.ui.transcript.DisplayEntry
@@ -168,7 +167,7 @@ private const val SESSION_FILE_SEND_BACKSTOP_MS = SESSION_FILE_SEND_BUDGET_MS + 
 
 /**
  * The session screen, top to bottom: [SessionTopBar] (back, title,
- * workspace), the GSD strip, the transcript (whose last line says what a
+ * workspace), the transcript (whose last line says what a
  * running turn is doing), the always-visible pending-permission bar, the
  * staged image-attachment strip, quick prompts, the [SendFailedBar] with
  * Retry, and the [Composer]: the text over one row of controls — attach,
@@ -569,15 +568,6 @@ fun SessionScreen(
                     if (supportsUsage) dispatch(UniffiIntent.RequestUsage(machine = machine, sessionId = sessionId))
                 }
             },
-        )
-
-        GsdStrip(
-            core = core,
-            machine = machine,
-            sessionId = sessionId,
-            gsd = session?.gsd,
-            supportsGsd = agent?.supportsGsd == true,
-            sessionState = session?.state,
         )
 
         TranscriptList(
