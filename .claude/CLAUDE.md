@@ -63,6 +63,11 @@ applies:**
   `source toolchain/env.sh` in any shell that needs
   `cargo`/`node`/`pnpm`/`java`/`sdkmanager` from it.
   `apps/android/scripts/build-apk-local.sh` uses this directly — no Docker.
+  `./codedeck` also detects a Docker-less Linux host and does this itself:
+  its `check`/`typecheck`/`test`, `gen-android-bindings` and `apk` commands
+  install the toolchain on first use and run the local equivalents (only
+  `bridge` and `tor` still need Docker). A docker binary that is present but
+  whose daemon is down is an error to fix, not a trigger for the local path.
 
 ```bash
 # Workspace verification, in throwaway containers (nothing installed locally
