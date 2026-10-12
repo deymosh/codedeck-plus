@@ -26,14 +26,13 @@ dexec() { MSYS_NO_PATHCONV=1 docker exec "$@"; }
 # multi-GB install). bridge and tor wrap docker compose and have no local
 # form regardless.
 
-# True when the docker binary exists AND its daemon answers.
-have_docker() {
-  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
-}
-
-# True when the docker binary exists but its daemon does not answer.
-docker_down() {
-  command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1
+# One probe, three states: 0 = Docker usable; 1 = no docker binary at all;
+# 2 = binary present but its daemon does not answer. Every command site acts
+# on this single result — with the daemon down, `docker info` itself can hang
+# for seconds, so it must never run twice for one command.
+docker_state() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 || return 2
 }
 
 fail_docker_down() {
@@ -43,8 +42,12 @@ fail_docker_down() {
 
 # Commands with no local mode (bridge, tor) call this first.
 require_docker() {
-  have_docker && return 0
-  docker_down && fail_docker_down
+  local state=0
+  docker_state || state=$?
+  case $state in
+    0) return 0 ;;
+    2) fail_docker_down ;;
+  esac
   echo "Docker is not installed, and this command is only a docker compose" >&2
   echo "wrapper — it has no local form. Install Docker and re-run (Docker" >&2
   echo "Desktop on Windows/macOS), or on Linux run the bridge from source:" >&2
@@ -96,7 +99,8 @@ Tor (optional codedeck-tor service, Compose `tor` profile):
                            since Compose profiles apply per `up` invocation)
   tor down                Stop codedeck-tor
 
-Android APK (apps/android/docker/build-apk.sh — see that file for details):
+Android APK (Docker: apps/android/docker/build-apk.sh; Docker-less Linux:
+apps/android/scripts/build-apk-local.sh — see those files for details):
   apk [--target <triple>]  Debug APK of the native app into dist/ (default:
                            arm64 device + x86_64 emulator)
 
@@ -107,7 +111,7 @@ the vendored toolchain instead, installed on first use):
   typecheck                typecheck only (agent host + cargo check)
   test                     test only
 
-Bindings (run in a throwaway Rust container):
+Bindings (throwaway Rust container; locally on a Docker-less Linux host):
   gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
                            from crates/client-ffi via uniffi-bindgen
                            (source of truth — see that crate's own doc
@@ -195,10 +199,12 @@ cmd_tor() {
 
 cmd_apk() {
   # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
-  if have_docker; then
-    exec ./apps/android/docker/build-apk.sh "$@"
-  fi
-  docker_down && fail_docker_down
+  local state=0
+  docker_state || state=$?
+  case $state in
+    0) exec ./apps/android/docker/build-apk.sh "$@" ;;
+    2) fail_docker_down ;;
+  esac
   ensure_toolchain
   # Sources toolchain/env.sh itself when present.
   exec ./apps/android/scripts/build-apk-local.sh "$@"
@@ -296,11 +302,14 @@ DOCKERFILE
 # Same checks, on the local toolchain (no Docker). The Docker path packs
 # only what each container needs; locally the whole repo is already here.
 check_typescript_local() {
+  # NODE_ENV inherited as production would make pnpm silently skip
+  # devDependencies on install (and the toolchain this path runs —
+  # typescript, vitest — IS devDependencies) and reach the tests, where the
+  # Docker containers never set it. The containers run with it unset, so
+  # unset it here too: same repo, same result either way.
+  unset NODE_ENV
   echo "==> Installing dependencies (local toolchain)"
-  # NODE_ENV=production would make pnpm silently skip devDependencies, and
-  # the toolchain this path exists to run (typescript, vitest) IS dev
-  # dependencies — force the dev install no matter what the caller exports.
-  NODE_ENV=development pnpm install --frozen-lockfile
+  pnpm install --frozen-lockfile
   case "$1" in
     typecheck) pnpm -r --no-bail run typecheck ;;
     test) pnpm -r --no-bail run test ;;
@@ -325,16 +334,20 @@ check_rust_local() {
 # Each Docker check in a subshell: start_throwaway's EXIT trap removes that
 # container. The local path needs no cleanup.
 run_checks() {
-  if have_docker; then
-    (check_typescript "$1")
-    (check_rust "$1")
-  elif docker_down; then
-    fail_docker_down
-  else
-    ensure_toolchain
-    check_typescript_local "$1"
-    check_rust_local "$1"
-  fi
+  local state=0
+  docker_state || state=$?
+  case $state in
+    0)
+      (check_typescript "$1")
+      (check_rust "$1")
+      ;;
+    2) fail_docker_down ;;
+    *)
+      ensure_toolchain
+      check_typescript_local "$1"
+      check_rust_local "$1"
+      ;;
+  esac
 }
 
 # --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
@@ -368,8 +381,10 @@ gen_android_bindings_local() {
 }
 
 cmd_gen_android_bindings() {
-  if ! have_docker; then
-    docker_down && fail_docker_down
+  local state=0
+  docker_state || state=$?
+  if [ "$state" -ne 0 ]; then
+    [ "$state" -eq 2 ] && fail_docker_down
     ensure_toolchain
     gen_android_bindings_local
     return
