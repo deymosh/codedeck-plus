@@ -235,4 +235,6 @@ pnpm install && pnpm --filter @codedeck/agent-host run build
 ./target/release/codedeck-bridge run --agent-host packages/agent-host/dist/main.js
 ```
 
-Or with no toolchain at all, `./codedeck check` runs every check in Docker.
+Or with no toolchain at all, `./codedeck check` runs every check in Docker —
+and with no Docker either (Linux), it installs the local toolchain
+(`scripts/install-toolchain.sh`) on first use and runs the checks with it.

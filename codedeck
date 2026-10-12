@@ -3,8 +3,12 @@
 # the optional Tor daemon, Android APK builds, and workspace checks.
 #
 # Everything here just wraps commands already established elsewhere in the
-# repo (docker compose, apps/android/docker/build-apk.sh, cargo, pnpm) — this
-# script adds no new mechanism, only a short memorable surface over them.
+# repo (docker compose, apps/android/docker/build-apk.sh,
+# apps/android/scripts/build-apk-local.sh, cargo, pnpm) — this script adds no
+# new mechanism, only a short memorable surface over them. Docker is the
+# default engine; on a Linux host with no docker binary at all, the commands
+# that have a local form fall back to the vendored toolchain
+# (scripts/install-toolchain.sh, installed on first use).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -13,6 +17,63 @@ cd "$(git rev-parse --show-toplevel)"
 # Scoped (not exported globally): doing that also breaks docker cp's HOST-side
 # path resolution. No-op on real Linux/macOS. Same fix as build-apk.sh.
 dexec() { MSYS_NO_PATHCONV=1 docker exec "$@"; }
+
+# --- Engine selection: Docker when its daemon answers; else (Linux only,
+# and only when no docker binary exists at all) the vendored toolchain.
+#
+# A binary whose daemon is merely DOWN is not "no Docker": that machine chose
+# Docker, so it gets "start your daemon" — never a surprise local run (or a
+# multi-GB install). bridge and tor wrap docker compose and have no local
+# form regardless.
+
+# True when the docker binary exists AND its daemon answers.
+have_docker() {
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# True when the docker binary exists but its daemon does not answer.
+docker_down() {
+  command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1
+}
+
+fail_docker_down() {
+  echo "Docker is installed but its daemon is unreachable — start it and re-run." >&2
+  exit 1
+}
+
+# Commands with no local mode (bridge, tor) call this first.
+require_docker() {
+  have_docker && return 0
+  docker_down && fail_docker_down
+  echo "Docker is not installed, and this command is only a docker compose" >&2
+  echo "wrapper — it has no local form. Install Docker and re-run (Docker" >&2
+  echo "Desktop on Windows/macOS), or on Linux run the bridge from source:" >&2
+  echo "docs/BRIDGE.md, \"Build from source\"." >&2
+  exit 1
+}
+
+# The local engine: the vendored toolchain from scripts/install-toolchain.sh.
+# Installs it on first use so a Docker-less Linux host (or the coding agent
+# driving one) gets a working path with zero extra steps; idempotent after
+# that. env.sh is sourced into THIS shell so cargo/node/pnpm/java stay on PATH
+# for the rest of the script. Non-Linux hosts have no supported Docker-free
+# path — scripts/install-toolchain.sh is Linux-only by design.
+ensure_toolchain() {
+  if [ "$(uname -s)" != Linux ]; then
+    echo "Docker is unavailable and this host cannot use the local toolchain" >&2
+    echo "instead (scripts/install-toolchain.sh is Linux-only). Install and" >&2
+    echo "start Docker (Docker Desktop on Windows/macOS), then re-run this" >&2
+    echo "command. See CLAUDE.md, \"Commands\"." >&2
+    exit 1
+  fi
+  if [ ! -f toolchain/env.sh ]; then
+    echo "==> No Docker and no ./toolchain yet — installing the local toolchain"
+    echo "    (one-time, a few GB, nothing outside this repo; Ctrl-C to abort)"
+    bash scripts/install-toolchain.sh
+  fi
+  # shellcheck source=/dev/null
+  . toolchain/env.sh
+}
 
 usage() {
   cat <<'EOF'
@@ -40,7 +101,8 @@ Android APK (apps/android/docker/build-apk.sh — see that file for details):
                            arm64 device + x86_64 emulator)
 
 Workspace checks (throwaway Node and Rust containers — nothing installed
-locally is required):
+locally is required; on a Docker-less Linux host these run locally through
+the vendored toolchain instead, installed on first use):
   check                    typecheck + test: the agent host and every crate
   typecheck                typecheck only (agent host + cargo check)
   test                     test only
@@ -63,6 +125,7 @@ require_running_bridge() {
 }
 
 cmd_bridge() {
+  require_docker
   case "${1:-}" in
     up)
       docker compose up -d --build codedeck-bridge
@@ -110,6 +173,7 @@ cmd_bridge() {
 }
 
 cmd_tor() {
+  require_docker
   case "${1:-}" in
     up)
       docker compose --profile tor up -d --build
@@ -131,7 +195,13 @@ cmd_tor() {
 
 cmd_apk() {
   # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
-  exec ./apps/android/docker/build-apk.sh "$@"
+  if have_docker; then
+    exec ./apps/android/docker/build-apk.sh "$@"
+  fi
+  docker_down && fail_docker_down
+  ensure_toolchain
+  # Sources toolchain/env.sh itself when present.
+  exec ./apps/android/scripts/build-apk-local.sh "$@"
 }
 
 # shellcheck source=scripts/lib/pack-repo.sh
@@ -223,25 +293,87 @@ DOCKERFILE
   esac
 }
 
-# Each in a subshell: start_throwaway's EXIT trap removes that container.
+# Same checks, on the local toolchain (no Docker). The Docker path packs
+# only what each container needs; locally the whole repo is already here.
+check_typescript_local() {
+  echo "==> Installing dependencies (local toolchain)"
+  # NODE_ENV=production would make pnpm silently skip devDependencies, and
+  # the toolchain this path exists to run (typescript, vitest) IS dev
+  # dependencies — force the dev install no matter what the caller exports.
+  NODE_ENV=development pnpm install --frozen-lockfile
+  case "$1" in
+    typecheck) pnpm -r --no-bail run typecheck ;;
+    test) pnpm -r --no-bail run test ;;
+    check)
+      pnpm -r --no-bail run typecheck
+      pnpm -r --no-bail run test
+      ;;
+  esac
+}
+
+check_rust_local() {
+  case "$1" in
+    typecheck) cargo clippy --locked --workspace --all-targets -- -D warnings ;;
+    test) cargo test --locked --workspace ;;
+    check)
+      cargo clippy --locked --workspace --all-targets -- -D warnings
+      cargo test --locked --workspace
+      ;;
+  esac
+}
+
+# Each Docker check in a subshell: start_throwaway's EXIT trap removes that
+# container. The local path needs no cleanup.
 run_checks() {
-  (check_typescript "$1")
-  (check_rust "$1")
+  if have_docker; then
+    (check_typescript "$1")
+    (check_rust "$1")
+  elif docker_down; then
+    fail_docker_down
+  else
+    ensure_toolchain
+    check_typescript_local "$1"
+    check_rust_local "$1"
+  fi
 }
 
 # --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
 # crates/client-ffi/src/lib.rs's own doc comment — the Kotlin binding
 # surface is a build artifact of `uniffi-bindgen`'s library-mode generation,
-# never hand-edited). Builds the cdylib
-# for the HOST target (the generated Kotlin source is architecture-
-# independent — it only reads the crate's embedded UniFFI metadata, not the
-# target triple), runs the bindgen binary, copies the output back. Does NOT
-# cross-compile the actual .so for an Android ABI — that's a separate,
-# NDK-dependent build step (apps/android's own Gradle Rust task, once it
-# exists), out of scope for a pure Kotlin-source regeneration command. Only
-# the cargo workspace is copied; the cargo registry and target dir are
-# cached volumes. ---
+# never hand-edited). Builds the cdylib for the HOST target (the generated
+# Kotlin source is architecture-independent — it only reads the crate's
+# embedded UniFFI metadata, not the target triple), runs the bindgen binary,
+# copies the output back. Does NOT cross-compile the actual .so for an
+# Android ABI — that's a separate, NDK-dependent build step (apps/android's
+# own Gradle Rust task, once it exists), out of scope for a pure
+# Kotlin-source regeneration command. ---
+# The local (Docker-free) variant: same steps, output copied straight from a
+# temp dir. The Docker variant below copies only the cargo workspace in; the
+# cargo registry and target dir live in cached volumes.
+gen_android_bindings_local() {
+  local out dest
+  out="$(mktemp -d)"
+  dest="apps/android/app/src/main/java/uniffi"
+  echo "==> Building crates/client-ffi (host target)"
+  cargo build --locked -p client-ffi --lib
+  echo "==> Running uniffi-bindgen (Kotlin, library mode)"
+  cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
+    generate --library target/debug/libclient_ffi.so --language kotlin --no-format \
+    --out-dir "$out"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  cp -R "$out/uniffi/." "$dest"
+  rm -rf "$out"
+  echo "==> Wrote $dest/**"
+}
+
 cmd_gen_android_bindings() {
+  if ! have_docker; then
+    docker_down && fail_docker_down
+    ensure_toolchain
+    gen_android_bindings_local
+    return
+  fi
   local name="codedeck-gen-android-bindings-$$"
   start_throwaway "$name" rust:1-bookworm \
     -v codedeck-cargo-registry:/usr/local/cargo/registry \
