@@ -164,12 +164,19 @@ private const val SHORT_ITEM_LIST = 12
  * a turn and leads; the [snapshot] of what fills the context is asked for
  * again each time it moves, so until the new one comes the old one is left
  * out rather than shown disagreeing with the figure above it.
+ *
+ * A context at or past its window is the one case where the two may differ
+ * without the snapshot being stale: the figure stops at 100 %, and the parts
+ * are what say how far past it the context went. Leaving them out there
+ * would hide the parts exactly when they are worth reading and leave the
+ * tokens below them to be worked out from the capped figure instead.
  */
 internal fun contextFigures(percentage: Double?, snapshot: UniffiContextBreakdown?): Pair<Double?, UniffiContextBreakdown?> {
     val parts = snapshot?.takeIf { it.windowTokens > 0u }
     val partsPct = parts?.let { it.usedTokens.toDouble() / it.windowTokens.toDouble() * 100.0 }
     val live = percentage?.takeIf { it.isFinite() }
-    val agrees = live == null || (partsPct != null && abs(partsPct - live) < 1.0)
+    val agrees = live == null ||
+        (partsPct != null && (abs(partsPct - live) < 1.0 || (live >= 100.0 && partsPct >= 100.0)))
     return (live ?: partsPct)?.coerceIn(0.0, 100.0) to parts?.takeIf { agrees }
 }
 

@@ -376,6 +376,102 @@ describe('OpenCode usage', () => {
     expect(usage?.context?.windowTokens).toBe(1_000);
     await session.end();
   });
+
+  it('measures the step, not the session totals the server reports beside it', async () => {
+    // `session.usage.updated` carries the session's running totals — every
+    // step, title and compaction it has ever paid for — and arrives right
+    // after each step's own counters. Measuring the context from those pins
+    // the meter at 100 % on a session whose context is barely used, and the
+    // model keeps working, which is what the phone must never be told.
+    const step = { input: 200, output: 50, reasoning: 0, cache: { read: 300, write: 0 } };
+    const sessionTotals = { input: 9_000, output: 2_000, reasoning: 500, cache: { read: 12_000, write: 0 } };
+    const client = clientWith([
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0, tokens: step } },
+      { type: 'session.usage.updated', data: { sessionID: 'ses_1', cost: 0.5, tokens: sessionTotals } },
+    ], modelsWith(1_000));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.waitFor((e) => e.type === 'info' && 'contextPercentage' in e);
+    // The step's own counters: 200 + 50 + 0 + 300 + 0.
+    expect(ctx.events.filter((e) => e.type === 'info' && 'contextPercentage' in e)).toEqual([
+      { type: 'info', contextPercentage: 55, contextWindow: 1_000 },
+    ]);
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', cost: 0.5 });
+    const usage = await session.getUsage!();
+    expect(usage?.context?.usedTokens).toBe(550);
+    await session.end();
+  });
+
+  it('a sub-agent step does not move the context meter', async () => {
+    // A child session's step counters are its own; the meter measures this
+    // session, and a sub-agent's step must not stand in for it.
+    const client = clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', id: 'call_1', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', id: 'call_1', input: { prompt: 'look around', agent: 'explore' } } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', title: 'Child session' } },
+      { type: 'session.step.started', data: { sessionID: 'ses_child', assistantMessageID: 'm2', agent: 'explore', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_child', assistantMessageID: 'm2', finish: 'stop', cost: 0, tokens: { input: 900, output: 100, reasoning: 0, cache: { read: 900, write: 0 } } } },
+    ], modelsWith(1_000));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.ended();
+    expect(ctx.events.filter((e) => e.type === 'info' && 'contextPercentage' in e)).toEqual([]);
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', cost: 0 });
+    expect((await session.getUsage!())?.context).toBeUndefined();
+  });
+});
+
+describe('OpenCode compaction', () => {
+  const stepStarted = { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } };
+
+  it('says an automatic compaction happened, and that it made room', async () => {
+    // Nothing else would tell the phone: the transcript keeps the turns the
+    // summary replaced, and the context meter simply drops at the next step.
+    const ctx = start(clientWith([
+      stepStarted,
+      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'auto', recent: '' } },
+      { type: 'session.compaction.delta', data: { sessionID: 'ses_1', text: '## Objective' } },
+      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'auto', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', recent: '', cost: 0 } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
+      'OpenCode session started',
+      'OpenCode is compacting the conversation to make room in the context.',
+      'Compacted the conversation to make room: OpenCode continues from a summary of it.',
+    ]);
+  });
+
+  it('says a compaction the user asked for by name only once it is done', async () => {
+    // The `/compact` built-in already put its own line in the transcript; the
+    // driver adds the outcome, which is the part the built-in cannot know.
+    const ctx = start(clientWith([
+      stepStarted,
+      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'manual', recent: '', inputID: 'msg_9' } },
+      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'manual', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', recent: '', cost: 0 } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
+      'OpenCode session started',
+      'Compacted the conversation: OpenCode continues from a summary of it.',
+    ]);
+  });
+
+  it('reports a compaction that failed', async () => {
+    const ctx = start(clientWith([
+      stepStarted,
+      {
+        type: 'session.compaction.failed',
+        data: { sessionID: 'ses_1', reason: 'manual', inputID: 'msg_9', error: { type: 'compaction.failed', message: 'Nothing to compact yet' } },
+      },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'error').map((e) => (e as { text: string }).text)).toEqual([
+      'OpenCode could not compact the conversation: Nothing to compact yet',
+    ]);
+  });
 });
 
 describe('OpenCode conversation delete', () => {

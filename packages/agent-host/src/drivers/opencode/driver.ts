@@ -142,13 +142,25 @@ export interface OpenCodeCatalog {
   models: ModelEntry[];
   defaultModel?: string;
   /** Context window per model id, for the models whose provider declares
-   *  one. OpenCode reports an undeclared limit as 0 and then never compacts
-   *  on its own, so such a model has no entry rather than a guessed size. */
+   *  one. A provider that declares none reports 0, and OpenCode then has no
+   *  size to compact against (its auto-compaction threshold is derived from
+   *  the window, and is unbounded without one), so such a model has no entry
+   *  here rather than a guessed size. */
   contextLimits?: Record<string, number>;
 }
 
-/** Tokens the conversation occupies after an assistant step: everything the
- *  step read and wrote. The measure OpenCode's own context meter shows. */
+/**
+ * What the context holds after one assistant step: the prompt that step sent
+ * (its uncached input, what the provider read from its cache and what it
+ * wrote there) plus the reply it produced (its text and its reasoning),
+ * which the next step sends back as part of its prompt.
+ *
+ * These are a STEP's counters — `session.step.ended`'s. They must never be
+ * fed the session's own totals (`session.usage.updated`), which only ever
+ * grow: they count every step, tool call, title and compaction the session
+ * has ever paid for, so a meter built from them climbs to the window's size
+ * and stays pinned there while the context itself is nearly empty.
+ */
 export function contextTokens(tokens: SessionInfo['tokens']): number {
   return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write;
 }
@@ -370,7 +382,8 @@ export class OpenCodeSession implements DriverSession {
   /** The error last reported in this turn: OpenCode reports a failed
    *  turn's error both on its step and on its execution. */
   private lastError?: string;
-  /** The last main-agent step's token counts: what the context held then. */
+  /** The last main-agent step's own token counts: what the context held
+   *  then. Never the session's running totals, which only grow. */
   private lastTokens?: SessionInfo['tokens'];
   /** The model the last main-agent step ran, which is the window its tokens
    *  are measured against. */
@@ -586,18 +599,45 @@ export class OpenCodeSession implements DriverSession {
           break;
         }
         case 'session.step.ended': {
-          if (event.data.tokens) this.lastTokens = event.data.tokens;
-          if (!child) this.reportStepTokens();
+          if (!child) {
+            // The step's own counters, not the session's running totals (see
+            // contextTokens): what the next step will carry as its prompt.
+            if (event.data.tokens) this.lastTokens = event.data.tokens;
+            this.reportStepTokens();
+          }
           // Files the step changed that no tool call already showed (a shell
           // command's writes, say): v2 names them here rather than as a
           // session-wide diff.
           if (event.data.files && event.data.files.length > 0) void this.reportChangedFiles(client, sessionId, event.data.files);
           break;
         }
-        case 'session.usage.updated': {
+        // A compaction rewrote the conversation the model sees. The phone's
+        // transcript still holds what the summary replaced, and its context
+        // meter is about to drop, so the compaction is stated rather than
+        // left to look like the context vanishing on its own.
+        case 'session.compaction.started': {
           if (child) break;
-          this.lastTokens = event.data.tokens;
-          this.reportUsageTokens();
+          // A manual compaction is the `/compact` built-in, whose own status
+          // line is already in the transcript; only an automatic one is news.
+          if (event.data.reason !== 'manual') {
+            this.deliver({ type: 'status', text: 'OpenCode is compacting the conversation to make room in the context.' });
+          }
+          break;
+        }
+        case 'session.compaction.ended': {
+          if (child) break;
+          this.deliver({
+            type: 'status',
+            text:
+              event.data.reason === 'manual'
+                ? 'Compacted the conversation: OpenCode continues from a summary of it.'
+                : 'Compacted the conversation to make room: OpenCode continues from a summary of it.',
+          });
+          break;
+        }
+        case 'session.compaction.failed': {
+          if (child) break;
+          this.reportError(`OpenCode could not compact the conversation: ${formatOpenCodeError(event.data.error)}`);
           break;
         }
         // A child's failure is the sub-agent's own: it ends that sub-agent,
@@ -839,11 +879,6 @@ export class OpenCodeSession implements DriverSession {
         ...(changedCw ? { contextWindow: window } : {}),
       });
     });
-  }
-
-  private reportUsageTokens(): void {
-    if (!this.lastTokens) return;
-    this.reportStepTokens();
   }
 
   private reportError(content: string): void {
