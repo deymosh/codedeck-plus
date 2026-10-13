@@ -352,15 +352,31 @@ pub fn is_hidden_entry(entry: &OutputEntry) -> bool {
     }
 }
 
-/// `request_id` → outcome summary, from `resolved` entries (the latest wins).
-pub fn collect_resolved(entries: &[SeqEntry]) -> HashMap<String, String> {
+/// `request_id` → the last `resolved` entry for it: the seq it landed at, and
+/// its outcome summary.
+///
+/// The seq is part of it because one request id can carry more than one card
+/// in turn (a peer that asks twice about the same thing, or two asks that
+/// belong to one call). A card is therefore only answered by a resolution
+/// that landed *after* it — see [`answered_at`].
+pub fn collect_resolved(entries: &[SeqEntry]) -> HashMap<String, (u64, String)> {
     let mut resolved = HashMap::new();
     for item in entries {
         if let EntryBody::Resolved { request_id, summary } = &item.entry.body {
-            resolved.insert(request_id.clone(), summary.clone());
+            resolved.insert(request_id.clone(), (item.seq, summary.clone()));
         }
     }
     resolved
+}
+
+/// What the card whose first entry is at `seq` resolved to, when a resolution
+/// came after it. An earlier one carrying the same id answered an earlier
+/// card, and must not answer this one.
+fn answered_at(resolved: &HashMap<String, (u64, String)>, request_id: &str, seq: u64) -> Option<String> {
+    resolved
+        .get(request_id)
+        .filter(|(at, _)| *at > seq)
+        .map(|(_, summary)| summary.clone())
 }
 
 fn subagent_label(entry: &OutputEntry) -> Option<String> {
@@ -369,7 +385,9 @@ fn subagent_label(entry: &OutputEntry) -> Option<String> {
 
 struct Builder {
     display: Vec<DisplayEntry>,
-    resolved: HashMap<String, String>,
+    /// Each card's resolution, by id, with the seq it landed at
+    /// ([`collect_resolved`]).
+    resolved: HashMap<String, (u64, String)>,
     steps: Vec<ToolStep>,
     group_seq: u64,
     questions: Vec<QuestionView>,
@@ -411,7 +429,7 @@ impl Builder {
         questions.sort_by_key(|q| q.index);
         self.display.push(DisplayEntry::Question {
             seq: self.question_seq,
-            answered: self.resolved.get(&request_id).cloned(),
+            answered: answered_at(&self.resolved, &request_id, self.question_seq),
             request_id,
             questions,
         });
@@ -608,7 +626,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 b.flush_all();
                 b.display.push(DisplayEntry::PermissionRequest {
                     seq,
-                    answered: b.resolved.get(request_id).cloned(),
+                    answered: answered_at(&b.resolved, request_id, seq),
                     request_id: request_id.clone(),
                     tool_name: tool_name.clone(),
                     tool_kind: *kind,
@@ -627,7 +645,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                 b.flush_all();
                 b.display.push(DisplayEntry::PlanApproval {
                     seq,
-                    answered: b.resolved.get(request_id).cloned(),
+                    answered: answered_at(&b.resolved, request_id, seq),
                     request_id: request_id.clone(),
                     options: options.clone(),
                     revise: revise.clone(),
@@ -740,7 +758,11 @@ pub fn find_pending_permission(
         else {
             return None;
         };
-        if resolved.contains_key(request_id) || responded_cards.is_some_and(|s| s.contains(request_id)) {
+        // A resolution that came after this ask is its answer; one that came
+        // before belongs to an earlier card carrying the same id.
+        if answered_at(&resolved, request_id, item.seq).is_some()
+            || responded_cards.is_some_and(|s| s.contains(request_id))
+        {
             return None;
         }
         Some(PendingPermissionSummary {
@@ -1015,6 +1037,59 @@ mod tests {
         assert_eq!(answered.as_deref(), Some("Answered"));
         let DisplayEntry::Question { answered, .. } = &d[1] else { panic!() };
         assert_eq!(*answered, None);
+    }
+
+    /// One id can carry two cards in turn — a permission ask, then the card
+    /// it was asked for. Each card is answered by its own resolution: the
+    /// second must not be born answered with the first one's outcome, which
+    /// is what a map keyed on the id alone does — and the user then never
+    /// gets to answer it.
+    #[test]
+    fn a_second_card_on_the_same_id_is_not_born_answered() {
+        let q = json!({"entryType":"question","requestId":"c1","index":0,"count":1,"question":"Which colour?","options":[{"label":"Red"},{"label":"Blue"}]});
+
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            perm("c1"),
+            json!({"entryType":"resolved","requestId":"c1","summary":"Allowed"}),
+            q.clone(),
+        ]));
+        assert_eq!(kinds(&d), ["tools", "permission", "question"]);
+        let DisplayEntry::Question { answered, .. } = d.last().unwrap() else { panic!("{d:?}") };
+        assert_eq!(*answered, None, "the earlier card's answer is not this card's");
+
+        // And once the phone answers the question, that resolution is what
+        // says so — the same id, a later resolution.
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            perm("c1"),
+            json!({"entryType":"resolved","requestId":"c1","summary":"Allowed"}),
+            q,
+            json!({"entryType":"resolved","requestId":"c1","summary":"Red"}),
+        ]));
+        let DisplayEntry::Question { answered, .. } = d.last().unwrap() else { panic!("{d:?}") };
+        assert_eq!(answered.as_deref(), Some("Red"));
+    }
+
+    /// The same rule for the card that waits on the user: a repeated ask on
+    /// an id that was already resolved is pending again, not answered.
+    #[test]
+    fn a_repeated_permission_ask_is_pending_again() {
+        let d = build_display_entries(&seq(&[
+            call("c1"),
+            perm("c1"),
+            json!({"entryType":"resolved","requestId":"c1","summary":"Allowed"}),
+            perm("c1"),
+        ]));
+        let DisplayEntry::PermissionRequest { answered, .. } = d.last().unwrap() else { panic!("{d:?}") };
+        assert_eq!(*answered, None);
+        let source = seq(&[
+            call("c1"),
+            perm("c1"),
+            json!({"entryType":"resolved","requestId":"c1","summary":"Allowed"}),
+            perm("c1"),
+        ]);
+        assert!(find_pending_permission(&source, None).is_some(), "the second ask is the one waiting");
     }
 
     #[test]

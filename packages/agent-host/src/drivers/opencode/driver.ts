@@ -45,6 +45,7 @@ import type {
 } from '../../sdk/types';
 import {
   opencodeEventToEntries,
+  QUESTION_TOOL,
   toolCallDiffs,
   toolResultText,
   type OpenCodeEvent,
@@ -537,11 +538,12 @@ export class OpenCodeSession implements DriverSession {
           break;
         }
         case 'session.tool.input.started': {
-          this.toolNames.set(event.data.id, event.data.name);
+          this.toolCalls.set(event.data.id, { name: event.data.name, input: {} });
           break;
         }
         case 'session.tool.called': {
-          const name = this.toolNames.get(event.data.id) ?? '';
+          const name = this.toolCalls.get(event.data.id)?.name ?? '';
+          this.toolCalls.set(event.data.id, { name, input: (event.data.input ?? {}) as Record<string, unknown> });
           if (name === SUBAGENT_TOOL) this.noteSubagentCall(event.data.id, event.data.input);
           this.deliver({
             type: 'tool-start',
@@ -679,9 +681,14 @@ export class OpenCodeSession implements DriverSession {
     }
   }
 
-  /** Tool name per call id: v2 names the tool when its input starts, and the
-   *  call itself carries only the id. */
-  private readonly toolNames = new Map<string, string>();
+  /**
+   * What each call is, by its id: v2 names the tool when its input starts and
+   * sends the input when the call is made, while the events that come after
+   * — a permission ask, a result — carry only the id. A permission card is
+   * therefore read from here, since the ask itself says no more than which
+   * call it is about.
+   */
+  private readonly toolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
   /** Files a completed edit/write/patch call already showed as a diff card.
    *  A file the step also names as changed is that same edit — dropped
    *  instead of shown twice — and consumes the entry, so a LATER change to
@@ -863,9 +870,23 @@ export class OpenCodeSession implements DriverSession {
       reply('once');
       return;
     }
-    const toolName = this.toolNames.get(ask.source?.id ?? '') ?? ask.action;
+    const started = this.toolCalls.get(ask.source?.id ?? '');
+    const toolName = started?.name ?? ask.action;
+    // The question tool asks for permission to ask, and then asks. Its own
+    // ask is the question: a card for it would make the user allow being
+    // asked before they are asked, with the answer they give the form the
+    // only one that says anything. Allowed here, so the form's card is the
+    // one they see.
+    if (toolName === QUESTION_TOOL) {
+      reply('once');
+      return;
+    }
+    // The ask names the call, not what it will run: the arguments it was
+    // called with are what the card shows (`read` a file, `shell` a command).
+    // Its own `metadata` carries them when v2 sends any.
+    const input = started?.input ?? ((ask.metadata ?? {}) as Record<string, unknown>);
     const description = ask.message?.trim() || describePermission(ask.action, ask.resources);
-    const call = opencodeTool(toolName, (ask.metadata ?? {}) as Record<string, unknown>, this.reportUnknownTool);
+    const call = opencodeTool(toolName, input, this.reportUnknownTool);
     this.ctx
       .requestPermission({
         requestId: ask.source?.id ?? ask.id,
@@ -873,7 +894,7 @@ export class OpenCodeSession implements DriverSession {
         kind: call.kind,
         title: call.title,
         description,
-        locations: toolLocations((ask.metadata ?? {}) as Record<string, unknown>),
+        locations: toolLocations(input),
         options: ask.save && ask.save.length > 0 ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })
