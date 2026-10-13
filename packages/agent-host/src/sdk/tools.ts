@@ -6,62 +6,86 @@
 import type { PermissionOption, TodoItem, ToolKind } from './types';
 
 /**
+ * Tool names, by the agent they come from.
+ *
  * Every name here belongs to an agent this host runs — Claude Code, OpenCode
  * 2.x or the DeepSeek Harness. A name none of them emits (an older SDK's
- * tool, or one dropped in a rename) does not belong: it would label a row
- * that can never appear. Names are matched lower-cased.
+ * tool, or one a rename left behind) does not belong: it could only label a
+ * row that never appears. Names are matched lower-cased, since these agents
+ * spell them differently (`Bash`, `bash`).
+ *
+ * A name more than one of them uses, meaning the same thing, lives in
+ * COMMON_TOOLS; the rest sit with their agent's own tools. When an agent
+ * renames a tool, its new name joins its list and the old one leaves — the
+ * exceptions are the ones an agent still answers to, like Claude Code's
+ * KillShell/KillBash aliases of TaskStop.
  */
-const TOOL_KINDS: Record<string, ToolKind> = {
+const COMMON_TOOLS: Record<string, ToolKind> = {
   read: 'read',
-  notebookread: 'read',
-  list: 'read',
-  ls: 'read',
   write: 'edit',
   edit: 'edit',
-  multiedit: 'edit',
-  notebookedit: 'edit',
-  patch: 'edit',
+  glob: 'search',
+  grep: 'search',
+  webfetch: 'fetch',
+  websearch: 'fetch',
+  // Claude Code's and the DeepSeek Harness's sub-agent call.
+  task: 'agent',
+};
+
+const CLAUDE_TOOLS: Record<string, ToolKind> = {
   bash: 'execute',
   bashoutput: 'execute',
-  // Claude Code's stop-a-background-task tool. It is called TaskStop; the
-  // CLI still resolves KillShell/KillBash as aliases of it, kept below for a
-  // session driven by an older CLI.
+  // Stopping a background task. The CLI's own rename map turns KillShell and
+  // KillBash into TaskStop, so TaskStop is what arrives; the aliases are kept
+  // for a session driven by a CLI that still says them.
   taskstop: 'execute',
   killshell: 'execute',
   killbash: 'execute',
-  // OpenCode's shell tool (it was `bash` before v2), and the rest of what
-  // v2 added: running code in Code Mode, driving a browser, and working
-  // trees. Without these the phone shows a bare row whose title is the
-  // call's raw JSON.
+  ls: 'read',
+  notebookread: 'read',
+  multiedit: 'edit',
+  notebookedit: 'edit',
+  todowrite: 'think',
+  exitplanmode: 'switch_mode',
+  enterplanmode: 'switch_mode',
+};
+
+const OPENCODE_TOOLS: Record<string, ToolKind> = {
+  // 2.x's name for the shell tool; `bash` above is Claude Code's.
   shell: 'execute',
+  // Code Mode: running a program, driving a browser, working trees.
   execute: 'execute',
   browser: 'fetch',
   worktree_create: 'execute',
   worktree_remove: 'execute',
   worktree_list: 'read',
-  question: 'think',
-  glob: 'search',
-  grep: 'search',
-  webfetch: 'fetch',
-  websearch: 'fetch',
-  todowrite: 'think',
-  exitplanmode: 'switch_mode',
-  enterplanmode: 'switch_mode',
-  task: 'agent',
-  // OpenCode's sub-agent tool (it was `task` before v2).
+  // 2.x's name for the sub-agent call; `task` above is the others'.
   subagent: 'agent',
+  patch: 'edit',
+  skill: 'read',
+  question: 'think',
+};
+
+const DEEPSEEK_TOOLS: Record<string, ToolKind> = {
   agent: 'agent',
-  // The DeepSeek Harness's own tools.
   pwsh: 'execute',
+  job_kill: 'execute',
   str_replace_editor: 'edit',
   todo_write: 'think',
   web_fetch: 'fetch',
   web_search: 'fetch',
   read_image: 'read',
-  skill: 'read',
   job_output: 'read',
   job_list: 'read',
-  job_kill: 'execute',
+  list: 'read',
+};
+
+/** Every agent's tools together, which is what a lookup reads. */
+const TOOL_KINDS: Record<string, ToolKind> = {
+  ...COMMON_TOOLS,
+  ...CLAUDE_TOOLS,
+  ...OPENCODE_TOOLS,
+  ...DEEPSEEK_TOOLS,
 };
 
 /** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `bash`)
