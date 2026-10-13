@@ -11,6 +11,9 @@
 # (scripts/install-toolchain.sh, installed on first use).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+# Absolute, because some commands change directory (the Android ones work in
+# apps/android) and this script's own files are still theirs to reach.
+REPO_ROOT="$PWD"
 
 # Git Bash (MSYS) on Windows rewrites leading-/ arguments as if they were
 # Windows paths before docker.exe sees them — breaks `docker exec -w /path`.
@@ -56,9 +59,18 @@ require_docker() {
 }
 
 # The local engine: the vendored toolchain from scripts/install-toolchain.sh.
-# Installs it on first use so a Docker-less Linux host (or the coding agent
-# driving one) gets a working path with zero extra steps; idempotent after
-# that. env.sh is sourced into THIS shell so cargo/node/pnpm/java stay on PATH
+# Takes the components the command being run actually needs — `node` for the
+# TypeScript workspace, `rust` for the crates, `android` for apps/android — so
+# a host that runs one part of the repo never fetches the others (the Android
+# SDK and NDK are a few GB on their own). No argument means the whole
+# toolchain.
+#
+# The installer is run every time rather than only when its target is absent:
+# it is idempotent, and it checks the directory itself, while any record of
+# what was installed can drift from what is there (a deleted NDK, a half-run
+# that landed cmdline-tools and nothing else). Every step of it skips without
+# touching the network when its target is present, so the check costs a shell
+# startup. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
 # for the rest of the script. Non-Linux hosts have no supported Docker-free
 # path — scripts/install-toolchain.sh is Linux-only by design.
 ensure_toolchain() {
@@ -70,10 +82,11 @@ ensure_toolchain() {
     exit 1
   fi
   if [ ! -f toolchain/env.sh ]; then
-    echo "==> No Docker and no ./toolchain yet — installing the local toolchain"
-    echo "    (one-time, a few GB, nothing outside this repo; Ctrl-C to abort)"
-    bash scripts/install-toolchain.sh
+    echo "==> No Docker and no ./toolchain yet — installing what this needs"
+    [ $# -gt 0 ] && echo "    (${*})"
+    echo "    one-time; Ctrl-C to abort"
   fi
+  bash scripts/install-toolchain.sh "$@"
   # shellcheck source=/dev/null
   . toolchain/env.sh
 }
@@ -83,6 +96,11 @@ usage() {
 codedeck — manage this CodeDeck fork
 
 Usage: ./codedeck <command> [args]
+
+First time here, or something looks wrong:
+  doctor                   What exists on this machine right now: Docker, the
+                           images and volumes, the containers below, the agent
+                           cache, the Android SDK. Read-only; start here.
 
 Bridge (the deployed Docker service):
   bridge up               Build (if needed) and start the bridge
@@ -110,6 +128,43 @@ the vendored toolchain instead, installed on first use):
   check                    typecheck + test: the agent host and every crate
   typecheck                typecheck only (agent host + cargo check)
   test                     test only
+
+The dev container — one long-lived container with node_modules and the caches
+kept warm, for the loop between checks (editing a driver, running one test
+file, driving a live agent, poking at a crate). The tree is synced into it on
+every command; on a Docker-less Linux host the command runs in this tree:
+  dev [--] <cmd…>          Run <cmd> in it, at the repo root (no <cmd>: a shell)
+  dev vitest [args…]       The agent host's test files, run once
+  dev --sync-only          Sync the tree and install dependencies, then stop
+  dev --no-sync            Skip the sync (the tree has not changed)
+  dev --reset              Recreate the container from scratch first
+  clean [--yes]            Remove the containers this script keeps (the dev
+                           and Android ones, and any a killed run left), after
+                           asking. Volumes are kept — the caches live there
+
+One live agent session, with everything the host reports about it (this is
+what the phone is shown: entries, turn states, context figures, errors). An
+agent that is not installed is fetched once, at the version this build pins,
+and kept — in the agents volume on the Docker path, in ./toolchain/agents on
+a Docker-less host:
+  live <agent>             One turn, "Reply with exactly: codedeck-live-ok"
+  live <agent> --prompt …  One turn per --prompt, in order
+  live <agent> --models    What the agent offers, and what a session with no
+                           model would run — starts nothing, costs nothing
+  live <agent> [options]   --mode ask|plan|default, --model ID, --effort ID,
+                           --cwd DIR, --env K=V (agent paths and keys),
+                           --timeout SECONDS (default 300), --no-sync
+                           agents: claude-code, opencode, deepseek-harness,
+                           and `fake` for the driver-protocol test agent
+
+Android tests and lint (same idea, in the Android container — a subcommand
+maps to its Gradle task; anything else is passed to Gradle as it is):
+  android [test]           app:testDebugUnitTest, then the counts and failures
+  android lint             app:lintDebug, then what the report says
+  android paparazzi        app:verifyPaparazziDebug (the snapshot tests)
+  android snapshot         app:recordPaparazziDebug, goldens copied back
+  android shell            A shell in apps/android
+  android <task> [args…]   Any other Gradle task
 
 Bindings (throwaway Rust container; locally on a Docker-less Linux host):
   gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
@@ -157,13 +212,24 @@ cmd_bridge() {
       # acquire it, so this reads the QR the running `run` command already
       # printed (it opens a pairing window on its own whenever nothing's
       # paired) rather than trying to trigger a new one.
-      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL"; then
-        echo "No pairing QR found in the logs yet. If the window already" >&2
-        echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
-        exit 1
-      fi
+      #
+      # The logs are read once, into a variable, and searched here: under
+      # `set -o pipefail`, piping them into `grep -q` makes the search exit
+      # at its first match, which can leave `docker compose logs` killed by
+      # SIGPIPE — and the pipeline then reports failure for logs that do hold
+      # the QR, so a bridge that is plainly paired answers "no pairing QR".
+      local bridge_logs
+      bridge_logs="$(docker compose logs --no-log-prefix codedeck-bridge 2>&1 || true)"
+      case "$bridge_logs" in
+        *"Pairing URL"*) ;;
+        *)
+          echo "No pairing QR found in the logs yet. If the window already" >&2
+          echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
+          exit 1
+          ;;
+      esac
       # The QR is printed just above its URL line.
-      docker compose logs --no-log-prefix codedeck-bridge 2>&1 | grep -B 32 -A 1 "Pairing URL" | tail -34
+      printf '%s\n' "$bridge_logs" | grep -B 32 -A 1 "Pairing URL" | tail -34
       ;;
     shell)
       require_running_bridge
@@ -205,7 +271,7 @@ cmd_apk() {
     0) exec ./apps/android/docker/build-apk.sh "$@" ;;
     2) fail_docker_down ;;
   esac
-  ensure_toolchain
+  ensure_toolchain rust java android
   # Sources toolchain/env.sh itself when present.
   exec ./apps/android/scripts/build-apk-local.sh "$@"
 }
@@ -228,14 +294,99 @@ start_throwaway() {
   trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
 }
 
-# Build a small tool image from an inline Dockerfile (no build context).
-# Docker's layer cache makes every run after the first a no-op, so per-run
-# `apt-get install` / `npm install -g` cost is paid once per machine.
-ensure_image() {
-  local tag="$1"
-  shift
+# The images this script builds for its own containers, one file each, in
+# scripts/docker — beside the scripts that use them rather than at the repo
+# root, and needing nothing from the repo as build context. Docker's layer
+# cache makes every run after the first a no-op, so the per-image install cost
+# is paid once per machine.
+TOOL_IMAGE_DIR=scripts/docker
+
+ensure_tool_image() {
+  local tag="$1" file="$2"
+  shift 2
   echo "==> Preparing $tag image (cached after the first run)"
-  docker build -q -t "$tag" "$@" - >/dev/null
+  docker build -q -t "$tag" -f "$file" "$TOOL_IMAGE_DIR" "$@" >/dev/null
+}
+
+# --- Plumbing for the long-lived containers (dev, android). ---
+
+# Exact-name lookups throughout: Docker's `name=` filter is a regular
+# expression matched against every container's name, so `codedeck-dev` would
+# also answer for `codedeck-dev-2`. The list is matched in the shell and not
+# piped into `grep -q`: under `set -o pipefail`, a match that makes grep exit
+# early can leave the writer killed by SIGPIPE, and the pipeline then reports
+# failure for a name that was found.
+container_named() {
+  local names
+  names="$(docker ps $1 --format '{{.Names}}')"
+  case $'\n'"$names"$'\n' in
+    *$'\n'"$2"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+container_exists() { container_named "-a" "$1"; }
+
+container_running() { container_named "" "$1"; }
+
+# A container this script created carries the label, and runs the image it was
+# created from. One without either was made by hand — or by an older workflow
+# that kept its own sync scripts — and is not trusted to have what the
+# commands below expect, so it is replaced rather than used and puzzled over;
+# so is one whose image has moved on, which is what makes an edit to a
+# Dockerfile here take effect on the next command instead of on the next
+# `dev --reset`.
+container_is_ours() {
+  [ "$(docker inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null)" = "1" ] &&
+    [ "$(docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null)" = "$3" ]
+}
+
+ensure_container() {
+  local name="$1" label="$2" image="$3"
+  shift 3
+  if container_exists "$name" && ! container_is_ours "$name" "$label" "$image"; then
+    echo "==> Replacing $name (not this script's, or its image changed)"
+    docker rm -f "$name" >/dev/null
+  fi
+  if ! container_exists "$name"; then
+    echo "==> Creating $name (kept between commands)"
+    MSYS_NO_PATHCONV=1 docker create --name "$name" --label "$label=1" "$@" "$image" sleep infinity >/dev/null
+  fi
+  # Already running is fine: this is "make sure it is up", not "start it".
+  docker start "$name" >/dev/null 2>&1 || true
+}
+
+# Mirror the working tree into <container>:<dest>. The file list comes from git
+# (pack_repo_into: tracked plus untracked-not-ignored, minus tracked files
+# deleted in the tree), staged inside the container and copied over, then
+# whatever the tree no longer has is removed — so an edit, a new file, a rename
+# and a deletion each land with one command, and a file the tree no longer has
+# cannot linger in the container and keep compiling. node_modules, dist, build
+# and target are never pruned: they belong to the container, and rebuilding
+# them per command is exactly what a long-lived container exists to avoid.
+#
+# It is all shell and coreutils, with no tool the container has to have: the
+# images this runs in are the repo's own, and one of them carries no rsync.
+# (A file name with a newline in it would confuse the prune; the repo has
+# none, and the cost would be a stale file, never a lost one.)
+sync_tree() {
+  local container="$1" dest="$2"
+  echo "==> Syncing the working tree into $container"
+  dexec "$container" sh -c 'rm -rf /tmp/codedeck-tree && mkdir -p /tmp/codedeck-tree'
+  pack_repo_into "$container" /tmp/codedeck-tree
+  dexec "$container" sh -c '
+    set -e
+    dest="$1"
+    mkdir -p "$dest"
+    cd /tmp/codedeck-tree
+    find . -type f | sed "s|^\./||" | LC_ALL=C sort > /tmp/codedeck-want
+    cp -a . "$dest"/
+    cd "$dest"
+    find . \( -name node_modules -o -name dist -o -name build -o -name target \) -prune -o -type f -print \
+      | sed "s|^\./||" | LC_ALL=C sort > /tmp/codedeck-have
+    comm -13 /tmp/codedeck-want /tmp/codedeck-have | while IFS= read -r gone; do rm -f -- "$gone"; done
+    rm -rf /tmp/codedeck-tree /tmp/codedeck-want /tmp/codedeck-have
+  ' sh "$dest"
 }
 
 # --- Workspace checks, in throwaway containers — nothing needs to be
@@ -249,19 +400,19 @@ ensure_image() {
 # Rust (every crate): the stock Rust image with clippy; the cargo registry
 # and target dir live in named volumes, so a rerun only recompiles what
 # changed. Only the cargo workspace is copied. ---
-check_typescript() {
-  local name="codedeck-check-$$" pnpm_version
+
+# The one Node image the checks and the dev container share (scripts/docker/
+# node.Dockerfile), so a dependency is downloaded once into one store volume.
+ensure_node_image() {
+  local pnpm_version
   pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
-  ensure_image codedeck-check --build-arg "PNPM_VERSION=$pnpm_version" <<'DOCKERFILE'
-FROM node:22-slim
-ARG PNPM_VERSION
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "pnpm@${PNPM_VERSION}"
-ENV npm_config_store_dir=/pnpm-store
-DOCKERFILE
-  start_throwaway "$name" codedeck-check -v codedeck-pnpm-store:/pnpm-store
+  ensure_tool_image codedeck-node "$TOOL_IMAGE_DIR/node.Dockerfile" --build-arg "PNPM_VERSION=$pnpm_version"
+}
+
+check_typescript() {
+  local name="codedeck-check-$$"
+  ensure_node_image
+  start_throwaway "$name" codedeck-node -v codedeck-pnpm-store:/pnpm-store
 
   pack_repo_into "$name" /app package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json packages
   echo "==> Installing dependencies"
@@ -278,10 +429,7 @@ DOCKERFILE
 
 check_rust() {
   local name="codedeck-check-rust-$$"
-  ensure_image codedeck-check-rust <<'DOCKERFILE'
-FROM rust:1-bookworm
-RUN rustup component add clippy
-DOCKERFILE
+  ensure_tool_image codedeck-check-rust "$TOOL_IMAGE_DIR/rust.Dockerfile"
   start_throwaway "$name" codedeck-check-rust \
     -v codedeck-cargo-registry:/usr/local/cargo/registry \
     -v codedeck-check-target:/repo/target
@@ -343,12 +491,561 @@ run_checks() {
       ;;
     2) fail_docker_down ;;
     *)
-      ensure_toolchain
+      ensure_toolchain node rust
       check_typescript_local "$1"
       check_rust_local "$1"
       ;;
   esac
 }
+
+# --- The dev container: what the throwaway checks are too slow for. ---
+#
+# The checks above answer "is this green?" in a container thrown away with the
+# answer. Everything between — editing a driver, running one test file, driving
+# a live agent, poking at a crate — wants the opposite: one container that
+# keeps its node_modules and its store, with the working tree kept in step
+# with the host. `./codedeck dev` is that container, and it is the difference
+# between a two-second test run and a two-minute one.
+DEV_IMAGE=codedeck-workspace
+DEV_CONTAINER=codedeck-dev
+DEV_ROOT=/repo
+# Whether the container's install is current. The stamp lives outside the
+# synced tree, which the mirror would otherwise delete.
+DEV_LOCK_STAMP=/root/.codedeck-dev-lock
+
+# The whole repository's tooling in one container (scripts/docker/
+# workspace.Dockerfile), with the two stores the checks fill mounted into it
+# as well: the pnpm store, and cargo's registry and target directory — the
+# same target `./codedeck check` compiles into, so a crate built either way is
+# not built again by the other.
+ensure_dev_image() {
+  local pnpm_version
+  pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
+  ensure_tool_image "$DEV_IMAGE" "$TOOL_IMAGE_DIR/workspace.Dockerfile" --build-arg "PNPM_VERSION=$pnpm_version"
+}
+
+ensure_dev_container() {
+  ensure_dev_image
+  ensure_container "$DEV_CONTAINER" codedeck.dev "$DEV_IMAGE" \
+    -v codedeck-pnpm-store:/pnpm-store \
+    -v codedeck-agents:/agents \
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-check-target:"$DEV_ROOT/target"
+}
+
+ensure_dev_deps() {
+  local want have
+  want="$(git hash-object pnpm-lock.yaml)"
+  have="$(dexec "$DEV_CONTAINER" cat "$DEV_LOCK_STAMP" 2>/dev/null || true)"
+  [ "$want" = "$have" ] && return 0
+  echo "==> Installing the workspace's Node dependencies"
+  dexec -w "$DEV_ROOT" "$DEV_CONTAINER" pnpm install --frozen-lockfile
+  dexec "$DEV_CONTAINER" sh -c "printf '%s' '$want' > $DEV_LOCK_STAMP"
+}
+
+# The same "install when the lockfile moved" rule for a host that has the tree
+# itself (a Docker-less Linux host): the stamp goes in the toolchain directory,
+# which is gitignored and only exists for that path.
+ensure_local_deps() {
+  local want have
+  want="$(git hash-object pnpm-lock.yaml)"
+  have="$(cat toolchain/.codedeck-dev-lock 2>/dev/null || true)"
+  [ "$want" = "$have" ] && return 0
+  echo "==> Installing the workspace's Node dependencies"
+  # NODE_ENV=production would make pnpm skip devDependencies — which is where
+  # everything this runs (typescript, vitest) lives.
+  (unset NODE_ENV; pnpm install --frozen-lockfile)
+  printf '%s' "$want" > toolchain/.codedeck-dev-lock
+}
+
+# One command in the dev container, with the tree in step first.
+cmd_dev() {
+  local reset=0 sync=1 only_sync=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reset) reset=1; shift ;;
+      --no-sync) sync=0; shift ;;
+      --sync-only) only_sync=1; shift ;;
+      --) shift; break ;;
+      -*) echo "unknown option for dev: $1" >&2; exit 2 ;;
+      *) break ;;
+    esac
+  done
+
+  # What the command is, and where it runs — relative to the repo root, which
+  # both engines then translate. `dev vitest …` is the loop's most-run
+  # command: it belongs where vitest expects to be (the agent host's package),
+  # and without an explicit run/watch word it runs once, rather than opening a
+  # watch UI no session can answer.
+  local workdir="" vitest=()
+  if [ "${1:-}" = vitest ]; then
+    shift
+    vitest=(npx vitest)
+    case " $* " in
+      *" run "*|*" watch "*|*" --watch"*|*" -w "*) ;;
+      *) vitest+=(run) ;;
+    esac
+    workdir="packages/agent-host"
+  fi
+  set -- ${vitest[@]+"${vitest[@]}"} "$@"
+
+  local state=0
+  docker_state || state=$?
+  case $state in
+    # Docker answers: the container path below is the one that runs. The
+    # other two branches never return.
+    0) ;;
+    2) fail_docker_down ;;
+    # No Docker: the same command runs in this tree, on the vendored
+    # toolchain, with no container in the way at all. `--sync-only` has done
+    # its work once the dependencies are in, and must not open a shell.
+    *)
+      ensure_toolchain node
+      ensure_local_deps
+      [ "$only_sync" = 1 ] && return 0
+      cd "${workdir:-.}"
+      if [ $# -eq 0 ]; then exec "${SHELL:-bash}"; fi
+      exec "$@"
+      ;;
+  esac
+
+  [ "$reset" = 1 ] && docker rm -f "$DEV_CONTAINER" >/dev/null 2>&1
+  ensure_dev_container
+  if [ "$sync" = 1 ]; then
+    sync_tree "$DEV_CONTAINER" "$DEV_ROOT"
+    ensure_dev_deps
+  fi
+  [ "$only_sync" = 1 ] && return 0
+
+  # A terminal (a person, or an agent with a pty) gets a pty; anything else
+  # must not have one, or the command's output stops being a pipe.
+  local tty=()
+  if [ -t 0 ] && [ -t 1 ]; then tty=(-t); fi
+
+  if [ $# -eq 0 ]; then
+    MSYS_NO_PATHCONV=1 exec docker exec -i ${tty[@]+"${tty[@]}"} -w "$DEV_ROOT" "$DEV_CONTAINER" sh
+  fi
+  MSYS_NO_PATHCONV=1 exec docker exec -i ${tty[@]+"${tty[@]}"} \
+    -w "$DEV_ROOT${workdir:+/$workdir}" "$DEV_CONTAINER" "$@"
+}
+
+# --- The Android container: the phone's tests, lint and snapshots. ---
+#
+# `apk` builds a throwaway container per run (build-apk.sh) and leans on the
+# Gradle cache volume for speed. Iterating on the app is the same story as the
+# agent host: one container, the tree synced in, warm caches — `android test`,
+# `android lint`, `android paparazzi`, `android shell`.
+#
+# Gradle runs WITHOUT --offline. The platform DSL's `release(37)` resolves to
+# `android-37.0`, which the toolchain image does not carry (it installs 37.2),
+# so the first run downloads it through the SDK manager. Offline, that download
+# cannot happen and the build stops with "Failed to find target with hash
+# string 'android-37.0'" — which reads like a missing SDK when it is a flag.
+ANDROID_IMAGE=codedeck-android-build
+ANDROID_CONTAINER=codedeck-android-dev
+ANDROID_ROOT=/workspace
+ANDROID_PROJECT=apps/android
+
+ensure_android_container() {
+  if [ -z "$(docker images -q "$ANDROID_IMAGE" 2>/dev/null)" ]; then
+    echo "==> Building the Android toolchain image (one-time; several GB, several minutes)"
+    docker build -t "$ANDROID_IMAGE" -f "$ANDROID_PROJECT/docker/Dockerfile" "$ANDROID_PROJECT/docker"
+  fi
+  # The container is disposable; the Gradle user home, the cargo registry and
+  # the cargo target dir are not, and live in named volumes.
+  ensure_container "$ANDROID_CONTAINER" codedeck.android "$ANDROID_IMAGE" -m 6g \
+    -v codedeck-android-cargo-registry:/opt/cargo/registry \
+    -v codedeck-android-target:"$ANDROID_ROOT/target" \
+    -v codedeck-android-gradle:/gradle-home \
+    -e GRADLE_USER_HOME=/gradle-home
+}
+
+# What a Gradle task left behind: the counts from the JUnit XML, the classes
+# that failed, and what lint said. The report is scripts/lib/android-report.sh
+# — a file, so it can be read and run on its own — and it runs after a pass
+# and a failure alike, because a failure is when it is worth most. The tree is
+# already synced into the container, so both engines run the same file: one in
+# the container at the app's directory, one in this tree from the app's.
+android_report() {
+  local container="${1:-}"
+  if [ -n "$container" ]; then
+    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$container"       sh "$ANDROID_ROOT/scripts/lib/android-report.sh"
+  else
+    sh "$REPO_ROOT/scripts/lib/android-report.sh"
+  fi
+}
+
+# The Gradle task a subcommand means; anything else is passed through as it is,
+# so `./codedeck android :app:dependencies` works like `gradle` would.
+android_task() {
+  case "$1" in
+    test) echo testDebugUnitTest ;;
+    lint) echo lintDebug ;;
+    paparazzi) echo verifyPaparazziDebug ;;
+    snapshot) echo recordPaparazziDebug ;;
+    *) echo "$1" ;;
+  esac
+}
+
+cmd_android() {
+  # Options may sit anywhere: the rest of the line is the task and its own
+  # arguments, passed through as they are.
+  local sync=1 args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-sync) sync=0 ;;
+      --) ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  set -- ${args[@]+"${args[@]}"}
+  # No subcommand means the common one.
+  [ $# -eq 0 ] && set -- test
+  local task
+  task="$(android_task "$1")"
+  shift
+
+  local state=0
+  docker_state || state=$?
+  case $state in
+    # Docker answers: the container path below is the one that runs. The
+    # other two branches never return.
+    0) ;;
+    2) fail_docker_down ;;
+    # No Docker: the Gradle wrapper runs against this tree directly. java and
+    # the SDK come from wherever this host has them — a system install, or
+    # the vendored toolchain — and only a host with neither installs the
+    # toolchain's own (java comes with android). Asking for the components is
+    # also the check: a toolchain directory that exists may hold only some of
+    # them, and `android` alone would not find java in it.
+    *)
+      if ! command -v java >/dev/null 2>&1 || [ -z "${ANDROID_HOME:-}" ]; then
+        ensure_toolchain android
+      fi
+      cd "$ANDROID_PROJECT"
+      local code=0
+      ./gradlew "$task" "$@" --console=plain || code=$?
+      android_report
+      # Recording writes the goldens straight into the tree here, which is
+      # the whole of what the Docker path has to copy back.
+      return "$code"
+      ;;
+  esac
+
+  ensure_android_container
+  [ "$sync" = 1 ] && sync_tree "$ANDROID_CONTAINER" "$ANDROID_ROOT"
+
+  if [ "$task" = shell ]; then
+    local tty=()
+    if [ -t 0 ] && [ -t 1 ]; then tty=(-t); fi
+    MSYS_NO_PATHCONV=1 exec docker exec -i ${tty[@]+"${tty[@]}"} -w "$ANDROID_ROOT/$ANDROID_PROJECT" \
+      "$ANDROID_CONTAINER" sh
+  fi
+
+  local code=0
+  dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$ANDROID_CONTAINER" \
+    gradle "$task" "$@" --console=plain || code=$?
+
+  android_report "$ANDROID_CONTAINER"
+
+  # The goldens are recorded inside the container; they are only useful on the
+  # host, where a person can look at each image before it is committed.
+  if [ "$task" = recordPaparazziDebug ] && [ "$code" = 0 ]; then
+    local goldens="$ANDROID_PROJECT/app/src/test/snapshots/images"
+    mkdir -p "$goldens"
+    MSYS_NO_PATHCONV=1 docker cp "$ANDROID_CONTAINER:$ANDROID_ROOT/$goldens/." "$goldens/"
+    echo "==> Wrote $goldens — look at every image that changed before committing it"
+  fi
+  return "$code"
+}
+
+# --- One real agent, one real session, everything the host reports. ---
+#
+# Changing a driver means asking "what does the agent actually send, and what
+# does the phone actually end up being shown?" — a question that used to cost
+# a throwaway probe written, run and deleted every session. This is that probe,
+# kept in the tree (packages/agent-host/tools/live-probe.mjs): it speaks the
+# driver protocol to the built host exactly as the bridge does, so what it
+# prints is the phone's own view — entries, turn states, context figures,
+# errors — and it installs the agent at the version this build pins into the
+# agents volume, so the first run of an agent is the only one that downloads.
+LIVE_DEFAULT_TIMEOUT=300
+LIVE_LOG=/tmp/codedeck-live.log
+
+cmd_live() {
+  local agent="${1:-}"
+  case "$agent" in
+    ''|-*)
+      echo "usage: $0 live <agent> [--prompt TEXT]… [--mode MODE] [--model ID]" >&2
+      echo "                     [--effort ID] [--cwd DIR] [--env K=V]… [--timeout SECONDS] [--no-sync]" >&2
+      echo "agents: claude-code, opencode, deepseek-harness, fake" >&2
+      exit 2
+      ;;
+  esac
+  shift
+
+  local sync=1 timeout="$LIVE_DEFAULT_TIMEOUT" probe=() pairs=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-sync) sync=0; shift ;;
+      --timeout) timeout="$2"; shift 2 ;;
+      --env) pairs+=("$2"); shift 2 ;;
+      *) probe+=("$1"); shift ;;
+    esac
+  done
+
+  # A live session runs on a real account. Two agents cost nothing: the `fake`
+  # test agent, and OpenCode's free Zen models. Everything else spends a
+  # subscription or a balance, so a run that does not name a model says so
+  # rather than quietly using whatever the agent defaults to.
+  case " ${probe[*]-} " in
+    *" --model "*|*" --models "*) ;;
+    *)
+      case "$agent" in
+        fake) ;;
+        opencode) echo "==> No --model: this runs OpenCode's own default, which is whatever it used last. A free one: --model opencode/cat-jam-free" ;;
+        *) echo "==> No --model: this runs $agent's default, on your account. Free alternatives: opencode (free Zen models) or fake" ;;
+      esac
+      ;;
+  esac
+
+  local state=0
+  docker_state || state=$?
+  case $state in
+    # Docker answers: the container path below is the one that runs. The
+    # other two branches never return.
+    0) ;;
+    2) fail_docker_down ;;
+    # No Docker: the host runs here, on the vendored Node.
+    *)
+      ensure_toolchain node
+      ensure_local_deps
+      echo "==> Building the agent host"
+      pnpm --filter "@codedeck/agent-host" run build
+      local workdir
+      workdir="$(mktemp -d)"
+      local code=0
+      # The agents an install fetches are kept where this engine keeps
+      # everything else it installs (./toolchain, gitignored) — the local
+      # counterpart of the agents volume the Docker path mounts, so a run is
+      # the only one that downloads. An explicit CODEDECK_AGENT_CACHE wins.
+      env ${pairs[@]+"${pairs[@]}"} CODEDECK_AGENT_HOST_DRIVERS="$agent" \
+        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$PWD/toolchain/agents}" \
+        timeout "${timeout}s" node packages/agent-host/tools/live-probe.mjs \
+        --host packages/agent-host/dist/main.js --agent "$agent" --cwd "$workdir" \
+        --timeout "$timeout" ${probe[@]+"${probe[@]}"} || code=$?
+      live_report "$code" "$timeout" ""
+      return "$code"
+      ;;
+  esac
+
+  ensure_dev_container
+  if [ "$sync" = 1 ]; then
+    sync_tree "$DEV_CONTAINER" "$DEV_ROOT"
+    ensure_dev_deps
+  fi
+  echo "==> Building the agent host"
+  dexec -w "$DEV_ROOT/packages/agent-host" "$DEV_CONTAINER" pnpm run build
+
+  # The session runs in a scratch directory, not in the tree: an agent given a
+  # prompt is free to edit what it can see, and a probe is not a reason to let
+  # it touch the repository.
+  local live_cwd="/tmp/codedeck-live-$$"
+  dexec "$DEV_CONTAINER" mkdir -p "$live_cwd"
+  case " ${probe[*]-} " in
+    *" --cwd "*) ;;
+    *) probe+=(--cwd "$live_cwd") ;;
+  esac
+
+  local docker_env=()
+  local pair
+  for pair in ${pairs[@]+"${pairs[@]}"}; do docker_env+=(-e "$pair"); done
+
+  local code=0
+  dexec -i -w "$DEV_ROOT/packages/agent-host" \
+    -e CODEDECK_AGENT_HOST_DRIVERS="$agent" \
+    -e CODEDECK_AGENT_CACHE=/agents \
+    ${docker_env[@]+"${docker_env[@]}"} \
+    "$DEV_CONTAINER" timeout "${timeout}s" node tools/live-probe.mjs \
+    --host dist/main.js --agent "$agent" --timeout "$timeout" --log "$LIVE_LOG" \
+    ${probe[@]+"${probe[@]}"} || code=$?
+
+  # The log outlives the container's /tmp, and is what to read after a run
+  # that was killed or timed out. It lands under dist/ (gitignored, and the
+  # repo's own place for what is not committed): a relative host path is what
+  # `docker cp` needs here — with MSYS path conversion off for the container
+  # side, an absolute one would be read as a Windows path.
+  local host_log="dist/live-$agent.log"
+  mkdir -p dist
+  MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$LIVE_LOG" "$host_log" >/dev/null 2>&1 || true
+  live_report "$code" "$timeout" "$host_log"
+  return "$code"
+}
+
+live_report() {
+  local code="$1" timeout="$2" log="$3"
+  if [ -n "$log" ]; then echo "==> log: $log"; fi
+  case "$code" in
+    0) ;;
+    124) echo "==> the probe was still running after ${timeout}s and was stopped" >&2 ;;
+    *) echo "==> the probe reported a failure (exit $code)" >&2 ;;
+  esac
+}
+
+# --- Putting the machine back. ---
+#
+# The containers this script keeps are disposable — everything expensive is in
+# the volumes — but removing them is not something to do on a guess: a `clean`
+# that cannot be answered (no terminal to prompt on: an agent, a CI job) does
+# nothing and says how to mean it. The one-shot containers remove themselves,
+# with their traps; these are the long-lived ones, and any a killed run left.
+#
+# Only containers this script made are touched. codedeck-bridge and
+# codedeck-tor are the deployed service, not scratch: `bridge down` stops
+# those. Volumes are never removed here — they hold the caches that make the
+# next command fast — and the message says how to drop one.
+OWNED_CONTAINER_PATTERN='^codedeck-(dev|android-dev|check|gen-android-bindings|android-build-run)(-|$)'
+
+confirm() {
+  if [ ! -t 0 ]; then
+    echo "$1 [y/N] — no terminal to answer on: pass --yes to mean it" >&2
+    return 1
+  fi
+  printf '%s [y/N] ' "$1" >&2
+  local answer
+  read -r answer || return 1
+  case "$answer" in
+    [yY] | [yY][eE][sS]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cmd_clean() {
+  local assume_yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes | -y) assume_yes=1; shift ;;
+      *) echo "usage: $0 clean [--yes]" >&2; exit 2 ;;
+    esac
+  done
+
+  local state=0
+  docker_state || state=$?
+  case $state in
+    2) fail_docker_down ;;
+    1)
+      echo "Docker is not installed: this script keeps no containers here." >&2
+      return 0
+      ;;
+  esac
+
+  local names=() other=() name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if printf '%s\n' "$name" | grep -Eq "$OWNED_CONTAINER_PATTERN"; then
+      names+=("$name")
+    elif printf '%s' "$name" | grep -q '^codedeck'; then
+      other+=("$name")
+    fi
+  done <<<"$(docker ps -a --format '{{.Names}}')"
+
+  if [ ${#other[@]} -gt 0 ]; then
+    echo "==> Not this script's to remove (left alone):"
+    printf '    %s\n' "${other[@]}"
+  fi
+
+  if [ ${#names[@]} -eq 0 ]; then
+    echo "==> Nothing of this script's is running or left behind."
+    return 0
+  fi
+
+  echo "==> Containers this script keeps (or a killed run left):"
+  for name in "${names[@]}"; do
+    printf '    %-26s %s\n' "$name" "$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || echo '?')"
+  done
+  echo "    They hold no state worth keeping — the caches live in the volumes,"
+  echo "    which are NOT removed here. To drop one too: docker volume rm <name>"
+
+  if [ "$assume_yes" != 1 ] && ! confirm "Remove these ${#names[@]} containers?"; then
+    echo "==> Nothing removed."
+    return 0
+  fi
+  docker rm -f "${names[@]}" >/dev/null
+  echo "==> Removed ${#names[@]} containers. The next command recreates what it needs."
+}
+
+# --- What exists right now, in one command. ---
+#
+# A session should not have to ask Docker five questions to learn what it may
+# run: this answers them in one call. Read-only, and it reports what is
+# missing rather than failing on it — that is the point of it.
+cmd_doctor() {
+  echo "host"
+  printf '  %-14s %s\n' "repo" "$(pwd)"
+  printf '  %-14s %s\n' "os" "$(uname -s)"
+  printf '  %-14s %s\n' "toolchain" "$([ -f toolchain/env.sh ] && echo 'present (./toolchain, for Docker-less Linux)' || echo 'absent')"
+
+  local state=0
+  docker_state || state=$?
+  case $state in
+    0) printf '  %-14s %s\n' "docker" "running" ;;
+    1) printf '  %-14s %s\n' "docker" "not installed — check/test/typecheck/apk/dev/android/gen-android-bindings run locally; bridge and tor cannot"
+       return 0 ;;
+    2) printf '  %-14s %s\n' "docker" "installed, but its daemon is not answering — start it"
+       return 0 ;;
+  esac
+
+  local tag size
+  echo
+  echo "images (this script builds them; 'docker rmi <tag>' reclaims one)"
+  for tag in codedeck-node codedeck-check-rust codedeck-android-build; do
+    size="$(docker images --format '{{.Size}}, {{.CreatedSince}}' "$tag" 2>/dev/null | head -1)"
+    printf '  %-24s %s\n' "$tag" "${size:-not built}"
+  done
+
+  echo
+  echo "volumes (the caches; 'docker volume rm <name>' resets one)"
+  local volumes
+  volumes="$(docker volume ls --filter name=codedeck --format '{{.Name}}')"
+  if [ -n "$volumes" ]; then printf '%s\n' "$volumes" | sed 's/^/  /'; else echo "  none"; fi
+
+  echo
+  echo "containers"
+  local containers
+  containers="$(docker ps -a --filter name=codedeck --format '  {{.Names}}: {{.Status}}')"
+  if [ -n "$containers" ]; then printf '%s\n' "$containers"; else echo "  none"; fi
+
+  # What the two long-lived containers are good for right now. Only read while
+  # they are running: a fact from a stopped container is no fact.
+  if container_running "$DEV_CONTAINER"; then
+    echo
+    echo "$DEV_CONTAINER (./codedeck dev)"
+    printf '  %-14s %s\n' "node" "$(dexec "$DEV_CONTAINER" node --version 2>/dev/null || echo '—')"
+    printf '  %-14s %s\n' "pnpm" "$(dexec "$DEV_CONTAINER" pnpm --version 2>/dev/null || echo '—')"
+    local lock have
+    lock="$(git hash-object pnpm-lock.yaml)"
+    have="$(dexec "$DEV_CONTAINER" cat "$DEV_LOCK_STAMP" 2>/dev/null || true)"
+    if ! dexec "$DEV_CONTAINER" test -d "$DEV_ROOT/node_modules" 2>/dev/null; then
+      printf '  %-14s %s\n' "node_modules" "not installed yet — the next 'dev' installs them"
+    elif [ "$lock" = "$have" ]; then
+      printf '  %-14s %s\n' "node_modules" "installed, current with pnpm-lock.yaml"
+    else
+      printf '  %-14s %s\n' "node_modules" "installed, but pnpm-lock.yaml moved on — the next 'dev' re-installs"
+    fi
+    local agents
+    agents="$(dexec "$DEV_CONTAINER" sh -c 'ls /agents 2>/dev/null | grep -v "^\." | tr "\n" " "' 2>/dev/null || true)"
+    printf '  %-14s %s\n' "agents" "${agents:-none installed (./codedeck live installs what it needs)}"
+  fi
+
+  if container_running "$ANDROID_CONTAINER"; then
+    echo
+    echo "$ANDROID_CONTAINER (./codedeck android)"
+    printf '  %-14s %s\n' "sdk" "$(dexec "$ANDROID_CONTAINER" sh -c 'ls /opt/android-sdk/platforms 2>/dev/null | tr "\n" " "' 2>/dev/null || echo '—')"
+    printf '  %-14s %s\n' "ndk" "$(dexec "$ANDROID_CONTAINER" sh -c 'ls /opt/android-sdk/ndk 2>/dev/null | tr "\n" " "' 2>/dev/null || echo '—')"
+  fi
+}
+
 
 # --- Regenerate apps/android/app/src/main/java/uniffi/** from Rust (see
 # crates/client-ffi/src/lib.rs's own doc comment — the Kotlin binding
@@ -385,7 +1082,7 @@ cmd_gen_android_bindings() {
   docker_state || state=$?
   if [ "$state" -ne 0 ]; then
     [ "$state" -eq 2 ] && fail_docker_down
-    ensure_toolchain
+    ensure_toolchain rust
     gen_android_bindings_local
     return
   fi
@@ -413,6 +1110,11 @@ case "${1:-help}" in
   bridge) shift; cmd_bridge "$@" ;;
   tor) shift; cmd_tor "$@" ;;
   apk) shift; cmd_apk "$@" ;;
+  dev) shift; cmd_dev "$@" ;;
+  clean) shift; cmd_clean "$@" ;;
+  live) shift; cmd_live "$@" ;;
+  android) shift; cmd_android "$@" ;;
+  doctor) shift; cmd_doctor "$@" ;;
   check) run_checks check ;;
   typecheck) run_checks typecheck ;;
   test) run_checks test ;;

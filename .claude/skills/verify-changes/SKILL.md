@@ -26,24 +26,68 @@ inside them. Paths below are relative to the repo root.
   volumes, so reruns only rebuild what changed.
 - Each check's container is removed on exit (success, failure, or Ctrl-C).
 
-To iterate on one piece without the full sweep:
+To iterate on one piece without the full sweep, use the dev container — one
+long-lived container that keeps its `node_modules` and the caches, with the
+working tree synced into it on every command (so an edit, a new file or a
+deletion lands without thinking about it). It runs the same command on a
+Docker-less Linux host, so nothing here is Windows-only:
 
 ```bash
-pnpm --filter @codedeck/agent-host run test          # the agent host's vitest suite
-cargo test -p bridge-core                            # one crate
+./codedeck dev vitest run src/drivers/opencode/__tests__/opencodeDriver.test.ts
+./codedeck dev vitest run <file> -t "the test name"
+./codedeck dev cargo test -p bridge-core
+./codedeck dev pnpm --filter @codedeck/agent-host run typecheck
+./codedeck dev sh          # a shell in it, if you need one
 ```
 
-Tests marked `#[ignore]` need Node plus a built agent host bundle
-(`pnpm --filter @codedeck/agent-host run build`): the driver-protocol spawn
-test and the bridge end-to-end test. Run them with `-- --ignored`:
+`./codedeck doctor` reports what exists right now (Docker, images, volumes,
+containers, the agent cache, the Android SDK) — worth one call before
+debugging anything about the environment.
+
+Tests marked `#[ignore]` need Node plus a built agent host bundle: the
+driver-protocol spawn test and the bridge end-to-end test. Build the bundle in
+the same container, then run them with `-- --ignored`:
 
 ```bash
-cargo test -p bridge-runtime --test e2e -- --ignored
+./codedeck dev pnpm --filter @codedeck/agent-host run build
+./codedeck dev cargo test -p bridge-runtime --test e2e -- --ignored
 ```
 
 After changing a type in `crates/agent-protocol`, regenerate the host's
-TypeScript types first (`cargo test -p agent-protocol --test gen_ts_bindings
--- --ignored`) or the host will not typecheck.
+TypeScript types first (`./codedeck dev cargo test -p agent-protocol --test
+gen_ts_bindings -- --ignored`) or the host will not typecheck.
+
+## Android tests and lint
+
+```bash
+./codedeck android test          # app:testDebugUnitTest, then the counts and any failing class
+./codedeck android lint          # app:lintDebug, then what the report says
+./codedeck android paparazzi     # the snapshot tests
+./codedeck android snapshot      # re-record them; goldens copied back to review
+./codedeck android <task>        # any other Gradle task, passed through
+```
+
+Gradle runs without `--offline` on purpose: AGP resolves the platform DSL's
+`release(37)` to `android-37.0`, which the toolchain image does not carry, so
+the first run downloads it. Offline it stops with a message that reads like a
+missing SDK.
+
+## Asking a real agent
+
+For anything about what an agent actually sends, or what the phone actually
+ends up being shown, run one real session instead of writing a probe:
+
+```bash
+./codedeck live opencode --prompt "Reply with exactly: ok"
+./codedeck live opencode --models      # what it offers, and which one a session defaults to
+./codedeck live fake --prompt question # the scripted test agent: no network, no account
+```
+
+It prints every transcript entry, turn state, context figure and error as they
+arrive, and keeps the log at `dist/live-<agent>.log`. Cost: `fake` and
+OpenCode's free Zen models are free; anything else spends the account, so pass
+`--model` when it matters. Claude and DeepSeek need credentials the bridge
+holds — do not borrow them; use `opencode` or `fake`.
 
 ## Opt-in: building an APK or running the bridge
 
