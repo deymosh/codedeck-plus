@@ -270,6 +270,36 @@ describe('OpenCode sub-agents', () => {
       kind: 'agent',
     });
   });
+
+  it('a sub-agent that ran to completion inside its call is not reported as a task', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'explore', description: 'find things' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      // The child finishes before the call that started it returns.
+      { type: 'session.idle', data: { sessionID: 'ses_child' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'done' }], executed: false } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([]);
+  });
+
+  it("a failing sub-agent ends its own task, not the session's turn", async () => {
+    const ctx = start(clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'explore', description: 'find things' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'running' }], executed: false } },
+      { type: 'session.execution.failed', data: { sessionID: 'ses_child', error: { type: 'api', message: 'child blew up' } } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task').at(-1)).toMatchObject({
+      taskId: 'ses_child',
+      status: 'failed',
+    });
+    // The sub-agent's failure is not the session's error.
+    expect(ctx.entries().filter((e) => e.entryType === 'error')).toEqual([]);
+  });
 });
 
 describe('OpenCode usage', () => {
@@ -286,14 +316,54 @@ describe('OpenCode usage', () => {
     await session.end();
   });
 
-  it('reports the context window once a step has used one', async () => {
+  const tokens = { input: 500, output: 100, reasoning: 0, cache: { read: 400, write: 0 } };
+  const modelsWith = (limit: number) => ({
+    model: {
+      default: vi.fn(async () => ({ location: { directory: '/tmp' }, data: null })),
+      list: vi.fn(async () => ({
+        location: { directory: '/tmp' },
+        data: [{ id: 'm1', modelID: 'm1', providerID: 'zen', name: 'M1', enabled: true, status: 'active', cost: [], variants: [], limit: { context: limit, output: 100 } }],
+      })),
+    },
+  });
+
+  it('reports how full the context is, over the window of the model that ran the step', async () => {
     const ctx = start(clientWith([
-      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'opencode', id: 'exo-free' }, started: 0 } },
-      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0, tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } } } },
-    ]));
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0, tokens } },
+    ], modelsWith(1_000)));
     await ctx.ended();
-    // No declared window for this model: nothing to divide by, nothing said.
+    // Everything the step read and wrote: 500 + 100 + 0 + 400 + 0.
+    expect(ctx.events.find((e) => e.type === 'info' && 'contextPercentage' in e)).toMatchObject({
+      type: 'info',
+      contextPercentage: 100,
+      contextWindow: 1_000,
+    });
+  });
+
+  it('says nothing for a model whose provider declares no window', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0, tokens } },
+    ], modelsWith(0)));
+    await ctx.ended();
     expect(ctx.events.filter((e) => e.type === 'info' && 'contextPercentage' in e)).toEqual([]);
+  });
+
+  it('carries the context into the usage it reports', async () => {
+    const client = clientWith([
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0.02, tokens } },
+    ], modelsWith(1_000));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.waitFor((e) => e.type === 'info' && 'contextPercentage' in e);
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', cost: 0.02 });
+    const usage = await session.getUsage!();
+    expect(usage?.context?.usedTokens).toBe(1_000);
+    expect(usage?.context?.windowTokens).toBe(1_000);
+    await session.end();
   });
 });
 

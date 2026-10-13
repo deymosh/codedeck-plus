@@ -110,6 +110,9 @@ interface ChildSession {
   background: boolean;
   /** The user asked it to stop: its end is a stop, not a completion. */
   stopping: boolean;
+  /** The child session has ended, however it ended. A call that finishes
+   *  after its child already went idle did not leave anything running. */
+  ended: boolean;
 }
 
 function subagentOf(child: ChildSession): Subagent {
@@ -590,12 +593,27 @@ export class OpenCodeSession implements DriverSession {
           this.reportUsageTokens();
           break;
         }
+        // A child's failure is the sub-agent's own: it ends that sub-agent,
+        // rather than surfacing on the phone as an error the user cannot
+        // place. The background task it was left as is what reports it.
         case 'session.step.failed': {
+          if (child) {
+            this.childEnded(child, 'failed');
+            break;
+          }
           if (event.data.error) this.reportError(formatOpenCodeError(event.data.error));
           break;
         }
         case 'session.execution.failed': {
+          if (child) {
+            this.childEnded(child, 'failed');
+            break;
+          }
           this.reportError(formatOpenCodeError(event.data.error));
+          // The turn is over however it ended: a failure that left the
+          // session looking like it was still working would strand the phone
+          // with a spinner and no way back.
+          this.markTurnComplete();
           break;
         }
         case 'session.execution.succeeded': {
@@ -682,6 +700,7 @@ export class OpenCodeSession implements DriverSession {
       ...(call?.label ? { label: call.label } : {}),
       background: false,
       stopping: false,
+      ended: false,
     });
     return true;
   }
@@ -712,7 +731,9 @@ export class OpenCodeSession implements DriverSession {
     const found = this.childOfCall(callId);
     if (!found) return;
     const { id, child } = found;
-    if (child.background) return;
+    // A child that already went idle ran to completion inside the call: it
+    // was not left running, so there is no task to report.
+    if (child.background || child.ended) return;
     child.background = true;
     this.deliver({ type: 'task', taskId: id, title: child.title, status: 'running', callId: child.callId });
   }
@@ -725,6 +746,7 @@ export class OpenCodeSession implements DriverSession {
   /** A child session went idle or failed: a background sub-agent's task
    *  ended (stopped, when the user asked for that). */
   private childEnded(child: ChildSession, status: 'completed' | 'failed'): void {
+    child.ended = true;
     if (!child.background) return;
     child.background = false;
     this.deliver({

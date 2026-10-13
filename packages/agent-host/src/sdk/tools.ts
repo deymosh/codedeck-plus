@@ -32,6 +32,8 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   exitplanmode: 'switch_mode',
   enterplanmode: 'switch_mode',
   task: 'agent',
+  // OpenCode's sub-agent tool (it was `task` before v2).
+  subagent: 'agent',
   agent: 'agent',
   // OpenCode's code-intelligence queries (diagnostics, definitions).
   lsp: 'read',
@@ -92,9 +94,12 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
     case 'grep':
       return str(input.pattern);
     case 'task':
+    case 'subagent':
     case 'agent': {
       const desc = str(input.description);
-      const sub = str(input.subagent_type);
+      // Claude Code and OpenCode v1 name the sub-agent `subagent_type`;
+      // OpenCode v2 names it `agent`.
+      const sub = str(input.subagent_type) || str(input.agent);
       return sub ? `${desc} (${sub})` : desc;
     }
     case 'websearch':

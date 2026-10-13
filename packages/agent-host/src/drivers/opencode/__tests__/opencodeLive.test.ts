@@ -28,7 +28,8 @@ function recorder() {
   const questions: Array<{ toolUseId: string; specs: QuestionSpec[] }> = [];
   const states: string[] = [];
   const logs: string[] = [];
-  /** What a permission ask is answered with: the bridge's own option id —
+  const infos: Array<{ contextPercentage?: number | null; contextWindow?: number | null }> = [];
+  /** What a permission ask is answered with: the bridge's own option id â€”
    *  the driver maps `allow` onto OpenCode's `once`. */
   let answer = 'allow';
   const ctx: SessionContext = {
@@ -36,6 +37,7 @@ function recorder() {
     emit: (event) => {
       if (event.type === 'entries') entries.push(...event.entries);
       if (event.type === 'turn') states.push(event.state);
+      if (event.type === 'info') infos.push(event);
     },
     log: (message) => logs.push(message),
     requestPermission: async (request) => {
@@ -71,6 +73,8 @@ function recorder() {
     results: () => entries.filter((e) => e.entryType === 'tool_result'),
     errors: () => entries.filter((e) => e.entryType === 'error').map((e) => (e as { text: string }).text),
     diffs: () => entries.filter((e) => e.entryType === 'diff').map((e) => (e as { path: string }).path),
+    /** The context fullness last reported, if any. */
+    contextPercentage: () => infos.filter((e) => e.contextPercentage !== undefined).at(-1)?.contextPercentage,
     ready: () => new Promise<void>((resolve) => {
       const tick = setInterval(() => {
         if (states.includes('idle') && entries.length > 0) {
@@ -128,8 +132,13 @@ describe.skipIf(!LIVE)('OpenCode driver against a live v2 server', () => {
     expect(rec.states).toContain('running');
     expect(rec.states).toContain('idle');
 
+    // The context meter: a free model declares a window, so the phone is
+    // told how full it is, and the usage view carries the breakdown.
+    expect(rec.contextPercentage()).not.toBeNull();
     const usage = await session.getUsage();
     expect(usage?.available).toBe(true);
+    expect(usage?.context?.windowTokens).toBeGreaterThan(0);
+    expect(usage?.context?.usedTokens).toBeGreaterThan(0);
     await session.end();
   }, 180_000);
 
