@@ -98,6 +98,8 @@ proof.
 
 ```bash
 ./codedeck apk             # debug APK of apps/android into dist/ (Docker; several GB first run)
+./codedeck apk --target aarch64-linux-android   # the phone's build, and nothing else:
+                           # dist/codedeck-plus-<rev>-debug-arm64-v8a.apk
 ./codedeck bridge up       # build + start the bridge service (Docker Compose)
 ./codedeck bridge logs     # follow its logs
 ./codedeck bridge pair     # print the most recent pairing QR / URL

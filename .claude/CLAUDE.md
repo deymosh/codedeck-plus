@@ -89,6 +89,8 @@ the vendored toolchain — the caller does not choose, and does not need to know
 # The Android app — Windows: Docker (its own toolchain image, several GB
 # first run); Linux: scripts/install-toolchain.sh once, then the -local script.
 ./codedeck apk                               # debug APK into dist/ (Docker)
+./codedeck apk --target aarch64-linux-android # ...for an arm64 device only:
+                                             # dist/codedeck-plus-<rev>-debug-arm64-v8a.apk
 apps/android/scripts/build-apk-local.sh      # debug APK, Linux/local path
 ./codedeck gen-android-bindings              # regenerate the UniFFI Kotlin bindings
 ```

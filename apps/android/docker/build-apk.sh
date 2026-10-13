@@ -116,7 +116,16 @@ dexec -w /workspace/apps/android -e ANDROID_HOME=/opt/android-sdk "$CONTAINER" \
   gradle assembleDebug -PcodedeckGitRev="$GIT_REV" --console=plain
 
 OUT="apps/android/app/build/outputs/apk/debug/app-debug.apk"
-DEST="dist/codedeck-android-debug.apk"
+# Named after the commit the tree came from: that is what tells one debug
+# build from another, and what the phone can be matched against `git log`
+# with. A build that is not the default ABI set says which one it is, because
+# the same commit can be built for one ABI and for several — and the smaller
+# file would otherwise quietly replace the other.
+DEST="dist/codedeck-plus-$GIT_REV-debug"
+if [ "${#TARGETS[@]}" -eq 1 ]; then
+  DEST="$DEST-$(abi_of "${TARGETS[0]}")"
+fi
+DEST="$DEST.apk"
 dcp "$CONTAINER":/workspace/"$OUT" "$DEST"
 
 echo

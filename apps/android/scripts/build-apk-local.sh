@@ -86,8 +86,16 @@ cd apps/android
 cd - >/dev/null
 
 mkdir -p dist
-cp apps/android/app/build/outputs/apk/debug/app-debug.apk dist/codedeck-android-debug.apk
+# The same name the Docker path writes (build-apk.sh), for the same reason:
+# the commit identifies the build, and a single-ABI build says which ABI.
+GIT_REV="$(git describe --always --dirty --exclude='*')"
+DEST="dist/codedeck-plus-$GIT_REV-debug"
+if [ "${#TARGETS[@]}" -eq 1 ]; then
+  DEST="$DEST-$(abi_of "${TARGETS[0]}")"
+fi
+DEST="$DEST.apk"
+cp apps/android/app/build/outputs/apk/debug/app-debug.apk "$DEST"
 
 echo
-echo "==> Done: dist/codedeck-android-debug.apk ($(du -h dist/codedeck-android-debug.apk | cut -f1))"
-echo "    Install: adb install dist/codedeck-android-debug.apk"
+echo "==> Done: $DEST ($(du -h "$DEST" | cut -f1))"
+echo "    Install: adb install $DEST"
