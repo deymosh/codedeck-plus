@@ -54,6 +54,9 @@ function main() {
   if (!args.agent) throw new Error('--agent is required');
   const prompts = args.prompts.length > 0 ? args.prompts : ['Reply with exactly: codedeck-live-ok'];
   const cwd = args.cwd ?? process.cwd();
+  /** How long a single request to the host may go unanswered. Generous — a
+   *  turn is not a request/reply pair — but not unbounded. */
+  const requestTimeout = Math.max(args.timeout, 30) * 1000;
 
   const logPath = args.log ?? '/tmp/codedeck-live.log';
   mkdirSync(path.dirname(logPath), { recursive: true });
@@ -78,7 +81,25 @@ function main() {
   const send = (kind, payload) => {
     const id = `p${(nextId += 1)}`;
     host.stdin.write(`${JSON.stringify({ v: PROTOCOL_VERSION, id, kind, payload })}\n`);
-    return new Promise((resolve) => pending.set(id, { kind, resolve }));
+    return new Promise((resolve, reject) => {
+      // Every request has a deadline of its own: a host that takes the frame
+      // and never answers would otherwise leave the probe waiting with no
+      // output at all, which reads exactly like an agent thinking.
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        say(`!! ${kind}: no reply within ${Math.round(requestTimeout / 1000)}s`);
+        failed = true;
+        reject(new Error(`${kind} was not answered`));
+      }, requestTimeout);
+      timer.unref?.();
+      pending.set(id, {
+        kind,
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+      });
+    });
   };
   const reply = (id, kind, payload) => {
     host.stdin.write(`${JSON.stringify({ v: PROTOCOL_VERSION, id, kind, payload })}\n`);
