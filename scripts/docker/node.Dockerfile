@@ -1,8 +1,10 @@
-# The Node image `./codedeck` runs the TypeScript workspace in — the
-# throwaway containers behind `check`/`typecheck`/`test`, and the long-lived
-# dev container behind `dev` and `live`. One image for all of them, so the
-# checks and the loop run on the same Node and pnpm, and a dependency is
-# downloaded once into the shared store volume.
+# The Node image `./codedeck` runs the TypeScript workspace checks in — the
+# throwaway containers behind `check`, `typecheck` and `test`. Small on
+# purpose: those want Node and the pinned pnpm, nothing else.
+#
+# The long-lived dev container (`dev`, `live`) is a different image on
+# purpose — `workspace.Dockerfile`, which carries Rust too, because a session
+# works on the crates and the agent host in the same place.
 #
 # Built by `./codedeck` (ensure_node_image), which passes the pnpm version
 # pinned in package.json's "packageManager" as a build argument — the file

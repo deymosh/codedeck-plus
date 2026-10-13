@@ -46,10 +46,12 @@
 # binaries) but is untested — the NDK clang triples build-apk-local.sh uses
 # are Linux-host-specific (`linux-x86_64` prebuilt dir) either way.
 #
-# Idempotent: safe to re-run — each step checks whether its target already
-# exists before downloading/installing anything, and a later run for another
-# component leaves the earlier ones alone (toolchain/env.sh and
-# toolchain/.components are rewritten from what is on disk).
+# Idempotent, and cheap enough to run as a check: every step asks whether its
+# target is already here before it touches the network, and a later run for
+# another component leaves the earlier ones alone (toolchain/env.sh is
+# rewritten from what is on disk). `./codedeck` therefore calls this rather
+# than keeping its own record of what was installed — a record can drift from
+# the directory it describes, and a check cannot.
 #
 # After this: apps/android/scripts/build-apk-local.sh builds a debug APK
 # directly on this host — no Docker, no tar, no throwaway container per
@@ -109,21 +111,7 @@ extract_tar_xz() {
   if command -v xz >/dev/null 2>&1 || command -v unxz >/dev/null 2>&1; then
     tar -xJf "$archive" -C "$dest" --strip-components=1
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -c '
-import lzma, sys, tarfile
-archive, dest = sys.argv[1], sys.argv[2]
-with lzma.open(archive) as f, tarfile.open(fileobj=f) as tar:
-    members = []
-    for m in tar.getmembers():
-        # emulate --strip-components=1: drop the top-level directory entry,
-        # rename everything else past its first path segment
-        _, _, rest = m.name.partition("/")
-        if not rest:
-            continue
-        m.name = rest
-        members.append(m)
-    tar.extractall(dest, members=members)
-' "$archive" "$dest"
+    python3 "$LIB_DIR/extract-tar-xz.py" "$archive" "$dest"
   else
     echo "error: extracting $archive needs either the xz/unxz binary or python3, neither is on PATH" >&2
     exit 1
@@ -135,20 +123,7 @@ extract_zip() {
   if command -v unzip >/dev/null 2>&1; then
     unzip -q "$archive" -d "$dest"
   elif command -v python3 >/dev/null 2>&1; then
-    # zipfile.extractall writes the bytes but not the Unix mode, so an SDK
-    # manager or a wrapper script would come out non-executable — and a
-    # "Permission denied" on it reads like a broken download. Apply each
-    # entry's own mode (external_attr's high half) afterwards.
-    python3 -c '
-import os, sys, zipfile
-archive, dest = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(archive) as z:
-    z.extractall(dest)
-    for info in z.infolist():
-        mode = info.external_attr >> 16
-        if mode:
-            os.chmod(os.path.join(dest, info.filename), mode & 0o777)
-' "$archive" "$dest"
+    python3 "$LIB_DIR/extract-zip.py" "$archive" "$dest"
   else
     echo "error: extracting $archive needs either the unzip binary or python3, neither is on PATH" >&2
     exit 1
@@ -156,6 +131,9 @@ with zipfile.ZipFile(archive) as z:
 }
 
 TOOLCHAIN_DIR="$PWD/toolchain"
+# The helper scripts this one runs or installs: the python extractors for a
+# host with no xz/unzip, and the Zig shims that go into toolchain/bin.
+LIB_DIR="$(cd "$(dirname "$0")" && pwd)/lib"
 JDK_DIR="$TOOLCHAIN_DIR/jdk"
 RUSTUP_HOME="$TOOLCHAIN_DIR/rustup"
 CARGO_HOME="$TOOLCHAIN_DIR/cargo"
@@ -204,8 +182,13 @@ if wants rust; then
   fi
   export RUSTUP_HOME CARGO_HOME
   export PATH="$CARGO_HOME/bin:$PATH"
-  echo "==> Adding Android Rust targets"
-  rustup target add aarch64-linux-android x86_64-linux-android
+  # Asked of the local toolchain, not of the network: `target list
+  # --installed` reads what is here, so a run that finds the targets already
+  # in place costs nothing and this script stays cheap to call as a check.
+  if ! rustup target list --installed 2>/dev/null | grep -qx 'aarch64-linux-android'; then
+    echo "==> Adding Android Rust targets"
+    rustup target add aarch64-linux-android x86_64-linux-android
+  fi
 fi
 
 # --- Zig — host C linker stand-in for cargo ---
@@ -247,45 +230,12 @@ fi
 
 if [ -x "$ZIG_DIR/zig" ]; then
   mkdir -p "$TOOLCHAIN_DIR/bin"
-  # The cc shim rewrites --target/-target triples from the LLVM dialect
-  # (cc-rs emits the `-unknown-` vendor segment; zig rejects it).
-  sed "s|@ZIG@|$ZIG_DIR/zig|" > "$TOOLCHAIN_DIR/bin/cc" <<'EOF'
-#!/bin/sh
-# Installed by scripts/install-toolchain.sh — zig cc, the host C
-# compiler/linker this machine lacks (see that script for why).
-translate() {
-  printf '%s' "$1" | sed -E 's/^([A-Za-z0-9_]+)-unknown-/\1-/'
-}
-n=$#
-target_next=0
-for arg do
-  case "$arg" in
-    --target=*|-target=*)
-      set -- "$@" "${arg%%=*}=$(translate "${arg#*=}")"
-      ;;
-    -target|--target)
-      target_next=1
-      set -- "$@" "$arg"
-      ;;
-    *)
-      if [ "$target_next" -eq 1 ]; then
-        set -- "$@" "$(translate "$arg")"
-        target_next=0
-      else
-        set -- "$@" "$arg"
-      fi
-      ;;
-  esac
-done
-shift "$n"
-exec "@ZIG@" cc "$@"
-EOF
-  sed "s|@ZIG@|$ZIG_DIR/zig|" > "$TOOLCHAIN_DIR/bin/ar" <<'EOF'
-#!/bin/sh
-# Installed by scripts/install-toolchain.sh — pairs with bin/cc (zig ar).
-exec "@ZIG@" ar "$@"
-EOF
-  chmod +x "$TOOLCHAIN_DIR/bin/cc" "$TOOLCHAIN_DIR/bin/ar"
+  # Copied, not generated: the shims are scripts/lib/zig-cc.sh and
+  # scripts/lib/zig-ar.sh, which find the zig beside them at run time rather
+  # than having its path written into them — so what is installed is exactly
+  # what a reader reads, and re-installing them is a copy.
+  install -m 0755 "$LIB_DIR/zig-cc.sh" "$TOOLCHAIN_DIR/bin/cc"
+  install -m 0755 "$LIB_DIR/zig-ar.sh" "$TOOLCHAIN_DIR/bin/ar"
 fi
 
 # --- Node.js + the exact pnpm this repo pins (package.json's "engines"/
@@ -346,37 +296,46 @@ if wants android; then
     echo "==> Android cmdline-tools already installed, skipping"
   fi
 
-  echo "==> Installing platform-tools, $PLATFORM, build-tools $BUILD_TOOLS, NDK $NDK_VERSION"
-  yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-  "$SDKMANAGER" --install \
-    "platform-tools" \
-    "platforms;$PLATFORM" \
-    "build-tools;$BUILD_TOOLS" \
-    "ndk;$NDK_VERSION"
+  # The four packages behind cmdline-tools are asked for only when one of them
+  # is missing: a run that finds them all in place does not touch the network,
+  # which is what lets this script be called as a check on every command
+  # rather than once with a marker file claiming what it installed.
+  if [ ! -d "$ANDROID_HOME/platforms/$PLATFORM" ] || [ ! -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+    echo "==> Installing platform-tools, $PLATFORM, build-tools $BUILD_TOOLS, NDK $NDK_VERSION"
+    yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+    "$SDKMANAGER" --install \
+      "platform-tools" \
+      "platforms;$PLATFORM" \
+      "build-tools;$BUILD_TOOLS" \
+      "ndk;$NDK_VERSION"
+  else
+    echo "==> Android platform, build-tools and NDK already installed, skipping"
+  fi
 fi
 
-# --- What this toolchain now holds, and the shell that points at it. ---
-# Both are derived from what is on disk rather than from what this run
-# installed, so a later run for another component leaves the earlier ones in
-# place instead of writing a toolchain that forgets half of itself.
-# `.components` is what `./codedeck` reads to tell whether the piece a command
-# needs is here before it runs the installer again.
+# --- What this toolchain holds. ---
+# Derived from what is on disk rather than from what this run installed, so a
+# later run for another component leaves the earlier ones in place instead of
+# writing a toolchain that forgets half of itself.
 
-# A component is here when the binary that does its work is.
+# A component is here when the binary that does its work is — and, for
+# Android, when what that binary was going to install is here too: the
+# platform, the build tools and the NDK are separate downloads after
+# cmdline-tools lands, so a run interrupted in between would otherwise look
+# like an Android toolchain and then fail in Gradle.
 component_present() {
   case "$1" in
     java) [ -x "$JDK_DIR/bin/java" ] ;;
     rust) [ -x "$CARGO_HOME/bin/cargo" ] ;;
     node) [ -x "$NODE_DIR/bin/node" ] ;;
-    android) [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ] ;;
+    android)
+      [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ] &&
+        [ -d "$ANDROID_HOME/platforms/$PLATFORM" ] &&
+        [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]
+      ;;
     *) return 1 ;;
   esac
 }
-
-: > "$TOOLCHAIN_DIR/.components"
-for component in "${ALL_COMPONENTS[@]}"; do
-  if component_present "$component"; then echo "$component" >> "$TOOLCHAIN_DIR/.components"; fi
-done
 
 {
   echo "# Source this to point your shell at this repo's local toolchain — the"
@@ -415,6 +374,9 @@ if component_present android; then
   echo "==> Done. toolchain/env.sh written — source it, then run:"
   echo "    apps/android/scripts/build-apk-local.sh"
 else
-  echo "==> Done. toolchain/env.sh written — source it for the pieces"
-  echo "    installed here ($(tr '\n' ' ' < "$TOOLCHAIN_DIR/.components"))."
+  present=""
+  for component in "${ALL_COMPONENTS[@]}"; do
+    if component_present "$component"; then present="$present$component "; fi
+  done
+  echo "==> Done. toolchain/env.sh written — source it for: ${present% }"
 fi
