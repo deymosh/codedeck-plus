@@ -942,7 +942,7 @@ cmd_clean() {
   echo "    They hold no state worth keeping — the caches live in the volumes,"
   echo "    which are NOT removed here. To drop one too: docker volume rm <name>"
 
-  if ! confirm "Remove these ${#names[@]} containers?"; then
+  if [ "$assume_yes" != 1 ] && ! confirm "Remove these ${#names[@]} containers?"; then
     echo "==> Nothing removed."
     return 0
   fi
