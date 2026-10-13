@@ -1039,12 +1039,11 @@ mod tests {
         assert_eq!(*answered, None);
     }
 
-    /// One id can carry two cards in turn — a permission ask, then the
-    /// question it was asked for, which is what an OpenCode session does.
-    /// Each card is answered by its own resolution: the second card must not
-    /// be born answered with the first card's outcome, which is what a map
-    /// keyed on the id alone would do (and the user then never sees the
-    /// question's options).
+    /// One id can carry two cards in turn — a permission ask, then the card
+    /// it was asked for. Each card is answered by its own resolution: the
+    /// second must not be born answered with the first one's outcome, which
+    /// is what a map keyed on the id alone does — and the user then never
+    /// gets to answer it.
     #[test]
     fn a_second_card_on_the_same_id_is_not_born_answered() {
         let q = json!({"entryType":"question","requestId":"c1","index":0,"count":1,"question":"Which colour?","options":[{"label":"Red"},{"label":"Blue"}]});
