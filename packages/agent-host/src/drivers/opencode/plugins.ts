@@ -10,8 +10,9 @@
  * switches a listed plugin off without removing it; a later plain entry
  * switches it back on.
  *
- * OpenCode has no marketplaces and updates its plugins itself when it loads
- * them, so update is not an action here.
+ * OpenCode has no marketplaces, so a plugin is installed by its package
+ * name. V2 serves an explicit update, which the phone can ask for; OpenCode
+ * also updates its own plugins when it loads them.
  */
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';

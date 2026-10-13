@@ -44,7 +44,7 @@ Settings for this mode:
   explicit path to the `opencode` binary. Otherwise the agent host looks for
   it on `PATH` and in a few well-known global-install locations (mirroring
   how it resolves `claude`), and when there is none it **installs it**: the
-  `opencode-<os>-<arch>` build pinned in `pnpm-lock.yaml` (the `baseline`
+  `@opencode/cli-<os>-<arch>` build pinned in `pnpm-lock.yaml` (the `baseline`
   variant on x64, which needs no AVX2), downloaded in the background into
   `<home>/agents/`. The phone shows it as installing meanwhile, and new
   sessions start on it once it is ready.

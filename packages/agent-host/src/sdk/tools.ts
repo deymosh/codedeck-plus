@@ -88,7 +88,7 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   ...DEEPSEEK_TOOLS,
 };
 
-/** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `bash`)
+/** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `shell`)
  *  to the wire's tool kind. */
 export function toolKindOf(toolName: string): ToolKind {
   return TOOL_KINDS[toolName.toLowerCase()] ?? 'other';
