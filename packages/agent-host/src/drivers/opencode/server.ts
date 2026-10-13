@@ -84,7 +84,10 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 /** Grace period between SIGTERM and SIGKILL on shutdown. */
 const CLOSE_GRACE_MS = 5_000;
 
-const LISTENING_PREFIX = 'opencode server listening';
+/** OpenCode v2 prints this line, and nothing else, on stdout once its HTTP
+ *  server accepts requests; a password line follows only when the password
+ *  was not handed over in the environment (this driver always sets it). */
+const LISTENING_PREFIX = 'server listening';
 
 function parseListeningUrl(line: string): string | null {
   if (!line.startsWith(LISTENING_PREFIX)) return null;
