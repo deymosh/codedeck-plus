@@ -135,7 +135,20 @@ extract_zip() {
   if command -v unzip >/dev/null 2>&1; then
     unzip -q "$archive" -d "$dest"
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$archive" "$dest"
+    # zipfile.extractall writes the bytes but not the Unix mode, so an SDK
+    # manager or a wrapper script would come out non-executable — and a
+    # "Permission denied" on it reads like a broken download. Apply each
+    # entry's own mode (external_attr's high half) afterwards.
+    python3 -c '
+import os, sys, zipfile
+archive, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(archive) as z:
+    z.extractall(dest)
+    for info in z.infolist():
+        mode = info.external_attr >> 16
+        if mode:
+            os.chmod(os.path.join(dest, info.filename), mode & 0o777)
+' "$archive" "$dest"
   else
     echo "error: extracting $archive needs either the unzip binary or python3, neither is on PATH" >&2
     exit 1
@@ -321,6 +334,10 @@ if wants android; then
     tmp="$(mktemp -d)"
     curl -fsSL -o "$tmp/cmdline-tools.zip" \
       "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+    # Cleared first: a copy left half-extracted (an interrupted run, or an
+    # extractor that lost the executable bits) must not survive into the
+    # `mv` below, which would land the real tools one directory down.
+    rm -rf "$ANDROID_HOME/cmdline-tools"
     mkdir -p "$ANDROID_HOME/cmdline-tools"
     extract_zip "$tmp/cmdline-tools.zip" "$ANDROID_HOME/cmdline-tools"
     mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
