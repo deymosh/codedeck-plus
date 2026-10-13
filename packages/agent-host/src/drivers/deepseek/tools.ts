@@ -35,7 +35,9 @@ const askTitle = (input: Input): string => {
   return oneLine(first && typeof first === 'object' ? str((first as Input).question) : '');
 };
 
-const DEEPSEEK_TOOLS: ToolDialects = {
+/** Every name this agent answers to: the table the drift test reads, and
+ *  what `deepseekTool` falls back to when a call's arguments say nothing. */
+export const DEEPSEEK_TOOLS: ToolDialects = {
   // --- running things ---
   // Which of these two is mounted depends on the host OS: bash everywhere
   // but Windows, pwsh on Windows.

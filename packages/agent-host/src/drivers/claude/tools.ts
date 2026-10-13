@@ -43,7 +43,9 @@ const questionTitle = (input: Input): string => {
   return oneLine(first && typeof first === 'object' ? str((first as Input).question) : '');
 };
 
-const CLAUDE_TOOLS: ToolDialects = {
+/** Every name this agent answers to: the table the drift test reads, and
+ *  what `claudeTool` falls back to when a call's arguments say nothing. */
+export const CLAUDE_TOOLS: ToolDialects = {
   // --- running things ---
   bash: { kind: ToolKind.Execute, title: runTitle, detail: (input) => str(input.command) },
   powershell: { kind: ToolKind.Execute, title: runTitle, detail: (input) => str(input.command) },

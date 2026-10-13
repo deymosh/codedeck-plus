@@ -44,7 +44,9 @@ const questionTitle = (input: Input): string => {
   return oneLine(first && typeof first === 'object' ? str((first as Input).question) : '');
 };
 
-const OPENCODE_TOOLS: ToolDialects = {
+/** Every name this agent answers to: the table the drift test reads, and
+ *  what `opencodeTool` falls back to when a call's arguments say nothing. */
+export const OPENCODE_TOOLS: ToolDialects = {
   // The shell tool; `bash` is Claude Code's spelling of the same thing.
   shell: { kind: ToolKind.Execute, title: (input) => oneLine(str(input.command)), detail: (input) => str(input.command) },
   // Code Mode: the program the model writes, which calls the other tools.

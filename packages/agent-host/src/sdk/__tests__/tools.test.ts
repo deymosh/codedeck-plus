@@ -5,15 +5,16 @@
  *
  * Each agent's own names are tested beside it (`drivers/<agent>/__tests__`).
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { readToolCall, ToolKind, toolLocations, todosOf, unknownToolReporter, type ToolDialects } from '../tools';
+import { readToolCall, shapeKindOf, str, ToolKind, toolLocations, todosOf, unknownToolReporter, type ToolDialects } from '../tools';
 
 /** A driver's table, standing in for one of the real ones. */
 const TOOLS: ToolDialects = {
-  run: { kind: ToolKind.Execute, title: (input) => String(input.command), detail: (input) => String(input.command) },
-  look: { kind: ToolKind.Read, title: (input) => String(input.path) },
-  stop: { kind: ToolKind.Execute, title: (input) => String(input.task_id) },
-  change: { kind: ToolKind.Edit, title: (input) => String(input.path), detail: () => undefined },
+  run: { kind: ToolKind.Execute, title: (input) => str(input.command), detail: (input) => String(input.command) },
+  look: { kind: ToolKind.Read, title: (input) => str(input.path) },
+  stop: { kind: ToolKind.Execute, title: (input) => str(input.task_id) },
+  change: { kind: ToolKind.Edit, title: (input) => str(input.path), detail: () => undefined },
   ask: { kind: ToolKind.Think },
 };
 
@@ -33,11 +34,19 @@ describe('readToolCall', () => {
   });
 
   it('shows a call’s arguments as JSON when they say more than the title', () => {
+    // `stop` names no kind of argument of its own, so its entry answers and
+    // its title comes from there too.
     expect(read('stop', { task_id: 'task-7', force: true })).toEqual({
       kind: 'execute',
       title: 'task-7',
       input: '{\n  "task_id": "task-7",\n  "force": true\n}',
     });
+  });
+
+  it('reads the kind from the arguments even when the table knows the name', () => {
+    // `change` is this table's edit tool, and a call whose arguments name a
+    // pattern is a search — the arguments are what a rename leaves intact.
+    expect(read('change', { pattern: 'TODO' })).toEqual({ kind: 'search', title: 'TODO' });
   });
 
   it('lets a tool say its input is not worth showing', () => {
@@ -48,13 +57,19 @@ describe('readToolCall', () => {
     });
   });
 
-  it('gives an unknown name its own name and arguments, never a guess', () => {
+  it('reads an unknown name by its arguments, which is what a rename leaves intact', () => {
+    // A tool the agent renamed away still runs the same way: the call's
+    // arguments are read even though its name means nothing here.
+    expect(read('mystery', { command: 'rm -rf /' })).toEqual({ kind: 'execute', title: 'rm -rf /' });
+  });
+
+  it('gives an unknown name and arguments that say nothing the call itself, never a guess', () => {
     // The kind is what the phone picks an icon and a verb from: a wrong guess
     // would read as a confident lie about what the call did.
-    expect(read('mystery', { command: 'rm -rf /' })).toEqual({
+    expect(read('mystery', { opaque: true })).toEqual({
       kind: 'other',
       title: 'mystery',
-      input: '{\n  "command": "rm -rf /"\n}',
+      input: '{\n  "opaque": true\n}',
     });
     // Even one argument travels: the title is the tool's name, not the value.
     expect(read('mcp__gh__issue', { n: 1 }).input).toBe('{\n  "n": 1\n}');
@@ -106,6 +121,64 @@ describe('toolLocations', () => {
     expect(toolLocations({ path: '/c.ts' })).toEqual(['/c.ts']);
     expect(toolLocations({ notebook_path: '/d.ipynb' })).toEqual(['/d.ipynb']);
     expect(toolLocations({ command: 'ls' })).toEqual([]);
+  });
+});
+
+describe('ToolKind', () => {
+  it('names every kind the wire has, and no other', () => {
+    // The generated protocol is the wire's own word on it: a kind added there
+    // fails here until it is named above, and a name that is not a kind fails
+    // the `satisfies` in tools.ts.
+    const generated = readFileSync(new URL('../../generated/protocol.ts', import.meta.url), 'utf8');
+    const at = generated.indexOf('export type ToolKind =');
+    expect(at).toBeGreaterThan(-1);
+    const union = generated.slice(at, generated.indexOf(';', at));
+    const kinds = [...union.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]!);
+    expect(kinds.length).toBeGreaterThan(5);
+    expect([...Object.values(ToolKind)].sort()).toEqual([...kinds].sort());
+  });
+});
+
+describe('shapeKindOf', () => {
+  it('reads what a call does from the arguments every agent shares', () => {
+    expect(shapeKindOf({ command: 'npm test' })).toBe('execute');
+    expect(shapeKindOf({ code: 'await tools.read({path: "/a"})' })).toBe('execute');
+    expect(shapeKindOf({ url: 'https://example.com' })).toBe('fetch');
+    expect(shapeKindOf({ query: 'nostr relays' })).toBe('fetch');
+    expect(shapeKindOf({ queries: ['nostr relays'] })).toBe('fetch');
+    expect(shapeKindOf({ pattern: 'src/**/*.ts' })).toBe('search');
+    expect(shapeKindOf({ file_path: '/a.ts', old_string: 'a', new_string: 'b' })).toBe('edit');
+    expect(shapeKindOf({ path: '/a.ts', content: 'x' })).toBe('edit');
+    expect(shapeKindOf({ path: '/a.ts' })).toBe('read');
+    expect(shapeKindOf({ notebook_path: '/a.ipynb', new_source: 'x' })).toBe('edit');
+    expect(shapeKindOf({ todos: [{ content: 'x' }] })).toBe('think');
+  });
+
+  it('reads a sub-agent hand-off from its instructions', () => {
+    expect(shapeKindOf({ description: 'find things', prompt: 'look' })).toBe('agent');
+    expect(shapeKindOf({ agent: 'explore', description: 'find things', prompt: 'look' })).toBe('agent');
+    expect(shapeKindOf({ subagent_type: 'explore', description: 'find things', prompt: 'look' })).toBe('agent');
+    // A prompt alone is a prompt: WebFetch carries one too.
+    expect(shapeKindOf({ url: 'https://example.com', prompt: 'summarize' })).toBe('fetch');
+  });
+
+  it('reads a file before it reads a bare key, so an operation word is not a command', () => {
+    // The harness's editor spells its operation `command`, and takes a path:
+    // `view` reads, and putting text in the file edits.
+    expect(shapeKindOf({ command: 'view', path: '/a.ts' })).toBe('read');
+    expect(shapeKindOf({ command: 'str_replace', path: '/a.ts', old_str: 'a', new_str: 'b' })).toBe('edit');
+    // A search names its pattern and the tree to search.
+    expect(shapeKindOf({ pattern: 'TODO', path: '/src' })).toBe('search');
+  });
+
+  it('says nothing when the arguments do not', () => {
+    // An empty call, an argument nobody reads, and the shapes that are a
+    // tool's own business: the agent's table answers for these.
+    expect(shapeKindOf({})).toBeUndefined();
+    expect(shapeKindOf({ task_id: 'task-7' })).toBeUndefined();
+    expect(shapeKindOf({ questions: [{ question: 'which?' }] })).toBeUndefined();
+    expect(shapeKindOf({ todos: 'not an array' })).toBeUndefined();
+    expect(shapeKindOf({ command: '' })).toBeUndefined();
   });
 });
 
