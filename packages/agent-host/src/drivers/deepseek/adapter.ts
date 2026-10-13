@@ -13,8 +13,9 @@
  * messages and thoughts, generic tool call lifecycles, usage, config — and
  * nothing else: no plans, no slash commands, no modes, no terminal or
  * filesystem callbacks. Its tool calls arrive with `kind: "other"` and the
- * tool's own name as their title, so the agent-neutral kind and summary come
- * from the name (src/tools.ts) exactly as they do for the other agents.
+ * tool's own name as their title, so the agent-neutral kind and title are
+ * read from the call's arguments, and from this driver's own table of names
+ * (tools.ts), exactly as they are for the other agents.
  */
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { todosOf, toolLocations } from '../../sdk/tools';
