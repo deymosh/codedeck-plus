@@ -424,6 +424,56 @@ describe('OpenCode usage', () => {
   });
 });
 
+describe('OpenCode compaction', () => {
+  const stepStarted = { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } };
+
+  it('says an automatic compaction happened, and that it made room', async () => {
+    // Nothing else would tell the phone: the transcript keeps the turns the
+    // summary replaced, and the context meter simply drops at the next step.
+    const ctx = start(clientWith([
+      stepStarted,
+      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'auto', recent: '' } },
+      { type: 'session.compaction.delta', data: { sessionID: 'ses_1', text: '## Objective' } },
+      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'auto', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', recent: '', cost: 0 } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
+      'OpenCode session started',
+      'OpenCode is compacting the conversation to make room in the context.',
+      'Compacted the conversation to make room: OpenCode continues from a summary of it.',
+    ]);
+  });
+
+  it('says a compaction the user asked for by name only once it is done', async () => {
+    // The `/compact` built-in already put its own line in the transcript; the
+    // driver adds the outcome, which is the part the built-in cannot know.
+    const ctx = start(clientWith([
+      stepStarted,
+      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'manual', recent: '', inputID: 'msg_9' } },
+      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'manual', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', recent: '', cost: 0 } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
+      'OpenCode session started',
+      'Compacted the conversation: OpenCode continues from a summary of it.',
+    ]);
+  });
+
+  it('reports a compaction that failed', async () => {
+    const ctx = start(clientWith([
+      stepStarted,
+      {
+        type: 'session.compaction.failed',
+        data: { sessionID: 'ses_1', reason: 'manual', inputID: 'msg_9', error: { type: 'compaction.failed', message: 'Nothing to compact yet' } },
+      },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'error').map((e) => (e as { text: string }).text)).toEqual([
+      'OpenCode could not compact the conversation: Nothing to compact yet',
+    ]);
+  });
+});
+
 describe('OpenCode conversation delete', () => {
   it('deletes the session on the server', async () => {
     const client = clientWith([]);

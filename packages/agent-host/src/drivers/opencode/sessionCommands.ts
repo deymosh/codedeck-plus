@@ -64,12 +64,13 @@ export const SESSION_COMMANDS: SessionCommand[] = [
     async run(ctx) {
       ctx.status('Compacting the conversation…');
       // The request is queued to the next safe point, so the turn carrying it
-      // is what reports the outcome.
+      // is what reports the outcome — the driver's own status line, when the
+      // server's compaction ends or fails. Saying here what it will do would
+      // be a claim made before anything has happened.
       const queued = await ctx.client.session.compact({ sessionID: ctx.sessionID }).catch((err: unknown) => {
         throw failure('compact the conversation', err);
       });
       void queued;
-      ctx.status('Compacting: OpenCode continues from a summary of the conversation.');
     },
   },
   {

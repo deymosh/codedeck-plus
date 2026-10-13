@@ -611,6 +611,35 @@ export class OpenCodeSession implements DriverSession {
           if (event.data.files && event.data.files.length > 0) void this.reportChangedFiles(client, sessionId, event.data.files);
           break;
         }
+        // A compaction rewrote the conversation the model sees. The phone's
+        // transcript still holds what the summary replaced, and its context
+        // meter is about to drop, so the compaction is stated rather than
+        // left to look like the context vanishing on its own.
+        case 'session.compaction.started': {
+          if (child) break;
+          // A manual compaction is the `/compact` built-in, whose own status
+          // line is already in the transcript; only an automatic one is news.
+          if (event.data.reason !== 'manual') {
+            this.deliver({ type: 'status', text: 'OpenCode is compacting the conversation to make room in the context.' });
+          }
+          break;
+        }
+        case 'session.compaction.ended': {
+          if (child) break;
+          this.deliver({
+            type: 'status',
+            text:
+              event.data.reason === 'manual'
+                ? 'Compacted the conversation: OpenCode continues from a summary of it.'
+                : 'Compacted the conversation to make room: OpenCode continues from a summary of it.',
+          });
+          break;
+        }
+        case 'session.compaction.failed': {
+          if (child) break;
+          this.reportError(`OpenCode could not compact the conversation: ${formatOpenCodeError(event.data.error)}`);
+          break;
+        }
         // A child's failure is the sub-agent's own: it ends that sub-agent,
         // rather than surfacing on the phone as an error the user cannot
         // place. The background task it was left as is what reports it.
