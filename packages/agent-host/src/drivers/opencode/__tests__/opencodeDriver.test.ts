@@ -200,6 +200,17 @@ describe('OpenCode permissions', () => {
     expect(cancelled.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'reject' });
   });
 
+  it('allows the question tool its own ask, so the form is the only card', async () => {
+    // v2's question tool asks permission to ask before it raises the form —
+    // the same call id, so a card for it would be answered and then reused as
+    // the question's. The form's card is the ask the user acts on.
+    const client = clientWith([ask({ action: 'question', resources: ['*'], source: { type: 'tool', messageID: 'm1', id: 'call_q' } })]);
+    const ctx = start(client, { mode: 'ask' });
+    await ctx.ended();
+    expect(ctx.permissions).toEqual([]);
+    expect(client.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'once' });
+  });
+
   it('the auto-approve mode answers without troubling the phone', async () => {
     const client = clientWith([ask()]);
     const ctx = start(client, { mode: 'default' });

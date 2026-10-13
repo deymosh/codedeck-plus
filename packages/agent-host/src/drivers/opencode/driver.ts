@@ -45,6 +45,7 @@ import type {
 } from '../../sdk/types';
 import {
   opencodeEventToEntries,
+  QUESTION_TOOL,
   toolCallDiffs,
   toolResultText,
   type OpenCodeEvent,
@@ -864,6 +865,15 @@ export class OpenCodeSession implements DriverSession {
       return;
     }
     const toolName = this.toolNames.get(ask.source?.id ?? '') ?? ask.action;
+    // The question tool asks for permission to ask, and then asks. Its own
+    // ask is the question: a card for it would make the user allow being
+    // asked before they are asked, with the answer they give the form the
+    // only one that says anything. Allowed here, so the form's card is the
+    // one they see.
+    if (toolName === QUESTION_TOOL) {
+      reply('once');
+      return;
+    }
     const description = ask.message?.trim() || describePermission(ask.action, ask.resources);
     const call = opencodeTool(toolName, (ask.metadata ?? {}) as Record<string, unknown>, this.reportUnknownTool);
     this.ctx
