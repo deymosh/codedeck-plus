@@ -5,6 +5,12 @@
  */
 import type { PermissionOption, TodoItem, ToolKind } from './types';
 
+/**
+ * Every name here belongs to an agent this host runs — Claude Code, OpenCode
+ * 2.x or the DeepSeek Harness. A name none of them emits (an older SDK's
+ * tool, or one dropped in a rename) does not belong: it would label a row
+ * that can never appear. Names are matched lower-cased.
+ */
 const TOOL_KINDS: Record<string, ToolKind> = {
   read: 'read',
   notebookread: 'read',
@@ -15,7 +21,6 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   multiedit: 'edit',
   notebookedit: 'edit',
   patch: 'edit',
-  apply_patch: 'edit',
   bash: 'execute',
   bashoutput: 'execute',
   killshell: 'execute',
@@ -33,11 +38,9 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   question: 'think',
   glob: 'search',
   grep: 'search',
-  codesearch: 'search',
   webfetch: 'fetch',
   websearch: 'fetch',
   todowrite: 'think',
-  todoread: 'think',
   exitplanmode: 'switch_mode',
   enterplanmode: 'switch_mode',
   task: 'agent',
@@ -152,21 +155,28 @@ export function toolInput(toolName: string, input: Record<string, unknown>): str
   const title = toolTitle(toolName, input);
   let text: string;
   switch (toolName.toLowerCase()) {
+    // The command a session ran, whole: the title is one line cut to
+    // MAX_TITLE_CHARS, so a long command must not have to fall back to it.
     case 'bash':
+    case 'shell':
       text = str(input.command);
       break;
+    // The instructions a sub-agent was given.
     case 'task':
+    case 'subagent':
     case 'agent':
       text = str(input.prompt);
+      break;
+    // The program a Code Mode call runs.
+    case 'execute':
+      text = str(input.code);
       break;
     case 'write':
     case 'edit':
     case 'multiedit':
     case 'notebookedit':
     case 'patch':
-    case 'apply_patch':
     case 'todowrite':
-    case 'todoread':
     case 'todo_write':
     case 'str_replace_editor':
       return undefined;
