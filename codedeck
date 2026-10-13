@@ -308,24 +308,28 @@ container_running() {
   docker ps --format '{{.Names}}' | grep -qx "$1"
 }
 
-# A container this script created carries the label. One without it was made
-# by hand — or by an older workflow that kept its own sync scripts — and is
-# not trusted to have what the commands below expect of its image, so it is
-# replaced once rather than used and puzzled over.
+# A container this script created carries the label, and runs the image it was
+# created from. One without either was made by hand — or by an older workflow
+# that kept its own sync scripts — and is not trusted to have what the
+# commands below expect, so it is replaced rather than used and puzzled over;
+# so is one whose image has moved on, which is what makes an edit to a
+# Dockerfile here take effect on the next command instead of on the next
+# `dev --reset`.
 container_is_ours() {
-  [ "$(docker inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null)" = "1" ]
+  [ "$(docker inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null)" = "1" ] &&
+    [ "$(docker inspect -f '{{.Config.Image}}' "$1" 2>/dev/null)" = "$3" ]
 }
 
 ensure_container() {
-  local name="$1" label="$2"
-  shift 2
-  if container_exists "$name" && ! container_is_ours "$name" "$label"; then
-    echo "==> Replacing $name (not created by this script)"
+  local name="$1" label="$2" image="$3"
+  shift 3
+  if container_exists "$name" && ! container_is_ours "$name" "$label" "$image"; then
+    echo "==> Replacing $name (not this script's, or its image changed)"
     docker rm -f "$name" >/dev/null
   fi
   if ! container_exists "$name"; then
     echo "==> Creating $name (kept between commands)"
-    MSYS_NO_PATHCONV=1 docker create --name "$name" --label "$label=1" "$@" >/dev/null
+    MSYS_NO_PATHCONV=1 docker create --name "$name" --label "$label=1" "$@" "$image" sleep infinity >/dev/null
   fi
   # Already running is fine: this is "make sure it is up", not "start it".
   docker start "$name" >/dev/null 2>&1 || true
@@ -481,19 +485,31 @@ run_checks() {
 # keeps its node_modules and its store, with the working tree kept in step
 # with the host. `./codedeck dev` is that container, and it is the difference
 # between a two-second test run and a two-minute one.
-DEV_IMAGE=codedeck-node
+DEV_IMAGE=codedeck-workspace
 DEV_CONTAINER=codedeck-dev
 DEV_ROOT=/repo
 # Whether the container's install is current. The stamp lives outside the
 # synced tree, which the mirror would otherwise delete.
 DEV_LOCK_STAMP=/root/.codedeck-dev-lock
 
+# The whole repository's tooling in one container (scripts/docker/
+# workspace.Dockerfile), with the two stores the checks fill mounted into it
+# as well: the pnpm store, and cargo's registry and target directory — the
+# same target `./codedeck check` compiles into, so a crate built either way is
+# not built again by the other.
+ensure_dev_image() {
+  local pnpm_version
+  pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
+  ensure_tool_image "$DEV_IMAGE" "$TOOL_IMAGE_DIR/workspace.Dockerfile" --build-arg "PNPM_VERSION=$pnpm_version"
+}
+
 ensure_dev_container() {
-  ensure_node_image
-  ensure_container "$DEV_CONTAINER" codedeck.dev \
+  ensure_dev_image
+  ensure_container "$DEV_CONTAINER" codedeck.dev "$DEV_IMAGE" \
     -v codedeck-pnpm-store:/pnpm-store \
     -v codedeck-agents:/agents \
-    "$DEV_IMAGE" sleep infinity
+    -v codedeck-cargo-registry:/usr/local/cargo/registry \
+    -v codedeck-check-target:"$DEV_ROOT/target"
 }
 
 ensure_dev_deps() {
@@ -614,12 +630,11 @@ ensure_android_container() {
   fi
   # The container is disposable; the Gradle user home, the cargo registry and
   # the cargo target dir are not, and live in named volumes.
-  ensure_container "$ANDROID_CONTAINER" codedeck.android -m 6g \
+  ensure_container "$ANDROID_CONTAINER" codedeck.android "$ANDROID_IMAGE" -m 6g \
     -v codedeck-android-cargo-registry:/opt/cargo/registry \
     -v codedeck-android-target:"$ANDROID_ROOT/target" \
     -v codedeck-android-gradle:/gradle-home \
-    -e GRADLE_USER_HOME=/gradle-home \
-    "$ANDROID_IMAGE" sleep infinity
+    -e GRADLE_USER_HOME=/gradle-home
 }
 
 # What a Gradle task left behind, in one line each: the counts from the JUnit
