@@ -132,7 +132,10 @@ function main() {
     },
   };
 
-  const sessionId = 'live';
+  // A UUID, because a driver may hand the id to its agent (Claude Code takes
+  // it as `--session-id`, which the CLI rejects unless it is one) and because
+  // it is what the bridge sends: bridge-runtime's own ids are v4 UUIDs.
+  const sessionId = randomUUID();
   /** Set once the probe is done with the host, so the SIGTERM it sends to
    *  stop it is not read back as the host dying on its own. */
   let finished = false;
