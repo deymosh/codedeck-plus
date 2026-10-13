@@ -23,6 +23,10 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   patch: 'edit',
   bash: 'execute',
   bashoutput: 'execute',
+  // Claude Code's stop-a-background-task tool. It is called TaskStop; the
+  // CLI still resolves KillShell/KillBash as aliases of it, kept below for a
+  // session driven by an older CLI.
+  taskstop: 'execute',
   killshell: 'execute',
   killbash: 'execute',
   // OpenCode's shell tool (it was `bash` before v2), and the rest of what
@@ -112,6 +116,10 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
       const sub = str(input.subagent_type) || str(input.agent);
       return sub ? `${desc} (${sub})` : desc;
     }
+    case 'taskstop':
+    case 'killshell':
+    case 'killbash':
+      return str(input.task_id) || str(input.shell_id);
     case 'websearch':
       return str(input.query);
     case 'web_search':

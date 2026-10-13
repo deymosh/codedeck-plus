@@ -12,6 +12,13 @@ describe('toolKindOf', () => {
     expect(toolKindOf('something-new')).toBe('other');
   });
 
+  it("reads Claude Code's current name for stopping a task", () => {
+    // The CLI renames KillShell/KillBash to TaskStop and still accepts the
+    // old spellings as aliases.
+    expect(toolKindOf('TaskStop')).toBe('execute');
+    expect(toolKindOf('KillShell')).toBe('execute');
+  });
+
   it("reads OpenCode v2's names for tools the others spell differently", () => {
     // `bash` and `task` became `shell` and `subagent`.
     expect(toolKindOf('shell')).toBe('execute');
@@ -31,6 +38,11 @@ describe('toolTitle', () => {
   it('names a file by whichever key the agent uses for it', () => {
     expect(toolTitle('edit', { filePath: '/a.ts' })).toBe('/a.ts');
     expect(toolTitle('edit', { path: '/b.ts' })).toBe('/b.ts');
+  });
+
+  it('names the background task a stop refers to', () => {
+    expect(toolTitle('TaskStop', { task_id: 'task-7' })).toBe('task-7');
+    expect(toolTitle('TaskStop', { shell_id: 'sh-2' })).toBe('sh-2');
   });
 
   it('shows a shell command under either spelling', () => {
