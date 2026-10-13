@@ -16,6 +16,9 @@ importers:
       '@opencode-ai/sdk':
         specifier: ^1.18.32
         version: 1.18.32
+      '@opencode/client':
+        specifier: 2.0.28
+        version: 2.0.28(effect@4.0.1)
       js-yaml:
         specifier: ^4.2.0
         version: 4.3.2
@@ -29,6 +32,9 @@ importers:
       '@deepseek-ai/dsh':
         specifier: 0.2.0-rc.2
         version: 0.2.0-rc.2(0f1e5c6ba2281237b4c3df3d203ea37c)
+      '@opencode/cli':
+        specifier: 2.0.28
+        version: 2.0.28
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -3158,6 +3164,89 @@ packages:
   '@opencode-ai/sdk@1.18.32':
     resolution: {integrity: sha512-Wi3WtH/cLA3C0ga05lyDb7zac+SzbST9MPwCve1Ffod0xwzHdy9G2gnxvMAR4RBRhKJS32Rgk2cR+fxBhAVSQw==}
 
+  '@opencode/cli-darwin-arm64@2.0.28':
+    resolution: {integrity: sha512-HYFeBK8drYVq9b9DlQ51pBLCaL+GNyih1ysTQfmekW7YhAJngPYDM7xMgCINXopRVMGTw7EmbJPrMm+9V0G7Yg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@opencode/cli-darwin-x64-baseline@2.0.28':
+    resolution: {integrity: sha512-qXu5pTHtjWm/Kw6Xthl5Y3V13BYtqDoot4au6NW+h/8JSEN0sN0To35dXoWu41FWWmMve2fAl0zEK/36x6WTPw==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@opencode/cli-darwin-x64@2.0.28':
+    resolution: {integrity: sha512-krCMJm7ZhUll2CSNFWltoosqdp52F87s/ITzVvRP5gtDnA95Ll9iXvGzEIT25Rlxniho2wH1vyz04SxaTsUIFQ==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@opencode/cli-linux-arm64-musl@2.0.28':
+    resolution: {integrity: sha512-GvMHYI9u7l6VmwqxSFn52kQDe+CBOrTVpjbZhppGn8u6mcU+aexrRQPk6mgTM17CEXAACQh8hV3Jb/jzwBdpWg==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@opencode/cli-linux-arm64@2.0.28':
+    resolution: {integrity: sha512-BOjXZMtvYiQ9xowfHXJseARn7wHN8RTvRvYvMMIsjIOEJOYtv4aPvB4l0BmmnhUEhZQgrprPFamkUDy0lDiYiw==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@opencode/cli-linux-x64-baseline-musl@2.0.28':
+    resolution: {integrity: sha512-jykJx50o3xC8/+hKNFb8Bb7sAQ6TgKdqNL3O5WuoZEIyWdCYNb+EgxXYwqvlhG2UvUsnogS0cGMn4km7sTq35A==}
+    cpu: [x64]
+    os: [linux]
+
+  '@opencode/cli-linux-x64-baseline@2.0.28':
+    resolution: {integrity: sha512-8T+h4jl0QnqrH8VKudv28D7cxMwFcylJYlEcBUw3HlBUheHAZQEiZn4a8ha+YxM4CDWX9vUv6cQXsZkT0kcs4Q==}
+    cpu: [x64]
+    os: [linux]
+
+  '@opencode/cli-linux-x64-musl@2.0.28':
+    resolution: {integrity: sha512-6z+2Bv6SBhKr/IyFcyGaJJmw5p2gyxh+12liArpZwyMNB5YI35lFT2Z0T5w9NcentHOKHao1TpqP6ziVkNZDLg==}
+    cpu: [x64]
+    os: [linux]
+
+  '@opencode/cli-linux-x64@2.0.28':
+    resolution: {integrity: sha512-HdgQ2c9FrER88w3Alm/UGdzU55lCc0FXxSm+VNMXUz+Yyv03uLc0Z+PxSnEBysmYNKcFvcnxdT7e0xGPoytrNg==}
+    cpu: [x64]
+    os: [linux]
+
+  '@opencode/cli-windows-arm64@2.0.28':
+    resolution: {integrity: sha512-9HXcqjQa2ghY6tgqjRqaVCZfBuP10b55ffo2QdgHESzsItTwL0yKWaorzj91q96dqmQJ6MOvpl31PdhJnhuJ4g==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@opencode/cli-windows-x64-baseline@2.0.28':
+    resolution: {integrity: sha512-IZLtEGaaJ7Ms0EWSxNHZBMqwZgov+9k4XRWLoYNHcIbhcq97ExoADJ/WEM5UpdZA4lTJnygLLV4xPItvb6j/Qw==}
+    cpu: [x64]
+    os: [win32]
+
+  '@opencode/cli-windows-x64@2.0.28':
+    resolution: {integrity: sha512-1/pyMMi61RHsROPJbLUsO8U2hIUMwzNQvYH/XUlF5IgxXvIVd9oNI8kxmZcD72rta3s17doKAEB+MKdsnmeFxQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@opencode/cli@2.0.28':
+    resolution: {integrity: sha512-nKStJJVG6to58gSPv5AuzNQZhYtou6b1jfI5EIckshWT9w8teesSLgP3gH/iSA/madUhvkNqsFjUFuD3NRne9Q==}
+    cpu: [arm64, x64]
+    os: [darwin, linux, win32]
+    hasBin: true
+
+  '@opencode/client@2.0.28':
+    resolution: {integrity: sha512-YV0Yxk93/K2h4Xy/sEW/4ZYGMwn7ltxG2Y/Vdy2VCIZ2z0/r9MI6x5/XawSNfCvImBxuHkQNbYtu9Rgp3ArJ4g==}
+    peerDependencies:
+      effect: 4.0.1
+      solid-js: '>=1.9.0'
+    peerDependenciesMeta:
+      effect:
+        optional: true
+      solid-js:
+        optional: true
+
+  '@opencode/protocol@2.0.28':
+    resolution: {integrity: sha512-yfc0SDa7FxqSDZRC0olACnhB7Gvsx8X0ji0gEmO2xunCswNiJTCPUngcIKphxN5NFeMl/A5E0iNG4q39KW5fyA==}
+
+  '@opencode/schema@2.0.28':
+    resolution: {integrity: sha512-NHl42ngFN6uLCjtmtooYlEGEayng9ZFc+30DAqQuPcvKpMWsO23OqximHlukxtErp209C4f9LW+OJH/6k60+yw==}
+
   '@opentelemetry/api-logs@0.220.0':
     resolution: {integrity: sha512-CmVa4ImJ+ynfrPMNaAXHET6Bhb44SwzmfyVJFq9ni2jgXJR/l7C6gfVFddNmHP+ZOkP9cf4f9DBe68qVLTHc9w==}
     engines: {node: '>=8.0.0'}
@@ -3770,6 +3859,9 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
+  effect@4.0.1:
+    resolution: {integrity: sha512-b1VlQG9g8fwxE5QnIZuPoOP/0MsqHJSRKxUijjoM80E5q95FXrX5yWtY5XI8G+GJsBQAVSDbLS458z9a++uVvw==}
+
   encodeurl@2.0.0:
     resolution: {integrity: sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==}
     engines: {node: '>= 0.8'}
@@ -4271,7 +4363,6 @@ packages:
 
   opencode-ai@1.18.32:
     resolution: {integrity: sha512-SCrZWdq44y/EoH2+fE4HLcXS+DzpVqHPzmXk3p2RrufYy8LWvpfhRhKtijb5ktvx8r94ScqToqwHxR0BwS65OQ==}
-    cpu: [arm64, x64]
     os: [darwin, linux, win32]
     hasBin: true
 
@@ -8651,6 +8742,74 @@ snapshots:
     dependencies:
       cross-spawn: 7.0.6
 
+  '@opencode/cli-darwin-arm64@2.0.28':
+    optional: true
+
+  '@opencode/cli-darwin-x64-baseline@2.0.28':
+    optional: true
+
+  '@opencode/cli-darwin-x64@2.0.28':
+    optional: true
+
+  '@opencode/cli-linux-arm64-musl@2.0.28':
+    optional: true
+
+  '@opencode/cli-linux-arm64@2.0.28':
+    optional: true
+
+  '@opencode/cli-linux-x64-baseline-musl@2.0.28':
+    optional: true
+
+  '@opencode/cli-linux-x64-baseline@2.0.28':
+    optional: true
+
+  '@opencode/cli-linux-x64-musl@2.0.28':
+    optional: true
+
+  '@opencode/cli-linux-x64@2.0.28':
+    optional: true
+
+  '@opencode/cli-windows-arm64@2.0.28':
+    optional: true
+
+  '@opencode/cli-windows-x64-baseline@2.0.28':
+    optional: true
+
+  '@opencode/cli-windows-x64@2.0.28':
+    optional: true
+
+  '@opencode/cli@2.0.28':
+    optionalDependencies:
+      '@opencode/cli-darwin-arm64': 2.0.28
+      '@opencode/cli-darwin-x64': 2.0.28
+      '@opencode/cli-darwin-x64-baseline': 2.0.28
+      '@opencode/cli-linux-arm64': 2.0.28
+      '@opencode/cli-linux-arm64-musl': 2.0.28
+      '@opencode/cli-linux-x64': 2.0.28
+      '@opencode/cli-linux-x64-baseline': 2.0.28
+      '@opencode/cli-linux-x64-baseline-musl': 2.0.28
+      '@opencode/cli-linux-x64-musl': 2.0.28
+      '@opencode/cli-windows-arm64': 2.0.28
+      '@opencode/cli-windows-x64': 2.0.28
+      '@opencode/cli-windows-x64-baseline': 2.0.28
+
+  '@opencode/client@2.0.28(effect@4.0.1)':
+    dependencies:
+      '@opencode/protocol': 2.0.28
+      '@opencode/schema': 2.0.28
+    optionalDependencies:
+      effect: 4.0.1
+
+  '@opencode/protocol@2.0.28':
+    dependencies:
+      '@opencode/schema': 2.0.28
+      effect: 4.0.1
+
+  '@opencode/schema@2.0.28':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      effect: 4.0.1
+
   '@opentelemetry/api-logs@0.220.0':
     dependencies:
       '@opentelemetry/api': 1.9.1
@@ -9194,6 +9353,8 @@ snapshots:
       safe-buffer: 5.2.1
 
   ee-first@1.1.1: {}
+
+  effect@4.0.1: {}
 
   encodeurl@2.0.0: {}
 

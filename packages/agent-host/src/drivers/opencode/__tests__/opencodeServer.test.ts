@@ -56,7 +56,7 @@ describe('startOpenCodeServer', () => {
     const spawnFn = vi.fn(() => fake) as unknown as SpawnFn;
 
     const pending = startOpenCodeServer({ command: '/bin/opencode', spawnFn });
-    fake.stdout.emit('data', Buffer.from('opencode server listening on http://127.0.0.1:4096\n'));
+    fake.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:4096\n'));
 
     const handle = await pending;
     expect(handle.url).toBe('http://127.0.0.1:4096');
@@ -101,7 +101,7 @@ describe('startOpenCodeServer', () => {
       const spawnFn = vi.fn(() => fake) as unknown as SpawnFn;
 
       const pending = startOpenCodeServer({ command: '/bin/opencode', spawnFn });
-      fake.stdout.emit('data', Buffer.from('opencode server listening on http://127.0.0.1:1234\n'));
+      fake.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:1234\n'));
       const handle = await pending;
 
       const closed = handle.close();
@@ -120,7 +120,7 @@ describe('startOpenCodeServer', () => {
     const spawnFn = vi.fn(() => fake) as unknown as SpawnFn;
 
     const pending = startOpenCodeServer({ command: '/bin/opencode', spawnFn });
-    fake.stdout.emit('data', Buffer.from('opencode server listening on http://127.0.0.1:1234\n'));
+    fake.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:1234\n'));
     const handle = await pending;
 
     fake.exitCode = 0;
@@ -136,7 +136,7 @@ describe('startOpenCodeServer', () => {
     expect(fake.stdout.listenerCount('data')).toBe(1);
     expect(fake.stderr.listenerCount('data')).toBe(1);
 
-    fake.stdout.emit('data', Buffer.from('opencode server listening on http://127.0.0.1:1234\n'));
+    fake.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:1234\n'));
     await pending;
 
     // Left dangling, a stderr listener with no reference kept would grow

@@ -28,13 +28,22 @@
  * means a new server (see the driver).
  */
 import { createHash, randomBytes } from 'node:crypto';
-import type { Provider } from '@opencode-ai/sdk/v2/client';
+import type { ProviderInfo } from '@opencode/client';
 import { providerApiRoot } from '../../sdk/providerModels';
 import type { ProviderBinding, ProviderModel, RefusedProvider } from '../../sdk/types';
 import { type Catalog, catalogModel, EMPTY_CATALOG, knownProviderAt, profileModelConfig, providerIdOf } from './catalog';
 
-/** The user name OpenCode's server expects with its password. */
+/** The user name OpenCode's server expects with its password. V2 fixes it at
+ *  `opencode` — there is no environment variable for it any more. */
 const SERVER_USERNAME = 'opencode';
+
+/** The web-search provider the driver connects for every model, so a session
+ *  can search without the operator signing in to a search service of their
+ *  own. V2 gates web search behind a connected provider and offers no keyless
+ *  default; TinyFish is the one provider its own list serves without a key,
+ *  which keeps the arrangement the v1 bridge had with Exa's keyless endpoint
+ *  (still behind the `websearch` permission). */
+const WEBSEARCH_PROVIDER = 'tinyfish';
 
 /** Where a profile sits among OpenCode's providers. */
 export interface Placement {
@@ -43,7 +52,7 @@ export interface Placement {
    *  else its name's. */
   providerId: string;
   /** The catalog provider it signs in to, when OpenCode knows its endpoint. */
-  known?: Provider;
+  known?: ProviderInfo;
 }
 
 /** What profiles already are in a running server, so they are not taken
@@ -114,38 +123,45 @@ function tokenVariable(index: number): string {
   return `CODEDECK_PROVIDER_KEY_${index}`;
 }
 
-/** One placed profile's provider entry. */
+/** One placed profile's provider entry. V2 names a provider's transport with
+ *  `package` (the `aisdk:` prefix marks an AI-SDK provider) and its endpoint
+ *  and key under `settings`; `options` and `npm` are the v1 spellings. */
 function providerEntry(placement: Placement, index: number, catalog: Catalog, served: Served): Record<string, unknown> {
   const { profile, known } = placement;
   const apiKey = `{env:${tokenVariable(index)}}`;
   if (known) {
     // The catalog's models stand; the endpoint's others join them.
-    const extra = profile.models.filter((m) => !known.models[m.id]);
+    const extra = profile.models.filter((m) => !catalog.models.has(`${known.id}/${m.id}`));
     return {
       name: profile.label || known.name,
-      options: { apiKey },
+      settings: { apiKey },
       ...(extra.length > 0 ? { models: Object.fromEntries(extra.map((m) => [m.id, profileModelConfig(m, undefined)])) } : {}),
     };
   }
   return {
-    npm: '@ai-sdk/openai-compatible',
+    package: 'aisdk:@ai-sdk/openai-compatible',
     name: profile.label || profile.id,
-    options: { baseURL: providerApiRoot(profile.baseUrl), apiKey },
+    settings: { baseURL: providerApiRoot(profile.baseUrl), apiKey },
     models: Object.fromEntries(profile.models.map((m) => [m.id, profileModelConfig(m, catalogModel(catalog, m, served.own))])),
   };
 }
 
 /** The provider entries for `placed`, on top of `base` (an operator's own
- *  `OPENCODE_CONFIG_CONTENT`, whose providers stay). */
+ *  `OPENCODE_CONFIG_CONTENT`, whose providers stay) — plus the web-search
+ *  provider every model gets, unless the operator named one themselves. */
 export function providersConfig(
   placed: Placement[],
   catalog: Catalog = EMPTY_CATALOG,
   base: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  const own = (base.provider ?? {}) as Record<string, unknown>;
+  const own = (base.providers ?? {}) as Record<string, unknown>;
   const served = servedBy(placed);
   const added = Object.fromEntries(placed.map((p, index) => [p.providerId, providerEntry(p, index, catalog, served)]));
-  return { ...base, provider: { ...own, ...added } };
+  return {
+    ...base,
+    providers: { ...own, ...added },
+    ...(base.websearch === undefined ? { websearch: { provider: WEBSEARCH_PROVIDER } } : {}),
+  };
 }
 
 /** The group a profile model is listed under: the profile, and the
@@ -166,22 +182,22 @@ export interface ServerSetup {
 export function serverSetup(placed: Placement[], catalog: Catalog, baseEnv: NodeJS.ProcessEnv): ServerSetup {
   const password = randomBytes(24).toString('hex');
   const env: Record<string, string> = {
-    OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
-    OPENCODE_SERVER_PASSWORD: password,
-    // OpenCode offers its web search only on its own providers unless this
-    // is set; with it, every model can search (Exa's keyless endpoint,
-    // still behind the `websearch` permission).
-    OPENCODE_ENABLE_EXA: '1',
+    // V2 authenticates every request (Basic, user `opencode`) and refuses to
+    // start without a password of its own; handing one over is what keeps
+    // the server reachable by this driver and by nothing else, since it
+    // never prints the password when the environment carries it.
+    OPENCODE_PASSWORD: password,
     // Its version is the one pnpm-lock.yaml pins: it must not replace
     // itself, nor spend its start looking for a newer one.
     OPENCODE_DISABLE_AUTOUPDATE: '1',
   };
-  if (placed.length > 0) {
-    env.OPENCODE_CONFIG_CONTENT = JSON.stringify(providersConfig(placed, catalog, operatorConfig(baseEnv)));
-    placed.forEach(({ profile }, index) => {
-      env[tokenVariable(index)] = profile.authToken;
-    });
-  }
+  // The config is handed over whatever the profiles: the web-search default
+  // rides on it, and a server started without it would have none.
+  const config = providersConfig(placed, catalog, operatorConfig(baseEnv));
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config);
+  placed.forEach(({ profile }, index) => {
+    env[tokenVariable(index)] = profile.authToken;
+  });
   const headers = { authorization: `Basic ${Buffer.from(`${SERVER_USERNAME}:${password}`).toString('base64')}` };
   return { env, headers };
 }

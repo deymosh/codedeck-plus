@@ -1,10 +1,10 @@
 /**
  * Where the `opencode` binary comes from when auto-start is on and none is
- * installed: the per-platform npm package the `opencode-ai` CLI package
- * depends on (`opencode-<os>-<arch>[-baseline][-musl]`, the binary under
- * `bin/`), installed on demand (agentInstall.ts). `opencode-ai` is a dev
- * dependency of the agent host only so that pnpm-lock.yaml pins those
- * packages; keep its version in step with the OpenCode SDK's.
+ * installed: the per-platform npm package the `@opencode/cli` package
+ * depends on (`@opencode/cli-<os>-<arch>[-baseline][-musl]`, the binary
+ * under `bin/`), installed on demand (agentInstall.ts). `@opencode/cli` is
+ * a dev dependency of the agent host only so that pnpm-lock.yaml pins those
+ * packages; keep its version in step with the OpenCode client's.
  */
 import type { PackagedBinary } from '../../install/agentInstall';
 import { exeName, isMusl } from '../../sdk/executable';
@@ -19,7 +19,7 @@ export function openCodePlatformPackage(
   const os = platform === 'win32' ? 'windows' : platform;
   const baseline = arch === 'x64' ? '-baseline' : '';
   const libc = platform === 'linux' && musl ? '-musl' : '';
-  return `opencode-${os}-${arch}${baseline}${libc}`;
+  return `@opencode/cli-${os}-${arch}${baseline}${libc}`;
 }
 
 /** The `opencode` binary as an on-demand install. */

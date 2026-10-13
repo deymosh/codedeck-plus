@@ -1,102 +1,74 @@
 /**
  * OpenCodeSession against a fake v2 client: how the session ends (it must
  * never hang), how OpenCode's event stream becomes session events, and how
- * its permission asks and questions reach the bridge.
+ * its permission asks and its question forms reach the bridge.
+ *
+ * V2's stream is one event per thing that happens, with the payload flat on
+ * `data`, and its client answers values (throwing on failure) rather than
+ * `{ data, error }` envelopes — both are what these fakes stand in for.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { Event, OpencodeClient, Provider, Session } from '@opencode-ai/sdk/v2/client';
-import { OpenCodeDriver, openCodeContext, reasoningLevels, pickDefaultModel, toQuestionAnswers } from '../driver';
+import type { OpenCodeClient } from '@opencode/client';
+import { OpenCodeDriver, openCodeContext, pickDefaultModel, reasoningLevels, toFormAnswer, toQuestionSpecs } from '../driver';
 import type { StartSession } from '../../../sdk/types';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
-type FakeClient = OpencodeClient & {
-  permission: { reply: ReturnType<typeof vi.fn>; respond: ReturnType<typeof vi.fn> };
-  question: { reply: ReturnType<typeof vi.fn>; reject: ReturnType<typeof vi.fn> };
-};
+type V2 = Record<string, unknown> & { type: string; data?: Record<string, unknown> };
+
+/** The fake client's calls are mocks; the client type itself is the real
+ *  one, so this is how a test scripts one of them. */
+const asMock = (fn: unknown): ReturnType<typeof vi.fn> => fn as ReturnType<typeof vi.fn>;
 
 /** A client whose event stream yields `events`, then stays open briefly so
  *  the ask → reply chains settle before the stream ends. */
-function clientWith(events: unknown[]): FakeClient {
-  async function* stream(): AsyncGenerator<Event> {
-    for (const e of events) yield e as Event;
+function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeClient {
+  async function* stream(): AsyncGenerator<V2> {
+    for (const e of events) yield e;
     await new Promise((r) => setTimeout(r, 20));
   }
-  return {
-    event: { subscribe: vi.fn().mockResolvedValue({ stream: stream() }) },
+  const client = {
+    event: { subscribe: vi.fn(() => stream()) },
     session: {
-      create: vi.fn().mockResolvedValue({ data: { id: 'ses_1' } as Session, error: undefined }),
+      create: vi.fn(async () => ({ id: 'ses_1', projectID: 'p', cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 0, updated: 0 }, location: { directory: '/tmp' } })),
       get: vi.fn(),
-      abort: vi.fn().mockResolvedValue({ data: true, error: undefined }),
+      remove: vi.fn(async () => undefined),
+      update: vi.fn(async () => undefined),
+      switchAgent: vi.fn(async () => undefined),
+      switchModel: vi.fn(async () => undefined),
+      interrupt: vi.fn(async () => undefined),
+      prompt: vi.fn(async () => ({})),
+      command: vi.fn(async () => undefined),
+      compact: vi.fn(async () => ({})),
+      diff: vi.fn(async () => []),
+      revert: { stage: vi.fn(async () => ({})), clear: vi.fn(async () => undefined), commit: vi.fn(async () => undefined) },
+      form: { reply: vi.fn(async () => undefined), cancel: vi.fn(async () => undefined) },
     },
-    permission: {
-      reply: vi.fn().mockResolvedValue({ data: true, error: undefined }),
-      respond: vi.fn().mockResolvedValue({ data: true, error: undefined }),
-    },
-    question: {
-      reply: vi.fn().mockResolvedValue({ data: true, error: undefined }),
-      reject: vi.fn().mockResolvedValue({ data: true, error: undefined }),
-    },
-  } as unknown as FakeClient;
+    permission: { reply: vi.fn(async () => undefined) },
+    message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
+    command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
+    mcp: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
+    provider: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
+    model: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })), default: vi.fn(async () => ({ location: { directory: '/tmp' }, data: null })) },
+    plugin: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
+    ...over,
+  } as unknown as OpenCodeClient;
+  return client;
 }
 
-function start(client: FakeClient, overrides: Partial<StartSession> = {}, handlers: Handlers = {}) {
+function start(client: OpenCodeClient, overrides: Partial<StartSession> = {}, handlers: Handlers = {}) {
   const ctx = recordingContext(handlers);
   OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', ...overrides }, ctx);
   return ctx;
 }
 
-describe('OpenCode session titles', () => {
-  const updated = (title: string, sessionID = 'ses_1') => ({ type: 'session.updated', properties: { sessionID, info: { id: sessionID, title } } });
-
-  it('creates a session untitled, then reports the title OpenCode gives it, each new one once', async () => {
-    const client = clientWith([
-      updated('New session - 2026-10-08T10:00:00.000Z'),
-      updated('Fix the login redirect'),
-      updated('Fix the login redirect'),
-      updated('Other session', 'ses_other'),
-    ]);
-    const ctx = start(client);
-    await ctx.ended();
-    expect(client.session.create).toHaveBeenCalledWith({ directory: '/tmp' });
-    expect(ctx.events.filter((e) => e.type === 'info' && 'title' in e)).toEqual([{ type: 'info', title: 'Fix the login redirect' }]);
-  });
-});
-
-describe('OpenCode usage', () => {
-  it("is the session's cost, none for a free session", async () => {
-    const client = clientWith([]);
-    const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
-    await ctx.waitFor((e) => e.type === 'ready');
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1', cost: 0.0371 } });
-    expect(await session.getUsage!()).toMatchObject({ available: true, windows: [], sessionCostUsd: 0.0371 });
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1', cost: 0 } });
-    expect(await session.getUsage!()).not.toHaveProperty('sessionCostUsd');
-    expect(OpenCodeDriver.withClient(client).info().supports?.usage).toBe(true);
-    await session.end();
-  });
-});
-
-describe('OpenCode conversation delete', () => {
-  const deleting = (result: unknown) => {
-    const client = clientWith([]) as FakeClient & { session: { delete: ReturnType<typeof vi.fn> } };
-    client.session.delete = vi.fn().mockResolvedValue(result);
-    return { client, driver: OpenCodeDriver.withClient(client) };
-  };
-
-  it('deletes the session on the server, in its directory', async () => {
-    const { client, driver } = deleting({ data: true, error: undefined, response: { status: 200 } });
-    await driver.deleteConversation('ses_1', '/w');
-    expect(client.session.delete).toHaveBeenCalledWith({ sessionID: 'ses_1', directory: '/w' });
-  });
-
-  it('a session the server no longer knows is already deleted; another error is not', async () => {
-    const gone = deleting({ data: undefined, error: { name: 'NotFoundError' }, response: { status: 404 } });
-    await expect(gone.driver.deleteConversation('ses_1', '/w')).resolves.toBeUndefined();
-    const failed = deleting({ data: undefined, error: { name: 'BadRequest' }, response: { status: 400 } });
-    await expect(failed.driver.deleteConversation('ses_1', '/w')).rejects.toThrow(/could not delete session ses_1/);
-  });
-});
+/** The events v2 sends for one assistant turn: the execution starting, the
+ *  model's text, and the turn ending. */
+const turn = (text: string, sessionID = 'ses_1'): V2[] => [
+  { type: 'session.execution.started', data: { sessionID } },
+  { type: 'session.step.started', data: { sessionID, assistantMessageID: 'm1', agent: 'build', model: { providerID: 'opencode', id: 'exo-free' }, started: 0 } },
+  { type: 'session.text.ended', data: { sessionID, assistantMessageID: 'm1', ordinal: 0, text } },
+  { type: 'session.idle', data: { sessionID } },
+];
 
 describe('OpenCode session lifecycle', () => {
   it('reports its conversation id, becomes ready, and ends normally when the stream closes', async () => {
@@ -106,636 +78,384 @@ describe('OpenCode session lifecycle', () => {
     expect(ctx.events.findIndex((e) => e.type === 'ready')).toBeLessThan(ctx.events.findIndex((e) => e.type === 'ended'));
   });
 
-  it('ends with the error when event.subscribe() rejects before any session exists', async () => {
+  it('creates the session on the model and permission ruleset the mode implies', async () => {
     const client = clientWith([]);
-    (client.event.subscribe as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('connection refused'));
+    const ctx = start(client);
+    await ctx.ended();
+    expect(client.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        location: { directory: '/tmp' },
+        // Ask mode: v2's own default would allow everything and never ask.
+        permissions: [{ action: '*', resource: '*', effect: 'ask' }],
+      }),
+    );
+  });
+
+  it('ends with the error when the stream rejects before any session exists', async () => {
+    const client = clientWith([], {
+      event: { subscribe: vi.fn(() => { throw new Error('connection refused'); }) },
+    });
     const ctx = start(client);
     expect(await ctx.ended()).toEqual({ type: 'ended', error: 'connection refused' });
     expect(ctx.events.some((e) => e.type === 'ready')).toBe(false);
     expect(client.session.create).not.toHaveBeenCalled();
   });
+});
 
-  it('a stream that throws mid-iteration ends with an error, keeping what arrived first', async () => {
-    async function* throwingStream(): AsyncGenerator<Event> {
-      yield { type: 'session.idle', properties: { sessionID: 'ses_1' } } as unknown as Event;
-      throw new Error('connection reset');
-    }
-    const client = clientWith([]);
-    (client.event.subscribe as ReturnType<typeof vi.fn>).mockResolvedValue({ stream: throwingStream() });
-    const ctx = start(client);
-    expect(await ctx.ended()).toEqual({ type: 'ended', error: 'connection reset' });
-    expect(ctx.entries().some((e) => e.entryType === 'turn_complete')).toBe(true);
-  });
-
-  it('a failed turn reads once: one error, one turn complete, and every retry before it', async () => {
-    const failed = { name: 'APIError', data: { message: 'Model is unavailable.' } };
-    const ctx = start(clientWith([
-      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'busy' } } },
-      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'retry', attempt: 1, message: 'Model is unavailable.', next: Date.now() + 2_000 } } },
-      { type: 'message.updated', properties: { info: { id: 'msg_1', sessionID: 'ses_1', role: 'assistant', error: failed, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } } },
-      { type: 'session.error', properties: { sessionID: 'ses_1', error: failed } },
-      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
-      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'idle' } } },
-      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
-    ]));
+describe('OpenCode turn reporting', () => {
+  it('reports the model text, and the turn running then idle', async () => {
+    const ctx = start(clientWith(turn('hello there')));
     await ctx.ended();
-    const kinds = ctx.entries().map((e) => e.entryType);
-    expect(kinds.filter((t) => t === 'error')).toHaveLength(1);
-    expect(kinds.filter((t) => t === 'turn_complete')).toHaveLength(1);
-    expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'status', text: expect.stringMatching(/^Model is unavailable\. — retrying \(attempt 1, in [12] s\)$/) }));
-  });
-
-  it('a busy status starts a turn and idle ends it', async () => {
-    const ctx = start(clientWith([
-      { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'busy' } } },
-      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
-    ]));
-    await ctx.ended();
+    expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'text', role: 'agent', text: 'hello there' }));
     expect(ctx.events.filter((e) => e.type === 'turn')).toEqual([
       { type: 'turn', state: 'running' },
       { type: 'turn', state: 'idle' },
     ]);
+    // `session.idle` also ends the turn, but a turn completes once.
+    expect(ctx.entries().filter((e) => e.entryType === 'turn_complete')).toHaveLength(1);
   });
 
-  it('end() stops the session without reporting it ended', async () => {
-    const client = clientWith([]);
-    const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
-    await ctx.waitFor((e) => e.type === 'ready');
-    await session.end();
-    await new Promise((r) => setTimeout(r, 40));
-    expect(ctx.events.some((e) => e.type === 'ended')).toBe(false);
-    expect(client.session.abort).toHaveBeenCalled();
+  it('says a provider retry rather than leaving the turn looking slow', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.status', data: { sessionID: 'ses_1', status: { type: 'retry', attempt: 2, message: 'rate limited', next: Date.now() + 5_000 } } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().find((e) => e.entryType === 'status')).toMatchObject({ entryType: 'status' });
+  });
+
+  it('reports a failed step as an error, once', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.step.failed', data: { sessionID: 'ses_1', assistantMessageID: 'm1', error: { type: 'api', message: 'boom' } } },
+      { type: 'session.execution.failed', data: { sessionID: 'ses_1', error: { type: 'api', message: 'boom' } } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'error')).toEqual([expect.objectContaining({ text: 'boom' })]);
+  });
+
+  it('ignores another session\'s events', async () => {
+    const ctx = start(clientWith(turn('not mine', 'ses_other')));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'text')).toEqual([]);
   });
 });
 
-describe('OpenCode session.diff', () => {
-  const diff = (patch: string) => ({ file: 'a.ts', patch, additions: 1, deletions: 1, status: 'modified' });
-  const diffEntries = (ctx: ReturnType<typeof start>) => ctx.entries().filter((e) => e.entryType === 'diff');
-
-  it('shows a changed file once — a repeat of the same diff is not a new card', async () => {
-    const ev = (d: unknown) => ({ type: 'session.diff', properties: { sessionID: 'ses_1', diff: [d] } });
-    const ctx = start(clientWith([ev(diff('@@ -1 +1 @@\n-x\n+y')), ev(diff('@@ -1 +1 @@\n-x\n+y')), ev(diff('@@ -1 +1 @@\n-x\n+z'))]));
+describe('OpenCode session titles', () => {
+  it('reports the title OpenCode gives it, each new one once, never the placeholder', async () => {
+    const named = (title: string, sessionID = 'ses_1') => ({ type: 'session.renamed', data: { sessionID, title } });
+    const ctx = start(clientWith([
+      named('New session - 2026-10-08T10:00:00.000Z'),
+      named('Fix the login redirect'),
+      named('Fix the login redirect'),
+      named('Other session', 'ses_other'),
+    ]));
     await ctx.ended();
-    expect(diffEntries(ctx)).toHaveLength(2);
-  });
-
-  it('drops the session.diff change a completed edit already showed, but not a later change to that file', async () => {
-    const edit = {
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'prt_1', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_1', tool: 'edit',
-          state: {
-            status: 'completed', input: { filePath: '/tmp/src/a.ts', oldString: 'x', newString: 'y' },
-            output: 'ok', title: 'src/a.ts', metadata: {}, time: { start: 1, end: 2 },
-          },
-        },
-      },
-    };
-    const ev = (d: unknown) => ({ type: 'session.diff', properties: { sessionID: 'ses_1', diff: [d] } });
-    const byEdit = { file: 'src/a.ts', patch: '@@ -1 +1 @@\n-x\n+y', additions: 1, deletions: 1, status: 'modified' };
-    const byShell = { file: 'src/a.ts', patch: '@@ -1 +1 @@\n-y\n+w', additions: 1, deletions: 1, status: 'modified' };
-    const ctx = start(clientWith([edit, ev(byEdit), ev(byShell)]));
-    await ctx.ended();
-    // One card from the edit call itself, one from the later shell change.
-    expect(diffEntries(ctx).map((e) => e.entryType === 'diff' && e.callId)).toEqual(['call_1', undefined]);
+    expect(ctx.events.filter((e) => e.type === 'info' && 'title' in e)).toEqual([{ type: 'info', title: 'Fix the login redirect' }]);
   });
 });
 
-describe('OpenCode permission asks', () => {
-  const pendingRead = {
-    type: 'message.part.updated',
-    properties: {
-      part: {
-        id: 'prt_1', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_1', tool: 'read',
-        state: { status: 'pending', input: { filePath: '/etc/hosts' }, raw: '' },
-      },
-    },
-  };
-  const ask = {
+describe('OpenCode permissions', () => {
+  const ask = (over: Record<string, unknown> = {}) => ({
     type: 'permission.asked',
-    properties: {
-      id: 'per_1', sessionID: 'ses_1', permission: 'external_directory', patterns: ['/etc/*'],
-      metadata: {}, always: [], tool: { messageID: 'msg_1', callID: 'call_1' },
+    data: {
+      id: 'per_1',
+      sessionID: 'ses_1',
+      action: 'shell',
+      resources: ['git push origin main'],
+      save: ['git push *'],
+      source: { type: 'tool', messageID: 'm1', id: 'call_1' },
+      ...over,
     },
-  };
-
-  it('shows the tool call before the card, and describes the rule being asked about', async () => {
-    const client = clientWith([pendingRead, ask]);
-    const ctx = start(client);
-    await ctx.ended();
-    const call = ctx.entries().find((e) => e.entryType === 'tool_call');
-    expect(call).toMatchObject({ callId: 'call_1', toolName: 'read', kind: 'read' });
-    expect(ctx.permissions).toEqual([
-      expect.objectContaining({
-        requestId: 'call_1',
-        toolName: 'read',
-        title: '/etc/hosts',
-        description: 'Access outside the project: /etc/*',
-        options: [expect.objectContaining({ id: 'allow' }), expect.objectContaining({ id: 'deny' })],
-      }),
-    ]);
-    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'reject' });
   });
 
-  it('an allowed ask is replied once', async () => {
-    const client = clientWith([pendingRead, ask]);
+  it('reaches the bridge as a card, and an allow becomes OpenCode\'s `once`', async () => {
+    const client = clientWith([ask()]);
     const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
     await ctx.ended();
-    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'once' });
+    expect(ctx.permissions[0]).toMatchObject({ toolName: 'shell', kind: 'execute' });
+    expect(ctx.permissions[0]!.description).toContain('git push origin main');
+    expect(client.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'once' });
   });
 
-  it("offers OpenCode's always when it has one, and replies with it", async () => {
-    const offered = { ...ask, properties: { ...ask.properties, always: ['/etc/*'] } };
-    const client = clientWith([pendingRead, offered]);
+  it('"always in this project" becomes `always` only when OpenCode offered to save the rule', async () => {
+    const client = clientWith([ask()]);
     const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
     await ctx.ended();
-    expect(ctx.permissions[0]!.options.map((o) => [o.id, o.label])).toEqual([
-      ['allow', 'Allow'],
-      ['allow_always', 'Always allow in this project'],
-      ['deny', 'Deny'],
-    ]);
-    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'always' });
+    expect(client.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'always' });
+
+    const without = clientWith([ask({ save: [] })]);
+    const none = start(without, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
+    await none.ended();
+    expect(without.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'reject' });
   });
 
-  it('an ask with nothing to always allow refuses an always answer', async () => {
-    const client = clientWith([pendingRead, ask]);
-    const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
+  it('a deny, and a cancelled card, both reject', async () => {
+    const denied = clientWith([ask()]);
+    const ctx = start(denied, {}, { permission: () => ({ outcome: 'selected', optionId: 'deny' }) });
     await ctx.ended();
-    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'reject' });
+    expect(denied.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'reject' });
+
+    const cancelled = clientWith([ask()]);
+    const other = start(cancelled, {}, { permission: () => ({ outcome: 'cancelled', reason: 'timeout' }) });
+    await other.ended();
+    expect(cancelled.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'reject' });
   });
 
-  it('the auto-approve mode allows without asking', async () => {
-    const client = clientWith([pendingRead, ask]);
+  it('the auto-approve mode answers without troubling the phone', async () => {
+    const client = clientWith([ask()]);
     const ctx = start(client, { mode: 'default' });
     await ctx.ended();
     expect(ctx.permissions).toEqual([]);
-    expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_1', directory: '/tmp', reply: 'once' });
-  });
-
-  it('the real running update after the card is not a second tool row', async () => {
-    const running = {
-      type: 'message.part.updated',
-      properties: {
-        part: { ...pendingRead.properties.part, state: { status: 'running', input: { filePath: '/etc/hosts' }, time: { start: 1 } } },
-      },
-    };
-    const ctx = start(clientWith([pendingRead, ask, running]));
-    await ctx.ended();
-    expect(ctx.entries().filter((e) => e.entryType === 'tool_call')).toHaveLength(1);
-  });
-
-  it('asks for a different session are ignored', async () => {
-    const ctx = start(clientWith([{ ...ask, properties: { ...ask.properties, sessionID: 'ses_other' } }]));
-    await ctx.ended();
-    expect(ctx.permissions).toEqual([]);
-  });
-
-  describe("a sub-agent's child session", () => {
-    const taskPart = (status: string, metadata: Record<string, unknown>) => ({
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'prt_t', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_task', tool: 'task',
-          state: {
-            status, input: { description: 'Audit', prompt: 'look', subagent_type: 'explore' }, metadata,
-            time: { start: 1, ...(status === 'completed' ? { end: 2 } : {}) }, ...(status === 'completed' ? { output: 'ok', title: 'Audit' } : {}),
-          },
-        },
-      },
-    });
-    const childRead = {
-      type: 'message.part.updated',
-      properties: {
-        part: {
-          id: 'prt_c', sessionID: 'ses_child', messageID: 'msg_c', type: 'tool', callID: 'call_c', tool: 'read',
-          state: { status: 'running', input: { filePath: '/a.ts' }, time: { start: 1 } },
-        },
-      },
-    };
-    const childAsk = { ...ask, properties: { ...ask.properties, id: 'per_c', sessionID: 'ses_child', tool: { messageID: 'msg_c', callID: 'call_c' } } };
-
-    it('shows its work under the task call and has its asks answered', async () => {
-      const client = clientWith([taskPart('running', { sessionId: 'ses_child' }), childRead, childAsk]);
-      const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
-      await ctx.ended();
-      const read = ctx.entries().find((e) => e.entryType === 'tool_call' && e.callId === 'call_c');
-      expect(read).toMatchObject({ subagent: { label: 'explore', parentCallId: 'call_task' } });
-      expect(ctx.permissions).toEqual([expect.objectContaining({ requestId: 'call_c', subagent: { label: 'explore', parentCallId: 'call_task' } })]);
-      expect(client.permission.reply).toHaveBeenCalledWith({ requestID: 'per_c', directory: '/tmp', reply: 'once' });
-    });
-
-    it('a sub-agent left in the background is a task until its session goes idle, and can be stopped', async () => {
-      const idle = { type: 'session.idle', properties: { sessionID: 'ses_child' } };
-      const ctx = start(clientWith([taskPart('running', { sessionId: 'ses_child' }), taskPart('completed', { sessionId: 'ses_child', background: true }), idle]));
-      await ctx.ended();
-      const tasks = ctx.entries().filter((e) => e.entryType === 'background_task');
-      expect(tasks).toMatchObject([
-        { taskId: 'ses_child', kind: 'agent', title: 'Audit', status: 'running', callId: 'call_task' },
-        { taskId: 'ses_child', status: 'completed' },
-      ]);
-    });
-  });
-
-  it('a legacy permission.updated is answered on the per-session endpoint', async () => {
-    const client = clientWith([{
-      type: 'permission.updated',
-      properties: { id: 'per_2', type: 'edit', sessionID: 'ses_1', title: 'Edit a.ts', metadata: {} },
-    }]);
-    const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
-    await ctx.ended();
-    expect(client.permission.respond).toHaveBeenCalledWith({
-      sessionID: 'ses_1', permissionID: 'per_2', directory: '/tmp', response: 'once',
-    });
-    expect(client.permission.reply).not.toHaveBeenCalled();
+    expect(client.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'once' });
+    expect(client.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({ permissions: [{ action: '*', resource: '*', effect: 'allow' }] }),
+    );
   });
 });
 
-describe('OpenCode questions', () => {
-  const questions = [
-    { question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }] },
-    { question: 'Which sizes?', header: 'Size', multiple: true, options: [{ label: 'S', description: '' }, { label: 'M', description: '' }] },
-  ];
-  const asked = {
-    type: 'question.asked',
-    properties: { id: 'que_1', sessionID: 'ses_1', questions, tool: { messageID: 'msg_1', callID: 'call_q' } },
+describe('OpenCode question forms', () => {
+  const form = {
+    type: 'form.created',
+    data: {
+      form: {
+        id: 'frm_1',
+        sessionID: 'ses_1',
+        title: 'Questions',
+        metadata: { kind: 'question', tool: { messageID: 'm1', id: 'call_q' } },
+        fields: [
+          { key: 'q0', type: 'string', title: 'Which colour?', options: [{ value: 'Red', label: 'Red' }, { value: 'Blue', label: 'Blue' }], custom: true },
+        ],
+      },
+    },
   };
 
-  it('asks the bridge and replies with the answers', async () => {
-    const client = clientWith([asked]);
-    const ctx = start(client, {}, { question: () => ({ outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }, { type: 'selected', labels: ['S', 'M'] }] }) });
+  it('becomes the bridge\'s question card, keyed by the question tool\'s call', async () => {
+    const client = clientWith([form]);
+    const ctx = start(client, {}, { question: () => ({ outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }] }) });
     await ctx.ended();
-    expect(ctx.questions).toEqual([{
-      requestId: 'call_q',
-      questions: [
-        { question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }] },
-        { question: 'Which sizes?', header: 'Size', options: [{ label: 'S' }, { label: 'M' }], multiSelect: true },
-      ],
-    }]);
-    expect(client.question.reply).toHaveBeenCalledWith({
-      requestID: 'que_1', directory: '/tmp', answers: [['Blue'], ['S', 'M']],
+    expect(ctx.questions[0]!.requestId).toBe('call_q');
+    expect(ctx.questions[0]!.questions[0]!.options?.map((o) => o.label)).toEqual(['Red', 'Blue']);
+    expect(client.session.form.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', formID: 'frm_1', answer: { q0: 'Blue' } });
+  });
+
+  it('a card nobody answers cancels the form, so OpenCode never waits', async () => {
+    const client = clientWith([form]);
+    const ctx = start(client);
+    await ctx.ended();
+    expect(client.session.form.cancel).toHaveBeenCalledWith({ sessionID: 'ses_1', formID: 'frm_1' });
+    expect(client.session.form.reply).not.toHaveBeenCalled();
+  });
+
+  it('ignores a form that is not a question', async () => {
+    const other = { type: 'form.created', data: { form: { id: 'f2', sessionID: 'ses_1', title: 'Auth', metadata: { kind: 'auth' }, fields: [] } } };
+    const ctx = start(clientWith([other]));
+    await ctx.ended();
+    expect(ctx.questions).toEqual([]);
+  });
+});
+
+describe('OpenCode sub-agents', () => {
+  it('reports a sub-agent the parent left running as a background task', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'explore', description: 'find things' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'started' }], executed: false } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().find((e) => e.entryType === 'background_task')).toMatchObject({
+      entryType: 'background_task',
+      taskId: 'ses_child',
+      title: 'find things',
+      status: 'running',
+      kind: 'agent',
     });
   });
 
-  it('a cancelled question is rejected, never left waiting', async () => {
-    const client = clientWith([asked]);
-    const ctx = start(client, {}, { question: () => ({ outcome: 'cancelled', reason: 'Timed out' }) });
+  it('a sub-agent that ran to completion inside its call is not reported as a task', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'explore', description: 'find things' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      // The child finishes before the call that started it returns.
+      { type: 'session.idle', data: { sessionID: 'ses_child' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'done' }], executed: false } },
+    ]));
     await ctx.ended();
-    expect(client.question.reject).toHaveBeenCalledWith({ requestID: 'que_1', directory: '/tmp' });
-    expect(client.question.reply).not.toHaveBeenCalled();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([]);
   });
 
-  it('the question tool call is not a generic tool row, and neither is its result', async () => {
-    const part = (status: string, extra: object) => ({
-      type: 'message.part.updated',
-      properties: {
-        part: { id: 'prt_q', sessionID: 'ses_1', messageID: 'msg_1', type: 'tool', callID: 'call_q', tool: 'question', state: { status, input: {}, ...extra } },
-      },
+  it("a failing sub-agent ends its own task, not the session's turn", async () => {
+    const ctx = start(clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'explore', description: 'find things' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'running' }], executed: false } },
+      { type: 'session.execution.failed', data: { sessionID: 'ses_child', error: { type: 'api', message: 'child blew up' } } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task').at(-1)).toMatchObject({
+      taskId: 'ses_child',
+      status: 'failed',
     });
-    const ctx = start(clientWith([part('running', { time: { start: 1 } }), part('completed', { output: 'ok', title: '', metadata: {}, time: { start: 1, end: 2 } })]));
-    await ctx.ended();
-    expect(ctx.entries().filter((e) => e.entryType === 'tool_call' || e.entryType === 'tool_result')).toEqual([]);
-  });
-
-  it('a typed answer to a multi-select question is kept whole', () => {
-    expect(toQuestionAnswers(questions, [{ type: 'text', text: 'Green' }, { type: 'text', text: 'XL, huge' }])).toEqual([['Green'], ['XL, huge']]);
+    // The sub-agent's failure is not the session's error.
+    expect(ctx.entries().filter((e) => e.entryType === 'error')).toEqual([]);
   });
 });
 
-describe('OpenCode resume', () => {
-  it('a conversation the server no longer has is replaced, with a notice ahead of the start', async () => {
+describe('OpenCode usage', () => {
+  it("is the session's cost, none for a free session", async () => {
     const client = clientWith([]);
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: undefined, error: { message: 'not found' } });
-    (client.session.create as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_new' } as Session, error: undefined });
-    const ctx = start(client, { resume: 'ses_gone' });
-    await ctx.ended();
-    const kinds = ctx.entries().map((e) => e.entryType);
-    expect(kinds.indexOf('notice')).toBeGreaterThanOrEqual(0);
-    expect(kinds.indexOf('notice')).toBeLessThan(kinds.indexOf('status'));
-    expect(ctx.events).toContainEqual(expect.objectContaining({ type: 'info', nativeSessionId: 'ses_new' }));
-  });
-
-  it('a conversation the server still has is continued', async () => {
-    const client = clientWith([]);
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_gone' } as Session, error: undefined });
-    const ctx = start(client, { resume: 'ses_gone' });
-    await ctx.ended();
-    expect(ctx.entries().some((e) => e.entryType === 'notice')).toBe(false);
-    expect(client.session.create).not.toHaveBeenCalled();
-  });
-});
-
-describe('OpenCode options', () => {
-  it('accepts its modes and provider/model ids', async () => {
-    const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(clientWith([])).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
-    await session.setOption('mode', 'default');
-    await session.setOption('mode', 'plan');
-    await session.setOption('model', 'anthropic/claude-sonnet-5');
-    await expect(session.setOption('mode', 'acceptEdits')).rejects.toThrow(/no mode/);
-    await expect(session.setOption('model', 'sonnet')).rejects.toThrow(/provider\/model/);
-    await session.end();
-  });
-});
-
-describe('OpenCode reasoning levels', () => {
-  const catalog = {
-    providers: vi.fn().mockResolvedValue({
-      data: {
-        providers: [{
-          id: 'ccr', name: 'CCR',
-          models: {
-            'OpenCode Go/deepseek-v4.1-flash': { id: 'OpenCode Go/deepseek-v4.1-flash', name: 'deepseek-v4.1-flash', variants: { low: {}, high: {}, max: {} }, cost: { input: 0, output: 0 }, status: 'active' },
-            plain: { id: 'plain', name: 'plain', variants: {}, cost: { input: 0, output: 0 }, status: 'active' },
-          },
-        }],
-        default: {},
-      },
-      error: undefined,
-    }),
-    get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-  };
-
-  it("are the model's own, default first", () => {
-    expect(reasoningLevels({ low: {}, xhigh: {}, max: {} })).toEqual([
-      { id: 'default', label: 'Default' },
-      { id: 'low', label: 'Low' },
-      { id: 'xhigh', label: 'Extra high' },
-      { id: 'max', label: 'Max' },
-    ]);
-    expect(reasoningLevels({})).toEqual([]);
-    expect(reasoningLevels(undefined)).toEqual([]);
-  });
-
-  it('are listed with each model, asked of it on every prompt, and checked against it', async () => {
-    const client = Object.assign(clientWith([]), { config: catalog });
-    const promptAsync = vi.fn().mockResolvedValue({ data: undefined, error: undefined });
-    (client.session as unknown as { promptAsync: unknown }).promptAsync = promptAsync;
-    const driver = OpenCodeDriver.withClient(client);
-    const listed = (await driver.listModels()).models;
-    expect(listed.find((m) => m.id === 'ccr/OpenCode Go/deepseek-v4.1-flash')?.efforts?.map((e) => e.id)).toEqual(['default', 'low', 'high', 'max']);
-    expect(listed.find((m) => m.id === 'ccr/plain')).not.toHaveProperty('efforts');
-
-    const ctx = recordingContext();
-    const session = driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'ccr/OpenCode Go/deepseek-v4.1-flash' }, ctx);
-    await ctx.waitFor((e) => e.type === 'ready');
-    await session.setOption('effort', 'max');
-    session.prompt('think hard');
-    await expect.poll(() => promptAsync.mock.calls.length).toBe(1);
-    expect(promptAsync.mock.calls[0]![0].variant).toBe('max');
-    await expect(session.setOption('effort', 'ultra')).rejects.toThrow(/not a reasoning level/);
-
-    // A model without levels drops the level, and refuses one.
-    await session.setOption('model', 'ccr/plain');
-    session.prompt('quick');
-    await expect.poll(() => promptAsync.mock.calls.length).toBe(2);
-    expect(promptAsync.mock.calls[1]![0]).not.toHaveProperty('variant');
-    await expect(session.setOption('effort', 'high')).rejects.toThrow(/has no reasoning levels/);
-
-    await session.setOption('model', 'ccr/OpenCode Go/deepseek-v4.1-flash');
-    await session.setOption('effort', 'default');
-    session.prompt('as usual');
-    await expect.poll(() => promptAsync.mock.calls.length).toBe(3);
-    expect(promptAsync.mock.calls[2]![0]).not.toHaveProperty('variant');
-    await session.end();
-  });
-});
-
-describe('OpenCode default model', () => {
-  const model = (id: string, cost: number, status = 'active') => ({ id, name: id.toUpperCase(), cost: { input: cost, output: cost }, status });
-  const provider = (id: string, ...models: ReturnType<typeof model>[]) =>
-    ({ id, name: id === 'anthropic' ? 'Anthropic' : '', models: Object.fromEntries(models.map((m) => [m.id, m])) }) as unknown as Provider;
-  const zen = provider('opencode', model('big-pickle', 1), model('old-free', 0, 'deprecated'), model('nemotron-free', 0));
-  const anthropic = provider('anthropic', model('claude-sonnet-5', 3));
-
-  it('is the model OpenCode is configured with, when it is offered', () => {
-    expect(pickDefaultModel('anthropic/claude-sonnet-5', [zen, anthropic], {})).toBe('anthropic/claude-sonnet-5');
-  });
-
-  it('else a free OpenCode Zen model that is not deprecated', () => {
-    expect(pickDefaultModel(undefined, [anthropic, zen], {})).toBe('opencode/nemotron-free');
-    expect(pickDefaultModel('gone/model', [anthropic, zen], {})).toBe('opencode/nemotron-free');
-  });
-
-  it("else the first provider's own default, else none", () => {
-    expect(pickDefaultModel(undefined, [anthropic], { anthropic: 'claude-sonnet-5' })).toBe('anthropic/claude-sonnet-5');
-    expect(pickDefaultModel(undefined, [anthropic], {})).toBeUndefined();
-  });
-
-  function withCatalog(client: FakeClient, configured?: string): FakeClient {
-    (client as unknown as { config: unknown }).config = {
-      providers: vi.fn().mockResolvedValue({ data: { providers: [zen, anthropic], default: {} }, error: undefined }),
-      get: vi.fn().mockResolvedValue({ data: configured ? { model: configured } : {}, error: undefined }),
-    };
-    return client;
-  }
-
-  it('is listed with the models', async () => {
-    const catalog = await OpenCodeDriver.withClient(withCatalog(clientWith([]))).listModels();
-    expect(catalog.defaultModel).toBe('opencode/nemotron-free');
-    expect(catalog.models).toContainEqual({ id: 'anthropic/claude-sonnet-5', label: 'CLAUDE-SONNET-5', provider: 'Anthropic' });
-    // A provider without a display name is named by its id.
-    expect(catalog.models).toContainEqual({ id: 'opencode/big-pickle', label: 'BIG-PICKLE', provider: 'opencode' });
-  });
-
-  it('a session started with no model runs, and reports, the default', async () => {
-    const client = withCatalog(clientWith([]));
     const ctx = recordingContext();
     const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
     await ctx.waitFor((e) => e.type === 'ready');
-    expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'ses_1', model: 'opencode/nemotron-free', mode: 'ask' });
-    (client.session as unknown as { promptAsync: unknown }).promptAsync = vi.fn().mockResolvedValue({ data: undefined, error: undefined });
-    session.prompt('hi');
-    await expect.poll(() => (client.session as unknown as { promptAsync: ReturnType<typeof vi.fn> }).promptAsync.mock.calls.length).toBe(1);
-    expect((client.session as unknown as { promptAsync: ReturnType<typeof vi.fn> }).promptAsync.mock.calls[0]![0].model).toEqual({
-      providerID: 'opencode',
-      modelID: 'nemotron-free',
-    });
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', cost: 0.0371 });
+    expect(await session.getUsage!()).toMatchObject({ available: true, windows: [], sessionCostUsd: 0.0371 });
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', cost: 0 });
+    expect(await session.getUsage!()).not.toHaveProperty('sessionCostUsd');
+    expect(OpenCodeDriver.withClient(client).info().supports?.usage).toBe(true);
     await session.end();
   });
-});
 
-describe('OpenCode plan mode', () => {
-  it("runs OpenCode's plan agent, and its default agent again once left", async () => {
-    const client = clientWith([]);
-    const promptAsync = vi.fn().mockResolvedValue({ data: undefined, error: undefined });
-    (client.session as unknown as { promptAsync: unknown }).promptAsync = promptAsync;
-    const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', mode: 'plan' }, ctx);
-    await ctx.waitFor((e) => e.type === 'ready');
-    session.prompt('how would you split this module?');
-    await expect.poll(() => promptAsync.mock.calls.length).toBe(1);
-    expect(promptAsync.mock.calls[0]![0].agent).toBe('plan');
-    await session.setOption('mode', 'ask');
-    session.prompt('do it');
-    await expect.poll(() => promptAsync.mock.calls.length).toBe(2);
-    expect(promptAsync.mock.calls[1]![0]).not.toHaveProperty('agent');
-    await session.end();
-  });
-});
-
-describe('OpenCode context usage', () => {
-  const withLimits = (client: FakeClient) =>
-    Object.assign(client, {
-      config: {
-        providers: vi.fn().mockResolvedValue({
-          data: {
-            providers: [{
-              id: 'anthropic',
-              models: {
-                'claude-sonnet-5': { id: 'claude-sonnet-5', name: 'Sonnet', cost: { input: 3, output: 3 }, status: 'active', limit: { context: 200_000, output: 64_000 } },
-                'no-limit': { id: 'no-limit', name: 'Custom', cost: { input: 0, output: 0 }, status: 'active', limit: { context: 0, output: 0 } },
-              },
-            }],
-            default: {},
-          },
-          error: undefined,
-        }),
-        get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-      },
-    });
-  const step = (modelID: string, input: number, cacheRead = 0) => ({
-    type: 'message.updated',
-    properties: {
-      info: {
-        id: `msg_${input}`, sessionID: 'ses_1', role: 'assistant', providerID: 'anthropic', modelID,
-        tokens: { input, output: 1_000, reasoning: 0, cache: { read: cacheRead, write: 0 } },
-      },
+  const tokens = { input: 500, output: 100, reasoning: 0, cache: { read: 400, write: 0 } };
+  const modelsWith = (limit: number) => ({
+    model: {
+      default: vi.fn(async () => ({ location: { directory: '/tmp' }, data: null })),
+      list: vi.fn(async () => ({
+        location: { directory: '/tmp' },
+        data: [{ id: 'm1', modelID: 'm1', providerID: 'zen', name: 'M1', enabled: true, status: 'active', cost: [], variants: [], limit: { context: limit, output: 100 } }],
+      })),
     },
   });
 
-  it('reports the window of the model that ran and how full it is, only when it changes', async () => {
-    const ctx = start(withLimits(clientWith([
-      step('claude-sonnet-5', 49_000),
-      step('claude-sonnet-5', 49_000),
-      step('claude-sonnet-5', 9_000, 90_000),
-    ])));
+  it('reports how full the context is, over the window of the model that ran the step', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0, tokens } },
+    ], modelsWith(1_000)));
     await ctx.ended();
-    expect(ctx.events.filter((e) => e.type === 'info' && ('contextPercentage' in e || 'contextWindow' in e))).toEqual([
-      { type: 'info', contextPercentage: 25, contextWindow: 200_000 },
-      { type: 'info', contextPercentage: 50 },
-    ]);
-  });
-
-  it("breaks the last step's tokens down into what the window held", () => {
-    const tokens = { input: 4_000, output: 1_000, reasoning: 500, cache: { read: 90_000, write: 500 } };
-    expect(openCodeContext(tokens, 200_000)).toEqual({
-      usedTokens: 96_000,
-      windowTokens: 200_000,
-      categories: [
-        { name: 'Cached prompt', tokens: 90_000, kind: 'used' },
-        { name: 'New prompt', tokens: 4_500, kind: 'used' },
-        { name: 'Reasoning', tokens: 500, kind: 'used' },
-        { name: 'Reply', tokens: 1_000, kind: 'used' },
-        { name: 'Free space', tokens: 104_000, kind: 'free' },
-      ],
+    // Everything the step read and wrote: 500 + 100 + 0 + 400 + 0.
+    expect(ctx.events.find((e) => e.type === 'info' && 'contextPercentage' in e)).toMatchObject({
+      type: 'info',
+      contextPercentage: 100,
+      contextWindow: 1_000,
     });
-    expect(openCodeContext(tokens, undefined)).toBeUndefined();
   });
 
-  it('reports nothing for a model whose provider declares no limit', async () => {
-    const ctx = start(withLimits(clientWith([step('no-limit', 49_000)])));
+  it('says nothing for a model whose provider declares no window', async () => {
+    const ctx = start(clientWith([
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0, tokens } },
+    ], modelsWith(0)));
     await ctx.ended();
-    expect(ctx.events.some((e) => e.type === 'info' && 'contextPercentage' in e)).toBe(false);
+    expect(ctx.events.filter((e) => e.type === 'info' && 'contextPercentage' in e)).toEqual([]);
   });
 
-  it('lists only declared limits with the models', async () => {
-    const catalog = await OpenCodeDriver.withClient(withLimits(clientWith([]))).listModels();
-    expect(catalog.contextLimits).toEqual({ 'anthropic/claude-sonnet-5': 200_000 });
-  });
-});
-
-describe('OpenCode slash commands', () => {
-  const commands = [
-    { name: 'init', description: 'create/update AGENTS.md', template: 't', hints: [] },
-    { name: 'review', description: 'review changes', template: 't', hints: ['$ARGUMENTS'] },
-    { name: 'fix', template: 't', hints: ['$1', '$2'] },
-  ];
-  const withCommands = (client: FakeClient) => {
-    Object.assign(client, { command: { list: vi.fn().mockResolvedValue({ data: commands, error: undefined }) } });
-    Object.assign(client.session, {
-      command: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-      promptAsync: vi.fn().mockResolvedValue({ data: undefined, error: undefined }),
-    });
-    return client as FakeClient & { session: { command: ReturnType<typeof vi.fn>; promptAsync: ReturnType<typeof vi.fn> } };
-  };
-
-  it('lists its commands with their argument placeholders as hints, then the ones the driver runs', async () => {
-    const client = withCommands(clientWith([]));
+  it('carries the context into the usage it reports', async () => {
+    const client = clientWith([
+      { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'zen', id: 'm1' }, started: 0 } },
+      { type: 'session.step.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', finish: 'stop', cost: 0.02, tokens } },
+    ], modelsWith(1_000));
     const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'a/b', resume: 'x' }, ctx);
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
-    const commands = await session.listCommands!();
-    expect(commands.slice(0, 3)).toEqual([
-      { name: 'init', description: 'create/update AGENTS.md' },
-      { name: 'review', description: 'review changes', argumentHint: '<arguments>' },
-      { name: 'fix', argumentHint: '<arg1> <arg2>' },
-    ]);
-    expect(commands.slice(3).map((c) => c.name)).toEqual(['compact', 'undo', 'redo', 'share', 'unshare']);
-    await session.end();
-  });
-
-  it('runs a typed /command through session.command, and anything else as a prompt', async () => {
-    const client = withCommands(clientWith([]));
-    const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'anthropic/sonnet', resume: 'x' }, ctx);
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
-    session.prompt('/review  the auth module');
-    session.prompt('/unknown thing');
-    session.prompt('/etc/hosts is broken');
-    await expect.poll(() => client.session.promptAsync.mock.calls.length).toBe(2);
-    expect(client.session.command).toHaveBeenCalledTimes(1);
-    expect(client.session.command.mock.calls[0]![0]).toEqual({
-      sessionID: 'ses_1', directory: '/tmp', command: 'review', arguments: 'the auth module', model: 'anthropic/sonnet',
-    });
-    expect(client.session.promptAsync.mock.calls.map((c) => c[0].parts[0].text).sort()).toEqual(['/etc/hosts is broken', '/unknown thing']);
-    await session.end();
-  });
-
-  it('runs a typed /undo itself, never as a prompt, and reports the outcome', async () => {
-    const client = withCommands(clientWith([]));
-    const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', resume: 'x' }, ctx);
-    (client.session.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { id: 'ses_1' }, error: undefined });
-    Object.assign(client.session, {
-      messages: vi.fn().mockResolvedValue({ data: [{ info: { id: 'm1', role: 'user' }, parts: [{ type: 'text', text: 'fix it' }] }] }),
-      revert: vi.fn().mockResolvedValue({ data: {} }),
-    });
-    session.prompt('/undo');
-    await ctx.waitFor(() => ctx.entries().some((e) => e.entryType === 'status' && e.text.startsWith('Undid "fix it"')));
-    expect(client.session.promptAsync).not.toHaveBeenCalled();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.waitFor((e) => e.type === 'info' && 'contextPercentage' in e);
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', cost: 0.02 });
+    const usage = await session.getUsage!();
+    expect(usage?.context?.usedTokens).toBe(1_000);
+    expect(usage?.context?.windowTokens).toBe(1_000);
     await session.end();
   });
 });
 
-describe('OpenCode model checks', () => {
-  const catalog = {
-    providers: vi.fn().mockResolvedValue({
-      data: { providers: [{ id: 'opencode', models: { 'big-pickle': { id: 'big-pickle', name: 'Big Pickle', cost: { input: 0, output: 0 }, status: 'active' } } }], default: {} },
-      error: undefined,
-    }),
-    get: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+describe('OpenCode conversation delete', () => {
+  it('deletes the session on the server', async () => {
+    const client = clientWith([]);
+    await OpenCodeDriver.withClient(client).deleteConversation('ses_1', '/w');
+    expect(client.session.remove).toHaveBeenCalledWith({ sessionID: 'ses_1' });
+  });
+
+  it('a session the server no longer knows is already deleted; another error is not', async () => {
+    const gone = clientWith([]);
+    asMock(gone.session.remove).mockRejectedValue({ name: 'SessionNotFoundError', message: 'gone' });
+    await expect(OpenCodeDriver.withClient(gone).deleteConversation('ses_1', '/w')).resolves.toBeUndefined();
+
+    const failed = clientWith([]);
+    asMock(failed.session.remove).mockRejectedValue({ name: 'InvalidRequestError', message: 'nope' });
+    await expect(OpenCodeDriver.withClient(failed).deleteConversation('ses_1', '/w')).rejects.toThrow(/could not delete session ses_1/);
+  });
+});
+
+describe('OpenCode modes, models and effort', () => {
+  const over = {
+    model: {
+      default: vi.fn(async () => ({ location: { directory: '/tmp' }, data: null })),
+      list: vi.fn(async () => ({
+        location: { directory: '/tmp' },
+        data: [
+          { id: 'm', modelID: 'm', providerID: 'ccr', name: 'M', enabled: true, status: 'active', cost: [], variants: [{ id: 'low' }, { id: 'high' }], limit: { context: 1000, output: 100 } },
+        ],
+      })),
+    },
   };
-  const withCatalog = (client: FakeClient) => Object.assign(client, { config: catalog });
 
-  it('refuses an id that is not provider/model at once', () => {
-    expect(() => start(clientWith([]), { model: 'claude-opus-5-5' })).toThrow(/not an OpenCode provider\/model id/);
-  });
-
-  it('fails a new session on a model no provider offers, before creating anything', async () => {
-    const client = withCatalog(clientWith([]));
-    const ctx = start(client, { model: 'anthropic/claude-opus-5-5' });
-    expect((await ctx.ended()).error).toMatch(/OpenCode does not offer the model 'anthropic\/claude-opus-5-5'/);
-    expect(ctx.events.some((e) => e.type === 'ready')).toBe(false);
-    expect(client.session.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses a switch to a model no provider offers', async () => {
+  it('switches the session model, carrying the reasoning variant', async () => {
+    const client = clientWith([], over);
     const ctx = recordingContext();
-    const session = OpenCodeDriver.withClient(withCatalog(clientWith([]))).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
-    await expect(session.setOption('model', 'anthropic/claude-opus-5-5')).rejects.toThrow(/does not offer/);
-    await session.setOption('model', 'opencode/big-pickle');
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await session.setOption!('model', 'ccr/m');
+    expect(client.session.switchModel).toHaveBeenCalledWith({ sessionID: 'ses_1', model: { providerID: 'ccr', id: 'm' } });
+    await session.setOption!('effort', 'high');
+    expect(client.session.switchModel).toHaveBeenLastCalledWith({ sessionID: 'ses_1', model: { providerID: 'ccr', id: 'm', variant: 'high' } });
     await session.end();
+  });
+
+  it('switches the session agent and its permission ruleset with the mode', async () => {
+    const client = clientWith([]);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await session.setOption!('mode', 'plan');
+    expect(client.session.switchAgent).toHaveBeenCalledWith({ sessionID: 'ses_1', agent: 'plan' });
+    expect(client.session.update).toHaveBeenCalledWith({ sessionID: 'ses_1', permissions: [{ action: '*', resource: '*', effect: 'ask' }] });
+    await session.setOption!('mode', 'default');
+    expect(client.session.update).toHaveBeenLastCalledWith({ sessionID: 'ses_1', permissions: [{ action: '*', resource: '*', effect: 'allow' }] });
+    await session.end();
+  });
+
+  it('refuses a mode, a model and an effort the model does not offer', async () => {
+    const client = clientWith([], over);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await expect(session.setOption!('mode', 'nonsense')).rejects.toThrow(/no mode 'nonsense'/);
+    await expect(session.setOption!('model', 'nope')).rejects.toThrow(/not an OpenCode provider\/model id/);
+    await expect(session.setOption!('effort', 'nope')).rejects.toThrow(/reasoning level/);
+    await session.end();
+  });
+});
+
+describe('the pure helpers', () => {
+  it('reads a model id into provider and model halves', () => {
+    expect(pickDefaultModel(undefined, [])).toBeUndefined();
+    expect(reasoningLevels([{ id: 'low' }, { id: 'high' }]).map((l) => l.id)).toEqual(['default', 'low', 'high']);
+    expect(reasoningLevels([])).toEqual([]);
+  });
+
+  it('breaks a context window into what it holds', () => {
+    const window = openCodeContext({ input: 100, output: 50, reasoning: 25, cache: { read: 1000, write: 5 } }, 10_000);
+    expect(window?.usedTokens).toBe(1180);
+    expect(window?.categories?.at(-1)).toEqual({ name: 'Free space', tokens: 8_820, kind: 'free' });
+    expect(openCodeContext({ input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, undefined)).toBeUndefined();
+  });
+
+  it('reads a question into the wire shape, and the answers back into the form\'s own', () => {
+    const fields = [{ key: 'q0', type: 'string', title: 'Which?', options: [{ value: 'a', label: 'A' }], custom: true }];
+    expect(toQuestionSpecs(fields)).toEqual([{ question: 'Which?', options: [{ label: 'A' }] }]);
+    expect(toFormAnswer(fields, [{ type: 'selected', labels: ['A'] }])).toEqual({ q0: 'A' });
+    expect(toFormAnswer(fields, [{ type: 'text', text: 'mine' }])).toEqual({ q0: 'mine' });
+    const multi = [{ key: 'q1', type: 'multiselect', title: 'Which ones?', options: [] }];
+    expect(toQuestionSpecs(multi)[0]!.multiSelect).toBe(true);
+    expect(toFormAnswer(multi, [{ type: 'selected', labels: ['A', 'B'] }])).toEqual({ q1: ['A', 'B'] });
   });
 });

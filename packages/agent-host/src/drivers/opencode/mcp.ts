@@ -1,60 +1,44 @@
 /**
  * OpenCode's MCP servers for the whole machine: the `mcp` section of its
- * global config, which every project loads and the `opencode` terminal uses
- * too.
+ * config, which every project loads and the `opencode` terminal uses too.
  *
- * OpenCode's server merges a config update into what it has — a server left
- * out stays, and a field left out keeps its old value — so an added server
- * is written whole, with the env or headers it no longer has cleared by
- * `null`. Its API cannot delete a server at all, so removing one edits the
- * global config file itself and has the server reload it — through a no-op
- * config update, since the server caches its global config and disposing its
- * instances does not re-read it: only a file that is
- * plain JSON (what OpenCode itself writes), so no comment of the user's is
- * lost; a hand-edited file with comments is left alone, with the reason.
- * Every config change reloads the projects OpenCode has open, which restarts
- * their running sessions, as for any change to its config.
+ * V2 serves the whole lifecycle over its API — list, add, remove, connect,
+ * disconnect — so nothing here edits a config file by hand any more (v1 had
+ * no way to delete a server, and rewrote the global config itself). A config
+ * change reloads the projects OpenCode has open, which restarts their running
+ * sessions, as for any change to its config.
  *
  * In a session, a server is connected or disconnected for the session's
  * project — OpenCode has no narrower scope — so the switch is project-wide.
  */
-import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import * as path from 'node:path';
-import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
+import type { OpenCodeClient } from '@opencode/client';
 import type { McpManager, McpState, SessionMcpState } from '../../sdk/driver';
 import { mcpStatus, serverInfo } from '../../sdk/mcp';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
 
-type RawConfig = Record<string, unknown>;
-
-/** The files OpenCode reads its global config from. */
-export function openCodeGlobalConfigFiles(env: NodeJS.ProcessEnv = process.env): string[] {
-  const base = env.XDG_CONFIG_HOME?.trim() || path.join(homedir(), '.config');
-  return ['config.json', 'opencode.json', 'opencode.jsonc'].map((f) => path.join(base, 'opencode', f));
-}
-
-/** A server as OpenCode's config holds it. Absent env or headers are
- *  `null`, which clears what an earlier server of that name had. */
-export function openCodeServerConfig(add: McpServerAdd, enabled = true): RawConfig {
+/** A server as OpenCode v2's config holds it. Absent env or headers are left
+ *  out entirely: an add replaces the whole entry, so nothing of an earlier
+ *  server of that name can linger. */
+export function openCodeServerConfig(add: McpServerAdd): Record<string, unknown> {
   const s = add.setup;
-  const map = (m: Record<string, string> | undefined) => (m && Object.keys(m).length ? m : null);
+  const map = (m: Record<string, string> | undefined) => (m && Object.keys(m).length ? m : undefined);
   return s.type === 'stdio'
-    ? { type: 'local', command: [s.command, ...(s.args ?? [])], environment: map(s.env), enabled }
+    ? { type: 'local', command: [s.command, ...(s.args ?? [])], ...(map(s.env) ? { environment: map(s.env) } : {}) }
     : // OpenCode's remote transport negotiates streamable HTTP or SSE itself.
-      { type: 'remote', url: s.url, headers: map(s.headers), enabled };
+      { type: 'remote', url: s.url, ...(map(s.headers) ? { headers: map(s.headers) } : {}) };
 }
 
-/** The servers in OpenCode's `mcp` config section, secret-free. */
+/** The servers OpenCode's config holds, secret-free: v2 lists the servers it
+ *  knows with their connection state, and nothing else about them, so the
+ *  command, URL and key names come from the config itself. */
 export function openCodeServers(mcp: unknown): McpServerInfo[] {
   if (!mcp || typeof mcp !== 'object') return [];
   const out: McpServerInfo[] = [];
   for (const [name, raw] of Object.entries(mcp as Record<string, unknown>)) {
     if (!raw || typeof raw !== 'object') continue;
-    const r = raw as { type?: unknown; command?: unknown; url?: unknown; environment?: unknown; headers?: unknown; enabled?: unknown };
+    const r = raw as { type?: unknown; command?: unknown; url?: unknown; environment?: unknown; headers?: unknown; disabled?: unknown };
     const keys = (v: unknown) => (v && typeof v === 'object' ? Object.keys(v) : []);
-    const enabled = r.enabled !== false;
+    const enabled = r.disabled !== true;
     if (r.type === 'local' && Array.isArray(r.command) && typeof r.command[0] === 'string') {
       out.push(serverInfo({ name, transport: 'stdio', command: r.command[0], envKeys: keys(r.environment), enabled }));
     } else if (r.type === 'remote' && typeof r.url === 'string') {
@@ -65,73 +49,56 @@ export function openCodeServers(mcp: unknown): McpServerInfo[] {
 }
 
 export class OpenCodeMcp implements McpManager {
-  /** One config change at a time: each reads, then writes. */
+  /** One MCP change at a time: each reads the list, then writes it. */
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(
-    private readonly client: () => Promise<OpencodeClient>,
-    private readonly configFiles: () => string[] = () => openCodeGlobalConfigFiles(),
-  ) {}
+  constructor(private readonly client: () => Promise<OpenCodeClient>) {}
 
   list(): Promise<McpState> {
-    return this.serial(async () => this.state(await this.mcp(await this.client())));
+    return this.serial(async () => this.state(await this.client()));
   }
 
   act(action: McpAction, servers: McpServerAdd[], names: string[]): Promise<McpState> {
     return this.serial(async () => {
       const client = await this.client();
+      const current = await this.known(client);
       if (action === 'remove') {
-        await this.remove(names);
-        // An update re-reads the global config file before merging into it.
-        const { error } = await client.global.config.update({ config: { $schema: 'https://opencode.ai/config.json' } });
-        if (error) throw new Error(`OpenCode did not reload its config: ${JSON.stringify(error)}`);
-        const current = await this.mcp(client);
-        const stale = names.find((n) => current[n]);
-        if (stale) throw new Error(`OpenCode still has the MCP server '${stale}' from another config file.`);
-        return this.state(current);
-      }
-      const current = await this.mcp(client);
-      let patch: Record<string, RawConfig>;
-      if (action === 'add') {
-        patch = Object.fromEntries(servers.map((s) => [s.name, openCodeServerConfig(s)]));
-      } else {
-        const missing = names.find((n) => !current[n]);
+        const missing = names.find((n) => !current.has(n));
         if (missing) throw new Error(`OpenCode has no MCP server '${missing}'.`);
-        patch = Object.fromEntries(names.map((n) => [n, { ...(current[n] as RawConfig), enabled: action === 'enable' }]));
+        for (const name of names) await this.call(`remove ${name}`, () => client.mcp.remove({ server: name }));
+      } else if (action === 'add') {
+        for (const add of servers) {
+          await this.call(`add ${add.name}`, () =>
+            client.mcp.add({ server: add.name, config: openCodeServerConfig(add) as never }));
+        }
+      } else {
+        const missing = names.find((n) => !current.has(n));
+        if (missing) throw new Error(`OpenCode has no MCP server '${missing}'.`);
+        for (const name of names) {
+          await this.call(
+            `${action === 'enable' ? 'connect' : 'disconnect'} ${name}`,
+            () => (action === 'enable' ? client.mcp.connect({ server: name }) : client.mcp.disconnect({ server: name })),
+          );
+        }
       }
-      const { error } = await client.global.config.update({ config: { mcp: patch } as never });
-      if (error) throw new Error(`OpenCode refused the change: ${JSON.stringify(error)}`);
-      return this.state(await this.mcp(client));
+      return this.state(client);
     });
   }
 
-  /** Delete `names` from every global config file that has them. */
-  private async remove(names: string[]): Promise<void> {
-    const edits: [string, RawConfig][] = [];
-    const found = new Set<string>();
-    for (const file of this.configFiles().filter((f) => existsSync(f))) {
-      const text = await readFile(file, 'utf8');
-      let config: RawConfig;
-      try {
-        config = JSON.parse(text) as RawConfig;
-      } catch {
-        if (names.some((n) => text.includes(`"${n}"`))) {
-          throw new Error(`${file} has comments, so it is not edited from here. Remove the server from it by hand.`);
-        }
-        continue;
-      }
-      const mcp = config.mcp as Record<string, unknown> | undefined;
-      const here = names.filter((n) => mcp && n in mcp);
-      if (!mcp || here.length === 0) continue;
-      for (const n of here) {
-        delete mcp[n];
-        found.add(n);
-      }
-      edits.push([file, config]);
+  /** The servers the server knows, by name. */
+  private async known(client: OpenCodeClient): Promise<Set<string>> {
+    const listed = await client.mcp.list().catch((err: unknown) => {
+      throw new Error(`OpenCode could not report its MCP servers: ${reason(err)}`);
+    });
+    return new Set(listed.data.map((s) => s.name));
+  }
+
+  private async call(what: string, work: () => Promise<unknown>): Promise<void> {
+    try {
+      await work();
+    } catch (err) {
+      throw new Error(`OpenCode could not ${what}: ${reason(err)}`);
     }
-    const missing = names.find((n) => !found.has(n));
-    if (missing) throw new Error(`OpenCode's global config has no MCP server '${missing}'.`);
-    for (const [file, config] of edits) await writeFile(file, `${JSON.stringify(config, null, 2)}\n`);
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -140,30 +107,58 @@ export class OpenCodeMcp implements McpManager {
     return next;
   }
 
-  private async mcp(client: OpencodeClient): Promise<Record<string, unknown>> {
-    const { data, error } = await client.global.config.get();
-    if (error || !data) throw new Error(`OpenCode could not read its config: ${JSON.stringify(error ?? 'no config')}`);
-    return ((data as { mcp?: Record<string, unknown> }).mcp ?? {}) as Record<string, unknown>;
-  }
-
-  private state(mcp: Record<string, unknown>): McpState {
+  private async state(client: OpenCodeClient): Promise<McpState> {
+    // The server lists which servers exist; only the config says what each
+    // one is (its command, its URL), so both are read. V2's config answer is
+    // a list of documents whose shape is the config file's, read loosely
+    // here for the one section that matters.
+    const [config, listed] = await Promise.all([
+      client.config.get().catch(() => []),
+      client.mcp.list().catch((err: unknown) => {
+        throw new Error(`OpenCode could not report its MCP servers: ${reason(err)}`);
+      }),
+    ]);
+    const documents = config as unknown as Array<{ info?: { mcp?: Record<string, unknown> } }>;
+    const mcp = documents.find((entry) => entry.info?.mcp)?.info?.mcp ?? {};
     return { servers: openCodeServers(mcp), toggles: true };
   }
 }
 
 /** A session's servers, as OpenCode reports them for its project. */
-export async function openCodeSessionMcp(client: OpencodeClient, directory: string): Promise<SessionMcpState> {
-  const { data, error } = await client.mcp.status({ directory });
-  if (error || !data) throw new Error(`OpenCode could not report its MCP servers: ${JSON.stringify(error ?? 'no status')}`);
-  const servers = Object.entries(data as Record<string, { status?: string; error?: string }>)
-    .map(([name, s]) => ({ name, status: mcpStatus(s?.status), ...(s?.error ? { error: s.error } : {}) }))
+export async function openCodeSessionMcp(client: OpenCodeClient, directory: string): Promise<SessionMcpState> {
+  const listed = await client.mcp.list({ location: { directory } }).catch((err: unknown) => {
+    throw new Error(`OpenCode could not report its MCP servers: ${reason(err)}`);
+  });
+  const servers = listed.data
+    .map((s) => ({
+      name: s.name,
+      status: mcpStatus(s.status.status),
+      ...(s.status.status === 'failed' ? { error: s.status.error } : {}),
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return { servers, toggles: true, projectWide: true };
 }
 
 /** Connect or disconnect one server for a session's project. */
-export async function toggleOpenCodeMcp(client: OpencodeClient, directory: string, name: string, enabled: boolean): Promise<SessionMcpState> {
-  const { error } = enabled ? await client.mcp.connect({ name, directory }) : await client.mcp.disconnect({ name, directory });
-  if (error) throw new Error(`OpenCode could not ${enabled ? 'connect' : 'disconnect'} ${name}: ${JSON.stringify(error)}`);
+export async function toggleOpenCodeMcp(
+  client: OpenCodeClient,
+  directory: string,
+  name: string,
+  enabled: boolean,
+): Promise<SessionMcpState> {
+  try {
+    if (enabled) await client.mcp.connect({ server: name, location: { directory } });
+    else await client.mcp.disconnect({ server: name, location: { directory } });
+  } catch (err) {
+    throw new Error(`OpenCode could not ${enabled ? 'connect' : 'disconnect'} ${name}: ${reason(err)}`);
+  }
   return openCodeSessionMcp(client, directory);
+}
+
+/** A client error's reason, as a string. */
+function reason(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
