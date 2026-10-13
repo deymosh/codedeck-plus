@@ -327,23 +327,37 @@ ensure_container() {
   docker start "$name" >/dev/null 2>&1 || true
 }
 
-# Mirror the working tree into <container>:<dest>. The file list comes from
-# git (pack_repo_into: tracked plus untracked-not-ignored, minus tracked files
-# deleted in the tree), packed into a staging directory and rsynced over — so
-# an edit, a new file, a rename and a deletion each land with one command, and
-# a file the tree no longer has cannot linger in the container and keep
-# compiling. node_modules, dist, build and target stay out of the mirror:
-# they belong to the container, and rebuilding them per command is exactly
-# what a long-lived container exists to avoid.
-TREE_MIRROR_EXCLUDES=(--exclude node_modules --exclude dist --exclude build --exclude target)
-
+# Mirror the working tree into <container>:<dest>. The file list comes from git
+# (pack_repo_into: tracked plus untracked-not-ignored, minus tracked files
+# deleted in the tree), staged inside the container and copied over, then
+# whatever the tree no longer has is removed — so an edit, a new file, a rename
+# and a deletion each land with one command, and a file the tree no longer has
+# cannot linger in the container and keep compiling. node_modules, dist, build
+# and target are never pruned: they belong to the container, and rebuilding
+# them per command is exactly what a long-lived container exists to avoid.
+#
+# It is all shell and coreutils, with no tool the container has to have: the
+# images this runs in are the repo's own, and one of them carries no rsync.
+# (A file name with a newline in it would confuse the prune; the repo has
+# none, and the cost would be a stale file, never a lost one.)
 sync_tree() {
   local container="$1" dest="$2"
   echo "==> Syncing the working tree into $container"
   dexec "$container" sh -c 'rm -rf /tmp/codedeck-tree && mkdir -p /tmp/codedeck-tree'
   pack_repo_into "$container" /tmp/codedeck-tree
-  dexec "$container" rsync -a --delete "${TREE_MIRROR_EXCLUDES[@]}" /tmp/codedeck-tree/ "$dest/"
-  dexec "$container" rm -rf /tmp/codedeck-tree
+  dexec "$container" sh -c '
+    set -e
+    dest="$1"
+    mkdir -p "$dest"
+    cd /tmp/codedeck-tree
+    find . -type f | sed "s|^\./||" | LC_ALL=C sort > /tmp/codedeck-want
+    cp -a . "$dest"/
+    cd "$dest"
+    find . \( -name node_modules -o -name dist -o -name build -o -name target \) -prune -o -type f -print \
+      | sed "s|^\./||" | LC_ALL=C sort > /tmp/codedeck-have
+    comm -13 /tmp/codedeck-want /tmp/codedeck-have | while IFS= read -r gone; do rm -f -- "$gone"; done
+    rm -rf /tmp/codedeck-tree /tmp/codedeck-want /tmp/codedeck-have
+  ' sh "$dest"
 }
 
 # --- Workspace checks, in throwaway containers — nothing needs to be
@@ -359,9 +373,9 @@ sync_tree() {
 # changed. Only the cargo workspace is copied. ---
 
 # The one Node image the checks and the dev container share: same Node, same
-# pnpm, same store volume, so a dependency is downloaded once for both. rsync
-# is the dev container's tree mirror, jq reads the driver protocol's frames,
-# curl and ps are for poking at a running agent from inside.
+# pnpm, same store volume, so a dependency is downloaded once for both. jq
+# reads the driver protocol's frames, curl and ps are for poking at a running
+# agent from inside, git for the tree.
 ensure_node_image() {
   local pnpm_version
   pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
@@ -370,7 +384,7 @@ FROM node:22-slim
 ARG PNPM_VERSION
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       git ca-certificates rsync jq procps curl \
+       git ca-certificates jq procps curl \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g "pnpm@${PNPM_VERSION}"
 ENV npm_config_store_dir=/pnpm-store
