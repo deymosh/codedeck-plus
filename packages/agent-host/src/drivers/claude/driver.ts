@@ -19,8 +19,9 @@ import type { ProviderHttp } from '../../sdk/net';
 import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
 import { isBenignPlanDirWrite } from './policy';
-import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
-import { newTranslateContext } from '../../sdk/transcript';
+import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
+import { claudeTool } from './tools';
+import { newTranslateContext, type TranslateContext } from '../../sdk/transcript';
 import { slashCommand } from '../../sdk/commands';
 import type {
   AgentInfo,
@@ -171,7 +172,9 @@ export interface ClaudeDriverDeps {
 
 export class ClaudeSession implements DriverSession {
   private handle: SdkSessionHandle | null = null;
-  private readonly translate = newTranslateContext();
+  private readonly translate: TranslateContext;
+  /** Told a tool name no agent's table lists, which the log then carries. */
+  private readonly reportUnknownTool: (toolName: string) => void;
   private readonly resumeTarget: string | null;
   private mode: string;
   private model: string | undefined;
@@ -225,6 +228,8 @@ export class ClaudeSession implements DriverSession {
     private readonly options: ClaudeDriverOptions,
   ) {
     this.resumeTarget = params.resume ?? null;
+    this.reportUnknownTool = unknownToolReporter((message) => this.ctx.log(message));
+    this.translate = newTranslateContext(this.reportUnknownTool);
     this.mode = params.mode ?? DEFAULT_MODE;
     // A provider-bound session has no Anthropic model to fall back on; the
     // bridge hands it the profile's own default.
@@ -515,14 +520,15 @@ export class ClaudeSession implements DriverSession {
     if (toolName === 'ExitPlanMode') return this.approvePlan(requestId);
 
     const locations = toolLocations(input);
+    const call = claudeTool(toolName, input, this.reportUnknownTool);
     const hookPlugin = hook ? hookPluginOf(toolName, this.plugins, this.settingsFiles()) : undefined;
     // The SDK's own prompt sentence, when it sent one, describes the call.
     const description = options.description ?? options.title;
     const outcome = await this.ctx.requestPermission({
       requestId,
       toolName,
-      kind: toolKindOf(toolName),
-      title: toolTitle(toolName, input) || toolName,
+      kind: call.kind,
+      title: call.title,
       ...(description ? { description } : {}),
       locations,
       options: hook ? [PERMISSION_ALLOW, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],

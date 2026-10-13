@@ -14,7 +14,8 @@
  * text — which is where v1's "stable parts only" rule now lives.
  */
 import type { FileDiffInfo } from '@opencode/client';
-import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { todosOf, toolLocations } from '../../sdk/tools';
+import { opencodeTool } from './tools';
 import {
   MAX_DIFF_LINE_CHARS,
   MAX_DIFF_LINES,
@@ -216,17 +217,17 @@ function toolStartEntries(
   }
   if (ctx.hiddenCallIds.has(event.callId)) return [];
   const locations = toolLocations(event.input);
-  const full = toolInput(event.toolName, event.input);
+  const call = opencodeTool(event.toolName, event.input, ctx.onUnknownTool);
   const todos = todosOf(event.input);
   return [
     {
       entryType: 'tool_call',
       callId: event.callId,
       toolName: event.toolName,
-      kind: toolKindOf(event.toolName),
-      title: toolTitle(event.toolName, event.input),
+      kind: call.kind,
+      title: call.title,
       ...(locations.length > 0 ? { locations } : {}),
-      ...(full !== undefined ? { input: full } : {}),
+      ...(call.input !== undefined ? { input: call.input } : {}),
       timestamp: ts,
     },
     ...(todos ? [{ entryType: 'todos' as const, items: todos, callId: event.callId, timestamp: ts }] : []),
