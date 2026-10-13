@@ -75,19 +75,67 @@ missing SDK.
 ## Asking a real agent
 
 For anything about what an agent actually sends, or what the phone actually
-ends up being shown, run one real session instead of writing a probe:
+ends up being shown, run one real session instead of writing a probe. Three
+tiers, cheapest first — pick by what needs proving:
 
 ```bash
-./codedeck live opencode --prompt "Reply with exactly: ok"
+# 1. The scripted test agent: the driver protocol's own plumbing, no SDK, no model.
+./codedeck live fake --prompt permission
+
+# 2. A real agent against a local model server: real CLI, real session, fake
+#    model. No account, no network, the same bytes every run.
+./codedeck live claude-code --fake-model --prompt /tool
+./codedeck live opencode    --fake-model --prompt /question --prompt /long
+./codedeck live deepseek-harness --fake-model --prompt /error
+
+# 3. A real model. Free on OpenCode's Zen models; anything else spends the account.
+./codedeck live opencode --model opencode/cat-jam-free --prompt "Reply with exactly: ok"
 ./codedeck live opencode --models      # what it offers, and which one a session defaults to
-./codedeck live fake --prompt question # the scripted test agent: no network, no account
 ```
 
 It prints every transcript entry, turn state, context figure and error as they
-arrive, and keeps the log at `dist/live-<agent>.log`. Cost: `fake` and
-OpenCode's free Zen models are free; anything else spends the account, so pass
-`--model` when it matters. Claude and DeepSeek need credentials the bridge
-holds — do not borrow them; use `opencode` or `fake`.
+arrive, and keeps the log at `dist/live-<agent>.log`.
+
+### Tier 2: the fake model
+
+`--fake-model` starts `packages/agent-host/tools/fake-model.mjs` on loopback
+and binds the session to it as a provider profile, so the agent runs the model
+it is given (`fake-model-1`) and nothing reaches an account whatever an
+agent's banner says. Each prompt is a scenario, the same vocabulary the `fake`
+agent uses:
+
+| prompt | what it makes the agent do |
+| --- | --- |
+| `/tool [command]` | call its own shell tool (a permission card on OpenCode) |
+| `/question` | ask one multiple-choice question (a question form/card) |
+| `/plan-approval` | propose a plan for approval (a plan card; needs plan mode) |
+| `/error` | answer with a 400, exercising the failure path |
+| `/long` | answer with a long text and a large context figure |
+| anything else | echoed back as the agent's text |
+
+`--dump DIR` writes every request the agent made, which is the fastest way to
+see what a driver actually sends. Add `--mode`, `--model` or `--effort` as
+usual — a scenario is a prompt, not a setup step.
+
+What each agent does with a scenario differs, and that is the point of running
+it: OpenCode raises a permission card for `/tool` (its v2 policy auto-allows
+everything, and the driver still asks first); Claude Code 2.1.283 answers a
+tool call through its own auto-mode safety classifier instead of asking the
+user, so `/tool` there proves the tool round trip rather than a card, and a
+permission card needs a hook's ask; the DeepSeek Harness validates model ids
+against its own table, so it keeps its own model name while every request still
+goes to the stub.
+
+Tier 2 is deterministic, so it is also what CI runs:
+`packages/agent-host/src/drivers/claude/__tests__/claudeFakeModel.test.ts`
+drives the real `claude` binary (the SDK's own platform package) through the
+driver against the stub, and skips with a reason where that package is not
+installed.
+
+Tier 3 is for fidelity — only a real model picks its own tool arguments and
+writes prose. Claude and DeepSeek have no free path, so a real-model run there
+spends the account: pass `--model` deliberately, and never borrow the bridge's
+credentials for it.
 
 ## Opt-in: building an APK or running the bridge
 

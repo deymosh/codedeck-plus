@@ -79,6 +79,9 @@ the vendored toolchain — the caller does not choose, and does not need to know
 ./codedeck android test  # the app's unit tests, then the counts and failures
 ./codedeck android lint  # lintDebug, then what the report says
 ./codedeck live opencode # one real agent session, everything the host reports
+./codedeck live claude-code --fake-model --prompt /tool
+                         # the same session against a local model server:
+                         # no account, no network, fixed replies (see below)
 
 # The deployed bridge service (Docker Compose)
 ./codedeck bridge up     # build if needed and start
@@ -104,6 +107,29 @@ and the bridge end-to-end test (`-p bridge-runtime --test e2e`) — the host
 bundle is `./codedeck dev pnpm --filter @codedeck/agent-host run build`. After
 changing a driver-protocol type, regenerate the host's types with
 `./codedeck dev cargo test -p agent-protocol --test gen_ts_bindings -- --ignored`.
+
+### Asking an agent a question — three tiers, cheapest first
+
+A run costs what its model costs, so pick the tier by what needs proving.
+Tiers one and two spend nothing; tier three is where a subscription or a
+balance is at stake, so pass `--model` and never borrow the bridge's
+credentials (`--env` is for the agent's own paths, not its keys).
+
+1. **`live fake`** — the scripted test agent: the driver protocol's own
+   plumbing, with no SDK and no model at all.
+2. **`live <agent> --fake-model`** — a real agent (claude-code, opencode,
+   deepseek-harness) against a local model server
+   (`packages/agent-host/tools/fake-model.mjs`). The session is real, the
+   model is not: each prompt is a scenario — `/tool` (a tool call; OpenCode
+   asks permission for it), `/question` (a question form), `/plan-approval`
+   (a plan card), `/error` (an API failure), `/long` (a long answer and a
+   large context) — and anything else is echoed. Nothing reaches an account,
+   and CI runs the same thing for claude-code
+   (`src/drivers/claude/__tests__/claudeFakeModel.test.ts`).
+3. **A real model** — OpenCode on its free Zen models
+   (`--model opencode/cat-jam-free`) for fidelity, since only a real model
+   chooses its own tool arguments and writes prose. Everything else on
+   claude-code or deepseek-harness spends the account.
 
 ### CI and releases
 
