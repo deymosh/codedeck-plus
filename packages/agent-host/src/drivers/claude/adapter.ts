@@ -9,7 +9,8 @@
  * hides the tool calls behind those cards so they do not also render as
  * ordinary tool actions.
  */
-import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { todosOf, toolLocations } from '../../sdk/tools';
+import { claudeTool } from './tools';
 import {
   MAX_DIFF_LINES,
   toDiffLines,
@@ -97,19 +98,18 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
       } else if (block.name === 'AskUserQuestion') {
         ctx.hiddenCallIds.add(block.id);
       } else {
-        const kind = toolKindOf(block.name, ctx.onUnknownTool);
-        if (kind === 'agent' && typeof input.subagent_type === 'string' && input.subagent_type) {
+        const call = claudeTool(block.name, input, ctx.onUnknownTool);
+        if (call.kind === 'agent' && typeof input.subagent_type === 'string' && input.subagent_type) {
           ctx.subagentLabels.set(block.id, input.subagent_type);
         }
-        const full = toolInput(block.name, input);
         entries.push({
           entryType: 'tool_call',
           callId: block.id,
           toolName: block.name,
-          kind,
-          title: toolTitle(block.name, input),
+          kind: call.kind,
+          title: call.title,
           ...withLocations(toolLocations(input)),
-          ...(full !== undefined ? { input: full } : {}),
+          ...(call.input !== undefined ? { input: call.input } : {}),
           timestamp: ts,
           ...sub,
         });

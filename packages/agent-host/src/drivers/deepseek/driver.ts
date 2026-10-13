@@ -29,7 +29,8 @@ import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
 import { mcpStatus as mcpStatusOf } from '../../sdk/mcp';
 import { parseSlashCommand } from '../../sdk/commands';
-import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle, unknownToolReporter } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolLocations, unknownToolReporter } from '../../sdk/tools';
+import { deepseekTool } from './tools';
 import type {
   AgentInfo,
   McpStatus,
@@ -473,11 +474,12 @@ export class DeepSeekSession implements DriverSession {
     const toolName = facts?.name ?? request.toolCall.name ?? request.toolCall.title ?? 'tool';
     const input = facts?.input ?? {};
     const locations = toolLocations(input);
+    const call = deepseekTool(toolName, input, this.reportUnknownTool);
     const outcome = await this.ctx.requestPermission({
       requestId: callId,
       toolName,
-      kind: toolKindOf(toolName, this.reportUnknownTool),
-      title: toolTitle(toolName, input) || toolName,
+      kind: call.kind,
+      title: call.title,
       ...(locations.length > 0 ? { locations } : {}),
       options: [PERMISSION_ALLOW, PERMISSION_DENY],
     });

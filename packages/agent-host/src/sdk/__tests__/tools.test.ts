@@ -1,38 +1,77 @@
 /**
- * Tool kinds: each agent's tool names, as the phone groups and labels them.
+ * The agent-neutral reading of a tool call: what a driver gets for the kind,
+ * the title and the input a call travels with, and what happens to a name the
+ * driver's own table does not list.
+ *
+ * Each agent's own names are tested beside it (`drivers/<agent>/__tests__`).
  */
 import { describe, expect, it } from 'vitest';
-import { toolInput, toolKindOf, toolTitle, unknownToolReporter } from '../tools';
+import { readToolCall, ToolKind, toolLocations, todosOf, unknownToolReporter, type ToolDialects } from '../tools';
 
-describe('toolKindOf', () => {
-  it("reads every agent's spelling of a tool", () => {
-    expect(toolKindOf('Edit')).toBe('edit');
-    expect(toolKindOf('patch')).toBe('edit');
-    expect(toolKindOf('websearch')).toBe('fetch');
-    expect(toolKindOf('something-new')).toBe('other');
+/** A driver's table, standing in for one of the real ones. */
+const TOOLS: ToolDialects = {
+  run: { kind: ToolKind.Execute, title: (input) => String(input.command), detail: (input) => String(input.command) },
+  look: { kind: ToolKind.Read, title: (input) => String(input.path) },
+  stop: { kind: ToolKind.Execute, title: (input) => String(input.task_id) },
+  change: { kind: ToolKind.Edit, title: (input) => String(input.path), detail: () => undefined },
+  ask: { kind: ToolKind.Think },
+};
+
+const read = (name: string, input: Record<string, unknown>, report?: (name: string) => void) =>
+  readToolCall(TOOLS, name, input, report);
+
+describe('readToolCall', () => {
+  it("reads a name the table lists, case-insensitively, as the agent spells it", () => {
+    // The command is the title in full, so no second copy travels as input.
+    expect(read('Run', { command: 'npm test' })).toEqual({ kind: 'execute', title: 'npm test' });
+    const script = "python3 - <<'EOF'\nprint(1)\nEOF";
+    expect(read('Run', { command: script })).toEqual({ kind: 'execute', title: "python3 - <<'EOF'…", input: script });
   });
 
-  it('reports a name no table lists, and only that', () => {
-    // Deduplicating the repeats is the reporter's job (`unknownToolReporter`).
+  it('falls back to the tool’s own name when the call has nothing to title it with', () => {
+    expect(read('ask', { questions: [] })).toEqual({ kind: 'think', title: 'ask' });
+  });
+
+  it('shows a call’s arguments as JSON when they say more than the title', () => {
+    expect(read('stop', { task_id: 'task-7', force: true })).toEqual({
+      kind: 'execute',
+      title: 'task-7',
+      input: '{\n  "task_id": "task-7",\n  "force": true\n}',
+    });
+  });
+
+  it('lets a tool say its input is not worth showing', () => {
+    // A file change: its diff entry already carries the content.
+    expect(read('change', { path: '/a.ts', oldString: 'a', newString: 'b' })).toEqual({
+      kind: 'edit',
+      title: '/a.ts',
+    });
+  });
+
+  it('gives an unknown name its own name and arguments, never a guess', () => {
+    // The kind is what the phone picks an icon and a verb from: a wrong guess
+    // would read as a confident lie about what the call did.
+    expect(read('mystery', { command: 'rm -rf /' })).toEqual({
+      kind: 'other',
+      title: 'mystery',
+      input: '{\n  "command": "rm -rf /"\n}',
+    });
+    // Even one argument travels: the title is the tool's name, not the value.
+    expect(read('mcp__gh__issue', { n: 1 }).input).toBe('{\n  "n": 1\n}');
+    expect(read('mystery', {}).input).toBeUndefined();
+  });
+
+  it('reports an unknown name, which is how a rename stops being silent', () => {
     const reported: string[] = [];
-    const report = (name: string): void => void reported.push(name);
-    expect(toolKindOf('TaskRenamed', report)).toBe('other');
-    expect(toolKindOf('Edit', report)).toBe('edit');
-    expect(toolKindOf('something-new', report)).toBe('other');
-    expect(reported).toEqual(['TaskRenamed', 'something-new']);
+    read('mystery', {}, (name) => reported.push(name));
+    read('look', {}, (name) => reported.push(name));
+    expect(reported).toEqual(['mystery']);
   });
 
-  it("reads Claude Code's current name for stopping a task", () => {
-    // The CLI renames KillShell/KillBash to TaskStop and still accepts the
-    // old spellings as aliases.
-    expect(toolKindOf('TaskStop')).toBe('execute');
-    expect(toolKindOf('KillShell')).toBe('execute');
-  });
-
-  it("reads OpenCode v2's names for tools the others spell differently", () => {
-    // `bash` and `task` became `shell` and `subagent`.
-    expect(toolKindOf('shell')).toBe('execute');
-    expect(toolKindOf('subagent')).toBe('agent');
+  it('caps the input it hands over', () => {
+    const call = read('mystery', { blob: 'x'.repeat(5000) });
+    expect(call.input).toHaveLength(4001);
+    expect(call.input?.endsWith('…')).toBe(true);
   });
 });
 
@@ -58,61 +97,24 @@ describe('unknownToolReporter', () => {
   });
 });
 
-describe('toolTitle', () => {
-  it('names the sub-agent and what it was asked to do, under either spelling', () => {
-    // Claude Code and OpenCode v1 name the sub-agent `subagent_type`;
-    // OpenCode v2 names it `agent`.
-    expect(toolTitle('task', { description: 'find things', subagent_type: 'explore' })).toBe('find things (explore)');
-    expect(toolTitle('subagent', { description: 'find things', agent: 'explore' })).toBe('find things (explore)');
-    expect(toolTitle('subagent', { description: 'find things' })).toBe('find things');
-  });
-
-  it('names a file by whichever key the agent uses for it', () => {
-    expect(toolTitle('edit', { filePath: '/a.ts' })).toBe('/a.ts');
-    expect(toolTitle('edit', { path: '/b.ts' })).toBe('/b.ts');
-  });
-
-  it('names the background task a stop refers to', () => {
-    expect(toolTitle('TaskStop', { task_id: 'task-7' })).toBe('task-7');
-    expect(toolTitle('TaskStop', { shell_id: 'sh-2' })).toBe('sh-2');
-  });
-
-  it('shows a shell command under either spelling', () => {
-    expect(toolTitle('bash', { command: 'ls -la' })).toBe('ls -la');
-    expect(toolTitle('shell', { command: 'ls -la' })).toBe('ls -la');
+describe('toolLocations', () => {
+  it('names the file under whichever key the agent uses for it', () => {
+    // Claude Code and the DeepSeek Harness say `file_path`; OpenCode v2 says
+    // `path`, and a notebook has a path of its own.
+    expect(toolLocations({ file_path: '/a.ts' })).toEqual(['/a.ts']);
+    expect(toolLocations({ filePath: '/b.ts' })).toEqual(['/b.ts']);
+    expect(toolLocations({ path: '/c.ts' })).toEqual(['/c.ts']);
+    expect(toolLocations({ notebook_path: '/d.ipynb' })).toEqual(['/d.ipynb']);
+    expect(toolLocations({ command: 'ls' })).toEqual([]);
   });
 });
 
-describe('toolInput', () => {
-  it('gives the whole command, under either spelling, never the one-line title', () => {
-    // The title is cut to 200 chars, so a long command has to come from here.
-    const command = `git commit -m "${'x'.repeat(300)}"`;
-    expect(toolInput('bash', { command })).toBe(command);
-    expect(toolInput('shell', { command })).toBe(command);
-  });
-
-  it('gives a sub-agent its instructions, under either spelling', () => {
-    expect(toolInput('task', { prompt: 'find the bug', description: 'look' })).toBe('find the bug');
-    expect(toolInput('subagent', { prompt: 'find the bug', description: 'look', agent: 'explore' })).toBe('find the bug');
-  });
-
-  it('gives the program a Code Mode call runs', () => {
-    // Long enough that the one-line title cannot be the whole answer.
-    const code = 'const hits = await tools.grep({ pattern: "x" }); return hits.slice(0, 10); '
-      + 'work(); '.repeat(40);
-    expect(toolInput('execute', { code })).toBe(code);
-  });
-
-  it('says nothing extra when the title already is the whole input', () => {
-    // A short command is its own title, so the sheet needs no second copy.
-    expect(toolInput('shell', { command: 'ls' })).toBeUndefined();
-  });
-
-  it('leaves a tool whose title already says it all without an input', () => {
-    // A lone argument is the title: a path, a pattern, a URL.
-    expect(toolInput('read', { path: '/a.ts' })).toBeUndefined();
-    expect(toolInput('webfetch', { url: 'https://x' })).toBeUndefined();
-    // A file-changing call shows its diff instead.
-    expect(toolInput('edit', { path: '/a.ts', oldString: 'a', newString: 'b' })).toBeUndefined();
+describe('todosOf', () => {
+  it('reads a checklist, counting an unknown status as pending', () => {
+    expect(todosOf({ todos: [{ content: 'fix it', status: 'in_progress' }, { content: 'ship it' }] })).toEqual([
+      { text: 'fix it', status: 'in_progress' },
+      { text: 'ship it', status: 'pending' },
+    ]);
+    expect(todosOf({ command: 'ls' })).toBeNull();
   });
 });

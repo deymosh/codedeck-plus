@@ -19,7 +19,8 @@ import type { ProviderHttp } from '../../sdk/net';
 import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
 import { isBenignPlanDirWrite } from './policy';
-import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle, unknownToolReporter } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
+import { claudeTool } from './tools';
 import { newTranslateContext, type TranslateContext } from '../../sdk/transcript';
 import { slashCommand } from '../../sdk/commands';
 import type {
@@ -519,14 +520,15 @@ export class ClaudeSession implements DriverSession {
     if (toolName === 'ExitPlanMode') return this.approvePlan(requestId);
 
     const locations = toolLocations(input);
+    const call = claudeTool(toolName, input, this.reportUnknownTool);
     const hookPlugin = hook ? hookPluginOf(toolName, this.plugins, this.settingsFiles()) : undefined;
     // The SDK's own prompt sentence, when it sent one, describes the call.
     const description = options.description ?? options.title;
     const outcome = await this.ctx.requestPermission({
       requestId,
       toolName,
-      kind: toolKindOf(toolName, this.reportUnknownTool),
-      title: toolTitle(toolName, input) || toolName,
+      kind: call.kind,
+      title: call.title,
       ...(description ? { description } : {}),
       locations,
       options: hook ? [PERMISSION_ALLOW, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY],

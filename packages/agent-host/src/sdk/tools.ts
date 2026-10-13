@@ -1,92 +1,68 @@
 /**
  * Helpers every driver uses to describe tool calls in the wire's
- * agent-neutral terms: a tool kind, a one-line title, the files touched, and
- * the standard permission choices.
+ * agent-neutral terms: a tool kind, a one-line title, the input a sheet
+ * shows, the files touched, and the standard permission choices.
+ *
+ * What a tool's name means belongs to the agent that emits it, in
+ * `drivers/<agent>/tools.ts`: the same name can mean different things to two
+ * agents, and a rename then touches one driver's own file rather than a
+ * shared table every driver reads. This module holds what is the same for
+ * all of them — the kind vocabulary, the reading of a call's arguments, and
+ * the caps every entry travels under.
  */
-import type { PermissionOption, TodoItem, ToolKind } from './types';
+import type { PermissionOption, TodoItem, ToolKind as ToolKindName } from './types';
 
 /**
- * Tool names, by the agent they come from.
+ * The wire's tool kinds, as values, so a driver names one instead of spelling
+ * the string: `ToolKind.Read` is checked against the protocol, a literal
+ * `'raed'` is not.
  *
- * Every name here belongs to an agent this host runs — Claude Code, OpenCode
- * 2.x or the DeepSeek Harness. A name none of them emits (an older SDK's
- * tool, or one a rename left behind) does not belong: it could only label a
- * row that never appears. Names are matched lower-cased, since these agents
- * spell them differently (`Bash`, `bash`).
- *
- * A name more than one of them uses, meaning the same thing, lives in
- * COMMON_TOOLS; the rest sit with their agent's own tools. When an agent
- * renames a tool, its new name joins its list and the old one leaves — the
- * exceptions are the ones an agent still answers to, like Claude Code's
- * KillShell/KillBash aliases of TaskStop.
+ * `satisfies` holds each value to a kind the wire actually has;
+ * `__tests__/tools.test.ts` holds the other direction, reading the wire's own
+ * union out of `generated/protocol.ts` and failing on a kind this object does
+ * not name.
  */
-const COMMON_TOOLS: Record<string, ToolKind> = {
-  read: 'read',
-  write: 'edit',
-  edit: 'edit',
-  glob: 'search',
-  grep: 'search',
-  webfetch: 'fetch',
-  websearch: 'fetch',
-  // Claude Code's and the DeepSeek Harness's sub-agent call.
-  task: 'agent',
-};
+export const ToolKind = {
+  Read: 'read',
+  Edit: 'edit',
+  Delete: 'delete',
+  Move: 'move',
+  Search: 'search',
+  Execute: 'execute',
+  Think: 'think',
+  Fetch: 'fetch',
+  SwitchMode: 'switch_mode',
+  Agent: 'agent',
+  Other: 'other',
+} as const satisfies Record<string, ToolKindName>;
 
-const CLAUDE_TOOLS: Record<string, ToolKind> = {
-  bash: 'execute',
-  bashoutput: 'execute',
-  // Stopping a background task. The CLI's own rename map turns KillShell and
-  // KillBash into TaskStop, so TaskStop is what arrives; the aliases are kept
-  // for a session driven by a CLI that still says them.
-  taskstop: 'execute',
-  killshell: 'execute',
-  killbash: 'execute',
-  ls: 'read',
-  notebookread: 'read',
-  multiedit: 'edit',
-  notebookedit: 'edit',
-  todowrite: 'think',
-  exitplanmode: 'switch_mode',
-  enterplanmode: 'switch_mode',
-};
+/** The kind vocabulary, under the name it has on the wire. */
+export type ToolKind = ToolKindName;
 
-const OPENCODE_TOOLS: Record<string, ToolKind> = {
-  // 2.x's name for the shell tool; `bash` above is Claude Code's.
-  shell: 'execute',
-  // Code Mode: running a program, driving a browser, working trees.
-  execute: 'execute',
-  browser: 'fetch',
-  worktree_create: 'execute',
-  worktree_remove: 'execute',
-  worktree_list: 'read',
-  // 2.x's name for the sub-agent call; `task` above is the others'.
-  subagent: 'agent',
-  patch: 'edit',
-  skill: 'read',
-  question: 'think',
-};
+/** One agent's tool call: the kind the phone groups by, and how to read a
+ *  call's own arguments. */
+export interface ToolDialect {
+  kind: ToolKind;
+  /** The call's one-line title, from its arguments. A tool whose name is all
+   *  there is to say leaves this out, and the name is shown. */
+  title?: (input: Record<string, unknown>) => string;
+  /** The arguments as the sheet shows them, when they say more than the
+   *  title. `undefined` for a call whose entry is already the title, and for
+   *  a file change, whose diff entry carries the content. Absent: the
+   *  arguments as JSON, unless there is only one (the title already is it). */
+  detail?: (input: Record<string, unknown>) => string | undefined;
+}
 
-const DEEPSEEK_TOOLS: Record<string, ToolKind> = {
-  agent: 'agent',
-  pwsh: 'execute',
-  job_kill: 'execute',
-  str_replace_editor: 'edit',
-  todo_write: 'think',
-  web_fetch: 'fetch',
-  web_search: 'fetch',
-  read_image: 'read',
-  job_output: 'read',
-  job_list: 'read',
-  list: 'read',
-};
+/** One agent's tool names, which is what its reader answers from. */
+export type ToolDialects = Record<string, ToolDialect>;
 
-/** Every agent's tools together, which is what a lookup reads. */
-const TOOL_KINDS: Record<string, ToolKind> = {
-  ...COMMON_TOOLS,
-  ...CLAUDE_TOOLS,
-  ...OPENCODE_TOOLS,
-  ...DEEPSEEK_TOOLS,
-};
+/** What a driver derives for one tool call: the kind, the title the phone
+ *  shows, and — when it says more than the title — the call's whole input. */
+export interface ToolCallRead {
+  kind: ToolKind;
+  title: string;
+  input?: string;
+}
 
 /** Whether a tool belongs to an MCP server the user configured rather than
  *  to the agent itself. Its name comes from that server, so no table here can
@@ -115,148 +91,74 @@ export function unknownToolReporter(log: (message: string) => void): (toolName: 
     const key = toolName.toLowerCase();
     if (reported.has(key)) return;
     reported.add(key);
-    log(`unknown tool name '${toolName}': no agent's tool table lists it, so its calls show as generic actions`);
+    log(
+      `unknown tool name '${toolName}': no agent's tool table lists it, so its calls show as generic actions`
+        + ' (a tool an agent renamed, or one of an MCP server\'s own)',
+    );
   };
 }
 
-/** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `shell`)
- *  to the wire's tool kind. A name no table lists is `other`, which is a
- *  deliberate answer for a tool that does something of its own and a gap for
- *  one that was renamed — `report` is how a caller tells those apart. */
-export function toolKindOf(toolName: string, report?: (toolName: string) => void): ToolKind {
-  const kind = TOOL_KINDS[toolName.toLowerCase()];
-  if (kind !== undefined) return kind;
-  report?.(toolName);
-  return 'other';
-}
-
-function str(v: unknown): string {
+export function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
 /** A title is one line: a multi-line command (a heredoc, a script) shows its
  *  first line, and the whole command travels as the call's `input`. */
-const MAX_TITLE_CHARS = 200;
+export const MAX_TITLE_CHARS = 200;
 
-function oneLine(text: string): string {
+export function oneLine(text: string): string {
   const first = text.split('\n', 1)[0]!.trimEnd();
   const cut = first.length > MAX_TITLE_CHARS ? first.slice(0, MAX_TITLE_CHARS) : first;
   return cut.length < text.trimEnd().length ? `${cut}…` : cut;
-}
-
-/** One-line human summary of a tool call, e.g. `npm test` or `src/main.rs`. */
-export function toolTitle(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName.toLowerCase()) {
-    case 'bash':
-    case 'shell':
-    case 'pwsh':
-      return oneLine(str(input.command) || str(input.description));
-    case 'read':
-    case 'write':
-    case 'edit':
-    case 'multiedit':
-    case 'read_image':
-      // OpenCode v2 names a file `path`; v1 and Claude Code `filePath`.
-      return str(input.file_path) || str(input.filePath) || str(input.path);
-    case 'notebookedit':
-      return str(input.notebook_path) || str(input.file_path);
-    // The DeepSeek Harness's editor names its file `path`; its `command`
-    // (view, create, str_replace, insert) says what the call does.
-    case 'str_replace_editor':
-      return `${str(input.command)} ${str(input.path)}`.trim();
-    case 'glob':
-    case 'grep':
-      return str(input.pattern);
-    case 'task':
-    case 'subagent':
-    case 'agent': {
-      const desc = str(input.description);
-      // Claude Code and OpenCode v1 name the sub-agent `subagent_type`;
-      // OpenCode v2 names it `agent`.
-      const sub = str(input.subagent_type) || str(input.agent);
-      return sub ? `${desc} (${sub})` : desc;
-    }
-    case 'taskstop':
-    case 'killshell':
-    case 'killbash':
-      return str(input.task_id) || str(input.shell_id);
-    case 'websearch':
-      return str(input.query);
-    case 'web_search':
-      return Array.isArray(input.queries) ? str(input.queries[0]) : '';
-    case 'webfetch':
-    case 'web_fetch':
-      return str(input.url);
-    case 'skill':
-      return str(input.name);
-    // v2's own tools. A worktree is named by what it is for, and the browser
-    // by the page it opens.
-    case 'worktree_create':
-    case 'worktree_remove':
-      return str(input.name) || str(input.branch) || '';
-    case 'worktree_list':
-      return '';
-    case 'browser':
-      return str(input.url) || str(input.action) || '';
-    case 'execute':
-      return oneLine(str(input.code) || str(input.description));
-    // The question tool's own row is hidden — its card comes from the form
-    // it raises — so this only names the call if a server ever shows it.
-    case 'question':
-      return oneLine(str(input.title));
-    default:
-      return JSON.stringify(input ?? {}).slice(0, MAX_TITLE_CHARS);
-  }
 }
 
 /** A call's `input` is capped like a tool result: enough to read, well
  *  inside a relay event. */
 export const MAX_TOOL_INPUT_CHARS = 4000;
 
-/**
- * The call's whole input as a person reads it, when it says more than its
- * title: the full command, a sub-agent's instructions, any other tool's
- * arguments as indented JSON. `undefined` for a file change — its diff
- * entry already carries the content — and when the title says it all.
- */
-export function toolInput(toolName: string, input: Record<string, unknown>): string | undefined {
-  const title = toolTitle(toolName, input);
-  let text: string;
-  switch (toolName.toLowerCase()) {
-    // The command a session ran, whole: the title is one line cut to
-    // MAX_TITLE_CHARS, so a long command must not have to fall back to it.
-    case 'bash':
-    case 'shell':
-      text = str(input.command);
-      break;
-    // The instructions a sub-agent was given.
-    case 'task':
-    case 'subagent':
-    case 'agent':
-      text = str(input.prompt);
-      break;
-    // The program a Code Mode call runs.
-    case 'execute':
-      text = str(input.code);
-      break;
-    case 'write':
-    case 'edit':
-    case 'multiedit':
-    case 'notebookedit':
-    case 'patch':
-    case 'todowrite':
-    case 'todo_write':
-    case 'str_replace_editor':
-      return undefined;
-    default: {
-      const keys = Object.keys(input ?? {});
-      // A lone argument is the title already (a path, a pattern, a URL).
-      if (keys.length <= 1) return undefined;
-      text = JSON.stringify(input, null, 2);
-    }
-  }
-  if (!text || text === title) return undefined;
+function capped(text: string): string {
   return text.length > MAX_TOOL_INPUT_CHARS ? text.slice(0, MAX_TOOL_INPUT_CHARS) + '…' : text;
+}
+
+/** The arguments as a person reads them: indented JSON, or nothing when the
+ *  one argument is the title already (a path, a pattern, a URL). */
+function argumentsAsJson(input: Record<string, unknown>): string | undefined {
+  return Object.keys(input ?? {}).length <= 1 ? undefined : JSON.stringify(input, null, 2);
+}
+
+/**
+ * Read one tool call of one agent: its kind, the title the phone shows, and
+ * the call's whole input when it says more than the title.
+ *
+ * A name the agent's own table does not list is read as `other`, keeping the
+ * tool's own name and its arguments rather than guessing at either — the
+ * kind is what the phone picks an icon and a verb from, so a wrong guess
+ * would read as a confident lie about what the call did. `report` is told
+ * such a name (`unknownToolReporter`), which is how a rename stops being
+ * silent.
+ */
+export function readToolCall(
+  dialects: ToolDialects,
+  toolName: string,
+  input: Record<string, unknown>,
+  report?: (toolName: string) => void,
+): ToolCallRead {
+  const dialect = dialects[toolName.toLowerCase()];
+  if (dialect === undefined) {
+    report?.(toolName);
+    const title = oneLine(toolName);
+    const args = Object.keys(input ?? {}).length > 0 ? JSON.stringify(input, null, 2) : '';
+    return { kind: ToolKind.Other, title, ...(args ? { input: capped(args) } : {}) };
+  }
+  const title = oneLine(dialect.title?.(input ?? {}) ?? '') || toolName;
+  const detail = dialect.detail ? dialect.detail(input ?? {}) : argumentsAsJson(input ?? {});
+  // The input is what the sheet shows *besides* the title, so a call that
+  // says no more than its title carries none: no second copy of it travels.
+  return {
+    kind: dialect.kind,
+    title,
+    ...(detail && detail !== title ? { input: capped(detail) } : {}),
+  };
 }
 
 const TODO_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed', 'cancelled']);
@@ -285,9 +187,11 @@ export function todosOf(input: Record<string, unknown>): TodoItem[] | null {
   return items;
 }
 
-/** The files a tool call touches, when its input names them. */
+/** The files a tool call touches, when its input names them: Claude Code and
+ *  the DeepSeek Harness say `file_path`, OpenCode v2 `path`, and a notebook
+ *  has a path of its own. */
 export function toolLocations(input: Record<string, unknown>): string[] {
-  const path = str(input.file_path) || str(input.filePath) || str(input.notebook_path);
+  const path = str(input.file_path) || str(input.filePath) || str(input.path) || str(input.notebook_path);
   return path ? [path] : [];
 }
 

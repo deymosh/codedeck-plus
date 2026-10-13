@@ -23,7 +23,8 @@
 import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
-import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle, unknownToolReporter } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
+import { opencodeTool } from './tools';
 import { newTranslateContext, type TranslateContext } from '../../sdk/transcript';
 import type {
   AgentInfo,
@@ -864,12 +865,13 @@ export class OpenCodeSession implements DriverSession {
     }
     const toolName = this.toolNames.get(ask.source?.id ?? '') ?? ask.action;
     const description = ask.message?.trim() || describePermission(ask.action, ask.resources);
+    const call = opencodeTool(toolName, (ask.metadata ?? {}) as Record<string, unknown>, this.reportUnknownTool);
     this.ctx
       .requestPermission({
         requestId: ask.source?.id ?? ask.id,
         toolName,
-        kind: toolKindOf(toolName, this.reportUnknownTool),
-        title: toolTitle(toolName, (ask.metadata ?? {}) as Record<string, unknown>) || toolName,
+        kind: call.kind,
+        title: call.title,
         description,
         locations: toolLocations((ask.metadata ?? {}) as Record<string, unknown>),
         options: ask.save && ask.save.length > 0 ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],

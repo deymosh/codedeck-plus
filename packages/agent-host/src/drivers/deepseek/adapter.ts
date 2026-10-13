@@ -17,7 +17,8 @@
  * from the name (src/tools.ts) exactly as they do for the other agents.
  */
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import { todosOf, toolInput, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { todosOf, toolLocations } from '../../sdk/tools';
+import { deepseekTool } from './tools';
 import { MAX_DIFF_LINES, truncateToolResult, toDiffLines, type DiffPayload } from '../../sdk/transcript';
 import type { OutputEntry } from '../../sdk/types';
 
@@ -79,18 +80,18 @@ function toolCallEntries(
   const input = record(update.rawInput);
   calls.set(update.toolCallId, { name, input });
   if (QUESTION_TOOLS.has(name)) return [];
-  const locations = fileLocations(name, input);
-  const full = toolInput(name, input);
+  const locations = toolLocations(input);
+  const call = deepseekTool(name, input, reportUnknownTool);
   const todos = todosOf(input);
   return [
     {
       entryType: 'tool_call',
       callId: update.toolCallId,
       toolName: name,
-      kind: toolKindOf(name, reportUnknownTool),
-      title: toolTitle(name, input) || name,
+      kind: call.kind,
+      title: call.title,
       ...(locations.length > 0 ? { locations } : {}),
-      ...(full !== undefined ? { input: full } : {}),
+      ...(call.input !== undefined ? { input: call.input } : {}),
       timestamp: ts,
     },
     ...(todos ? [{ entryType: 'todos' as const, items: todos, callId: update.toolCallId, timestamp: ts }] : []),
@@ -219,14 +220,3 @@ function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-/**
- * The file a call names. The harness's own file tools agree on `file_path`;
- * `str_replace_editor` is the odd one out with `path` — a key `glob` and
- * `grep` use for a directory, so only that editor is read that way.
- */
-function fileLocations(name: string, input: Record<string, unknown>): string[] {
-  const direct = toolLocations(input);
-  if (direct.length > 0) return direct;
-  const path = name === 'str_replace_editor' ? str(input.path) : undefined;
-  return path ? [path] : [];
-}
