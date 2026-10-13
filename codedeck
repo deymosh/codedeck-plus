@@ -281,14 +281,18 @@ start_throwaway() {
   trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
 }
 
-# Build a small tool image from an inline Dockerfile (no build context).
-# Docker's layer cache makes every run after the first a no-op, so per-run
-# `apt-get install` / `npm install -g` cost is paid once per machine.
-ensure_image() {
-  local tag="$1"
-  shift
+# The images this script builds for its own containers, one file each, in
+# scripts/docker — beside the scripts that use them rather than at the repo
+# root, and needing nothing from the repo as build context. Docker's layer
+# cache makes every run after the first a no-op, so the per-image install cost
+# is paid once per machine.
+TOOL_IMAGE_DIR=scripts/docker
+
+ensure_tool_image() {
+  local tag="$1" file="$2"
+  shift 2
   echo "==> Preparing $tag image (cached after the first run)"
-  docker build -q -t "$tag" "$@" - >/dev/null
+  docker build -q -t "$tag" -f "$file" "$TOOL_IMAGE_DIR" "$@" >/dev/null
 }
 
 # --- Plumbing for the long-lived containers (dev, android). ---
@@ -372,23 +376,12 @@ sync_tree() {
 # and target dir live in named volumes, so a rerun only recompiles what
 # changed. Only the cargo workspace is copied. ---
 
-# The one Node image the checks and the dev container share: same Node, same
-# pnpm, same store volume, so a dependency is downloaded once for both. jq
-# reads the driver protocol's frames, curl and ps are for poking at a running
-# agent from inside, git for the tree.
+# The one Node image the checks and the dev container share (scripts/docker/
+# node.Dockerfile), so a dependency is downloaded once into one store volume.
 ensure_node_image() {
   local pnpm_version
   pnpm_version="$(sed -n 's/.*"packageManager": *"pnpm@\([^"]*\)".*/\1/p' package.json)"
-  ensure_image codedeck-node --build-arg "PNPM_VERSION=$pnpm_version" <<'DOCKERFILE'
-FROM node:22-slim
-ARG PNPM_VERSION
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       git ca-certificates jq procps curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "pnpm@${PNPM_VERSION}"
-ENV npm_config_store_dir=/pnpm-store
-DOCKERFILE
+  ensure_tool_image codedeck-node "$TOOL_IMAGE_DIR/node.Dockerfile" --build-arg "PNPM_VERSION=$pnpm_version"
 }
 
 check_typescript() {
@@ -411,10 +404,7 @@ check_typescript() {
 
 check_rust() {
   local name="codedeck-check-rust-$$"
-  ensure_image codedeck-check-rust <<'DOCKERFILE'
-FROM rust:1-bookworm
-RUN rustup component add clippy
-DOCKERFILE
+  ensure_tool_image codedeck-check-rust "$TOOL_IMAGE_DIR/rust.Dockerfile"
   start_throwaway "$name" codedeck-check-rust \
     -v codedeck-cargo-registry:/usr/local/cargo/registry \
     -v codedeck-check-target:/repo/target
