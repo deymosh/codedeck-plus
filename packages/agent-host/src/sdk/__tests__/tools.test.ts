@@ -2,7 +2,7 @@
  * Tool kinds: each agent's tool names, as the phone groups and labels them.
  */
 import { describe, expect, it } from 'vitest';
-import { toolInput, toolKindOf, toolTitle } from '../tools';
+import { toolInput, toolKindOf, toolTitle, unknownToolReporter } from '../tools';
 
 describe('toolKindOf', () => {
   it("reads every agent's spelling of a tool", () => {
@@ -10,6 +10,16 @@ describe('toolKindOf', () => {
     expect(toolKindOf('patch')).toBe('edit');
     expect(toolKindOf('websearch')).toBe('fetch');
     expect(toolKindOf('something-new')).toBe('other');
+  });
+
+  it('reports a name no table lists, and only that', () => {
+    // Deduplicating the repeats is the reporter's job (`unknownToolReporter`).
+    const reported: string[] = [];
+    const report = (name: string): void => void reported.push(name);
+    expect(toolKindOf('TaskRenamed', report)).toBe('other');
+    expect(toolKindOf('Edit', report)).toBe('edit');
+    expect(toolKindOf('something-new', report)).toBe('other');
+    expect(reported).toEqual(['TaskRenamed', 'something-new']);
   });
 
   it("reads Claude Code's current name for stopping a task", () => {
@@ -23,6 +33,28 @@ describe('toolKindOf', () => {
     // `bash` and `task` became `shell` and `subagent`.
     expect(toolKindOf('shell')).toBe('execute');
     expect(toolKindOf('subagent')).toBe('agent');
+  });
+});
+
+describe('unknownToolReporter', () => {
+  it('logs a name once per session, whatever its spelling', () => {
+    const lines: string[] = [];
+    const report = unknownToolReporter((message) => lines.push(message));
+    report('TaskRenamed');
+    report('taskrenamed');
+    report('TaskRenamed');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('TaskRenamed');
+  });
+
+  it('leaves an MCP server’s own tool names alone', () => {
+    // The server names its tools; no table here can list them, so their
+    // names are not news.
+    const lines: string[] = [];
+    const report = unknownToolReporter((message) => lines.push(message));
+    report('mcp__github__create_issue');
+    report('mcp__filesystem__read_file');
+    expect(lines).toEqual([]);
   });
 });
 

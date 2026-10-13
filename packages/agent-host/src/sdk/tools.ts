@@ -88,10 +88,46 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   ...DEEPSEEK_TOOLS,
 };
 
+/** Whether a tool belongs to an MCP server the user configured rather than
+ *  to the agent itself. Its name comes from that server, so no table here can
+ *  list it — and a name this host has never seen is normal for one. */
+function isMcpTool(toolName: string): boolean {
+  return toolName.toLowerCase().startsWith('mcp__');
+}
+
+/**
+ * A reporter for tool names no agent's table knows, to be handed a driver's
+ * log seam.
+ *
+ * A name that is missing here is either a tool an agent renamed (its calls
+ * then reach the phone as generic actions, with the tool's raw arguments as
+ * their text) or one this host has never seen at all. Either way it belongs
+ * in the log of the session that used it, where the next reader can see it,
+ * rather than only in what the phone renders. Each name is reported once per
+ * session — and per name, not per call, since a tool is used many times.
+ */
+export function unknownToolReporter(log: (message: string) => void): (toolName: string) => void {
+  const reported = new Set<string>();
+  return (toolName) => {
+    // An MCP name says its own server owns it; the agent's tables are not
+    // expected to know it.
+    if (isMcpTool(toolName)) return;
+    const key = toolName.toLowerCase();
+    if (reported.has(key)) return;
+    reported.add(key);
+    log(`unknown tool name '${toolName}': no agent's tool table lists it, so its calls show as generic actions`);
+  };
+}
+
 /** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `shell`)
- *  to the wire's tool kind. */
-export function toolKindOf(toolName: string): ToolKind {
-  return TOOL_KINDS[toolName.toLowerCase()] ?? 'other';
+ *  to the wire's tool kind. A name no table lists is `other`, which is a
+ *  deliberate answer for a tool that does something of its own and a gap for
+ *  one that was renamed — `report` is how a caller tells those apart. */
+export function toolKindOf(toolName: string, report?: (toolName: string) => void): ToolKind {
+  const kind = TOOL_KINDS[toolName.toLowerCase()];
+  if (kind !== undefined) return kind;
+  report?.(toolName);
+  return 'other';
 }
 
 function str(v: unknown): string {

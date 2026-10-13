@@ -97,7 +97,8 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
       } else if (block.name === 'AskUserQuestion') {
         ctx.hiddenCallIds.add(block.id);
       } else {
-        if (toolKindOf(block.name) === 'agent' && typeof input.subagent_type === 'string' && input.subagent_type) {
+        const kind = toolKindOf(block.name, ctx.onUnknownTool);
+        if (kind === 'agent' && typeof input.subagent_type === 'string' && input.subagent_type) {
           ctx.subagentLabels.set(block.id, input.subagent_type);
         }
         const full = toolInput(block.name, input);
@@ -105,7 +106,7 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
           entryType: 'tool_call',
           callId: block.id,
           toolName: block.name,
-          kind: toolKindOf(block.name),
+          kind,
           title: toolTitle(block.name, input),
           ...withLocations(toolLocations(input)),
           ...(full !== undefined ? { input: full } : {}),

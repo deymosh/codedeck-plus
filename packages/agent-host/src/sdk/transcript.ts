@@ -24,10 +24,14 @@ export interface TranslateContext {
   subagentLabels: Map<string, string>;
   /** The agent's tasks, by id. */
   tasks: Map<string, KnownTask>;
+  /** Told every tool name no agent's table lists (`unknownToolReporter`),
+   *  so a rename is a line in the driver's log rather than a quiet change in
+   *  what the phone shows. */
+  onUnknownTool: (toolName: string) => void;
 }
 
-export function newTranslateContext(): TranslateContext {
-  return { hiddenCallIds: new Set(), subagentLabels: new Map(), tasks: new Map() };
+export function newTranslateContext(onUnknownTool: (toolName: string) => void = () => {}): TranslateContext {
+  return { hiddenCallIds: new Set(), subagentLabels: new Map(), tasks: new Map(), onUnknownTool };
 }
 
 /** A tool result's text is capped so one entry stays well inside a relay event. */

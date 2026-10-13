@@ -29,7 +29,7 @@ import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
 import { mcpStatus as mcpStatusOf } from '../../sdk/mcp';
 import { parseSlashCommand } from '../../sdk/commands';
-import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolKindOf, toolLocations, toolTitle, unknownToolReporter } from '../../sdk/tools';
 import type {
   AgentInfo,
   McpStatus,
@@ -196,6 +196,8 @@ export class DeepSeekSession implements DriverSession {
   /** What each tool call's own update carried, for its result and for the
    *  permission card the harness asks about it. */
   private readonly calls: ToolCallMemory = new Map();
+  /** Told a tool name no agent's table lists, which the log then carries. */
+  private readonly reportUnknownTool: (toolName: string) => void;
   private readonly cwd: string;
   private readonly env: Record<string, string>;
   private readonly ready: Promise<void>;
@@ -246,6 +248,7 @@ export class DeepSeekSession implements DriverSession {
   ) {
     this.cwd = params.cwd;
     this.mode = params.mode ?? DEFAULT_MODE;
+    this.reportUnknownTool = unknownToolReporter((message) => this.ctx.log(message));
     // Built here, not in `init`: a provider profile that cannot be used at
     // all refuses the session before it starts, rather than after an error
     // entry the phone would have to read.
@@ -437,7 +440,7 @@ export class DeepSeekSession implements DriverSession {
       this.options = update.configOptions;
       return;
     }
-    const entries = deepseekUpdateToEntries(update, this.calls);
+    const entries = deepseekUpdateToEntries(update, this.calls, this.reportUnknownTool);
     if (entries.length > 0) this.ctx.emit({ type: 'entries', entries });
   }
 
@@ -473,7 +476,7 @@ export class DeepSeekSession implements DriverSession {
     const outcome = await this.ctx.requestPermission({
       requestId: callId,
       toolName,
-      kind: toolKindOf(toolName),
+      kind: toolKindOf(toolName, this.reportUnknownTool),
       title: toolTitle(toolName, input) || toolName,
       ...(locations.length > 0 ? { locations } : {}),
       options: [PERMISSION_ALLOW, PERMISSION_DENY],

@@ -40,8 +40,13 @@ export interface ToolCallFacts {
 /** Every tool call of one session, by id. */
 export type ToolCallMemory = Map<string, ToolCallFacts>;
 
-/** Convert one update into entries. */
-export function deepseekUpdateToEntries(update: SessionUpdate, calls: ToolCallMemory): OutputEntry[] {
+/** Convert one update into entries. `reportUnknownTool` is told every tool
+ *  name no agent's table lists (`unknownToolReporter`). */
+export function deepseekUpdateToEntries(
+  update: SessionUpdate,
+  calls: ToolCallMemory,
+  reportUnknownTool?: (toolName: string) => void,
+): OutputEntry[] {
   const ts = new Date().toISOString();
   switch (update.sessionUpdate) {
     case 'agent_message_chunk':
@@ -49,7 +54,7 @@ export function deepseekUpdateToEntries(update: SessionUpdate, calls: ToolCallMe
     case 'agent_thought_chunk':
       return textOf(update.content, 'thinking', ts);
     case 'tool_call':
-      return toolCallEntries(update, calls, ts);
+      return toolCallEntries(update, calls, reportUnknownTool, ts);
     case 'tool_call_update':
       return toolResultEntries(update, calls, ts);
     default:
@@ -67,6 +72,7 @@ function textOf(content: unknown, role: 'agent' | 'thinking', ts: string): Outpu
 function toolCallEntries(
   update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>,
   calls: ToolCallMemory,
+  reportUnknownTool: ((toolName: string) => void) | undefined,
   ts: string,
 ): OutputEntry[] {
   const name = toolNameOf(update);
@@ -81,7 +87,7 @@ function toolCallEntries(
       entryType: 'tool_call',
       callId: update.toolCallId,
       toolName: name,
-      kind: toolKindOf(name),
+      kind: toolKindOf(name, reportUnknownTool),
       title: toolTitle(name, input) || name,
       ...(locations.length > 0 ? { locations } : {}),
       ...(full !== undefined ? { input: full } : {}),

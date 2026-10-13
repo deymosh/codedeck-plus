@@ -223,7 +223,7 @@ function toolStartEntries(
       entryType: 'tool_call',
       callId: event.callId,
       toolName: event.toolName,
-      kind: toolKindOf(event.toolName),
+      kind: toolKindOf(event.toolName, ctx.onUnknownTool),
       title: toolTitle(event.toolName, event.input),
       ...(locations.length > 0 ? { locations } : {}),
       ...(full !== undefined ? { input: full } : {}),
