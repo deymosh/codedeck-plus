@@ -11,6 +11,9 @@
 # (scripts/install-toolchain.sh, installed on first use).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+# Absolute, because some commands change directory (the Android ones work in
+# apps/android) and this script's own files are still theirs to reach.
+REPO_ROOT="$PWD"
 
 # Git Bash (MSYS) on Windows rewrites leading-/ arguments as if they were
 # Windows paths before docker.exe sees them — breaks `docker exec -w /path`.
@@ -56,14 +59,18 @@ require_docker() {
 }
 
 # The local engine: the vendored toolchain from scripts/install-toolchain.sh.
-# Installs it on first use so a Docker-less Linux host (or the coding agent
-# driving one) gets a working path with zero extra steps; idempotent after
-# that. Takes the components the command being run actually needs — `node`
-# for the TypeScript workspace, `rust` for the crates, `android` for
-# apps/android — and installs only what is missing of those, so a host that
-# runs one part of the repo never fetches the others (the Android SDK and NDK
-# are a few GB on their own). No argument means the whole toolchain.
-# env.sh is sourced into THIS shell so cargo/node/pnpm/java stay on PATH
+# Takes the components the command being run actually needs — `node` for the
+# TypeScript workspace, `rust` for the crates, `android` for apps/android — so
+# a host that runs one part of the repo never fetches the others (the Android
+# SDK and NDK are a few GB on their own). No argument means the whole
+# toolchain.
+#
+# The installer is run every time rather than only when its target is absent:
+# it is idempotent, and it checks the directory itself, while any record of
+# what was installed can drift from what is there (a deleted NDK, a half-run
+# that landed cmdline-tools and nothing else). Every step of it skips without
+# touching the network when its target is present, so the check costs a shell
+# startup. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
 # for the rest of the script. Non-Linux hosts have no supported Docker-free
 # path — scripts/install-toolchain.sh is Linux-only by design.
 ensure_toolchain() {
@@ -74,21 +81,12 @@ ensure_toolchain() {
     echo "command. See CLAUDE.md, \"Commands\"." >&2
     exit 1
   fi
-  local wanted=("$@") missing=()
-  [ ${#wanted[@]} -eq 0 ] && wanted=(java rust node android)
-  local component
-  for component in "${wanted[@]}"; do
-    grep -qx "$component" toolchain/.components 2>/dev/null || missing+=("$component")
-  done
-  if [ ${#missing[@]} -gt 0 ]; then
-    if [ ! -f toolchain/env.sh ]; then
-      echo "==> No Docker and no ./toolchain yet — installing what this needs:"
-      echo "    ${missing[*]} (one-time; Ctrl-C to abort)"
-    else
-      echo "==> Adding to ./toolchain: ${missing[*]}"
-    fi
-    bash scripts/install-toolchain.sh "${missing[@]}"
+  if [ ! -f toolchain/env.sh ]; then
+    echo "==> No Docker and no ./toolchain yet — installing what this needs"
+    [ $# -gt 0 ] && echo "    (${*})"
+    echo "    one-time; Ctrl-C to abort"
   fi
+  bash scripts/install-toolchain.sh "$@"
   # shellcheck source=/dev/null
   . toolchain/env.sh
 }
@@ -145,10 +143,14 @@ every command; on a Docker-less Linux host the command runs in this tree:
                            asking. Volumes are kept — the caches live there
 
 One live agent session, with everything the host reports about it (this is
-what the phone is shown: entries, turn states, context figures, errors). It
-installs the agent at the version this build pins, into the agents volume:
+what the phone is shown: entries, turn states, context figures, errors). An
+agent that is not installed is fetched once, at the version this build pins,
+and kept — in the agents volume on the Docker path, in ./toolchain/agents on
+a Docker-less host:
   live <agent>             One turn, "Reply with exactly: codedeck-live-ok"
   live <agent> --prompt …  One turn per --prompt, in order
+  live <agent> --models    What the agent offers, and what a session with no
+                           model would run — starts nothing, costs nothing
   live <agent> [options]   --mode ask|plan|default, --model ID, --effort ID,
                            --cwd DIR, --env K=V (agent paths and keys),
                            --timeout SECONDS (default 300), --no-sync
@@ -210,13 +212,24 @@ cmd_bridge() {
       # acquire it, so this reads the QR the running `run` command already
       # printed (it opens a pairing window on its own whenever nothing's
       # paired) rather than trying to trigger a new one.
-      if ! docker compose logs codedeck-bridge 2>&1 | grep -q "Pairing URL"; then
-        echo "No pairing QR found in the logs yet. If the window already" >&2
-        echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
-        exit 1
-      fi
+      #
+      # The logs are read once, into a variable, and searched here: under
+      # `set -o pipefail`, piping them into `grep -q` makes the search exit
+      # at its first match, which can leave `docker compose logs` killed by
+      # SIGPIPE — and the pipeline then reports failure for logs that do hold
+      # the QR, so a bridge that is plainly paired answers "no pairing QR".
+      local bridge_logs
+      bridge_logs="$(docker compose logs --no-log-prefix codedeck-bridge 2>&1 || true)"
+      case "$bridge_logs" in
+        *"Pairing URL"*) ;;
+        *)
+          echo "No pairing QR found in the logs yet. If the window already" >&2
+          echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
+          exit 1
+          ;;
+      esac
       # The QR is printed just above its URL line.
-      docker compose logs --no-log-prefix codedeck-bridge 2>&1 | grep -B 32 -A 1 "Pairing URL" | tail -34
+      printf '%s\n' "$bridge_logs" | grep -B 32 -A 1 "Pairing URL" | tail -34
       ;;
     shell)
       require_running_bridge
@@ -299,14 +312,22 @@ ensure_tool_image() {
 
 # Exact-name lookups throughout: Docker's `name=` filter is a regular
 # expression matched against every container's name, so `codedeck-dev` would
-# also answer for `codedeck-dev-2`.
-container_exists() {
-  docker ps -a --format '{{.Names}}' | grep -qx "$1"
+# also answer for `codedeck-dev-2`. The list is matched in the shell and not
+# piped into `grep -q`: under `set -o pipefail`, a match that makes grep exit
+# early can leave the writer killed by SIGPIPE, and the pipeline then reports
+# failure for a name that was found.
+container_named() {
+  local names
+  names="$(docker ps $1 --format '{{.Names}}')"
+  case $'\n'"$names"$'\n' in
+    *$'\n'"$2"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
-container_running() {
-  docker ps --format '{{.Names}}' | grep -qx "$1"
-}
+container_exists() { container_named "-a" "$1"; }
+
+container_running() { container_named "" "$1"; }
 
 # A container this script created carries the label, and runs the image it was
 # created from. One without either was made by hand — or by an older workflow
@@ -576,10 +597,12 @@ cmd_dev() {
     0) ;;
     2) fail_docker_down ;;
     # No Docker: the same command runs in this tree, on the vendored
-    # toolchain, with no container in the way at all.
+    # toolchain, with no container in the way at all. `--sync-only` has done
+    # its work once the dependencies are in, and must not open a shell.
     *)
       ensure_toolchain node
       ensure_local_deps
+      [ "$only_sync" = 1 ] && return 0
       cd "${workdir:-.}"
       if [ $# -eq 0 ]; then exec "${SHELL:-bash}"; fi
       exec "$@"
@@ -637,36 +660,18 @@ ensure_android_container() {
     -e GRADLE_USER_HOME=/gradle-home
 }
 
-# What a Gradle task left behind, in one line each: the counts from the JUnit
-# XML, which classes failed, and what lint said. Read after both a pass and a
-# failure — a failure is when it is worth most.
-ANDROID_REPORT='
-results=app/build/test-results/testDebugUnitTest
-if [ -d "$results" ]; then
-  count() { grep -h -o "$1=\"[0-9]*\"" "$results"/*.xml 2>/dev/null | awk -F"\"" "{n+=\$2} END{print n+0}"; }
-  printf "==> tests: %s run, %s failed, %s errored, %s skipped\n" \
-    "$(count tests)" "$(count failures)" "$(count errors)" "$(count skipped)"
-  for f in "$results"/*.xml; do
-    if grep -qE "failures=\"[1-9]|errors=\"[1-9]" "$f" 2>/dev/null; then
-      printf "    failed: %s\n" "$(basename "$f" .xml | sed "s/^TEST-//")"
-    fi
-  done
-fi
-lint=app/build/reports/lint-results-debug.txt
-if [ -f "$lint" ]; then
-  printf "==> lint: %s\n" "$(grep -Eo "[0-9]+ errors?, [0-9]+ warnings?" "$lint" | tail -1)"
-fi
-exit 0
-'
-
+# What a Gradle task left behind: the counts from the JUnit XML, the classes
+# that failed, and what lint said. The report is scripts/lib/android-report.sh
+# — a file, so it can be read and run on its own — and it runs after a pass
+# and a failure alike, because a failure is when it is worth most. The tree is
+# already synced into the container, so both engines run the same file: one in
+# the container at the app's directory, one in this tree from the app's.
 android_report() {
-  # The same report either way: in the container at the project directory, or
-  # in this one (the caller has already changed into apps/android).
   local container="${1:-}"
   if [ -n "$container" ]; then
-    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$container" sh -c "$ANDROID_REPORT"
+    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$container"       sh "$ANDROID_ROOT/scripts/lib/android-report.sh"
   else
-    sh -c "$ANDROID_REPORT"
+    sh "$REPO_ROOT/scripts/lib/android-report.sh"
   fi
 }
 
@@ -821,7 +826,12 @@ cmd_live() {
       local workdir
       workdir="$(mktemp -d)"
       local code=0
+      # The agents an install fetches are kept where this engine keeps
+      # everything else it installs (./toolchain, gitignored) — the local
+      # counterpart of the agents volume the Docker path mounts, so a run is
+      # the only one that downloads. An explicit CODEDECK_AGENT_CACHE wins.
       env ${pairs[@]+"${pairs[@]}"} CODEDECK_AGENT_HOST_DRIVERS="$agent" \
+        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$PWD/toolchain/agents}" \
         timeout "${timeout}s" node packages/agent-host/tools/live-probe.mjs \
         --host packages/agent-host/dist/main.js --agent "$agent" --cwd "$workdir" \
         --timeout "$timeout" ${probe[@]+"${probe[@]}"} || code=$?
