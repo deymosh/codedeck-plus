@@ -5,10 +5,10 @@
  * bridges that would rather run their own OpenCode server than point at one
  * running elsewhere (the driver picks between the two).
  *
- * `@opencode-ai/sdk`'s own `createOpencodeServer()` cannot be reused for this:
- * it always spawns the literal string `opencode` (PATH-resolved by
- * cross-spawn) with no way to hand it an explicit binary path or extra env,
- * and returns only a bare `close()` closure with no pid/lifecycle visibility.
+ * The client package's own server helper cannot be reused for this: it
+ * spawns the bare name `opencode` (resolved on PATH) with no way to hand it
+ * an explicit binary path or extra environment, and hands back nothing but a
+ * `close()` with no pid or lifecycle visibility.
  * This module resolves the binary the same way `resolveClaudeExecutable`
  * (facade.ts) resolves Claude's — explicit path → env var → PATH →
  * well-known install locations — and spawns it directly so the bridge

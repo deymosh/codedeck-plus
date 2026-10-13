@@ -111,10 +111,12 @@ places each profile: an endpoint it knows (DeepSeek's, OpenRouter's) signs
 in to that provider as `/connect` would; a gateway's models are filled in
 from the catalog — limits, tool calls, image input, and with reasoning
 OpenCode's own reasoning levels — but never its prices, a gateway's being
-its own. The server the bridge starts sets
-`OPENCODE_ENABLE_EXA`, so that web search (Exa's keyless endpoint, behind
-OpenCode's `websearch` permission) is offered to every model, not only to
-OpenCode's own providers'. Codex is out (its client speaks only the
+its own. The server the bridge starts names
+a web-search provider, so that search is offered to every model, not only to
+OpenCode's own providers'. (OpenCode 1.x did this with `OPENCODE_ENABLE_EXA`
+and Exa's keyless endpoint; 2.x has no such variable and gates search behind
+a connected provider, so the driver names the one its list serves without a
+key.) Codex is out (its client speaks only the
 Responses API); a Pi-based entry stays an option once the Pi driver exists.
 
 ## Installing agents on demand (done)
@@ -161,7 +163,7 @@ would buy — per-driver dependencies, a published SDK for outside authors —
 is not needed today: the drivers ship as one esbuild bundle, version in
 lockstep with the host, and nobody outside this repository writes one. What
 it would cost is real: the installer's pins are generated from the agent
-host's importer in `pnpm-lock.yaml` (`opencode-ai` and `@deepseek-ai/dsh`
+host's importer in `pnpm-lock.yaml` (`@opencode/cli` and `@deepseek-ai/dsh`
 are dev dependencies there only so the lockfile pins them), the release and
 image builds `pnpm deploy` one package, and every driver package would need
 its own build, typecheck and test wiring. Revisit if third-party drivers

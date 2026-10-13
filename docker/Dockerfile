@@ -6,11 +6,11 @@
 #              one it runs on.
 #   agenthost  the agent host (packages/agent-host): esbuild bundle, then
 #              `pnpm deploy --prod` of its own dependency closure — the
-#              Claude Agent SDK and the OpenCode SDK, nothing else.
-#   opencode   only with BUNDLE_AGENTS=1: `npm install -g opencode-ai` pulls
-#              every CPU variant of the OpenCode binary (~180MB each); its
-#              postinstall picks one and materialises it. Only that one file
-#              is copied out.
+#              Claude Agent SDK and the OpenCode client, nothing else.
+#   opencode   only with BUNDLE_AGENTS=1: `npm install -g @opencode/cli`
+#              pulls every CPU variant of the OpenCode binary (~180MB each);
+#              its postinstall picks one and materialises it. Only that one
+#              file is copied out.
 #   runtime    node:slim (the agent host is Node) + git/gh/python3 for the
 #              agent's own tool use.
 #
@@ -92,15 +92,15 @@ RUN mkdir -p /agents \
 
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS opencode
-# Keep in step with the `@opencode-ai/sdk` version in pnpm-lock.yaml — the
-# agent host speaks that SDK's HTTP API to this binary — and with the agent
-# host's `opencode-ai` dev dependency, which pins the build installed on
-# demand.
-ARG OPENCODE_VERSION=1.18.32
+# Keep in step with the `@opencode/client` version in pnpm-lock.yaml — the
+# agent host speaks that client's HTTP API to this binary — and with the
+# agent host's `@opencode/cli` dev dependency, which pins the build installed
+# on demand. Both are OpenCode 2.x: the 1.x packages are a different API.
+ARG OPENCODE_VERSION=2.0.28
 ARG BUNDLE_AGENTS
 RUN mkdir /out \
     && if [ "$BUNDLE_AGENTS" = 1 ]; then \
-         npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+         npm install -g "@opencode/cli@${OPENCODE_VERSION}" \
          && cp -L "$(readlink -f /usr/local/bin/opencode)" /out/opencode \
          && /out/opencode --version; \
        fi
