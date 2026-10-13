@@ -156,6 +156,14 @@ a Docker-less host:
                            --timeout SECONDS (default 300), --no-sync
                            agents: claude-code, opencode, deepseek-harness,
                            and `fake` for the driver-protocol test agent
+  live <agent> --fake-model
+                           Point the agent at a local model server instead
+                           (tools/fake-model.mjs): no account, no network,
+                           and the same replies every run. Each prompt is a
+                           scenario — /tool (a permission card), /question,
+                           /error, /long (a large context) — and anything
+                           else is echoed. --dump DIR writes every request
+                           the agent made, for reading a driver's own input
 
 Android tests and lint (same idea, in the Android container — a subcommand
 maps to its Gradle task; anything else is passed to Gradle as it is):
@@ -778,7 +786,8 @@ cmd_live() {
   case "$agent" in
     ''|-*)
       echo "usage: $0 live <agent> [--prompt TEXT]… [--mode MODE] [--model ID]" >&2
-      echo "                     [--effort ID] [--cwd DIR] [--env K=V]… [--timeout SECONDS] [--no-sync]" >&2
+      echo "                     [--effort ID] [--cwd DIR] [--env K=V]… [--timeout SECONDS]" >&2
+      echo "                     [--fake-model] [--dump DIR] [--no-sync]" >&2
       echo "agents: claude-code, opencode, deepseek-harness, fake" >&2
       exit 2
       ;;
@@ -798,9 +807,11 @@ cmd_live() {
   # A live session runs on a real account. Two agents cost nothing: the `fake`
   # test agent, and OpenCode's free Zen models. Everything else spends a
   # subscription or a balance, so a run that does not name a model says so
-  # rather than quietly using whatever the agent defaults to.
+  # rather than quietly using whatever the agent defaults to. `--fake-model`
+  # is the third free path: the agent is pointed at a local server instead,
+  # so nothing reaches an account whatever model it names.
   case " ${probe[*]-} " in
-    *" --model "*|*" --models "*) ;;
+    *" --model "*|*" --models "*|*" --fake-model "*) ;;
     *)
       case "$agent" in
         fake) ;;
