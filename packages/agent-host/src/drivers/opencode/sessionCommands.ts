@@ -1,22 +1,23 @@
 /**
  * Commands OpenCode's terminal runs itself and its server does not list:
- * compacting the conversation, undoing and redoing turns, sharing it. Each
- * runs through the server's API, and its outcome is a status line in the
- * transcript (the transcript keeps what an undo took back; the line says
- * so). A command the server lists under the same name — a project's own —
- * is the one that runs.
+ * compacting the conversation, undoing and redoing turns. Each runs through
+ * the server's API, and its outcome is a status line in the transcript (the
+ * transcript keeps what an undo took back; the line says so). A command the
+ * server lists under the same name — a project's own — is the one that runs.
+ *
+ * V2 has no sharing of a conversation at a link, so `/share` and `/unshare`
+ * are gone rather than listed and failing.
  */
-import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
+import type { OpenCodeClient } from '@opencode/client';
 import { slashCommand } from '../../sdk/commands';
 import type { SlashCommand } from '../../sdk/types';
 
 /** What a command works on and how it reports back. */
 export interface SessionCommandContext {
-  client: OpencodeClient;
+  client: OpenCodeClient;
   sessionID: string;
-  directory: string;
-  /** The model the session's prompts name, if one was chosen. */
-  model?: { providerID: string; modelID: string };
+  /** The model the session runs, if one was chosen. */
+  model?: { providerID: string; id: string };
   status(text: string): void;
 }
 
@@ -28,8 +29,9 @@ interface SessionCommand {
 
 /** A failed call's reason, for the error entry. */
 function failure(what: string, error: unknown): Error {
-  const detail = typeof error === 'object' && error !== null && 'data' in error ? (error as { data: unknown }).data : error;
-  return new Error(`OpenCode could not ${what}: ${JSON.stringify(detail)}`);
+  const detail =
+    error && typeof error === 'object' && 'message' in error ? (error as { message: unknown }).message : error;
+  return new Error(`OpenCode could not ${what}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
 }
 
 /** The first line of a prompt, short enough to name it in a status line. */
@@ -40,20 +42,19 @@ function gist(text: string): string {
 
 /** The user turns of a session, oldest first, with their text. */
 async function userTurns(ctx: SessionCommandContext): Promise<Array<{ id: string; text: string }>> {
-  const { data, error } = await ctx.client.session.messages({ sessionID: ctx.sessionID, directory: ctx.directory });
-  if (error || !data) throw failure('read the conversation', error);
-  return data
-    .filter((m) => m.info.role === 'user')
-    .map((m) => ({
-      id: m.info.id,
-      text: m.parts.flatMap((p) => (p.type === 'text' && !p.synthetic ? [p.text] : [])).join('\n'),
-    }));
+  const listed = await ctx.client.message.list({ sessionID: ctx.sessionID }).catch((err: unknown) => {
+    throw failure('read the conversation', err);
+  });
+  return listed.data
+    .filter((m) => m.type === 'user')
+    .map((m) => ({ id: m.id, text: m.type === 'user' ? m.text : '' }));
 }
 
 async function revertPoint(ctx: SessionCommandContext): Promise<string | undefined> {
-  const { data, error } = await ctx.client.session.get({ sessionID: ctx.sessionID, directory: ctx.directory });
-  if (error || !data) throw failure('read the session', error);
-  return data.revert?.messageID;
+  const session = await ctx.client.session.get({ sessionID: ctx.sessionID }).catch((err: unknown) => {
+    throw failure('read the session', err);
+  });
+  return session.revert?.messageID;
 }
 
 export const SESSION_COMMANDS: SessionCommand[] = [
@@ -62,13 +63,13 @@ export const SESSION_COMMANDS: SessionCommand[] = [
     description: 'Summarize the conversation so far, to free up context',
     async run(ctx) {
       ctx.status('Compacting the conversation…');
-      const { error } = await ctx.client.session.summarize({
-        sessionID: ctx.sessionID,
-        directory: ctx.directory,
-        ...(ctx.model ?? {}),
+      // The request is queued to the next safe point, so the turn carrying it
+      // is what reports the outcome.
+      const queued = await ctx.client.session.compact({ sessionID: ctx.sessionID }).catch((err: unknown) => {
+        throw failure('compact the conversation', err);
       });
-      if (error) throw failure('compact the conversation', error);
-      ctx.status('Compacted: OpenCode continues from a summary of the conversation.');
+      void queued;
+      ctx.status('Compacting: OpenCode continues from a summary of the conversation.');
     },
   },
   {
@@ -83,8 +84,11 @@ export const SESSION_COMMANDS: SessionCommand[] = [
         ctx.status('Nothing to undo.');
         return;
       }
-      const { error } = await ctx.client.session.revert({ sessionID: ctx.sessionID, directory: ctx.directory, messageID: last.id });
-      if (error) throw failure('undo the last turn', error);
+      await ctx.client.session.revert
+        .stage({ sessionID: ctx.sessionID, messageID: last.id, files: true })
+        .catch((err: unknown) => {
+          throw failure('undo the last turn', err);
+        });
       ctx.status(
         `Undid "${gist(last.text)}" and the file changes it made. OpenCode forgets it with your next message; /redo brings it back before then.`,
       );
@@ -98,27 +102,10 @@ export const SESSION_COMMANDS: SessionCommand[] = [
         ctx.status('Nothing to redo.');
         return;
       }
-      const { error } = await ctx.client.session.unrevert({ sessionID: ctx.sessionID, directory: ctx.directory });
-      if (error) throw failure('redo', error);
+      await ctx.client.session.revert.clear({ sessionID: ctx.sessionID }).catch((err: unknown) => {
+        throw failure('redo', err);
+      });
       ctx.status('Brought back the undone turns and their file changes.');
-    },
-  },
-  {
-    name: 'share',
-    description: 'Publish the conversation at a link anyone can open',
-    async run(ctx) {
-      const { data, error } = await ctx.client.session.share({ sessionID: ctx.sessionID, directory: ctx.directory });
-      if (error || !data) throw failure('share the conversation', error);
-      ctx.status(data.share?.url ? `Shared at ${data.share.url} — anyone with the link can read it. /unshare stops it.` : 'Shared.');
-    },
-  },
-  {
-    name: 'unshare',
-    description: 'Stop sharing the conversation',
-    async run(ctx) {
-      const { error } = await ctx.client.session.unshare({ sessionID: ctx.sessionID, directory: ctx.directory });
-      if (error) throw failure('stop sharing the conversation', error);
-      ctx.status('The conversation is no longer shared.');
     },
   },
 ];

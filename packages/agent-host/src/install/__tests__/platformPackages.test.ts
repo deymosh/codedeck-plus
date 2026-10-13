@@ -23,11 +23,11 @@ describe('platform packages', () => {
   });
 
   it('name the OpenCode platform packages, baseline on x64', () => {
-    expect(openCodePlatformPackage('linux', 'x64', false)).toBe('opencode-linux-x64-baseline');
-    expect(openCodePlatformPackage('linux', 'x64', true)).toBe('opencode-linux-x64-baseline-musl');
-    expect(openCodePlatformPackage('linux', 'arm64', true)).toBe('opencode-linux-arm64-musl');
-    expect(openCodePlatformPackage('darwin', 'arm64', false)).toBe('opencode-darwin-arm64');
-    expect(openCodePlatformPackage('win32', 'x64', false)).toBe('opencode-windows-x64-baseline');
+    expect(openCodePlatformPackage('linux', 'x64', false)).toBe('@opencode/cli-linux-x64-baseline');
+    expect(openCodePlatformPackage('linux', 'x64', true)).toBe('@opencode/cli-linux-x64-baseline-musl');
+    expect(openCodePlatformPackage('linux', 'arm64', true)).toBe('@opencode/cli-linux-arm64-musl');
+    expect(openCodePlatformPackage('darwin', 'arm64', false)).toBe('@opencode/cli-darwin-arm64');
+    expect(openCodePlatformPackage('win32', 'x64', false)).toBe('@opencode/cli-windows-x64-baseline');
   });
 
   // A name the lockfile does not pin could never be installed.

@@ -1,73 +1,68 @@
 /**
- * OpenCode's plugins: npm packages listed under `plugin` in its global
- * config. Its server reads and writes that config; OpenCode installs a listed
- * package itself the next time it loads, and a write reloads every project it
- * has open — which restarts the sessions running in them, as it does for any
- * change to its config.
+ * OpenCode's plugins: packages listed under `plugins` in its global config,
+ * which every project loads.
  *
- * OpenCode has no marketplaces and no way to switch a plugin off short of
- * removing it, so only `install` and `uninstall` apply.
+ * V2 reports what it has loaded over its API (`plugin.list`), but takes the
+ * list itself only from config — its config API writes the shell and nothing
+ * else — so install, uninstall and the disable switch all edit the global
+ * config file, and the API is what reads the result back. An entry is a
+ * package spec, or an object naming one with its options. A `-<id>` entry
+ * switches a listed plugin off without removing it; a later plain entry
+ * switches it back on.
+ *
+ * OpenCode has no marketplaces and updates its plugins itself when it loads
+ * them, so update is not an action here.
  */
-import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
+import type { OpenCodeClient } from '@opencode/client';
 import type { PluginManager, PluginState } from '../../sdk/driver';
 import type { InstalledPlugin, PluginAction } from '../../sdk/types';
 
-type PluginEntry = string | [string, Record<string, unknown>];
+type PluginEntry = string | { package?: unknown; options?: unknown };
 
 /** An npm package, optionally scoped and versioned (`name`, `@scope/name`,
  *  `name@1.2.3`, `name@^1`, `name@latest`). */
 const PACKAGE_SPEC = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[\w.^~<>=*|-]+)?$/i;
 
-const specOf = (entry: PluginEntry): string => (Array.isArray(entry) ? entry[0] : entry);
+const specOf = (entry: PluginEntry): string =>
+  typeof entry === 'string' ? entry : typeof entry.package === 'string' ? entry.package : '';
+const isDisabled = (spec: string): boolean => spec.startsWith('-');
+const bareSpec = (spec: string): string => (isDisabled(spec) ? spec.slice(1) : spec);
 
 /** A listed plugin; its version is whatever the spec pins. */
-export function toInstalledPlugin(entry: PluginEntry): InstalledPlugin {
-  const spec = specOf(entry);
+export function toInstalledPlugin(entry: PluginEntry): InstalledPlugin | undefined {
+  const spec = bareSpec(specOf(entry));
+  if (!spec) return undefined;
   const at = spec.lastIndexOf('@');
   const pinned = at > 0;
   return {
     id: spec,
     name: pinned ? spec.slice(0, at) : spec,
     ...(pinned ? { version: spec.slice(at + 1) } : {}),
-    enabled: true,
+    enabled: !isDisabled(specOf(entry)),
   };
+}
+
+/** The files OpenCode reads its global config from. */
+export function openCodeGlobalConfigFiles(env: NodeJS.ProcessEnv = process.env): string[] {
+  const base = env.XDG_CONFIG_HOME?.trim() || path.join(homedir(), '.config');
+  return ['config.json', 'opencode.json', 'opencode.jsonc'].map((f) => path.join(base, 'opencode', f));
 }
 
 export class OpenCodePlugins implements PluginManager {
   /** One config write at a time: each rewrites the whole list. */
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly client: () => Promise<OpencodeClient>) {}
+  constructor(
+    private readonly client: () => Promise<OpenCodeClient>,
+    private readonly configFiles: () => string[] = () => openCodeGlobalConfigFiles(),
+  ) {}
 
   list(): Promise<PluginState> {
-    return this.serial(async () => this.state(await this.entries(await this.client())));
-  }
-
-  act(action: PluginAction, target: string): Promise<PluginState> {
-    return this.serial(async () => {
-      if (action !== 'install' && action !== 'uninstall') {
-        throw new Error(
-          action === 'enable' || action === 'disable'
-            ? 'OpenCode cannot switch a plugin off; uninstall it instead.'
-            : action === 'update'
-              ? 'OpenCode updates its plugins itself when it loads.'
-              : 'OpenCode has no plugin marketplaces; install a plugin by its npm package name.',
-        );
-      }
-      if (action === 'install' && !PACKAGE_SPEC.test(target)) {
-        throw new Error(`'${target}' is not an npm package name.`);
-      }
-      const client = await this.client();
-      const entries = await this.entries(client);
-      const listed = entries.some((e) => specOf(e) === target);
-      if (action === 'uninstall' && !listed) throw new Error(`OpenCode has no plugin '${target}'.`);
-      const next = action === 'install' ? (listed ? entries : [...entries, target]) : entries.filter((e) => specOf(e) !== target);
-      if (next !== entries) {
-        const { error } = await client.global.config.update({ config: { plugin: next } });
-        if (error) throw new Error(`OpenCode refused the change: ${JSON.stringify(error)}`);
-      }
-      return this.state(next);
-    });
+    return this.serial(async () => this.state(await this.entries()));
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -76,13 +71,87 @@ export class OpenCodePlugins implements PluginManager {
     return next;
   }
 
-  private async entries(client: OpencodeClient): Promise<PluginEntry[]> {
-    const { data, error } = await client.global.config.get();
-    if (error || !data) throw new Error(`OpenCode could not read its config: ${JSON.stringify(error ?? 'no config')}`);
-    return (data.plugin ?? []) as PluginEntry[];
+  act(action: PluginAction, target: string): Promise<PluginState> {
+    return this.serial(async () => {
+      if (action === 'update') {
+        throw new Error('OpenCode updates its plugins itself when it loads.');
+      }
+      if (action !== 'install' && action !== 'uninstall' && action !== 'enable' && action !== 'disable') {
+        throw new Error('OpenCode has no plugin marketplaces; install a plugin by its npm package name.');
+      }
+      if (action === 'install' && !PACKAGE_SPEC.test(target)) {
+        throw new Error(`'${target}' is not an npm package name.`);
+      }
+      await this.rewrite(action, target);
+      return this.state(await this.entries());
+    });
   }
 
-  private state(entries: PluginEntry[]): PluginState {
-    return { installed: entries.map(toInstalledPlugin), toggles: false };
+  /** The `plugins` array of the one global config file that holds it. */
+  private async file(): Promise<{ path: string; config: Record<string, unknown>; entries: PluginEntry[] }> {
+    for (const file of this.configFiles().filter((f) => existsSync(f))) {
+      const text = await readFile(file, 'utf8');
+      let config: Record<string, unknown>;
+      try {
+        config = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        // A file OpenCode itself wrote is plain JSON; one with comments is
+        // the user's own, and rewriting it would lose them.
+        throw new Error(`${file} has comments, so it is not edited from here. Edit its "plugins" list by hand.`);
+      }
+      const entries = Array.isArray(config.plugins) ? (config.plugins as PluginEntry[]) : [];
+      return { path: file, config, entries };
+    }
+    throw new Error('OpenCode has no global config file to write its plugins to.');
+  }
+
+  private async rewrite(action: PluginAction, target: string): Promise<void> {
+    const { path: file, config, entries } = await this.file();
+    const spec = (e: PluginEntry) => bareSpec(specOf(e));
+    const listed = entries.some((e) => spec(e) === target);
+    // Nothing to remove or switch: said plainly, rather than rewriting the
+    // list to the same thing and reporting success.
+    if ((action === 'uninstall' || action === 'enable' || action === 'disable') && !listed) {
+      throw new Error(`OpenCode has no plugin '${target}'.`);
+    }
+    const without = entries.filter((e) => spec(e) !== target);
+    let next: PluginEntry[];
+    if (action === 'install') next = [...without, target];
+    else if (action === 'uninstall') next = without;
+    else {
+      // The switch is an entry of its own: `-<id>` off, plain back on.
+      next = action === 'disable' ? [...without, `-${target}`] : [...without, target];
+    }
+    await writeFile(file, `${JSON.stringify({ ...config, plugins: next }, null, 2)}\n`);
+  }
+
+  private async entries(): Promise<PluginEntry[]> {
+    for (const file of this.configFiles().filter((f) => existsSync(f))) {
+      try {
+        const config = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+        if (Array.isArray(config.plugins)) return config.plugins as PluginEntry[];
+      } catch {
+        continue;
+      }
+    }
+    return [];
+  }
+
+  private async state(entries: PluginEntry[]): Promise<PluginState> {
+    // What the server has actually loaded, so a plugin it could not load
+    // reads as failed rather than as a config line that looks fine.
+    const loaded = await this.client()
+      .then((client) => client.plugin.list())
+      .then((listed) => new Map(listed.data.map((p) => [p.id, p.state])))
+      .catch(() => new Map());
+    const plugins = entries
+      .map(toInstalledPlugin)
+      .filter((p): p is InstalledPlugin => p !== undefined)
+      .map((plugin) => {
+        const state = loaded.get(plugin.id);
+        if (state?.status === 'failed') return { ...plugin, enabled: false, error: state.error };
+        return plugin;
+      });
+    return { installed: plugins, toggles: true };
   }
 }

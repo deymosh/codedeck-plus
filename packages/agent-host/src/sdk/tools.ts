@@ -20,6 +20,8 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   bashoutput: 'execute',
   killshell: 'execute',
   killbash: 'execute',
+  // OpenCode's shell tool (it was `bash` before v2).
+  shell: 'execute',
   glob: 'search',
   grep: 'search',
   codesearch: 'search',
@@ -70,6 +72,7 @@ function oneLine(text: string): string {
 export function toolTitle(toolName: string, input: Record<string, unknown>): string {
   switch (toolName.toLowerCase()) {
     case 'bash':
+    case 'shell':
     case 'pwsh':
       return oneLine(str(input.command) || str(input.description));
     case 'read':
@@ -77,7 +80,8 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
     case 'edit':
     case 'multiedit':
     case 'read_image':
-      return str(input.file_path) || str(input.filePath);
+      // OpenCode v2 names a file `path`; v1 and Claude Code `filePath`.
+      return str(input.file_path) || str(input.filePath) || str(input.path);
     case 'notebookedit':
       return str(input.notebook_path) || str(input.file_path);
     // The DeepSeek Harness's editor names its file `path`; its `command`

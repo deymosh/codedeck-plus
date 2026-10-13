@@ -4,7 +4,7 @@
  * the restart a changed list takes.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Model, OpencodeClient, Provider } from '@opencode-ai/sdk/v2/client';
+import type { ModelInfo, OpenCodeClient, ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
 import { type Catalog, EMPTY_CATALOG } from '../catalog';
 import { placeProfiles, profileModelGroup, profileProviderId, providersConfig, servedBy, serverSetup } from '../providers';
@@ -23,43 +23,49 @@ const router = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
 });
 
 /** A catalog provider, as OpenCode's server lists it. */
-function catalogProvider(id: string, name: string, url: string, models: Record<string, Partial<Model>> = {}): Provider {
-  return {
+/** A catalog provider as v2 states one: the record itself, and the models it
+ *  serves — v2 lists models apart from the providers that offer them. */
+function catalogProvider(id: string, name: string, url: string, models: Record<string, Partial<ModelInfo>> = {}) {
+  const info: ProviderInfo = {
     id,
     name,
-    source: 'api',
-    env: [],
-    options: {},
-    models: Object.fromEntries(
-      Object.entries(models).map(([mid, m]) => [mid, { id: mid, providerID: id, api: { id: mid, url, npm: '@ai-sdk/openai-compatible' }, name: mid, ...m } as Model]),
-    ),
-  } as Provider;
+    activation: 'enabled',
+    package: '@opencode/ai/providers/openai-compatible',
+    settings: { baseURL: url },
+  };
+  const entries = Object.entries(models).map(
+    ([mid, m]) => [`${id}/${mid}`, { id: mid, modelID: mid, providerID: id, name: mid, ...m } as ModelInfo] as const,
+  );
+  return { info, entries };
 }
 
-const reasoningModel: Partial<Model> = {
+/** A catalog from `catalogProvider`s. */
+function catalogOf(connected: string[], ...providers: Array<ReturnType<typeof catalogProvider>>): Catalog {
+  return {
+    providers: new Map(providers.map((p) => [p.info.id, p.info])),
+    models: new Map(providers.flatMap((p) => p.entries)),
+    connected: new Set(connected),
+  };
+}
+
+const reasoningModel: Partial<ModelInfo> = {
   name: 'DeepSeek V4.1 Flash',
   family: 'deepseek',
-  capabilities: {
-    temperature: true, reasoning: true, attachment: true, toolcall: true,
-    input: { text: true, audio: false, image: true, video: false, pdf: false },
-    output: { text: true, audio: false, image: false, video: false, pdf: false },
-    interleaved: { field: 'reasoning_content' },
-  },
-  cost: { input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } },
+  capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
+  variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+  cost: [{ input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }],
   limit: { context: 1_000_000, output: 393_216 },
 };
 
-const catalog: Catalog = {
-  providers: new Map([
-    ['deepseek', catalogProvider('deepseek', 'DeepSeek', 'https://api.deepseek.com', { 'deepseek-flash': reasoningModel })],
-    ['opencode-go', catalogProvider('opencode-go', 'OpenCode Go', 'https://opencode.ai/zen/go/v1', { 'deepseek-v4.1-flash': reasoningModel })],
-    ['openrouter', catalogProvider('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1', { 'deepseek/deepseek-chat': {} })],
-    ['opencode', catalogProvider('opencode', 'OpenCode Zen', 'https://opencode.ai/zen/v1')],
-  ]),
-  connected: new Set(['opencode', 'deepseek']),
-};
+const catalog: Catalog = catalogOf(
+  ['opencode', 'deepseek'],
+  catalogProvider('deepseek', 'DeepSeek', 'https://api.deepseek.com', { 'deepseek-flash': reasoningModel }),
+  catalogProvider('opencode-go', 'OpenCode Go', 'https://opencode.ai/zen/go/v1', { 'deepseek-v4.1-flash': reasoningModel }),
+  catalogProvider('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1', { 'deepseek/deepseek-chat': {} }),
+  catalogProvider('opencode', 'OpenCode Zen', 'https://opencode.ai/zen/v1'),
+);
 
-const providerOf = (config: Record<string, unknown>, id: string) => (config.provider as Record<string, Record<string, unknown>>)[id]!;
+const providerOf = (config: Record<string, unknown>, id: string) => (config.providers as Record<string, Record<string, unknown>>)[id]!;
 
 describe('placing profiles', () => {
   it('names a profile of its own as the user named it', () => {
@@ -92,8 +98,10 @@ describe('placing profiles', () => {
   it('never takes what profiles already made of the running server for OpenCode\'s own', () => {
     // The running server lists the profile's provider, and the catalog one
     // it signed in to as connected.
+    const ccr = catalogProvider('ccr', 'CCR', 'http://192.168.1.2:3458/v1', { m: {} });
     const running: Catalog = {
-      providers: new Map([...catalog.providers, ['ccr', catalogProvider('ccr', 'CCR', 'http://192.168.1.2:3458/v1', { m: {} })]]),
+      providers: new Map([...catalog.providers, [ccr.info.id, ccr.info]]),
+      models: new Map([...catalog.models, ...ccr.entries]),
       connected: new Set([...catalog.connected, 'ccr', 'openrouter']),
     };
     const served = servedBy(placeProfiles([router({ label: 'CCR' }), router({ id: 'or', label: 'OR', baseUrl: 'https://openrouter.ai/api' })], catalog).placed);
@@ -106,23 +114,26 @@ describe('placing profiles', () => {
 describe('providersConfig', () => {
   it("adds a profile of its own beside the operator's providers, with the token left to the environment", () => {
     const { placed } = placeProfiles([router()], catalog);
-    const config = providersConfig(placed, catalog, { provider: { mine: { npm: 'x' } }, theme: 'dark' });
+    const config = providersConfig(placed, catalog, { providers: { mine: { package: 'x' } }, theme: 'dark' });
     expect(config).toEqual({
       theme: 'dark',
-      provider: {
-        mine: { npm: 'x' },
+      providers: {
+        mine: { package: 'x' },
         'home-router': {
-          npm: '@ai-sdk/openai-compatible',
+          package: 'aisdk:@ai-sdk/openai-compatible',
           name: 'Home router',
-          options: { baseURL: 'http://192.168.1.2:3458/v1', apiKey: '{env:CODEDECK_PROVIDER_KEY_0}' },
+          settings: { baseURL: 'http://192.168.1.2:3458/v1', apiKey: '{env:CODEDECK_PROVIDER_KEY_0}' },
           models: { 'Z.ai/glm-5': { name: 'GLM 5' }, 'kimi-k3': {} },
         },
       },
+      // Every model can search: v2 gates web search behind a provider, and
+      // this is the one that needs no key.
+      websearch: { provider: 'tinyfish' },
     });
     expect(JSON.stringify(config)).not.toContain('tok-secret');
   });
 
-  it("fills a gateway's routed model in from the catalog, without its price", () => {
+  it("fills a gateway's routed model in from the catalog, its price riding along as a reference", () => {
     const routed = router({ label: 'CCR', models: [{ id: 'OpenCode Go/deepseek-v4.1-flash', provider: 'OpenCode Go' }] });
     const { placed } = placeProfiles([routed], catalog);
     expect(providerOf(providersConfig(placed, catalog), 'ccr').models).toEqual({
@@ -130,11 +141,11 @@ describe('providersConfig', () => {
         name: 'deepseek-v4.1-flash',
         family: 'deepseek',
         limit: { context: 1_000_000, output: 393_216 },
-        reasoning: true,
-        tool_call: true,
-        temperature: true,
-        attachment: true,
-        modalities: { input: ['text', 'image'], output: ['text'] },
+        capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
+        variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+        // The upstream list price, not what the gateway charges — a cost
+        // shown from the catalog beats no cost at all.
+        cost: [{ input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }],
       },
     });
     expect(profileModelGroup('CCR', routed.models[0])).toBe('CCR · OpenCode Go');
@@ -152,7 +163,7 @@ describe('providersConfig', () => {
     const config = providersConfig(placeProfiles([openrouter], catalog).placed, catalog);
     expect(providerOf(config, 'openrouter')).toEqual({
       name: 'My OpenRouter',
-      options: { apiKey: '{env:CODEDECK_PROVIDER_KEY_0}' },
+      settings: { apiKey: '{env:CODEDECK_PROVIDER_KEY_0}' },
       models: { 'new/model': { name: 'New' } },
     });
   });
@@ -172,22 +183,23 @@ describe('serverSetup', () => {
     const a = serverSetup(placedOf(router(), router({ id: 'or', label: 'My OpenRouter', authToken: 'tok-2' })), EMPTY_CATALOG, {});
     expect(a.env.CODEDECK_PROVIDER_KEY_0).toBe('tok-secret');
     expect(a.env.CODEDECK_PROVIDER_KEY_1).toBe('tok-2');
-    expect(JSON.parse(a.env.OPENCODE_CONFIG_CONTENT!).provider).toHaveProperty('my-openrouter');
-    const password = a.env.OPENCODE_SERVER_PASSWORD!;
+    expect(JSON.parse(a.env.OPENCODE_CONFIG_CONTENT!).providers).toHaveProperty('my-openrouter');
+    const password = a.env.OPENCODE_PASSWORD!;
     expect(password).toMatch(/^[0-9a-f]{48}$/);
     expect(a.headers.authorization).toBe(`Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`);
-    expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_SERVER_PASSWORD).not.toBe(password);
-    // Web search for every model, not only OpenCode's own providers'.
-    expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_ENABLE_EXA).toBe('1');
+    expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_PASSWORD).not.toBe(password);
+    // V2 gates web search behind a connected provider and has no keyless
+    // default of its own, so the keyless one is named in the config.
+    expect(JSON.parse(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_CONFIG_CONTENT!).websearch).toEqual({ provider: 'tinyfish' });
     // The pinned version stays.
     expect(serverSetup([], EMPTY_CATALOG, {}).env.OPENCODE_DISABLE_AUTOUPDATE).toBe('1');
-    // No profiles: the operator's config stands as it is.
-    expect(serverSetup([], EMPTY_CATALOG, { OPENCODE_CONFIG_CONTENT: '{"theme":"x"}' }).env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
+    // No profiles: the operator's config is carried through as it is.
+    expect(JSON.parse(serverSetup([], EMPTY_CATALOG, { OPENCODE_CONFIG_CONTENT: '{"theme":"x"}' }).env.OPENCODE_CONFIG_CONTENT!).theme).toBe('x');
   });
 
   it("keeps the operator's own environment config underneath", () => {
-    const { env } = serverSetup(placedOf(router()), EMPTY_CATALOG, { OPENCODE_CONFIG_CONTENT: '{"provider":{"mine":{"npm":"x"}}}' });
-    expect(Object.keys(JSON.parse(env.OPENCODE_CONFIG_CONTENT!).provider)).toEqual(['mine', 'home-router']);
+    const { env } = serverSetup(placedOf(router()), EMPTY_CATALOG, { OPENCODE_CONFIG_CONTENT: '{"providers":{"mine":{"package":"x"}}}' });
+    expect(Object.keys(JSON.parse(env.OPENCODE_CONFIG_CONTENT!).providers)).toEqual(['mine', 'home-router']);
   });
 });
 
@@ -208,7 +220,7 @@ describe('an OpenCode driver given provider profiles', () => {
       },
       connect: (config) => {
         connects.push(config);
-        return {} as OpencodeClient;
+        return {} as OpenCodeClient;
       },
     });
     return { driver, starts, closed, connects };
@@ -220,7 +232,9 @@ describe('an OpenCode driver given provider profiles', () => {
     expect(driver.info().supports?.providerModels).toBe(true);
     expect(driver.info().supports?.providers).toBe(false);
     expect(starts).toHaveLength(1);
-    expect(starts[0]!.env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
+    // The config goes over whatever the profiles: the web-search default
+    // rides on it, and there are no profiles in it yet.
+    expect(Object.keys(JSON.parse(starts[0]!.env!.OPENCODE_CONFIG_CONTENT!).providers)).toEqual([]);
     expect(connects[0]!.headers?.authorization).toMatch(/^Basic /);
 
     await driver.setProviders([router()]);
@@ -237,7 +251,7 @@ describe('an OpenCode driver given provider profiles', () => {
 
     await driver.setProviders([]);
     expect(starts).toHaveLength(3);
-    expect(starts[2]!.env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
+    expect(Object.keys(JSON.parse(starts[2]!.env!.OPENCODE_CONFIG_CONTENT!).providers)).toEqual([]);
     await driver.shutdown();
     expect(closed).toEqual([1, 2, 3]);
   });
@@ -245,9 +259,24 @@ describe('an OpenCode driver given provider profiles', () => {
   it('ends the sessions on the server it replaces, so the bridge resumes them on the new one', async () => {
     // Its event stream never opens: a session stays on the server it started on.
     const client = {
-      event: { subscribe: () => new Promise(() => {}) },
-      provider: { list: async () => ({ error: 'no catalog' }) },
-    } as unknown as OpencodeClient;
+      // The stream opens and never yields: the session stays on the server
+      // it started on until that server is replaced.
+      event: {
+        subscribe: () =>
+          (async function* () {
+            await new Promise(() => {});
+          })(),
+      },
+      provider: { list: async () => { throw new Error('no catalog'); } },
+      model: {
+        list: async () => { throw new Error('no models'); },
+        default: async () => { throw new Error('no default'); },
+      },
+      session: {
+        get: async () => { throw new Error('that session is gone'); },
+        create: async () => ({ id: 'ses_1' }),
+      },
+    } as unknown as OpenCodeClient;
     let starts = 0;
     const driver = await OpenCodeDriver.create({
       autoStart: true,
@@ -277,11 +306,17 @@ describe('an OpenCode driver given provider profiles', () => {
     let starts = 0;
     const client = (n: number) =>
       ({
-        config: {
-          providers: async () => ({ data: { providers: [{ id: 'zen', name: 'Zen', models: { [`m${n}`]: { id: `m${n}`, name: `M${n}` } } }], default: {} } }),
-          get: async () => ({ data: {} }),
+        provider: { list: async () => ({ location: { directory: '/tmp' }, data: [] }) },
+        model: {
+          list: async () => ({
+            location: { directory: '/tmp' },
+            data: [
+              { id: `m${n}`, modelID: `m${n}`, providerID: 'zen', name: `M${n}`, enabled: true, status: 'active', cost: [], variants: [], limit: { context: 1_000, output: 100 } },
+            ],
+          }),
+          default: async () => ({ location: { directory: '/tmp' }, data: null }),
         },
-      }) as unknown as OpencodeClient;
+      }) as unknown as OpenCodeClient;
     const driver = await OpenCodeDriver.create({
       autoStart: true,
       binaryPath: process.execPath,
@@ -313,7 +348,19 @@ describe('an OpenCode driver given provider profiles', () => {
         return { url: `http://127.0.0.1:${4100 + starts.length}`, pid: starts.length, exited: new Promise(() => {}), close: async () => {} };
       },
       // The running server lists what it has, the profiles it was given too.
-      connect: () => ({ provider: { list: async () => ({ data: { all: ids.map((id) => ({ id, name: id, models: {} })), default: {}, connected: [] } }) } }) as unknown as OpencodeClient,
+      connect: () =>
+        ({
+          provider: {
+            list: async () => ({
+              location: { directory: '/tmp' },
+              data: ids.map((id) => ({ id, name: id, activation: 'enabled', package: '@opencode/ai/providers/openai-compatible' })),
+            }),
+          },
+          model: {
+            list: async () => ({ location: { directory: '/tmp' }, data: [] }),
+            default: async () => ({ location: { directory: '/tmp' }, data: null }),
+          },
+        }) as unknown as OpenCodeClient,
     });
     expect(await driver.setProviders([router({ label: 'DeepSeek' })])).toEqual([
       { id: 'router', reason: "OpenCode already has a provider called 'deepseek'. Give this profile another name." },
@@ -330,7 +377,7 @@ describe('an OpenCode driver given provider profiles', () => {
   });
 
   it('refuses them for a server it does not start', async () => {
-    const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4096', log: () => {}, connect: () => ({}) as OpencodeClient });
+    const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4096', log: () => {}, connect: () => ({}) as OpenCodeClient });
     expect(driver.info().supports?.providerModels).toBe(false);
     await expect(driver.setProviders([router()])).rejects.toThrow(/does not start/);
   });
@@ -338,7 +385,7 @@ describe('an OpenCode driver given provider profiles', () => {
   it('checks and lists a profile as an OpenAI-compatible endpoint', async () => {
     const post = vi.fn().mockResolvedValue({ status: 401 });
     const get = vi.fn().mockResolvedValue({ status: 200, text: JSON.stringify({ data: [{ id: 'kimi-k3' }] }) });
-    const driver = await OpenCodeDriver.create({ serverUrl: 'http://x', log: () => {}, providerHttp: { get, post }, connect: () => ({}) as OpencodeClient });
+    const driver = await OpenCodeDriver.create({ serverUrl: 'http://x', log: () => {}, providerHttp: { get, post }, connect: () => ({}) as OpenCodeClient });
     expect(await driver.checkProvider(router(), 'kimi-k3')).toBe(false);
     const [url, headers, body] = post.mock.calls[0]!;
     expect(url).toBe('http://192.168.1.2:3458/v1/chat/completions');

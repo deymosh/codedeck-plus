@@ -1,40 +1,26 @@
 /**
- * The OpenCode driver, over `@opencode-ai/sdk`'s v2 client — the API
- * OpenCode 1.x servers serve, and the only one with question replies and the
- * current permission-reply endpoint.
+ * The OpenCode driver, over `@opencode/client` — the API OpenCode 2.x
+ * servers serve.
  *
  * One `OpenCodeSession` per bridge session: it subscribes to the server's
- * event stream, filters it down to stable `OpenCodeEvent`s (adapter.ts
- * translates those into entries), and answers OpenCode's permission and
- * question asks through the bridge.
+ * event stream, normalizes it down to stable `OpenCodeEvent`s (adapter.ts
+ * translates those into entries), and answers OpenCode's permission asks and
+ * its forms (the cards a question becomes) through the bridge.
  *
  * Deliberate limits:
  *  - permission replies are allow/deny only — no "always"/pattern rules;
  *  - no subscription usage: OpenCode has no equivalent to ask, and a
  *    fabricated number would be worse than none. Context usage is reported
  *    only for models whose provider declares a context limit;
- *  - no effort levels; models are per prompt (`provider/model` ids).
+ *  - no effort levels of its own; models are `provider/model` ids, and a
+ *    reasoning level rides on the model as a v2 variant.
  *
  * Provider profiles are added to the server this driver starts as
  * providers of their own (providers.ts): their models join the list beside
  * OpenCode Zen and the operator's providers, and a session picks one like
  * any other.
  */
-import { createOpencodeClient } from '@opencode-ai/sdk/v2/client';
-import type {
-  AssistantMessage,
-  Command,
-  Event,
-  EventPermissionAsked,
-  EventQuestionAsked,
-  OpencodeClient,
-  Part,
-  Provider,
-  QuestionAnswer,
-  QuestionInfo,
-  Session,
-  SnapshotFileDiff,
-} from '@opencode-ai/sdk/v2/client';
+import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolKindOf, toolLocations, toolTitle } from '../../sdk/tools';
@@ -56,8 +42,13 @@ import type {
   Subagent,
   UsageData,
 } from '../../sdk/types';
+import {
+  opencodeEventToEntries,
+  toolCallDiffs,
+  toolResultText,
+  type OpenCodeEvent,
+} from './adapter';
 import { SESSION_COMMANDS, sessionCommand, sessionSlashCommands } from './sessionCommands';
-import { opencodeEventToEntries, toolCallDiffs, type OpenCodeEvent } from './adapter';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
 import { type Catalog, EMPTY_CATALOG } from './catalog';
@@ -90,47 +81,27 @@ const OPENCODE_MODES = [
  *  none, so OpenCode uses its default agent (`build`, or the operator's). */
 const PLAN_AGENT = 'plan';
 
+/**
+ * The permission rules a session runs under, from its mode.
+ *
+ * V2's base policy ALLOWS every tool in the project: left alone, a session
+ * would never ask, and the phone's approval card would never appear. The ask
+ * modes therefore state the rule that makes OpenCode ask — the last matching
+ * rule wins, and `*`/`*` matches everything — while the auto-approve mode
+ * states the allow it already had, so a mode switch always lands on an
+ * explicit rule rather than on whatever the operator configured.
+ */
+function permissionRules(mode: string): Array<{ action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }> {
+  return [{ action: '*', resource: '*', effect: mode === AUTO_APPROVE_MODE ? 'allow' : 'ask' }];
+}
+
 /** OpenCode's "always": the rule stands for every session of the project
  *  until its server restarts — it is not saved. */
 const PERMISSION_ALLOW_IN_PROJECT: PermissionOption = { ...PERMISSION_ALLOW_ALWAYS, label: 'Always allow in this project' };
 
-type ToolPart = Extract<Part, { type: 'tool' }>;
-type PermissionAsk = EventPermissionAsked['properties'];
-type QuestionAsk = EventQuestionAsked['properties'];
+type SessionPermissionAsk = PermissionAsked['data'];
 
-/** The permission ask older (pre-1.x) servers sent. 1.x sends
- *  `permission.asked` instead and never this; kept so an external older
- *  server still gets its asks answered. Not in the v2 `Event` union, hence
- *  declared here. */
-interface LegacyPermissionUpdated {
-  type: 'permission.updated';
-  properties: {
-    id: string;
-    type: string;
-    sessionID: string;
-    callID?: string;
-    title: string;
-    metadata?: Record<string, unknown>;
-  };
-}
-
-type StreamEvent = Event | LegacyPermissionUpdated;
-
-/** The pieces of an ask the phone needs, normalized from either ask shape,
- *  plus how to send the answer back on the matching endpoint. */
-interface NormalizedPermission {
-  id: string;
-  toolName: string;
-  input: Record<string, unknown>;
-  toolUseID: string;
-  title: string;
-  description?: string;
-  /** OpenCode offers to allow such calls from now on. */
-  always: boolean;
-  reply: (response: 'once' | 'always' | 'reject') => Promise<void>;
-}
-
-/** A sub-agent's child session, as its `task` call described it. */
+/** A sub-agent's child session, as its `subagent` call described it. */
 interface ChildSession {
   callId: string;
   title: string;
@@ -146,19 +117,19 @@ function subagentOf(child: ChildSession): Subagent {
 }
 
 /** The tool OpenCode uses to ask the user questions. Its own call is not
- *  shown as a generic tool row: `question.asked` renders it as a question
- *  card instead (see handleQuestion). */
-const QUESTION_TOOL = 'question';
+ *  shown as a generic tool row: the form it raises renders as a question
+ *  card instead (see handleForm). */
+const SUBAGENT_TOOL = 'subagent';
 
-/** `model/providerID` split — OpenCode's prompt body wants `{providerID,
- *  modelID}`, not a single string. A model id with no `/` (or an empty half)
- *  has no valid split, so the field is omitted entirely and OpenCode falls
- *  back to its own configured default — no fabrication. */
-function splitModelId(model: string | undefined): { providerID: string; modelID: string } | undefined {
+/** `model/providerID` split — a v2 model reference wants `{providerID, id}`,
+ *  not a single string. A model id with no `/` (or an empty half) has no
+ *  valid split, so nothing is named and OpenCode falls back to its own
+ *  configured default — no fabrication. */
+function splitModelId(model: string | undefined): { providerID: string; id: string } | undefined {
   if (!model) return undefined;
   const i = model.indexOf('/');
   if (i <= 0 || i === model.length - 1) return undefined;
-  return { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
+  return { providerID: model.slice(0, i), id: model.slice(i + 1) };
 }
 
 /** OpenCode's models and the one a session defaults to. */
@@ -173,9 +144,8 @@ export interface OpenCodeCatalog {
 
 /** Tokens the conversation occupies after an assistant step: everything the
  *  step read and wrote. The measure OpenCode's own context meter shows. */
-export function contextTokens(message: AssistantMessage): number {
-  const t = message.tokens;
-  return t.input + t.output + t.reasoning + t.cache.read + t.cache.write;
+export function contextTokens(tokens: SessionInfo['tokens']): number {
+  return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write;
 }
 
 /** A provider retry as the phone shows it: why, which attempt, and when
@@ -192,7 +162,7 @@ export function retryText(status: { attempt: number; message: string; next: numb
  * and the reply (its reasoning, its text), which the next step reads as part
  * of its prompt. Nothing without the window's size.
  */
-export function openCodeContext(tokens: AssistantMessage['tokens'], window: number | undefined): ContextBreakdown | undefined {
+export function openCodeContext(tokens: SessionInfo['tokens'], window: number | undefined): ContextBreakdown | undefined {
   if (!window || window <= 0) return undefined;
   const parts: Array<[string, number]> = [
     ['Cached prompt', tokens.cache.read],
@@ -215,31 +185,22 @@ const ZEN_PROVIDER = 'opencode';
 
 /**
  * The model a session runs when the phone names none, as a
- * `<providerID>/<modelID>` id from `providers`: the model OpenCode's own
- * config names, when it is one of them; else a free OpenCode Zen model, which
- * works with no credential set up; else the first provider's own default
- * (`serverDefaults`, providerID → modelID). Deprecated models are skipped.
+ * `<providerID>/<modelID>` id from `models`: the model OpenCode's own
+ * default names, when it is one of them; else a free OpenCode Zen model,
+ * which works with no credential set up; else the first model that is not
+ * deprecated. Deprecated models are skipped, and a model the server does not
+ * offer at all is never named.
  */
-export function pickDefaultModel(
-  configured: string | undefined,
-  providers: Provider[],
-  serverDefaults: Record<string, string>,
-): string | undefined {
-  const usable = (p: Provider) => Object.values(p.models).filter((m) => m.status !== 'deprecated');
-  const ids = new Set(providers.flatMap((p) => usable(p).map((m) => `${p.id}/${m.id}`)));
+export function pickDefaultModel(configured: string | undefined, models: ModelInfo[]): string | undefined {
+  const usable = models.filter((m) => m.status !== 'deprecated' && m.enabled);
+  const ids = new Set(usable.map((m) => `${m.providerID}/${m.modelID}`));
   if (configured && ids.has(configured)) return configured;
-  const zen = providers.find((p) => p.id === ZEN_PROVIDER);
-  const free = zen && usable(zen).find((m) => m.cost.input === 0 && m.cost.output === 0);
-  if (free) return `${ZEN_PROVIDER}/${free.id}`;
-  for (const p of providers) {
-    const id = `${p.id}/${serverDefaults[p.id] ?? ''}`;
-    if (ids.has(id)) return id;
-  }
-  return undefined;
+  const free = usable.find((m) => m.providerID === ZEN_PROVIDER && m.cost.every((c) => c.input === 0 && c.output === 0));
+  if (free) return `${free.providerID}/${free.modelID}`;
+  const first = usable[0];
+  return first ? `${first.providerID}/${first.modelID}` : undefined;
 }
 
-/** Why OpenCode cannot run `model`: none of its providers offers it. When
- *  the model list could not be fetched, nothing is refused. */
 /** The variant OpenCode reads as "none": the model's own settings. */
 const DEFAULT_VARIANT = 'default';
 
@@ -249,8 +210,8 @@ const VARIANT_LABELS: Record<string, string> = { xhigh: 'Extra high', none: 'Non
 /** A model's reasoning levels, from its OpenCode variants (`low`, `high`,
  *  `max`…, set by OpenCode from what the model is): its default first. A
  *  model without variants has none. */
-export function reasoningLevels(variants: Record<string, unknown> | undefined): OptionChoice[] {
-  const ids = Object.keys(variants ?? {}).filter((id) => id !== DEFAULT_VARIANT);
+export function reasoningLevels(variants: ModelInfo['variants'] | undefined): OptionChoice[] {
+  const ids = (variants ?? []).map((v) => v.id).filter((id) => id !== DEFAULT_VARIANT);
   if (ids.length === 0) return [];
   const label = (id: string) => VARIANT_LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
   return [{ id: DEFAULT_VARIANT, label: 'Default' }, ...ids.map((id) => ({ id, label: label(id) }))];
@@ -269,14 +230,11 @@ export function unsupportedModelReason(model: string, models: ModelEntry[]): str
   return `OpenCode does not offer the model '${model}' — none of its configured providers serves it; choose one from its model list.`;
 }
 
-/** Best-effort human-readable text out of OpenCode's error-union shapes
- *  (ProviderAuthError / UnknownError / MessageOutputLengthError /
- *  MessageAbortedError / ApiError) without importing every member by name —
- *  all but one carry `data.message`; the odd one out (MessageOutputLengthError)
- *  falls back to its `name`. */
-function formatOpenCodeError(error: unknown): string {
+/** Best-effort human-readable text out of a v2 structured error. */
+export function formatOpenCodeError(error: unknown): string {
   if (error && typeof error === 'object') {
-    const e = error as { name?: unknown; data?: { message?: unknown } };
+    const e = error as { message?: unknown; name?: unknown; data?: { message?: unknown } };
+    if (typeof e.message === 'string' && e.message !== '') return e.message;
     if (typeof e.data?.message === 'string') return e.data.message;
     if (typeof e.name === 'string') return e.name;
   }
@@ -284,10 +242,10 @@ function formatOpenCodeError(error: unknown): string {
 }
 
 /**
- * The phone-facing description of a permission ask. OpenCode names the
- * RULE that needs approval (`external_directory`, `edit`, `bash`, …), not
- * the tool; the tool itself is shown as the card's title (see fromAsk), so
- * this says what the approval is actually for.
+ * The phone-facing description of a permission ask. V2 names the RULE that
+ * needs approval (`external_directory`, `edit`, `shell`, …), not the tool;
+ * the tool itself is shown as the card's title (see fromAsk), so this says
+ * what the approval is actually for.
  */
 export function describePermission(permission: string, patterns: string[]): string {
   const what = patterns.filter((p) => p.length > 0).join(', ');
@@ -296,7 +254,7 @@ export function describePermission(permission: string, patterns: string[]): stri
       return what ? `Access outside the project: ${what}` : 'Access outside the project';
     case 'doom_loop':
       return 'The same tool call keeps repeating — let it continue?';
-    case 'bash':
+    case 'shell':
       return what ? `Run: ${what}` : 'Run a shell command';
     case 'edit':
       return what ? `Edit: ${what}` : 'Edit files';
@@ -304,45 +262,66 @@ export function describePermission(permission: string, patterns: string[]): stri
       return what ? `Read: ${what}` : 'Read files';
     case 'webfetch':
       return what ? `Fetch: ${what}` : 'Fetch a URL';
+    case 'websearch':
+      return what ? `Search the web: ${what}` : 'Search the web';
     default:
       return what ? `${permission}: ${what}` : permission;
   }
 }
 
-/** A command's argument placeholders (`$ARGUMENTS`, `$1`, …) as a hint the
- *  phone can show; none when the command takes no arguments. */
-export function commandArgumentHint(hints: string[]): string | undefined {
-  const shown = hints.map((h) => (h === '$ARGUMENTS' ? '<arguments>' : h.replace(/^\$(\d+)$/, '<arg$1>')));
-  return shown.length > 0 ? shown.join(' ') : undefined;
+/** OpenCode's commands as the phone's command menu lists them. V2's command
+ *  list carries no argument hints of its own, so a command shows just its
+ *  name and description. */
+export function toSlashCommands(commands: Array<{ name: string; description?: string }>): SlashCommand[] {
+  return commands.map((c) => slashCommand(c.name, c.description));
 }
 
-/** OpenCode's commands as the phone's command menu lists them. */
-export function toSlashCommands(commands: Command[]): SlashCommand[] {
-  return commands.map((c) => slashCommand(c.name, c.description, commandArgumentHint(c.hints ?? [])));
-}
-
-/** OpenCode's questions in the wire's question shape. */
-export function toQuestionSpecs(questions: QuestionInfo[]): QuestionSpec[] {
-  return questions.map((q) => ({
-    question: q.question,
-    ...(q.header ? { header: q.header } : {}),
-    options: q.options.map((o) => ({ label: o.label, ...(o.description ? { description: o.description } : {}) })),
-    ...(q.multiple ? { multiSelect: true } : {}),
+/** A `question` form's fields in the wire's question shape. V2 states a
+ *  question as a form field: a string field carrying the options (with
+ *  `custom` allowing a typed answer), or a multiselect for a question that
+ *  takes more than one. */
+export function toQuestionSpecs(fields: FormFieldLike[]): QuestionSpec[] {
+  return fields.map((f) => ({
+    question: f.title ?? f.description ?? f.key,
+    ...(f.description && f.title ? { header: f.title } : {}),
+    options: (f.type === 'multiselect' || f.type === 'string' ? (f.options ?? []) : []).map((o) => ({
+      label: o.label,
+      ...(o.description ? { description: o.description } : {}),
+    })),
+    ...(f.type === 'multiselect' ? { multiSelect: true } : {}),
   }));
 }
 
+/** The subset of a v2 form field the question card reads. */
+export interface FormFieldLike {
+  key: string;
+  type: string;
+  title?: string;
+  description?: string;
+  options?: Array<{ value: string; label: string; description?: string }>;
+}
+
 /**
- * The user's answers as OpenCode's per-question label arrays: the chosen
- * labels, or what the user typed as the one entry (OpenCode takes a custom
- * answer the same way).
+ * The user's answers as the form's value map: v2 keys each field's answer by
+ * the field itself (`q0`, `q1`…, the key the question tool gave it), and
+ * takes a chosen entry as its value — a custom (typed) answer is sent as the
+ * text, since OpenCode reads any value the options do not offer that way.
  */
-export function toQuestionAnswers(questions: QuestionInfo[], answers: QuestionReply[]): QuestionAnswer[] {
-  return questions.map((_, i) => {
+export function toFormAnswer(
+  fields: FormFieldLike[],
+  answers: QuestionReply[],
+): Record<string, string | string[]> {
+  const answer: Record<string, string | string[]> = {};
+  fields.forEach((field, i) => {
     const reply = answers[i];
-    if (reply === undefined) return [];
-    if (reply.type === 'selected') return reply.labels;
-    return reply.text === '' ? [] : [reply.text];
+    if (reply === undefined) return;
+    if (reply.type === 'selected') {
+      answer[field.key] = field.type === 'multiselect' ? reply.labels : (reply.labels[0] ?? '');
+      return;
+    }
+    if (reply.text !== '') answer[field.key] = field.type === 'multiselect' ? [reply.text] : reply.text;
   });
+  return answer;
 }
 
 export class OpenCodeSession implements DriverSession {
@@ -353,46 +332,22 @@ export class OpenCodeSession implements DriverSession {
   private mode: string;
   /** The title last reported for the session. */
   private title: string | undefined;
-  private model?: { providerID: string; modelID: string };
+  private model?: { providerID: string; id: string };
   /** The reasoning level ("variant") prompts ask of the model; none = the
    *  model's default. */
   private variant: string | undefined;
 
-  /** messageID -> role, seeded from message.updated events, so a later
-   *  message.part.updated for the same messageID can be tagged — Part itself
-   *  carries no role. Defaults to 'assistant' when unseen (the common case:
-   *  the role event for a message reliably precedes its part events). */
-  private readonly roles = new Map<string, 'user' | 'assistant'>();
-  /** Text/reasoning part ids already emitted — each part is translated at
-   *  most once, when it reaches a stable (non-streaming) state; see
-   *  shouldEmitPart. */
-  private readonly emittedPartIds = new Set<string>();
-  /** Tool callID -> last part status an entry was emitted for. A callID that
-   *  reached a terminal status (completed/error) never emits again — without
-   *  this guard a duplicate late message.part.updated for an already-finished
-   *  call would re-emit a second tool_result; a repeat of the same status
-   *  (e.g. two 'running' updates) is suppressed the same way. */
-  private readonly emittedToolStatus = new Map<string, ToolPart['state']['status']>();
-  /** Latest part per tool callID, including still-`pending` ones. OpenCode
-   *  asks for permission (and asks questions) BEFORE the call goes
-   *  `running`, so the call would otherwise only appear in the transcript
-   *  after its own approval card; showCall() emits it first from here. */
-  private readonly toolParts = new Map<string, ToolPart>();
-  /** Last diff fingerprint per file. `session.diff` repeats the whole
-   *  session's diff on every step; only files whose diff changed become a
-   *  new card. */
-  private readonly lastDiffs = new Map<string, string>();
-  /** Files a completed edit/write/apply_patch call already showed as a diff
-   *  card (adapter.ts's toolCallDiffs). The next `session.diff` change to
-   *  such a file is that same edit — dropped instead of shown twice — and
-   *  consumes the entry, so a LATER change to the file (a shell command, say)
-   *  still gets its card. */
-  private readonly toolDiffedFiles = new Set<string>();
-  /** Ask ids (permissions and questions) already handled — an ask could in
+  /** Tool call ids already shown as a row — v2 reports a call's input, its
+   *  start and its end separately, and only one row may come of them. */
+  private readonly shownCalls = new Set<string>();
+  /** Text/reasoning ordinals already emitted, per message: v2 sends deltas
+   *  and then the finished text, and only the finished one is shown. */
+  private readonly emittedParts = new Set<string>();
+  /** Ask ids (permissions and forms) already handled — an ask could in
    *  theory refire; a second reply is rejected by the server anyway, but this
    *  avoids the wasted round trip and a second card. */
   private readonly answeredAsks = new Set<string>();
-  /** Sub-agent sessions this session started (OpenCode's `task` tool runs
+  /** Sub-agent sessions this session started (OpenCode's `subagent` tool runs
    *  each in a child session), by session id: the call that started it, the
    *  sub-agent's kind, and — for one left running in the background — that
    *  it is a task, and whether the user asked it to stop. */
@@ -406,23 +361,26 @@ export class OpenCodeSession implements DriverSession {
   /** The turn was reported complete, and no new one has started since. */
   private turnCompleted = false;
   /** The error last reported in this turn: OpenCode reports a failed
-   *  turn's error both on its message and on the session. */
+   *  turn's error both on its step and on its execution. */
   private lastError?: string;
   /** The last main-agent step's token counts: what the context held then. */
-  private lastTokens?: AssistantMessage['tokens'];
+  private lastTokens?: SessionInfo['tokens'];
+  /** The model the last main-agent step ran, which is the window its tokens
+   *  are measured against. */
+  private lastStepModel?: { providerID: string; id: string };
   /** Names of the session's commands, from the last list fetched: a typed
    *  `/name` runs as that command only when OpenCode has one by that name.
    *  Dropped again when the fetch failed, so the next one asks again. */
   private commandNames?: Promise<Set<string>>;
 
   /** Resolves once the OpenCode session exists server-side. */
-  private readonly ready: Promise<{ client: OpencodeClient; session: Session }>;
+  private readonly ready: Promise<{ client: OpenCodeClient; session: SessionInfo }>;
   private readonly catalog: () => Promise<OpenCodeCatalog>;
 
   constructor(
     params: StartSession,
     private readonly ctx: SessionContext,
-    clientPromise: Promise<OpencodeClient>,
+    clientPromise: Promise<OpenCodeClient>,
     options: OpenCodeSessionOptions = {},
   ) {
     this.cwd = params.cwd;
@@ -462,27 +420,24 @@ export class OpenCodeSession implements DriverSession {
   }
 
   private async init(
-    clientPromise: Promise<OpencodeClient>,
+    clientPromise: Promise<OpenCodeClient>,
     params: StartSession,
-  ): Promise<{ client: OpencodeClient; session: Session }> {
+  ): Promise<{ client: OpenCodeClient; session: SessionInfo }> {
     try {
-      const client = await clientPromise;
       // With no model named, the session runs the default the phone was
-      // shown, sent with every prompt — never whatever OpenCode would pick on
+      // shown, set on the session — never whatever OpenCode would pick on
       // its own (the last model used, possibly one with no credential).
       // A resumed conversation already ran on its model; only a new start is
       // checked against what the providers offer.
       const catalogRead: Promise<OpenCodeCatalog> = !params.model || !params.resume ? this.catalog() : Promise.resolve({ models: [] });
       // Subscribe BEFORE resolving/creating the session so no event in the gap
       // between "session exists" and "we started listening" is missed. The
-      // stream is directory-scoped (a server can host multiple projects); this
-      // session further filters by sessionID once it is known. Opened while
-      // the catalog is read, so a new session waits for one round trip, not
-      // two; a refused model closes it again (the abort in `finish`).
-      const [catalog, { stream }] = await Promise.all([
-        catalogRead,
-        client.event.subscribe({ directory: this.cwd }, { signal: this.abortController.signal }),
-      ]);
+      // stream carries every location, so this session filters by sessionID.
+      // Opened while the catalog is read, so a new session waits for one
+      // round trip, not two; a refused model closes it again (the abort in
+      // `finish`).
+      const [catalog, client] = await Promise.all([catalogRead, clientPromise]);
+      const stream = client.event.subscribe({ signal: this.abortController.signal });
       if (params.model && !params.resume) {
         const refused = unsupportedModelReason(params.model, catalog.models);
         if (refused) throw new Error(refused);
@@ -504,7 +459,7 @@ export class OpenCodeSession implements DriverSession {
       // end (server closed the connection) ends the session normally; a
       // rejection (network drop, server restart) ends it with the error, so
       // the bridge's restart policy can bring it back.
-      void this.consumeEvents(client, stream as AsyncIterable<StreamEvent>, session.id).then(
+      void this.consumeEvents(client, stream, session.id).then(
         () => this.finish(),
         (err) => this.finish(err instanceof Error ? err.message : String(err)),
       );
@@ -523,88 +478,141 @@ export class OpenCodeSession implements DriverSession {
    *  through to creating a fresh one rather than failing the whole session.
    *  `resumeLost` says whether that fallback happened, so the user is told. */
   private async resolveSession(
-    client: OpencodeClient,
+    client: OpenCodeClient,
     params: StartSession,
-  ): Promise<{ session: Session; resumeLost: boolean }> {
+  ): Promise<{ session: SessionInfo; resumeLost: boolean }> {
     if (params.resume) {
-      const { data, error } = await client.session.get({ sessionID: params.resume, directory: this.cwd });
-      if (!error && data) return { session: data, resumeLost: false };
-      this.ctx.log(
-        `[opencode] resume ${params.resume} not found server-side ` +
-          `(${error ? JSON.stringify(error) : 'no session returned'}) — starting a fresh session instead`,
-      );
-      return { session: await this.createSessionRemote(client), resumeLost: true };
+      try {
+        return { session: await client.session.get({ sessionID: params.resume }), resumeLost: false };
+      } catch (err) {
+        this.ctx.log(`[opencode] resume ${params.resume} not found server-side (${formatOpenCodeError(err)}) — starting a fresh session instead`);
+      }
     }
-    return { session: await this.createSessionRemote(client), resumeLost: false };
+    return { session: await this.createSessionRemote(client), resumeLost: Boolean(params.resume) };
   }
 
-  /** Created untitled, so OpenCode names it after its first message. */
-  private async createSessionRemote(client: OpencodeClient): Promise<Session> {
-    const { data, error } = await client.session.create({ directory: this.cwd });
-    if (error || !data) {
-      throw new Error(`OpenCode session.create failed: ${JSON.stringify(error ?? 'no session returned')}`);
+  /** Created untitled, so OpenCode names it after its first message, on the
+   *  model and agent the session runs from the start — v2 takes both here
+   *  rather than on each prompt. */
+  private async createSessionRemote(client: OpenCodeClient): Promise<SessionInfo> {
+    try {
+      return await client.session.create({
+        location: { directory: this.cwd },
+        ...(this.model ? { model: { ...this.model, ...(this.variant ? { variant: this.variant } : {}) } } : {}),
+        ...(this.mode === PLAN_MODE ? { agent: PLAN_AGENT } : {}),
+        permissions: permissionRules(this.mode),
+      });
+    } catch (err) {
+      throw new Error(`OpenCode session.create failed: ${formatOpenCodeError(err)}`);
     }
-    return data;
   }
 
   private async consumeEvents(
-    client: OpencodeClient,
-    stream: AsyncIterable<StreamEvent>,
+    client: OpenCodeClient,
+    stream: AsyncIterable<V2Event>,
     sessionId: string,
   ): Promise<void> {
     for await (const event of stream) {
       if (this.ended) break;
+      const data = event.data as { sessionID?: string } | undefined;
+      const child = data?.sessionID ? this.children.get(data.sessionID) : undefined;
+      // Events for other sessions are dropped, except the one that tells this
+      // session a sub-agent of its own started.
+      if (data?.sessionID && data.sessionID !== sessionId && !child && !this.noteChild(event, sessionId)) continue;
       switch (event.type) {
-        case 'message.updated': {
-          const info = event.properties.info;
-          if (info.sessionID !== sessionId) {
-            // A sub-agent's messages: their roles, for its parts; its
-            // errors and context are its own.
-            if (this.children.has(info.sessionID)) this.roles.set(info.id, info.role);
-            continue;
-          }
-          this.roles.set(info.id, info.role);
-          if (info.role === 'assistant' && info.error) this.reportError(formatOpenCodeError(info.error));
-          if (info.role === 'assistant') this.reportContext(info);
+        case 'session.text.ended': {
+          this.deliver({ type: 'text', role: 'assistant', text: event.data.text, ...(child ? { subagent: subagentOf(child) } : {}) });
           break;
         }
-        case 'message.part.updated': {
-          const part = event.properties.part;
-          const child = this.children.get(part.sessionID);
-          if (part.sessionID !== sessionId && !child) continue;
-          if (part.type === 'tool') {
-            this.toolParts.set(part.callID, part);
-            this.noteSubagent(part);
-          }
-          if (!this.shouldEmitPart(part)) continue;
-          if (part.type === 'tool' && part.state.status === 'completed') {
-            for (const diff of toolCallDiffs(part.tool, part.state.input, part.state.metadata)) {
-              this.toolDiffedFiles.add(diff.path);
-            }
-          }
-          this.pushPart(part, child);
+        case 'session.reasoning.ended': {
+          this.deliver({ type: 'reasoning', text: event.data.text, ...(child ? { subagent: subagentOf(child) } : {}) });
+          break;
+        }
+        case 'session.tool.input.started': {
+          this.toolNames.set(event.data.id, event.data.name);
+          break;
+        }
+        case 'session.tool.called': {
+          const name = this.toolNames.get(event.data.id) ?? '';
+          if (name === SUBAGENT_TOOL) this.noteSubagentCall(event.data.id, event.data.input);
+          this.deliver({
+            type: 'tool-start',
+            callId: event.data.id,
+            toolName: name,
+            input: event.data.input,
+            ...(child ? { subagent: subagentOf(child) } : {}),
+          });
+          break;
+        }
+        case 'session.tool.success': {
+          const diffs = toolCallDiffs(event.data.metadata as Record<string, unknown> | undefined);
+          for (const diff of diffs) this.toolDiffedFiles.add(diff.path);
+          this.deliver({
+            type: 'tool-result',
+            callId: event.data.id,
+            text: toolResultText(event.data.content, 'Done.'),
+            diffs,
+            ...(child ? { subagent: subagentOf(child) } : {}),
+          });
+          this.finishSubagentCall(event.data.id);
+          break;
+        }
+        case 'session.tool.failed': {
+          this.deliver({
+            type: 'tool-result',
+            callId: event.data.id,
+            text: toolResultText(event.data.content, formatOpenCodeError(event.data.error)),
+            isError: true,
+            diffs: toolCallDiffs(event.data.metadata as Record<string, unknown> | undefined),
+            ...(child ? { subagent: subagentOf(child) } : {}),
+          });
+          this.finishSubagentCall(event.data.id);
+          break;
+        }
+        case 'session.step.started': {
+          // The step is what names the model; its end carries only the
+          // tokens, and the context meter needs both.
+          if (!child) this.lastStepModel = event.data.model;
+          break;
+        }
+        case 'session.step.ended': {
+          if (event.data.tokens) this.lastTokens = event.data.tokens;
+          if (!child) this.reportStepTokens();
+          // Files the step changed that no tool call already showed (a shell
+          // command's writes, say): v2 names them here rather than as a
+          // session-wide diff.
+          if (event.data.files && event.data.files.length > 0) void this.reportChangedFiles(client, sessionId, event.data.files);
+          break;
+        }
+        case 'session.usage.updated': {
+          if (child) break;
+          this.lastTokens = event.data.tokens;
+          this.reportUsageTokens();
+          break;
+        }
+        case 'session.step.failed': {
+          if (event.data.error) this.reportError(formatOpenCodeError(event.data.error));
+          break;
+        }
+        case 'session.execution.failed': {
+          this.reportError(formatOpenCodeError(event.data.error));
+          break;
+        }
+        case 'session.execution.succeeded': {
+          this.markTurnComplete();
+          break;
+        }
+        case 'session.execution.interrupted': {
+          this.markTurnComplete();
           break;
         }
         case 'session.idle': {
-          if (event.properties.sessionID !== sessionId) {
-            this.childEnded(event.properties.sessionID, 'completed');
-            continue;
-          }
-          // OpenCode can say a turn is over more than once (after a
-          // failed one, say): the turn is complete once.
-          if (!this.turnCompleted) this.deliver({ type: 'idle' });
-          this.turnCompleted = true;
-          if (!this.ended) this.ctx.emit({ type: 'turn', state: 'idle' });
+          if (child) this.childEnded(child, 'completed');
+          else this.markTurnComplete();
           break;
         }
-        // Turn-boundary signal: `busy` starts a turn. `idle` overlaps with
-        // 'session.idle' above; reporting the same state twice is harmless.
         case 'session.status': {
-          if (event.properties.sessionID !== sessionId) {
-            if (event.properties.status.type === 'idle') this.childEnded(event.properties.sessionID, 'completed');
-            continue;
-          }
-          const status = event.properties.status;
+          const status = event.data.status;
           if (status.type === 'retry') {
             // The provider failed and OpenCode tries again, waiting longer
             // each time: said on the phone, rather than a turn that only
@@ -612,7 +620,7 @@ export class OpenCodeSession implements DriverSession {
             this.deliver({ type: 'status', text: retryText(status, Date.now()) });
             break;
           }
-          if (status.type !== 'busy' && status.type !== 'idle') break;
+          if (child) break;
           if (status.type === 'busy') {
             this.turnCompleted = false;
             this.lastError = undefined;
@@ -620,42 +628,26 @@ export class OpenCodeSession implements DriverSession {
           if (!this.ended) this.ctx.emit({ type: 'turn', state: status.type === 'busy' ? 'running' : 'idle' });
           break;
         }
-        case 'session.updated': {
-          if (event.properties.sessionID === sessionId) this.reportTitle(event.properties.info.title);
-          break;
-        }
-        case 'session.diff': {
-          if (event.properties.sessionID !== sessionId) continue;
-          const files = this.changedDiffs(event.properties.diff);
-          if (files.length > 0) this.deliver({ type: 'diff', files });
-          break;
-        }
-        case 'session.error': {
-          if (event.properties.sessionID && event.properties.sessionID !== sessionId) {
-            this.childEnded(event.properties.sessionID, 'failed');
-            continue;
-          }
-          if (event.properties.error) this.reportError(formatOpenCodeError(event.properties.error));
+        case 'session.renamed': {
+          if (!child) this.reportTitle(event.data.title);
           break;
         }
         case 'permission.asked': {
-          const ask = event.properties;
-          if (ask.sessionID !== sessionId && !this.children.has(ask.sessionID)) continue;
-          this.showCall(ask.tool?.callID);
-          this.handlePermission(this.fromAsk(client, ask), this.children.get(ask.sessionID));
+          this.handlePermission(client, event.data, child);
           break;
         }
-        case 'permission.updated': {
-          const permission = event.properties;
-          if (permission.sessionID !== sessionId && !this.children.has(permission.sessionID)) continue;
-          this.showCall(permission.callID);
-          this.handlePermission(this.fromLegacyPermission(client, permission), this.children.get(permission.sessionID));
+        case 'form.created': {
+          if (event.data.form.metadata?.kind !== 'question') break;
+          this.handleForm(client, event.data.form, child);
           break;
         }
-        case 'question.asked': {
-          const ask = event.properties;
-          if (ask.sessionID !== sessionId && !this.children.has(ask.sessionID)) continue;
-          this.handleQuestion(client, ask);
+        case 'session.execution.started': {
+          if (child) break;
+          // V2 starts a turn with this, not with a `busy` status: without it
+          // the phone would only ever learn a turn had ended.
+          this.turnCompleted = false;
+          this.lastError = undefined;
+          if (!this.ended) this.ctx.emit({ type: 'turn', state: 'running' });
           break;
         }
         default:
@@ -664,19 +656,142 @@ export class OpenCodeSession implements DriverSession {
     }
   }
 
-  /** Report how full the context is after an assistant step, over the
-   *  window of the model that ran it — only what changed, and nothing for a
-   *  model with no declared limit. */
-  private reportContext(message: AssistantMessage): void {
-    const used = contextTokens(message);
+  /** Tool name per call id: v2 names the tool when its input starts, and the
+   *  call itself carries only the id. */
+  private readonly toolNames = new Map<string, string>();
+  /** Files a completed edit/write/patch call already showed as a diff card.
+   *  A file the step also names as changed is that same edit — dropped
+   *  instead of shown twice — and consumes the entry, so a LATER change to
+   *  the file (a shell command, say) still gets its card. */
+  private readonly toolDiffedFiles = new Set<string>();
+
+  /** Whether this event is this session's own child being announced; the
+   *  child is recorded so its later events are read. OpenCode names the
+   *  parent on the child's own `session.created`, which is what tells a
+   *  sub-agent's session apart from an unrelated one on the same server. */
+  private noteChild(event: V2Event, sessionId: string): boolean {
+    if (event.type !== 'session.created') return false;
+    const created = event.data;
+    if (created.parentID !== sessionId || this.children.has(created.sessionID)) return false;
+    // The call that started it named the sub-agent; the two events arrive
+    // back to back, the call first.
+    const call = this.pendingSubagents.shift();
+    this.children.set(created.sessionID, {
+      callId: call?.callId ?? '',
+      title: call?.title ?? created.title ?? 'Sub-agent',
+      ...(call?.label ? { label: call.label } : {}),
+      background: false,
+      stopping: false,
+    });
+    return true;
+  }
+
+  /** Sub-agent calls whose child session has not been announced yet: the
+   *  call names the sub-agent, the `session.created` that follows names the
+   *  session it runs in, and the two are paired here. */
+  private readonly pendingSubagents: Array<{ callId: string; label?: string; title: string }> = [];
+
+  /** Remember what the `subagent` call asked for; the child session it
+   *  starts is created just after, and claims this. */
+  private noteSubagentCall(callId: string, input: Record<string, unknown>): void {
+    const label = typeof input.agent === 'string' && input.agent ? input.agent : undefined;
+    const title = typeof input.description === 'string' && input.description ? input.description : 'Sub-agent';
+    this.pendingSubagents.push({ callId, ...(label ? { label } : {}), title });
+  }
+
+  /** The child a sub-agent call started, by that call's id. */
+  private childOfCall(callId: string): { id: string; child: ChildSession } | undefined {
+    for (const [id, child] of this.children) if (child.callId === callId) return { id, child };
+    return undefined;
+  }
+
+  /** A sub-agent call finished while its child session is still going: the
+   *  sub-agent was left to run on its own, which is the background task the
+   *  phone can stop. */
+  private finishSubagentCall(callId: string): void {
+    const found = this.childOfCall(callId);
+    if (!found) return;
+    const { id, child } = found;
+    if (child.background) return;
+    child.background = true;
+    this.deliver({ type: 'task', taskId: id, title: child.title, status: 'running', callId: child.callId });
+  }
+
+  private childIdOf(child: ChildSession): string {
+    for (const [id, c] of this.children) if (c === child) return id;
+    return child.callId;
+  }
+
+  /** A child session went idle or failed: a background sub-agent's task
+   *  ended (stopped, when the user asked for that). */
+  private childEnded(child: ChildSession, status: 'completed' | 'failed'): void {
+    if (!child.background) return;
+    child.background = false;
+    this.deliver({
+      type: 'task',
+      taskId: this.childIdOf(child),
+      title: child.title,
+      status: child.stopping ? 'stopped' : status,
+      callId: child.callId,
+    });
+  }
+
+  /** The turn is over: said once, however many of v2's end signals arrive. */
+  private markTurnComplete(): void {
+    if (!this.turnCompleted) this.deliver({ type: 'idle' });
+    this.turnCompleted = true;
+    if (!this.ended) this.ctx.emit({ type: 'turn', state: 'idle' });
+  }
+
+  /** Files a step changed that no tool call showed, as diff cards: the
+   *  server's own diff carries the patch for each. */
+  private async reportChangedFiles(client: OpenCodeClient, sessionId: string, files: string[]): Promise<void> {
+    const wanted = files.filter((f) => !this.consumeToolDiff(f));
+    if (wanted.length === 0) return;
+    try {
+      const diff = await client.session.diff({ sessionID: sessionId });
+      const byPath = new Map(diff.map((d) => [d.file, d]));
+      const shown = wanted.flatMap((f) => {
+        const found = byPath.get(f) ?? [...byPath.values()].find((d) => d.file.endsWith(`/${f}`) || f.endsWith(`/${d.file}`));
+        return found ? [found] : [];
+      });
+      if (shown.length > 0) this.deliver({ type: 'diff', files: shown });
+    } catch {
+      // A diff the server will not give is not worth failing a turn over.
+    }
+  }
+
+  /** Whether a tool call already showed `file`'s change (removing that
+   *  record). Tool calls name files by absolute path, the step's list by
+   *  worktree-relative path, so either may be a path-suffix of the other. */
+  private consumeToolDiff(file: string): boolean {
+    const norm = (p: string) => p.replace(/\\/g, '/');
+    const target = norm(file);
+    for (const shown of this.toolDiffedFiles) {
+      const s = norm(shown);
+      if (s === target || s.endsWith(`/${target}`) || target.endsWith(`/${s}`)) {
+        this.toolDiffedFiles.delete(shown);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Report how full the context is after a step, over the window of the
+   *  model that ran it — only what changed, and nothing for a model with no
+   *  declared limit. */
+  private reportStepTokens(): void {
+    const providerID = this.lastStepModel?.providerID;
+    const modelID = this.lastStepModel?.id;
+    if (!this.lastTokens || !providerID || !modelID) return;
+    const used = contextTokens(this.lastTokens);
     if (used <= 0) return;
-    this.lastTokens = message.tokens;
     this.contextLimits ??= this.catalog().then((c) => {
       if (c.models.length === 0) this.contextLimits = undefined;
       return c.contextLimits ?? {};
     });
     void this.contextLimits.then((limits) => {
-      const window = limits[`${message.providerID}/${message.modelID}`];
+      const window = limits[`${providerID}/${modelID}`];
       if (!window || this.ended) return;
       const pct = Math.max(0, Math.min(100, Math.round((used / window) * 100)));
       const changedPct = pct !== this.contextPercentage;
@@ -692,251 +807,82 @@ export class OpenCodeSession implements DriverSession {
     });
   }
 
+  private reportUsageTokens(): void {
+    if (!this.lastTokens) return;
+    this.reportStepTokens();
+  }
+
   private reportError(content: string): void {
     if (content === this.lastError) return;
     this.lastError = content;
     this.deliver({ type: 'error', content });
   }
 
-  private pushPart(part: Part, child?: ChildSession): void {
-    const role = this.roles.get(part.messageID) ?? 'assistant';
-    this.deliver({ type: 'part', part, role, ...(child ? { subagent: subagentOf(child) } : {}) });
-  }
-
   /**
-   * A `task` call names the child session its sub-agent runs in
-   * (`metadata.sessionId`) as soon as it starts, before the sub-agent does
-   * anything: from then on that session's events are this one's. A call
-   * that completes with `metadata.background` left the sub-agent running on
-   * its own — a background task, until the child goes idle.
+   * Answer one OpenCode permission ask: allowed in the auto-approve mode,
+   * otherwise sent to the phone. Always answered — OpenCode must never wait
+   * on a reply that is not coming.
    */
-  private noteSubagent(part: ToolPart): void {
-    if (part.tool !== 'task' || part.state.status === 'pending') return;
-    const metadata = (part.state as { metadata?: Record<string, unknown> }).metadata;
-    const childId = typeof metadata?.sessionId === 'string' ? metadata.sessionId : '';
-    if (!childId) return;
-    let child = this.children.get(childId);
-    if (!child) {
-      const input = (part.state.input ?? {}) as Record<string, unknown>;
-      const label = typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : undefined;
-      const title = typeof input.description === 'string' && input.description ? input.description : 'Sub-agent';
-      child = { callId: part.callID, title, ...(label ? { label } : {}), background: false, stopping: false };
-      this.children.set(childId, child);
-    }
-    if (part.state.status === 'completed' && metadata?.background === true && !child.background) {
-      child.background = true;
-      this.deliver({ type: 'task', taskId: childId, title: child.title, status: 'running', callId: child.callId });
-    }
-  }
-
-  /** A child session went idle or failed: a background sub-agent's task
-   *  ended (stopped, when the user asked for that). */
-  private childEnded(childId: string, status: 'completed' | 'failed'): void {
-    const child = this.children.get(childId);
-    if (!child?.background) return;
-    child.background = false;
-    this.deliver({
-      type: 'task',
-      taskId: childId,
-      title: child.title,
-      status: child.stopping ? 'stopped' : status,
-      callId: child.callId,
-    });
-  }
-
-  /**
-   * Emit the tool call an ask belongs to, if it has not been shown yet. The
-   * part is still `pending` at ask time (the adapter drops pending parts as
-   * unstable), so it is emitted as `running` with the input it already has;
-   * the later real `running` update is then suppressed as a repeat.
-   */
-  private showCall(callID: string | undefined): void {
-    if (!callID || this.emittedToolStatus.has(callID)) return;
-    const part = this.toolParts.get(callID);
-    if (!part || part.tool === QUESTION_TOOL) return;
-    this.emittedToolStatus.set(callID, 'running');
-    this.pushPart({
-      ...part,
-      state: { status: 'running', input: part.state.input, time: { start: Date.now() } },
-    });
-  }
-
-  /** Deduplicates streaming updates into at-most-one translation per part:
-   *  text/reasoning parts only qualify once they stop changing (`time`
-   *  absent — no timing info at all — or `time.end` set); a tool's 'running'
-   *  transition is reported once per call, its terminal transition
-   *  (completed/error) always reported. The question tool's call itself is
-   *  never a row (its card comes from `question.asked`), but its result is:
-   *  that is what marks the card answered. */
-  private shouldEmitPart(part: Part): boolean {
-    switch (part.type) {
-      case 'text':
-      case 'reasoning': {
-        if (this.emittedPartIds.has(part.id)) return false;
-        const finished = part.time === undefined || part.time.end !== undefined;
-        if (!finished) return false;
-        this.emittedPartIds.add(part.id);
-        return true;
-      }
-      case 'tool': {
-        const status = part.state.status;
-        if (status === 'pending') return false;
-        if (status === 'running' && part.tool === QUESTION_TOOL) return false;
-        const last = this.emittedToolStatus.get(part.callID);
-        if (last === 'completed' || last === 'error') return false;
-        if (last === status) return false;
-        this.emittedToolStatus.set(part.callID, status);
-        return true;
-      }
-      default:
-        return true;
-    }
-  }
-
-  /** Files of a `session.diff` whose content differs from the last time they
-   *  were shown. */
-  private changedDiffs(files: SnapshotFileDiff[]): SnapshotFileDiff[] {
-    return files.filter((f) => {
-      const key = f.file ?? '';
-      const fingerprint = `${f.status ?? ''}\u0000${f.additions}\u0000${f.deletions}\u0000${f.patch ?? ''}`;
-      if (this.lastDiffs.get(key) === fingerprint) return false;
-      this.lastDiffs.set(key, fingerprint);
-      return !this.consumeToolDiff(key);
-    });
-  }
-
-  /** Whether a tool call already showed `file`'s change (removing that
-   *  record). Tool calls name files by absolute path, `session.diff` by
-   *  worktree-relative path, so either may be a path-suffix of the other. */
-  private consumeToolDiff(file: string): boolean {
-    const norm = (p: string) => p.replace(/\\/g, '/');
-    const target = norm(file);
-    for (const shown of this.toolDiffedFiles) {
-      const s = norm(shown);
-      if (s === target || s.endsWith(`/${target}`) || target.endsWith(`/${s}`)) {
-        this.toolDiffedFiles.delete(shown);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Answer one OpenCode permission ask: refused outright when it touches a
-   * secret path in a session that forbids that, allowed in the auto-approve
-   * mode, otherwise sent to the phone. Always answered — OpenCode must never
-   * wait on a reply that is not coming.
-   */
-  private handlePermission(permission: NormalizedPermission, child?: ChildSession): void {
-    if (this.answeredAsks.has(permission.id)) return;
-    this.answeredAsks.add(permission.id);
-    const reply = (response: 'once' | 'always' | 'reject'): void => {
+  private handlePermission(client: OpenCodeClient, ask: SessionPermissionAsk, child?: ChildSession): void {
+    if (this.answeredAsks.has(ask.id)) return;
+    this.answeredAsks.add(ask.id);
+    const reply = (decision: 'once' | 'always' | 'reject'): void => {
       // Best effort — the ask then stays pending server-side; there is no
       // live connection left to retry over.
-      permission.reply(response).catch(() => {});
+      void client.permission.reply({ sessionID: ask.sessionID, requestID: ask.id, decision }).catch(() => {});
     };
 
     if (this.mode === AUTO_APPROVE_MODE) {
       reply('once');
       return;
     }
+    const toolName = this.toolNames.get(ask.source?.id ?? '') ?? ask.action;
+    const description = ask.message?.trim() || describePermission(ask.action, ask.resources);
     this.ctx
       .requestPermission({
-        requestId: permission.toolUseID,
-        toolName: permission.toolName,
-        kind: toolKindOf(permission.toolName),
-        title: toolTitle(permission.toolName, permission.input) || permission.toolName,
-        description: permission.description ?? permission.title,
-        locations: toolLocations(permission.input),
-        options: permission.always ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
+        requestId: ask.source?.id ?? ask.id,
+        toolName,
+        kind: toolKindOf(toolName),
+        title: toolTitle(toolName, (ask.metadata ?? {}) as Record<string, unknown>) || toolName,
+        description,
+        locations: toolLocations((ask.metadata ?? {}) as Record<string, unknown>),
+        options: ask.save && ask.save.length > 0 ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })
       .then((outcome) => {
         const chosen = outcome.outcome === 'selected' ? outcome.optionId : undefined;
-        reply(chosen === PERMISSION_ALLOW.id ? 'once' : chosen === PERMISSION_ALLOW_IN_PROJECT.id && permission.always ? 'always' : 'reject');
+        reply(chosen === PERMISSION_ALLOW.id ? 'once' : chosen === PERMISSION_ALLOW_IN_PROJECT.id && ask.save?.length ? 'always' : 'reject');
       })
       .catch(() => reply('reject'));
   }
 
   /**
-   * A v2 `permission.asked`, answered on `/permission/{requestID}/reply`.
-   * The card names the tool the ask came from with that call's own input
-   * (what the user recognizes from the tool row above it); the permission
-   * rule being asked about goes into the description.
+   * One OpenCode form raised by the `question` tool, asked on the phone.
+   * Keyed by the question tool's call id — the form's own metadata names it —
+   * so the card groups under that call and the call's result marks the card
+   * answered. Always answered — a dismissal cancels the form, so OpenCode
+   * never waits on a reply that is not coming.
    */
-  private fromAsk(client: OpencodeClient, ask: PermissionAsk): NormalizedPermission {
-    const part = ask.tool ? this.toolParts.get(ask.tool.callID) : undefined;
-    const description = describePermission(ask.permission, ask.patterns);
-    return {
-      id: ask.id,
-      toolName: part?.tool ?? ask.permission,
-      input: part?.state.input ?? ask.metadata ?? {},
-      toolUseID: ask.tool?.callID ?? ask.id,
-      title: description,
-      description,
-      always: ask.always.length > 0,
-      reply: async (response) => {
-        const { error } = await client.permission.reply({
-          requestID: ask.id,
-          directory: this.cwd,
-          reply: response,
-        });
-        if (error) throw new Error(JSON.stringify(error));
-      },
-    };
-  }
+  private handleForm(client: OpenCodeClient, form: FormInfoLike, child?: ChildSession): void {
+    if (this.answeredAsks.has(form.id)) return;
+    this.answeredAsks.add(form.id);
 
-  /** A `permission.updated` from an older server, answered on the per-session
-   *  endpoint those servers expose. */
-  private fromLegacyPermission(
-    client: OpencodeClient,
-    permission: LegacyPermissionUpdated['properties'],
-  ): NormalizedPermission {
-    return {
-      id: permission.id,
-      toolName: permission.type,
-      input: permission.metadata ?? {},
-      toolUseID: permission.callID ?? permission.id,
-      title: permission.title,
-      always: false,
-      reply: async (response) => {
-        await client.permission.respond({
-          sessionID: permission.sessionID,
-          permissionID: permission.id,
-          directory: this.cwd,
-          response,
-        });
-      },
-    };
-  }
+    const tool = (form.metadata as { tool?: { id?: string } } | undefined)?.tool;
+    const toolUseId = tool?.id ?? form.id;
+    this.deliver({ type: 'question', toolUseId });
 
-  /**
-   * One OpenCode `question.asked`, asked on the phone. Keyed by the question
-   * tool's call id: the card groups under it and that call's own result
-   * marks the card answered. Always answered — a cancellation rejects the
-   * question, so OpenCode never waits on a reply that is not coming.
-   */
-  private handleQuestion(client: OpencodeClient, ask: QuestionAsk): void {
-    if (this.answeredAsks.has(ask.id)) return;
-    this.answeredAsks.add(ask.id);
-
-    const toolUseID = ask.tool?.callID ?? ask.id;
-    this.deliver({ type: 'question', toolUseId: toolUseID });
-
-    const reject = (): void => {
-      void client.question.reject({ requestID: ask.id, directory: this.cwd }).catch(() => {});
+    const cancel = (): void => {
+      void client.session.form.cancel({ sessionID: form.sessionID, formID: form.id }).catch(() => {});
     };
     this.ctx
-      .askQuestion(toolUseID, toQuestionSpecs(ask.questions))
+      .askQuestion(toolUseId, toQuestionSpecs(form.fields))
       .then((outcome) => {
-        if (outcome.outcome !== 'answered') return reject();
-        return client.question
-          .reply({ requestID: ask.id, directory: this.cwd, answers: toQuestionAnswers(ask.questions, outcome.answers) })
-          .then(({ error }) => {
-            if (error) reject();
-          });
+        if (outcome.outcome !== 'answered') return cancel();
+        return client.session.form
+          .reply({ sessionID: form.sessionID, formID: form.id, answer: toFormAnswer(form.fields, outcome.answers) })
+          .catch(cancel);
       })
-      .catch(reject);
+      .catch(cancel);
   }
 
   /**
@@ -960,15 +906,11 @@ export class OpenCodeSession implements DriverSession {
           this.runSessionCommand(client, session.id, builtin);
           return;
         }
-        const { error } = await client.session.promptAsync({
-          sessionID: session.id,
-          directory: this.cwd,
-          parts: [{ type: 'text', text }],
-          ...(this.model ? { model: this.model } : {}),
-          ...this.agentField(),
-          ...this.variantField(),
-        });
-        if (error) this.deliver({ type: 'error', content: `OpenCode prompt failed: ${JSON.stringify(error)}` });
+        try {
+          await client.session.prompt({ sessionID: session.id, text });
+        } catch (err) {
+          this.deliver({ type: 'error', content: `OpenCode prompt failed: ${formatOpenCodeError(err)}` });
+        }
       })
       .catch((err) => {
         this.deliver({ type: 'error', content: `OpenCode prompt failed: ${err instanceof Error ? err.message : String(err)}` });
@@ -977,13 +919,12 @@ export class OpenCodeSession implements DriverSession {
 
   /** One of the commands OpenCode's terminal runs itself; its outcome is a
    *  status line, its failure an error entry. */
-  private runSessionCommand(client: OpencodeClient, sessionID: string, command: (typeof SESSION_COMMANDS)[number]): void {
+  private runSessionCommand(client: OpenCodeClient, sessionID: string, command: (typeof SESSION_COMMANDS)[number]): void {
     command
       .run({
         client,
         sessionID,
-        directory: this.cwd,
-        ...(this.model ? { model: this.model } : {}),
+        ...(this.model ? { model: { ...this.model, ...(this.variant ? { variant: this.variant } : {}) } } : {}),
         status: (text) => this.deliver({ type: 'status', text }),
       })
       .catch((err) => this.deliver({ type: 'error', content: err instanceof Error ? err.message : String(err) }));
@@ -997,34 +938,28 @@ export class OpenCodeSession implements DriverSession {
     this.ctx.emit({ type: 'info', title });
   }
 
-  /** The OpenCode agent a prompt names: the plan agent in the plan mode,
-   *  none (OpenCode's default) otherwise. */
-  private agentField(): { agent?: string } {
-    return this.mode === PLAN_MODE ? { agent: PLAN_AGENT } : {};
-  }
-
   /** `session.command` answers only once the whole turn is over, so it is
    *  not awaited: the turn itself arrives on the event stream. A refusal
    *  becomes an error entry; a connection given up on while the turn runs
    *  (the stream still carries it) is only logged. */
-  private runCommand(client: OpencodeClient, sessionID: string, name: string, args: string): void {
-    const model = this.model ? `${this.model.providerID}/${this.model.modelID}` : undefined;
+  private runCommand(client: OpenCodeClient, sessionID: string, name: string, args: string): void {
     client.session
-      .command({ sessionID, directory: this.cwd, command: name, arguments: args, ...(model ? { model } : {}), ...this.agentField(), ...this.variantField() })
-      .then(({ error }) => {
-        if (error) this.deliver({ type: 'error', content: `OpenCode /${name} failed: ${JSON.stringify(error)}` });
-      })
-      .catch((err) => this.ctx.log(`[opencode] /${name}: ${err instanceof Error ? err.message : String(err)}`));
+      .command({ sessionID, name, text: args })
+      .then(() => {})
+      .catch((err) => this.ctx.log(`[opencode] /${name}: ${formatOpenCodeError(err)}`));
   }
 
-  private async fetchCommands(client: OpencodeClient): Promise<Command[]> {
-    const { data, error } = await client.command.list({ directory: this.cwd });
-    if (error || !data) throw new Error(`OpenCode could not list its commands: ${JSON.stringify(error ?? 'no list')}`);
-    this.commandNames = Promise.resolve(new Set(data.map((c) => c.name)));
-    return data;
+  private async fetchCommands(client: OpenCodeClient): Promise<Array<{ name: string; description?: string }>> {
+    try {
+      const listed = await client.command.list({ location: { directory: this.cwd } });
+      this.commandNames = Promise.resolve(new Set(listed.data.map((c) => c.name)));
+      return listed.data;
+    } catch (err) {
+      throw new Error(`OpenCode could not list its commands: ${formatOpenCodeError(err)}`);
+    }
   }
 
-  private knownCommands(client: OpencodeClient): Promise<Set<string>> {
+  private knownCommands(client: OpenCodeClient): Promise<Set<string>> {
     this.commandNames ??= this.fetchCommands(client).then(
       (commands) => new Set(commands.map((c) => c.name)),
       () => {
@@ -1054,48 +989,62 @@ export class OpenCodeSession implements DriverSession {
 
   async setOption(option: SessionOption, value: string): Promise<void> {
     switch (option) {
-      case 'mode':
+      case 'mode': {
         if (!OPENCODE_MODES.some((m) => m.id === value)) throw new Error(`OpenCode has no mode '${value}'`);
         this.mode = value;
+        // V2 runs an agent and a permission ruleset for the whole session, so
+        // switching the mode switches both: the plan agent (or OpenCode's own
+        // default), and whether a tool call reaches the phone at all.
+        const { client, session } = await this.ready;
+        await client.session.switchAgent({ sessionID: session.id, agent: value === PLAN_MODE ? PLAN_AGENT : 'build' }).catch(() => {});
+        await client.session.update({ sessionID: session.id, permissions: permissionRules(value) }).catch(() => {});
         return;
+      }
       case 'model': {
-        // Model selection is per prompt in OpenCode; the next prompt uses it.
+        // V2 keeps the model on the session; the switch applies from the next
+        // step, which is what a per-prompt model used to mean.
         const split = splitModelId(value);
         if (!split) throw new Error(`'${value}' is not an OpenCode provider/model id`);
         const models = (await this.catalog()).models;
         const refused = unsupportedModelReason(value, models);
         if (refused) throw new Error(refused);
-        this.model = split;
         // A level the new model lacks would be ignored; drop it.
         if (this.variant && !models.find((m) => m.id === value)?.efforts?.some((e) => e.id === this.variant)) this.variant = undefined;
+        this.model = split;
+        await this.switchModel();
         return;
       }
       case 'effort': {
         // Levels are the model's own (its OpenCode variants).
         const { models, defaultModel } = await this.catalog();
-        const id = this.model ? `${this.model.providerID}/${this.model.modelID}` : defaultModel;
+        const id = this.model ? `${this.model.providerID}/${this.model.id}` : defaultModel;
         const levels = models.find((m) => m.id === id)?.efforts ?? [];
         if (!levels.some((e) => e.id === value)) {
           throw new Error(levels.length > 0 ? `'${value}' is not a reasoning level of ${id}` : `${id ?? 'This model'} has no reasoning levels`);
         }
         this.variant = value === DEFAULT_VARIANT ? undefined : value;
+        await this.switchModel();
         return;
       }
     }
   }
 
-  /** The reasoning level a prompt or command asks for, if any. */
-  private variantField(): { variant?: string } {
-    return this.variant ? { variant: this.variant } : {};
+  /** Tell the server which model (and reasoning variant) the session runs. */
+  private async switchModel(): Promise<void> {
+    if (!this.model) return;
+    const { client, session } = await this.ready;
+    await client.session
+      .switchModel({ sessionID: session.id, model: { ...this.model, ...(this.variant ? { variant: this.variant } : {}) } })
+      .catch(() => {});
   }
 
   async interrupt(): Promise<void> {
     try {
       const { client, session } = await this.ready;
-      await client.session.abort({ sessionID: session.id, directory: this.cwd });
+      await client.session.interrupt({ sessionID: session.id });
     } catch {
-      // Best effort — an already-idle OpenCode session can legitimately 404
-      // on abort.
+      // Best effort — an already-idle OpenCode session can legitimately
+      // refuse an interrupt.
     }
   }
 
@@ -1106,8 +1055,11 @@ export class OpenCodeSession implements DriverSession {
     if (!child?.background) throw new Error('No such task is running');
     child.stopping = true;
     const { client } = await this.ready;
-    const { error } = await client.session.abort({ sessionID: taskId, directory: this.cwd });
-    if (error) throw new Error(`OpenCode could not stop the task: ${JSON.stringify(error)}`);
+    try {
+      await client.session.interrupt({ sessionID: taskId });
+    } catch (err) {
+      throw new Error(`OpenCode could not stop the task: ${formatOpenCodeError(err)}`);
+    }
   }
 
   /** What the session has cost so far, as OpenCode prices its models (no
@@ -1115,16 +1067,19 @@ export class OpenCodeSession implements DriverSession {
    *  unpriced model's session reports no cost. */
   async getUsage(): Promise<UsageData | null> {
     const { client, session } = await this.ready;
-    const { data, error } = await client.session.get({ sessionID: session.id, directory: this.cwd });
-    if (error || !data) return null;
-    const context = this.lastTokens ? openCodeContext(this.lastTokens, this.contextWindow) : undefined;
-    return {
-      available: true,
-      windows: [],
-      ...(data.cost ? { sessionCostUsd: data.cost } : {}),
-      ...(context ? { context } : {}),
-      fetchedAt: new Date().toISOString(),
-    };
+    try {
+      const info = await client.session.get({ sessionID: session.id });
+      const context = this.lastTokens ? openCodeContext(this.lastTokens, this.contextWindow) : undefined;
+      return {
+        available: true,
+        windows: [],
+        ...(info.cost ? { sessionCostUsd: info.cost } : {}),
+        ...(context ? { context } : {}),
+        fetchedAt: new Date().toISOString(),
+      };
+    } catch {
+      return null;
+    }
   }
 
   async end(): Promise<void> {
@@ -1133,12 +1088,21 @@ export class OpenCodeSession implements DriverSession {
     this.abortController.abort();
     try {
       const { client, session } = await this.ready;
-      await client.session.abort({ sessionID: session.id, directory: this.cwd });
+      await client.session.interrupt({ sessionID: session.id });
     } catch {
       // Best effort — the session may never have been created, or may
       // already be gone server-side.
     }
   }
+}
+
+/** The parts of a v2 form the question card reads. */
+interface FormInfoLike {
+  id: string;
+  sessionID: string;
+  title: string;
+  metadata?: Record<string, unknown>;
+  fields: FormFieldLike[];
 }
 
 export interface OpenCodeSessionOptions {
@@ -1164,14 +1128,14 @@ export interface OpenCodeDriverOptions {
   providerHttp?: ProviderHttp;
   /** Seams for tests: how the server is started and connected to. */
   startServer?: (options: StartOpenCodeServerOptions) => Promise<OpenCodeServerHandle>;
-  connect?: (config: { baseUrl: string; headers?: Record<string, string> }) => OpencodeClient;
+  connect?: (config: { baseUrl: string; headers?: Record<string, string> }) => OpenCodeClient;
 }
 
 /** Why OpenCode cannot run, when it is enabled but unusable. */
 const NOT_CONFIGURED = 'This bridge has no OpenCode server to use (CODEDECK_OPENCODE_SERVER_URL), and starts none of its own.';
 
 export class OpenCodeDriver implements Driver {
-  private clientPromise: Promise<OpencodeClient> | null = null;
+  private clientPromise: Promise<OpenCodeClient> | null = null;
   private server: OpenCodeServerHandle | null = null;
   private unavailable: string | undefined;
   /** The `opencode` the server runs, once found or installed. */
@@ -1205,7 +1169,7 @@ export class OpenCodeDriver implements Driver {
   }
 
   /** The server's client, starting it again when the last attempt failed. */
-  private client(): Promise<OpencodeClient> {
+  private client(): Promise<OpenCodeClient> {
     if (!this.clientPromise && !this.stopped && (this.bin || this.installs)) this.launch();
     return this.clientPromise ?? Promise.reject(new Error(this.unavailable ?? NOT_CONFIGURED));
   }
@@ -1240,19 +1204,19 @@ export class OpenCodeDriver implements Driver {
   }
 
   /** A driver over an existing client (tests). */
-  static withClient(client: OpencodeClient): OpenCodeDriver {
+  static withClient(client: OpenCodeClient): OpenCodeDriver {
     const driver = new OpenCodeDriver({ log: () => {} });
     driver.clientPromise = Promise.resolve(client);
     return driver;
   }
 
-  private connect(config: { baseUrl: string; headers?: Record<string, string> }): OpencodeClient {
-    return (this.options.connect ?? createOpencodeClient)(config);
+  private connect(config: { baseUrl: string; headers?: Record<string, string> }): OpenCodeClient {
+    return (this.options.connect ?? OpenCode.make)(config);
   }
 
   /** Start `opencode serve` with the provider profiles it should have, and
    *  connect to it. */
-  private async startServer(bin: string): Promise<OpencodeClient> {
+  private async startServer(bin: string): Promise<OpenCodeClient> {
     const placed = this.placed;
     const setup = serverSetup(placed, this.catalog, process.env);
     const start = this.options.startServer ?? startOpenCodeServer;
@@ -1282,7 +1246,7 @@ export class OpenCodeDriver implements Driver {
    *  and model lists asked for meanwhile wait on the same promise. `first`
    *  runs before the start (closing the server being replaced). */
   private launch(first?: () => Promise<void>): void {
-    const attempt = (async (): Promise<OpencodeClient> => {
+    const attempt = (async (): Promise<OpenCodeClient> => {
       await first?.();
       this.bin ??= await this.options.installOpenCode!();
       return this.startServer(this.bin);
@@ -1350,9 +1314,12 @@ export class OpenCodeDriver implements Driver {
     try {
       const client = await this.clientPromise;
       if (!client) return EMPTY_CATALOG;
-      const { data, error } = await client.provider.list();
-      if (error || !data) throw new Error(JSON.stringify(error ?? 'no provider list'));
-      return { providers: new Map(data.all.map((p) => [p.id, p])), connected: new Set(data.connected) };
+      const [providers, models] = await Promise.all([client.provider.list(), client.model.list()]);
+      return {
+        providers: new Map(providers.data.map((p) => [p.id, p])),
+        models: new Map(models.data.map((m) => [`${m.providerID}/${m.modelID}`, m])),
+        connected: new Set(providers.data.filter((p) => p.activation === 'enabled').map((p) => p.id)),
+      };
     } catch (err) {
       this.options.log(`[opencode] could not read its provider catalog, so profiles are not checked against it: ${err instanceof Error ? err.message : String(err)}`);
       return EMPTY_CATALOG;
@@ -1413,30 +1380,37 @@ export class OpenCodeDriver implements Driver {
 
   /** Best-effort model list from OpenCode's configured providers, and the
    *  default among them (see pickDefaultModel) — empty on any failure. Ids
-   *  are `<providerID>/<modelID>`, the shape a prompt expects back. */
+   *  are `<providerID>/<modelID>`, the shape a session expects. */
   async listModels(): Promise<OpenCodeCatalog> {
     if (!this.clientPromise) return { models: [] };
     try {
       const client = await this.clientPromise;
-      const [providers, config] = await Promise.all([client.config.providers(), client.config.get().catch(() => null)]);
-      const { data, error } = providers;
-      if (error || !data) return { models: [] };
+      const listed = await client.model.list();
+      // The default is an extra: a server that cannot name one still lists
+      // its models, and a list without a default is worth more than none.
+      let fallback: { data?: { providerID: string; modelID: string } | null } | null = null;
+      try {
+        fallback = await client.model.default();
+      } catch {
+        fallback = null;
+      }
       const models: ModelEntry[] = [];
       const contextLimits: Record<string, number> = {};
       const profiles = new Map(this.placed.map((p) => [p.providerId, p.profile]));
-      for (const provider of data.providers) {
-        const profile = profiles.get(provider.id);
-        for (const model of Object.values(provider.models)) {
-          const id = `${provider.id}/${model.id}`;
-          const name = provider.name || provider.id;
-          const group = profile ? profileModelGroup(name, profile.models.find((m) => m.id === model.id)) : name;
-          const efforts = reasoningLevels(model.variants);
-          models.push({ id, label: model.name, provider: group, ...(efforts.length > 0 ? { efforts } : {}) });
-          const window = model.limit?.context ?? 0;
-          if (window > 0) contextLimits[id] = window;
-        }
+      for (const model of listed.data) {
+        if (!model.enabled) continue;
+        const id = `${model.providerID}/${model.modelID}`;
+        const profile = profiles.get(model.providerID);
+        const group = profile
+          ? profileModelGroup(profile.label || model.providerID, profile.models.find((m) => m.id === model.modelID))
+          : model.providerID;
+        const efforts = reasoningLevels(model.variants);
+        models.push({ id, label: model.name, provider: group, ...(efforts.length > 0 ? { efforts } : {}) });
+        const window = model.limit?.context ?? 0;
+        if (window > 0) contextLimits[id] = window;
       }
-      const defaultModel = pickDefaultModel(config?.data?.model, data.providers, data.default);
+      const configured = fallback?.data ? `${fallback.data.providerID}/${fallback.data.modelID}` : undefined;
+      const defaultModel = pickDefaultModel(configured, listed.data);
       return { models, contextLimits, ...(defaultModel ? { defaultModel } : {}) };
     } catch {
       return { models: [] };
@@ -1446,9 +1420,12 @@ export class OpenCodeDriver implements Driver {
   /** OpenCode deletes a session's subagent sessions with it. */
   async deleteConversation(conversationId: string, cwd: string): Promise<void> {
     const client = await this.client();
-    const { error, response } = await client.session.delete({ sessionID: conversationId, directory: cwd });
-    if (error && response?.status !== 404) {
-      throw new Error(`OpenCode could not delete session ${conversationId}: ${JSON.stringify(error)}`);
+    try {
+      await client.session.remove({ sessionID: conversationId });
+    } catch (err) {
+      // A session already gone is the outcome that was wanted.
+      if (isNotFound(err)) return;
+      throw new Error(`OpenCode could not delete session ${conversationId}: ${formatOpenCodeError(err)}`);
     }
   }
 
@@ -1456,4 +1433,13 @@ export class OpenCodeDriver implements Driver {
     this.stopped = true;
     await this.server?.close();
   }
+}
+
+/** Whether a client error is the server's "no such thing" — 404, or the
+ *  declared not-found error it answers a missing session with. */
+function isNotFound(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: unknown; cause?: { status?: unknown }; reason?: unknown };
+  if (typeof e.cause?.status === 'number') return e.cause.status === 404;
+  return typeof e.name === 'string' && /NotFound/.test(e.name);
 }
