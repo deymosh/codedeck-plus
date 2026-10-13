@@ -318,7 +318,16 @@ function main() {
     }
     if (agent.install?.state !== 'ready') {
       say(`installing ${agent.id} at the version this build pins (once; it stays in the cache)`);
-      const installing = waitFor(`${agent.id} to be installed`, (value) => value.kind === 'agent-changed' && value.agent.id === args.agent);
+      // The host announces an install the moment it starts and again when it
+      // lands, so the wait is for the landing — ready or failed — and not for
+      // the first thing it says about the agent.
+      const installing = waitFor(
+        `${agent.id} to be installed`,
+        (value) =>
+          value.kind === 'agent-changed' &&
+          value.agent.id === args.agent &&
+          (value.agent.install?.state === 'ready' || value.agent.install?.state === 'failed'),
+      );
       await send('install-agent', { agent: args.agent });
       agent = (await installing).agent;
       if (agent.install?.state !== 'ready') {
