@@ -9,7 +9,6 @@ describe('toolKindOf', () => {
     expect(toolKindOf('Edit')).toBe('edit');
     expect(toolKindOf('apply_patch')).toBe('edit');
     expect(toolKindOf('patch')).toBe('edit');
-    expect(toolKindOf('lsp')).toBe('read');
     expect(toolKindOf('websearch')).toBe('fetch');
     expect(toolKindOf('something-new')).toBe('other');
   });

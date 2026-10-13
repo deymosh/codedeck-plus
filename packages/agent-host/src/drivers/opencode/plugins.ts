@@ -74,7 +74,18 @@ export class OpenCodePlugins implements PluginManager {
   act(action: PluginAction, target: string): Promise<PluginState> {
     return this.serial(async () => {
       if (action === 'update') {
-        throw new Error('OpenCode updates its plugins itself when it loads.');
+        // V2 updates a listed plugin on request; it also does so by itself
+        // when it loads one, so this is for asking for it now.
+        const listed = await this.entries();
+        if (!listed.some((e) => bareSpec(specOf(e)) === target)) {
+          throw new Error(`OpenCode has no plugin '${target}'.`);
+        }
+        try {
+          await (await this.client()).plugin.update({ targets: [target] });
+        } catch (err) {
+          throw new Error(`OpenCode could not update ${target}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return this.state(await this.entries());
       }
       if (action !== 'install' && action !== 'uninstall' && action !== 'enable' && action !== 'disable') {
         throw new Error('OpenCode has no plugin marketplaces; install a plugin by its npm package name.');

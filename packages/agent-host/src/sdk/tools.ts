@@ -20,8 +20,17 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   bashoutput: 'execute',
   killshell: 'execute',
   killbash: 'execute',
-  // OpenCode's shell tool (it was `bash` before v2).
+  // OpenCode's shell tool (it was `bash` before v2), and the rest of what
+  // v2 added: running code in Code Mode, driving a browser, and working
+  // trees. Without these the phone shows a bare row whose title is the
+  // call's raw JSON.
   shell: 'execute',
+  execute: 'execute',
+  browser: 'fetch',
+  worktree_create: 'execute',
+  worktree_remove: 'execute',
+  worktree_list: 'read',
+  question: 'think',
   glob: 'search',
   grep: 'search',
   codesearch: 'search',
@@ -35,8 +44,6 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   // OpenCode's sub-agent tool (it was `task` before v2).
   subagent: 'agent',
   agent: 'agent',
-  // OpenCode's code-intelligence queries (diagnostics, definitions).
-  lsp: 'read',
   // The DeepSeek Harness's own tools.
   pwsh: 'execute',
   str_replace_editor: 'edit',
@@ -111,6 +118,21 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
       return str(input.url);
     case 'skill':
       return str(input.name);
+    // v2's own tools. A worktree is named by what it is for, and the browser
+    // by the page it opens.
+    case 'worktree_create':
+    case 'worktree_remove':
+      return str(input.name) || str(input.branch) || '';
+    case 'worktree_list':
+      return '';
+    case 'browser':
+      return str(input.url) || str(input.action) || '';
+    case 'execute':
+      return oneLine(str(input.code) || str(input.description));
+    // The question tool's own row is hidden — its card comes from the form
+    // it raises — so this only names the call if a server ever shows it.
+    case 'question':
+      return oneLine(str(input.title));
     default:
       return JSON.stringify(input ?? {}).slice(0, MAX_TITLE_CHARS);
   }

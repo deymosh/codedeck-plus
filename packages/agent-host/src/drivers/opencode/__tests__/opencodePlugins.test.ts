@@ -13,11 +13,14 @@ async function server(plugins: unknown[], loaded: Array<{ id: string; state: unk
   const file = path.join(dir, 'opencode.json');
   await writeFile(file, JSON.stringify({ plugins }));
   const client = {
-    plugin: { list: vi.fn(async () => ({ location: { directory: dir }, data: loaded })) },
+    plugin: {
+      list: vi.fn(async () => ({ location: { directory: dir }, data: loaded })),
+      update: vi.fn(async () => undefined),
+    },
   } as unknown as OpenCodeClient;
   const manager = new OpenCodePlugins(async () => client, () => [file]);
   const written = async () => JSON.parse(await readFile(file, 'utf8')) as { plugins: unknown[] };
-  return { manager, written, dir, file };
+  return { manager, written, client, dir, file };
 }
 
 const dirs: string[] = [];
@@ -70,10 +73,17 @@ describe('OpenCode plugins', () => {
     await expect(manager.act('disable', 'ghost')).rejects.toThrow(/no plugin 'ghost'/);
   });
 
+  it('asks the server to update a listed plugin, and refuses one it does not have', async () => {
+    const { manager, client, dir } = await server(['@acme/oc-plugin']);
+    dirs.push(dir);
+    await manager.act('update', '@acme/oc-plugin');
+    expect(client.plugin.update).toHaveBeenCalledWith({ targets: ['@acme/oc-plugin'] });
+    await expect(manager.act('update', 'ghost')).rejects.toThrow(/no plugin 'ghost'/);
+  });
+
   it('refuses what OpenCode cannot do, and names that are not packages', async () => {
     const { manager, dir } = await server([]);
     dirs.push(dir);
-    await expect(manager.act('update', 'x')).rejects.toThrow(/updates its plugins itself/);
     await expect(manager.act('add-marketplace', 'me/skills')).rejects.toThrow(/no plugin marketplaces/);
     await expect(manager.act('install', 'rm -rf /')).rejects.toThrow(/not an npm package/);
     await expect(manager.act('uninstall', 'ghost')).rejects.toThrow(/no plugin 'ghost'/);
