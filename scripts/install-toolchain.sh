@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# scripts/install-toolchain.sh — installs EVERY toolchain this repo needs
-# into ./toolchain/ (gitignored): a JDK, a Rust toolchain with the Android
+# scripts/install-toolchain.sh — installs this repo's toolchain into
+# ./toolchain/ (gitignored): a JDK, a Rust toolchain with the Android
 # targets, Node.js + the exact pinned pnpm, and the Android SDK/NDK — plus a
 # Zig that stands in for a missing system C compiler (see below).
 # Everything lives under the repo, version-pinned independently of whatever
@@ -10,6 +10,16 @@
 # colliding with this one's, and a completely bare machine (no Rust, no
 # Node, no Java already installed) works the same as one with all three
 # already present for something else.
+#
+#   scripts/install-toolchain.sh [component…]
+#
+# No argument installs everything, which is what a machine building both the
+# crates and the app wants. Naming components installs only those, for a host
+# that works on one part of the repo: `node` for the TypeScript workspace,
+# `rust` for the crates, `android` for apps/android (the SDK and NDK are a
+# few GB on their own). A component pulls in what it stands on — `android`
+# brings `java`, `rust` brings `zig` — so no request can leave a toolchain
+# that does not run.
 #
 # The only things this script assumes are already on the machine: bash,
 # curl, tar, and a glibc-or-compatible Linux (the prebuilt JDK/Rust/
@@ -37,7 +47,9 @@
 # are Linux-host-specific (`linux-x86_64` prebuilt dir) either way.
 #
 # Idempotent: safe to re-run — each step checks whether its target already
-# exists before downloading/installing anything.
+# exists before downloading/installing anything, and a later run for another
+# component leaves the earlier ones alone (toolchain/env.sh and
+# toolchain/.components are rewritten from what is on disk).
 #
 # After this: apps/android/scripts/build-apk-local.sh builds a debug APK
 # directly on this host — no Docker, no tar, no throwaway container per
@@ -53,6 +65,38 @@ if [ "$(uname -s)" != "Linux" ]; then
   echo "path instead: apps/android/docker/build-apk.sh." >&2
   exit 1
 fi
+
+# What was asked for, as a space-delimited set to match against. `android`
+# implies `java` and `rust` implies `zig`, resolved here so each section below
+# only has to ask for its own name.
+ALL_COMPONENTS=(java rust node android)
+WANTED=("$@")
+if [ ${#WANTED[@]} -eq 0 ]; then
+  WANTED=("${ALL_COMPONENTS[@]}")
+else
+  for component in "${WANTED[@]}"; do
+    case " ${ALL_COMPONENTS[*]} " in
+      *" $component "*) ;;
+      *)
+        echo "unknown component: $component" >&2
+        echo "components: ${ALL_COMPONENTS[*]} (none = all of them)" >&2
+        exit 2
+        ;;
+    esac
+  done
+fi
+WANTED_STR=" ${WANTED[*]} "
+case "$WANTED_STR" in *" android "*) WANTED_STR="$WANTED_STR java " ;; esac
+case "$WANTED_STR" in *" rust "*) WANTED_STR="$WANTED_STR zig " ;; esac
+
+# Whether this run is to install `$1` (and, for the two that stand on
+# something else, what they bring with them).
+wants() {
+  case "$WANTED_STR" in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Extraction helpers: prefer the system `xz`/`unzip` binaries (faster, and
 # `tar -xJf` needs `xz` on PATH even though `xz` itself never appears in the
@@ -111,41 +155,45 @@ NDK_VERSION="28.2.13676358"
 mkdir -p "$TOOLCHAIN_DIR"
 
 # --- JDK (Temurin 21 LTS, via Adoptium's API — always the latest 21.x build) ---
-if [ ! -x "$JDK_DIR/bin/java" ]; then
-  echo "==> Installing a JDK (Temurin 21)"
-  arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=aarch64 ;; esac
-  jdk_url="$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/21/hotspot?os=linux&architecture=${arch}&image_type=jdk" \
-    | grep -o '"link": *"[^"]*tar\.gz"' | head -1 | cut -d'"' -f4 || true)"
-  if [ -z "$jdk_url" ]; then
-    echo "error: could not resolve a Temurin 21 download URL from the Adoptium API" >&2
-    exit 1
+if wants java; then
+  if [ ! -x "$JDK_DIR/bin/java" ]; then
+    echo "==> Installing a JDK (Temurin 21)"
+    arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=aarch64 ;; esac
+    jdk_url="$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/21/hotspot?os=linux&architecture=${arch}&image_type=jdk" \
+      | grep -o '"link": *"[^"]*tar\.gz"' | head -1 | cut -d'"' -f4 || true)"
+    if [ -z "$jdk_url" ]; then
+      echo "error: could not resolve a Temurin 21 download URL from the Adoptium API" >&2
+      exit 1
+    fi
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/jdk.tar.gz" "$jdk_url"
+    mkdir -p "$JDK_DIR"
+    tar -xzf "$tmp/jdk.tar.gz" -C "$JDK_DIR" --strip-components=1
+    rm -rf "$tmp"
+  else
+    echo "==> JDK already installed, skipping"
   fi
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/jdk.tar.gz" "$jdk_url"
-  mkdir -p "$JDK_DIR"
-  tar -xzf "$tmp/jdk.tar.gz" -C "$JDK_DIR" --strip-components=1
-  rm -rf "$tmp"
-else
-  echo "==> JDK already installed, skipping"
+  export JAVA_HOME="$JDK_DIR"
+  export PATH="$JAVA_HOME/bin:$PATH"
 fi
-export JAVA_HOME="$JDK_DIR"
-export PATH="$JAVA_HOME/bin:$PATH"
 
 # --- Rust (project-scoped rustup — never the user's own ~/.rustup) ---
-if [ ! -x "$CARGO_HOME/bin/cargo" ]; then
-  echo "==> Installing a project-scoped Rust toolchain"
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/rustup-init.sh" https://sh.rustup.rs
-  RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
-    sh "$tmp/rustup-init.sh" -y --no-modify-path --default-toolchain stable >/dev/null
-  rm -rf "$tmp"
-else
-  echo "==> Project-scoped Rust toolchain already installed, skipping"
+if wants rust; then
+  if [ ! -x "$CARGO_HOME/bin/cargo" ]; then
+    echo "==> Installing a project-scoped Rust toolchain"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/rustup-init.sh" https://sh.rustup.rs
+    RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
+      sh "$tmp/rustup-init.sh" -y --no-modify-path --default-toolchain stable >/dev/null
+    rm -rf "$tmp"
+  else
+    echo "==> Project-scoped Rust toolchain already installed, skipping"
+  fi
+  export RUSTUP_HOME CARGO_HOME
+  export PATH="$CARGO_HOME/bin:$PATH"
+  echo "==> Adding Android Rust targets"
+  rustup target add aarch64-linux-android x86_64-linux-android
 fi
-export RUSTUP_HOME CARGO_HOME
-export PATH="$CARGO_HOME/bin:$PATH"
-echo "==> Adding Android Rust targets"
-rustup target add aarch64-linux-android x86_64-linux-android
 
 # --- Zig — host C linker stand-in for cargo ---
 # Cargo links host binaries (build scripts, proc macros, test executables)
@@ -155,31 +203,33 @@ rustup target add aarch64-linux-android x86_64-linux-android
 # env.sh only puts toolchain/bin (the shims below) on PATH when the machine
 # has no cc/gcc/clang at all.
 ZIG_DIR="$TOOLCHAIN_DIR/zig"
-if [ ! -x "$ZIG_DIR/zig" ]; then
-  echo "==> Installing Zig (host linker stand-in for cargo)"
-  arch="$(uname -m)"
-  case "$arch" in x86_64 | aarch64) ;; *)
-    echo "error: no prebuilt Zig for linux-$arch" >&2
-    exit 1
-  ;; esac
-  # Same resolve-at-install-time pattern as the JDK/Node steps: latest
-  # stable from ziglang.org's index (the index's only non-release key is
-  # "master"; every other key is a plain x.y.z version).
-  zig_version="$(curl -fsSL https://ziglang.org/download/index.json \
-    | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | sort -V | tail -1)"
-  if [ -z "$zig_version" ]; then
-    echo "error: could not resolve the latest Zig version from ziglang.org" >&2
-    exit 1
+if wants zig; then
+  if [ ! -x "$ZIG_DIR/zig" ]; then
+    echo "==> Installing Zig (host linker stand-in for cargo)"
+    arch="$(uname -m)"
+    case "$arch" in x86_64 | aarch64) ;; *)
+      echo "error: no prebuilt Zig for linux-$arch" >&2
+      exit 1
+    ;; esac
+    # Same resolve-at-install-time pattern as the JDK/Node steps: latest
+    # stable from ziglang.org's index (the index's only non-release key is
+    # "master"; every other key is a plain x.y.z version).
+    zig_version="$(curl -fsSL https://ziglang.org/download/index.json \
+      | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | sort -V | tail -1)"
+    if [ -z "$zig_version" ]; then
+      echo "error: could not resolve the latest Zig version from ziglang.org" >&2
+      exit 1
+    fi
+    echo "==> Zig $zig_version"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/zig.tar.xz" \
+      "https://ziglang.org/download/${zig_version}/zig-${arch}-linux-${zig_version}.tar.xz"
+    mkdir -p "$ZIG_DIR"
+    extract_tar_xz "$tmp/zig.tar.xz" "$ZIG_DIR"
+    rm -rf "$tmp"
+  else
+    echo "==> Zig already installed, skipping"
   fi
-  echo "==> Zig $zig_version"
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/zig.tar.xz" \
-    "https://ziglang.org/download/${zig_version}/zig-${arch}-linux-${zig_version}.tar.xz"
-  mkdir -p "$ZIG_DIR"
-  extract_tar_xz "$tmp/zig.tar.xz" "$ZIG_DIR"
-  rm -rf "$tmp"
-else
-  echo "==> Zig already installed, skipping"
 fi
 
 if [ -x "$ZIG_DIR/zig" ]; then
@@ -231,79 +281,123 @@ fi
 NODE_MAJOR="22"
 PNPM_VERSION="10.8.0"
 NODE_DIR="$TOOLCHAIN_DIR/node"
-if [ ! -x "$NODE_DIR/bin/node" ]; then
-  echo "==> Installing Node.js $NODE_MAJOR.x"
-  arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
-  node_file="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt" \
-    | grep -o "node-v${NODE_MAJOR}\.[0-9.]*-linux-${arch}\.tar\.xz" | head -1 || true)"
-  if [ -z "$node_file" ]; then
-    echo "error: could not resolve a Node ${NODE_MAJOR}.x download for linux-$arch" >&2
-    exit 1
+if wants node; then
+  if [ ! -x "$NODE_DIR/bin/node" ]; then
+    echo "==> Installing Node.js $NODE_MAJOR.x"
+    arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
+    node_file="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt" \
+      | grep -o "node-v${NODE_MAJOR}\.[0-9.]*-linux-${arch}\.tar\.xz" | head -1 || true)"
+    if [ -z "$node_file" ]; then
+      echo "error: could not resolve a Node ${NODE_MAJOR}.x download for linux-$arch" >&2
+      exit 1
+    fi
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/node.tar.xz" "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$node_file"
+    mkdir -p "$NODE_DIR"
+    extract_tar_xz "$tmp/node.tar.xz" "$NODE_DIR"
+    rm -rf "$tmp"
+  else
+    echo "==> Node.js already installed, skipping"
   fi
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/node.tar.xz" "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$node_file"
-  mkdir -p "$NODE_DIR"
-  extract_tar_xz "$tmp/node.tar.xz" "$NODE_DIR"
-  rm -rf "$tmp"
-else
-  echo "==> Node.js already installed, skipping"
-fi
-export PATH="$NODE_DIR/bin:$PATH"
+  export PATH="$NODE_DIR/bin:$PATH"
 
-if [ ! -x "$NODE_DIR/bin/pnpm" ]; then
-  echo "==> Installing pnpm $PNPM_VERSION via corepack"
-  export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
-  corepack enable --install-directory "$NODE_DIR/bin"
-  corepack prepare "pnpm@$PNPM_VERSION" --activate
-else
-  echo "==> pnpm already installed, skipping"
+  if [ ! -x "$NODE_DIR/bin/pnpm" ]; then
+    echo "==> Installing pnpm $PNPM_VERSION via corepack"
+    export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
+    corepack enable --install-directory "$NODE_DIR/bin"
+    corepack prepare "pnpm@$PNPM_VERSION" --activate
+  else
+    echo "==> pnpm already installed, skipping"
+  fi
 fi
 
 # --- Android SDK + NDK ---
-mkdir -p "$ANDROID_HOME"
-if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-  echo "==> Installing Android cmdline-tools"
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/cmdline-tools.zip" \
-    "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-  mkdir -p "$ANDROID_HOME/cmdline-tools"
-  extract_zip "$tmp/cmdline-tools.zip" "$ANDROID_HOME/cmdline-tools"
-  mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-  rm -rf "$tmp"
-else
-  echo "==> Android cmdline-tools already installed, skipping"
+if wants android; then
+  export ANDROID_HOME
+  SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+  mkdir -p "$ANDROID_HOME"
+  if [ ! -x "$SDKMANAGER" ]; then
+    echo "==> Installing Android cmdline-tools"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/cmdline-tools.zip" \
+      "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+    mkdir -p "$ANDROID_HOME/cmdline-tools"
+    extract_zip "$tmp/cmdline-tools.zip" "$ANDROID_HOME/cmdline-tools"
+    mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+    rm -rf "$tmp"
+  else
+    echo "==> Android cmdline-tools already installed, skipping"
+  fi
+
+  echo "==> Installing platform-tools, $PLATFORM, build-tools $BUILD_TOOLS, NDK $NDK_VERSION"
+  yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+  "$SDKMANAGER" --install \
+    "platform-tools" \
+    "platforms;$PLATFORM" \
+    "build-tools;$BUILD_TOOLS" \
+    "ndk;$NDK_VERSION"
 fi
 
-export ANDROID_HOME
-SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+# --- What this toolchain now holds, and the shell that points at it. ---
+# Both are derived from what is on disk rather than from what this run
+# installed, so a later run for another component leaves the earlier ones in
+# place instead of writing a toolchain that forgets half of itself.
+# `.components` is what `./codedeck` reads to tell whether the piece a command
+# needs is here before it runs the installer again.
 
-echo "==> Installing platform-tools, $PLATFORM, build-tools $BUILD_TOOLS, NDK $NDK_VERSION"
-yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-"$SDKMANAGER" --install \
-  "platform-tools" \
-  "platforms;$PLATFORM" \
-  "build-tools;$BUILD_TOOLS" \
-  "ndk;$NDK_VERSION"
+# A component is here when the binary that does its work is.
+component_present() {
+  case "$1" in
+    java) [ -x "$JDK_DIR/bin/java" ] ;;
+    rust) [ -x "$CARGO_HOME/bin/cargo" ] ;;
+    node) [ -x "$NODE_DIR/bin/node" ] ;;
+    android) [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ] ;;
+    *) return 1 ;;
+  esac
+}
 
-cat > "$TOOLCHAIN_DIR/env.sh" <<EOF
-# Source this to point your shell at this repo's ENTIRE local toolchain —
-# cargo, node, pnpm, java, and the Android SDK/NDK all resolve from here,
-# nothing from a system install:
-#   source toolchain/env.sh
-export JAVA_HOME="$JDK_DIR"
-export RUSTUP_HOME="$RUSTUP_HOME"
-export CARGO_HOME="$CARGO_HOME"
-export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
-export ANDROID_HOME="$ANDROID_HOME"
-export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
-export PATH="\$JAVA_HOME/bin:\$CARGO_HOME/bin:$NODE_DIR/bin:\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/platform-tools:\$PATH"
-# zig-backed cc/ar shims (see install-toolchain.sh), only when this machine
-# has no C compiler of its own.
-if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then
-  export PATH="$TOOLCHAIN_DIR/bin:\$PATH"
-fi
-EOF
+: > "$TOOLCHAIN_DIR/.components"
+for component in "${ALL_COMPONENTS[@]}"; do
+  if component_present "$component"; then echo "$component" >> "$TOOLCHAIN_DIR/.components"; fi
+done
+
+{
+  echo "# Source this to point your shell at this repo's local toolchain — the"
+  echo "# pieces scripts/install-toolchain.sh has installed here, and nothing"
+  echo "# from a system install of the same tool:"
+  echo "#   source toolchain/env.sh"
+  path_prefix=""
+  if component_present java; then
+    echo "export JAVA_HOME=\"$JDK_DIR\""
+    path_prefix="$path_prefix\$JAVA_HOME/bin:"
+  fi
+  if component_present rust; then
+    echo "export RUSTUP_HOME=\"$RUSTUP_HOME\""
+    echo "export CARGO_HOME=\"$CARGO_HOME\""
+    path_prefix="$path_prefix\$CARGO_HOME/bin:"
+  fi
+  if component_present node; then
+    echo "export COREPACK_HOME=\"$TOOLCHAIN_DIR/corepack\""
+    path_prefix="$path_prefix$NODE_DIR/bin:"
+  fi
+  if component_present android; then
+    echo "export ANDROID_HOME=\"$ANDROID_HOME\""
+    echo "export ANDROID_NDK_HOME=\"$ANDROID_HOME/ndk/$NDK_VERSION\""
+    path_prefix="$path_prefix\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/platform-tools:"
+  fi
+  echo "export PATH=\"${path_prefix}\$PATH\""
+  echo "# zig-backed cc/ar shims (see install-toolchain.sh), only when this"
+  echo "# machine has no C compiler of its own."
+  echo 'if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then'
+  echo "  export PATH=\"$TOOLCHAIN_DIR/bin:\$PATH\""
+  echo "fi"
+} > "$TOOLCHAIN_DIR/env.sh"
 
 echo
-echo "==> Done. toolchain/env.sh written — source it, then run:"
-echo "    apps/android/scripts/build-apk-local.sh"
+if component_present android; then
+  echo "==> Done. toolchain/env.sh written — source it, then run:"
+  echo "    apps/android/scripts/build-apk-local.sh"
+else
+  echo "==> Done. toolchain/env.sh written — source it for the pieces"
+  echo "    installed here ($(tr '\n' ' ' < "$TOOLCHAIN_DIR/.components"))."
+fi
