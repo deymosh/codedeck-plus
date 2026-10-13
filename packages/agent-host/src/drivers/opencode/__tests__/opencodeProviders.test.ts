@@ -170,9 +170,14 @@ describe('providersConfig', () => {
 
   it('does not restrict the providers OpenCode already has', () => {
     const config = providersConfig(placeProfiles([router()], catalog).placed, catalog);
-    expect(config).not.toHaveProperty('enabled_providers');
-    expect(config).not.toHaveProperty('disabled_providers');
+    // Nothing is written that would narrow what OpenCode offers, or move
+    // the model it defaults to.
     expect(config).not.toHaveProperty('model');
+    expect(config).not.toHaveProperty('default_agent');
+    for (const provider of Object.values(config.providers as Record<string, Record<string, unknown>>)) {
+      expect(provider).not.toHaveProperty('activation');
+      expect(provider).not.toHaveProperty('disabled');
+    }
   });
 });
 

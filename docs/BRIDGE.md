@@ -73,7 +73,7 @@ asked for:
 
 - **Claude Code**: the Agent SDK's platform package, at the version the SDK
   is locked to (about 100 MB).
-- **OpenCode**: its `opencode-<os>-<arch>` build (about 60 MB). A server URL
+- **OpenCode**: its `@opencode/cli-<os>-<arch>` build (about 200 MB). A server URL
   (`CODEDECK_OPENCODE_SERVER_URL`) needs nothing installed.
 - **The DeepSeek Harness**: not one binary but a package tree — some 600
   packages, a few hundred MB, a couple of minutes on a normal connection.

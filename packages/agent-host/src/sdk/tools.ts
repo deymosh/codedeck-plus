@@ -5,52 +5,90 @@
  */
 import type { PermissionOption, TodoItem, ToolKind } from './types';
 
-const TOOL_KINDS: Record<string, ToolKind> = {
+/**
+ * Tool names, by the agent they come from.
+ *
+ * Every name here belongs to an agent this host runs — Claude Code, OpenCode
+ * 2.x or the DeepSeek Harness. A name none of them emits (an older SDK's
+ * tool, or one a rename left behind) does not belong: it could only label a
+ * row that never appears. Names are matched lower-cased, since these agents
+ * spell them differently (`Bash`, `bash`).
+ *
+ * A name more than one of them uses, meaning the same thing, lives in
+ * COMMON_TOOLS; the rest sit with their agent's own tools. When an agent
+ * renames a tool, its new name joins its list and the old one leaves — the
+ * exceptions are the ones an agent still answers to, like Claude Code's
+ * KillShell/KillBash aliases of TaskStop.
+ */
+const COMMON_TOOLS: Record<string, ToolKind> = {
   read: 'read',
-  notebookread: 'read',
-  list: 'read',
-  ls: 'read',
   write: 'edit',
   edit: 'edit',
-  multiedit: 'edit',
-  notebookedit: 'edit',
-  patch: 'edit',
-  apply_patch: 'edit',
-  bash: 'execute',
-  bashoutput: 'execute',
-  killshell: 'execute',
-  killbash: 'execute',
-  // OpenCode's shell tool (it was `bash` before v2).
-  shell: 'execute',
   glob: 'search',
   grep: 'search',
-  codesearch: 'search',
   webfetch: 'fetch',
   websearch: 'fetch',
+  // Claude Code's and the DeepSeek Harness's sub-agent call.
+  task: 'agent',
+};
+
+const CLAUDE_TOOLS: Record<string, ToolKind> = {
+  bash: 'execute',
+  bashoutput: 'execute',
+  // Stopping a background task. The CLI's own rename map turns KillShell and
+  // KillBash into TaskStop, so TaskStop is what arrives; the aliases are kept
+  // for a session driven by a CLI that still says them.
+  taskstop: 'execute',
+  killshell: 'execute',
+  killbash: 'execute',
+  ls: 'read',
+  notebookread: 'read',
+  multiedit: 'edit',
+  notebookedit: 'edit',
   todowrite: 'think',
-  todoread: 'think',
   exitplanmode: 'switch_mode',
   enterplanmode: 'switch_mode',
-  task: 'agent',
-  // OpenCode's sub-agent tool (it was `task` before v2).
+};
+
+const OPENCODE_TOOLS: Record<string, ToolKind> = {
+  // 2.x's name for the shell tool; `bash` above is Claude Code's.
+  shell: 'execute',
+  // Code Mode: running a program, driving a browser, working trees.
+  execute: 'execute',
+  browser: 'fetch',
+  worktree_create: 'execute',
+  worktree_remove: 'execute',
+  worktree_list: 'read',
+  // 2.x's name for the sub-agent call; `task` above is the others'.
   subagent: 'agent',
+  patch: 'edit',
+  skill: 'read',
+  question: 'think',
+};
+
+const DEEPSEEK_TOOLS: Record<string, ToolKind> = {
   agent: 'agent',
-  // OpenCode's code-intelligence queries (diagnostics, definitions).
-  lsp: 'read',
-  // The DeepSeek Harness's own tools.
   pwsh: 'execute',
+  job_kill: 'execute',
   str_replace_editor: 'edit',
   todo_write: 'think',
   web_fetch: 'fetch',
   web_search: 'fetch',
   read_image: 'read',
-  skill: 'read',
   job_output: 'read',
   job_list: 'read',
-  job_kill: 'execute',
+  list: 'read',
 };
 
-/** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `bash`)
+/** Every agent's tools together, which is what a lookup reads. */
+const TOOL_KINDS: Record<string, ToolKind> = {
+  ...COMMON_TOOLS,
+  ...CLAUDE_TOOLS,
+  ...OPENCODE_TOOLS,
+  ...DEEPSEEK_TOOLS,
+};
+
+/** Normalize an agent's tool name (Claude Code's `Bash`, OpenCode's `shell`)
  *  to the wire's tool kind. */
 export function toolKindOf(toolName: string): ToolKind {
   return TOOL_KINDS[toolName.toLowerCase()] ?? 'other';
@@ -102,6 +140,10 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
       const sub = str(input.subagent_type) || str(input.agent);
       return sub ? `${desc} (${sub})` : desc;
     }
+    case 'taskstop':
+    case 'killshell':
+    case 'killbash':
+      return str(input.task_id) || str(input.shell_id);
     case 'websearch':
       return str(input.query);
     case 'web_search':
@@ -111,6 +153,21 @@ export function toolTitle(toolName: string, input: Record<string, unknown>): str
       return str(input.url);
     case 'skill':
       return str(input.name);
+    // v2's own tools. A worktree is named by what it is for, and the browser
+    // by the page it opens.
+    case 'worktree_create':
+    case 'worktree_remove':
+      return str(input.name) || str(input.branch) || '';
+    case 'worktree_list':
+      return '';
+    case 'browser':
+      return str(input.url) || str(input.action) || '';
+    case 'execute':
+      return oneLine(str(input.code) || str(input.description));
+    // The question tool's own row is hidden — its card comes from the form
+    // it raises — so this only names the call if a server ever shows it.
+    case 'question':
+      return oneLine(str(input.title));
     default:
       return JSON.stringify(input ?? {}).slice(0, MAX_TITLE_CHARS);
   }
@@ -130,21 +187,28 @@ export function toolInput(toolName: string, input: Record<string, unknown>): str
   const title = toolTitle(toolName, input);
   let text: string;
   switch (toolName.toLowerCase()) {
+    // The command a session ran, whole: the title is one line cut to
+    // MAX_TITLE_CHARS, so a long command must not have to fall back to it.
     case 'bash':
+    case 'shell':
       text = str(input.command);
       break;
+    // The instructions a sub-agent was given.
     case 'task':
+    case 'subagent':
     case 'agent':
       text = str(input.prompt);
+      break;
+    // The program a Code Mode call runs.
+    case 'execute':
+      text = str(input.code);
       break;
     case 'write':
     case 'edit':
     case 'multiedit':
     case 'notebookedit':
     case 'patch':
-    case 'apply_patch':
     case 'todowrite':
-    case 'todoread':
     case 'todo_write':
     case 'str_replace_editor':
       return undefined;

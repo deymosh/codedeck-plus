@@ -413,9 +413,10 @@ describe('installPackageTree', () => {
     fs.rmSync(path.join(cache, '@deepseek-ai+dsh@1.0.0', 'node_modules', 'commander', 'package.json'));
     expect(installedPackageTree('@deepseek-ai/dsh', entries, cache)).toBeNull();
 
-    fs.mkdirSync(path.join(cache, 'opencode-linux-x64@1.0.0'));
+    // Another agent's install, in the shape the cache names them.
+    fs.mkdirSync(path.join(cache, '@opencode+cli-linux-x64@2.0.28'));
     removePackageTree('@deepseek-ai/dsh', cache);
-    expect(fs.readdirSync(cache)).toEqual(['opencode-linux-x64@1.0.0']);
+    expect(fs.readdirSync(cache)).toEqual(['@opencode+cli-linux-x64@2.0.28']);
   });
 
   it('prunes older versions of the tree once the new one is in', async () => {

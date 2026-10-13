@@ -10,8 +10,8 @@ CodeDeck installed, and is then not installed again until someone asks.
 
 The bridge never manages OpenCode's model access itself — the OpenCode driver
 (`packages/agent-host/src/drivers/opencode/`) talks to a running
-`opencode serve` HTTP server through `@opencode-ai/sdk`. There are two ways to
-give it that server:
+`opencode serve` HTTP server through `@opencode/client`, OpenCode 2.x's own
+client. There are two ways to give it that server:
 
 ## Mode 1 — point at an external OpenCode server
 
@@ -44,7 +44,7 @@ Settings for this mode:
   explicit path to the `opencode` binary. Otherwise the agent host looks for
   it on `PATH` and in a few well-known global-install locations (mirroring
   how it resolves `claude`), and when there is none it **installs it**: the
-  `opencode-<os>-<arch>` build pinned in `pnpm-lock.yaml` (the `baseline`
+  `@opencode/cli-<os>-<arch>` build pinned in `pnpm-lock.yaml` (the `baseline`
   variant on x64, which needs no AVX2), downloaded in the background into
   `<home>/agents/`. The phone shows it as installing meanwhile, and new
   sessions start on it once it is ready.
@@ -55,10 +55,17 @@ Settings for this mode:
 
 The embedded server always binds to `127.0.0.1` only — it is spawned
 exclusively for the bridge's own use and is never configurable to listen on
-any wider interface — and is guarded by a password made for each start. It
-runs with self-updating off (its version is the one `pnpm-lock.yaml` pins)
-and with web search offered to every model, not only OpenCode's own
-providers' (`OPENCODE_ENABLE_EXA`).
+any wider interface — and is guarded by a password made for each start
+(`OPENCODE_PASSWORD`), which OpenCode 2 requires before it will start at all.
+It runs with self-updating off (its version is the one `pnpm-lock.yaml`
+pins). Web search is offered to every model rather than only OpenCode's own
+providers': 2.x gates it behind a connected search provider with no keyless
+default of its own, so the driver names the one provider its list serves
+without a key.
+
+The driver speaks OpenCode 2's API and nothing older. A binary from the 1.x
+line will not work with it — set `CODEDECK_OPENCODE_PATH` to a 2.x install if
+the machine has an older one on `PATH`.
 
 If an installed `opencode` fails to come up, the agent host logs one
 actionable line and reports OpenCode as unavailable (a session on it fails
