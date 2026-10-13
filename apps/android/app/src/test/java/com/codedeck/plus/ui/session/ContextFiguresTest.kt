@@ -31,4 +31,26 @@ class ContextFiguresTest {
         assertSame(snapshot, parts)
         assertEquals(null to null, contextFigures(Double.NaN, null))
     }
+
+    @Test
+    fun a_context_past_its_window_keeps_its_breakdown_under_the_capped_figure() {
+        // 240 000 of 200 000: the figure stops at 100 %, the parts are what
+        // say by how much — dropping them here would leave the tokens line
+        // reading "200k of 200k" for a context holding 240k.
+        val over = DesignFixtures.contextBreakdown.copy(usedTokens = 240_000u)
+        val (shown, parts) = contextFigures(100.0, over)
+        assertEquals(100.0, shown!!, 0.0)
+        assertSame(over, parts)
+    }
+
+    @Test
+    fun a_snapshot_from_before_the_turn_is_still_left_out_past_the_top() {
+        // The parts say the context is over its window while the session's own
+        // figure says 60 %: that snapshot is from an earlier turn, not an
+        // over-full context.
+        val over = DesignFixtures.contextBreakdown.copy(usedTokens = 240_000u)
+        val (shown, parts) = contextFigures(60.0, over)
+        assertEquals(60.0, shown!!, 0.0)
+        assertNull(parts)
+    }
 }
