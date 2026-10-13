@@ -41,40 +41,44 @@ upstream did not design for:
 
 **Two supported ways to get a toolchain, pick by host OS — never assume
 `pnpm`/`node`/`cargo`/`java` are already on `PATH` without checking which
-applies:**
+applies. `./codedeck doctor` answers what this machine has right now.** Every
+command below runs on both engines: Docker when its daemon answers, otherwise
+the vendored toolchain — the caller does not choose, and does not need to know.
 
 - **Windows (the maintainer's usual host):** no toolchain on the host at
   all. Everything runs through Docker via the `./codedeck` script (Git Bash).
-  For a single one-shot command this is fine as-is, but Windows bind mounts
-  and repeated tar-the-whole-repo-and-`docker cp`-it startup cost make
-  Docker slow for anything iterative (many builds/edits in a row, e.g. an
-  Android session): build the toolchain image ONCE, `docker create`+`start`
-  ONE long-lived container from it, then run each step as a separate
-  `docker exec` against that same container, and only `docker rm -f` it once
-  the whole session of work is actually done. Don't spin up a fresh
-  container (and re-tar the repo into it) per command.
+  The commands that hold a container open (`dev`, `android`, `live`) keep ONE
+  long-lived container and sync the tree into it, so nothing re-tars the repo
+  per command — that is what makes them fast enough for a loop of edits.
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
-  or any bare Linux machine):** `scripts/install-toolchain.sh` installs a
-  COMPLETE toolchain — JDK, Rust (+ the Android targets), Node.js, the exact
-  pinned pnpm, the Android SDK/NDK, and a Zig host-`cc` shim (active only
-  when the machine has no C compiler; cargo needs one to link build
-  scripts/proc macros/test binaries) — into `./toolchain/` (gitignored),
-  independent of anything already on that machine. Run it once, then
-  `source toolchain/env.sh` in any shell that needs
-  `cargo`/`node`/`pnpm`/`java`/`sdkmanager` from it.
-  `apps/android/scripts/build-apk-local.sh` uses this directly — no Docker.
-  `./codedeck` also detects a Docker-less Linux host and does this itself:
-  its `check`/`typecheck`/`test`, `gen-android-bindings` and `apk` commands
-  install the toolchain on first use and run the local equivalents (only
-  `bridge` and `tor` still need Docker). A docker binary that is present but
-  whose daemon is down is an error to fix, not a trigger for the local path.
+  or any bare Linux machine):** `scripts/install-toolchain.sh` installs the
+  toolchain into `./toolchain/` (gitignored), independent of anything already
+  on that machine: a JDK, Rust (+ the Android targets), Node.js with the exact
+  pinned pnpm, the Android SDK/NDK, and a Zig host-`cc` shim (active only when
+  the machine has no C compiler). It takes the components a command needs —
+  `node`, `rust`, `android` or `java` — so a host that works on one part of
+  the repo never downloads the rest (the SDK and NDK alone are a few GB); no
+  argument installs everything. `source toolchain/env.sh` puts whatever is
+  installed on `PATH`. A docker binary that is present but whose daemon is
+  down is an error to fix, not a trigger for the local path.
 
 ```bash
+# What exists right now — Docker, images, volumes, containers, the agent
+# cache, the Android SDK. Start here when something looks wrong.
+./codedeck doctor
+
 # Workspace verification, in throwaway containers (nothing installed locally
 # is required). A change is not done until `check` is green.
 ./codedeck check         # agent host typecheck + test, cargo clippy + test (every crate)
 ./codedeck typecheck     # typecheck / clippy only
 ./codedeck test          # tests only
+
+# The loop between checks: one long-lived container, tree synced in, caches warm.
+./codedeck dev <cmd…>    # run <cmd> in it, at the repo root (bare: a shell)
+./codedeck dev vitest …  # the agent host's test files, run once
+./codedeck android test  # the app's unit tests, then the counts and failures
+./codedeck android lint  # lintDebug, then what the report says
+./codedeck live opencode # one real agent session, everything the host reports
 
 # The deployed bridge service (Docker Compose)
 ./codedeck bridge up     # build if needed and start
@@ -89,13 +93,15 @@ apps/android/scripts/build-apk-local.sh      # debug APK, Linux/local path
 ./codedeck gen-android-bindings              # regenerate the UniFFI Kotlin bindings
 ```
 
-Narrower loops: `cargo test -p <crate>`; `pnpm --filter @codedeck/agent-host
-run test`. Tests marked `#[ignore]` need Node and a built agent host
-(`pnpm --filter @codedeck/agent-host run build`): the driver-protocol spawn
-test (`-p agent-protocol --test agent_host`) and the bridge end-to-end test
-(`-p bridge-runtime --test e2e`) — run them with `-- --ignored`. After changing
-a driver-protocol type, regenerate the host's types with
-`cargo test -p agent-protocol --test gen_ts_bindings -- --ignored`.
+Narrower loops run in the dev container, which keeps its node_modules and the
+caches between commands: `./codedeck dev cargo test -p <crate>`,
+`./codedeck dev vitest run <file>` (the agent host's own tests). Tests marked
+`#[ignore]` need Node and a built agent host: the driver-protocol spawn test
+(`./codedeck dev cargo test -p agent-protocol --test agent_host -- --ignored`)
+and the bridge end-to-end test (`-p bridge-runtime --test e2e`) — the host
+bundle is `./codedeck dev pnpm --filter @codedeck/agent-host run build`. After
+changing a driver-protocol type, regenerate the host's types with
+`./codedeck dev cargo test -p agent-protocol --test gen_ts_bindings -- --ignored`.
 
 ### CI and releases
 
