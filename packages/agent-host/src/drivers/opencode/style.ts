@@ -18,6 +18,9 @@ export const OPENCODE_STYLE: AgentStyle = {
   // Each tool row wears the mark OpenCode's TUI gives that kind. `move` and
   // `switch_mode` are left out, so those keep the phone's own marker.
   toolGlyphs: { read: '→', edit: '←', delete: '←', search: '✱', fetch: '%', execute: '$', agent: '→', other: '→' },
+  // Its TUI writes what a call came to on an indented line after `↳`
+  // ("↳ Loaded <path>", a command's first line of output).
+  resultMark: '↳',
   userMessage: { shape: 'block' },
   // The "opencode" wordmark from OpenCode's logo.ts, each line its left half
   // plus the gap plus its right half, with the logo's shading cells flattened
