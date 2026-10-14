@@ -878,6 +878,21 @@ cmd_live() {
   local pair
   for pair in ${pairs[@]+"${pairs[@]}"}; do docker_env+=(-e "$pair"); done
 
+  # The probe resolves a relative --dump against its own working directory,
+  # which inside the container is packages/agent-host — and `docker cp` would
+  # resolve the same string against the container's root. Resolved once here,
+  # to the path both of them then mean.
+  if [ -n "$dump" ]; then
+    case "$dump" in
+      /*) ;;
+      *) dump="$DEV_ROOT/packages/agent-host/$dump" ;;
+    esac
+    local i
+    for i in "${!probe[@]}"; do
+      if [ "${probe[$i]}" = "--dump" ]; then probe[$((i + 1))]="$dump"; fi
+    done
+  fi
+
   local code=0
   dexec -i -w "$DEV_ROOT/packages/agent-host" \
     -e CODEDECK_AGENT_HOST_DRIVERS="$agent" \
@@ -896,13 +911,19 @@ cmd_live() {
   mkdir -p dist
   MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$LIVE_LOG" "$host_log" >/dev/null 2>&1 || true
   # --dump writes inside the container, which is no use to anyone reading it
-  # on the host — so it comes back beside the log, for the same reason.
-  if [ -n "$dump" ]; then
-    local host_dump="dist/live-$agent-dump"
-    mkdir -p "$host_dump"
-    MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$dump/." "$host_dump/" >/dev/null 2>&1 || true
-    echo "==> dumped requests: $host_dump"
-  fi
+  # on the host — so it comes back beside the log, for the same reason. Only
+  # when the fake model was the writer: without it the directory is empty, and
+  # saying otherwise would read as a dump that came back.
+  case " ${probe[*]-} " in
+    *" --fake-model "*)
+      if [ -n "$dump" ]; then
+        local host_dump="dist/live-$agent-dump"
+        mkdir -p "$host_dump"
+        MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$dump/." "$host_dump/" >/dev/null 2>&1 || true
+        echo "==> dumped requests: $host_dump"
+      fi
+      ;;
+  esac
   live_report "$code" "$timeout" "$host_log"
   return "$code"
 }

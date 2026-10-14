@@ -207,10 +207,18 @@ const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode'];
  *  it, when the request offers one. */
 const SCENARIO_TOOLS = { question: QUESTION_TOOLS, 'plan-approval': PLAN_TOOLS, tool: SHELL_TOOLS };
 
-/** The first of `names` the request offers, else its first tool at all. */
-function pickTools(offered, names) {
-  for (const name of names) if (offered.includes(name)) return name;
-  return offered[0];
+/**
+ * The tool a scenario calls, or null when the request offers none this server
+ * would name for it. `/tool` is the loose one — any tool the request offers is
+ * a tool call, so its own first serves as well as its shell's. The others ask
+ * for something specific, and a fallback would be a lie: a Bash call carrying
+ * question arguments is a tool error, not a question form.
+ */
+function toolFor(offered, scenario) {
+  const preferred = SCENARIO_TOOLS[scenario] ?? SHELL_TOOLS;
+  const found = preferred.find((name) => offered.includes(name));
+  if (found) return found;
+  return scenario === 'tool' ? (offered[0] ?? null) : null;
 }
 
 /** The plan a `/plan-approval` call proposes, for the approval card. */
@@ -326,12 +334,12 @@ export function planReply(body, shape, seq = 1) {
       : { messageId: `chatcmpl-fake-${seq}`, callId: `call_fake_${seq}` };
   const usage = { input: reply.input ?? USAGE.input, output: reply.output ?? USAGE.output };
   if (reply.text !== undefined) return { kind: 'text', text: reply.text, ...ids, ...usage };
-  const offered = offeredTools(body, shape);
   // A scenario that asks for a tool cannot be answered by a request that
-  // offers none (Claude Code's classifier sends no tools at all): saying so
-  // beats calling a tool that does not exist.
-  if (offered.length === 0) return { kind: 'text', text: `no ${reply.scenario} tool in this request`, ...ids, ...usage };
-  const name = pickTools(offered, SCENARIO_TOOLS[reply.scenario] ?? SHELL_TOOLS);
+  // offers none (Claude Code's classifier sends no tools at all), nor by one
+  // whose tools are all of another kind: saying so beats calling a tool the
+  // request did not offer.
+  const name = toolFor(offeredTools(body, shape), reply.scenario);
+  if (!name) return { kind: 'text', text: `no ${reply.scenario} tool in this request`, ...ids, ...usage };
   return { kind: 'tool', name, args: toolArguments(name, reply.scenario, reply.argument), ...ids, ...usage };
 }
 
@@ -609,7 +617,19 @@ export function startFakeModel(options = {}) {
         return;
       }
 
-      if (body && parsePrompt(turn.toolResult ? '' : turn.text).scenario === 'error') {
+      // Guarded exactly as `replyFor` is, and for the same reason: a request
+      // an agent makes for its own purposes is not the user's turn, however
+      // the conversation quoted inside it reads. A Claude Code session-title
+      // request wraps the first prompt in `<session>` — a session whose first
+      // prompt was `/error` would otherwise get a 400 for the TITLE and never
+      // a title at all — and the safety classifier quotes the same prompts.
+      if (
+        body &&
+        !turn.toolResult &&
+        !isSecurityMonitor(body) &&
+        !isTitleRequest(turn.text) &&
+        parsePrompt(turn.text).scenario === 'error'
+      ) {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify(errorBody(shape, ERROR_MESSAGE)));
         log(`-> 400 ${ERROR_MESSAGE}`);

@@ -51,7 +51,13 @@ function startFakeModel(timeoutMs = 15_000): Promise<FakeModelServer> {
   const child = spawn(process.execPath, [MODEL_SERVER, '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let output = '';
-    const timer = setTimeout(() => reject(new Error(`the fake model did not start: ${output}`)), timeoutMs);
+    const timer = setTimeout(() => {
+      // Killed on the way out, not left behind: a server that never printed
+      // its URL still holds its stdio pipes open, and a leaked child keeps
+      // vitest from exiting — which would hide the failure it just reported.
+      void stopServer(child);
+      reject(new Error(`the fake model did not start: ${output}`));
+    }, timeoutMs);
     const stop = () => stopServer(child);
     const onOutput = (chunk: Buffer) => {
       output += chunk.toString();
@@ -94,19 +100,25 @@ const live = claudePath ? describe : describe.skip;
 const TURN_MS = 60_000;
 
 live('Claude Code against the fake model', () => {
-  let model: FakeModelServer;
+  let model: FakeModelServer | undefined;
+  let modelUrl = '';
   let cwd: string;
   let session: DriverSession | undefined;
 
   beforeEach(async () => {
     model = await startFakeModel();
+    modelUrl = model.url;
     cwd = await mkdtemp(path.join(tmpdir(), 'codedeck-fake-model-'));
   });
 
   afterEach(async () => {
     await session?.end();
     session = undefined;
-    await model.stop();
+    // Optional both ways round: a test whose server never started must still
+    // clean up its directory, and must fail with why the server did not
+    // start rather than with what the cleanup tripped over.
+    await model?.stop();
+    model = undefined;
     await rm(cwd, { recursive: true, force: true });
   });
 
@@ -125,7 +137,7 @@ live('Claude Code against the fake model', () => {
         provider: {
           id: 'codedeck-fake',
           label: 'Fake model',
-          baseUrl: model.url,
+          baseUrl: modelUrl,
           authToken: 'codedeck-fake-model',
           models: [{ id: FAKE_MODEL_ID, label: 'Fake model' }],
           defaultModel: FAKE_MODEL_ID,

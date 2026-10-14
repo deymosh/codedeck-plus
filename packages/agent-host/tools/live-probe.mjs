@@ -176,6 +176,12 @@ async function main() {
       say(`model: ${args.agent} runs ${fakeSession.model} at ${fakeModel.url} — no account is reached`);
     }
   }
+  if (args.dump && !args['fake-model']) {
+    // The requests are written by the fake model server, so there is nothing
+    // to write without it; said out loud because the run would otherwise
+    // look like it dumped something.
+    say('!! --dump writes nothing without --fake-model: it is the fake model that records what the agent sent');
+  }
   const model = args.model ?? fakeSession?.model ?? undefined;
 
   const host = spawn(process.execPath, [args.host], { stdio: ['pipe', 'pipe', 'pipe'] });
