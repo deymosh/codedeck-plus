@@ -60,6 +60,10 @@ pub(crate) enum HostCall {
     /// An agent's saved permission rules, listed or after a removal, for the
     /// client that asked.
     PermissionRules { agent: String, to: Addressee },
+    /// An agent's accounts, for the client that asked.
+    Accounts { agent: String, all: bool, to: Addressee },
+    /// A change to an account, answered to the client that asked.
+    AccountAction { agent: String, account: String, reply: super::accounts::AccountReply, to: Addressee },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
     /// A provider profile's token check, for the save waiting on it.
     CheckProvider { ticket: u64 },
@@ -167,6 +171,7 @@ impl Engine {
             }
         }
         let error = format!("The agent host stopped ({reason})");
+        self.fail_sign_ins(&error);
         let running: Vec<String> =
             self.sessions.iter().filter(|(_, s)| s.run.as_ref().is_some_and(|r| r.started)).map(|(id, _)| id.clone()).collect();
         for id in running {
@@ -180,6 +185,9 @@ impl Engine {
             None => match message {
                 HostMessage::SessionEvent { session_id, event } => self.on_session_event(&session_id, event),
                 HostMessage::AgentChanged { agent } => self.on_agent_changed(agent),
+                HostMessage::AccountSignInEnded { attempt_id, status, error, .. } => {
+                    self.on_account_sign_in_ended(attempt_id, status, error)
+                }
                 _ => log::warn!("[Engine] The agent host sent a request or reply without an id — dropped"),
             },
             Some(id) if message.is_reply() => match self.host.calls.remove(&id) {
@@ -253,6 +261,10 @@ impl Engine {
             HostCall::McpAction { agent, action, names } => self.on_mcp_action_reply(agent, action, names, result),
             HostCall::SessionMcp { session_id } => self.on_session_mcp_reply(session_id, result),
             HostCall::PermissionRules { agent, to } => self.on_permission_rules_reply(agent, to, result),
+            HostCall::Accounts { agent, all, to } => self.on_accounts_reply(agent, all, to, result),
+            HostCall::AccountAction { agent, account, reply, to } => {
+                self.on_account_action_reply(agent, account, reply, to, result)
+            }
             HostCall::CheckCredential { ticket, agent, credential, value } => {
                 let valid = match result {
                     Ok(HostMessage::CredentialChecked { valid }) => valid,
