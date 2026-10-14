@@ -41,7 +41,7 @@ use client_runtime::{
 };
 use client_runtime::view::TranscriptSyncView;
 use protocol::common::{
-    AgentDescriptor, AgentInstall, CredentialStatus, OptionChoice,
+    AgentDescriptor, AgentInstall, AgentStyle, CredentialStatus, OptionChoice, UserMessageStyle,
     ContextBreakdown, UsageData, UsageWindow,
 };
 use serde::Deserialize;
@@ -383,6 +383,83 @@ pub struct UniffiAgent {
     pub action_busy: Option<String>,
     /// Why the bridge refused the last install or removal.
     pub action_failure: Option<String>,
+    /// How its sessions look; `None` until the phone has the style its
+    /// bridge names (it is fetched while one of its sessions is open), and
+    /// for an agent with none.
+    pub style: Option<UniffiAgentStyle>,
+}
+
+/// An agent's look (`protocol::common::AgentStyle`), ready to draw: colours
+/// are opaque ARGB, and a spinner's frames are the sequence it plays.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentStyle {
+    /// Frames shown in turn while the agent works, looped; empty = the
+    /// client's own spinner.
+    pub spinner_frames: Vec<String>,
+    pub spinner_interval_ms: u32,
+    /// Words beside the spinner, one picked per turn; empty = the client's.
+    pub working_words: Vec<String>,
+    /// Time worked and tokens so far beside the word.
+    pub working_counter: bool,
+    /// Glyph before a tool row, by tool kind wire name; `other` stands for
+    /// every kind not listed.
+    pub tool_glyphs: HashMap<String, String>,
+    pub result_mark: Option<String>,
+    pub user_message: UniffiUserMessageShape,
+    /// Block-art lines, one character per terminal cell.
+    pub wordmark: Vec<String>,
+    /// Leading cells of each wordmark line drawn muted.
+    pub wordmark_split: u16,
+    pub accent: Option<u32>,
+    /// Colour by mode id.
+    pub mode_colors: HashMap<String, u32>,
+}
+
+/// How the user's own message is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum UniffiUserMessageShape {
+    /// The client's bubble (also any shape this build does not know).
+    Bubble,
+    /// A line of text after `mark`, no bubble.
+    Prompt { mark: String },
+    /// A full-width raised block.
+    Block,
+}
+
+/// `#RRGGBB` as opaque ARGB; anything else is no colour.
+fn argb(hex: &str) -> Option<u32> {
+    let digits = hex.strip_prefix('#').filter(|d| d.len() == 6 && d.bytes().all(|b| b.is_ascii_hexdigit()))?;
+    u32::from_str_radix(digits, 16).ok().map(|rgb| 0xFF00_0000 | rgb)
+}
+
+pub fn to_uniffi_agent_style(s: &AgentStyle) -> UniffiAgentStyle {
+    let (spinner_frames, spinner_interval_ms) = match &s.spinner {
+        Some(sp) if !sp.frames.is_empty() && sp.interval_ms > 0 => {
+            let mut frames = sp.frames.clone();
+            if sp.bounce {
+                frames.extend(sp.frames.iter().rev().cloned());
+            }
+            (frames, sp.interval_ms)
+        }
+        _ => (Vec::new(), 0),
+    };
+    UniffiAgentStyle {
+        spinner_frames,
+        spinner_interval_ms,
+        working_words: s.working_words.clone(),
+        working_counter: s.working_counter,
+        tool_glyphs: s.tool_glyphs.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        result_mark: s.result_mark.clone(),
+        user_message: match &s.user_message {
+            UserMessageStyle::Prompt { mark } => UniffiUserMessageShape::Prompt { mark: mark.clone() },
+            UserMessageStyle::Block => UniffiUserMessageShape::Block,
+            UserMessageStyle::Bubble | UserMessageStyle::Unknown => UniffiUserMessageShape::Bubble,
+        },
+        wordmark: s.wordmark.clone(),
+        wordmark_split: s.wordmark_split,
+        accent: s.accent.as_deref().and_then(argb),
+        mode_colors: s.mode_colors.iter().filter_map(|(k, v)| Some((k.clone(), argb(v)?))).collect(),
+    }
 }
 
 /// One agent's live model list on a machine.
@@ -413,7 +490,7 @@ fn to_uniffi_credential_status(c: &CredentialStatus) -> UniffiCredentialStatus {
     }
 }
 
-fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>) -> UniffiAgent {
+fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>, style: Option<&AgentStyle>) -> UniffiAgent {
     let (install_state, removable, install_error) = match &a.install {
         AgentInstall::Ready { removable } => ("ready", *removable, None),
         AgentInstall::NotInstalled {} => ("not_installed", false, None),
@@ -443,6 +520,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>) -> Un
         install_error,
         action_busy: action.and_then(|s| s.busy.as_ref()).map(wire_str),
         action_failure: action.and_then(|s| s.failure.clone()),
+        style: style.map(to_uniffi_agent_style),
     }
 }
 
@@ -742,7 +820,14 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                 capabilities: m.capabilities.clone(),
                 folders: m.folders.clone(),
                 roots: m.roots.clone(),
-                agents: m.agents.iter().map(|a| to_uniffi_agent(a, m.agent_actions.get(&a.id))).collect(),
+                agents: m
+                    .agents
+                    .iter()
+                    .map(|a| {
+                        let style = a.style_hash.as_ref().and_then(|h| v.agent_styles.get(h));
+                        to_uniffi_agent(a, m.agent_actions.get(&a.id), style)
+                    })
+                    .collect(),
                 credentials: m.credentials.iter().map(to_uniffi_credential_status).collect(),
                 models: m
                     .models
@@ -1344,6 +1429,26 @@ mod tests {
     use super::*;
     use client_runtime::view::TranscriptRowView;
     use serde_json::json;
+
+    #[test]
+    fn a_style_crosses_ready_to_draw() {
+        let style: AgentStyle = serde_json::from_value(json!({
+            "spinner": { "frames": ["·", "✢", "✳"], "intervalMs": 120, "bounce": true },
+            "userMessage": { "shape": "card" },
+            "accent": "#D77757",
+            "modeColors": { "ask": "#5c9cf5", "plan": "purple", "yolo": "#12345" },
+        }))
+        .unwrap();
+        let s = to_uniffi_agent_style(&style);
+        assert_eq!(s.spinner_frames, ["·", "✢", "✳", "✳", "✢", "·"], "forward, then back");
+        assert_eq!(s.spinner_interval_ms, 120);
+        assert_eq!(s.user_message, UniffiUserMessageShape::Bubble, "a shape this build does not know");
+        assert_eq!(s.accent, Some(0xFFD7_7757));
+        assert_eq!(s.mode_colors, HashMap::from([("ask".to_string(), 0xFF5C_9CF5)]), "bad colours are none");
+
+        let still: AgentStyle = serde_json::from_value(json!({ "spinner": { "frames": [], "intervalMs": 80 } })).unwrap();
+        assert!(to_uniffi_agent_style(&still).spinner_frames.is_empty(), "no frames: the client's own spinner");
+    }
 
     fn view(rows: &[(u64, serde_json::Value)]) -> TranscriptRowsView {
         let mut v = TranscriptRowsView::empty();

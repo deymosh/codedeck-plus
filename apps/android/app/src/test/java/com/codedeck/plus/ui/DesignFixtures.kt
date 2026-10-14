@@ -80,7 +80,7 @@ internal object DesignFixtures {
         defaultMode = "default", defaultEffort = null,
         supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
-        installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null,
+        installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null, style = null,
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
@@ -88,7 +88,7 @@ internal object DesignFixtures {
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
         supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = emptyList(),
-        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null,
+        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = null,
     )
     /** An agent the bridge offers and the machine does not have yet: a name, nothing it supports. */
     val deepseek = UniffiAgent(
@@ -96,7 +96,7 @@ internal object DesignFixtures {
         modes = emptyList(), efforts = emptyList(), defaultMode = null, defaultEffort = null,
         supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false,
         credentials = emptyList(),
-        installState = "not_installed", removable = false, installError = null, actionBusy = null, actionFailure = null,
+        installState = "not_installed", removable = false, installError = null, actionBusy = null, actionFailure = null, style = null,
     )
 
     private const val OFFICIAL = "claude-plugins-official"
