@@ -38,6 +38,7 @@ use crate::nostr_client::NostrEvent;
 use crate::stores::Persister;
 use crate::transport::ws::{PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
 use super::SliceId;
+use client_core::connection::ConnectionStatus;
 
 /// How long after the last change a backup is saved: a burst of edits (or
 /// the heartbeats a pairing brings) costs one event.
@@ -335,6 +336,13 @@ impl Loop {
         self.sync_relays();
         self.refresh_authors();
         self.sync_direct_links();
+        // A machine new here hears from this client first by its grant, so
+        // it never has to speak to the identity.
+        if outcome.added > 0 && self.conn.status == ConnectionStatus::Connected {
+            for machine in self.stores.machines.machine_pubkeys() {
+                self.grant_if_due(&machine);
+            }
+        }
         self.stores.backup.config.fingerprint = Some(backup_fingerprint(&backup));
         self.stores.backup.config.saved_at = Some(backup.saved_at);
         self.stores.backup.config.machines = Some(u32::try_from(backup.machines.len()).unwrap_or(u32::MAX));

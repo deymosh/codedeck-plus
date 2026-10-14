@@ -800,6 +800,7 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
 
             let mut state = client_core::stores::machines::MachinesState::default();
             state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            heard_without_session_keys(&mut state, &machine.pubkey_hex);
             let kv = MemoryKv::seeded([(
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
@@ -1587,13 +1588,28 @@ fn push_bridge_to_phone_event(
     sub_id: &str,
     msg: &BridgeToPhone,
 ) {
+    push_bridge_to_phone_event_at(mock, machine, phone_pubkey_hex, sub_id, msg, LIVE_KIND, None);
+}
+
+/// [`push_bridge_to_phone_event`] as an event of `kind`, written at
+/// `created_at` (seconds) rather than now.
+fn push_bridge_to_phone_event_at(
+    mock: &MockRelay,
+    machine: &protocol::crypto::Keypair,
+    phone_pubkey_hex: &str,
+    sub_id: &str,
+    msg: &BridgeToPhone,
+    kind: u16,
+    created_at: Option<u64>,
+) {
     let plaintext = encode_bridge_to_phone(msg);
     let ct = protocol::crypto::encrypt_to(&machine.secret_key, phone_pubkey_hex, &plaintext)
         .unwrap();
-    let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
-                .tag(recipient(machine, phone_pubkey_hex))
-        .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
-        .unwrap();
+    let mut builder = nostr::EventBuilder::new(nostr::Kind::Custom(kind), ct).tag(recipient(machine, phone_pubkey_hex));
+    if let Some(at) = created_at {
+        builder = builder.custom_created_at(nostr::Timestamp::from(at));
+    }
+    let event = builder.sign_with_keys(&nostr::Keys::new(machine.secret_key.clone())).unwrap();
     mock.push(format!(
         r#"["EVENT","{sub_id}",{}]"#,
         <nostr::Event as nostr::JsonUtil>::as_json(&event)
@@ -1905,6 +1921,7 @@ async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
             let machine = generate_keypair();
             let mut state = client_core::stores::machines::MachinesState::default();
             state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            heard_without_session_keys(&mut state, &machine.pubkey_hex);
             let kv = MemoryKv::seeded([(
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
@@ -2001,6 +2018,15 @@ async fn next_command_via(
     None
 }
 
+/// Mark `machine` as a bridge already heard from that does not honour
+/// session keys: it is talked to with the identity, as a test of anything
+/// else expects.
+fn heard_without_session_keys(state: &mut client_core::stores::machines::MachinesState, machine: &str) {
+    let m = state.machines.get_mut(machine).unwrap();
+    m.capabilities = vec![protocol::capabilities::FILES.to_string()];
+    m.last_heartbeat_at = Some(1);
+}
+
 fn heartbeat_with(caps: &[&str]) -> BridgeToPhone {
     protocol::codec::decode_bridge_to_phone(
         &serde_json::json!({
@@ -2039,39 +2065,172 @@ async fn a_bridge_with_session_keys_gets_payloads_under_the_key_and_signatures_b
             let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
             core.start();
             eose_all(&mut mock).await;
-            // The reconnect's refresh, under the identity.
-            let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
-            assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
-
-            // A heartbeat advertising session keys earns a grant.
-            let heartbeat = heartbeat_with(&[protocol::capabilities::SESSION_KEYS]);
-            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat);
-            let grant = match next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await {
-                Some(PhoneToBridge::SessionKey(m)) => m.session_key,
-                other => panic!("expected a grant, got {other:?}"),
-            };
+            // A machine not heard from is granted before anything else; the
+            // reconnect's refresh waits on it.
+            let grant = expect_grant(&mut mock, &phone, &machine).await;
             let session = grant.pubkey_hex.clone();
             assert_ne!(session, phone.pubkey_hex);
+            assert_eq!(grant.replaces, None);
 
-            // Before the bridge confirms, payloads stay under the identity.
+            // Before the bridge confirms, commands wait.
             core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
-            let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
-            assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
 
-            // The heartbeat under the key confirms it: payloads switch.
+            // The heartbeat under the key confirms it: what waited goes out
+            // under the key, without the refresh the heartbeat answered.
+            let heartbeat = heartbeat_with(&[protocol::capabilities::SESSION_KEYS]);
             push_bridge_to_phone_event(&mock, &machine, &session, "cd-1", &heartbeat);
-            settle().await;
-            core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
             let cmd = next_command_via(&mut mock, &phone, &session, &machine).await;
             assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
 
-            // A later message under the identity: the bridge lost the key.
-            tokio::time::sleep(Duration::from_millis(1100)).await;
+            // A later message to the identity: the bridge lost the key, and
+            // is granted it again at once.
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat);
+            let again = expect_grant(&mut mock, &phone, &machine).await;
+            assert_eq!(again.pubkey_hex, session);
+            core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
+            push_bridge_to_phone_event(&mock, &machine, &session, "cd-1", &heartbeat);
+            let cmd = next_command_via(&mut mock, &phone, &session, &machine).await;
+            assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+        })
+        .await;
+}
+
+/// The next command must be a grant, under the identity.
+async fn expect_grant(
+    mock: &mut MockRelay,
+    phone: &Keypair,
+    machine: &Keypair,
+) -> protocol::commands::SessionKeyGrant {
+    match next_command_via(mock, phone, &phone.pubkey_hex, machine).await {
+        Some(PhoneToBridge::SessionKey(m)) => m.session_key,
+        other => panic!("expected a grant, got {other:?}"),
+    }
+}
+
+/// An identity signer that counts what it is asked to decrypt.
+struct DecryptCounter(crate::signer::LocalSigner, Rc<std::cell::Cell<usize>>);
+impl IdentitySigner for DecryptCounter {
+    fn pubkey_hex(&self) -> String {
+        self.0.pubkey_hex()
+    }
+    fn sign_event(&self, event: nostr::UnsignedEvent) -> crate::ports::LocalBoxFuture<'_, Result<nostr::Event, SignerError>> {
+        self.0.sign_event(event)
+    }
+    fn nip44_encrypt(&self, peer: &str, plaintext: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, SignerError>> {
+        self.0.nip44_encrypt(peer, plaintext)
+    }
+    fn nip44_decrypt(&self, peer: &str, ciphertext: &str) -> crate::ports::LocalBoxFuture<'_, Result<String, SignerError>> {
+        self.1.set(self.1.get() + 1);
+        self.0.nip44_decrypt(peer, ciphertext)
+    }
+}
+
+/// A core whose identity counts its decrypts, with `machine` restored
+/// from a backup: known, never heard from, no key of this client.
+async fn restored_core(mock: &MockRelay, phone: &Keypair, machine: &Keypair, spy: Rc<Spy>) -> (Core, Rc<std::cell::Cell<usize>>) {
+    let mut state = client_core::stores::machines::MachinesState::default();
+    state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+    let kv = MemoryKv::seeded([(
+        crate::stores::MACHINES_KEY,
+        client_core::stores::machines::serialize_machines(&state.machines),
+    )]);
+    let decrypts = Rc::new(std::cell::Cell::new(0));
+    let core = Core::spawn(
+        CoreConfig {
+            identity: Rc::new(DecryptCounter(crate::signer::LocalSigner(phone.clone()), Rc::clone(&decrypts))),
+            proxy: None,
+            tor: false,
+            reconnect: fast_reconnect(),
+        },
+        CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+        spy,
+        Rc::new(FixedClock(RefCell::new(1_000_000))),
+        Rc::new(ZeroEntropy),
+    )
+    .await;
+    core.set_relays(vec![mock.url.clone()]);
+    (core, decrypts)
+}
+
+/// A restored device costs the identity's signer no decrypt: what the
+/// bridge wrote to the identity before the grant is skipped, what it
+/// writes while the grant travels is dropped once the key is confirmed,
+/// and the sessions the confirming heartbeat lists sync under the key.
+#[tokio::test]
+async fn a_restored_machine_is_granted_first_and_nothing_to_the_identity_is_decrypted() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let spy = Rc::new(Spy::default());
+            let (core, decrypts) = restored_core(&mock, &phone, &machine, Rc::clone(&spy)).await;
+            core.start();
+            eose_all(&mut mock).await;
+            let grant = expect_grant(&mut mock, &phone, &machine).await;
+
+            // An identity heartbeat from an earlier install, still on the
+            // relay, and one written while the grant travels.
+            let heartbeat = heartbeat_with(&[protocol::capabilities::SESSION_KEYS]);
+            push_bridge_to_phone_event_at(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat, SESSION_LIST_KIND, Some(500));
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat);
             settle().await;
-            core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
-            let cmd = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
-            assert!(matches!(cmd, Some(PhoneToBridge::Interrupt(_))), "{cmd:?}");
+            assert!(spy.messages.lock().unwrap().is_empty(), "nothing to the identity is read yet");
+
+            // The heartbeat under the key lists a session: it syncs under the key.
+            let listed = protocol::codec::decode_bridge_to_phone(
+                &serde_json::json!({
+                    "v": protocol::capabilities::PROTOCOL_VERSION,
+                    "type": "sessions",
+                    "machine": "laptop",
+                    "sessions": [{"id": "s1", "agent": "opencode", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "seqHigh": 3}],
+                    "agents": [],
+                    "credentials": [],
+                    "capabilities": [protocol::capabilities::SESSION_KEYS],
+                })
+                .to_string(),
+            )
+            .unwrap();
+            push_bridge_to_phone_event(&mock, &machine, &grant.pubkey_hex, "cd-1", &listed);
+            let sync = next_command_via(&mut mock, &phone, &grant.pubkey_hex, &machine).await;
+            assert!(matches!(sync, Some(PhoneToBridge::SyncRequest(_))), "{sync:?}");
+            settle().await;
+            assert_eq!(decrypts.get(), 0, "the identity decrypted nothing");
+            assert_eq!(spy.messages.lock().unwrap().len(), 1, "only the heartbeat under the key was read");
+        })
+        .await;
+}
+
+/// A bridge that does not confirm the grant in time: what waited on it
+/// goes on under the identity, as without session keys.
+#[tokio::test]
+async fn an_unconfirmed_grant_lets_what_waited_go_on_under_the_identity() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let spy = Rc::new(Spy::default());
+            let (core, decrypts) = restored_core(&mock, &phone, &machine, Rc::clone(&spy)).await;
+            core.start();
+            eose_all(&mut mock).await;
+            expect_grant(&mut mock, &phone, &machine).await;
+            // A heartbeat to the identity, and live output superseded by
+            // the sync that follows it.
+            let heartbeat = heartbeat_with(&[]);
+            push_bridge_to_phone_event_at(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat, SESSION_LIST_KIND, None);
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &heartbeat);
+            settle().await;
+            assert_eq!(decrypts.get(), 0);
+
+            tokio::time::pause();
+            tokio::time::advance(super::grant::GRANT_WAIT + Duration::from_secs(1)).await;
+            tokio::time::resume();
+            let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+            assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+            settle().await;
+            assert_eq!(decrypts.get(), 1, "the held heartbeat is read with the identity");
+            assert!(spy.messages.lock().unwrap().iter().any(|(_, m)| matches!(m, BridgeToPhone::Sessions(_))));
         })
         .await;
 }
@@ -2261,6 +2420,7 @@ async fn a_resume_refreshes_only_machines_not_heard_from_lately() {
             let machine = generate_keypair();
             let mut state = client_core::stores::machines::MachinesState::default();
             state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            heard_without_session_keys(&mut state, &machine.pubkey_hex);
             let kv = MemoryKv::seeded([(
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),
@@ -2366,6 +2526,7 @@ async fn a_direct_link_carries_messages_and_commands() {
             let endpoint = format!("ws://{}", listener.local_addr().unwrap());
             let mut state = client_core::stores::machines::MachinesState::default();
             state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            heard_without_session_keys(&mut state, &machine.pubkey_hex);
             state.machines.get_mut(&machine.pubkey_hex).unwrap().direct =
                 Some(protocol::direct::DirectInfo { endpoints: vec![endpoint.clone()], cert_sha256: None });
             let kv = MemoryKv::seeded([(
@@ -2446,6 +2607,7 @@ async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
             let machine = generate_keypair();
             let mut state = client_core::stores::machines::MachinesState::default();
             state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            heard_without_session_keys(&mut state, &machine.pubkey_hex);
             let kv = MemoryKv::seeded([(
                 crate::stores::MACHINES_KEY,
                 client_core::stores::machines::serialize_machines(&state.machines),

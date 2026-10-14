@@ -84,11 +84,12 @@ pub struct SessionKeyRing {
     pub previous: Option<SessionKey>,
 }
 
-/// The ring as the host stores it, and as the config backup carries it.
-/// Holds secrets; its `Debug` shows none.
+/// The ring as the host stores it. Holds secrets; its `Debug` shows none.
+/// The config backup never carries it: a restored device makes keys of its
+/// own and is its own client of each bridge.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StoredRing {
+struct StoredRing {
     current: StoredKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous: Option<StoredKey>,
@@ -146,18 +147,8 @@ impl SessionKeyRing {
         serde_json::to_string(&self.stored()).expect("ring serializes")
     }
 
-    /// The ring with its secrets, as the config backup carries it.
-    pub fn stored(&self) -> StoredRing {
+    fn stored(&self) -> StoredRing {
         StoredRing { current: StoredKey::of(&self.current), previous: self.previous.as_ref().map(StoredKey::of) }
-    }
-
-    /// The ring a backup carried, if its current key is readable and still
-    /// live at `now_ms`; a previous key already lapsed is left behind.
-    pub fn from_stored(stored: &StoredRing, now_ms: u64) -> Option<Self> {
-        let now = now_ms / 1000;
-        let current = stored.current.key().filter(|k| k.live(now))?;
-        let previous = stored.previous.as_ref().and_then(StoredKey::key).filter(|k| k.live(now));
-        Some(Self { current, previous })
     }
 
     /// Replace the current key with a fresh one once less than
@@ -253,14 +244,31 @@ impl MachinesState {
     }
 
     /// Whether `machine` should be granted `current` (again): it honours
-    /// session keys and has not confirmed a grant of `current` with more
-    /// than [`RENEW_BEFORE_SECS`] left. Throttling repeats is the caller's.
+    /// session keys, or has not said what it honours yet, and has not
+    /// confirmed a grant of `current` with more than [`RENEW_BEFORE_SECS`]
+    /// left. Throttling repeats is the caller's.
+    ///
+    /// A machine not heard from (a restored one, say) is granted before
+    /// anything else rather than after its first heartbeat: until it holds
+    /// a key of this client, everything it sends this client goes to the
+    /// identity, each message a signer decrypt. A bridge that does not
+    /// honour session keys never confirms, and the identity is used.
     pub fn wants_session_grant(&self, machine: &str, current: &SessionKey, now_ms: u64) -> bool {
         let Some(m) = self.machine(machine) else { return false };
-        m.capabilities.iter().any(|c| c == SESSION_KEYS)
+        let unheard = m.last_heartbeat_at.is_none() && m.capabilities.is_empty();
+        (unheard || m.capabilities.iter().any(|c| c == SESSION_KEYS))
             && !m.session_grant.as_ref().is_some_and(|g| {
                 g.pubkey_hex == current.keypair.pubkey_hex && g.expires_at >= now_ms / 1000 + RENEW_BEFORE_SECS
             })
+    }
+
+    /// When the newest grant to `machine`, confirmed or not, was sent
+    /// (seconds). What the bridge wrote to the identity before then is for
+    /// an earlier client or answers nothing this one still waits on: its
+    /// heartbeat, cards and session changes come anew, to the key.
+    pub fn session_grant_sent_at(&self, machine: &str) -> Option<u64> {
+        let m = self.machine(machine)?;
+        m.session_grant.iter().chain(&m.session_grant_sent).map(|g| g.sent_at).max()
     }
 
     /// `grant` was sent to `machine`; it counts once the bridge confirms it.
@@ -452,5 +460,20 @@ mod tests {
         assert!(!s.wants_session_grant("m", &ring.current, NOW));
         assert!(!s.wants_session_grant("unknown", &ring.current, NOW));
         assert_eq!(s.session_key_of("unknown", NOW), None);
+        // One not heard from yet is granted before anything else.
+        assert!(store(&[]).wants_session_grant("m", &ring.current, NOW));
+    }
+
+    #[test]
+    fn the_newest_grant_sent_dates_what_the_identity_still_has_to_read() {
+        let (ring, _) = SessionKeyRing::load(None, NOW);
+        let mut s = store(&[SESSION_KEYS]);
+        assert_eq!(s.session_grant_sent_at("m"), None);
+        s.note_session_grant_sent("m", grant_of(&ring.current, NOW));
+        assert_eq!(s.session_grant_sent_at("m"), Some(NOW / 1000));
+        s.note_heard_via("m", &via(&ring.current), NOW / 1000 + 5);
+        assert_eq!(s.session_grant_sent_at("m"), Some(NOW / 1000), "confirmed, still dated by its sending");
+        s.note_session_grant_sent("m", grant_of(&ring.current, NOW + DAY_MS));
+        assert_eq!(s.session_grant_sent_at("m"), Some((NOW + DAY_MS) / 1000));
     }
 }
