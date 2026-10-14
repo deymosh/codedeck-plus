@@ -145,7 +145,8 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
             // jumping to the last entry while it is already in view would
             // yank a tall, still-streaming reply back to its start, so only
             // jump when it is not.
-            if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != itemCount - 1) {
+            val lastInView = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == itemCount - 1
+            if (!lastInView) {
                 if (animate) listState.animateScrollToItem(itemCount - 1) else listState.scrollToItem(itemCount - 1)
             }
             // A last entry taller than the viewport still ends below it —
@@ -156,8 +157,11 @@ fun rememberTranscriptPin(listState: LazyListState, itemCount: Int): TranscriptP
             val last = layout.visibleItemsInfo.lastOrNull()
             if (last != null && last.index == itemCount - 1) {
                 val overflow = last.offset + last.size - (layout.viewportEndOffset - layout.afterContentPadding)
+                // The rows already in view grew (a reply being typed out):
+                // follow at once, as a terminal pushes its text up. Easing
+                // every few lines would make the whole screen lurch.
                 if (overflow > 0) {
-                    if (animate) listState.animateScrollBy(overflow.toFloat()) else listState.scrollBy(overflow.toFloat())
+                    if (animate && !lastInView) listState.animateScrollBy(overflow.toFloat()) else listState.scrollBy(overflow.toFloat())
                 }
             }
             positioned = true
