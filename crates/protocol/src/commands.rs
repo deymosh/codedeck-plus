@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::common::{
-    AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, ProviderModel, SessionOption,
+    AccountAction, AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, ProviderModel, SessionOption,
 };
 use super::tristate::Tristate;
 use crate::ranges::SeqRange;
@@ -196,6 +196,27 @@ pub struct PermissionRulesRequestMsg {
 pub struct PermissionRulesRemoveMsg {
     pub agent: String,
     pub ids: Vec<String>,
+}
+
+/// Ask for an agent's accounts (agents with `supports.accounts`): those
+/// with a connection, or with `all` every provider the agent can connect.
+/// Reply: `accounts`, to the asking client only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AccountsRequestMsg {
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
+}
+
+/// Change one of an agent's accounts. Reply, to the asking client only:
+/// `account-sign-in` for `sign-in`, `finish` and `cancel` (and another as
+/// the sign-in ends); the connected `accounts` for `key`, `activate` and
+/// `remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AccountActionMsg {
+    pub agent: String,
+    pub account: String,
+    pub action: AccountAction,
 }
 
 /// Switch one MCP server on or off in one running session. Reply: the
@@ -482,6 +503,8 @@ pub enum PhoneToBridge {
     SessionMcpToggle(SessionMcpToggleMsg),
     PermissionRulesRequest(PermissionRulesRequestMsg),
     PermissionRulesRemove(PermissionRulesRemoveMsg),
+    AccountsRequest(AccountsRequestMsg),
+    AccountAction(AccountActionMsg),
     SetCredentials(SetCredentialsMsg),
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
@@ -548,6 +571,13 @@ mod tests {
         rt(&json!({"v":12,"type":"session-mcp-toggle","sessionId":"s","name":"github","enabled":false}));
         rt(&json!({"v":12,"type":"permission-rules-request","agent":"opencode"}));
         rt(&json!({"v":12,"type":"permission-rules-remove","agent":"opencode","ids":["psv_1","psv_2"]}));
+        rt(&json!({"v":12,"type":"accounts-request","agent":"opencode","all":true}));
+        rt(&json!({"v":12,"type":"account-action","agent":"opencode","account":"nano-gpt","action":{"kind":"key","method":"key","key":"sk-x","label":"work"}}));
+        rt(&json!({"v":12,"type":"account-action","agent":"opencode","account":"github-copilot","action":{"kind":"sign-in","method":"device","answers":{"deploymentType":"github.com"}}}));
+        rt(&json!({"v":12,"type":"account-action","agent":"opencode","account":"openai","action":{"kind":"finish","attempt":"con_1","callbackUrl":"http://127.0.0.1:1/auth/callback?code=c"}}));
+        rt(&json!({"v":12,"type":"account-action","agent":"opencode","account":"openai","action":{"kind":"cancel","attempt":"con_1"}}));
+        rt(&json!({"v":12,"type":"account-action","agent":"opencode","account":"openai","action":{"kind":"activate","connection":"cred_1"}}));
+        rt(&json!({"v":12,"type":"account-action","agent":"opencode","account":"openai","action":{"kind":"remove","connection":"cred_1"}}));
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"provider-profiles-request"}));
@@ -586,6 +616,8 @@ mod tests {
             json!({"v":12,"type":"upload-file","sessionId":"s","hash":"h","url":"u","key":"SECRET-key","iv":"iv","filename":"f","mimeType":"image/png","text":"","sizeBytes":1}),
             json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"SECRET-token"}),
             json!({"v":12,"type":"set-provider-profile","profileId":"p","profile":{"agent":"opencode","label":"L","baseUrl":"https://x","authToken":"tok-SECRET","models":[]}}),
+            json!({"v":12,"type":"account-action","agent":"opencode","account":"a","action":{"kind":"key","method":"key","key":"sk-SECRET"}}),
+            json!({"v":12,"type":"account-action","agent":"opencode","account":"a","action":{"kind":"finish","attempt":"c","callbackUrl":"http://127.0.0.1:1/cb?code=SECRET"}}),
         ] {
             let shown = format!("{:?}", rt(&v));
             assert!(!shown.contains("SECRET"), "{shown}");

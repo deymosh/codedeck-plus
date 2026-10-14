@@ -102,6 +102,11 @@ pub struct AgentSupports {
     /// them, for the whole machine.
     #[serde(default)]
     pub permission_rules: bool,
+    /// `accounts-request` / `account-action` list the providers the agent
+    /// can be given access to on the machine and connect them — a key, or a
+    /// sign-in to a subscription — without restarting it.
+    #[serde(default)]
+    pub accounts: bool,
 }
 
 /// One rule an agent saved from an "always allow" answer: every later
@@ -122,6 +127,180 @@ pub struct PermissionRule {
     /// When it was saved, milliseconds since the Unix epoch.
     #[specta(type = specta_typescript::Number)]
     pub created_at: u64,
+}
+
+// --- accounts ---
+
+/// A provider an agent can be given access to on the bridge's machine — an
+/// API key, or a sign-in to a subscription — with the access it has now.
+/// The secrets themselves stay on the machine: nothing here carries one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAccount {
+    /// What `account-action` names it by (the agent's own id, `openai`).
+    pub id: String,
+    pub name: String,
+    /// The ways to connect it, in the agent's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<AccountMethod>,
+    /// The access it has now: keys and sign-ins kept on the machine, and
+    /// variables its environment sets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<AccountConnection>,
+}
+
+/// One way to connect an account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountMethod {
+    /// What `account-action` names it by.
+    pub id: String,
+    pub kind: AccountMethodKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// What must be answered first (an instance URL, a deployment type).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<AccountField>,
+}
+
+/// How an account method connects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccountMethodKind {
+    /// The user types (or pastes) a key.
+    Key,
+    /// The user signs in in a browser, with a link and maybe a code from
+    /// the machine.
+    SignIn,
+    /// A kind this client does not know (a newer bridge's).
+    Unknown,
+}
+
+open_vocabulary!(AccountMethodKind, Unknown, [Key, SignIn, Unknown]);
+
+/// One question a method asks before it connects. Answers are text; a
+/// field with `options` takes one of their ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountField {
+    pub key: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<OptionChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    /// What the answer is when none is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// One access an account has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountConnection {
+    /// What `activate` / `remove` name it by.
+    pub id: String,
+    pub label: String,
+    /// `key`, `sign-in`, or `env` (a variable of the machine's environment,
+    /// which only the machine can change).
+    pub kind: String,
+    /// The one the agent uses, when the account has several.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub active: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub removable: bool,
+}
+
+/// A sign-in under way: open `url` (on any device), and do what
+/// `instructions` says — typically, enter the code it names. With
+/// `pasteBack`, the provider then sends the browser to an address on the
+/// bridge's machine that a phone cannot open: the address it fails to load
+/// is pasted back (`finish`), and the machine opens it itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInAttempt {
+    pub attempt_id: String,
+    pub url: String,
+    pub instructions: String,
+    /// When it lapses, milliseconds since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub expires_at: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub paste_back: bool,
+}
+
+/// Where a sign-in stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignInStatus {
+    /// Waiting for the user (`attempt` says what to do).
+    Started,
+    Complete,
+    Failed,
+    Expired,
+    Cancelled,
+    /// A status this client does not know (a newer bridge's).
+    Unknown,
+}
+
+open_vocabulary!(SignInStatus, Unknown, [Started, Complete, Failed, Expired, Cancelled, Unknown]);
+
+/// A change to an account. `key` and `callbackUrl` are secrets: they ride
+/// phone → bridge only, and `Debug` leaves them out.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum AccountAction {
+    /// Keep a key for it, connected with `method`.
+    Key {
+        method: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        answers: BTreeMap<String, String>,
+    },
+    /// Start a sign-in with `method`.
+    SignIn {
+        method: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        answers: BTreeMap<String, String>,
+    },
+    /// Finish a `pasteBack` sign-in with the address the browser was sent
+    /// to. The machine opens it only when it is the sign-in's own address.
+    Finish { attempt: String, callback_url: String },
+    Cancel { attempt: String },
+    /// Make this connection the one the agent uses.
+    Activate { connection: String },
+    Remove { connection: String },
+}
+
+impl std::fmt::Debug for AccountAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Key { method, label, answers, .. } => f
+                .debug_struct("Key")
+                .field("method", method)
+                .field("key", &"<redacted>")
+                .field("label", label)
+                .field("answers", answers)
+                .finish(),
+            Self::SignIn { method, label, answers } => {
+                f.debug_struct("SignIn").field("method", method).field("label", label).field("answers", answers).finish()
+            }
+            Self::Finish { attempt, .. } => {
+                f.debug_struct("Finish").field("attempt", attempt).field("callback_url", &"<redacted>").finish()
+            }
+            Self::Cancel { attempt } => f.debug_struct("Cancel").field("attempt", attempt).finish(),
+            Self::Activate { connection } => f.debug_struct("Activate").field("connection", connection).finish(),
+            Self::Remove { connection } => f.debug_struct("Remove").field("connection", connection).finish(),
+        }
+    }
 }
 
 // --- MCP servers ---
