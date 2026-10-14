@@ -128,7 +128,19 @@ describe('DeepSeekSession startup', () => {
       { sessionId: 's1', configId: 'reasoning_effort', value: 'low' },
     ]);
     expect(infoEvents(ctx)[0]).toEqual({ type: 'info', nativeSessionId: 's1', model: 'DeepSeek-V4-Pro', mode: 'ask' });
-    expect(ctx.entries().map((entry) => entry.entryType)).toEqual(['status']);
+    // No manifest in this fake tree: the line goes without a version.
+    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'DeepSeek Harness session started' })]);
+  });
+
+  it("opens with the harness's version, read from its package rather than its placeholder agentInfo", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-tree-'));
+    const pkg = path.join(root, 'node_modules', '@deepseek-ai', 'dsh');
+    mkdirSync(path.join(pkg, 'lib'), { recursive: true });
+    writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0-rc.2' }));
+    writeFileSync(path.join(pkg, 'lib', 'bin.js'), '');
+    const ready = withDriver({ dshPath: path.join(pkg, 'lib', 'bin.js') });
+    const ctx = await started(ready);
+    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'DeepSeek Harness 0.2.0-rc.2' })]);
   });
 
   it('accepts a model named by its plain id, as a provider profile names one', async () => {
@@ -445,9 +457,11 @@ describe('DeepSeekSession options', () => {
 describe('DeepSeekSession resume', () => {
   it('continues the conversation the bridge names', async () => {
     const ready = withDriver();
-    await started(ready, { resume: 'old-session' });
+    const ctx = await started(ready, { resume: 'old-session' });
     expect(ready.harness.resumed).toEqual([{ sessionId: 'old-session', cwd: '/work', mcpServers: [] }]);
     expect(ready.harness.newSessions).toEqual([]);
+    // The conversation said its opening line when it began.
+    expect(ctx.entries()).toEqual([]);
   });
 
   it('starts fresh with a notice when the conversation is gone', async () => {

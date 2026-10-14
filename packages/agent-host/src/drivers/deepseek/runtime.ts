@@ -25,6 +25,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type {
@@ -300,6 +301,7 @@ export class DeepSeekRuntime {
   private readonly contexts = new Map<string, Context>();
   private readonly log: (message: string) => void;
   private entry: Promise<string> | null = null;
+  private knownVersion?: string;
   private stopping = false;
 
   constructor(private readonly options: DeepSeekRuntimeOptions) {
@@ -349,6 +351,29 @@ export class DeepSeekRuntime {
       file = dir;
     }
     return undefined;
+  }
+
+  /**
+   * The harness's own version, from its package's manifest: what `initialize`
+   * reports as `agentInfo` is a fixed placeholder (`0.0.1`), not the release.
+   * Undefined when the runtime is not one the tree describes (an operator's
+   * own entry point outside any `node_modules`).
+   */
+  async version(): Promise<string | undefined> {
+    if (this.knownVersion !== undefined) return this.knownVersion;
+    try {
+      const root = await this.packagesRoot();
+      if (root === undefined) return undefined;
+      const manifest = JSON.parse(await readFile(path.join(root, '@deepseek-ai', 'dsh', 'package.json'), 'utf8')) as {
+        version?: unknown;
+      };
+      // Only a found version is kept: one the tree cannot tell yet may be
+      // readable once an install finishes.
+      if (typeof manifest.version === 'string') this.knownVersion = manifest.version;
+    } catch {
+      // No runtime yet, or a tree without the manifest: the line goes without.
+    }
+    return this.knownVersion;
   }
 
   /** Close every process. Called on host shutdown. */
