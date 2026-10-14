@@ -1165,8 +1165,8 @@ sealed class CoreEvent {
     /**
      * A reply the agent is still writing, in the session on screen: live
      * row `key`'s whole text now, or `None` once the row is gone (its entry
-     * landed, or the turn ended). Shown after the transcript's rows; never
-     * stored.
+     * landed, or the session stopped running). Shown after the transcript's
+     * rows; never stored.
      */
     data class LiveText(
         val `machine`: kotlin.String, 
