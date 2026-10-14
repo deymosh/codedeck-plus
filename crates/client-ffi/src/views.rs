@@ -30,7 +30,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
-use client_runtime::client_core::stores::machines::{AgentActionState, AgentMcp, AgentPlugins, SessionMcp};
+use client_runtime::client_core::stores::machines::{AgentActionState, AgentMcp, AgentPermissionRules, AgentPlugins, SessionMcp};
 use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
@@ -375,6 +375,9 @@ pub struct UniffiAgent {
     pub supports_mcp: bool,
     /// Sessions report background tasks, and `StopTask` stops one.
     pub supports_tasks: bool,
+    /// The agent keeps "always allow" answers as rules of its own;
+    /// `RequestPermissionRules` / `RemovePermissionRules` list and revoke them.
+    pub supports_permission_rules: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
     /// `ready` / `not_installed` / `installing` / `failed`; sessions start
     /// only on a `ready` agent.
@@ -517,6 +520,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>, style
         supports_commands: a.supports.commands,
         supports_plugins: a.supports.plugins,
         supports_mcp: a.supports.mcp,
+        supports_permission_rules: a.supports.permission_rules,
         supports_tasks: a.supports.tasks,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
         install_state: install_state.into(),
@@ -549,6 +553,9 @@ pub struct UniffiMachineSummary {
     pub plugins: Vec<UniffiAgentPlugins>,
     /// MCP servers, one entry per agent that has answered `RequestMcp`.
     pub mcp: Vec<UniffiAgentMcp>,
+    /// Saved permission rules, one entry per agent that has answered
+    /// `RequestPermissionRules`.
+    pub permission_rules: Vec<UniffiAgentPermissionRules>,
     /// The direct endpoints the bridge advertises, in its order.
     pub direct_advertised: Vec<String>,
     /// Whether the bridge advertised a certificate pin (without one no
@@ -757,6 +764,48 @@ fn to_uniffi_agent_mcp(agent: &str, a: &AgentMcp) -> UniffiAgentMcp {
     }
 }
 
+/// One rule an agent saved from an "always allow" answer: every later
+/// session in `project` runs a call of `tool` matching `pattern` without
+/// asking. `created_at` is milliseconds since the Unix epoch.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPermissionRule {
+    pub id: String,
+    pub project: String,
+    pub tool: String,
+    pub pattern: String,
+    pub created_at: u64,
+}
+
+/// One agent's saved permission rules on a machine.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentPermissionRules {
+    pub agent: String,
+    pub rules: Vec<UniffiPermissionRule>,
+    /// Why the last list or removal failed (the rules held are kept).
+    pub error: Option<String>,
+    /// Ids of rules being removed, not answered yet.
+    pub busy: Vec<String>,
+}
+
+fn to_uniffi_agent_permission_rules(agent: &str, a: &AgentPermissionRules) -> UniffiAgentPermissionRules {
+    UniffiAgentPermissionRules {
+        agent: agent.to_string(),
+        rules: a
+            .rules
+            .iter()
+            .map(|r| UniffiPermissionRule {
+                id: r.id.clone(),
+                project: r.project.clone(),
+                tool: r.tool.clone(),
+                pattern: r.pattern.clone(),
+                created_at: r.created_at,
+            })
+            .collect(),
+        error: a.error.clone(),
+        busy: a.busy.clone(),
+    }
+}
+
 /// The mode / effort / model one agent's new sessions on a machine start
 /// with: agent ids, `""` = the agent's own default.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -863,6 +912,11 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                     .collect(),
                 plugins: m.plugins.iter().map(|(agent, p)| to_uniffi_agent_plugins(agent, p)).collect(),
                 mcp: m.mcp.iter().map(|(agent, a)| to_uniffi_agent_mcp(agent, a)).collect(),
+                permission_rules: m
+                    .permission_rules
+                    .iter()
+                    .map(|(agent, a)| to_uniffi_agent_permission_rules(agent, a))
+                    .collect(),
                 direct_advertised: m.direct.as_ref().map(|d| d.endpoints.clone()).unwrap_or_default(),
                 direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
                 direct_endpoints: m.direct_endpoints.clone(),
