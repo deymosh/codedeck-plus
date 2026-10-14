@@ -242,6 +242,10 @@ pub enum DisplayEntry {
         text: String,
         /// A `plan` entry: rendered framed as a plan document.
         is_plan: bool,
+        /// The streamed part this message completes: while its live row is
+        /// still on screen, the row is hidden in its favour.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        part: Option<String>,
     },
     ToolGroup {
         seq: u64,
@@ -586,6 +590,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                         seq,
                         text: text.clone(),
                         is_plan: false,
+                        part: entry.part.clone(),
                     },
                 });
             }
@@ -595,6 +600,7 @@ pub fn build_display_entries(source: &[SeqEntry]) -> Vec<DisplayEntry> {
                     seq,
                     text: text.clone(),
                     is_plan: true,
+                    part: None,
                 });
             }
             // Folded into its call above.

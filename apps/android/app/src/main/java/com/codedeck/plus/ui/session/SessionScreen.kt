@@ -228,6 +228,14 @@ fun SessionScreen(
     }
     val transcriptView = transcript?.view
     val displayEntries = transcript?.displayEntries.orEmpty()
+    // The reply being written, as agent rows after the transcript's own.
+    // Built off the main thread: each row splits its markdown as it is made.
+    // Negative seqs, so their keys never meet a transcript row's.
+    val liveReplies by remember(machine, sessionId) {
+        core.liveTextFlow(machine, sessionId)
+            .map { replies -> replies.map { DisplayEntry.AgentMessage(seq = -it.id, text = it.text, part = it.key) } }
+            .flowOn(Dispatchers.Default)
+    }.collectAsState(emptyList())
     val pendingPermission: PendingPermissionSummary? = transcript?.pendingPermission
 
     val sessionKey = "$machine $sessionId"
@@ -582,6 +590,7 @@ fun SessionScreen(
 
         TranscriptList(
             displayEntries = displayEntries,
+            liveReplies = liveReplies,
             outboxItems = outboxView?.items.orEmpty(),
             machine = machine,
             sessionId = sessionId,

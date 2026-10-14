@@ -85,9 +85,12 @@ fun TranscriptList(
     canStopTasks: Boolean,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
+    /** The replies the agent is still writing (`part` set to each one's
+     *  key), shown after the transcript's rows until their entries land. */
+    liveReplies: List<DisplayEntry.AgentMessage> = emptyList(),
 ) = key(sessionId) {
     TranscriptListContent(
-        displayEntries, outboxItems, machine, sessionId, syncState, contiguous,
+        displayEntries, liveReplies, outboxItems, machine, sessionId, syncState, contiguous,
         respondedCards, planApprovalChoices, running, activity, canStopTasks, dispatch, modifier,
     )
 }
@@ -100,6 +103,7 @@ private data class OpenGroup(val seq: Long, val at: List<Long>? = null, val from
 @Composable
 private fun TranscriptListContent(
     displayEntries: List<DisplayEntry>,
+    liveReplies: List<DisplayEntry.AgentMessage>,
     outboxItems: List<UniffiOutboxItem>,
     machine: String,
     sessionId: String,
@@ -125,7 +129,17 @@ private fun TranscriptListContent(
     val showSyncGap = !contiguous && (syncState == "requested" || syncState == "syncing" || syncState == "failed")
     // A long message is several items, one per block, so only what is on
     // screen is composed and laid out.
-    val rows = remember(displayEntries) { listRowsOf(displayEntries) }
+    val transcriptRows = remember(displayEntries) { listRowsOf(displayEntries) }
+    // A live reply whose entry is already in the transcript is that entry:
+    // hidden by its part, so the two never show together and the reply never
+    // blinks out before its entry is in, whichever of the two arrives first.
+    val completedParts = remember(displayEntries) {
+        displayEntries.mapNotNullTo(HashSet()) { (it as? DisplayEntry.AgentMessage)?.part }
+    }
+    val liveRows = remember(liveReplies, completedParts) {
+        listRowsOf(liveReplies.filter { it.part !in completedParts })
+    }
+    val rows = remember(transcriptRows, liveRows) { transcriptRows + liveRows }
     val itemCount = rows.size + visibleOutbox.size + (if (showSyncGap) 1 else 0) + (if (running) 1 else 0)
 
     if (itemCount == 0) {
