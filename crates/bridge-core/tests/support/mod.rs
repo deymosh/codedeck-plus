@@ -13,7 +13,7 @@ use agent_protocol::{
 use bridge_core::ports::memory::{MemoryStore, MemoryTranscripts, MemoryWorkspace, TestSystem};
 use bridge_core::ports::Ports;
 use bridge_core::{Config, Effect, Engine, InboundEvent, Input, PairedPhone, TimerId, Via};
-use protocol::common::{AgentSupports, EntryBody, OptionChoice, OutputEntry, Role};
+use protocol::common::{AgentStyle, AgentSupports, EntryBody, OptionChoice, OutputEntry, Role};
 use protocol::crypto::{encrypt_to, generate_keypair, Keypair};
 use protocol::events::BridgeToPhone;
 use serde_json::{json, Value};
@@ -38,6 +38,7 @@ pub fn alpha() -> AgentInfo {
         credentials: vec![CredentialSpec { id: "alpha_key".into(), label: "Alpha key".into(), env_var: Some("ALPHA_KEY".into()) }],
         unavailable_reason: None,
         install: Default::default(),
+        style: Some(AgentStyle { result_mark: Some("⎿".into()), accent: Some("#D77757".into()), ..Default::default() }),
     }
 }
 
@@ -54,6 +55,7 @@ pub fn beta() -> AgentInfo {
         credentials: vec![],
         unavailable_reason: None,
         install: Default::default(),
+        style: None,
     }
 }
 

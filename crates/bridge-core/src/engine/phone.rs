@@ -6,11 +6,11 @@ use protocol::commands::{
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
 use protocol::common::{
-    is_valid_provider_base_url, AgentAction, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
+    is_valid_provider_base_url, AgentAction, AgentStyle, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
 };
 use protocol::events::{
     AgentAckMsg, BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
-    CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
+    AgentStyleMsg, CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
 use super::{ConversationDelete, Engine, HostCall};
@@ -39,6 +39,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::UploadFile(_) => "upload-file",
         PhoneToBridge::UsageRequest(_) => "usage-request",
         PhoneToBridge::ModelsRequest(_) => "models-request",
+        PhoneToBridge::AgentStyleRequest(_) => "agent-style-request",
         PhoneToBridge::CommandsRequest(_) => "commands-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
         PhoneToBridge::PluginAction(_) => "plugin-action",
@@ -134,6 +135,7 @@ impl Engine {
             PhoneToBridge::UploadFile(m) => self.on_upload_file(m),
             PhoneToBridge::UsageRequest(m) => self.on_usage_request(&m.session_id),
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
+            PhoneToBridge::AgentStyleRequest(m) => self.on_agent_style_request(m.agent, phone),
             PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
             PhoneToBridge::PluginsRequest(m) => self.on_plugins_request(m.agent, m.available),
             PhoneToBridge::PluginAction(m) => self.on_plugin_action(m),
@@ -468,6 +470,15 @@ impl Engine {
             log::info!("[Engine] models-request: {error}");
             self.publish_all(BridgeToPhone::Models(ModelsMsg { agent, models: vec![], default_model: None, error: Some(error) }));
         }
+    }
+
+    /// `agent`'s style, to the client that asked only: the others have
+    /// theirs, or ask when they need it. An agent without a style, or not
+    /// known here, is answered with none.
+    fn on_agent_style_request(&mut self, agent: String, phone: &str) {
+        let style = self.catalog.get(&agent).and_then(|a| a.style.clone());
+        let style_hash = style.as_ref().map(AgentStyle::hash);
+        self.publish_to(phone, BridgeToPhone::AgentStyle(AgentStyleMsg { agent, style_hash, style }));
     }
 
     /// Why `agent`'s plugins cannot be managed here, if they cannot.

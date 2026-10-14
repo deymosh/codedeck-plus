@@ -883,3 +883,23 @@ describe('OpenCode live reply text', () => {
     expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([]);
   });
 });
+
+describe('OpenCode session start line', () => {
+  const statuses = (ctx: ReturnType<typeof start>) =>
+    ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text);
+
+  it('a new session says the server version once', async () => {
+    const client = clientWith(turn('hi'), { server: { info: vi.fn(async () => ({ version: '2.0.28' })) } });
+    const ctx = start(client);
+    await ctx.ended();
+    expect(statuses(ctx)).toEqual(['OpenCode 2.0.28']);
+  });
+
+  it('a resumed session does not say it again', async () => {
+    const client = clientWith(turn('hi'), { server: { info: vi.fn(async () => ({ version: '2.0.28' })) } });
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', title: 'T' });
+    const ctx = start(client, { resume: 'ses_1' });
+    await ctx.ended();
+    expect(statuses(ctx)).toEqual([]);
+  });
+});

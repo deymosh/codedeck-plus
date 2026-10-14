@@ -17,6 +17,7 @@ import com.codedeck.plus.ui.theme.Tokens
 import org.junit.Rule
 import org.junit.Test
 import uniffi.client_ffi.UniffiOptionChoice
+import com.codedeck.plus.ui.session.SessionModeChip
 
 /**
  * The session screen's chrome on a narrow (360dp) phone, where it has to
@@ -40,6 +41,13 @@ class SessionChromeSnapshotTest {
             CodeDeckTheme {
                 Surface(color = Tokens.Bg, contentColor = Tokens.Text) {
                     Column(Modifier.background(Tokens.Bg).fillMaxWidth()) {
+                        val options = SessionOptions(
+                            modelName = "deepseek-v4.1-flash", model = "gw/deepseek-v4.1-flash", models = emptyList(),
+                            modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null)),
+                            mode = "acceptEdits", modePending = false,
+                            efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
+                            effort = "high",
+                        )
                         SessionTopBar(
                             title = "Refactor the relay reconnect logic so a flapping socket never duplicates subscriptions",
                             workspace = "/home/dev/projects/codedeck-docker",
@@ -56,17 +64,8 @@ class SessionChromeSnapshotTest {
                         Composer(
                             draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
                             canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
-                            options = {
-                                SessionOptionsChip(
-                                    SessionOptions(
-                                        modelName = "deepseek-v4.1-flash", model = "gw/deepseek-v4.1-flash", models = emptyList(),
-                                        modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null)),
-                                        mode = "acceptEdits", modePending = false, defaultMode = "default",
-                                        efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
-                                        effort = "high",
-                                    ),
-                                ) {}
-                            },
+                            options = { SessionOptionsChip(options) {} },
+                            mode = { SessionModeChip(options, color = null) {} },
                         )
                     }
                 }

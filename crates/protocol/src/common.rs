@@ -17,6 +17,10 @@ pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_zero(n: &u16) -> bool {
+    *n == 0
+}
+
 /// `Deserialize` for a string-valued open vocabulary: a value this build does
 /// not know becomes `$fallback` instead of failing the whole message. Written
 /// out rather than `#[serde(other)]`, which the TypeScript exporter refuses
@@ -399,6 +403,106 @@ pub struct AgentDescriptor {
     /// a `ready` one; the rest of the descriptor is filled in once it is.
     #[serde(default)]
     pub install: AgentInstall,
+    /// Names the agent's [`AgentStyle`], if it has one: the first 16 hex
+    /// digits of the SHA-256 of its JSON ([`AgentStyle::hash`]). The style
+    /// itself rides `agent-style`, asked for with `agent-style-request` by a
+    /// client that has not seen this hash: it never changes for one agent
+    /// version, so it is not sent again with every heartbeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_hash: Option<String>,
+}
+
+/// How an agent's sessions look on a client, so they read like the agent's
+/// own terminal UI: a fixed set of knobs its driver fills in. A knob left
+/// unset keeps the client's own look, and an agent with no style looks like
+/// any other. Colours that mean a state (running, waiting, failed) are the
+/// client's, never the agent's.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStyle {
+    /// The spinner shown while the agent works.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spinner: Option<SpinnerStyle>,
+    /// The words shown beside the spinner, one picked per turn. Empty: the
+    /// client's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub working_words: Vec<String>,
+    /// Whether the time worked and the tokens so far show beside the word.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub working_counter: bool,
+    /// The glyph before a tool row, by [`ToolKind`] wire name (`read`,
+    /// `execute`, …); `other` stands for every kind not listed. A kind with
+    /// no glyph keeps the client's own marker.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_glyphs: BTreeMap<String, String>,
+    /// The mark before a tool's result line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_mark: Option<String>,
+    /// How the user's own message is drawn.
+    #[serde(default, skip_serializing_if = "UserMessageStyle::is_bubble")]
+    pub user_message: UserMessageStyle,
+    /// Block-art lines shown on a session with nothing in it yet, one
+    /// character per terminal cell.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wordmark: Vec<String>,
+    /// How many leading cells of each wordmark line are drawn in the
+    /// client's muted text colour; the rest wear the accent, or the client's
+    /// text colour without one. Lets a two-tone logo keep its two tones.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wordmark_split: u16,
+    /// The agent's colour, `#RRGGBB`. Only the agent's own marks wear it:
+    /// the spinner, the working word, the wordmark.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    /// The colour each mode wears, `#RRGGBB` by mode id (an id from the
+    /// agent's `modes`), for an agent whose terminal UI colours the mode it
+    /// runs in: the mark on the user's own message and the mode's chip in
+    /// the composer. A mode with none wears the client's own colours.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mode_colors: BTreeMap<String, String>,
+}
+
+impl AgentStyle {
+    /// What [`AgentDescriptor::style_hash`] names this style by.
+    pub fn hash(&self) -> String {
+        use nostr::hashes::{sha256, Hash};
+        let json = serde_json::to_string(self).expect("AgentStyle serializes");
+        hex::encode(&sha256::Hash::hash(json.as_bytes()).to_byte_array()[..8])
+    }
+}
+
+/// A spinner: `frames` shown in turn, one every `intervalMs`; with
+/// `bounce`, played forward and then back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SpinnerStyle {
+    pub frames: Vec<String>,
+    pub interval_ms: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bounce: bool,
+}
+
+/// How the user's message is drawn in a session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "shape", rename_all = "snake_case")]
+pub enum UserMessageStyle {
+    /// A bubble on the right: the client's own look.
+    #[default]
+    Bubble,
+    /// A line of text after `mark` (a prompt such as `>`), no bubble.
+    Prompt { mark: String },
+    /// A full-width raised block.
+    Block,
+    /// A shape this client does not know: drawn as a bubble.
+    #[serde(other)]
+    #[specta(skip)]
+    Unknown,
+}
+
+impl UserMessageStyle {
+    fn is_bubble(&self) -> bool {
+        matches!(self, Self::Bubble)
+    }
 }
 
 /// Where an agent stands on the bridge's machine. The bridge installs an
@@ -504,6 +608,12 @@ pub struct RemoteSessionInfo {
     pub committed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<SessionState>,
+    /// When the turn running now started (ISO 8601, the bridge's clock),
+    /// while one runs — waiting on the user included; absent otherwise. A
+    /// turn need not start with a message from the user (a background
+    /// task's end can start one), so only the bridge can say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<String>,
     /// Highest transcript seq the bridge has persisted for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<specta_typescript::Number>)]

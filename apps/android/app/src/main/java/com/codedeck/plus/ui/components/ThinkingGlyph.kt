@@ -22,31 +22,31 @@ import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.delay
 
-/** Claude Code's spinner glyphs, cycled while a turn runs. */
-private val THINKING_FRAMES = listOf("·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢")
-private const val THINKING_FRAME_MS = 120L
-
 /**
- * The "a turn is running" mark: Claude Code's cycling spinner glyph. One
- * component for every place a running session is shown (the session's own
- * thinking line, the sessions list), so they read as the same signal.
- * Fixed width, so the glyph changing shape never shifts what follows it.
+ * The "a turn is running" mark: a cycling spinner glyph. One component for
+ * every place a running session is shown (the session's own thinking line,
+ * the sessions list), so they read as the same signal. Inside a session it
+ * is that agent's spinner, in its accent ([LocalAgentLook]); elsewhere the
+ * app's own. Fixed width, so the glyph changing shape never shifts what
+ * follows it.
  */
 @Composable
 fun ThinkingGlyph(
     modifier: Modifier = Modifier,
-    color: Color = Tokens.Accent,
+    color: Color = LocalAgentLook.current.accent ?: Tokens.Accent,
     fontSize: TextUnit = Tokens.TextMd,
 ) {
-    var frame by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
+    val look = LocalAgentLook.current
+    val frames = look.spinnerFrames
+    var frame by remember(frames) { mutableIntStateOf(0) }
+    LaunchedEffect(frames, look.spinnerIntervalMs) {
         while (true) {
-            delay(THINKING_FRAME_MS)
-            frame = (frame + 1) % THINKING_FRAMES.size
+            delay(look.spinnerIntervalMs)
+            frame = (frame + 1) % frames.size
         }
     }
     Text(
-        THINKING_FRAMES[frame],
+        frames[frame % frames.size],
         color = color,
         fontSize = fontSize,
         fontFamily = Tokens.FontMono,

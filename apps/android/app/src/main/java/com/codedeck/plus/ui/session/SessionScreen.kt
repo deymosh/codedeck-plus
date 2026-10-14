@@ -113,6 +113,10 @@ import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiSessionMcp
 import uniffi.client_ffi.UniffiTranscriptDelta
 import uniffi.client_ffi.UniffiUsageData
+import androidx.compose.runtime.CompositionLocalProvider
+import com.codedeck.plus.ui.components.AgentLook
+import com.codedeck.plus.ui.components.LocalAgentLook
+import com.codedeck.plus.ui.transcript.epochMillisOf
 
 /**
  * The session's transcript, decoded: the core's deltas applied in order, off
@@ -573,212 +577,223 @@ fun SessionScreen(
         }
     }
 
-    Column(modifier.fillMaxSize().unfocusOnTapOutside(focusManager, tapArea)) {
-        SessionTopBar(
-            title = session?.title?.takeIf { it.isNotBlank() }
-                ?: session?.project?.takeIf { it.isNotBlank() }
-                ?: session?.cwd?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
-                ?: "Session",
-            workspace = session?.cwd,
-            sessionState = session?.state,
-            onBack = onBack,
-            trailing = {
-                ContextRing(session?.contextPercentage, limitAlert) { contextSheetOpen = true }
-            },
-        )
+    // How the agent draws its own sessions, once the phone has its style: its
+    // spinner, glyphs, logo and colours, read by the rows below.
+    val look = remember(agent?.style, agent?.displayName, displayedMode) {
+        AgentLook.of(agent?.displayName ?: session?.agent.orEmpty(), agent?.style, displayedMode)
+    }
 
-        TranscriptList(
-            displayEntries = displayEntries,
-            liveReplies = liveReplies,
-            outboxItems = outboxView?.items.orEmpty(),
-            machine = machine,
-            sessionId = sessionId,
-            syncState = transcriptView?.syncState ?: "idle",
-            contiguous = transcriptView?.contiguous ?: true,
-            respondedCards = respondedCards,
-            planApprovalChoices = planChoices,
-            running = session?.state == "running",
-            activity = transcript?.activity,
-            canStopTasks = agent?.supportsTasks == true,
-            dispatch = ::dispatch,
-            modifier = Modifier.weight(1f),
-        )
+    CompositionLocalProvider(LocalAgentLook provides look) {
+        Column(modifier.fillMaxSize().unfocusOnTapOutside(focusManager, tapArea)) {
+            SessionTopBar(
+                title = session?.title?.takeIf { it.isNotBlank() }
+                    ?: session?.project?.takeIf { it.isNotBlank() }
+                    ?: session?.cwd?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                    ?: "Session",
+                workspace = session?.cwd,
+                sessionState = session?.state,
+                onBack = onBack,
+                trailing = {
+                    ContextRing(session?.contextPercentage, limitAlert) { contextSheetOpen = true }
+                },
+            )
 
-        pendingPermission?.let { pending ->
-            PendingPermissionBar(pending) { optionId ->
-                dispatch(
-                    UniffiIntent.RespondPermission(
-                        machine = machine,
-                        sessionId = sessionId,
-                        requestId = pending.requestId,
-                        optionId = optionId,
-                    ),
-                )
-            }
-        }
+            TranscriptList(
+                displayEntries = displayEntries,
+                liveReplies = liveReplies,
+                outboxItems = outboxView?.items.orEmpty(),
+                machine = machine,
+                sessionId = sessionId,
+                syncState = transcriptView?.syncState ?: "idle",
+                contiguous = transcriptView?.contiguous ?: true,
+                respondedCards = respondedCards,
+                planApprovalChoices = planChoices,
+                running = session?.state == "running",
+                activity = transcript?.activity,
+                canStopTasks = agent?.supportsTasks == true,
+                dispatch = ::dispatch,
+                modifier = Modifier.weight(1f),
+                turnStartedAt = epochMillisOf(session?.turnStartedAt),
+            )
 
-        // Staged-attachment strip: thumbnail, name, size (or the literal
-        // "uploading…" the device checks read) and the always-live remove.
-        pendingFile?.let { staged ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Tokens.SurfaceRaised)
-                    .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
-            ) {
-                val tile = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusSm))
-                val thumb = staged.thumbnail
-                if (thumb != null) {
-                    Image(bitmap = thumb, contentDescription = "attachment preview", contentScale = ContentScale.Crop, modifier = tile)
-                } else {
-                    Box(tile.background(Tokens.SurfaceHover), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Outlined.Description, contentDescription = null, tint = Tokens.TextMuted)
-                    }
+            pendingPermission?.let { pending ->
+                PendingPermissionBar(pending) { optionId ->
+                    dispatch(
+                        UniffiIntent.RespondPermission(
+                            machine = machine,
+                            sessionId = sessionId,
+                            requestId = pending.requestId,
+                            optionId = optionId,
+                        ),
+                    )
                 }
-                Text(
-                    staged.displayName,
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextXs,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    if (uploading) {
-                        "uploading…"
+            }
+
+            // Staged-attachment strip: thumbnail, name, size (or the literal
+            // "uploading…" the device checks read) and the always-live remove.
+            pendingFile?.let { staged ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Tokens.SurfaceRaised)
+                        .padding(horizontal = Tokens.Space3, vertical = Tokens.Space2),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                ) {
+                    val tile = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(Tokens.RadiusSm))
+                        .border(1.dp, Tokens.Border, RoundedCornerShape(Tokens.RadiusSm))
+                    val thumb = staged.thumbnail
+                    if (thumb != null) {
+                        Image(bitmap = thumb, contentDescription = "attachment preview", contentScale = ContentScale.Crop, modifier = tile)
                     } else {
-                        formatSize(staged.sizeBytes)
-                    },
-                    color = Tokens.TextMuted,
-                    fontSize = Tokens.TextXs,
-                )
-                IconButton(onClick = ::removePendingFile) {
-                    Icon(Icons.Outlined.Close, contentDescription = "Remove attachment", tint = Tokens.TextMuted)
+                        Box(tile.background(Tokens.SurfaceHover), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Outlined.Description, contentDescription = null, tint = Tokens.TextMuted)
+                        }
+                    }
+                    Text(
+                        staged.displayName,
+                        color = Tokens.TextMuted,
+                        fontSize = Tokens.TextXs,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (uploading) {
+                            "uploading…"
+                        } else {
+                            formatSize(staged.sizeBytes)
+                        },
+                        color = Tokens.TextMuted,
+                        fontSize = Tokens.TextXs,
+                    )
+                    IconButton(onClick = ::removePendingFile) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Remove attachment", tint = Tokens.TextMuted)
+                    }
                 }
             }
-        }
-        uploadError?.let { error ->
-            // Same banner placement and tone as the reference's
-            // `{uploadError && <div className={s.bannerError}>…</div>}`.
-            Text(
-                "Upload failed: $error",
-                color = Tokens.Danger,
-                fontSize = Tokens.TextSm,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(Tokens.RadiusSm))
-                    .background(Tokens.Danger.copy(alpha = 0.12f))
-                    .padding(Tokens.Space2),
-            )
-        }
-
-        // The command menu takes the quick prompts' place while it is open;
-        // a pick leaves `/name ` in the draft for its arguments.
-        if (commandQuery != null) {
-            SlashCommandMenu(session?.commands, commandQuery) { command ->
-                draft = "/${command.name} "
-                inputFocus.requestFocus()
+            uploadError?.let { error ->
+                // Same banner placement and tone as the reference's
+                // `{uploadError && <div className={s.bannerError}>…</div>}`.
+                Text(
+                    "Upload failed: $error",
+                    color = Tokens.Danger,
+                    fontSize = Tokens.TextSm,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(Tokens.RadiusSm))
+                        .background(Tokens.Danger.copy(alpha = 0.12f))
+                        .padding(Tokens.Space2),
+                )
             }
-        } else {
-            // Quick prompts (none: no strip); a tap puts the prompt in the draft.
-            QuickPromptStrip(quickPromptsView?.prompts.orEmpty(), ::insertPrompt)
-        }
 
-        // A failed send sits right above the controls, the same way the
-        // running turn's line does, with the message it failed to deliver.
-        oldestFailed?.let { failed ->
-            SendFailedBar(text = failed.text, failedCount = failedOutbox.size, onRetry = ::retryOldestFailed)
-        }
-
-        // What the next turn runs with, for the composer's options chip and
-        // its sheet. A session bound to a provider profile runs on that
-        // profile's models; any other on its agent's list, which for an agent
-        // whose profiles add models already carries theirs.
-        val agentModels = machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models
-        val agentProfiles = machineSummary?.providerProfiles.orEmpty().filter { it.agent == session?.agent }
-        val boundProfile = session?.providerId?.let { id -> agentProfiles.firstOrNull { it.id == id } }
-        val modelLists = listOfNotNull(agentModels) + agentProfiles.map { it.models }
-        // The session's model as its list names it: an agent may report it
-        // with a context marker (`[1m]`) the list's id does not carry.
-        val sessionModel = session?.model?.let { m -> listedModelId(m, modelLists) ?: m }
-        val sessionOptions = SessionOptions(
-            modelName = sessionModel?.let { m -> listedModelName(m, modelLists) ?: modelLabel(m) },
-            model = sessionModel,
-            models = when {
-                boundProfile != null -> boundProfile.models
-                agent?.supportsModels == true -> agentModels.orEmpty()
-                else -> emptyList()
-            },
-            modes = modes,
-            mode = displayedMode,
-            modePending = modeRequest.pending != null,
-            defaultMode = agent?.defaultMode,
-            // The session model's own levels, for an agent whose levels
-            // differ by model; else the agent's.
-            efforts = agentModels?.firstOrNull { it.id == sessionModel }?.efforts?.takeIf { it.isNotEmpty() }
-                ?: agent?.efforts.orEmpty(),
-            effort = session?.effort,
-            mcp = session?.mcp?.takeIf { supportsMcp && it.servers.isNotEmpty() },
-        )
-        var optionsSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
-        if (optionsSheetOpen) {
-            SessionOptionsSheet(
-                sessionOptions,
-                onMode = ::selectMode,
-                onEffort = { level ->
-                    if (level != session?.effort) {
-                        dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "effort", value = level))
-                    }
-                },
-                onModel = { id ->
-                    optionsSheetOpen = false
-                    if (id != sessionModel) {
-                        dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "model", value = id))
-                    }
-                },
-                onMcpOpen = ::requestMcp,
-                onMcpToggle = { name, enabled ->
-                    dispatch(UniffiIntent.ToggleSessionMcp(machine = machine, sessionId = sessionId, name = name, enabled = enabled))
-                },
-                onDismiss = { optionsSheetOpen = false },
-            )
-        }
-        if (contextSheetOpen) {
-            ContextSheet(
-                percentage = session?.contextPercentage,
-                window = session?.contextWindow?.toLong(),
-                usage = session?.usage,
-                nowMs = System.currentTimeMillis(),
-                onDismiss = { contextSheetOpen = false },
-            )
-        }
-        Composer(
-            draft = draft,
-            onDraftChange = { draft = it },
-            placeholder = if (activeQuestion != null) "Type your answer…" else "Message…",
-            canAttach = canAttachFiles,
-            uploading = uploading,
-            canSend = (draft.isNotBlank() || pendingFile != null) && !uploading,
-            onStop = if (session?.state == "running") {
-                { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) }
+            // The command menu takes the quick prompts' place while it is open;
+            // a pick leaves `/name ` in the draft for its arguments.
+            if (commandQuery != null) {
+                SlashCommandMenu(session?.commands, commandQuery) { command ->
+                    draft = "/${command.name} "
+                    inputFocus.requestFocus()
+                }
             } else {
-                null
-            },
-            onAttachPhoto = ::pickPhoto,
-            onAttachFile = ::pickFile,
-            onDictate = ::dictate,
-            onSend = ::send,
-            focusRequester = inputFocus,
-            onInputBounds = { tapArea.input = it },
-            options = {
-                SessionOptionsChip(sessionOptions) { optionsSheetOpen = true }
-            },
-        )
+                // Quick prompts (none: no strip); a tap puts the prompt in the draft.
+                QuickPromptStrip(quickPromptsView?.prompts.orEmpty(), ::insertPrompt)
+            }
+
+            // A failed send sits right above the controls, the same way the
+            // running turn's line does, with the message it failed to deliver.
+            oldestFailed?.let { failed ->
+                SendFailedBar(text = failed.text, failedCount = failedOutbox.size, onRetry = ::retryOldestFailed)
+            }
+
+            // What the next turn runs with, for the composer's options chip and
+            // its sheet. A session bound to a provider profile runs on that
+            // profile's models; any other on its agent's list, which for an agent
+            // whose profiles add models already carries theirs.
+            val agentModels = machineSummary?.models?.firstOrNull { it.agent == session?.agent }?.models
+            val agentProfiles = machineSummary?.providerProfiles.orEmpty().filter { it.agent == session?.agent }
+            val boundProfile = session?.providerId?.let { id -> agentProfiles.firstOrNull { it.id == id } }
+            val modelLists = listOfNotNull(agentModels) + agentProfiles.map { it.models }
+            // The session's model as its list names it: an agent may report it
+            // with a context marker (`[1m]`) the list's id does not carry.
+            val sessionModel = session?.model?.let { m -> listedModelId(m, modelLists) ?: m }
+            val sessionOptions = SessionOptions(
+                modelName = sessionModel?.let { m -> listedModelName(m, modelLists) ?: modelLabel(m) },
+                model = sessionModel,
+                models = when {
+                    boundProfile != null -> boundProfile.models
+                    agent?.supportsModels == true -> agentModels.orEmpty()
+                    else -> emptyList()
+                },
+                modes = modes,
+                mode = displayedMode,
+                modePending = modeRequest.pending != null,
+                // The session model's own levels, for an agent whose levels
+                // differ by model; else the agent's.
+                efforts = agentModels?.firstOrNull { it.id == sessionModel }?.efforts?.takeIf { it.isNotEmpty() }
+                    ?: agent?.efforts.orEmpty(),
+                effort = session?.effort,
+                mcp = session?.mcp?.takeIf { supportsMcp && it.servers.isNotEmpty() },
+            )
+            var optionsSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+            if (optionsSheetOpen) {
+                SessionOptionsSheet(
+                    sessionOptions,
+                    onMode = ::selectMode,
+                    onEffort = { level ->
+                        if (level != session?.effort) {
+                            dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "effort", value = level))
+                        }
+                    },
+                    onModel = { id ->
+                        optionsSheetOpen = false
+                        if (id != sessionModel) {
+                            dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "model", value = id))
+                        }
+                    },
+                    onMcpOpen = ::requestMcp,
+                    onMcpToggle = { name, enabled ->
+                        dispatch(UniffiIntent.ToggleSessionMcp(machine = machine, sessionId = sessionId, name = name, enabled = enabled))
+                    },
+                    onDismiss = { optionsSheetOpen = false },
+                )
+            }
+            if (contextSheetOpen) {
+                ContextSheet(
+                    percentage = session?.contextPercentage,
+                    window = session?.contextWindow?.toLong(),
+                    usage = session?.usage,
+                    nowMs = System.currentTimeMillis(),
+                    onDismiss = { contextSheetOpen = false },
+                )
+            }
+            Composer(
+                draft = draft,
+                onDraftChange = { draft = it },
+                placeholder = if (activeQuestion != null) "Type your answer…" else "Message…",
+                canAttach = canAttachFiles,
+                uploading = uploading,
+                canSend = (draft.isNotBlank() || pendingFile != null) && !uploading,
+                onStop = if (session?.state == "running") {
+                    { dispatch(UniffiIntent.Interrupt(machine = machine, sessionId = sessionId)) }
+                } else {
+                    null
+                },
+                onAttachPhoto = ::pickPhoto,
+                onAttachFile = ::pickFile,
+                onDictate = ::dictate,
+                onSend = ::send,
+                focusRequester = inputFocus,
+                onInputBounds = { tapArea.input = it },
+                options = {
+                    SessionOptionsChip(sessionOptions) { optionsSheetOpen = true }
+                },
+                mode = {
+                    SessionModeChip(sessionOptions, look.modeColor) { optionsSheetOpen = true }
+                },
+            )
+        }
     }
 }
 

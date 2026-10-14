@@ -39,6 +39,9 @@ use client_core::stores::ui::UiEffect;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreId {
     Machines,
+    /// The agent style cache (kept in the machines store, written apart:
+    /// it changes far less often than the session lists).
+    AgentStyles,
     Outbox,
     Settings,
     QuickPrompts,
@@ -363,6 +366,15 @@ impl<'a> Router<'a> {
             }
 
             // --- slice C: machines-slice updates + fire-and-answer acks ---
+            BridgeToPhone::AgentStyle(m) => {
+                self.stores
+                    .machines
+                    .fetches
+                    .answered(machine, Fetch::AgentStyle(m.agent.clone()));
+                if self.stores.machines.apply_agent_style(m) {
+                    r.persist(StoreId::AgentStyles);
+                }
+            }
             BridgeToPhone::Models(m) => {
                 self.stores.machines.apply_models(machine, m);
                 self.stores
@@ -577,6 +589,12 @@ impl<'a> Router<'a> {
         let unclosed = self.stores.machines.apply_session_list(machine, m, self.now);
         r.persist(StoreId::Machines);
         r.heartbeat = Some((machine.to_string(), self.now));
+        // The session on screen may have opened before this catalog named its
+        // agent's style, or its agent may have changed version.
+        let on_screen = self.stores.ui.selected_session.clone().filter(|s| self.viewing_session(machine, s));
+        if let Some(cmd) = on_screen.and_then(|s| self.stores.style_request(machine, &s, self.now)) {
+            r.send(machine, cmd);
+        }
         // A session no longer running has no reply being written, however its
         // turn ended (an error or a stop sends no `turn_complete`).
         for s in m.sessions.iter().filter(|s| s.state != Some(SessionState::Running)) {
@@ -876,6 +894,7 @@ mod tests {
             seq_high,
             provider_id: None,
             provider_label: None,
+            turn_started_at: None,
         }
     }
 
@@ -1230,6 +1249,42 @@ mod tests {
             .route(MACHINE, &BridgeToPhone::Sessions(sessions_msg(vec![info("s1", Some(SessionState::Idle), None)])))
             .await;
         assert_eq!(out.live_text, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: None })]);
+    }
+
+    /// A style is asked for once, for the session on screen, and kept.
+    #[tokio::test]
+    async fn the_style_of_the_agent_on_screen_is_fetched_once() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        let style = protocol::common::AgentStyle { accent: Some("#D77757".into()), ..Default::default() };
+        let mut list = sessions_msg(vec![info("s1", None, None)]);
+        list.agents = vec![serde_json::from_value(serde_json::json!({
+            "id": "claude-code", "displayName": "Claude Code", "styleHash": style.hash()
+        }))
+        .unwrap()];
+        let heartbeat = |rev: u64| {
+            let mut l = list.clone();
+            l.rev = Some(rev);
+            BridgeToPhone::Sessions(l)
+        };
+        let asks = |out: &RouteResult| out.sends.iter().filter(|c| matches!(c.msg, PhoneToBridge::AgentStyleRequest(_))).count();
+
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        assert_eq!(asks(&r.route(MACHINE, &heartbeat(1)).await), 0, "no session on screen");
+        r.stores.ui.selected_machine = Some(MACHINE.into());
+        r.stores.ui.selected_session = Some("s1".into());
+        assert_eq!(asks(&r.route(MACHINE, &heartbeat(2)).await), 1);
+        assert_eq!(asks(&r.route(MACHINE, &heartbeat(3)).await), 0, "already asked");
+
+        let answer = BridgeToPhone::AgentStyle(protocol::events::AgentStyleMsg {
+            agent: "claude-code".into(),
+            style_hash: Some(style.hash()),
+            style: Some(style.clone()),
+        });
+        assert_eq!(r.route(MACHINE, &answer).await.persist, vec![StoreId::AgentStyles]);
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000 + client_core::stores::fetches::FETCH_RETRY_AFTER_MS);
+        assert_eq!(asks(&r.route(MACHINE, &heartbeat(4)).await), 0, "cached");
+        assert_eq!(s.machines.agent_styles.get(&style.hash()), Some(&style));
     }
 
     #[tokio::test]

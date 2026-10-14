@@ -242,15 +242,11 @@ describe('sdkMessageToEntries', () => {
       session_id: SESSION_ID,
     };
 
-    it('converts a success result into a status summary', () => {
-      const entries = translate({
+    it('adds no row for a turn that succeeded', () => {
+      expect(translate({
         ...base, subtype: 'success', duration_ms: 5000, is_error: false, num_turns: 3,
         result: 'Done', stop_reason: 'end_turn', total_cost_usd: 0.0123,
-      } as unknown as SdkResultMessage);
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({ entryType: 'status' });
-      expect(find(entries, 'status')!.text).toContain('3 turns');
-      expect(find(entries, 'status')!.text).toContain('$0.0123');
+      } as unknown as SdkResultMessage)).toEqual([]);
     });
 
     it('drops the empty success results of a batched background-task completion', () => {
@@ -271,14 +267,13 @@ describe('sdkMessageToEntries', () => {
   });
 
   describe('system messages', () => {
-    it('converts the init message into a status line', () => {
+    it('adds no row for the init message every turn starts with', () => {
       const entries = translate({
         type: 'system', subtype: 'init', claude_code_version: '1.2.3', model: 'claude-opus-4-6',
         tools: ['Bash'], mcp_servers: [], permissionMode: 'plan', apiKeySource: 'oauth', cwd: '/workspace',
         slash_commands: [], output_style: 'default', skills: [], plugins: [], uuid: MSG_UUID, session_id: SESSION_ID,
       } as unknown as SdkSystemMessage);
-      expect(entries).toHaveLength(1);
-      expect(find(entries, 'status')!.text).toBe('Claude Code 1.2.3 (claude-opus-4-6)');
+      expect(entries).toEqual([]);
     });
 
     it('converts session_state_changed idle into turn_complete', () => {

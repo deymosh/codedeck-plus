@@ -123,6 +123,13 @@ pub struct CreateSessionMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct BareMsg {}
 
+/// Ask for an agent's style (`AgentDescriptor::style_hash` names one the
+/// client has not seen). Reply: `agent-style`, to the asking client only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AgentStyleRequestMsg {
+    pub agent: String,
+}
+
 /// Ask for an agent's live model list (agents with `supports.models`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ModelsRequestMsg {
@@ -444,6 +451,7 @@ pub enum PhoneToBridge {
     UploadFile(UploadFileMsg),
     UsageRequest(SessionIdMsg),
     ModelsRequest(ModelsRequestMsg),
+    AgentStyleRequest(AgentStyleRequestMsg),
     /// The slash commands a session understands (agents with
     /// `supports.commands`). Reply: `commands`.
     CommandsRequest(SessionIdMsg),
@@ -504,6 +512,7 @@ mod tests {
         rt(&json!({"v":12,"type":"upload-file","sessionId":"s","uploadId":"u","filename":"f","mimeType":"image/png","base64Data":"x","text":"","chunkIndex":0,"totalChunks":2}));
         rt(&json!({"v":12,"type":"usage-request","sessionId":"s"}));
         rt(&json!({"v":12,"type":"models-request","agent":"opencode"}));
+        rt(&json!({"v":12,"type":"agent-style-request","agent":"opencode"}));
         rt(&json!({"v":12,"type":"commands-request","sessionId":"s"}));
         rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code"}));
         rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code","available":true}));

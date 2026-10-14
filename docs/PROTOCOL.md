@@ -65,8 +65,8 @@ event-id set alongside the cursor so the replay is a no-op.
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
 `efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, providerModels, interrupt, commands, plugins, mcp, tasks}`, `credentials[]` status and
-`install` (below). Phones build every
+providers, providerModels, interrupt, commands, plugins, mcp, tasks}`, `credentials[]` status,
+`install` (below) and `styleHash` (see [Agent styles](#agent-styles)). Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -97,6 +97,38 @@ itself shows in the next session list's `install`. Removing ends the
 agent's sessions and deletes only what CodeDeck installed; an agent the
 machine has of its own is not removable.
 
+### Agent styles
+
+An agent's sessions can look like its own terminal UI. Its `AgentStyle` is
+a fixed set of knobs, each optional (an unset knob keeps the phone's own
+look; an agent with no style looks like any other):
+
+- `spinner {frames, intervalMs, bounce?}` while it works (`bounce`: played
+  forward, then back); `workingWords` beside it, one per turn, and
+  `workingCounter` (time and tokens beside the word);
+- `toolGlyphs`, the glyph before a tool row by `ToolKind` wire name (`other`
+  for every kind not listed), and `resultMark` before a result line;
+- `userMessage {shape: "bubble" | "prompt" (+ mark) | "block"}` — an
+  unknown shape is drawn as a bubble;
+- `wordmark`, block-art lines (one character per terminal cell) shown on an
+  empty session, with `wordmarkSplit` leading cells drawn muted for a
+  two-tone logo;
+- `accent` (`#RRGGBB`), worn only by the agent's own marks — the spinner,
+  the working word, the wordmark — and `modeColors`, a colour by mode id,
+  worn by the mark on the user's messages and by the mode in the composer.
+
+Colours that mean a state (running, waiting, failed) stay the phone's. The
+catalog rides every heartbeat and a style is about a kilobyte, so the
+catalog carries only `styleHash`: the first 16 hex digits of the SHA-256 of
+the style's JSON as `AgentStyle::hash` writes it (keys in declaration
+order), the one definition of it. A phone that has no style under that
+hash sends `agent-style-request {agent}`; the bridge answers that phone
+alone with `agent-style {agent, styleHash?, style?}`, both absent for an
+agent with no style or one it does not know. Phones cache styles by hash,
+keep one only under the hash it really has, and ask only while a session of
+that agent is on screen — so a style is fetched once per agent version,
+shared by every bridge that runs it.
+
 ### Sessions
 
 - **`pendingId == sessionId`.** `create-session {agent, …}` →
@@ -116,6 +148,11 @@ machine has of its own is not removable.
   nothing (the phone keeps what it knew); a refused effort or model confirms
   the value still in force. `option-confirmed` is also sent when the agent
   changes its own mode (it entered plan mode, a plan approval switched it).
+- **`turnStartedAt`:** while a turn runs (waiting on the user included),
+  when it started, as an ISO 8601 time on the bridge's clock; absent
+  otherwise. A turn need not start with the user's message (a background
+  task's end can start one), so the bridge is what says it; a phone shows
+  the time worked from it.
 - **`committed`:** the session's folder got a git commit after the session
   started (the agent's own, caught at once, or one made by hand, caught
   within seconds); a phone shows it as a badge.
@@ -651,7 +688,8 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `set-providers {agent, providers}` | `providers-set {refused: [{id, reason}]}` once an agent with `supports.providerModels` offers these profiles' models (all of its profiles, oldest saved first, sent after `initialize` and on every change) — all but the refused ones, which it cannot add (a name one of its own providers, or an earlier profile, has); or `error` |
 
 `AgentInfo` is the catalog entry minus credential status (the bridge adds
-that), plus `credentials[].envVar` and `unavailableReason`. The host
+that) and `styleHash` (the bridge hashes the `style` it carries), plus
+`credentials[].envVar` and `unavailableReason`. The host
 reports a change to one with the notification `agent-changed {agent:
 AgentInfo}` (an install starting, finishing or failing, a removal); the
 bridge replaces that entry, and once the agent is no longer installing
@@ -696,7 +734,10 @@ restart.
 
 1. Write a driver in `packages/agent-host/src/drivers/<agent>/` implementing
    `Driver` (`src/sdk/driver.ts`): `info()` advertises the agent (modes,
-   efforts, `supports`, credentials); `startSession()` returns a
+   efforts, `supports`, credentials, and its `style` — the look of its own
+   terminal UI, kept in the folder's `style.ts`, each value taken from the
+   agent's own source; check that Android draws each glyph as text, not as
+   an emoji); `startSession()` returns a
    `DriverSession` and reports through the `SessionContext` it is handed —
    `emit()` session events, `requestPermission()` / `askQuestion()` /
    `requestPlanApproval()` when the user must decide.

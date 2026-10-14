@@ -37,14 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.components.DeckSheet
 import com.codedeck.plus.ui.components.Dot
@@ -54,6 +52,7 @@ import com.codedeck.plus.ui.transcript.rows.SheetHeader
 import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiSessionMcp
+import androidx.compose.ui.graphics.Color
 
 /**
  * What a session runs its next turn with, and what it can switch to: the
@@ -71,8 +70,6 @@ internal data class SessionOptions(
     /** The mode shown: one requested and not yet confirmed, else the session's. */
     val mode: String?,
     val modePending: Boolean,
-    /** The agent's own default mode: the chip names the mode only when it is another. */
-    val defaultMode: String?,
     val efforts: List<UniffiOptionChoice>,
     val effort: String?,
     /** `null` hides the MCP row (no servers, or an agent without MCP). */
@@ -85,61 +82,36 @@ internal data class SessionOptions(
 }
 
 /**
- * The composer's options chip: "Plan · Opus 5 High" — the mode when it is
- * not the agent's default (it changes what the agent may do), the model,
- * then the effort, muted. A mode change still on its way pulses. Opens
- * [SessionOptionsSheet].
+ * The composer's options chip: the model, then the effort, muted — what
+ * the next turn runs on. The mode has its own chip ([SessionModeChip]).
+ * Opens [SessionOptionsSheet].
  */
 @Composable
 internal fun SessionOptionsChip(options: SessionOptions, onClick: () -> Unit) {
-    val modeShown = options.modeLabel?.takeIf { options.modes.size >= 2 && options.mode != options.defaultMode }
-    val alpha = if (options.modePending) pulsingAlpha(min = 0.35f, max = 1f, halfPeriodMs = 500) else 1f
-    val description = listOfNotNull(modeShown, options.modelName, options.effortLabel).joinToString(", ")
-    Box(
+    val description = listOfNotNull(options.modelName, options.effortLabel).joinToString(", ")
+    Row(
         Modifier
             .heightIn(min = 40.dp)
             .clip(RoundedCornerShape(Tokens.RadiusPill))
             .clickable(enabled = options.changeable, onClick = onClick)
             .semantics { contentDescription = "Session options: $description" }
             .padding(horizontal = Tokens.Space2),
-        contentAlignment = Alignment.CenterStart,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        ChipLayout(
-            mode = modeShown?.let {
-                {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            it,
-                            color = Tokens.Text,
-                            fontSize = Tokens.TextSm,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false).graphicsLayer { this.alpha = alpha },
-                        )
-                        Text("·", color = Tokens.TextDim, fontSize = Tokens.TextSm)
-                    }
-                }
-            },
-            model = {
-                Text(
-                    options.modelName ?: "Model",
-                    color = if (options.modelName != null) Tokens.Text else Tokens.TextMuted,
-                    fontSize = Tokens.TextSm,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
-            trailing = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    options.effortLabel?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextSm, maxLines = 1) }
-                    if (options.changeable) {
-                        Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = Tokens.TextMuted, modifier = Modifier.size(16.dp))
-                    }
-                }
-            },
+        Text(
+            options.modelName ?: "Model",
+            color = if (options.modelName != null) Tokens.Text else Tokens.TextMuted,
+            fontSize = Tokens.TextSm,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false).widthIn(max = CHIP_MODEL_MAX),
         )
+        options.effortLabel?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextSm, maxLines = 1) }
+        if (options.changeable) {
+            Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = Tokens.TextMuted, modifier = Modifier.size(16.dp))
+        }
     }
 }
 
@@ -147,43 +119,39 @@ internal fun SessionOptionsChip(options: SessionOptions, onClick: () -> Unit) {
 private val CHIP_MODEL_MAX = 140.dp
 
 /**
- * The chip's three parts in a line: [trailing] (the effort and the arrow)
- * always whole; [mode] and [model] whole when they fit, else half of what
- * is left each, one's unused half going to the other — the mode stays in
- * sight (bypassing permissions is not something to hide), and so does the
- * model. A plain Row cannot do this: a weighted child keeps its share even
- * when it needs less, so a short mode would still be cut.
+ * The mode the session runs in, beside the button that sends: always in
+ * sight, since it decides what the agent may do (bypassing permissions is
+ * not something to hide). It wears the mode's colour when the agent gives
+ * its modes one ([color]); a mode change still on its way pulses. Nothing
+ * for an agent with fewer than two modes. Opens [SessionOptionsSheet].
  */
 @Composable
-private fun ChipLayout(mode: (@Composable () -> Unit)?, model: @Composable () -> Unit, trailing: @Composable () -> Unit) {
-    Layout(content = {
-        mode?.invoke()
-        model()
-        trailing()
-    }) { measurables, constraints ->
-        val gap = 6.dp.roundToPx()
-        val modeM = if (mode != null) measurables[0] else null
-        val modelM = measurables[measurables.size - 2]
-        val trailingP = measurables.last().measure(Constraints())
-        val parts = if (modeM != null) 3 else 2
-        val room = if (constraints.hasBoundedWidth) (constraints.maxWidth - trailingP.width - gap * (parts - 1)).coerceAtLeast(0) else Int.MAX_VALUE
-        val modeWant = modeM?.maxIntrinsicWidth(constraints.maxHeight) ?: 0
-        val modelWant = minOf(modelM.maxIntrinsicWidth(constraints.maxHeight), CHIP_MODEL_MAX.roundToPx())
-        val modeWidth = if (modeWant + modelWant <= room) modeWant else minOf(modeWant, maxOf(room - modelWant, room / 2))
-        val modelWidth = minOf(modelWant, room - modeWidth)
-        val modeP = modeM?.measure(Constraints(maxWidth = modeWidth))
-        val modelP = modelM.measure(Constraints(maxWidth = modelWidth.coerceAtLeast(0)))
-        val placed = listOfNotNull(modeP, modelP, trailingP)
-        val height = placed.maxOf { it.height }
-        layout(placed.sumOf { it.width } + gap * (placed.size - 1), height) {
-            var x = 0
-            placed.forEach {
-                it.place(x, (height - it.height) / 2)
-                x += it.width + gap
-            }
-        }
+internal fun SessionModeChip(options: SessionOptions, color: Color?, onClick: () -> Unit) {
+    val label = options.modeLabel?.takeIf { options.modes.size >= 2 } ?: return
+    val alpha = if (options.modePending) pulsingAlpha(min = 0.35f, max = 1f, halfPeriodMs = 500) else 1f
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(Tokens.RadiusPill))
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Mode: $label" }
+            .padding(horizontal = Tokens.Space2),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = color ?: Tokens.Text,
+            fontSize = Tokens.TextSm,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = MODE_CHIP_MAX).graphicsLayer { this.alpha = alpha },
+        )
     }
 }
+
+/** Widest the mode chip gets, so a long mode name never crowds the model out. */
+private val MODE_CHIP_MAX = 96.dp
 
 /** The pages of [SessionOptionsList]: the main one, and one per longer choice. */
 internal enum class OptionsPage { Main, Models, Effort, Mode, Mcp }

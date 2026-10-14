@@ -336,9 +336,16 @@ fn turn_events_drive_the_listed_state() {
     rig.host_up();
     let s = rig.ready_session("alpha");
     rig.host_event(&s, SessionEvent::Turn { state: TurnState::Running });
-    assert_eq!(last_heartbeat(&rig.messages()).sessions[0].state, Some(SessionState::Running));
+    let running = last_heartbeat(&rig.messages()).sessions[0].clone();
+    assert_eq!(running.state, Some(SessionState::Running));
+    // The list says when the turn started, for the phone's elapsed time.
+    let started = running.turn_started_at.expect("a running turn has a start");
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Running });
+    rig.send(json!({"v":12,"type":"refresh-sessions"}));
+    assert_eq!(last_heartbeat(&rig.messages()).sessions[0].turn_started_at.as_ref(), Some(&started), "the same turn");
     rig.host_event(&s, SessionEvent::Turn { state: TurnState::Idle });
-    assert_eq!(last_heartbeat(&rig.messages()).sessions[0].state, Some(SessionState::Idle));
+    let idle = last_heartbeat(&rig.messages()).sessions[0].clone();
+    assert_eq!((idle.state, idle.turn_started_at), (Some(SessionState::Idle), None));
 }
 
 #[test]

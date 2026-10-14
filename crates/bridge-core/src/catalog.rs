@@ -3,7 +3,7 @@
 //! one of its modes, what does the phone see.
 
 use agent_protocol::AgentInfo;
-use protocol::common::{AgentDescriptor, AgentInstall, CredentialStatus};
+use protocol::common::{AgentDescriptor, AgentInstall, AgentStyle, CredentialStatus};
 
 #[derive(Default)]
 pub(crate) struct Catalog {
@@ -83,6 +83,7 @@ impl Catalog {
                 supports: a.supports.clone(),
                 credentials: credentials(a),
                 install: a.install.clone(),
+                style_hash: a.style.as_ref().map(AgentStyle::hash),
             })
             .collect()
     }

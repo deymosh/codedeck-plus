@@ -4480,6 +4480,13 @@ data class UniffiAgent (
      * Why the bridge refused the last install or removal.
      */
     var `actionFailure`: kotlin.String?
+    , 
+    /**
+     * How its sessions look; `None` until the phone has the style its
+     * bridge names (it is fetched while one of its sessions is open), and
+     * for an agent with none.
+     */
+    var `style`: UniffiAgentStyle?
     
 ){
     
@@ -4517,6 +4524,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalTypeUniffiAgentStyle.read(buf),
         )
     }
 
@@ -4541,7 +4549,8 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterBoolean.allocationSize(value.`removable`) +
             FfiConverterOptionalString.allocationSize(value.`installError`) +
             FfiConverterOptionalString.allocationSize(value.`actionBusy`) +
-            FfiConverterOptionalString.allocationSize(value.`actionFailure`)
+            FfiConverterOptionalString.allocationSize(value.`actionFailure`) +
+            FfiConverterOptionalTypeUniffiAgentStyle.allocationSize(value.`style`)
     )
 
     override fun write(value: UniffiAgent, buf: ByteBuffer) {
@@ -4566,6 +4575,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterOptionalString.write(value.`installError`, buf)
             FfiConverterOptionalString.write(value.`actionBusy`, buf)
             FfiConverterOptionalString.write(value.`actionFailure`, buf)
+            FfiConverterOptionalTypeUniffiAgentStyle.write(value.`style`, buf)
     }
 }
 
@@ -4838,6 +4848,116 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterSequenceString.write(value.`busy`, buf)
             FfiConverterOptionalTypeUniffiPluginNotice.write(value.`notice`, buf)
             FfiConverterOptionalTypeUniffiPluginFailure.write(value.`failure`, buf)
+    }
+}
+
+
+
+/**
+ * An agent's look (`protocol::common::AgentStyle`), ready to draw: colours
+ * are opaque ARGB, and a spinner's frames are the sequence it plays.
+ */
+data class UniffiAgentStyle (
+    /**
+     * Frames shown in turn while the agent works, looped; empty = the
+     * client's own spinner.
+     */
+    var `spinnerFrames`: List<kotlin.String>
+    , 
+    var `spinnerIntervalMs`: kotlin.UInt
+    , 
+    /**
+     * Words beside the spinner, one picked per turn; empty = the client's.
+     */
+    var `workingWords`: List<kotlin.String>
+    , 
+    /**
+     * Time worked and tokens so far beside the word.
+     */
+    var `workingCounter`: kotlin.Boolean
+    , 
+    /**
+     * Glyph before a tool row, by tool kind wire name; `other` stands for
+     * every kind not listed.
+     */
+    var `toolGlyphs`: Map<kotlin.String, kotlin.String>
+    , 
+    var `resultMark`: kotlin.String?
+    , 
+    var `userMessage`: UniffiUserMessageShape
+    , 
+    /**
+     * Block-art lines, one character per terminal cell.
+     */
+    var `wordmark`: List<kotlin.String>
+    , 
+    /**
+     * Leading cells of each wordmark line drawn muted.
+     */
+    var `wordmarkSplit`: kotlin.UShort
+    , 
+    var `accent`: kotlin.UInt?
+    , 
+    /**
+     * Colour by mode id.
+     */
+    var `modeColors`: Map<kotlin.String, kotlin.UInt>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiAgentStyle: FfiConverterRustBuffer<UniffiAgentStyle> {
+    override fun read(buf: ByteBuffer): UniffiAgentStyle {
+        return UniffiAgentStyle(
+            FfiConverterSequenceString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterMapStringString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeUniffiUserMessageShape.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterMapStringUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiAgentStyle) = (
+            FfiConverterSequenceString.allocationSize(value.`spinnerFrames`) +
+            FfiConverterUInt.allocationSize(value.`spinnerIntervalMs`) +
+            FfiConverterSequenceString.allocationSize(value.`workingWords`) +
+            FfiConverterBoolean.allocationSize(value.`workingCounter`) +
+            FfiConverterMapStringString.allocationSize(value.`toolGlyphs`) +
+            FfiConverterOptionalString.allocationSize(value.`resultMark`) +
+            FfiConverterTypeUniffiUserMessageShape.allocationSize(value.`userMessage`) +
+            FfiConverterSequenceString.allocationSize(value.`wordmark`) +
+            FfiConverterUShort.allocationSize(value.`wordmarkSplit`) +
+            FfiConverterOptionalUInt.allocationSize(value.`accent`) +
+            FfiConverterMapStringUInt.allocationSize(value.`modeColors`)
+    )
+
+    override fun write(value: UniffiAgentStyle, buf: ByteBuffer) {
+            FfiConverterSequenceString.write(value.`spinnerFrames`, buf)
+            FfiConverterUInt.write(value.`spinnerIntervalMs`, buf)
+            FfiConverterSequenceString.write(value.`workingWords`, buf)
+            FfiConverterBoolean.write(value.`workingCounter`, buf)
+            FfiConverterMapStringString.write(value.`toolGlyphs`, buf)
+            FfiConverterOptionalString.write(value.`resultMark`, buf)
+            FfiConverterTypeUniffiUserMessageShape.write(value.`userMessage`, buf)
+            FfiConverterSequenceString.write(value.`wordmark`, buf)
+            FfiConverterUShort.write(value.`wordmarkSplit`, buf)
+            FfiConverterOptionalUInt.write(value.`accent`, buf)
+            FfiConverterMapStringUInt.write(value.`modeColors`, buf)
     }
 }
 
@@ -7103,6 +7223,12 @@ data class UniffiSessionSummary (
     var `state`: kotlin.String?
     , 
     /**
+     * When the running turn started (ISO 8601, the bridge's clock), while
+     * one runs.
+     */
+    var `turnStartedAt`: kotlin.String? = null 
+    , 
+    /**
      * `live` / `stale` / `offline` — the machines store's own listing presence.
      */
     var `presence`: kotlin.String
@@ -7176,6 +7302,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
@@ -7200,6 +7327,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterString.allocationSize(value.`cwd`) +
             FfiConverterString.allocationSize(value.`project`) +
             FfiConverterOptionalString.allocationSize(value.`state`) +
+            FfiConverterOptionalString.allocationSize(value.`turnStartedAt`) +
             FfiConverterString.allocationSize(value.`presence`) +
             FfiConverterString.allocationSize(value.`lastActivity`) +
             FfiConverterString.allocationSize(value.`agent`) +
@@ -7223,6 +7351,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterString.write(value.`cwd`, buf)
             FfiConverterString.write(value.`project`, buf)
             FfiConverterOptionalString.write(value.`state`, buf)
+            FfiConverterOptionalString.write(value.`turnStartedAt`, buf)
             FfiConverterString.write(value.`presence`, buf)
             FfiConverterString.write(value.`lastActivity`, buf)
             FfiConverterString.write(value.`agent`, buf)
@@ -9993,6 +10122,105 @@ public object FfiConverterTypeUniffiTristate : FfiConverterRustBuffer<UniffiTris
 
 
 
+/**
+ * How the user's own message is drawn.
+ */
+sealed class UniffiUserMessageShape {
+    
+    /**
+     * The client's bubble (also any shape this build does not know).
+     */
+    object Bubble : UniffiUserMessageShape()
+    
+    
+    /**
+     * A line of text after `mark`, no bubble.
+     */
+    data class Prompt(
+        val `mark`: kotlin.String) : UniffiUserMessageShape()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * A full-width raised block.
+     */
+    object Block : UniffiUserMessageShape()
+    
+    
+
+    
+
+    
+    
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiUserMessageShape : FfiConverterRustBuffer<UniffiUserMessageShape>{
+    override fun read(buf: ByteBuffer): UniffiUserMessageShape {
+        return when(buf.getInt()) {
+            1 -> UniffiUserMessageShape.Bubble
+            2 -> UniffiUserMessageShape.Prompt(
+                FfiConverterString.read(buf),
+                )
+            3 -> UniffiUserMessageShape.Block
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: UniffiUserMessageShape): ULong = when(value) {
+        is UniffiUserMessageShape.Bubble -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is UniffiUserMessageShape.Prompt -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`mark`)
+            )
+        }
+        is UniffiUserMessageShape.Block -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: UniffiUserMessageShape, buf: ByteBuffer) {
+        when(value) {
+            is UniffiUserMessageShape.Bubble -> {
+                buf.putInt(1)
+                Unit
+            }
+            is UniffiUserMessageShape.Prompt -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`mark`, buf)
+                Unit
+            }
+            is UniffiUserMessageShape.Block -> {
+                buf.putInt(3)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 
 /**
  * @suppress
@@ -10211,6 +10439,38 @@ public object FfiConverterOptionalTypeUniffiSessionKeyStore: FfiConverterRustBuf
         } else {
             buf.put(1)
             FfiConverterTypeUniffiSessionKeyStore.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiAgentStyle: FfiConverterRustBuffer<UniffiAgentStyle?> {
+    override fun read(buf: ByteBuffer): UniffiAgentStyle? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiAgentStyle.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiAgentStyle?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiAgentStyle.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiAgentStyle?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiAgentStyle.write(value, buf)
         }
     }
 }
@@ -11615,6 +11875,45 @@ public object FfiConverterSequenceTypeUniffiUsageWindow: FfiConverterRustBuffer<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeUniffiUsageWindow.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringUInt: FfiConverterRustBuffer<Map<kotlin.String, kotlin.UInt>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, kotlin.UInt> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, kotlin.UInt>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterUInt.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, kotlin.UInt>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterUInt.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, kotlin.UInt>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterUInt.write(v, buf)
         }
     }
 }

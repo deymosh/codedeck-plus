@@ -21,6 +21,9 @@ pub enum Fetch {
     ProviderProfiles,
     /// One agent's model list.
     Models(String),
+    /// One agent's style; once answered it is cached by hash, so only a
+    /// request in flight needs remembering.
+    AgentStyle(String),
 }
 
 /// A request unanswered for this long may have been lost: asking again is
@@ -65,7 +68,7 @@ impl Fetches {
             Fetch::ProviderProfiles => {
                 self.entries.insert(key, State::Current);
             }
-            Fetch::Models(_) => {
+            Fetch::Models(_) | Fetch::AgentStyle(_) => {
                 self.entries.remove(&key);
             }
         }

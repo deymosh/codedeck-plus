@@ -50,6 +50,8 @@ import com.codedeck.plus.ui.transcript.rows.ToolGroupSheet
 import com.codedeck.plus.ui.transcript.rows.UserMessageRow
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiOutboxItem
+import com.codedeck.plus.ui.components.LocalAgentLook
+import com.codedeck.plus.ui.components.Wordmark
 
 /**
  * The virtualized transcript — port of `TranscriptView.tsx`. `LazyColumn` +
@@ -91,10 +93,12 @@ fun TranscriptList(
     /** The replies the agent is still writing (`part` set to each one's
      *  key), shown after the transcript's rows until their entries land. */
     liveReplies: List<DisplayEntry.AgentMessage> = emptyList(),
+    /** When the running turn started (epoch ms), for the working line's counter. */
+    turnStartedAt: Long? = null,
 ) = key(sessionId) {
     TranscriptListContent(
         displayEntries, liveReplies, outboxItems, machine, sessionId, syncState, contiguous,
-        respondedCards, planApprovalChoices, running, activity, canStopTasks, dispatch, modifier,
+        respondedCards, planApprovalChoices, running, activity, canStopTasks, dispatch, modifier, turnStartedAt,
     )
 }
 
@@ -119,6 +123,7 @@ private fun TranscriptListContent(
     canStopTasks: Boolean,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
+    turnStartedAt: Long? = null,
 ) {
     var expandedGroups by remember(sessionId) { mutableStateOf(setOf<Long>()) }
     // The tool group whose sheet is open, by seq: the sheet reads the group
@@ -146,9 +151,19 @@ private fun TranscriptListContent(
     val itemCount = rows.size + visibleOutbox.size + (if (showSyncGap) 1 else 0) + (if (running) 1 else 0)
 
     if (itemCount == 0) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val syncing = syncState == "requested" || syncState == "syncing"
+        val look = LocalAgentLook.current
+        Column(
+            modifier.fillMaxSize().padding(Tokens.Space5),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space5, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // A new session opens on its agent's own logo, as its CLI does.
+            if (!syncing && look.wordmark.isNotEmpty()) {
+                Wordmark(look.wordmark, look.wordmarkSplit, look.accent ?: Tokens.Text, label = "${look.name} logo")
+            }
             Text(
-                if (syncState == "requested" || syncState == "syncing") "Syncing transcript…" else "No transcript yet — send a message to start.",
+                if (syncing) "Syncing transcript…" else "No transcript yet — send a message to start.",
                 color = Tokens.TextMuted,
                 fontSize = Tokens.TextSm,
             )
@@ -228,7 +243,11 @@ private fun TranscriptListContent(
                         val call = activityOf(displayEntries)
                         // A sub-agent at work opens on its own page, with its steps.
                         val at = call?.takeIf { it.toolKind == "agent" }?.let { listOf(it.seq) }
-                        ActivityRow(call, onOpen = last?.let { { openGroup = OpenGroup(it.seq, at) } })
+                        // The turn is named by the message that started it.
+                        val turn = displayEntries.lastOrNull { it is DisplayEntry.UserMessage }?.seq ?: 0L
+                        // Counted only for an agent whose CLI shows the count.
+                        val tokens = if (LocalAgentLook.current.workingCounter) turnTokens(displayEntries, liveReplies.filter { it.part !in completedParts }) else 0L
+                        ActivityRow(call, turn, onOpen = last?.let { { openGroup = OpenGroup(it.seq, at) } }, turnStartedAt = turnStartedAt, tokens = tokens)
                     }
                 }
                 items(visibleOutbox, key = { "o${it.id}" }, contentType = { "outbox" }) { item ->

@@ -24,6 +24,7 @@ fn omega(install: AgentInstall) -> AgentInfo {
         credentials: vec![],
         unavailable_reason: None,
         install,
+        style: None,
     }
 }
 
@@ -146,4 +147,27 @@ fn an_agent_action_without_a_host_is_refused() {
     let (success, error) = agent_ack(&rig.messages());
     assert!(!success);
     assert!(error.unwrap().contains("stopped"));
+}
+
+/// The heartbeat names an agent's style by its hash only; the style itself
+/// goes to the client that asks for it.
+#[test]
+fn an_agent_style_is_advertised_by_hash_and_sent_when_asked() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let style = alpha().style.unwrap();
+    rig.send(json!({"v":12,"type":"refresh-sessions"}));
+    let lists: Vec<_> = rig.messages().into_iter().filter_map(|m| match m { BridgeToPhone::Sessions(l) => Some(l), _ => None }).collect();
+    let agents = &lists.last().expect("a heartbeat").agents;
+    let hash_of = |id: &str| agents.iter().find(|a| a.id == id).unwrap().style_hash.clone();
+    assert_eq!(hash_of("alpha"), Some(style.hash()));
+    assert_eq!(hash_of("beta"), None);
+
+    rig.send(json!({"v":12,"type":"agent-style-request","agent":"alpha"}));
+    let answer = rig.messages().into_iter().find_map(|m| match m { BridgeToPhone::AgentStyle(s) => Some(s), _ => None }).unwrap();
+    assert_eq!((answer.style_hash, answer.style), (Some(style.hash()), Some(style)));
+
+    rig.send(json!({"v":12,"type":"agent-style-request","agent":"nobody"}));
+    let answer = rig.messages().into_iter().find_map(|m| match m { BridgeToPhone::AgentStyle(s) => Some(s), _ => None }).unwrap();
+    assert_eq!((answer.agent.as_str(), answer.style_hash, answer.style), ("nobody", None, None));
 }

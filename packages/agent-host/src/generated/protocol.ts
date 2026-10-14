@@ -34,6 +34,12 @@ export type AgentInfo_Deserialize = {
 	 *  is installed.
 	 */
 	install?: AgentInstall_Deserialize,
+	/**
+	 *  How the agent's sessions look on the phone, from the agent's own
+	 *  terminal UI. The bridge advertises it by hash and hands it to a
+	 *  phone that asks.
+	 */
+	style?: AgentStyle_Deserialize | null,
 };
 
 /**
@@ -62,6 +68,12 @@ export type AgentInfo_Serialize = {
 	 *  is installed.
 	 */
 	install: AgentInstall_Serialize,
+	/**
+	 *  How the agent's sessions look on the phone, from the agent's own
+	 *  terminal UI. The bridge advertises it by hash and hands it to a
+	 *  phone that asks.
+	 */
+	style?: AgentStyle_Serialize | null,
 };
 
 /**
@@ -103,6 +115,119 @@ export type AgentInstall_Serialize =
  *  retries.
  */
 ({ state: "failed"; reason: string }) & { removable?: never };
+
+/**
+ *  How an agent's sessions look on a client, so they read like the agent's
+ *  own terminal UI: a fixed set of knobs its driver fills in. A knob left
+ *  unset keeps the client's own look, and an agent with no style looks like
+ *  any other. Colours that mean a state (running, waiting, failed) are the
+ *  client's, never the agent's.
+ */
+export type AgentStyle = AgentStyle_Serialize | AgentStyle_Deserialize;
+
+/**
+ *  How an agent's sessions look on a client, so they read like the agent's
+ *  own terminal UI: a fixed set of knobs its driver fills in. A knob left
+ *  unset keeps the client's own look, and an agent with no style looks like
+ *  any other. Colours that mean a state (running, waiting, failed) are the
+ *  client's, never the agent's.
+ */
+export type AgentStyle_Deserialize = {
+	/**  The spinner shown while the agent works. */
+	spinner?: SpinnerStyle_Deserialize | null,
+	/**
+	 *  The words shown beside the spinner, one picked per turn. Empty: the
+	 *  client's own.
+	 */
+	workingWords?: string[],
+	/**  Whether the time worked and the tokens so far show beside the word. */
+	workingCounter?: boolean,
+	/**
+	 *  The glyph before a tool row, by [`ToolKind`] wire name (`read`,
+	 *  `execute`, …); `other` stands for every kind not listed. A kind with
+	 *  no glyph keeps the client's own marker.
+	 */
+	toolGlyphs?: { [key in string]: string },
+	/**  The mark before a tool's result line. */
+	resultMark?: string | null,
+	/**  How the user's own message is drawn. */
+	userMessage?: UserMessageStyle_Deserialize,
+	/**
+	 *  Block-art lines shown on a session with nothing in it yet, one
+	 *  character per terminal cell.
+	 */
+	wordmark?: string[],
+	/**
+	 *  How many leading cells of each wordmark line are drawn in the
+	 *  client's muted text colour; the rest wear the accent, or the client's
+	 *  text colour without one. Lets a two-tone logo keep its two tones.
+	 */
+	wordmarkSplit?: number,
+	/**
+	 *  The agent's colour, `#RRGGBB`. Only the agent's own marks wear it:
+	 *  the spinner, the working word, the wordmark.
+	 */
+	accent?: string | null,
+	/**
+	 *  The colour each mode wears, `#RRGGBB` by mode id (an id from the
+	 *  agent's `modes`), for an agent whose terminal UI colours the mode it
+	 *  runs in: the mark on the user's own message and the mode's chip in
+	 *  the composer. A mode with none wears the client's own colours.
+	 */
+	modeColors?: { [key in string]: string },
+};
+
+/**
+ *  How an agent's sessions look on a client, so they read like the agent's
+ *  own terminal UI: a fixed set of knobs its driver fills in. A knob left
+ *  unset keeps the client's own look, and an agent with no style looks like
+ *  any other. Colours that mean a state (running, waiting, failed) are the
+ *  client's, never the agent's.
+ */
+export type AgentStyle_Serialize = {
+	/**  The spinner shown while the agent works. */
+	spinner?: SpinnerStyle_Serialize | null,
+	/**
+	 *  The words shown beside the spinner, one picked per turn. Empty: the
+	 *  client's own.
+	 */
+	workingWords?: string[],
+	/**  Whether the time worked and the tokens so far show beside the word. */
+	workingCounter?: boolean,
+	/**
+	 *  The glyph before a tool row, by [`ToolKind`] wire name (`read`,
+	 *  `execute`, …); `other` stands for every kind not listed. A kind with
+	 *  no glyph keeps the client's own marker.
+	 */
+	toolGlyphs?: { [key in string]: string },
+	/**  The mark before a tool's result line. */
+	resultMark?: string | null,
+	/**  How the user's own message is drawn. */
+	userMessage?: UserMessageStyle_Serialize,
+	/**
+	 *  Block-art lines shown on a session with nothing in it yet, one
+	 *  character per terminal cell.
+	 */
+	wordmark?: string[],
+	/**
+	 *  How many leading cells of each wordmark line are drawn in the
+	 *  client's muted text colour; the rest wear the accent, or the client's
+	 *  text colour without one. Lets a two-tone logo keep its two tones.
+	 */
+	wordmarkSplit?: number,
+	/**
+	 *  The agent's colour, `#RRGGBB`. Only the agent's own marks wear it:
+	 *  the spinner, the working word, the wordmark.
+	 */
+	accent?: string | null,
+	/**
+	 *  The colour each mode wears, `#RRGGBB` by mode id (an id from the
+	 *  agent's `modes`), for an agent whose terminal UI colours the mode it
+	 *  runs in: the mark on the user's own message and the mode's chip in
+	 *  the composer. A mode with none wears the client's own colours.
+	 */
+	modeColors?: { [key in string]: string },
+};
 
 /**
  *  Optional features an agent supports. A client offers a feature only when
@@ -1694,6 +1819,32 @@ export type SlashCommand_Serialize = {
 	argumentHint?: string | null,
 };
 
+/**
+ *  A spinner: `frames` shown in turn, one every `intervalMs`; with
+ *  `bounce`, played forward and then back.
+ */
+export type SpinnerStyle = SpinnerStyle_Serialize | SpinnerStyle_Deserialize;
+
+/**
+ *  A spinner: `frames` shown in turn, one every `intervalMs`; with
+ *  `bounce`, played forward and then back.
+ */
+export type SpinnerStyle_Deserialize = {
+	frames: string[],
+	intervalMs: number,
+	bounce?: boolean,
+};
+
+/**
+ *  A spinner: `frames` shown in turn, one every `intervalMs`; with
+ *  `bounce`, played forward and then back.
+ */
+export type SpinnerStyle_Serialize = {
+	frames: string[],
+	intervalMs: number,
+	bounce?: boolean,
+};
+
 export type StartSession = StartSession_Serialize | StartSession_Deserialize;
 
 export type StartSession_Deserialize = {
@@ -1856,3 +2007,24 @@ export type UsageWindow = {
 	utilization: number | null,
 	resetsAt: string | null,
 };
+
+/**  How the user's message is drawn in a session. */
+export type UserMessageStyle = UserMessageStyle_Serialize | UserMessageStyle_Deserialize;
+
+/**  How the user's message is drawn in a session. */
+export type UserMessageStyle_Deserialize = 
+/**  A bubble on the right: the client's own look. */
+({ shape: "bubble" }) & { mark?: never } | 
+/**  A line of text after `mark` (a prompt such as `>`), no bubble. */
+{ shape: "prompt"; mark: string } | 
+/**  A full-width raised block. */
+({ shape: "block" }) & { mark?: never };
+
+/**  How the user's message is drawn in a session. */
+export type UserMessageStyle_Serialize = 
+/**  A bubble on the right: the client's own look. */
+({ shape: "bubble" }) & { mark?: never } | 
+/**  A line of text after `mark` (a prompt such as `>`), no bubble. */
+{ shape: "prompt"; mark: string } | 
+/**  A full-width raised block. */
+({ shape: "block" }) & { mark?: never };
