@@ -53,6 +53,17 @@ describe('OpenCode saved permission rules', () => {
     expect(client.permission.saved.list.mock.calls.map(([input]) => input)).toEqual([{ projectID: 'p1' }, { projectID: 'p2' }]);
   });
 
+  it("leaves out a project whose rules cannot be read, and lists the others'", async () => {
+    const client = clientWith([rule('a', 'p1', 1), rule('c', 'p2', 3)]);
+    client.permission.saved.list.mockImplementationOnce(async () => {
+      throw new Error('database is locked');
+    });
+    const logs: string[] = [];
+    const rules = await new OpenCodePermissionRules(async () => client as unknown as OpenCodeClient, (m) => logs.push(m)).list();
+    expect(rules.map((r) => r.id)).toEqual(['c']);
+    expect(logs[0]).toMatch(/\/w\/app: database is locked/);
+  });
+
   it('removes the rules it still has and answers the list after', async () => {
     const client = clientWith([rule('a', 'p1', 1), rule('b', 'p2', 2)]);
     const rules = await new OpenCodePermissionRules(async () => client as unknown as OpenCodeClient).remove(['a', 'gone']);

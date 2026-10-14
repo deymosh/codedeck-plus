@@ -1427,7 +1427,7 @@ export class OpenCodeDriver implements Driver {
   private readonly sessions = new Set<OpenCodeSession>();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
   readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
-  readonly permissionRules: PermissionRuleManager = new OpenCodePermissionRules(() => this.client());
+  readonly permissionRules: PermissionRuleManager = new OpenCodePermissionRules(() => this.client(), (message) => this.options.log(message));
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
 

@@ -12,7 +12,9 @@
  *
  * The rules are listed per project: `permission.saved.list` without a
  * project answers only for the server's own directory, so each project the
- * server knows is asked in turn.
+ * server knows is asked in turn. A project whose rules cannot be read is
+ * left out (and logged) rather than failing the whole list: the others'
+ * rules can still be seen and revoked.
  */
 import type { OpenCodeClient } from '@opencode/client';
 import type { PermissionRuleManager } from '../../sdk/driver';
@@ -22,7 +24,10 @@ export class OpenCodePermissionRules implements PermissionRuleManager {
   /** One change at a time: a removal reads the list, then writes it. */
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly client: () => Promise<OpenCodeClient>) {}
+  constructor(
+    private readonly client: () => Promise<OpenCodeClient>,
+    private readonly log: (message: string) => void = () => {},
+  ) {}
 
   list(): Promise<PermissionRule[]> {
     return this.serial(async () => this.rules(await this.client()));
@@ -68,7 +73,8 @@ export class OpenCodePermissionRules implements PermissionRuleManager {
             }),
           );
         } catch (err) {
-          throw new Error(`OpenCode could not list the rules of ${project.canonical}: ${reason(err)}`);
+          this.log(`[opencode] could not read the saved permission rules of ${project.canonical}: ${reason(err)}`);
+          return [];
         }
       }),
     );
