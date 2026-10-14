@@ -47,6 +47,8 @@ import uniffi.client_ffi.UniffiSessionCommands
 import uniffi.client_ffi.UniffiSessionSummary
 import uniffi.client_ffi.UniffiSlashCommand
 import uniffi.client_ffi.UniffiSettingsView
+import uniffi.client_ffi.UniffiAgentStyle
+import uniffi.client_ffi.UniffiUserMessageShape
 
 /** Fixed data the design snapshots render: two machines, their agents and
  *  sessions, settings, and a transcript with every entry kind. */
@@ -73,6 +75,30 @@ internal object DesignFixtures {
         error = null,
     )
 
+    /** Claude Code's style as its driver reports it (its word list cut short). */
+    val claudeStyle = UniffiAgentStyle(
+        spinnerFrames = listOf("·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·"), spinnerIntervalMs = 120u,
+        workingWords = listOf("Brewing", "Pondering", "Wrangling"), workingCounter = true,
+        toolGlyphs = mapOf("other" to "●"), resultMark = "⎿", userMessage = UniffiUserMessageShape.Prompt(">"),
+        wordmark = listOf(" ▐▛███▜▌ ", "▝▜█████▛▘", "  ▘▘ ▝▝  "), wordmarkSplit = 0u,
+        accent = 0xFFD77757u, modeColors = mapOf("plan" to 0xFF48968Cu, "acceptEdits" to 0xFFAF87FFu),
+    )
+
+    /** OpenCode's style as its driver reports it, its mode colours keyed by this fixture's modes. */
+    val opencodeStyle = UniffiAgentStyle(
+        spinnerFrames = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"), spinnerIntervalMs = 80u,
+        workingWords = emptyList(), workingCounter = false,
+        toolGlyphs = mapOf("read" to "→", "edit" to "←", "delete" to "←", "search" to "✱", "fetch" to "%", "execute" to "$", "agent" to "→", "other" to "→"),
+        resultMark = null, userMessage = UniffiUserMessageShape.Block,
+        wordmark = listOf(
+            "                                 ▄     ",
+            "█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█",
+            "█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀",
+            "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀",
+        ),
+        wordmarkSplit = 20u, accent = null, modeColors = mapOf("build" to 0xFF5C9CF5u, "plan" to 0xFF9D7CD8u),
+    )
+
     val claude = UniffiAgent(
         id = "claude-code", displayName = "Claude Code",
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
@@ -80,7 +106,7 @@ internal object DesignFixtures {
         defaultMode = "default", defaultEffort = null,
         supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
-        installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null, style = null,
+        installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null, style = claudeStyle,
     )
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
@@ -88,7 +114,7 @@ internal object DesignFixtures {
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
         supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
         credentials = emptyList(),
-        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = null,
+        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = opencodeStyle,
     )
     /** An agent the bridge offers and the machine does not have yet: a name, nothing it supports. */
     val deepseek = UniffiAgent(
@@ -356,7 +382,7 @@ internal object DesignFixtures {
     val claudeOptions by lazy {
         SessionOptions(
             modelName = "Opus", model = "opus", models = workstation.models.first { it.agent == "claude-code" }.models,
-            modes = claude.modes, mode = "plan", modePending = false, defaultMode = "default",
+            modes = claude.modes, mode = "plan", modePending = false,
             efforts = claude.efforts, effort = "high", mcp = sessionMcp,
         )
     }
@@ -366,7 +392,7 @@ internal object DesignFixtures {
         modelName = "deepseek-v4.1-flash", model = "home-gateway/OpenCode Go/deepseek-v4.1-flash",
         models = listOf(UniffiModelEntry("home-gateway/OpenCode Go/deepseek-v4.1-flash", "deepseek-v4.1-flash", "Home gateway · OpenCode Go", null, emptyList())) +
             (1..8).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null, emptyList()) },
-        modes = opencode.modes, mode = "build", modePending = false, defaultMode = "build",
+        modes = opencode.modes, mode = "build", modePending = false,
         efforts = emptyList(), effort = null,
     )
 }

@@ -79,10 +79,10 @@ class TranscriptRowsParityTest {
                 Column {
                     groups.forEach { ToolGroupRow(it, live = false, onOpen = {}) }
                     ToolGroupRow(lone, live = true, onOpen = {})
-                    ActivityRow(lone.runningCall, onOpen = {})
-                    ActivityRow(null, onOpen = null)
+                    ActivityRow(lone.runningCall, turn = 0, onOpen = {})
+                    ActivityRow(null, turn = 0, onOpen = null)
                     // A sub-agent at work, and background tasks as rows.
-                    ActivityRow(agentGroup().steps[0] as ToolStep.Call, onOpen = {})
+                    ActivityRow(agentGroup().steps[0] as ToolStep.Call, turn = 0, onOpen = {})
                     corpus().filterIsInstance<DisplayEntry.Task>().forEach { TaskRow(it) }
                     TaskRow(DisplayEntry.Task(0, "bg-2", "shell", "npm run dev", "stopped"))
                 }

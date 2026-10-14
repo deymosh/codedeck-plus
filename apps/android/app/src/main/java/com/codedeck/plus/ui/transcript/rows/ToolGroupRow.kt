@@ -43,6 +43,10 @@ import com.codedeck.plus.ui.components.pulsingAlpha
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.transcript.ToolStep
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.text.style.TextAlign
+import com.codedeck.plus.ui.components.AgentLook
+import com.codedeck.plus.ui.components.LocalAgentLook
 
 /** The icon a tool kind is drawn with, in rows and in the sheet. */
 internal fun toolKindIcon(kind: String): ImageVector = when (kind) {
@@ -85,7 +89,8 @@ internal val ToolStep.Call.proseTitle: Boolean get() = toolKind == "agent" || to
  * did ("Ran 3 commands, read a file", or "Ran" and the command), how many
  * calls failed, the lines it changed, and a chevron — the details open in
  * a sheet. While [live] and a call is still waiting on its result, the
- * running glyph leads the line.
+ * running glyph leads the line; otherwise the agent's own glyph for what the
+ * group did, when its style has one ([AgentLook.glyphFor]).
  */
 @Composable
 fun ToolGroupRow(group: DisplayEntry.ToolGroup, live: Boolean, onOpen: () -> Unit) {
@@ -98,8 +103,19 @@ fun ToolGroupRow(group: DisplayEntry.ToolGroup, live: Boolean, onOpen: () -> Uni
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        val glyph = LocalAgentLook.current.glyphFor(group.steps.filterIsInstance<ToolStep.Call>().map { it.toolKind })
         if (live && group.runningCall != null) {
             ThinkingGlyph(color = Tokens.TextMuted, fontSize = Tokens.TextSm)
+        } else if (glyph != null) {
+            Text(
+                glyph,
+                color = Tokens.TextMuted,
+                fontSize = Tokens.TextSm,
+                fontFamily = Tokens.FontMono,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier.width(18.dp),
+            )
         }
         Text(
             verbAndSubject(group.summary, group.subject),
@@ -139,11 +155,14 @@ fun activityOf(entries: List<DisplayEntry>): ToolStep.Call? =
 /**
  * The running turn's line at the end of the transcript: the spinner glyph
  * and what the agent is doing. While it waits on a sub-agent, the line says
- * what that agent was asked, and under it what the agent is doing now.
+ * what that agent was asked, and under it what the agent is doing now. With
+ * no call to name, an agent with working words says one of them, picked by
+ * [turn] (one word per turn) and worn in its accent, as its CLI does.
  * Tapping it opens the activity it names, when [onOpen] is given.
  */
 @Composable
-fun ActivityRow(call: ToolStep.Call?, onOpen: (() -> Unit)?) {
+fun ActivityRow(call: ToolStep.Call?, turn: Long, onOpen: (() -> Unit)?) {
+    val look = LocalAgentLook.current
     val alpha = pulsingAlpha(min = 0.55f, max = 1f, halfPeriodMs = 900)
     if (call != null && call.toolKind == "agent") {
         Row(
@@ -196,8 +215,8 @@ fun ActivityRow(call: ToolStep.Call?, onOpen: (() -> Unit)?) {
         ThinkingGlyph(fontSize = Tokens.TextMd)
         Text(
             // A title cut short already ends in an ellipsis.
-            if (call != null) verbAndSubject(call.activeVerb, call.title, if (call.title.endsWith("…")) "" else "…", mono = !call.proseTitle) else AnnotatedString("Thinking…"),
-            color = Tokens.Text,
+            if (call != null) verbAndSubject(call.activeVerb, call.title, if (call.title.endsWith("…")) "" else "…", mono = !call.proseTitle) else AnnotatedString("${look.workingWord(turn) ?: "Thinking"}…"),
+            color = if (call == null) look.accent ?: Tokens.Text else Tokens.Text,
             fontSize = Tokens.TextMd,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

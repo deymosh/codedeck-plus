@@ -58,6 +58,10 @@ import org.junit.Test
 import uniffi.client_ffi.UniffiPairingView
 import uniffi.client_ffi.UniffiPendingSession
 import uniffi.client_runtime.CoreEvent
+import com.codedeck.plus.ui.components.AgentLook
+import com.codedeck.plus.ui.components.LocalAgentLook
+import com.codedeck.plus.ui.session.SessionModeChip
+import com.codedeck.plus.ui.session.SessionOptions
 
 /** Every page as the user sees it, from fixed data (see [DesignFixtures]). */
 private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
@@ -81,21 +85,35 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         )
     },
     "session" to {
-        Column(Modifier.background(Tokens.Bg)) {
-            SessionTopBar(
-                title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "running", onBack = {},
-                trailing = { ContextRing(42.0, alert = Tokens.Danger) {} },
-            )
+        Styled(claudeLook) {
+            Column(Modifier.background(Tokens.Bg)) {
+                SessionTopBar(
+                    title = "Fix the flaky reconnect test", workspace = "/home/me/code/codedeck-plus", sessionState = "running", onBack = {},
+                    trailing = { ContextRing(42.0, alert = Tokens.Danger) {} },
+                )
+                TranscriptList(
+                    displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
+                    syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = true,
+                    activity = DesignFixtures.activity(), canStopTasks = true, dispatch = {}, modifier = Modifier.weight(1f),
+                )
+                QuickPromptStrip(quickPrompts) {}
+                Composer(
+                    draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
+                    canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
+                    options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
+                    mode = { SessionModeChip(DesignFixtures.claudeOptions, claudeLook.modeColor) {} },
+                )
+            }
+        }
+    },
+    "session_new_claude" to { NewSession(claudeLook, DesignFixtures.claudeOptions) },
+    "session_new_opencode" to { NewSession(opencodeLook, DesignFixtures.opencodeOptions) },
+    "transcript_opencode" to {
+        Styled(opencodeLook) {
             TranscriptList(
-                displayEntries = DesignFixtures.transcript(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
+                displayEntries = DesignFixtures.transcript().take(7), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
                 syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = true,
-                activity = DesignFixtures.activity(), canStopTasks = true, dispatch = {}, modifier = Modifier.weight(1f),
-            )
-            QuickPromptStrip(quickPrompts) {}
-            Composer(
-                draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
-                canSend = false, onStop = {}, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
-                options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
+                activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
             )
         }
     },
@@ -105,6 +123,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 draft = "Run the migration again and tell me what changed in the schema", onDraftChange = {}, placeholder = "Message…",
                 canAttach = false, uploading = false, canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
                 options = { SessionOptionsChip(DesignFixtures.opencodeOptions) {} },
+                mode = { SessionModeChip(DesignFixtures.opencodeOptions, opencodeLook.modeColor) {} },
             )
         }
     },
@@ -166,6 +185,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
                 draft = "/co", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
                 canSend = true, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
                 options = { SessionOptionsChip(DesignFixtures.claudeOptions) {} },
+                mode = { SessionModeChip(DesignFixtures.claudeOptions, claudeLook.modeColor) {} },
             )
         }
     },
@@ -325,6 +345,33 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
 )
 
+private val claudeLook = AgentLook.of("Claude Code", DesignFixtures.claudeStyle, "plan")
+private val opencodeLook = AgentLook.of("OpenCode", DesignFixtures.opencodeStyle, "build")
+
+/** [content] drawn as a session of the agent [look] belongs to. */
+@Composable
+private fun Styled(look: AgentLook, content: @Composable () -> Unit) =
+    CompositionLocalProvider(LocalAgentLook provides look, content = content)
+
+/** A session with nothing in it yet: the agent's logo over an empty transcript, and the composer. */
+@Composable
+private fun NewSession(look: AgentLook, options: SessionOptions) = Styled(look) {
+    Column(Modifier.background(Tokens.Bg)) {
+        SessionTopBar(title = "New session", workspace = "/home/me/code/codedeck-plus", sessionState = "idle", onBack = {}, trailing = { ContextRing(0.0) {} })
+        TranscriptList(
+            displayEntries = emptyList(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
+            syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = false,
+            activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.weight(1f),
+        )
+        Composer(
+            draft = "", onDraftChange = {}, placeholder = "Message…", canAttach = true, uploading = false,
+            canSend = false, onStop = null, onAttachPhoto = {}, onAttachFile = {}, onDictate = {}, onSend = {},
+            options = { SessionOptionsChip(options) {} },
+            mode = { SessionModeChip(options, look.modeColor) {} },
+        )
+    }
+}
+
 private fun Paparazzi.page(name: String) = snapshot { CodeDeckTheme { pages.getValue(name)() } }
 
 /** The pages on a phone: what fits on one screen. */
@@ -341,6 +388,9 @@ class DesignSnapshotTest {
     @Test fun home_nothing_paired() = paparazzi.page("home_nothing_paired")
     @Test fun session() = paparazzi.page("session")
     @Test fun session_composer_opencode() = paparazzi.page("session_composer_opencode")
+    @Test fun session_new_claude() = paparazzi.page("session_new_claude")
+    @Test fun session_new_opencode() = paparazzi.page("session_new_opencode")
+    @Test fun transcript_opencode() = paparazzi.page("transcript_opencode")
     @Test fun session_options() = paparazzi.page("session_options")
     @Test fun session_options_more() = paparazzi.page("session_options_more")
     @Test fun session_options_effort() = paparazzi.page("session_options_effort")

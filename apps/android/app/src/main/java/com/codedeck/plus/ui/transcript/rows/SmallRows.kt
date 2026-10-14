@@ -29,10 +29,69 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.TranscriptMarkdown
+import androidx.compose.foundation.layout.width
+import com.codedeck.plus.ui.components.LocalAgentLook
+import uniffi.client_ffi.UniffiUserMessageShape
 
-/** A message the user sent; a long press selects its text. */
+/**
+ * A message the user sent, in the shape the session's agent draws it
+ * ([LocalAgentLook]): a bubble on the right (the app's own), a line after a
+ * prompt mark, or a full-width raised block with a bar on its left. The
+ * mark and the bar wear the colour of the mode the session runs in, when
+ * the agent gives its modes one. A long press selects its text.
+ */
 @Composable
 fun UserMessageRow(text: String, segment: Segment = Segment.Only) {
+    val look = LocalAgentLook.current
+    when (val shape = look.userMessage) {
+        is UniffiUserMessageShape.Prompt -> PromptMessage(text, shape.mark, segment, look.modeColor)
+        UniffiUserMessageShape.Block -> BlockMessage(text, segment, look.modeColor)
+        UniffiUserMessageShape.Bubble -> BubbleMessage(text, segment)
+    }
+}
+
+/** Width of a prompt mark's column, so the text after it lines up. */
+private val PromptMarkWidth = 18.dp
+
+@Composable
+private fun PromptMessage(text: String, mark: String, segment: Segment, markColor: Color?) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Space1)) {
+        // Only the message's first block carries the mark; the rest line up under it.
+        Text(
+            if (segment == Segment.Only || segment == Segment.First) mark else "",
+            color = markColor ?: Tokens.TextMuted,
+            fontSize = Tokens.TextLg,
+            fontFamily = Tokens.FontMono,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.width(PromptMarkWidth),
+        )
+        Column(Modifier.weight(1f)) { TranscriptMarkdown(text) }
+    }
+}
+
+/** The bar on a block message's left. */
+private val BlockBarWidth = 3.dp
+
+@Composable
+private fun BlockMessage(text: String, segment: Segment, barColor: Color?) {
+    val bar = barColor ?: Tokens.BorderStrong
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .segmentFrame(segment, Tokens.RadiusSm, fill = Tokens.SurfaceHover)
+            .drawBehind {
+                // Runs through the gap to the next block, like the fill.
+                val bottom = if (segment == Segment.Only || segment == Segment.Last) size.height else size.height + ItemGap.toPx()
+                drawRect(bar, size = Size(BlockBarWidth.toPx(), bottom))
+            }
+            .padding(segmentInsets(segment, Tokens.Space4, Tokens.Space3)),
+    ) {
+        TranscriptMarkdown(text)
+    }
+}
+
+@Composable
+private fun BubbleMessage(text: String, segment: Segment) {
     // Your turns sit on the right, set off from the agent's full-width text.
     Row(Modifier.fillMaxWidth().padding(start = Tokens.Space7), horizontalArrangement = Arrangement.End) {
         val bubble = if (segment == Segment.Only) {

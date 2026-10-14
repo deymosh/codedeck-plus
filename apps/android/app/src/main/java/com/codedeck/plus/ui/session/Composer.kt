@@ -62,7 +62,8 @@ import uniffi.client_ffi.UniffiQuickPrompt
 /**
  * The message input, one rounded surface: the text on top, and under it one
  * row of controls — `+` (a photo or any file), [options] (what the next
- * turn runs with), then on the right one round button for the rest: Send
+ * turn runs with), [mode] (the mode it runs in, always in sight beside the
+ * button that sends), then on the right one round button for the rest: Send
  * once something is typed; while a turn runs and nothing is, Stop;
  * otherwise dictation. A long press on it dictates whatever it shows, so
  * the microphone takes no room of its own. [onInputBounds] hears where the
@@ -86,6 +87,7 @@ internal fun Composer(
     focusRequester: FocusRequester = FocusRequester(),
     onInputBounds: (Rect) -> Unit = {},
     options: (@Composable () -> Unit)? = null,
+    mode: (@Composable () -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(26.dp)
     // The field keeps its own cursor; a draft replaced from outside (a quick
@@ -127,6 +129,7 @@ internal fun Composer(
             // The options take what the buttons leave, so on a narrow phone
             // the chip shortens rather than pushing Send off the edge.
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { options?.invoke() }
+            mode?.invoke()
             Spacer(Modifier.width(Tokens.Space1))
             // While a turn runs the button stops it — until something is typed:
             // then it sends, and the agent reads the message when it can.
