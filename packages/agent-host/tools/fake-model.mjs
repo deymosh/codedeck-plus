@@ -177,14 +177,9 @@ function readContent(content) {
   return { text: stripped.join('\n'), own: stripped[0] ?? '', results };
 }
 
-/** Claude Code's own request for a session title: the conversation wrapped
- *  in `<session>`, with instructions to name it. It carries no tool and ends
- *  on its own, so answering it with a title keeps a session's name out of
- *  the echo path — a model reply is what the phone shows as the title. */
+/** The title a title request is answered with: fixed, so a session's name is
+ *  the same every run (see isTitleRequest for which requests those are). */
 export const TITLE_REPLY = 'Fake model session';
-function isTitleRequest(text) {
-  return text.startsWith('<session>');
-}
 
 /** The tools a request offers, newest shape first: the model may only call
  *  one of these, and which shell/question tool exists is the agent's own
@@ -280,8 +275,43 @@ export const ERROR_MESSAGE = 'the fake model was asked to fail (/error)';
  * to run anything (`auto mode cannot determine the safety of …`).
  */
 export function isSecurityMonitor(body) {
-  const system = Array.isArray(body?.system) ? body.system.map((part) => part?.text ?? '').join('\n') : '';
-  return system.includes('You are a security monitor');
+  return systemText(body).includes('You are a security monitor');
+}
+
+/** A request's system prompt, whichever way the shape carries it: a string,
+ *  Anthropic's list of blocks, or a leading system message in the OpenAI
+ *  shape. */
+export function systemText(body) {
+  const system = body?.system;
+  if (typeof system === 'string') return system;
+  if (Array.isArray(system)) return system.map((part) => part?.text ?? '').join('\n');
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  return messages
+    .filter((message) => message?.role === 'system')
+    .map((message) => (typeof message.content === 'string' ? message.content : ''))
+    .join('\n');
+}
+
+/** Whether the request offers the agent any tool at all. A user's turn
+ *  always does; an agent's own errands — a title, a summary — do not. */
+export function noTools(body) {
+  return offeredTools(body, 'anthropic').length === 0 && offeredTools(body, 'openai').length === 0;
+}
+
+/**
+ * Whether a request is the agent naming the session rather than a turn of the
+ * user's — answered with a fixed title, since a model's reply to it is what
+ * the phone shows as the session's name.
+ *
+ * Two signals, both verified: Claude Code wraps the conversation in
+ * `<session>`, and OpenCode asks in its system prompt ("You are a title
+ * generator"). OpenCode's request carries the user's prompt verbatim, so
+ * without this a session started with `/question` was titled after whatever
+ * the server answered that with.
+ */
+export function isTitleRequest(body, turn) {
+  if (turn.text.startsWith('<session>')) return true;
+  return noTools(body) && /title generator|naming a coding session/i.test(systemText(body));
 }
 
 /**
@@ -302,10 +332,18 @@ function replyFor(body, turn) {
     const first = turn.text.split('\n')[0] ?? '';
     return { text: `tool-finished: ${first.slice(0, 200)}`, input: USAGE.input, output: USAGE.output };
   }
-  if (isTitleRequest(turn.text)) return { text: TITLE_REPLY, input: USAGE.input, output: USAGE.output };
+  if (isTitleRequest(body, turn)) return { text: TITLE_REPLY, input: USAGE.input, output: USAGE.output };
   const parsed = parsePrompt(turn.text);
   if (parsed.scenario === 'long') return { text: LONG_TEXT, input: USAGE.input, output: USAGE.output };
-  if (parsed.scenario && SCENARIO_TOOLS[parsed.scenario]) return { scenario: parsed.scenario, argument: parsed.text };
+  if (parsed.scenario && SCENARIO_TOOLS[parsed.scenario]) {
+    // A request offering no tool is not the user talking: it is the agent
+    // asking for something of its own while quoting the conversation back at
+    // the model (a title, a summary of it), so a marker inside that quote is
+    // context to echo, not a command to obey. A request WITH tools that
+    // offers the wrong kind is a real mismatch, and planReply says so.
+    if (noTools(body)) return { text: `echo: ${turn.own || turn.text}`, input: USAGE.input, output: USAGE.output };
+    return { scenario: parsed.scenario, argument: parsed.text };
+  }
   return { text: `echo: ${turn.own || turn.text}`, input: USAGE.input, output: USAGE.output };
 }
 
@@ -627,7 +665,7 @@ export function startFakeModel(options = {}) {
         body &&
         !turn.toolResult &&
         !isSecurityMonitor(body) &&
-        !isTitleRequest(turn.text) &&
+        !isTitleRequest(body, turn) &&
         parsePrompt(turn.text).scenario === 'error'
       ) {
         res.writeHead(400, { 'content-type': 'application/json' });
