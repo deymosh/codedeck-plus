@@ -30,6 +30,8 @@ export type AgentInfo = G.AgentInfo_Deserialize;
 export type AgentInstall = G.AgentInstall_Deserialize;
 export type SessionEvent = G.SessionEvent_Deserialize;
 export type OutputEntry = G.OutputEntry_Deserialize;
+/** What a `partial` streams: an assistant reply or the model's reasoning. */
+export type PartialKind = G.PartialKind;
 export type DiffLine = G.DiffLine;
 export type Subagent = G.Subagent_Deserialize;
 export type ToolKind = G.ToolKind;

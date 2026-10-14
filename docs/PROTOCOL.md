@@ -28,7 +28,7 @@ data over); v12 sends a copy of each message per client of an identity (see
 | Purpose | Kind | Storage |
 |---|---|---|
 | Session-list heartbeat (`sessions`) | **30515** | NIP-33 replaceable, one per client (`d` = the copy's recipient tag); NIP-40 expiry 1 day |
-| Live output / usage | **24515** | ephemeral — broadcast, never stored; loss is recoverable (sync / re-request) |
+| Live output / usage / partial text | **24515** | ephemeral — broadcast, never stored; loss is recoverable (sync / re-request / the completing entry) |
 | Phone→bridge commands | **4515** | stored, NIP-40 expiry 1 h |
 | Bridge→phone responses (sync chunks, acks, lifecycle, pairing) | **4516** | stored, NIP-40 expiry 1 h |
 
@@ -154,6 +154,21 @@ tagged by `entryType`:
 | `status`, `error`, `turn_complete` | one-line status, an error, the end of a turn |
 
 Clients branch on `entryType` and `kind`, never on tool names.
+
+**Live text (`partial`).** While an agent writes a reply or its reasoning,
+the bridge may send `partial {sessionId, key, entryType: text | thinking,
+subagent?, offset, text}`: the characters of part `key` from `offset` on,
+`offset` counted in UTF-16 code units. It is an ephemeral, unnumbered
+message with no tags. Each carries only what is new since the last one; the
+agent's driver coalesces its deltas so a part costs a few events a second,
+never one per token. The `text` / `thinking` entry that completes the part
+carries `part: key` and replaces the live row; an update whose `offset` is
+not the row's length (one was lost) freezes the row until then, and the end
+of a turn drops any row left over. An agent that does not stream sends no
+`partial` and its entries carry no `part`. Today the drivers stream only the
+main agent's reply: reasoning and a sub-agent's text are shown inside their
+tool group, so the kinds stay on the wire for later but cost nothing now.
+The phone shows live rows only for the session on screen.
 
 **Cards.** Every `permission_request`, `question` group and `plan_approval` is
 closed by exactly one `resolved` entry with the same `requestId` — answered,

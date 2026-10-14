@@ -76,6 +76,9 @@ pub(crate) struct Runner {
     pub agent_titled: bool,
     /// git HEAD when the session started; a different HEAD later = a commit.
     pub base_head: Option<String>,
+    /// Parts being streamed, by key, until the entry that completes each
+    /// one arrives or the turn ends.
+    pub parts: BTreeMap<String, crate::live::LivePart>,
 }
 
 impl Runner {
@@ -94,6 +97,7 @@ impl Runner {
             summarized: titled,
             agent_titled: false,
             base_head: None,
+            parts: BTreeMap::new(),
         }
     }
 

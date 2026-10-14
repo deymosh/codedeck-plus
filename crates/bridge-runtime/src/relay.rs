@@ -31,7 +31,7 @@ use protocol::kinds::{
 };
 use protocol::recipients::{self, fragment_d};
 use protocol::nostr_event::SignedEvent;
-use protocol::events::OutputMsg;
+use protocol::events::{OutputMsg, PartialMsg};
 use futures_util::future::LocalBoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::collections::VecDeque;
@@ -41,7 +41,9 @@ use tokio::sync::{mpsc, oneshot};
 pub fn kind_for(message: &BridgeToPhone) -> (u16, Option<u64>) {
     match message {
         BridgeToPhone::Sessions(_) => (SESSION_LIST_KIND, Some(SESSION_LIST_EXPIRY_SECONDS)),
-        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) => (LIVE_KIND, None),
+        // A partial is the one that must never be stored: it is only text on
+        // its way to the entry that completes it.
+        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) | BridgeToPhone::Partial(_) => (LIVE_KIND, None),
         _ => (RESPONSE_KIND, Some(RESPONSE_EXPIRY_SECONDS)),
     }
 }
@@ -204,6 +206,36 @@ fn absorb_run(run: &mut OutputMsg, to: &[Addressee], backlog: &mut VecDeque<Job>
     }
 }
 
+/// Take the pieces of the same part queued right behind `run` into it, while
+/// they continue it, so a relay slower than the agent writes costs one event
+/// per round trip, not one per piece. Only the front of `backlog` is looked
+/// at, so what goes out keeps its order.
+fn absorb_partial(run: &mut PartialMsg, to: &[Addressee], backlog: &mut VecDeque<Job>) {
+    while let Some(Job::Publish { to: next_to, message }) = backlog.front() {
+        let BridgeToPhone::Partial(next) = message.as_ref() else { break };
+        let end = run.offset + run.text.encode_utf16().count() as u64;
+        let continues = next_to.as_slice() == to && next.session_id == run.session_id && next.key == run.key && next.offset == end;
+        if !continues || run.text.len() + next.text.len() > RUN_MAX_BYTES / 2 {
+            break;
+        }
+        let Some(Job::Publish { message, .. }) = backlog.pop_front() else { break };
+        let BridgeToPhone::Partial(next) = *message else { break };
+        run.text.push_str(&next.text);
+    }
+}
+
+/// Whether the entry that completes `partial`'s part is already queued for
+/// `to`: it carries the whole text, so the piece need not take a round trip.
+fn completed(partial: &PartialMsg, to: &[Addressee], backlog: &VecDeque<Job>) -> bool {
+    backlog.iter().any(|job| {
+        matches!(job, Job::Publish { to: next_to, message }
+            if next_to.as_slice() == to
+                && matches!(message.as_ref(), BridgeToPhone::Output(o)
+                    if o.session_id == partial.session_id
+                        && o.entries.iter().any(|e| e.part.as_deref() == Some(partial.key.as_str()))))
+    })
+}
+
 /// Whether a heartbeat to `to` has a newer one queued behind it. A relay
 /// keeps only a machine's latest heartbeat (it is replaceable), so the older
 /// one need not take a relay's round trip: a turn starting, a card opening
@@ -229,6 +261,9 @@ const IN_FLIGHT: usize = 3;
 fn lane_of(message: &BridgeToPhone) -> Option<String> {
     match message {
         BridgeToPhone::Output(o) => Some(format!("output {}", o.session_id)),
+        // In its session's lane, so it never lands after the entry that
+        // completes its part, and never holds up anything else.
+        BridgeToPhone::Partial(p) => Some(format!("output {}", p.session_id)),
         BridgeToPhone::Sessions(_) => Some("heartbeat".to_string()),
         _ => None,
     }
@@ -396,8 +431,15 @@ impl Relays {
                         while let Ok(next) = queue.try_recv() {
                             backlog.push_back(next);
                         }
-                        if let BridgeToPhone::Output(run) = message.as_mut() {
-                            absorb_run(run, &to, &mut backlog);
+                        match message.as_mut() {
+                            BridgeToPhone::Output(run) => absorb_run(run, &to, &mut backlog),
+                            BridgeToPhone::Partial(part) => {
+                                if completed(part, &to, &backlog) {
+                                    continue;
+                                }
+                                absorb_partial(part, &to, &mut backlog);
+                            }
+                            _ => {}
                         }
                         let beat = matches!(*message, BridgeToPhone::Sessions(_));
                         if beat && superseded(&to, &backlog) {
@@ -619,6 +661,17 @@ mod tests {
         let plain = decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).unwrap();
         assert_eq!(protocol::decode_bridge_to_phone(&plain).unwrap(), out);
 
+        let partial = BridgeToPhone::Partial(protocol::events::PartialMsg {
+            session_id: "s".into(),
+            key: "k".into(),
+            entry_type: protocol::common::PartialKind::Text,
+            subagent: None,
+            offset: 0,
+            text: "x".into(),
+        });
+        let ev = f.events(&partial, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
+        assert_eq!((ev.kind, tag(&ev, "s"), tag(&ev, "expiration")), (LIVE_KIND, None, None));
+
         let ack = BridgeToPhone::InputAck(protocol::events::InputAckMsg { session_id: "s".into(), input_id: "i".into() });
         let ev = f.events(&ack, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!(ev.kind, RESPONSE_KIND);
@@ -696,6 +749,47 @@ mod tests {
         let mut backlog = VecDeque::from([job(&phone, output("s", 2, &[&big])), job(&phone, output("s", 3, &["y"]))]);
         absorb_run(&mut run, &phone, &mut backlog);
         assert_eq!((run.entries.len(), backlog.len()), (1, 2));
+    }
+
+    fn piece(key: &str, offset: u64, text: &str) -> PartialMsg {
+        PartialMsg {
+            session_id: "s".into(),
+            key: key.into(),
+            entry_type: protocol::common::PartialKind::Text,
+            subagent: None,
+            offset,
+            text: text.into(),
+        }
+    }
+
+    fn piece_job(to: &[Addressee], m: PartialMsg) -> Job {
+        Job::Publish { to: to.to_vec(), message: Box::new(BridgeToPhone::Partial(m)) }
+    }
+
+    #[test]
+    fn queued_pieces_of_a_part_go_out_as_one() {
+        let phone = [to("p")];
+        let mut run = piece("k", 0, "ab");
+        let mut backlog = VecDeque::from([
+            piece_job(&phone, piece("k", 2, "c🎉")),
+            piece_job(&phone, piece("k", 5, "d")),
+            // Another part, and a piece that does not continue: both stay.
+            piece_job(&phone, piece("j", 0, "x")),
+            piece_job(&phone, piece("k", 9, "e")),
+        ]);
+        absorb_partial(&mut run, &phone, &mut backlog);
+        assert_eq!((run.offset, run.text.as_str(), backlog.len()), (0, "abc🎉d", 2));
+    }
+
+    #[test]
+    fn a_piece_whose_part_is_already_completed_in_the_queue_is_not_sent() {
+        let phone = [to("p")];
+        let mut done = output("s", 1, &["abc"]);
+        done.entries[0].part = Some("k".into());
+        let backlog = VecDeque::from([job(&phone, done)]);
+        assert!(completed(&piece("k", 0, "ab"), &phone, &backlog));
+        assert!(!completed(&piece("j", 0, "ab"), &phone, &backlog));
+        assert!(!completed(&piece("k", 0, "ab"), &[to("q")], &backlog));
     }
 
     fn beat(to: &[Addressee]) -> Job {

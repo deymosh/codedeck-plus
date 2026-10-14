@@ -63,7 +63,10 @@ fun TranscriptMarkdown(content: String, modifier: Modifier = Modifier, selectabl
 
 @Composable
 private fun MarkdownBody(content: String, modifier: Modifier, immediate: Boolean) {
-    val state = rememberMarkdownState(content, immediate = immediate)
+    // retainState: when the text changes (a reply being typed out), the last
+    // rendering stays up until the new parse is done. Without it the state
+    // goes back to loading first, and a growing block blanks on every step.
+    val state = rememberMarkdownState(content, immediate = immediate, retainState = true)
     Markdown(
         markdownState = state,
         // Per-element text color rides on `typography` below (each `TextStyle`

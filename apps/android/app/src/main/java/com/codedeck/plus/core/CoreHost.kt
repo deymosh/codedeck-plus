@@ -17,8 +17,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.launch
 import uniffi.client_runtime.ActionFailedKind
 import uniffi.client_runtime.ConnectionView
@@ -38,6 +40,10 @@ import uniffi.client_ffi.UniffiSessionKeyStore
 import uniffi.client_ffi.UniffiSettingsView
 import uniffi.client_ffi.UniffiTranscriptDelta
 import uniffi.client_ffi.UniffiUiView
+
+/** A reply the agent is still writing: its part's [key], its text so far,
+ *  and [id], which orders and keys the row for as long as it lives. */
+data class LiveReply(val key: String, val text: String, val id: Long)
 
 /**
  * The Kotlin-side counterpart to `apps/mobile/src/core/nativeCore.ts` and
@@ -252,6 +258,30 @@ class CoreHost(
             }
             .conflate()
             .map { core.transcriptDelta(machine, sessionId, since).also { since = it.revision } }
+    }
+
+    /**
+     * The replies the agent is still writing in this session, in the order
+     * they started, each with its whole text so far: folded from the
+     * `LiveText` events, which the core sends only for the session on screen.
+     * Starts empty — a row already growing when the screen opened shows, whole,
+     * from its next piece (the core kept it). A row goes when its entry lands
+     * or the session stops running.
+     */
+    fun liveTextFlow(machine: String, sessionId: String): Flow<List<LiveReply>> {
+        var next = 0L
+        return events
+            .filterIsInstance<CoreEvent.LiveText>()
+            .filter { it.machine == machine && it.sessionId == sessionId }
+            .runningFold(emptyList<LiveReply>()) { rows, event ->
+                val text = event.text
+                val at = rows.indexOfFirst { it.key == event.key }
+                when {
+                    text == null -> rows.filterNot { it.key == event.key }
+                    at < 0 -> rows + LiveReply(event.key, text, ++next)
+                    else -> rows.toMutableList().also { it[at] = it[at].copy(text = text) }
+                }
+            }
     }
 
     override fun connectionChanged(view: ConnectionView) {

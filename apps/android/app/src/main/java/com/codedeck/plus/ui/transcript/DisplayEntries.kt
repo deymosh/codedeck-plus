@@ -166,10 +166,16 @@ sealed class DisplayEntry {
         val blocks: List<String> = markdownBlocks(text)
     }
 
-    /** Agent markdown; `isPlan` frames it as a plan document. */
+    /** Agent markdown; `isPlan` frames it as a plan document. `part` is the
+     *  streamed part it completes, whose live row it replaces. */
     @Serializable
     @SerialName("agentMessage")
-    data class AgentMessage(override val seq: Long, val text: String, val isPlan: Boolean = false) : DisplayEntry() {
+    data class AgentMessage(
+        override val seq: Long,
+        val text: String,
+        val isPlan: Boolean = false,
+        val part: String? = null,
+    ) : DisplayEntry() {
         /** [text] in list-sized blocks (see [markdownBlocks]); split as the
          *  entry is decoded, off the main thread. */
         @Transient

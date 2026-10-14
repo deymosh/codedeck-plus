@@ -401,6 +401,12 @@ async function main() {
       case 'entries':
         for (const entry of event.entries) say(`entry: ${render(entry)}`);
         break;
+      case 'partial':
+        // Live reply text: the key it streams under and the slice it carries
+        // (offset in, length added) — chained offsets are what the phone's
+        // live row grows by.
+        say(`partial: ${event.key} ${event.entryType} offset=${event.offset} +${String(event.text).length}`);
+        break;
       case 'turn':
         say(`turn: ${event.state}`);
         break;
@@ -434,7 +440,8 @@ async function main() {
     const body = (() => {
       switch (entry.entryType) {
         case 'text':
-          return `${entry.role}: ${cut(entry.text, 400)}`;
+          // The part names the live row this entry replaces, when it streamed.
+          return `${entry.role}: ${cut(entry.text, 400)}${entry.part ? ` [part ${entry.part}]` : ''}`;
         case 'thinking':
           return `thinking: ${cut(entry.text)}`;
         case 'status':

@@ -80,6 +80,39 @@ export const LONG_TEXT = Array.from(
 /** The scenario commands, in the order the vocabulary lists them. */
 export const SCENARIOS = ['tool', 'question', 'plan-approval', 'error', 'long'];
 
+/**
+ * How long a streamed reply is held between pieces, and the longest a text can
+ * be before it is split at all: long enough that a driver coalescing at ~250 ms
+ * sends several updates for `/long` rather than one, which is what makes live
+ * text observable against a scripted model that has no streaming pace of its
+ * own. Short replies still stream whole.
+ */
+export const STREAM_CHUNK_DELAY_MS = 60;
+
+/**
+ * A text as the pieces its stream carries, in order: a short one whole, a long
+ * one split on newline boundaries where it can — the same shape a real model's
+ * token stream has, which is what a coalescing driver turns into a few
+ * observable updates.
+ */
+export function textPieces(text) {
+  if (text.length <= 400) return [text];
+  const count = Math.min(20, Math.max(2, Math.ceil(text.length / 400)));
+  const target = Math.ceil(text.length / count);
+  const pieces = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + target);
+    if (end < text.length) {
+      const nl = text.lastIndexOf('\n', end);
+      if (nl > start) end = nl + 1;
+    }
+    pieces.push(text.slice(start, end));
+    start = end;
+  }
+  return pieces;
+}
+
 /** A prompt line that is a scenario command: `/tool`, `/question rest…`. */
 const COMMAND_RE = /^\/([a-z][a-z-]*)(?:\s+([\s\S]*))?$/;
 
@@ -381,7 +414,8 @@ export function planReply(body, shape, seq = 1) {
   return { kind: 'tool', name, args: toolArguments(name, reply.scenario, reply.argument), ...ids, ...usage };
 }
 
-/** Anthropic messages, as an SSE frame list. */
+/** Anthropic messages, as an SSE frame list. A long reply's text streams in
+ *  pieces; each frame's third element is how long to hold before the next. */
 export function anthropicFrames(body, seq = 1) {
   const reply = planReply(body, 'anthropic', seq);
   const usage = (input, output) => ({
@@ -410,7 +444,14 @@ export function anthropicFrames(body, seq = 1) {
   ];
   if (reply.kind === 'text') {
     frames.push(['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }]);
-    frames.push(['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: reply.text } }]);
+    const pieces = textPieces(reply.text);
+    pieces.forEach((piece, i) => {
+      frames.push([
+        'content_block_delta',
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } },
+        i < pieces.length - 1 ? STREAM_CHUNK_DELAY_MS : 0,
+      ]);
+    });
     frames.push(['content_block_stop', { type: 'content_block_stop', index: 0 }]);
   } else {
     const json = JSON.stringify(reply.args);
@@ -463,7 +504,9 @@ export function anthropicMessage(body, seq = 1) {
   };
 }
 
-/** OpenAI chat completions, as an SSE chunk list. */
+/** OpenAI chat completions, as an SSE chunk list: each entry is a chunk and
+ *  how long to hold before the next, so a long reply's text streams in
+ *  pieces. */
 export function openaiChunks(body, seq = 1) {
   const reply = planReply(body, 'openai', seq);
   const chunk = (delta, finish = null) => ({
@@ -473,11 +516,14 @@ export function openaiChunks(body, seq = 1) {
     model: FAKE_MODEL_ID,
     choices: [{ index: 0, delta, finish_reason: finish }],
   });
-  const chunks = [chunk({ role: 'assistant', content: '' })];
+  const out = [[chunk({ role: 'assistant', content: '' }), 0]];
   if (reply.kind === 'text') {
-    chunks.push(chunk({ content: reply.text }));
+    const pieces = textPieces(reply.text);
+    pieces.forEach((piece, i) => {
+      out.push([chunk({ content: piece }), i < pieces.length - 1 ? STREAM_CHUNK_DELAY_MS : 0]);
+    });
   } else {
-    chunks.push(
+    out.push([
       chunk({
         tool_calls: [
           {
@@ -488,22 +534,26 @@ export function openaiChunks(body, seq = 1) {
           },
         ],
       }),
-    );
+      0,
+    ]);
   }
-  chunks.push(chunk({}, reply.kind === 'text' ? 'stop' : 'tool_calls'));
-  chunks.push({
-    id: reply.messageId,
-    object: 'chat.completion.chunk',
-    created: 1_700_000_000,
-    model: FAKE_MODEL_ID,
-    choices: [],
-    usage: {
-      prompt_tokens: reply.input,
-      completion_tokens: reply.output,
-      total_tokens: reply.input + reply.output,
+  out.push([chunk({}, reply.kind === 'text' ? 'stop' : 'tool_calls'), 0]);
+  out.push([
+    {
+      id: reply.messageId,
+      object: 'chat.completion.chunk',
+      created: 1_700_000_000,
+      model: FAKE_MODEL_ID,
+      choices: [],
+      usage: {
+        prompt_tokens: reply.input,
+        completion_tokens: reply.output,
+        total_tokens: reply.input + reply.output,
+      },
     },
-  });
-  return chunks;
+    0,
+  ]);
+  return out;
 }
 
 /** The same reply as one OpenAI completion, for a request that did not ask
@@ -572,6 +622,9 @@ export function shapeOf(url) {
   return null;
 }
 
+/** A pause between two streamed frames (see STREAM_CHUNK_DELAY_MS). */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * The token count for a `POST /v1/messages/count_tokens`: the characters of
  * what is being counted over four, the crude rule of thumb.
@@ -605,7 +658,7 @@ export function startFakeModel(options = {}) {
   const server = createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => (raw += chunk));
-    req.on('end', () => {
+    req.on('end', async () => {
       const route = (req.url ?? '').split('?')[0];
       const shape = shapeOf(req.url);
       requests += 1;
@@ -686,12 +739,20 @@ export function startFakeModel(options = {}) {
       });
       if (shape === 'anthropic') {
         if (stream) {
-          for (const [event, data] of anthropicFrames(body, seq)) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+          for (const [event, data, delay = 0] of anthropicFrames(body, seq)) {
+            if (res.destroyed) return;
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            if (delay) await sleep(delay);
+          }
         } else {
           res.write(JSON.stringify(anthropicMessage(body, seq)));
         }
       } else if (stream) {
-        for (const chunk of openaiChunks(body, seq)) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        for (const [chunk, delay = 0] of openaiChunks(body, seq)) {
+          if (res.destroyed) return;
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          if (delay) await sleep(delay);
+        }
         res.write('data: [DONE]\n\n');
       } else {
         res.write(JSON.stringify(openaiMessage(body, seq)));

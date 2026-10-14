@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use protocol::common::{
     AgentInstall, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
-    OptionChoice, OutputEntry, PermissionOption, PluginAction, PluginMarketplace, ProviderModel,
+    OptionChoice, OutputEntry, PartialKind, PermissionOption, PluginAction, PluginMarketplace, ProviderModel,
     QuestionOption, SessionMcpServer, SessionOption, Subagent, ToolKind, UsageData,
 };
 use protocol::events::{ModelEntry, SlashCommand};
@@ -215,6 +215,20 @@ pub enum SessionEvent {
     },
     /// Transcript entries, in order. The bridge assigns their seqs.
     Entries { entries: Vec<OutputEntry> },
+    /// Text the agent is still writing: part `key` from `offset` on (UTF-16
+    /// code units). The driver coalesces its SDK's deltas and sends at most
+    /// one every 250 ms per part, each with only the text since the last;
+    /// the entry that completes the part carries `part: key`. Never stored or
+    /// numbered.
+    Partial {
+        key: String,
+        entry_type: PartialKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent: Option<Subagent>,
+        #[specta(type = specta_typescript::Number)]
+        offset: u64,
+        text: String,
+    },
     Turn { state: TurnState },
     /// The session is gone. Absent `error` = it ended normally. The host
     /// forgets the session after sending this.

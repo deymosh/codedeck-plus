@@ -1163,6 +1163,24 @@ sealed class CoreEvent {
     }
     
     /**
+     * A reply the agent is still writing, in the session on screen: live
+     * row `key`'s whole text now, or `None` once the row is gone (its entry
+     * landed, or the session stopped running). Shown after the transcript's
+     * rows; never stored.
+     */
+    data class LiveText(
+        val `machine`: kotlin.String, 
+        val `sessionId`: kotlin.String, 
+        val `key`: kotlin.String, 
+        val `text`: kotlin.String?) : CoreEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * The correlated response to `Intent::CreateFolder` — matched by
      * `request_id` off this stream (no store, no view: nothing to persist or
      * re-fetch for a one-shot RPC-style exchange).
@@ -1221,13 +1239,19 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            6 -> CoreEvent.FolderAck(
+            6 -> CoreEvent.LiveText(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            7 -> CoreEvent.FolderAck(
                 FfiConverterString.read(buf),
                 FfiConverterBoolean.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            7 -> CoreEvent.Ping
+            8 -> CoreEvent.Ping
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -1268,6 +1292,16 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 4UL
                 + FfiConverterString.allocationSize(value.`machine`)
                 + FfiConverterString.allocationSize(value.`sessionId`)
+            )
+        }
+        is CoreEvent.LiveText -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`sessionId`)
+                + FfiConverterString.allocationSize(value.`key`)
+                + FfiConverterOptionalString.allocationSize(value.`text`)
             )
         }
         is CoreEvent.FolderAck -> {
@@ -1317,8 +1351,16 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
-            is CoreEvent.FolderAck -> {
+            is CoreEvent.LiveText -> {
                 buf.putInt(6)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`sessionId`, buf)
+                FfiConverterString.write(value.`key`, buf)
+                FfiConverterOptionalString.write(value.`text`, buf)
+                Unit
+            }
+            is CoreEvent.FolderAck -> {
+                buf.putInt(7)
                 FfiConverterString.write(value.`requestId`, buf)
                 FfiConverterBoolean.write(value.`success`, buf)
                 FfiConverterOptionalString.write(value.`path`, buf)
@@ -1326,7 +1368,7 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 Unit
             }
             is CoreEvent.Ping -> {
-                buf.putInt(7)
+                buf.putInt(8)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

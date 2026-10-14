@@ -20,12 +20,13 @@ use client_core::stores::pairing::{
     pairing_reducer, PairingEffect, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
 use client_core::stores::fetches::Fetch;
+use client_core::stores::live_text::LiveChange;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
     BareMsg, PairRequestMsg, PhoneToBridge, SessionIdMsg, SyncAckMsg, SyncRequestMsg,
 };
-use protocol::common::{SessionOption, SessionState};
+use protocol::common::{EntryBody, SessionOption, SessionState};
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
@@ -95,6 +96,8 @@ pub struct RouteResult {
     /// chunk: a transcript view's whole purpose is to look live, so silence
     /// here would read as a frozen session, not a stale dot.
     pub transcript_appended: Option<(String, String)>,
+    /// `(machine, session_id, change)` for each live row that grew or went.
+    pub live_text: Vec<(String, String, LiveChange)>,
     /// A `folder-ack` arrived — the correlated response to `Intent::CreateFolder`.
     /// Not store-backed (nothing to persist or re-fetch a view for): the
     /// caller matches it by `request_id` off the `CoreEvent` stream, same
@@ -192,6 +195,16 @@ impl<'a> Router<'a> {
     pub async fn route(&mut self, machine: &str, msg: &BridgeToPhone) -> RouteResult {
         let mut r = RouteResult::default();
         match msg {
+            // Every piece keeps its row whole (in memory only), so a session
+            // opened again mid-reply shows it all at its next piece; only the
+            // session on screen is told.
+            BridgeToPhone::Partial(m) => {
+                if let Some(change) = self.stores.live_text.apply(machine, m) {
+                    if self.viewing_session(machine, &m.session_id) {
+                        r.live_text.push((machine.to_string(), m.session_id.clone(), change));
+                    }
+                }
+            }
             // --- slice B: the heartbeat + session lifecycle ---
             BridgeToPhone::Sessions(m) => self.on_sessions(machine, m, &mut r).await,
             BridgeToPhone::SessionPending(m) => {
@@ -256,6 +269,16 @@ impl<'a> Router<'a> {
                 let rows = m.numbered().map(|(seq, e)| (seq, to_value(e))).collect();
                 let inserted = self.apply_rows(machine, &m.session_id, rows).await;
                 r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
+                // An entry completing a part replaces its live row; the end of
+                // the turn drops the rows no entry completed.
+                for entry in &m.entries {
+                    let changes = match (&entry.part, &entry.body) {
+                        (Some(key), _) => self.stores.live_text.complete(machine, &m.session_id, key).into_iter().collect(),
+                        (None, EntryBody::TurnComplete {}) => self.stores.live_text.end_turn(machine, &m.session_id),
+                        _ => Vec::new(),
+                    };
+                    r.live_text.extend(changes.into_iter().map(|c| (machine.to_string(), m.session_id.clone(), c)));
+                }
                 // An entry already in the transcript is a replay, not news: a
                 // direct link resuming from an older cursor after the app was
                 // killed re-sends output the phone stored (and notified about)
@@ -554,6 +577,12 @@ impl<'a> Router<'a> {
         let unclosed = self.stores.machines.apply_session_list(machine, m, self.now);
         r.persist(StoreId::Machines);
         r.heartbeat = Some((machine.to_string(), self.now));
+        // A session no longer running has no reply being written, however its
+        // turn ended (an error or a stop sends no `turn_complete`).
+        for s in m.sessions.iter().filter(|s| s.state != Some(SessionState::Running)) {
+            let gone = self.stores.live_text.end_turn(machine, &s.id);
+            r.live_text.extend(gone.into_iter().map(|c| (machine.to_string(), s.id.clone(), c)));
+        }
 
         // A deleted session the bridge still lists never got its
         // `close-session` (sent while offline, or past the relays' hour):
@@ -887,6 +916,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_text_shows_in_the_session_on_screen_until_its_entry_lands() {
+        let (mut s, ts, kp) = stores().await;
+        s.ui.selected_machine = Some(MACHINE.into());
+        s.ui.selected_session = Some("s1".into());
+        let piece = |session: &str, offset: u64, text: &str| {
+            BridgeToPhone::Partial(protocol::events::PartialMsg {
+                session_id: session.into(),
+                key: "k".into(),
+                entry_type: protocol::common::PartialKind::Text,
+                subagent: None,
+                offset,
+                text: text.into(),
+            })
+        };
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let shown = r.route(MACHINE, &piece("s1", 0, "All tests")).await.live_text;
+        assert_eq!(shown, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: Some("All tests".into()) })]);
+        // Another session's reply is not kept live.
+        assert!(r.route(MACHINE, &piece("s2", 0, "x")).await.live_text.is_empty());
+
+        let mut done = text_entry("All tests pass.");
+        done.part = Some("k".into());
+        let out = r
+            .route(MACHINE, &BridgeToPhone::Output(OutputMsg { session_id: "s1".into(), seq: 1, entries: vec![done] }))
+            .await;
+        assert_eq!(out.live_text, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: None })]);
+        assert!(r.route(MACHINE, &piece("s1", 9, " pass")).await.live_text.is_empty(), "a late piece is dropped");
+    }
+
+    #[tokio::test]
     async fn output_stores_the_row_and_advances_coverage() {
         let (mut s, ts, kp) = stores().await;
         let mut r = Router::new(&mut s, &ts, &kp, 1_000);
@@ -1130,6 +1189,47 @@ mod tests {
             .await;
         assert_eq!(out.persist, vec![StoreId::Outbox]);
         assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Confirmed);
+    }
+
+    fn live_piece(offset: u64, text: &str) -> BridgeToPhone {
+        BridgeToPhone::Partial(protocol::events::PartialMsg {
+            session_id: "s1".into(),
+            key: "k".into(),
+            entry_type: protocol::common::PartialKind::Text,
+            subagent: None,
+            offset,
+            text: text.into(),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_session_opened_again_mid_reply_shows_the_reply_whole() {
+        let (mut s, ts, kp) = stores().await;
+        s.ui.selected_machine = Some(MACHINE.into());
+        s.ui.selected_session = Some("other".into());
+        {
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+            assert!(r.route(MACHINE, &live_piece(0, "All ")).await.live_text.is_empty());
+        }
+        s.ui.selected_session = Some("s1".into());
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        let shown = r.route(MACHINE, &live_piece(4, "tests")).await.live_text;
+        assert_eq!(shown, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: Some("All tests".into()) })]);
+    }
+
+    #[tokio::test]
+    async fn a_session_that_stops_running_drops_its_live_rows() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        s.ui.selected_machine = Some(MACHINE.into());
+        s.ui.selected_session = Some("s1".into());
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        r.route(MACHINE, &live_piece(0, "Half a rep")).await;
+        // An error or an interrupt ends the turn with no `turn_complete`.
+        let out = r
+            .route(MACHINE, &BridgeToPhone::Sessions(sessions_msg(vec![info("s1", Some(SessionState::Idle), None)])))
+            .await;
+        assert_eq!(out.live_text, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: None })]);
     }
 
     #[tokio::test]

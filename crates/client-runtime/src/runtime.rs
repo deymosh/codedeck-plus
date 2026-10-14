@@ -211,6 +211,11 @@ pub enum CoreEvent {
     /// cannot tell a consumer WHICH session to re-fetch and transcripts are
     /// per-session by nature.
     TranscriptAppended { machine: String, session_id: String },
+    /// A reply the agent is still writing, in the session on screen: live
+    /// row `key`'s whole text now, or `None` once the row is gone (its entry
+    /// landed, or the session stopped running). Shown after the transcript's
+    /// rows; never stored.
+    LiveText { machine: String, session_id: String, key: String, text: Option<String> },
     /// The correlated response to `Intent::CreateFolder` — matched by
     /// `request_id` off this stream (no store, no view: nothing to persist or
     /// re-fetch for a one-shot RPC-style exchange).
@@ -1604,6 +1609,11 @@ impl Loop {
         }
         if let Some((machine, session_id)) = r.transcript_appended {
             self.emit(CoreEvent::TranscriptAppended { machine, session_id });
+        }
+        // After the transcript event, so a completed row's entry is there to
+        // take its place when the row goes.
+        for (machine, session_id, change) in r.live_text {
+            self.emit(CoreEvent::LiveText { machine, session_id, key: change.key, text: change.text });
         }
         if let Some(m) = r.folder_ack {
             self.emit(CoreEvent::FolderAck {

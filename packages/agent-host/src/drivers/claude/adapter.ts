@@ -29,15 +29,21 @@ import type {
   SdkSystemMessage,
   SdkSessionStateChangedMessage,
 } from './facade';
+import type { ClaudePartTracker } from './partials';
 
 /**
  * Convert a single SDKMessage into zero or more OutputEntry objects.
  * Returns an empty array for message types we don't relay (stream_event, …).
+ *
+ * `blocks` is the session's streamed-part tracker: the `text` entry that
+ * completes a streamed block names its part with it, so the phone's live row
+ * is replaced by the entry rather than left beside it. Absent when the caller
+ * streams nothing.
  */
-export function sdkMessageToEntries(msg: SdkMessage, ctx: TranslateContext): OutputEntry[] {
+export function sdkMessageToEntries(msg: SdkMessage, ctx: TranslateContext, blocks?: ClaudePartTracker): OutputEntry[] {
   switch (msg.type) {
     case 'assistant':
-      return parseAssistant(msg as SdkAssistantMessage, ctx);
+      return parseAssistant(msg as SdkAssistantMessage, ctx, blocks);
     case 'user':
       return parseUser(msg as SdkUserMessage, ctx);
     case 'result':
@@ -63,7 +69,7 @@ function subagentField(parent: string | null | undefined, ctx: TranslateContext)
   return { subagent: { ...(label ? { label } : {}), parentCallId: parent } };
 }
 
-function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): OutputEntry[] {
+function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext, blocks?: ClaudePartTracker): OutputEntry[] {
   const entries: OutputEntry[] = [];
   const ts = new Date().toISOString();
 
@@ -71,10 +77,14 @@ function parseAssistant(msg: SdkAssistantMessage, ctx: TranslateContext): Output
 
   for (const block of msg.message.content) {
     if (block.type === 'text') {
+      // Only the main agent's reply is streamed (see partials.ts): a
+      // sub-agent's text is shown inside its tool group, so it gets no part.
+      const part = msg.parent_tool_use_id ? undefined : blocks?.takeTextPart(msg.message.id);
       entries.push({
         entryType: 'text',
         role: 'agent',
         text: block.text,
+        ...(part ? { part } : {}),
         timestamp: ts,
         ...sub,
       });

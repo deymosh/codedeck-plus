@@ -88,6 +88,7 @@ import com.codedeck.plus.ui.transcript.TranscriptList
 import com.codedeck.plus.ui.transcript.TranscriptRows
 import com.codedeck.plus.ui.transcript.parsePendingPermission
 import com.codedeck.plus.ui.transcript.questionCardKey
+import com.codedeck.plus.ui.transcript.rememberTypedReplies
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -228,6 +229,12 @@ fun SessionScreen(
     }
     val transcriptView = transcript?.view
     val displayEntries = transcript?.displayEntries.orEmpty()
+    // The reply being written, typed out as agent rows after the
+    // transcript's own (negative seqs, so their keys never meet a
+    // transcript row's).
+    val arrivingReplies by remember(machine, sessionId) { core.liveTextFlow(machine, sessionId) }
+        .collectAsState(emptyList())
+    val liveReplies = rememberTypedReplies(arrivingReplies)
     val pendingPermission: PendingPermissionSummary? = transcript?.pendingPermission
 
     val sessionKey = "$machine $sessionId"
@@ -582,6 +589,7 @@ fun SessionScreen(
 
         TranscriptList(
             displayEntries = displayEntries,
+            liveReplies = liveReplies,
             outboxItems = outboxView?.items.orEmpty(),
             machine = machine,
             sessionId = sessionId,

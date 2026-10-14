@@ -962,6 +962,11 @@ pub struct OutputEntry {
     /// Set when a sub-agent (not the session's main agent) produced it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<Subagent>,
+    /// The streamed part this entry completes, when the agent streamed it:
+    /// the `key` its `partial` messages carried. The entry replaces the live
+    /// row of that key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
     /// Agent-specific data no client depends on — the one sanctioned escape
     /// hatch; anything a client renders belongs in a typed field instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -975,9 +980,18 @@ impl OutputEntry {
             timestamp: timestamp.into(),
             body,
             subagent: None,
+            part: None,
             agent_extras: None,
         }
     }
+}
+
+/// What a `partial` streams: an assistant reply or the model's reasoning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PartialKind {
+    Text,
+    Thinking,
 }
 
 // --- usage ---

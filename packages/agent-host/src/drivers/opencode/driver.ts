@@ -26,6 +26,7 @@ import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, 
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
 import { opencodeTool } from './tools';
 import { newTranslateContext, type TranslateContext } from '../../sdk/transcript';
+import { PartialCoalescer } from '../../sdk/partial';
 import type {
   AgentInfo,
   ContextBreakdown,
@@ -119,6 +120,14 @@ interface ChildSession {
 
 function subagentOf(child: ChildSession): Subagent {
   return { ...(child.label ? { label: child.label } : {}), parentCallId: child.callId };
+}
+
+/** The stable id of a reply part: its message and the part's ordinal within
+ *  it — the same identity every event of the part (started, each delta,
+ *  ended) carries, so its `partial`s and the `text` entry that replaces them
+ *  agree on the key. */
+function partKey(data: { assistantMessageID: string; ordinal: number }): string {
+  return `${data.assistantMessageID}:${data.ordinal}`;
 }
 
 /** The tool OpenCode uses to ask the user questions. Its own call is not
@@ -359,9 +368,11 @@ export class OpenCodeSession implements DriverSession {
   /** Tool call ids already shown as a row — v2 reports a call's input, its
    *  start and its end separately, and only one row may come of them. */
   private readonly shownCalls = new Set<string>();
-  /** Text/reasoning ordinals already emitted, per message: v2 sends deltas
-   *  and then the finished text, and only the finished one is shown. */
-  private readonly emittedParts = new Set<string>();
+  /** Coalesces the reply's streamed deltas into `partial` events
+   *  (sdk/partial): a few signed, relayed updates a second, not one per
+   *  token. Only the main agent's reply text is streamed — see the `delta`
+   *  case in consumeEvents. */
+  private readonly partials: PartialCoalescer;
   /** Ask ids (permissions and forms) already handled — an ask could in
    *  theory refire; a second reply is rejected by the server anyway, but this
    *  avoids the wasted round trip and a second card. */
@@ -414,6 +425,9 @@ export class OpenCodeSession implements DriverSession {
     this.mode = params.mode ?? DEFAULT_MODE;
     this.reportUnknownTool = unknownToolReporter((message) => this.ctx.log(message));
     this.translate = newTranslateContext(this.reportUnknownTool);
+    this.partials = new PartialCoalescer((update) => {
+      if (!this.ended) this.ctx.emit({ type: 'partial', ...update });
+    });
     this.catalog = options.catalog ?? (async () => ({ models: [] }));
     this.model = splitModelId(params.model ?? undefined);
     // A level the model lacks is ignored by OpenCode: the session starts on
@@ -445,6 +459,7 @@ export class OpenCodeSession implements DriverSession {
     if (this.ended) return;
     this.ended = true;
     this.abortController.abort();
+    this.partials.reset();
     this.ctx.emit({ type: 'ended', ...(error ? { error } : {}) });
   }
 
@@ -555,8 +570,26 @@ export class OpenCodeSession implements DriverSession {
       // session a sub-agent of its own started.
       if (data?.sessionID && data.sessionID !== sessionId && !child && !this.noteChild(event, sessionId)) continue;
       switch (event.type) {
+        case 'session.text.delta': {
+          // Only the main agent's reply text is streamed: a sub-agent's text
+          // and the model's reasoning are shown collapsed (inside a tool
+          // group, or as a Thinking step), so a relay round trip for either
+          // would be traffic for what nobody sees as it arrives.
+          if (!child && event.data.delta) {
+            this.partials.delta({ key: partKey(event.data), entryType: 'text', text: event.data.delta });
+          }
+          break;
+        }
         case 'session.text.ended': {
-          this.deliver({ type: 'text', role: 'assistant', text: event.data.text, ...(child ? { subagent: subagentOf(child) } : {}) });
+          const part = child ? undefined : partKey(event.data);
+          if (part) this.partials.complete(part);
+          this.deliver({
+            type: 'text',
+            role: 'assistant',
+            text: event.data.text,
+            ...(part ? { part } : {}),
+            ...(child ? { subagent: subagentOf(child) } : {}),
+          });
           break;
         }
         case 'session.reasoning.ended': {
@@ -847,6 +880,9 @@ export class OpenCodeSession implements DriverSession {
 
   /** The turn is over: said once, however many of v2's end signals arrive. */
   private markTurnComplete(): void {
+    // A live row left over is dropped here (nothing will complete it), and no
+    // part timer outlives the turn.
+    this.partials.reset();
     if (!this.turnCompleted) this.deliver({ type: 'idle' });
     this.turnCompleted = true;
     if (!this.ended) this.ctx.emit({ type: 'turn', state: 'idle' });
@@ -1158,6 +1194,9 @@ export class OpenCodeSession implements DriverSession {
   }
 
   async interrupt(): Promise<void> {
+    // The interrupted turn's remaining text is dropped rather than left to
+    // keep arriving; its final entries still carry whatever it produced.
+    this.partials.reset();
     try {
       const { client, session } = await this.ready;
       await client.session.interrupt({ sessionID: session.id });
@@ -1205,6 +1244,7 @@ export class OpenCodeSession implements DriverSession {
     if (this.ended) return;
     this.ended = true;
     this.abortController.abort();
+    this.partials.reset();
     try {
       const { client, session } = await this.ready;
       await client.session.interrupt({ sessionID: session.id });

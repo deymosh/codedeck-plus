@@ -4,6 +4,7 @@
 pub mod backup;
 pub mod session_key;
 pub mod fetches;
+pub mod live_text;
 pub mod machines;
 pub mod outbox;
 pub mod pairing;
