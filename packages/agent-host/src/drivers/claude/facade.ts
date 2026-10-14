@@ -53,6 +53,7 @@ export type {
   SDKSystemMessage as SdkSystemMessage,
   SDKAuthStatusMessage as SdkAuthStatusMessage,
   SDKSessionStateChangedMessage as SdkSessionStateChangedMessage,
+  SDKPartialAssistantMessage as SdkPartialAssistantMessage,
   PermissionResult as SdkPermissionResult,
   PermissionUpdate as SdkPermissionUpdate,
   CanUseTool as SdkCanUseTool,
@@ -725,6 +726,10 @@ export function buildQueryOptions(
     // A hook's answer arrives just before the ask it causes, so the driver
     // can tell a hook's ask from Claude Code's own.
     includeHookEvents: true,
+    // Stream the assistant's reply as it is written (`stream_event` messages
+    // carrying Anthropic text deltas), so the phone can show it live. The
+    // complete message still follows as its own `assistant` message.
+    includePartialMessages: true,
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     tools: { type: 'preset', preset: 'claude_code' },
     ...(fallbackModel !== null ? { fallbackModel } : {}),

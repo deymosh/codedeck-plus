@@ -22,6 +22,8 @@ import { isBenignPlanDirWrite } from './policy';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
 import { claudeTool } from './tools';
 import { newTranslateContext, type TranslateContext } from '../../sdk/transcript';
+import { PartialCoalescer } from '../../sdk/partial';
+import { ClaudePartTracker } from './partials';
 import { slashCommand } from '../../sdk/commands';
 import type {
   AgentInfo,
@@ -46,6 +48,7 @@ import {
   type SdkFacade,
   type SdkMessage,
   type SdkModelDescriptor,
+  type SdkPartialAssistantMessage,
   type SdkPermissionResult,
   type SdkPermissionUpdate,
   type SdkSessionHandle,
@@ -176,6 +179,11 @@ export class ClaudeSession implements DriverSession {
   /** Told a tool name no agent's table lists, which the log then carries. */
   private readonly reportUnknownTool: (toolName: string) => void;
   private readonly resumeTarget: string | null;
+  /** Coalesces the SDK's streamed deltas into `partial` events (sdk/partial):
+   *  a few signed, relayed updates a second, not one per token. */
+  private readonly partials: PartialCoalescer;
+  /** Pairs each streamed text block with the `text` entry that completes it. */
+  private readonly blocks = new ClaudePartTracker();
   private mode: string;
   private model: string | undefined;
   private effort: string | undefined;
@@ -230,6 +238,9 @@ export class ClaudeSession implements DriverSession {
     this.resumeTarget = params.resume ?? null;
     this.reportUnknownTool = unknownToolReporter((message) => this.ctx.log(message));
     this.translate = newTranslateContext(this.reportUnknownTool);
+    this.partials = new PartialCoalescer((update) => {
+      if (!this.ended) this.ctx.emit({ type: 'partial', ...update });
+    });
     this.mode = params.mode ?? DEFAULT_MODE;
     // A provider-bound session has no Anthropic model to fall back on; the
     // bridge hands it the profile's own default.
@@ -303,6 +314,7 @@ export class ClaudeSession implements DriverSession {
   private finish(error?: string, resumeLost = false): void {
     if (this.ended) return;
     this.ended = true;
+    this.dropLiveText();
     void Promise.resolve(this.handle?.end()).catch(() => {});
     this.ctx.emit({ type: 'ended', ...(error ? { error } : {}), ...(resumeLost ? { resumeLost } : {}) });
   }
@@ -347,6 +359,12 @@ export class ClaudeSession implements DriverSession {
   private async handleMessage(msg: SdkMessage): Promise<void> {
     const hookAsk = hookAskOf(msg);
     if (hookAsk) this.hookAsks = [...this.hookAsks.slice(-7), hookAsk];
+
+    // The streamed reply: deltas are coalesced, never shown as entries.
+    if (msg.type === 'stream_event') {
+      for (const delta of this.blocks.streamEvent(msg as SdkPartialAssistantMessage)) this.partials.delta(delta);
+      return;
+    }
 
     if (msg.type === 'auth_status') {
       const auth = msg as SdkAuthStatusMessage;
@@ -407,7 +425,11 @@ export class ClaudeSession implements DriverSession {
         if (typeof sub === 'string' && sub) this.lastSubagentType = sub;
       }
     }
-    this.entries(sdkMessageToEntries(msg, this.translate));
+    const entries = sdkMessageToEntries(msg, this.translate, this.blocks);
+    // A completing `text` entry replaces its live row whole: anything the part
+    // still held unsent is dropped, never sent.
+    for (const entry of entries) if (entry.part) this.partials.complete(entry.part);
+    this.entries(entries);
   }
 
   /** The API's own context window for this session (`modelUsage` is keyed
@@ -476,7 +498,17 @@ export class ClaudeSession implements DriverSession {
   private setTurn(state: 'idle' | 'running'): void {
     if (this.ended) return;
     this.turn = state;
+    // The turn is over: any live row left over is dropped here (nothing
+    // will complete it), and no part timer outlives the turn.
+    if (state === 'idle') this.dropLiveText();
     this.ctx.emit({ type: 'turn', state });
+  }
+
+  /** Drop every streamed part: the turn or session they belonged to is over,
+   *  so no timer may fire later and no text from it may reach the phone. */
+  private dropLiveText(): void {
+    this.partials.reset();
+    this.blocks.reset();
   }
 
   private entries(entries: OutputEntry[]): void {
@@ -633,6 +665,9 @@ export class ClaudeSession implements DriverSession {
   }
 
   async interrupt(): Promise<void> {
+    // The interrupted turn's remaining text is dropped rather than left to
+    // keep arriving; its final entries still carry whatever it produced.
+    this.dropLiveText();
     await this.handle?.interrupt();
   }
 

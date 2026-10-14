@@ -134,6 +134,10 @@ describe('buildQueryOptions (CDX-062 fallbackModel tri-state)', () => {
     expect((resumed as { resume?: string }).resume).toBe('sdk-old');
     expect((resumed as { sessionId?: string }).sessionId).toBeUndefined();
   });
+
+  it('asks for partial messages, so the reply streams while it is written', () => {
+    expect(buildQueryOptions(baseOpts()).includePartialMessages).toBe(true);
+  });
 });
 
 describe('isProviderBoundSession (CDX-071)', () => {

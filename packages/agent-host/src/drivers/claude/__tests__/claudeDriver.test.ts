@@ -24,6 +24,7 @@ import type {
   SdkSessionOptions,
 } from '../facade';
 import type { StartSession } from '../../../sdk/types';
+import { PARTIAL_INTERVAL_MS } from '../../../sdk/partial';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
 class ScriptedHandle implements SdkSessionHandle {
@@ -763,5 +764,62 @@ describe('Claude model checks', () => {
     await ctx.waitFor((e) => e.type === 'ready');
     await expect(session.setOption('model', 'opencode/big-pickle')).rejects.toThrow(/does not offer/);
     await session.setOption('model', 'claude-sonnet-5');
+  });
+});
+
+describe('Claude live reply text', () => {
+  const event = (event: unknown, parent: string | null = null): unknown => ({
+    type: 'stream_event',
+    event,
+    parent_tool_use_id: parent,
+  });
+  const textDelta = (text: string, parent: string | null = null) =>
+    event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }, parent);
+  // Longer than one coalescing interval, so a held part would have been sent.
+  const pastOneTick = () => new Promise((resolve) => setTimeout(resolve, PARTIAL_INTERVAL_MS + 150));
+
+  it('coalesces the streamed reply and names its part on the completing entry', async () => {
+    const { ctx, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    handle.push(event({ type: 'message_start', message: { id: 'msg_1' } }));
+    handle.push(event({ type: 'content_block_start', index: 0, content_block: { type: 'text' } }));
+    handle.push(textDelta('Hel'));
+    handle.push(textDelta('lo'));
+    await ctx.waitFor((e) => e.type === 'partial');
+    // One event for the interval's whole text, not one per delta.
+    expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([
+      { type: 'partial', key: 'msg_1:0', entryType: 'text', offset: 0, text: 'Hello' },
+    ]);
+
+    handle.push({
+      type: 'assistant',
+      message: { id: 'msg_1', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
+      parent_tool_use_id: null,
+    });
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'text'));
+    expect(ctx.entries().find((e) => e.entryType === 'text')).toMatchObject({ text: 'Hello', part: 'msg_1:0' });
+  });
+
+  it('streams no reasoning and no sub-agent text', async () => {
+    const { ctx, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    handle.push(event({ type: 'message_start', message: { id: 'msg_1' } }));
+    handle.push(event({ type: 'message_start', message: { id: 'msg_sub' } }, 'agent_1'));
+    handle.push(event({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } }));
+    handle.push(textDelta('inner', 'agent_1'));
+    await pastOneTick();
+    expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([]);
+  });
+
+  it('drops reply text a turn end caught before its interval elapsed', async () => {
+    const { ctx, handle } = start();
+    await ctx.waitFor((e) => e.type === 'ready');
+    handle.push(event({ type: 'message_start', message: { id: 'msg_1' } }));
+    handle.push(textDelta('late'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    handle.push({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+    await ctx.waitFor((e) => e.type === 'turn' && e.state === 'idle');
+    await pastOneTick();
+    expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([]);
   });
 });
