@@ -1,5 +1,6 @@
 package com.codedeck.plus.ui.components
 
+import android.view.WindowManager
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -159,11 +160,19 @@ fun DeckSheet(
             window?.setDimAmount(0f)
             window?.setWindowAnimations(0)
         }
+        // A closing sheet is only sliding away: its window lets go of focus
+        // at once, so the next Back reaches the screen below instead of a
+        // sheet that is already leaving. It keeps its touches: a tap that
+        // reached the screen below could open a sheet at this same place,
+        // and it would come up as this one, already closing.
+        if (sheet.closing) {
+            SideEffect { window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) }
+        }
         // A back gesture shrinks the sheet as it goes; let go, it steps
         // back (a whole sheet that also has a half stop goes to it) or
         // closes. A page's own BackHandler in the content comes first.
         val back = remember { Animatable(0f) }
-        PredictiveBackHandler { events ->
+        PredictiveBackHandler(enabled = !sheet.closing) { events ->
             try {
                 events.collect { back.snapTo(it.progress) }
                 if (sheet.back()) back.animateTo(0f)
@@ -295,7 +304,10 @@ private class SheetMotion(density: Density, private val scope: CoroutineScope, p
     /** A finger is moving the sheet: new stops wait in [pending] until it lets go. */
     private var dragging = false
     private var pending: DraggableAnchors<SheetStop>? = null
-    private var closing = false
+
+    /** The sheet is on its way out: nothing brings it back. */
+    var closing by mutableStateOf(false)
+        private set
 
     /** How tall the screen the sheet lives in is, as last measured. */
     var region = Float.NaN
@@ -363,11 +375,11 @@ private class SheetMotion(density: Density, private val scope: CoroutineScope, p
         if (closing) return
         val anchors = release()
         val target = target(anchors, velocity)
+        // Closing from the moment it is let go, as [close] is, not once the
+        // slide ends.
+        if (target == SheetStop.Hidden) closing = true
         moveTo(target, velocity)
-        if (target == SheetStop.Hidden && !closing) {
-            closing = true
-            onClosed()
-        }
+        if (target == SheetStop.Hidden) onClosed()
     }
 
     /** Ends a drag, taking the stops that changed under it. */
