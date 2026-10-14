@@ -38,6 +38,7 @@ import type {
 } from '../../sdk/types';
 import { sdkMessageToEntries } from './adapter';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
+import { CLAUDE_STYLE } from './style';
 import {
   DEFAULT_MODEL,
   modelSupports1mContext,
@@ -849,6 +850,7 @@ export class ClaudeDriver implements Driver {
         tasks: true,
       },
       credentials: [{ id: ANTHROPIC_API_KEY_CREDENTIAL, label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY' }],
+      style: CLAUDE_STYLE,
     };
   }
 

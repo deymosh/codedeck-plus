@@ -68,6 +68,7 @@ import type { ProviderHttp } from '../../sdk/net';
 import { isValidProviderBaseUrl } from '../../sdk/provider';
 import { checkToken, listModels, OPENAI_API } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
+import { OPENCODE_STYLE } from './style';
 
 export const OPENCODE_AGENT_ID = 'opencode';
 
@@ -1595,6 +1596,7 @@ export class OpenCodeDriver implements Driver {
       },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
+      style: OPENCODE_STYLE,
     };
   }
 
