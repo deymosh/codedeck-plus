@@ -72,6 +72,11 @@ export type AccountField_Deserialize = {
 	placeholder?: string | null,
 	/**  What the answer is when none is given. */
 	default?: string | null,
+	/**
+	 *  Asked only when every one of these holds (an enterprise URL, only
+	 *  once "Enterprise" is chosen); a field not asked is not required.
+	 */
+	when?: FieldCondition_Deserialize[],
 };
 
 /**
@@ -87,6 +92,11 @@ export type AccountField_Serialize = {
 	placeholder?: string | null,
 	/**  What the answer is when none is given. */
 	default?: string | null,
+	/**
+	 *  Asked only when every one of these holds (an enterprise URL, only
+	 *  once "Enterprise" is chosen); a field not asked is not required.
+	 */
+	when?: FieldCondition_Serialize[],
 };
 
 /**  One way to connect an account. */
@@ -1208,6 +1218,32 @@ summary?: string | null }) & { count?: never; description?: never; header?: neve
  *  changes. `call_id` is the tool call that wrote it, when one did.
  */
 ({ entryType: "todos"; items: TodoItem_Serialize[]; callId?: string | null }) & { count?: never; description?: never; header?: never; hook?: never; hookPlugin?: never; index?: never; input?: never; isError?: never; kind?: never; lines?: never; locations?: never; multiSelect?: never; options?: never; path?: never; question?: never; reason?: never; redacted?: never; requestId?: never; revise?: never; role?: never; status?: never; summary?: never; taskId?: never; text?: never; title?: never; toolName?: never; truncated?: never };
+
+/**
+ *  A condition on an earlier answer: the field `key` answered `value` — or,
+ *  with `not`, anything else.
+ */
+export type FieldCondition = FieldCondition_Serialize | FieldCondition_Deserialize;
+
+/**
+ *  A condition on an earlier answer: the field `key` answered `value` — or,
+ *  with `not`, anything else.
+ */
+export type FieldCondition_Deserialize = {
+	key: string,
+	value: string,
+	not?: boolean,
+};
+
+/**
+ *  A condition on an earlier answer: the field `key` answered `value` — or,
+ *  with `not`, anything else.
+ */
+export type FieldCondition_Serialize = {
+	key: string,
+	value: string,
+	not?: boolean,
+};
 
 /**
  *  One line on the pipe: `{ "v": 1, "id"?: string, "kind": …, "payload": … }`.

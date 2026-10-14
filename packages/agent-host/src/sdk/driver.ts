@@ -12,6 +12,8 @@
  * `host/modules.ts`; the bridge needs no change.
  */
 import type {
+  AccountChange,
+  AgentAccount,
   AgentInfo,
   AvailablePlugin,
   InstalledPlugin,
@@ -23,6 +25,8 @@ import type {
   PermissionRequest,
   PermissionRule,
   PlanOutcome,
+  SignInAttempt,
+  SignInStatus,
   PluginAction,
   PluginMarketplace,
   ProviderBinding,
@@ -133,6 +137,32 @@ export interface PermissionRuleManager {
   remove(ids: string[]): Promise<PermissionRule[]>;
 }
 
+/** Where a sign-in stands, as an `account-sign-in` reply says it. */
+export interface SignInState {
+  status: SignInStatus;
+  attemptId: string;
+  attempt?: SignInAttempt;
+  error?: string;
+}
+
+/** What an account change came to: the connected accounts after a key,
+ *  an activation or a removal; where the sign-in stands after a sign-in,
+ *  a finish or a cancel. */
+export type AccountChangeResult = { accounts: AgentAccount[] } | { signIn: SignInState };
+
+/** For an agent whose catalog entry `supports.accounts`: the providers it
+ *  can be given access to on the machine, connected without restarting it.
+ *  No secret ever leaves it — a connection is its id, label and kind. */
+export interface AccountManager {
+  /** The accounts with a connection, or with `all` every one it can
+   *  connect. */
+  list(all: boolean): Promise<AgentAccount[]>;
+  /** Apply one change. A sign-in that started is watched here, and `ended`
+   *  is called once as it ends (completed, failed, expired, cancelled).
+   *  Rejects with the agent's own reason when it was refused. */
+  change(account: string, change: AccountChange, ended: (end: SignInState) => void): Promise<AccountChangeResult>;
+}
+
 /** A session's MCP servers. `toggles`: they can be switched in the
  *  session; `projectWide`: a switch applies to every session of the agent
  *  in the same project. */
@@ -187,6 +217,8 @@ export interface Driver {
   readonly mcp?: McpManager;
   /** Lists and revokes the agent's saved permission rules, when it keeps any. */
   readonly permissionRules?: PermissionRuleManager;
+  /** Connects the agent's provider accounts, when it can. */
+  readonly accounts?: AccountManager;
   /** Release driver-wide resources (servers it spawned). */
   shutdown?(): Promise<void>;
 }
