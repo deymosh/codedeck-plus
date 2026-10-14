@@ -175,8 +175,17 @@ describe('Claude session lifecycle', () => {
     handle.push(init());
     await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
     expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'native-1', mode: 'plan', model: 'claude-sonnet-5' });
-    // …and the adapter's status line.
-    expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'status' }));
+    // …and says the version once: every turn starts with an init.
+    handle.push(init());
+    await ctx.waitFor((e) => e.type === 'info' && ctx.events.filter((x) => x.type === 'info').length >= 2);
+    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'Claude Code 2.1.220' })]);
+  });
+
+  it('a resumed session does not say its version again', async () => {
+    const { ctx, handle } = start({ resume: 'native-1' });
+    handle.push(init());
+    await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
+    expect(ctx.entries()).toEqual([]);
   });
 
   it("init's 1M-window marker is not a model of its own: the catalog id stays the session's", async () => {

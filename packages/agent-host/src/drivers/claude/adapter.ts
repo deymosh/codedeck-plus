@@ -217,31 +217,18 @@ function parseResult(msg: SdkResultMessage): OutputEntry[] {
       agentExtras: { errorType: msg.subtype },
     }];
   }
-  // When several queued background-task completions are answered by one
-  // model call, the SDK still emits a result per completion, but every one
-  // except the last is empty (num_turns: 0). Those carry no turn and no cost,
-  // so they get no summary row.
-  if (msg.num_turns === 0) return [];
-  return [{
-    entryType: 'status',
-    text: `Session complete — ${msg.num_turns} turns, $${msg.total_cost_usd.toFixed(4)}`,
-    timestamp: ts,
-    agentExtras: {
-      durationMs: msg.duration_ms,
-      numTurns: msg.num_turns,
-      totalCostUsd: msg.total_cost_usd,
-    },
-  }];
+  // A turn that succeeded adds no row: the turn event already ends it on the
+  // phone, and its cost is in the session's usage (the context sheet), so a
+  // summary after every turn would only repeat both.
+  return [];
 }
 
 function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): OutputEntry[] {
-  if (msg.subtype === 'init') {
-    return [{
-      entryType: 'status',
-      text: `Claude Code ${msg.claude_code_version} (${msg.model})`,
-      timestamp: new Date().toISOString(),
-    }];
-  }
+  // The SDK starts every query (every turn) with an init message; what it
+  // says — the CLI version and the model — is no news in a transcript (the
+  // model is on the phone's composer, and the driver reads the init for its
+  // own state), so it adds no row.
+  if (msg.subtype === 'init') return [];
 
   // What a hook says to the user (its `systemMessage`): "PreToolUse:Bash
   // says: …".
