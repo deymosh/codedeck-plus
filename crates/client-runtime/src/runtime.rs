@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
 use client_core::stores::machines::Incompatible;
-use client_core::stores::session_key::{Recipient, SessionKeyRing, REGRANT_EVERY_MS};
+use client_core::stores::session_key::{Recipient, SessionKeyRing};
 use protocol::capabilities::PROTOCOL_VERSION;
 use nostr_transport::direct::{DirectConfig as LinkConfig, DirectHandlers, DirectLink};
 use nostr_transport::{PublishResult, PublishVerdict};
@@ -30,7 +30,7 @@ use client_core::connection::{
     TOR_RECONNECT_CONFIG,
 };
 use client_core::notifications::NotifyEffect;
-use protocol::commands::{PhoneToBridge, PresenceMsg, SessionKeyMsg, SyncAckMsg, PRESENCE_RENEW_SECS};
+use protocol::commands::{PhoneToBridge, PresenceMsg, SyncAckMsg, PRESENCE_RENEW_SECS};
 use protocol::ranges::SeqRange;
 use protocol::nostr_event::SignedEvent;
 use protocol::events::BridgeToPhone;
@@ -461,6 +461,8 @@ impl Core {
             flush_timer: None,
             pending_acks: Vec::new(),
             ack_timer: None,
+            grant_waits: HashMap::new(),
+            grant_seq: 0,
             links: HashMap::new(),
             links_up: HashMap::new(),
             links_on: false,
@@ -760,6 +762,10 @@ enum Msg {
         machine: String,
         endpoint: Option<String>,
     },
+    /// The grant `machine` is waiting on (`seq`) reached a relay, or did not.
+    GrantPublished { machine: String, seq: u64, delivered: bool },
+    /// `machine` did not confirm the grant `seq` in [`grant::GRANT_WAIT`].
+    GrantWaitOver { machine: String, seq: u64 },
 }
 
 /// Work for the identity's signer. One task runs it in order, off the loop:
@@ -1015,6 +1021,11 @@ struct Loop {
     pending_acks: Vec<(String, String, Vec<SeqRange>)>,
     /// Pending [`Msg::FlushAcks`].
     ack_timer: Option<AbortHandle>,
+    /// Per machine, the grant it has to confirm before this client talks to
+    /// it with the identity (see `runtime::grant`).
+    grant_waits: HashMap<String, grant::GrantWait>,
+    /// Counts the grant waits begun, so what an ended one reports is dropped.
+    grant_seq: u64,
     /// A direct link per machine that has somewhere to try, with the target
     /// (endpoints, pin, proxy) it was started for.
     links: HashMap<String, (DirectTarget, DirectLink)>,
@@ -1197,6 +1208,8 @@ impl Loop {
                 }
                 Msg::BackupSaved { epoch, saved } => self.on_backup_saved(epoch, saved).await,
                 Msg::BackupDeleted => self.forget_backup_relay().await,
+                Msg::GrantPublished { machine, seq, delivered } => self.on_grant_published(&machine, seq, delivered),
+                Msg::GrantWaitOver { machine, seq } => self.on_grant_wait_over(&machine, seq),
                 Msg::DirectState { machine, endpoint } => {
                     let changed = match endpoint {
                         Some(endpoint) => self.links_up.insert(machine, endpoint.clone()) != Some(endpoint),
@@ -1386,22 +1399,29 @@ impl Loop {
         if !known {
             return;
         }
-        // A bridge that holds a session key encrypts to it; try those
-        // first, locally. Only what they cannot read goes to the identity's
-        // signer.
+        // The recipient tag, signed by the bridge, says which key a copy is
+        // for. One to a session key is read here; only one to the identity
+        // may cost the identity's signer anything (`on_identity_copy`).
+        let identity_tag = protocol::recipients::recipient_tag(&event.pubkey, &self.keys.identity_pubkey_hex);
+        if event.tag(RECIPIENT_TAG) == Some(identity_tag.as_str()) {
+            self.on_identity_copy(event).await;
+            return;
+        }
         let now = self.clock.now_ms();
         let opened = self.session.keys(now).find_map(|key| {
             protocol::crypto::decrypt_from(&key.keypair.secret_key, &event.pubkey, &event.content)
                 .ok()
                 .map(|plaintext| (plaintext, Recipient::SessionKey(key.pubkey_hex().to_string())))
         });
+        let incoming = incoming_of(&event);
         match opened {
             Some((plaintext, via)) => {
-                let ingested = self.api.ingest_plaintext(&incoming_of(&event), plaintext, now);
+                let ingested = self.api.ingest_plaintext(&incoming, plaintext, now);
                 self.on_ingested(&event, ingested, &via).await;
             }
             None => {
-                let _ = self.signer_jobs.send(SignerJob::Decrypt(event));
+                let ingested = self.api.decrypt_failed(&incoming, "not readable with the session key".into());
+                self.on_ingested(&event, ingested, &Recipient::Identity).await;
             }
         }
     }
@@ -1421,6 +1441,12 @@ impl Loop {
                     self.persist_store(StoreId::Machines).await;
                 }
                 let now = self.clock.now_ms();
+                // A bridge that took the grant a pair-request carries sends
+                // the ack to the key: one to the identity means it did not,
+                // and that grant counts as the attempt the next one waits on.
+                if *via == Recipient::Identity && matches!(*msg, BridgeToPhone::PairAck(_)) {
+                    self.grant_attempts.insert(machine.clone(), now);
+                }
                 let visible = self.conn.visible;
                 let notify_enabled = self.stores.settings.data.notifications_enabled;
                 let mut router = Router::new(
@@ -1445,6 +1471,9 @@ impl Loop {
                         log::info!("session key: every bridge moved to the new key; the previous one is gone");
                         self.session_ring_changed().await;
                     }
+                }
+                if matches!(via, Recipient::SessionKey(_)) {
+                    self.end_grant_wait(&machine, true);
                 }
                 self.interpret_route(result).await;
                 self.grant_session_key_if_due(&machine).await;
@@ -1495,31 +1524,11 @@ impl Loop {
         }
     }
 
-    /// Grant `machine` the current session key if it honours session keys
-    /// and has not confirmed it, at most once per [`REGRANT_EVERY_MS`]: the
-    /// grant goes through the identity's signer.
+    /// Rotate the session key if due, then grant `machine` the current one
+    /// if it wants it ([`Self::grant_if_due`]).
     async fn grant_session_key_if_due(&mut self, machine: &str) {
         self.rotate_session_key_if_due().await;
-        let now = self.clock.now_ms();
-        if !self.stores.machines.wants_session_grant(machine, &self.session.current, now)
-            || self
-                .grant_attempts
-                .get(machine)
-                .is_some_and(|at| now.saturating_sub(*at) < REGRANT_EVERY_MS)
-        {
-            return;
-        }
-        self.grant_attempts.insert(machine.to_string(), now);
-        self.stores.machines.note_session_grant_sent(machine, self.keys.grant_sent(now));
-        self.persist_store(StoreId::Machines).await;
-        log::info!("session key: granting it to {}...", machine.get(..8).unwrap_or(machine));
-        self.on_send(
-            machine.to_string(),
-            PhoneToBridge::SessionKey(SessionKeyMsg {
-                session_key: self.keys.grant_for(machine, self.stores.machines.confirmed_session_key(machine)),
-            }),
-            None,
-        );
+        self.grant_if_due(machine);
     }
 
     /// Replace the session key with a fresh one when it is a month from
@@ -2113,6 +2122,10 @@ impl Loop {
             PhoneToBridge::PairRequest(_) => Cipher::Identity,
             _ => self.cipher_for(&machine),
         };
+        let (msg, reply, outbox_id) = match self.hold_for_grant(&machine, &cipher, msg, reply, outbox_id, quiet) {
+            Some(unheld) => unheld,
+            None => return,
+        };
         // Any command keeps this client present at the bridge.
         self.last_command_ms.insert(machine.clone(), now);
         let job = SignerJob::Command { machine, msg: Box::new(msg), cipher, now, reply, outbox_id, quiet };
@@ -2415,5 +2428,6 @@ fn egress_detail(err: &EgressError) -> String {
 }
 
 mod backup;
+mod grant;
 #[cfg(test)]
 mod tests;

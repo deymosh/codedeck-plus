@@ -16,8 +16,8 @@
 //!
 //! * [`FILES`]: the phone shows the attach control only when the bridge
 //!   advertises it;
-//! * [`SESSION_KEYS`]: the phone grants a session key only to a bridge that
-//!   honours one.
+//! * [`SESSION_KEYS`]: the phone grants a session key to a bridge that
+//!   honours one, and to none whose heartbeat lacks it.
 
 /// v12 = one copy of each message per client of an identity, each tagged
 /// with its recipient (see [`crate::recipients`]); a session-key grant names
@@ -31,8 +31,9 @@ pub const PROTOCOL_VERSION: u32 = 12;
 pub const FILES: &str = "files";
 // The bridge honours `session-key` grants: it
 // reads command payloads encrypted with a granted key and encrypts to it. A
-// client grants a key only when this is advertised; a bridge without it
-// could not read a payload encrypted with one.
+// client does not grant a key to a bridge whose heartbeat lacks this, and
+// uses one only once the bridge confirmed it: a bridge without it could not
+// read a payload encrypted with one.
 pub const SESSION_KEYS: &str = "session-keys";
 
 /// Every capability the reference bridge ships with.
