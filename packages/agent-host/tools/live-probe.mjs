@@ -11,20 +11,103 @@
  * Usage (normally through ./codedeck live, which sets the environment):
  *   node tools/live-probe.mjs --host dist/main.js --agent opencode \
  *     [--prompt TEXT]… [--mode MODE] [--model ID] [--effort ID] [--cwd DIR] \
- *     [--timeout SECONDS] [--log PATH]
+ *     [--timeout SECONDS] [--log PATH] [--fake-model]
  *
  * Every frame is echoed as one line (JSON for anything it does not render),
  * so the output is greppable and a tail of --log shows the same thing live.
  * Exit code: 0 when every turn finished without an error, 1 otherwise.
  */
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { FAKE_MODEL_ID, startFakeModel } from './fake-model.mjs';
 
 const PROTOCOL_VERSION = 1;
 
+/** The key the agent is handed for the local server. Any non-empty string
+ *  will do — nothing authenticates here — and a dummy keeps an operator's
+ *  own credential out of the request the server logs. */
+const FAKE_MODEL_KEY = 'codedeck-fake-model';
+
+/** The provider profile the local server is reached as. The id is the same
+ *  for every agent; OpenCode is the one that spells its models
+ *  `<provider>/<model>`. */
+const FAKE_MODEL_PROVIDER = 'codedeck-fake';
+const FAKE_MODEL_LABEL = 'Fake model';
+
 /** Flags that stand alone, with no value after them. */
-const FLAGS = new Set(['models']);
+const FLAGS = new Set(['models', 'fake-model']);
+
+/**
+ * What makes one session run the local model server, or null for an agent
+ * this does not know how to point at it.
+ *
+ * An endpoint that is not the agent's own is a provider profile in this
+ * product — the phone adds one, the bridge hands it to the agent — so that
+ * is what a fake run is bound to, rather than a stray environment variable.
+ * It is also what makes the model name the local one: a profile's models are
+ * what a session may name, so the session asks for `fake-model-1` and every
+ * banner an agent prints names that, instead of the real model the agent
+ * would otherwise default to.
+ *
+ * OpenCode is the exception twice over: it refuses a session-bound provider
+ * ("a session is not bound to one") and takes its providers from the config
+ * of the server it starts, handed over in its environment — so there the
+ * profile is a config entry, and the model is `codedeck-fake/fake-model-1`.
+ * Its config is the operator's own with this provider added beside it, the
+ * same placement the driver gives a profile.
+ */
+function fakeModelSession(agent, url) {
+  const provider = {
+    id: FAKE_MODEL_PROVIDER,
+    label: FAKE_MODEL_LABEL,
+    baseUrl: url,
+    authToken: FAKE_MODEL_KEY,
+    models: [{ id: FAKE_MODEL_ID, label: FAKE_MODEL_LABEL }],
+    defaultModel: FAKE_MODEL_ID,
+  };
+  switch (agent) {
+    case 'claude-code':
+      return { provider, model: FAKE_MODEL_ID };
+    case 'deepseek-harness':
+      // Bound, so its endpoint is the stub, but no model named: the harness
+      // answers an id it does not know with an error entry ("unknown model
+      // option"), and a profile's model list does not teach it one. The
+      // session therefore keeps its own default name while every request
+      // still goes to the stub — nothing is spent on that name.
+      return { provider };
+    case 'opencode': {
+      // `aisdk:@ai-sdk/openai-compatible` is the package the driver uses for
+      // an endpoint OpenCode's own catalog does not know.
+      let base = {};
+      try {
+        const parsed = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed;
+      } catch {
+        base = {};
+      }
+      process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+        ...base,
+        providers: {
+          ...(base.providers ?? {}),
+          [FAKE_MODEL_PROVIDER]: {
+            package: 'aisdk:@ai-sdk/openai-compatible',
+            name: FAKE_MODEL_LABEL,
+            settings: { baseURL: `${url}/v1`, apiKey: FAKE_MODEL_KEY },
+            // The declared window matters: OpenCode compacts a conversation
+            // that outgrows what its model claims, and a model with no limit
+            // of its own would send `/long` straight into a compaction.
+            models: { [FAKE_MODEL_ID]: { name: FAKE_MODEL_LABEL, limit: { context: 200_000, output: 8_192 } } },
+          },
+        },
+      });
+      return { model: `${FAKE_MODEL_PROVIDER}/${FAKE_MODEL_ID}` };
+    }
+    default:
+      return null;
+  }
+}
 
 /** `--flag value` and repeated `--prompt`: the whole surface, parsed here so
  *  the shell has nothing to quote. */
@@ -48,7 +131,7 @@ function parseArgs(argv) {
   return args;
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.host) throw new Error('--host is required');
   if (!args.agent) throw new Error('--agent is required');
@@ -71,6 +154,35 @@ function main() {
   };
   say(`probe: agent=${args.agent} mode=${args.mode ?? '(default)'} model=${args.model ?? '(agent default)'}`);
   say(`probe: cwd=${cwd} log=${logPath}`);
+
+  // The local model server, started before anything spawns: it is what the
+  // session is pointed at, and `--fake-model` is therefore not only what
+  // starts it but what decides the session's model — an agent that names no
+  // model of its own would run a real one, on a real account.
+  let fakeModel = null;
+  let fakeSession = null;
+  if (args['fake-model'] && args.agent === 'fake') {
+    // Nothing to point and no model to name: the fake agent answers from the
+    // prompt itself, and a server behind it would be decoration.
+    say('model: the fake agent runs no model, so --fake-model has nothing to do (it is for claude-code, opencode and deepseek-harness)');
+  } else if (args['fake-model']) {
+    fakeModel = await startFakeModel({ log: (line) => say(`model: ${line}`), dump: args.dump ?? null });
+    fakeSession = fakeModelSession(args.agent, fakeModel.url);
+    if (!fakeSession) say(`!! --fake-model does not know how to point '${args.agent}' at a local endpoint`);
+    else {
+      // For the record, because an agent's banner names the model it asks
+      // for and a real model name there reads like a bill: the model is the
+      // local one in any case, and nothing leaves this machine.
+      say(`model: ${args.agent} runs ${fakeSession.model} at ${fakeModel.url} — no account is reached`);
+    }
+  }
+  if (args.dump && !args['fake-model']) {
+    // The requests are written by the fake model server, so there is nothing
+    // to write without it; said out loud because the run would otherwise
+    // look like it dumped something.
+    say('!! --dump writes nothing without --fake-model: it is the fake model that records what the agent sent');
+  }
+  const model = args.model ?? fakeSession?.model ?? undefined;
 
   const host = spawn(process.execPath, [args.host], { stdio: ['pipe', 'pipe', 'pipe'] });
   let nextId = 0;
@@ -132,7 +244,10 @@ function main() {
     },
   };
 
-  const sessionId = 'live';
+  // A UUID, because a driver may hand the id to its agent (Claude Code takes
+  // it as `--session-id`, which the CLI rejects unless it is one) and because
+  // it is what the bridge sends: bridge-runtime's own ids are v4 UUIDs.
+  const sessionId = randomUUID();
   /** Set once the probe is done with the host, so the SIGTERM it sends to
    *  stop it is not read back as the host dying on its own. */
   let finished = false;
@@ -142,6 +257,9 @@ function main() {
     for (const entry of deadline.entries) clearTimeout(entry.timer);
     host.kill('SIGTERM');
     setTimeout(() => host.kill('SIGKILL'), 3000).unref?.();
+    // The model server holds the loop open; a probe that finished must let
+    // the process end without waiting on it.
+    void fakeModel?.close();
     process.exitCode = code;
   };
 
@@ -306,7 +424,10 @@ function main() {
         case 'notice':
           return `notice(${entry.kind}): ${cut(entry.text)}`;
         case 'tool_call':
-          return `tool_call ${entry.toolName} ${cut(JSON.stringify(entry.input ?? {}))}`;
+          // The title is what the phone shows as the call's one-line summary
+          // (a Bash call's command, a read's path); the input is the longer
+          // text beside it, and only some calls carry one.
+          return `tool_call ${entry.toolName}${entry.title ? ` ${cut(entry.title)}` : ''}${entry.input ? ` ${cut(JSON.stringify(entry.input))}` : ''}`;
         case 'tool_result':
           return `tool_result${entry.isError ? ' (failed)' : ''}: ${cut(entry.text)}`;
         case 'diff':
@@ -368,17 +489,19 @@ function main() {
       await send('end-session', { sessionId });
       return finish(0);
     }
-    if (!args.model && listed.defaultModel) {
+    if (!model && listed.defaultModel) {
       say(`note: no --model given, so this runs the agent's default: ${listed.defaultModel}`);
     }
+    if (model && !args.model) say(`model: the session runs ${model} (the fake model's own)`);
 
     await send('start-session', {
       sessionId,
       agent: args.agent,
       cwd,
       ...(args.mode ? { mode: args.mode } : {}),
-      ...(args.model ? { model: args.model } : {}),
+      ...(model ? { model } : {}),
       ...(args.effort ? { effort: args.effort } : {}),
+      ...(fakeSession?.provider ? { provider: fakeSession.provider } : {}),
     });
     await waitFor('the session to be ready', (value) => value.type === 'ready');
 
@@ -406,9 +529,7 @@ function main() {
   });
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   process.stderr.write(`live-probe: ${err?.message ?? err}\n`);
   process.exit(2);
-}
+});

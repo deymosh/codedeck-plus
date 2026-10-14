@@ -156,6 +156,18 @@ a Docker-less host:
                            --timeout SECONDS (default 300), --no-sync
                            agents: claude-code, opencode, deepseek-harness,
                            and `fake` for the driver-protocol test agent
+  live <agent> --fake-model
+                           Point the agent at a local model server instead
+                           (tools/fake-model.mjs): no account, no network,
+                           and the same replies every run. Each prompt is a
+                           scenario — /tool (a tool call; a permission card
+                           on OpenCode), /question, /plan-approval, /error,
+                           /long (a long answer, and a context figure that
+                           has moved) — and anything else is echoed.
+                           --dump DIR writes every request the agent made,
+                           for reading what a driver actually sends (on the
+                           Docker engine it is copied back to
+                           dist/live-<agent>-dump/ afterwards)
 
 Android tests and lint (same idea, in the Android container — a subcommand
 maps to its Gradle task; anything else is passed to Gradle as it is):
@@ -778,19 +790,21 @@ cmd_live() {
   case "$agent" in
     ''|-*)
       echo "usage: $0 live <agent> [--prompt TEXT]… [--mode MODE] [--model ID]" >&2
-      echo "                     [--effort ID] [--cwd DIR] [--env K=V]… [--timeout SECONDS] [--no-sync]" >&2
+      echo "                     [--effort ID] [--cwd DIR] [--env K=V]… [--timeout SECONDS]" >&2
+      echo "                     [--fake-model] [--dump DIR] [--no-sync]" >&2
       echo "agents: claude-code, opencode, deepseek-harness, fake" >&2
       exit 2
       ;;
   esac
   shift
 
-  local sync=1 timeout="$LIVE_DEFAULT_TIMEOUT" probe=() pairs=()
+  local sync=1 timeout="$LIVE_DEFAULT_TIMEOUT" probe=() pairs=() dump=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-sync) sync=0; shift ;;
       --timeout) timeout="$2"; shift 2 ;;
       --env) pairs+=("$2"); shift 2 ;;
+      --dump) dump="$2"; probe+=("$1" "$2"); shift 2 ;;
       *) probe+=("$1"); shift ;;
     esac
   done
@@ -798,9 +812,11 @@ cmd_live() {
   # A live session runs on a real account. Two agents cost nothing: the `fake`
   # test agent, and OpenCode's free Zen models. Everything else spends a
   # subscription or a balance, so a run that does not name a model says so
-  # rather than quietly using whatever the agent defaults to.
+  # rather than quietly using whatever the agent defaults to. `--fake-model`
+  # is the third free path: the agent is pointed at a local server instead,
+  # so nothing reaches an account whatever model it names.
   case " ${probe[*]-} " in
-    *" --model "*|*" --models "*) ;;
+    *" --model "*|*" --models "*|*" --fake-model "*) ;;
     *)
       case "$agent" in
         fake) ;;
@@ -862,6 +878,21 @@ cmd_live() {
   local pair
   for pair in ${pairs[@]+"${pairs[@]}"}; do docker_env+=(-e "$pair"); done
 
+  # The probe resolves a relative --dump against its own working directory,
+  # which inside the container is packages/agent-host — and `docker cp` would
+  # resolve the same string against the container's root. Resolved once here,
+  # to the path both of them then mean.
+  if [ -n "$dump" ]; then
+    case "$dump" in
+      /*) ;;
+      *) dump="$DEV_ROOT/packages/agent-host/$dump" ;;
+    esac
+    local i
+    for i in "${!probe[@]}"; do
+      if [ "${probe[$i]}" = "--dump" ]; then probe[$((i + 1))]="$dump"; fi
+    done
+  fi
+
   local code=0
   dexec -i -w "$DEV_ROOT/packages/agent-host" \
     -e CODEDECK_AGENT_HOST_DRIVERS="$agent" \
@@ -879,6 +910,20 @@ cmd_live() {
   local host_log="dist/live-$agent.log"
   mkdir -p dist
   MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$LIVE_LOG" "$host_log" >/dev/null 2>&1 || true
+  # --dump writes inside the container, which is no use to anyone reading it
+  # on the host — so it comes back beside the log, for the same reason. Only
+  # when the fake model was the writer: without it the directory is empty, and
+  # saying otherwise would read as a dump that came back.
+  case " ${probe[*]-} " in
+    *" --fake-model "*)
+      if [ -n "$dump" ]; then
+        local host_dump="dist/live-$agent-dump"
+        mkdir -p "$host_dump"
+        MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$dump/." "$host_dump/" >/dev/null 2>&1 || true
+        echo "==> dumped requests: $host_dump"
+      fi
+      ;;
+  esac
   live_report "$code" "$timeout" "$host_log"
   return "$code"
 }
