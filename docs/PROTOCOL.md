@@ -477,6 +477,53 @@ not be read or removed, `rules` is empty and `error` says why; a phone keeps
 showing what it had. Cost: one command and one reply per page opening or
 removal, never sent unasked.
 
+### `accounts`
+
+For agents with `supports.accounts`, a phone gives the agent access to
+providers on the bridge's machine — a key, or a sign-in to a subscription —
+through the agent's own API, so it takes effect on the running agent with
+no restart. The agent's store keeps the keys and tokens; nothing sent back
+carries one. The bridge keeps no account state beyond who started each
+sign-in.
+
+An `AgentAccount {id, name, methods?, connections?}` is one provider.
+A method `{id, kind: key|sign-in, label?, fields?}` may ask questions first:
+a field `{key, title, description?, required?, options?, placeholder?,
+default?, when?}` is asked only when every condition `{key, value, not?}` in
+`when` holds (an answer equal to `value`, or with `not` different), and a
+field not asked is not required. A connection `{id, label, kind: key|sign-in|env,
+active?, removable?}` is one access the provider has; `env` (a variable of
+the machine's environment) cannot be changed from a phone.
+
+- `accounts-request {agent, all?}` → `accounts {agent, accounts[], all?,
+  error?}`: the accounts with a connection, or with `all` every provider the
+  agent can connect (OpenCode: about 230, some 25 KB — asked only by the
+  picker that shows them).
+- `account-action {agent, account, action}`, `action` tagged by `kind`:
+  `key {method, key, label?, answers?}`, `activate {connection}` and
+  `remove {connection}` → the connected `accounts` after;
+  `sign-in {method, label?, answers?}` → `account-sign-in {agent, account,
+  status: started, attemptId, attempt}` where `SignInAttempt {attemptId,
+  url, instructions, expiresAt, pasteBack?}` says what to do; `finish
+  {attempt, callbackUrl}` and `cancel {attempt}` → `account-sign-in` with
+  where it stands. A sign-in that started ends with one more
+  `account-sign-in` (`complete`, `failed`, `expired`, `cancelled`).
+
+A device sign-in shows a code to enter on any device, and the agent watches
+the provider itself. One whose provider sends the browser back to the
+machine's loopback is `pasteBack`: the phone pastes the address its browser
+failed to open (`finish`), and the agent opens it on the machine — only when
+it is that sign-in's own origin and path (the bridge refuses anything that
+is not `http://` on loopback first). `key` and `callbackUrl` are secrets:
+phone → bridge only, `Secret` to the host, never logged.
+
+Everything is answered to the asking client only. When an action could not
+be done, `accounts` comes with `error` (and nothing in `accounts`, so a
+phone keeps showing what it had) or `account-sign-in` with `failed`. Cost:
+one command and one reply per page opening or change; a sign-in is two
+replies (started, ended) whatever it takes — the agent host watches it
+locally, nothing polls across the wire.
+
 ### Pairing
 
 A pairing window is a time-boxed subscription with **no author filter** — the
@@ -705,6 +752,8 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `session-mcp-toggle {sessionId, name, enabled}` | `session-mcp {…}` once done, or `error` |
 | `list-permission-rules {agent}` | `permission-rules {rules}`: every project's |
 | `remove-permission-rules {agent, ids}` | `permission-rules {rules}` after, or `error` with the agent's reason |
+| `list-accounts {agent, all?}` | `accounts {accounts}`: the connected ones, or every one with `all` |
+| `account-action {agent, account, change}` | `accounts {accounts}` (the connected ones) after `key`, `activate`, `remove`; `account-sign-in {status, attemptId, attempt?, error?}` after `sign-in`, `finish`, `cancel`; or `error` with the agent's reason. A sign-in that started ends with an `account-sign-in-ended {agent, account, attemptId, status, error?}` notification |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 | `check-provider {agent, provider, model}` | `credential-checked {valid?}`: a provider profile's token, checked on the API `agent` speaks |
 | `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty; each `{id, label?, provider?, contextWindow?}`), read the way `agent` signs in; or `error` with the reason there is none |

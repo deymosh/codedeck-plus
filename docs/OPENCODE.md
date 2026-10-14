@@ -78,23 +78,36 @@ installed or started.
 
 ## Provider credentials
 
-OpenCode supports 75+ model providers with no single credential shape, so
-CodeDeck+ does not manage them for you. Whatever environment reaches the
-`opencode` process (the bridge's own environment, for the server it starts; or however
-you started the external server) is what OpenCode sees — including common
-provider env vars like `ANTHROPIC_API_KEY`. See
-[OpenCode's own docs](https://opencode.ai/docs) for the full list of supported
-providers and how to configure each.
+OpenCode knows about 230 providers. The phone connects them on the
+machine's page: **AI providers → OpenCode → Connect a provider**. Pick one,
+then either type its API key or sign in to a subscription. This goes through
+OpenCode's own API, so it takes effect on the running server at once — the
+provider's models join the list, with no restart and no session cut.
 
-For **the bridge's own server under Docker**, run the one-time interactive login once the
-container is up and OpenCode has been installed (the bridge log says
-`OpenCode installed at …`; the image puts it on `PATH`). The login survives
-container recreation: the image redirects OpenCode's config/auth storage
-under `/data`, the same volume the bridge's own identity lives in.
+- **A key** is kept in OpenCode's database on the machine; the phone does not
+  keep it, and nothing sends it back. A provider can hold several keys; the
+  page marks the one in use and switches between them.
+- **A device sign-in** (GitHub Copilot, OpenCode Console for Zen/Go, xAI)
+  shows a code: open the sign-in page on any device and enter it. OpenCode
+  watches the provider itself; the page says when it is done.
+- **A sign-in that returns to the machine** (Sign in with ChatGPT, GitLab)
+  sends the browser back to a listener on the machine's loopback, which a
+  phone cannot open. After signing in, copy the address the browser fails to
+  load and paste it on the page: the machine opens it itself. Only that
+  sign-in's own address is accepted, so nothing else on the machine can be
+  reached this way.
 
-```bash
-docker compose exec codedeck-bridge opencode auth login
-```
+The environment still counts: whatever reaches the `opencode` process (the
+bridge's own environment, for the server it starts; or however you started
+the external server) is what OpenCode sees, including provider variables like
+`ANTHROPIC_API_KEY`. Such a provider shows as connected "from the machine's
+environment", and only the machine can change it.
+
+Under Docker the image redirects OpenCode's config and auth storage under
+`/data`, the volume the bridge's identity lives in, so keys and sign-ins
+survive container recreation. `opencode auth login` on the machine
+(`docker compose exec codedeck-bridge opencode auth login`) still works and
+shows on the phone the same way.
 
 ## Provider profiles
 
@@ -132,8 +145,9 @@ asks again).
 
 ## What this does not do
 
-- No automated credential setup — that one `opencode auth login` step (or
-  equivalent env vars) is on you.
+- No connection method that reads the machine's own setup (Amazon Bedrock's
+  and Google Vertex's "external" credentials, AWS profiles and the like):
+  those are configured on the machine. Their key methods are offered.
 - No support for multiple simultaneous OpenCode servers.
 - No change to the wire — this only controls how the OpenCode driver finds its
   server.
