@@ -70,6 +70,10 @@ pub struct UniffiSessionSummary {
     /// `offline` (`SessionState`'s own `snake_case` wire spelling), absent if
     /// the bridge never reported one.
     pub state: Option<String>,
+    /// When the running turn started (ISO 8601, the bridge's clock), while
+    /// one runs.
+    #[uniffi(default = None)]
+    pub turn_started_at: Option<String>,
     /// `live` / `stale` / `offline` — the machines store's own listing presence.
     pub presence: String,
     pub last_activity: String,
@@ -789,6 +793,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             cwd: info.cwd.clone(),
                             project: info.project.clone(),
                             state: info.state.map(|st| wire_str(&st)),
+                            turn_started_at: info.turn_started_at.clone(),
                             presence: wire_str(&s.presence),
                             last_activity: info.last_activity.clone(),
                             agent: info.agent.clone(),

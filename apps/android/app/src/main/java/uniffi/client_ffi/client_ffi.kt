@@ -7223,6 +7223,12 @@ data class UniffiSessionSummary (
     var `state`: kotlin.String?
     , 
     /**
+     * When the running turn started (ISO 8601, the bridge's clock), while
+     * one runs.
+     */
+    var `turnStartedAt`: kotlin.String? = null 
+    , 
+    /**
      * `live` / `stale` / `offline` — the machines store's own listing presence.
      */
     var `presence`: kotlin.String
@@ -7296,6 +7302,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
@@ -7320,6 +7327,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterString.allocationSize(value.`cwd`) +
             FfiConverterString.allocationSize(value.`project`) +
             FfiConverterOptionalString.allocationSize(value.`state`) +
+            FfiConverterOptionalString.allocationSize(value.`turnStartedAt`) +
             FfiConverterString.allocationSize(value.`presence`) +
             FfiConverterString.allocationSize(value.`lastActivity`) +
             FfiConverterString.allocationSize(value.`agent`) +
@@ -7343,6 +7351,7 @@ public object FfiConverterTypeUniffiSessionSummary: FfiConverterRustBuffer<Uniff
             FfiConverterString.write(value.`cwd`, buf)
             FfiConverterString.write(value.`project`, buf)
             FfiConverterOptionalString.write(value.`state`, buf)
+            FfiConverterOptionalString.write(value.`turnStartedAt`, buf)
             FfiConverterString.write(value.`presence`, buf)
             FfiConverterString.write(value.`lastActivity`, buf)
             FfiConverterString.write(value.`agent`, buf)
