@@ -8,6 +8,7 @@
 
 use client_core::delete_controller::DeleteController;
 use client_core::notifications::{NotificationContext, NotificationCoordinator};
+use client_core::stores::live_text::LiveTextState;
 use client_core::stores::machines::{
     hydrate_dismissed, hydrate_machines, serialize_dismissed, serialize_machines, MachinesState,
     MergeOptions,
@@ -75,6 +76,8 @@ pub struct CoreStores {
     pub ui: UiState,
     pub notifications: NotificationCoordinator,
     pub delete_controller: DeleteController,
+    /// Replies still being written: never persisted.
+    pub live_text: LiveTextState,
 }
 
 /// What [`CoreStores::forget_session`] dropped: anything of the UI's (a dot,
@@ -93,6 +96,7 @@ impl CoreStores {
     /// notification it posted.
     pub fn forget_session(&mut self, machine: &str, session_id: &str) -> Forgot {
         self.transcript.remove_session(machine, session_id);
+        self.live_text.end_turn(machine, session_id);
         Forgot { ui: self.ui.forget_session(machine, session_id), outbox: self.outbox.forget_session(machine, session_id) }
     }
 
@@ -246,6 +250,7 @@ pub async fn hydrate(
             ui: UiState::default(),
             notifications: NotificationCoordinator::default(),
             delete_controller: DeleteController::default(),
+            live_text: LiveTextState::default(),
         },
         last_stored_seen,
     }
