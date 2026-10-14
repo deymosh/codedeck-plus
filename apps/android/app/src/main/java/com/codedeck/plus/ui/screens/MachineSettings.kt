@@ -119,9 +119,10 @@ internal fun shortKey(key: String): String = if (key.length <= 20) key else "${k
 /**
  * One machine's page: who it is and whether it is up, its agents (installed
  * and removed from here), what its new sessions start with, the relays it is reached over, its direct link, the
- * credentials kept on it, its agents' AI providers, plugins and MCP
- * servers (each agent's on a page of its own, opened through
- * [onOpenProviders], [onOpenPlugins] and [onOpenMcp]), and forgetting it. Pure — the
+ * credentials kept on it, its agents' AI providers, plugins, MCP servers and
+ * saved permissions (each agent's on a page of its own, opened through
+ * [onOpenProviders], [onOpenPlugins], [onOpenMcp] and
+ * [onOpenPermissionRules]), and forgetting it. Pure — the
  * caller supplies the machine and a dispatcher — so it renders the same in
  * a snapshot.
  */
@@ -137,6 +138,7 @@ fun MachineSettingsContent(
     onOpenProviders: (agent: String) -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
     onOpenMcp: (agent: String) -> Unit,
+    onOpenPermissionRules: (agent: String) -> Unit,
 ) {
     // The model pickers need each agent's list, and the provider and plugin
     // rows their counts: ask for them on opening, and again for an agent
@@ -209,6 +211,18 @@ fun MachineSettingsContent(
                     if (i > 0) Divider()
                     val count = machine.mcp.firstOrNull { it.agent == agent.id }?.servers?.size
                     NavRow(agent.displayName, onClick = { onOpenMcp(agent.id) }, value = count?.let { if (it == 1) "1 server" else "$it servers" })
+                }
+            }
+        }
+        // Not asked for on opening: the rules are read only on their own page,
+        // and the count shows once they have been.
+        val ruleAgents = machine.agents.filter { it.supportsPermissionRules }
+        if (ruleAgents.isNotEmpty()) {
+            Group(title = "Permissions", footer = "What an agent runs without asking, from \"Always allow\" answers.") {
+                ruleAgents.forEachIndexed { i, agent ->
+                    if (i > 0) Divider()
+                    val count = machine.permissionRules.firstOrNull { it.agent == agent.id }?.rules?.size
+                    NavRow(agent.displayName, onClick = { onOpenPermissionRules(agent.id) }, value = count?.let { if (it == 1) "1 rule" else "$it rules" })
                 }
             }
         }
@@ -465,6 +479,7 @@ fun MachineSettingsScreen(
     onOpenProviders: (agent: String) -> Unit,
     onOpenPlugins: (agent: String) -> Unit,
     onOpenMcp: (agent: String) -> Unit,
+    onOpenPermissionRules: (agent: String) -> Unit,
 ) {
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -481,5 +496,6 @@ fun MachineSettingsScreen(
         onOpenProviders = onOpenProviders,
         onOpenPlugins = onOpenPlugins,
         onOpenMcp = onOpenMcp,
+        onOpenPermissionRules = onOpenPermissionRules,
     )
 }

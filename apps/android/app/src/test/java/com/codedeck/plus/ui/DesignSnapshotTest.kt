@@ -19,6 +19,7 @@ import com.codedeck.plus.ui.screens.AddView
 import com.codedeck.plus.ui.screens.AppearancePage
 import com.codedeck.plus.ui.screens.SessionsContent
 import com.codedeck.plus.ui.screens.McpContent
+import com.codedeck.plus.ui.screens.PermissionRulesContent
 import com.codedeck.plus.ui.screens.ConnectionPage
 import com.codedeck.plus.ui.screens.LogsContent
 import com.codedeck.plus.ui.screens.MachineSettingsContent
@@ -34,6 +35,7 @@ import com.codedeck.plus.ui.transcript.DisplayEntry
 import com.codedeck.plus.ui.screens.AccountPage
 import com.codedeck.plus.ui.screens.BackupPage
 import com.codedeck.plus.ui.screens.RestoreContent
+import uniffi.client_ffi.UniffiAgentPermissionRules
 import uniffi.client_ffi.UniffiUsageData
 import uniffi.client_ffi.UniffiBackupStatus
 import uniffi.client_ffi.UniffiBackupView
@@ -263,19 +265,26 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "settings_machine" to {
         MachineSettingsContent(
             machine = workstation, connectedRelays = setOf("wss://relay.example.org"), credentialsStatus = null,
-            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {},
+            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {}, onOpenPermissionRules = {},
         )
     },
     "settings_machine_update_needed" to {
         MachineSettingsContent(
             machine = workstation.copy(updateNeeded = "bridge"), connectedRelays = setOf("wss://relay.example.org"),
             credentialsStatus = null, providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {},
-            onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {},
+            onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {}, onOpenPermissionRules = {},
         )
     },
     "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
     "plugins_browse" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}, startOnBrowse = true) },
     "mcp" to { McpContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
+    "permission_rules" to { PermissionRulesContent(workstation, "opencode", dispatch = {}, onBack = {}) },
+    "permission_rules_empty" to {
+        PermissionRulesContent(
+            workstation.copy(permissionRules = listOf(UniffiAgentPermissionRules("opencode", emptyList(), error = null, busy = emptyList()))),
+            "opencode", dispatch = {}, onBack = {},
+        )
+    },
     "mcp_add" to { McpContent(workstation, "claude-code", dispatch = {}, onBack = {}, startAdding = AddView.Form) },
     "mcp_import" to {
         McpContent(
@@ -413,6 +422,8 @@ class DesignSnapshotTest {
     @Test fun plugins_browse() = paparazzi.page("plugins_browse")
     @Test fun plugins_opencode() = paparazzi.page("plugins_opencode")
     @Test fun mcp() = paparazzi.page("mcp")
+    @Test fun permission_rules() = paparazzi.page("permission_rules")
+    @Test fun permission_rules_empty() = paparazzi.page("permission_rules_empty")
     @Test fun mcp_add() = paparazzi.page("mcp_add")
     @Test fun mcp_import() = paparazzi.page("mcp_import")
     @Test fun providers_opencode() = paparazzi.page("providers_opencode")
