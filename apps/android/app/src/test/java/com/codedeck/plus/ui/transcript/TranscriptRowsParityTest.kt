@@ -26,6 +26,10 @@ import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
 import kotlinx.serialization.json.jsonObject
 import org.junit.Rule
 import org.junit.Test
+import androidx.compose.runtime.CompositionLocalProvider
+import com.codedeck.plus.ui.components.AgentLook
+import com.codedeck.plus.ui.components.LocalAgentLook
+import com.codedeck.plus.ui.DesignFixtures
 
 /**
  * Paparazzi goldens for a representative sample of transcript rows and
@@ -61,6 +65,39 @@ class TranscriptRowsParityTest {
             javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText(),
         ).jsonObject
         return parseDisplayEntries(root.getValue("displayEntries").toString())
+    }
+
+    /** Lone calls and the working line as each agent's look draws them: the
+     *  result line after its mark, and Claude Code's counter. */
+    @Test
+    fun styled_tool_rows() {
+        fun call(kind: String, verb: String, title: String, result: String, error: Boolean = false) = DisplayEntry.ToolGroup(
+            seq = 0,
+            steps = listOf(ToolStep.Call(0, "c-$kind", kind, kind, title, verb = verb, activeVerb = verb, result = ToolResultView(result, error))),
+            summary = verb, subject = title, failed = if (error) 1 else 0,
+        )
+        val rows = listOf(
+            call("execute", "Ran", "cargo test -p core", "running 9 tests\ntest a ... ok\ntest result: ok. 9 passed"),
+            call("read", "Read", "pool.ts", (1..212).joinToString("\n") { "line $it" }),
+            call("search", "Searched", "SimplePool", "pool.ts:12\nrelay.ts:40\nindex.ts:3"),
+            call("execute", "Ran", "npm run lint", "error: 'x' is never used", error = true),
+        )
+        val looks = listOf(
+            AgentLook.of("Claude Code", DesignFixtures.claudeStyle, "plan"),
+            AgentLook.of("OpenCode", DesignFixtures.opencodeStyle, "build"),
+        )
+        paparazzi.snapshot {
+            Dark {
+                Column {
+                    looks.forEach { look ->
+                        CompositionLocalProvider(LocalAgentLook provides look) {
+                            rows.forEach { ToolGroupRow(it, live = false, onOpen = {}) }
+                            ActivityRow(null, turn = 3, onOpen = null, turnStartedAt = 1_000_000L, tokens = 1_234, clock = { 1_012_400L })
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @Test

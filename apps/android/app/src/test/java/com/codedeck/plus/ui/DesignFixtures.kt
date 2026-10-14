@@ -89,7 +89,7 @@ internal object DesignFixtures {
         spinnerFrames = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"), spinnerIntervalMs = 80u,
         workingWords = emptyList(), workingCounter = false,
         toolGlyphs = mapOf("read" to "→", "edit" to "←", "delete" to "←", "search" to "✱", "fetch" to "%", "execute" to "$", "agent" to "→", "other" to "→"),
-        resultMark = null, userMessage = UniffiUserMessageShape.Block,
+        resultMark = "↳", userMessage = UniffiUserMessageShape.Block,
         wordmark = listOf(
             "                                 ▄     ",
             "█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█",

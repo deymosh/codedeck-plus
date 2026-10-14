@@ -47,6 +47,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.text.style.TextAlign
 import com.codedeck.plus.ui.components.AgentLook
 import com.codedeck.plus.ui.components.LocalAgentLook
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableLongStateOf
+import kotlinx.coroutines.delay
+import com.codedeck.plus.ui.transcript.workingCounterText
+import com.codedeck.plus.ui.transcript.resultSummary
 
 /** The icon a tool kind is drawn with, in rows and in the sheet. */
 internal fun toolKindIcon(kind: String): ImageVector = when (kind) {
@@ -90,20 +98,47 @@ internal val ToolStep.Call.proseTitle: Boolean get() = toolKind == "agent" || to
  * calls failed, the lines it changed, and a chevron — the details open in
  * a sheet. While [live] and a call is still waiting on its result, the
  * running glyph leads the line; otherwise the agent's own glyph for what the
- * group did, when its style has one ([AgentLook.glyphFor]).
+ * group did, when its style has one ([AgentLook.glyphFor]). A lone call
+ * that finished has, for an agent whose CLI writes one, its result's line
+ * under it after the agent's mark ([AgentLook.resultMark]).
  */
 @Composable
 fun ToolGroupRow(group: DisplayEntry.ToolGroup, live: Boolean, onOpen: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 36.dp)
-            .clickable(onClick = onOpen)
-            .padding(horizontal = Tokens.Space1, vertical = Tokens.Space1),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        val glyph = LocalAgentLook.current.glyphFor(group.steps.filterIsInstance<ToolStep.Call>().map { it.toolKind })
+    val look = LocalAgentLook.current
+    val calls = group.steps.filterIsInstance<ToolStep.Call>()
+    val glyph = look.glyphFor(calls.map { it.toolKind })
+    val result = look.resultMark?.let { mark -> calls.singleOrNull()?.let(::resultSummary)?.let { mark to it } }
+    val row = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 36.dp)
+        .clickable(onClick = onOpen)
+        .padding(horizontal = Tokens.Space1, vertical = Tokens.Space1)
+    if (result == null) {
+        GroupLine(group, live, glyph, row)
+        return
+    }
+    val (mark, summary) = result
+    Column(row) {
+        GroupLine(group, live, glyph, Modifier.fillMaxWidth())
+        // Under the line's text: past the glyph's column and the gap.
+        Row(Modifier.padding(start = 24.dp, top = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(mark, color = Tokens.TextDim, fontSize = Tokens.TextSm, fontFamily = Tokens.FontMono)
+            Text(
+                summary,
+                color = if (calls.single().failed) Tokens.Danger else Tokens.TextMuted,
+                fontSize = Tokens.TextSm,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** [ToolGroupRow]'s own line: the glyph (or the running spinner), what the
+ *  group did, what failed, the lines it changed, and the chevron. */
+@Composable
+private fun GroupLine(group: DisplayEntry.ToolGroup, live: Boolean, glyph: String?, modifier: Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         if (live && group.runningCall != null) {
             ThinkingGlyph(color = Tokens.TextMuted, fontSize = Tokens.TextSm)
         } else if (glyph != null) {
@@ -157,12 +192,34 @@ fun activityOf(entries: List<DisplayEntry>): ToolStep.Call? =
  * and what the agent is doing. While it waits on a sub-agent, the line says
  * what that agent was asked, and under it what the agent is doing now. With
  * no call to name, an agent with working words says one of them, picked by
- * [turn] (one word per turn) and worn in its accent, as its CLI does.
+ * [turn] (one word per turn) and worn in its accent, as its CLI does; an
+ * agent whose CLI counts the turn ([AgentLook.workingCounter]) gets the time
+ * since [turnStartedAt] (epoch ms) and the reply's [tokens] beside it.
  * Tapping it opens the activity it names, when [onOpen] is given.
  */
 @Composable
-fun ActivityRow(call: ToolStep.Call?, turn: Long, onOpen: (() -> Unit)?) {
+fun ActivityRow(
+    call: ToolStep.Call?,
+    turn: Long,
+    onOpen: (() -> Unit)?,
+    turnStartedAt: Long? = null,
+    tokens: Long = 0,
+    clock: () -> Long = System::currentTimeMillis,
+) {
     val look = LocalAgentLook.current
+    val counter = if (look.workingCounter && turnStartedAt != null) {
+        var now by remember { mutableLongStateOf(clock()) }
+        LaunchedEffect(turnStartedAt) {
+            while (true) {
+                now = clock()
+                delay(1_000)
+            }
+        }
+        // The bridge's clock against the phone's: never a negative time.
+        workingCounterText(((now - turnStartedAt) / 1_000).coerceAtLeast(0), tokens)
+    } else {
+        null
+    }
     val alpha = pulsingAlpha(min = 0.55f, max = 1f, halfPeriodMs = 900)
     if (call != null && call.toolKind == "agent") {
         Row(
@@ -222,6 +279,7 @@ fun ActivityRow(call: ToolStep.Call?, turn: Long, onOpen: (() -> Unit)?) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false).graphicsLayer { this.alpha = alpha },
         )
+        counter?.let { Text(it, color = Tokens.TextMuted, fontSize = Tokens.TextSm, maxLines = 1) }
         if (onOpen != null) {
             Icon(
                 Icons.AutoMirrored.Outlined.KeyboardArrowRight,

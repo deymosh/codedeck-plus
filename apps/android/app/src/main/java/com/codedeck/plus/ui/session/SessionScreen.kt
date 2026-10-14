@@ -116,6 +116,7 @@ import uniffi.client_ffi.UniffiUsageData
 import androidx.compose.runtime.CompositionLocalProvider
 import com.codedeck.plus.ui.components.AgentLook
 import com.codedeck.plus.ui.components.LocalAgentLook
+import com.codedeck.plus.ui.transcript.epochMillisOf
 
 /**
  * The session's transcript, decoded: the core's deltas applied in order, off
@@ -612,6 +613,7 @@ fun SessionScreen(
                 canStopTasks = agent?.supportsTasks == true,
                 dispatch = ::dispatch,
                 modifier = Modifier.weight(1f),
+                turnStartedAt = epochMillisOf(session?.turnStartedAt),
             )
 
             pendingPermission?.let { pending ->

@@ -27,8 +27,12 @@ data class AgentLook(
     val spinnerIntervalMs: Long = DEFAULT_SPINNER_MS,
     /** Shown beside the spinner instead of "Thinking", one per turn. */
     val workingWords: List<String> = emptyList(),
+    /** Time worked and tokens so far beside the working line. */
+    val workingCounter: Boolean = false,
     /** Glyph before a tool row, by tool kind; `other` for any kind not listed. */
     val toolGlyphs: Map<String, String> = emptyMap(),
+    /** Before a lone call's result line; none = no result line. */
+    val resultMark: String? = null,
     val userMessage: UniffiUserMessageShape = UniffiUserMessageShape.Bubble,
     /** Block-art lines, one character per cell; the first [wordmarkSplit] cells muted. */
     val wordmark: List<String> = emptyList(),
@@ -70,7 +74,9 @@ data class AgentLook(
                 spinnerFrames = style.spinnerFrames.ifEmpty { DEFAULT_SPINNER_FRAMES },
                 spinnerIntervalMs = if (style.spinnerFrames.isEmpty()) DEFAULT_SPINNER_MS else style.spinnerIntervalMs.toLong(),
                 workingWords = style.workingWords,
+                workingCounter = style.workingCounter,
                 toolGlyphs = style.toolGlyphs,
+                resultMark = style.resultMark,
                 userMessage = style.userMessage,
                 wordmark = style.wordmark,
                 wordmarkSplit = style.wordmarkSplit.toInt(),

@@ -93,10 +93,12 @@ fun TranscriptList(
     /** The replies the agent is still writing (`part` set to each one's
      *  key), shown after the transcript's rows until their entries land. */
     liveReplies: List<DisplayEntry.AgentMessage> = emptyList(),
+    /** When the running turn started (epoch ms), for the working line's counter. */
+    turnStartedAt: Long? = null,
 ) = key(sessionId) {
     TranscriptListContent(
         displayEntries, liveReplies, outboxItems, machine, sessionId, syncState, contiguous,
-        respondedCards, planApprovalChoices, running, activity, canStopTasks, dispatch, modifier,
+        respondedCards, planApprovalChoices, running, activity, canStopTasks, dispatch, modifier, turnStartedAt,
     )
 }
 
@@ -121,6 +123,7 @@ private fun TranscriptListContent(
     canStopTasks: Boolean,
     dispatch: (UniffiIntent) -> Unit,
     modifier: Modifier = Modifier,
+    turnStartedAt: Long? = null,
 ) {
     var expandedGroups by remember(sessionId) { mutableStateOf(setOf<Long>()) }
     // The tool group whose sheet is open, by seq: the sheet reads the group
@@ -242,7 +245,9 @@ private fun TranscriptListContent(
                         val at = call?.takeIf { it.toolKind == "agent" }?.let { listOf(it.seq) }
                         // The turn is named by the message that started it.
                         val turn = displayEntries.lastOrNull { it is DisplayEntry.UserMessage }?.seq ?: 0L
-                        ActivityRow(call, turn, onOpen = last?.let { { openGroup = OpenGroup(it.seq, at) } })
+                        // Counted only for an agent whose CLI shows the count.
+                        val tokens = if (LocalAgentLook.current.workingCounter) turnTokens(displayEntries, liveReplies.filter { it.part !in completedParts }) else 0L
+                        ActivityRow(call, turn, onOpen = last?.let { { openGroup = OpenGroup(it.seq, at) } }, turnStartedAt = turnStartedAt, tokens = tokens)
                     }
                 }
                 items(visibleOutbox, key = { "o${it.id}" }, contentType = { "outbox" }) { item ->
