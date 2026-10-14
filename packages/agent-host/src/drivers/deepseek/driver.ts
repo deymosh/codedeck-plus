@@ -55,6 +55,7 @@ import { syncEndpointCatalog } from './catalog';
 import { DSH_LABEL } from './install';
 import { DeepSeekMcp } from './mcp';
 import { DeepSeekPlugins, runDshPlugin, type DshRun } from './plugins';
+import { DEEPSEEK_STYLE } from './style';
 import {
   DSH_PROFILE,
   DeepSeekRuntime,
@@ -308,7 +309,13 @@ export class DeepSeekSession implements DriverSession {
       const model = this.currentModel();
       this.announced = true;
       this.ctx.emit({ type: 'info', nativeSessionId: opened.sessionId, ...(model ? { model: model.label } : {}), mode: this.mode });
-      this.deliver({ entryType: 'status', text: `${DSH_LABEL} session started${model ? ` (${model.label})` : ''}`, timestamp: now() });
+      // The version is said once, when a conversation starts — the model is
+      // on the phone's composer. A resumed one said it when it began.
+      if (!opened.resumed) {
+        const version = await this.deps.runtime.version();
+        if (this.ended) return;
+        this.deliver({ entryType: 'status', text: version ? `${DSH_LABEL} ${version}` : `${DSH_LABEL} session started`, timestamp: now() });
+      }
       this.ctx.emit({ type: 'ready' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -322,13 +329,13 @@ export class DeepSeekSession implements DriverSession {
    *  workspace — it checks) falls back to a fresh one with a notice, as the
    *  other drivers do: the transcript is the bridge's, the memory is the
    *  agent's. */
-  private async openSession(): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> {
+  private async openSession(): Promise<{ sessionId: string; configOptions: SessionConfigOption[]; resumed: boolean }> {
     const resume = this.params.resume;
     const resumable = this.process?.capabilities.sessionCapabilities?.resume;
     if (resume && resumable !== undefined) {
       try {
         const resumed = await this.client.request('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
-        return { sessionId: resume, configOptions: resumed.configOptions ?? [] };
+        return { sessionId: resume, configOptions: resumed.configOptions ?? [], resumed: true };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.ctx.log(`[deepseek] could not resume ${resume} (${reason}) — starting a fresh session`);
@@ -343,7 +350,7 @@ export class DeepSeekSession implements DriverSession {
       }
     }
     const created = await this.client.request('session/new', { cwd: this.cwd, mcpServers: [] });
-    return { sessionId: created.sessionId, configOptions: created.configOptions ?? [] };
+    return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], resumed: false };
   }
 
   /** Apply the model and reasoning level the session was started with. The
@@ -939,6 +946,7 @@ export class DeepSeekDriver implements Driver {
         tasks: false,
       },
       credentials: [{ id: DEEPSEEK_API_KEY_CREDENTIAL, label: 'DeepSeek API key', envVar: 'DEEPSEEK_API_KEY' }],
+      style: DEEPSEEK_STYLE,
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };
   }

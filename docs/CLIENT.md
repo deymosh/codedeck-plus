@@ -287,7 +287,10 @@ plays the agent's spinner in its accent; the working line says one of its
 working words per turn; a tool group leads with the glyph of its calls'
 kind; the user's message takes the agent's shape; an empty session shows
 the wordmark, drawn as quarter-cell blocks on a canvas (a phone's fonts
-draw block elements at widths of their own, which pulls a logo apart). The
+draw block elements at widths of their own, which pulls a logo apart). A
+session whose transcript holds only status lines still counts as empty —
+every driver opens a new conversation with its name and version before
+anyone writes — and shows those lines centred under the wordmark. The
 mode the session runs in sits beside the send button, in the mode's colour.
 With `workingCounter` the working line adds `(12s · ↓ 1.2k tokens)`, as
 Claude Code's spinner does and on the same terms: the seconds since the
