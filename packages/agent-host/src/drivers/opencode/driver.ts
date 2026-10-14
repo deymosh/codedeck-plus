@@ -502,13 +502,24 @@ export class OpenCodeSession implements DriverSession {
       if (catalog.models.length > 0) this.contextLimits ??= Promise.resolve(catalog.contextLimits ?? {});
       const model = params.model ?? catalog.defaultModel;
       if (!params.model) this.model = splitModelId(model);
+      // Read alongside the session, for the line a new session opens with; a
+      // server that does not say leaves the line without it.
+      const version = Promise.resolve()
+        .then(() => client.server.info())
+        .then((info) => info.version, () => undefined);
       const { session, resumeLost } = await this.resolveSession(client, params);
-      // The "memory was lost" notice goes ahead of "session started".
+      // The "memory was lost" notice goes ahead of the session's first line.
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
         this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode });
         this.reportTitle(session.title);
-        this.deliver({ type: 'started', ...(model ? { model } : {}) });
+        // The version is said once, when a conversation starts — the model is
+        // on the phone's composer. A resumed one said it when it began; one
+        // whose conversation was lost starts anew.
+        if (!params.resume || resumeLost) {
+          const v = await version;
+          this.deliver({ type: 'started', ...(v ? { version: v } : {}) });
+        }
         this.ctx.emit({ type: 'ready' });
       }
       // Consume the event stream for the rest of this session's life. A clean
