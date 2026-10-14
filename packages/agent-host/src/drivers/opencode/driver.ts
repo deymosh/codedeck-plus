@@ -570,7 +570,11 @@ export class OpenCodeSession implements DriverSession {
         case 'session.tool.called': {
           const name = this.toolCalls.get(event.data.id)?.name ?? '';
           this.toolCalls.set(event.data.id, { name, input: (event.data.input ?? {}) as Record<string, unknown> });
-          if (name === SUBAGENT_TOOL) this.noteSubagentCall(event.data.id, event.data.input);
+          // Only this session's own calls start children it pairs: a
+          // sub-agent's own sub-agent is announced to that sub-agent, never
+          // to us, so its call would wait here forever and the next child
+          // of ours would be paired with it.
+          if (name === SUBAGENT_TOOL && !child) this.noteSubagentCall(event.data.id, event.data.input);
           this.deliver({
             type: 'tool-start',
             callId: event.data.id,
@@ -734,7 +738,11 @@ export class OpenCodeSession implements DriverSession {
           break;
         }
         case 'session.execution.started': {
-          if (child) break;
+          // A sub-agent asked again works again: it has not ended.
+          if (child) {
+            child.ended = false;
+            break;
+          }
           // V2 starts a turn with this, not with a `busy` status: without it
           // the phone would only ever learn a turn had ended.
           this.turnCompleted = false;

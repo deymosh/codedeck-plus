@@ -345,6 +345,43 @@ describe('OpenCode sub-agents', () => {
     ]);
   });
 
+  it("a sub-agent's own sub-agent does not take the next child's call", async () => {
+    const ctx = start(clientWith([
+      ...awaitedSubagent('ses_child').slice(0, 4),
+      // The child calls a sub-agent of its own; that grandchild is announced
+      // to the child, not to this session.
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_child', assistantMessageID: 'm2', id: 'call_g', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_child', assistantMessageID: 'm2', id: 'call_g', input: { agent: 'explore', description: 'nested' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_grand', parentID: 'ses_child', projectID: 'p', location: { directory: '/tmp' }, slug: 'g', title: 'Grandchild' } },
+      { type: 'session.execution.succeeded', data: { sessionID: 'ses_child' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'done' }], executed: false } },
+      // A second sub-agent of ours, left running: its task names its own call.
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm3', id: 'call_t', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm3', id: 'call_t', input: { agent: 'general', description: 'second' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_two', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'two', title: 'Two' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm3', id: 'call_t', content: [{ type: 'text', text: 'started' }], executed: false } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([
+      expect.objectContaining({ taskId: 'ses_two', status: 'running', callId: 'call_t', title: 'second' }),
+    ]);
+  });
+
+  it('a sub-agent that ran once and is asked again is running again', async () => {
+    const ctx = start(clientWith([
+      ...awaitedSubagent('ses_child').slice(0, 5),
+      // The same child starts a second execution before its call returns.
+      { type: 'session.execution.started', data: { sessionID: 'ses_child' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'started' }], executed: false } },
+      { type: 'session.execution.succeeded', data: { sessionID: 'ses_child' } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([
+      expect.objectContaining({ taskId: 'ses_child', status: 'running' }),
+      expect.objectContaining({ taskId: 'ses_child', status: 'completed' }),
+    ]);
+  });
+
   it("a failing sub-agent ends its own task, not the session's turn", async () => {
     const ctx = start(clientWith([
       { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
