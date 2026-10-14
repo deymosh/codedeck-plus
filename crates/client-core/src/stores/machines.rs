@@ -17,11 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::{BridgeHostKind, PROTOCOL_VERSION};
 use protocol::common::{
-    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, PermissionRule,
+    AgentAccount, AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo,
+    PermissionRule, SignInAttempt, SignInStatus,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
-    AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PermissionRulesMsg, PluginAckMsg, PluginsMsg,
+    AccountSignInMsg, AccountsMsg, AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PermissionRulesMsg, PluginAckMsg, PluginsMsg,
     ProviderProfilesMsg,
     SessionListMsg, SessionMcpMsg, SlashCommand,
 };
@@ -302,6 +303,10 @@ pub struct MachineView {
     /// they live on the bridge's machine and are asked for when shown.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub permission_rules: BTreeMap<String, AgentPermissionRules>,
+    /// Provider accounts, by agent id. Never persisted, like `plugins`: the
+    /// keys and sign-ins live on the bridge's machine.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, AgentAccounts>,
     /// Installs and removals asked of the bridge, by agent id. Never
     /// persisted, like `plugins`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -467,6 +472,43 @@ pub struct AgentPermissionRules {
     pub busy: Vec<String>,
 }
 
+/// One agent's provider accounts on a machine, as the bridge last reported
+/// them, the changes asked for and not answered yet, and the sign-in under
+/// way. Absent until the first answer: a page shows it loading.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAccounts {
+    /// The accounts with a connection.
+    pub connected: Vec<AgentAccount>,
+    /// Every account the agent can connect, once a picker asked for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<Vec<AgentAccount>>,
+    /// Why the last list or change failed. What is held is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Ids of the accounts changed and not answered yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub busy: Vec<String>,
+    /// The last sign-in started from this client, until another starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<SignInView>,
+}
+
+/// A sign-in as this client follows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInView {
+    pub account: String,
+    /// `started` from the moment it is asked for; the bridge's answers move
+    /// it on.
+    pub status: SignInStatus,
+    /// What to do, once the machine said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<SignInAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// An install or removal of an agent asked of the bridge: in flight until
 /// the bridge takes it up, or refused. The install itself then shows in the
 /// agent's `install`.
@@ -531,6 +573,7 @@ impl MachineView {
             plugins: BTreeMap::new(),
             mcp: BTreeMap::new(),
             permission_rules: BTreeMap::new(),
+            accounts: BTreeMap::new(),
             agent_actions: BTreeMap::new(),
             session_grant: None,
             session_grant_sent: None,
@@ -561,6 +604,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
             m.plugins.clear();
             m.mcp.clear();
             m.permission_rules.clear();
+            m.accounts.clear();
             m.agent_actions.clear();
             m.incompatible = None;
             for s in m.sessions.values_mut() {
@@ -1166,6 +1210,80 @@ impl MachinesState {
                     a.error = None;
                     a.rules = msg.rules.clone();
                 }
+            }
+        });
+    }
+
+    /// A list replaces what it covers — the connected accounts always, the
+    /// whole catalogue when it is one; a failure keeps what is held and says
+    /// why. Either way it settles every change in flight: the bridge answers
+    /// each with exactly one message.
+    pub fn apply_accounts(&mut self, machine_pubkey: &str, msg: &AccountsMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.accounts.entry(msg.agent.clone()).or_default();
+            a.busy.clear();
+            if let Some(error) = &msg.error {
+                a.error = Some(error.clone());
+                return;
+            }
+            a.error = None;
+            a.connected = msg.accounts.iter().filter(|x| !x.connections.is_empty()).cloned().collect();
+            if msg.all {
+                a.all = Some(msg.accounts.clone());
+            } else if let Some(all) = &mut a.all {
+                // Keep the catalogue's connections in step with the list.
+                for account in all.iter_mut() {
+                    account.connections =
+                        msg.accounts.iter().find(|x| x.id == account.id).map(|x| x.connections.clone()).unwrap_or_default();
+                }
+            }
+        });
+    }
+
+    /// A change was sent: its account is busy until answered, and a sign-in
+    /// is followed from here.
+    pub fn account_action_sent(&mut self, machine_pubkey: &str, agent: &str, account: &str, sign_in: bool) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.accounts.entry(agent.to_string()).or_default();
+            if !a.busy.iter().any(|b| b == account) {
+                a.busy.push(account.to_string());
+            }
+            if sign_in {
+                a.sign_in = Some(SignInView { account: account.to_string(), status: SignInStatus::Started, attempt: None, error: None });
+            }
+        });
+    }
+
+    /// Where a sign-in stands. Its link and code stay shown until it ends;
+    /// one about another sign-in than the one followed is not this client's
+    /// to show.
+    pub fn apply_account_sign_in(&mut self, machine_pubkey: &str, msg: &AccountSignInMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.accounts.entry(msg.agent.clone()).or_default();
+            a.busy.retain(|b| *b != msg.account);
+            let Some(view) = &mut a.sign_in else { return };
+            if view.account != msg.account {
+                return;
+            }
+            let followed = view.attempt.as_ref().map(|x| x.attempt_id.clone());
+            if let (Some(followed), Some(id)) = (&followed, &msg.attempt_id) {
+                if followed != id {
+                    return;
+                }
+            }
+            view.status = msg.status;
+            view.error = msg.error.clone();
+            if let Some(attempt) = &msg.attempt {
+                view.attempt = Some(attempt.clone());
+            }
+        });
+    }
+
+    /// The sign-in's result has been seen: stop showing it.
+    pub fn dismiss_sign_in(&mut self, machine_pubkey: &str, agent: &str) {
+        self.with_machine(machine_pubkey, |m| {
+            if let Some(a) = m.accounts.get_mut(agent) {
+                a.sign_in = None;
             }
         });
     }
@@ -1802,6 +1920,74 @@ mod tests {
         assert_eq!(held(&st).failure, None, "a new action clears the last refusal");
         st.apply_agent_ack("pk", &ack(true, None));
         assert_eq!(held(&st), AgentActionState::default());
+    }
+
+    #[test]
+    fn accounts_follow_a_sign_in_keep_their_list_on_errors_and_are_never_persisted() {
+        use protocol::common::AccountConnection;
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        let account = |id: &str, connected: bool| AgentAccount {
+            id: id.into(),
+            name: id.into(),
+            methods: vec![],
+            connections: if connected {
+                vec![AccountConnection { id: "c".into(), label: "l".into(), kind: "key".into(), active: true, removable: true }]
+            } else {
+                vec![]
+            },
+        };
+        let list = |accounts: Vec<AgentAccount>, all: bool, error: Option<&str>| AccountsMsg {
+            agent: "opencode".into(),
+            accounts,
+            all,
+            error: error.map(Into::into),
+        };
+        let held = |st: &MachinesState| st.machine("pk").unwrap().accounts["opencode"].clone();
+
+        st.apply_accounts("pk", &list(vec![account("a", true), account("b", false)], true, None));
+        assert_eq!(held(&st).connected.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(held(&st).all.as_ref().map(Vec::len), Some(2));
+
+        // A sign-in: followed from the moment it is asked, its attempt kept
+        // until it ends; an answer about another attempt is not shown.
+        st.account_action_sent("pk", "opencode", "b", true);
+        assert_eq!(held(&st).busy, ["b"]);
+        let attempt = SignInAttempt {
+            attempt_id: "con_1".into(),
+            url: "https://x".into(),
+            instructions: "Enter code: X".into(),
+            expires_at: 1,
+            paste_back: false,
+        };
+        let sign_in = |status, id: &str, attempt: Option<SignInAttempt>| AccountSignInMsg {
+            agent: "opencode".into(),
+            account: "b".into(),
+            status,
+            attempt_id: Some(id.into()),
+            attempt,
+            error: None,
+        };
+        st.apply_account_sign_in("pk", &sign_in(SignInStatus::Started, "con_1", Some(attempt.clone())));
+        st.apply_account_sign_in("pk", &sign_in(SignInStatus::Failed, "con_0", None));
+        assert_eq!(held(&st).sign_in.unwrap().status, SignInStatus::Started);
+        st.apply_account_sign_in("pk", &sign_in(SignInStatus::Complete, "con_1", None));
+        let view = held(&st).sign_in.unwrap();
+        assert_eq!((view.status, view.attempt), (SignInStatus::Complete, Some(attempt)));
+        assert!(held(&st).busy.is_empty());
+
+        // A connected list after a change keeps the catalogue in step; a
+        // failure keeps both.
+        st.apply_accounts("pk", &list(vec![account("a", true), account("b", true)], false, None));
+        assert_eq!(held(&st).all.unwrap().iter().filter(|x| !x.connections.is_empty()).count(), 2);
+        st.apply_accounts("pk", &list(vec![], false, Some("no opencode")));
+        assert_eq!(held(&st).connected.len(), 2);
+        assert_eq!(held(&st).error.as_deref(), Some("no opencode"));
+
+        st.dismiss_sign_in("pk", "opencode");
+        assert!(held(&st).sign_in.is_none());
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert!(back["pk"].accounts.is_empty());
     }
 
     #[test]

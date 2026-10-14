@@ -24,9 +24,9 @@ use client_core::stores::live_text::LiveChange;
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
-    BareMsg, PairRequestMsg, PhoneToBridge, SessionIdMsg, SyncAckMsg, SyncRequestMsg,
+    AccountsRequestMsg, BareMsg, PairRequestMsg, PhoneToBridge, SessionIdMsg, SyncAckMsg, SyncRequestMsg,
 };
-use protocol::common::{EntryBody, SessionOption, SessionState};
+use protocol::common::{EntryBody, SessionOption, SessionState, SignInStatus};
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
@@ -416,6 +416,19 @@ impl<'a> Router<'a> {
             BridgeToPhone::PermissionRules(m) => {
                 self.stores.machines.apply_permission_rules(machine, m);
                 r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::Accounts(m) => {
+                self.stores.machines.apply_accounts(machine, m);
+                r.persist(StoreId::Machines);
+            }
+            BridgeToPhone::AccountSignIn(m) => {
+                self.stores.machines.apply_account_sign_in(machine, m);
+                r.persist(StoreId::Machines);
+                // A sign-in that completed added a connection: the page
+                // showing it needs the new list.
+                if m.status == SignInStatus::Complete {
+                    r.send(machine, PhoneToBridge::AccountsRequest(AccountsRequestMsg { agent: m.agent.clone(), all: false }));
+                }
             }
             BridgeToPhone::Commands(m) => {
                 self.stores.machines.apply_commands(machine, m);

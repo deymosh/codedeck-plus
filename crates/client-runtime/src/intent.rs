@@ -17,12 +17,12 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg,
+    AccountActionMsg, AccountsRequestMsg, AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     StopTaskMsg,
 };
-use protocol::common::{AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
+use protocol::common::{AccountAction, AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
 use serde::{Deserialize, Serialize};
 
@@ -345,6 +345,26 @@ pub enum Intent {
         machine: String,
         agent: String,
         ids: Vec<String>,
+    },
+    /// Ask for an agent's accounts on a machine: the connected ones, or with
+    /// `all` every one it can connect.
+    RequestAccounts {
+        machine: String,
+        agent: String,
+        all: bool,
+    },
+    /// Change one account. A key or a pasted address is a secret: sent,
+    /// never kept or logged.
+    AccountAction {
+        machine: String,
+        agent: String,
+        account: String,
+        action: AccountAction,
+    },
+    /// Stop showing the agent's last sign-in.
+    DismissSignIn {
+        machine: String,
+        agent: String,
     },
     /// Ask for a running session's MCP servers.
     RequestSessionMcp {
@@ -785,6 +805,19 @@ pub fn apply(
                 r.persist(StoreId::Machines);
                 r.send(&machine, PhoneToBridge::PermissionRulesRemove(PermissionRulesRemoveMsg { agent, ids }));
             }
+        }
+        Intent::RequestAccounts { machine, agent, all } => {
+            r.send(&machine, PhoneToBridge::AccountsRequest(AccountsRequestMsg { agent, all }))
+        }
+        Intent::AccountAction { machine, agent, account, action } => {
+            let sign_in = matches!(action, AccountAction::SignIn { .. });
+            stores.machines.account_action_sent(&machine, &agent, &account, sign_in);
+            r.persist(StoreId::Machines);
+            r.send(&machine, PhoneToBridge::AccountAction(AccountActionMsg { agent, account, action }));
+        }
+        Intent::DismissSignIn { machine, agent } => {
+            stores.machines.dismiss_sign_in(&machine, &agent);
+            r.persist(StoreId::Machines);
         }
         Intent::RequestSessionMcp { machine, session_id } => r.send(
             &machine,
