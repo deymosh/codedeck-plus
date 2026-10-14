@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { OpenCodeClient } from '@opencode/client';
 import { OpenCodeDriver, openCodeContext, pickDefaultModel, reasoningLevels, toFormAnswer, toQuestionSpecs } from '../driver';
 import type { StartSession } from '../../../sdk/types';
+import { PARTIAL_INTERVAL_MS } from '../../../sdk/partial';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
 
 type V2 = Record<string, unknown> & { type: string; data?: Record<string, unknown> };
@@ -548,7 +549,6 @@ describe('the pure helpers', () => {
     expect(reasoningLevels([{ id: 'low' }, { id: 'high' }]).map((l) => l.id)).toEqual(['default', 'low', 'high']);
     expect(reasoningLevels([])).toEqual([]);
   });
-
   it('breaks a context window into what it holds', () => {
     const window = openCodeContext({ input: 100, output: 50, reasoning: 25, cache: { read: 1000, write: 5 } }, 10_000);
     expect(window?.usedTokens).toBe(1180);
@@ -564,5 +564,93 @@ describe('the pure helpers', () => {
     const multi = [{ key: 'q1', type: 'multiselect', title: 'Which ones?', options: [] }];
     expect(toQuestionSpecs(multi)[0]!.multiSelect).toBe(true);
     expect(toFormAnswer(multi, [{ type: 'selected', labels: ['A', 'B'] }])).toEqual({ q1: ['A', 'B'] });
+  });
+});
+
+describe('OpenCode live reply text', () => {
+  // Longer than one coalescing interval, so a held part would have been sent.
+  const pastOneTick = () => new Promise((resolve) => setTimeout(resolve, PARTIAL_INTERVAL_MS + 150));
+  const executionStarted = { type: 'session.execution.started', data: { sessionID: 'ses_1' } };
+  const stepStarted = { type: 'session.step.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', agent: 'build', model: { providerID: 'opencode', id: 'exo-free' }, started: 0 } };
+
+  /** A client whose stream yields `before`, waits for the returned release,
+   *  then yields `after` — so a test can hold a turn open across a tick. */
+  function gatedClient(before: V2[], after: V2[]): { client: OpenCodeClient; release: () => void } {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    async function* stream(): AsyncGenerator<V2> {
+      for (const e of before) yield e;
+      await gate;
+      for (const e of after) yield e;
+    }
+    const client = clientWith([], { event: { subscribe: vi.fn(() => stream()) } });
+    return { client, release };
+  }
+
+  it('coalesces reply deltas into partials, and the completed text names its part', async () => {
+    const { client, release } = gatedClient(
+      [
+        executionStarted,
+        stepStarted,
+        { type: 'session.text.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0 } },
+        { type: 'session.text.delta', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, delta: 'Hel' } },
+        { type: 'session.text.delta', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, delta: 'lo' } },
+      ],
+      [
+        { type: 'session.text.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, text: 'Hello' } },
+        { type: 'session.idle', data: { sessionID: 'ses_1' } },
+      ],
+    );
+    const ctx = start(client);
+    await ctx.waitFor((e) => e.type === 'partial');
+    // One event for the tick's whole text, not one per delta.
+    expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([
+      { type: 'partial', key: 'm1:0', entryType: 'text', offset: 0, text: 'Hello' },
+    ]);
+
+    release();
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'text'));
+    expect(ctx.entries().find((e) => e.entryType === 'text')).toMatchObject({ text: 'Hello', part: 'm1:0' });
+  });
+
+  it('streams no reasoning and no sub-agent text', async () => {
+    const { client, release } = gatedClient(
+      [
+        executionStarted,
+        stepStarted,
+        { type: 'session.reasoning.delta', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, delta: 'hmm' } },
+        { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+        { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'explore', description: 'find things' }, executed: false } },
+        { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+        { type: 'session.text.delta', data: { sessionID: 'ses_child', assistantMessageID: 'm2', ordinal: 0, delta: 'inner' } },
+      ],
+      [{ type: 'session.idle', data: { sessionID: 'ses_1' } }],
+    );
+    const ctx = start(client);
+    await ctx.waitFor((e) => e.type === 'ready');
+    // A tick passes with the turn still open: a streamed part would be sent.
+    await pastOneTick();
+    expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([]);
+    release();
+    await ctx.ended();
+  });
+
+  it('drops reply text a turn end caught before its interval elapsed', async () => {
+    const { client, release } = gatedClient(
+      [
+        executionStarted,
+        stepStarted,
+        { type: 'session.text.delta', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, delta: 'late' } },
+      ],
+      [{ type: 'session.idle', data: { sessionID: 'ses_1' } }],
+    );
+    const ctx = start(client);
+    await ctx.waitFor((e) => e.type === 'ready');
+    // The delta is held, then the turn ends before the interval elapses.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    release();
+    await ctx.waitFor((e) => e.type === 'turn' && e.state === 'idle');
+    await pastOneTick();
+    expect(ctx.events.filter((e) => e.type === 'partial')).toEqual([]);
   });
 });

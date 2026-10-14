@@ -45,6 +45,9 @@ export interface OpenCodeText {
   text: string;
   /** Set when a sub-agent's child session produced it. */
   subagent?: Subagent;
+  /** The streamed part this entry completes, when the agent streamed it: the
+   *  `key` its `partial` messages carried. */
+  part?: string;
 }
 
 /** The model's reasoning for a step, once it stopped streaming. */
@@ -150,7 +153,13 @@ export function opencodeEventToEntries(event: OpenCodeEvent, ctx: TranslateConte
       // call already carries it as input: it is not shown again.
       if (event.subagent && event.role === 'user') return [];
       return tag(
-        [{ entryType: 'text', role: event.role === 'user' ? 'user' : 'agent', text: event.text, timestamp: ts }],
+        [{
+          entryType: 'text',
+          role: event.role === 'user' ? 'user' : 'agent',
+          text: event.text,
+          ...(event.part ? { part: event.part } : {}),
+          timestamp: ts,
+        }],
         event.subagent,
       );
     case 'reasoning':
