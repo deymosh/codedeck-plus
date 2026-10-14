@@ -182,6 +182,22 @@ pub struct McpActionMsg {
     pub names: Vec<String>,
 }
 
+/// Ask for the permission rules an agent saved (agents with
+/// `supports.permissionRules`). Reply: `permission-rules`, to the asking
+/// client only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PermissionRulesRequestMsg {
+    pub agent: String,
+}
+
+/// Revoke saved permission rules, by their `id`s. Reply: the new
+/// `permission-rules`, to the asking client only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PermissionRulesRemoveMsg {
+    pub agent: String,
+    pub ids: Vec<String>,
+}
+
 /// Switch one MCP server on or off in one running session. Reply: the
 /// session's new `session-mcp`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -464,6 +480,8 @@ pub enum PhoneToBridge {
     /// `session-mcp`.
     SessionMcpRequest(SessionIdMsg),
     SessionMcpToggle(SessionMcpToggleMsg),
+    PermissionRulesRequest(PermissionRulesRequestMsg),
+    PermissionRulesRemove(PermissionRulesRemoveMsg),
     SetCredentials(SetCredentialsMsg),
     PairRequest(PairRequestMsg),
     SetProviderProfile(SetProviderProfileMsg),
@@ -528,6 +546,8 @@ mod tests {
         rt(&json!({"v":12,"type":"mcp-action","agent":"opencode","action":"disable","names":["github"]}));
         rt(&json!({"v":12,"type":"session-mcp-request","sessionId":"s"}));
         rt(&json!({"v":12,"type":"session-mcp-toggle","sessionId":"s","name":"github","enabled":false}));
+        rt(&json!({"v":12,"type":"permission-rules-request","agent":"opencode"}));
+        rt(&json!({"v":12,"type":"permission-rules-remove","agent":"opencode","ids":["psv_1","psv_2"]}));
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"provider-profiles-request"}));

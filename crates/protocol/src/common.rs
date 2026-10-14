@@ -96,6 +96,32 @@ pub struct AgentSupports {
     /// (`background_task` entries), and `stop-task` stops it.
     #[serde(default)]
     pub tasks: bool,
+    /// The agent keeps the "always allow" answers given on permission cards
+    /// as rules of its own, which outlive the session that made them;
+    /// `permission-rules-request` / `permission-rules-remove` list and revoke
+    /// them, for the whole machine.
+    #[serde(default)]
+    pub permission_rules: bool,
+}
+
+/// One rule an agent saved from an "always allow" answer: every later
+/// session in `project` runs a call of `tool` matching `pattern` without
+/// asking, until the rule is removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRule {
+    /// What `permission-rules-remove` names it by.
+    pub id: String,
+    /// The directory of the project it applies in.
+    pub project: String,
+    /// The tool it lets run, in the agent's own name for it (`shell`, `edit`).
+    pub tool: String,
+    /// What the call must match, in the agent's own pattern syntax
+    /// (`git status *`, `src/**`); `*` alone matches every call of the tool.
+    pub pattern: String,
+    /// When it was saved, milliseconds since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub created_at: u64,
 }
 
 // --- MCP servers ---
