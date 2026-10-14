@@ -267,6 +267,32 @@ and hides it as soon as an entry naming its `part` is in the list, so the
 row and its entry never show together and nothing moves when one replaces
 the other.
 
+### Agent styles
+
+The core caches agents' styles by hash (`stores::agent_styles`, persisted
+under its own key and written only when it changes, not with the session
+lists; it stays out of the config backup). When the session on screen runs
+an agent whose catalog names a style the cache lacks — on opening the
+session, or at a heartbeat while it is open — it sends one
+`agent-style-request`; a request in flight is not repeated, and a reply is
+kept only if the style hashes to the name it came under. When one arrives,
+styles no paired bridge names any more are dropped. The FFI hands each
+agent its cached style ready to draw: colours as ARGB (a bad value is no
+colour), a bouncing spinner as the frame sequence it plays.
+
+The Android session screen turns the session agent's style into an
+`AgentLook` (`ui/components/AgentLook.kt`) — every knob falling back to the
+app's own look — and provides it to the rows below it. `ThinkingGlyph`
+plays the agent's spinner in its accent; the working line says one of its
+working words per turn; a tool group leads with the glyph of its calls'
+kind; the user's message takes the agent's shape; an empty session shows
+the wordmark, drawn as quarter-cell blocks on a canvas (a phone's fonts
+draw block elements at widths of their own, which pulls a logo apart). The
+mode the session runs in sits beside the send button, in the mode's colour.
+Two knobs are not drawn yet: `workingCounter` (the phone has no turn timer
+or running token count to show) and `resultMark` (a result has no row of
+its own; it opens in the tool sheet).
+
 ### Direct link
 
 A bridge can also be reached without the relays (the wire is in
