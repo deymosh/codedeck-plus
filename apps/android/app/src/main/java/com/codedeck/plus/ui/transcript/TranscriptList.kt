@@ -16,11 +16,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -162,6 +165,19 @@ private fun TranscriptListContent(
     // viewport.
     val listState = remember { LazyListState(firstVisibleItemIndex = itemCount - 1) }
     val pin = rememberTranscriptPin(listState, itemCount)
+
+    // A reply being typed out grows the list without adding a row, and its
+    // markdown is laid out a moment after each step, so no new-entry signal
+    // marks it. While one is typing and the user has not scrolled away, any
+    // content below the viewport is followed at once, as a terminal does.
+    val currentPin by rememberUpdatedState(pin)
+    val typing = liveRows.isNotEmpty()
+    LaunchedEffect(typing) {
+        if (!typing) return@LaunchedEffect
+        snapshotFlow { listState.canScrollForward }.collect { behind ->
+            if (behind && currentPin.pinned) currentPin.jumpToBottom()
+        }
+    }
 
     Column(modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
