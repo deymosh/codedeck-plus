@@ -99,6 +99,19 @@ internal object DesignFixtures {
         wordmarkSplit = 20u, accent = null, modeColors = mapOf("build" to 0xFF5C9CF5u, "plan" to 0xFF9D7CD8u),
     )
 
+    /** DeepSeek Harness's style as its driver reports it: a one-tone wordmark and nothing else. */
+    val deepseekStyle = UniffiAgentStyle(
+        spinnerFrames = emptyList(), spinnerIntervalMs = 0u, workingWords = emptyList(), workingCounter = false,
+        toolGlyphs = emptyMap(), resultMark = null, userMessage = UniffiUserMessageShape.Bubble,
+        wordmark = listOf(
+            "   ▄                               ▄   ",
+            "█▀▀█ █▀▀█ █▀▀█ █▀▀█ █▀▀▀ █▀▀█ █▀▀█ █ ▄▀",
+            "█  █ █▀▀▀ █▀▀▀ █  █ ▀▀▀█ █▀▀▀ █▀▀▀ █▀▄ ",
+            "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀",
+        ),
+        wordmarkSplit = 0u, accent = null, modeColors = emptyMap(),
+    )
+
     val claude = UniffiAgent(
         id = "claude-code", displayName = "Claude Code",
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
@@ -394,5 +407,13 @@ internal object DesignFixtures {
             (1..8).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null, emptyList()) },
         modes = opencode.modes, mode = "build", modePending = false,
         efforts = emptyList(), effort = null,
+    )
+
+    /** A DeepSeek Harness session on its own model, asking first. */
+    val deepseekOptions = SessionOptions(
+        modelName = "DeepSeek-V4-Pro", model = "deepseek-v4-pro",
+        models = listOf(UniffiModelEntry("deepseek-v4-pro", "DeepSeek-V4-Pro", null, null, emptyList())),
+        modes = listOf(UniffiOptionChoice("ask", "Ask first", null), UniffiOptionChoice("default", "Default", null)), mode = "ask", modePending = false,
+        efforts = listOf(UniffiOptionChoice("high", "High", null)), effort = "high",
     )
 }

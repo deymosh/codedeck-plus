@@ -27,6 +27,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.rows.ActivityBar
 import com.codedeck.plus.ui.transcript.rows.ActivityRow
@@ -149,8 +150,12 @@ private fun TranscriptListContent(
     }
     val rows = remember(transcriptRows, liveRows) { transcriptRows + liveRows }
     val itemCount = rows.size + visibleOutbox.size + (if (showSyncGap) 1 else 0) + (if (running) 1 else 0)
+    // An agent says its name and version as a session starts, before anyone
+    // has written a word: a transcript of only such lines is still a new
+    // session, which opens on the logo with those lines beneath it.
+    val opening = itemCount == rows.size && liveRows.isEmpty() && displayEntries.all { it is DisplayEntry.Status }
 
-    if (itemCount == 0) {
+    if (opening) {
         val syncing = syncState == "requested" || syncState == "syncing"
         val look = LocalAgentLook.current
         Column(
@@ -158,9 +163,19 @@ private fun TranscriptListContent(
             verticalArrangement = Arrangement.spacedBy(Tokens.Space5, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // A new session opens on its agent's own logo, as its CLI does.
-            if (!syncing && look.wordmark.isNotEmpty()) {
-                Wordmark(look.wordmark, look.wordmarkSplit, look.accent ?: Tokens.Text, label = "${look.name} logo")
+            // A new session opens on its agent's own logo, as its CLI does,
+            // with the lines the agent opened with set close beneath it.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Tokens.Space2),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (!syncing && look.wordmark.isNotEmpty()) {
+                    Wordmark(look.wordmark, look.wordmarkSplit, look.accent ?: Tokens.Text, label = "${look.name} logo")
+                }
+                displayEntries.forEach { entry ->
+                    val text = (entry as DisplayEntry.Status).text
+                    if (text.isNotBlank()) Text(text, color = Tokens.TextDim, fontSize = Tokens.TextXs, textAlign = TextAlign.Center)
+                }
             }
             Text(
                 if (syncing) "Syncing transcript…" else "No transcript yet — send a message to start.",

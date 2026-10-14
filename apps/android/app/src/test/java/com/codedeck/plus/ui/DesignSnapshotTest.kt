@@ -106,8 +106,9 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             }
         }
     },
-    "session_new_claude" to { NewSession(claudeLook, DesignFixtures.claudeOptions) },
-    "session_new_opencode" to { NewSession(opencodeLook, DesignFixtures.opencodeOptions) },
+    "session_new_claude" to { NewSession(claudeLook, DesignFixtures.claudeOptions, "Claude Code 2.1.283") },
+    "session_new_opencode" to { NewSession(opencodeLook, DesignFixtures.opencodeOptions, "OpenCode 2.0.28") },
+    "session_new_deepseek" to { NewSession(deepseekLook, DesignFixtures.deepseekOptions, "DeepSeek Harness 0.2.0-rc.2") },
     "transcript_opencode" to {
         Styled(opencodeLook) {
             TranscriptList(
@@ -347,19 +348,20 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
 
 private val claudeLook = AgentLook.of("Claude Code", DesignFixtures.claudeStyle, "plan")
 private val opencodeLook = AgentLook.of("OpenCode", DesignFixtures.opencodeStyle, "build")
+private val deepseekLook = AgentLook.of("DeepSeek Harness", DesignFixtures.deepseekStyle, "ask")
 
 /** [content] drawn as a session of the agent [look] belongs to. */
 @Composable
 private fun Styled(look: AgentLook, content: @Composable () -> Unit) =
     CompositionLocalProvider(LocalAgentLook provides look, content = content)
 
-/** A session with nothing in it yet: the agent's logo over an empty transcript, and the composer. */
+/** A session nobody has written in yet: the agent's logo over the line it opened with, and the composer. */
 @Composable
-private fun NewSession(look: AgentLook, options: SessionOptions) = Styled(look) {
+private fun NewSession(look: AgentLook, options: SessionOptions, version: String) = Styled(look) {
     Column(Modifier.background(Tokens.Bg)) {
         SessionTopBar(title = "New session", workspace = "/home/me/code/codedeck-plus", sessionState = "idle", onBack = {}, trailing = { ContextRing(0.0) {} })
         TranscriptList(
-            displayEntries = emptyList(), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
+            displayEntries = listOf(DisplayEntry.Status(1, version)), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
             syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = false,
             activity = null, canStopTasks = false, dispatch = {}, modifier = Modifier.weight(1f),
         )
@@ -390,6 +392,7 @@ class DesignSnapshotTest {
     @Test fun session_composer_opencode() = paparazzi.page("session_composer_opencode")
     @Test fun session_new_claude() = paparazzi.page("session_new_claude")
     @Test fun session_new_opencode() = paparazzi.page("session_new_opencode")
+    @Test fun session_new_deepseek() = paparazzi.page("session_new_deepseek")
     @Test fun transcript_opencode() = paparazzi.page("transcript_opencode")
     @Test fun session_options() = paparazzi.page("session_options")
     @Test fun session_options_more() = paparazzi.page("session_options_more")
