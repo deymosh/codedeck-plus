@@ -30,7 +30,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
-use client_runtime::client_core::stores::machines::{AgentActionState, AgentMcp, AgentPermissionRules, AgentPlugins, SessionMcp};
+use client_runtime::client_core::stores::machines::{
+    AgentAccounts, AgentActionState, AgentMcp, AgentPermissionRules, AgentPlugins, SessionMcp,
+};
 use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
@@ -378,6 +380,9 @@ pub struct UniffiAgent {
     /// The agent keeps "always allow" answers as rules of its own;
     /// `RequestPermissionRules` / `RemovePermissionRules` list and revoke them.
     pub supports_permission_rules: bool,
+    /// Provider keys and sign-ins can be connected from the phone
+    /// (`RequestAccounts` / `AccountAction`), without restarting the agent.
+    pub supports_accounts: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
     /// `ready` / `not_installed` / `installing` / `failed`; sessions start
     /// only on a `ready` agent.
@@ -521,6 +526,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>, style
         supports_plugins: a.supports.plugins,
         supports_mcp: a.supports.mcp,
         supports_permission_rules: a.supports.permission_rules,
+        supports_accounts: a.supports.accounts,
         supports_tasks: a.supports.tasks,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
         install_state: install_state.into(),
@@ -556,6 +562,9 @@ pub struct UniffiMachineSummary {
     /// Saved permission rules, one entry per agent that has answered
     /// `RequestPermissionRules`.
     pub permission_rules: Vec<UniffiAgentPermissionRules>,
+    /// Provider accounts, one entry per agent that has answered
+    /// `RequestAccounts`.
+    pub accounts: Vec<UniffiAgentAccounts>,
     /// The direct endpoints the bridge advertises, in its order.
     pub direct_advertised: Vec<String>,
     /// Whether the bridge advertised a certificate pin (without one no
@@ -787,6 +796,151 @@ pub struct UniffiAgentPermissionRules {
     pub busy: Vec<String>,
 }
 
+/// A condition on an earlier answer of the same form.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiFieldCondition {
+    pub key: String,
+    pub value: String,
+    pub not: bool,
+}
+
+/// One question a connection method asks; `options` (id, label,
+/// description) when it takes one of them, `when` the answers it is asked
+/// under.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAccountField {
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub required: bool,
+    pub options: Vec<UniffiOptionChoice>,
+    pub placeholder: Option<String>,
+    pub default_value: Option<String>,
+    pub when: Vec<UniffiFieldCondition>,
+}
+
+/// One way to connect an account. `kind`: `key`, `sign-in`, or `unknown`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAccountMethod {
+    pub id: String,
+    pub kind: String,
+    pub label: Option<String>,
+    pub fields: Vec<UniffiAccountField>,
+}
+
+/// One access an account has. `kind`: `key`, `sign-in` or `env`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAccountConnection {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub active: bool,
+    pub removable: bool,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentAccount {
+    pub id: String,
+    pub name: String,
+    pub methods: Vec<UniffiAccountMethod>,
+    pub connections: Vec<UniffiAccountConnection>,
+}
+
+/// A sign-in as this client follows it. `status`: `started`, `complete`,
+/// `failed`, `expired`, `cancelled`. `url` / `instructions` once the
+/// machine said; with `paste_back`, the address the browser fails to open
+/// is pasted back (`Finish`). `expires_at` in ms since the epoch.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiSignIn {
+    pub account: String,
+    pub status: String,
+    pub attempt_id: Option<String>,
+    pub url: Option<String>,
+    pub instructions: Option<String>,
+    pub expires_at: Option<u64>,
+    pub paste_back: bool,
+    pub error: Option<String>,
+}
+
+/// One agent's provider accounts on a machine.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentAccounts {
+    pub agent: String,
+    pub connected: Vec<UniffiAgentAccount>,
+    /// Every account it can connect, once asked for with `all`.
+    pub all: Option<Vec<UniffiAgentAccount>>,
+    /// Why the last list or change failed (what is held is kept).
+    pub error: Option<String>,
+    /// Ids of accounts changed and not answered yet.
+    pub busy: Vec<String>,
+    pub sign_in: Option<UniffiSignIn>,
+}
+
+fn to_uniffi_account(a: &protocol::common::AgentAccount) -> UniffiAgentAccount {
+    UniffiAgentAccount {
+        id: a.id.clone(),
+        name: a.name.clone(),
+        methods: a
+            .methods
+            .iter()
+            .map(|m| UniffiAccountMethod {
+                id: m.id.clone(),
+                kind: wire_str(&m.kind),
+                label: m.label.clone(),
+                fields: m
+                    .fields
+                    .iter()
+                    .map(|f| UniffiAccountField {
+                        key: f.key.clone(),
+                        title: f.title.clone(),
+                        description: f.description.clone(),
+                        required: f.required,
+                        options: f.options.iter().map(to_uniffi_option_choice).collect(),
+                        placeholder: f.placeholder.clone(),
+                        default_value: f.default.clone(),
+                        when: f
+                            .when
+                            .iter()
+                            .map(|c| UniffiFieldCondition { key: c.key.clone(), value: c.value.clone(), not: c.not })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        connections: a
+            .connections
+            .iter()
+            .map(|c| UniffiAccountConnection {
+                id: c.id.clone(),
+                label: c.label.clone(),
+                kind: c.kind.clone(),
+                active: c.active,
+                removable: c.removable,
+            })
+            .collect(),
+    }
+}
+
+fn to_uniffi_agent_accounts(agent: &str, a: &AgentAccounts) -> UniffiAgentAccounts {
+    UniffiAgentAccounts {
+        agent: agent.to_string(),
+        connected: a.connected.iter().map(to_uniffi_account).collect(),
+        all: a.all.as_ref().map(|all| all.iter().map(to_uniffi_account).collect()),
+        error: a.error.clone(),
+        busy: a.busy.clone(),
+        sign_in: a.sign_in.as_ref().map(|s| UniffiSignIn {
+            account: s.account.clone(),
+            status: wire_str(&s.status),
+            attempt_id: s.attempt.as_ref().map(|x| x.attempt_id.clone()),
+            url: s.attempt.as_ref().map(|x| x.url.clone()),
+            instructions: s.attempt.as_ref().map(|x| x.instructions.clone()),
+            expires_at: s.attempt.as_ref().map(|x| x.expires_at),
+            paste_back: s.attempt.as_ref().is_some_and(|x| x.paste_back),
+            error: s.error.clone(),
+        }),
+    }
+}
+
 fn to_uniffi_agent_permission_rules(agent: &str, a: &AgentPermissionRules) -> UniffiAgentPermissionRules {
     UniffiAgentPermissionRules {
         agent: agent.to_string(),
@@ -917,6 +1071,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                     .iter()
                     .map(|(agent, a)| to_uniffi_agent_permission_rules(agent, a))
                     .collect(),
+                accounts: m.accounts.iter().map(|(agent, a)| to_uniffi_agent_accounts(agent, a)).collect(),
                 direct_advertised: m.direct.as_ref().map(|d| d.endpoints.clone()).unwrap_or_default(),
                 direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
                 direct_endpoints: m.direct_endpoints.clone(),

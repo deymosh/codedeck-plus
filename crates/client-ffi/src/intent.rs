@@ -21,7 +21,7 @@
 
 use client_runtime::intent::{Intent, SessionFileSend};
 use protocol::commands::{ProviderProfileWrite, QuestionAnswer};
-use protocol::common::{CredentialValues, ProviderModel, SessionOption};
+use protocol::common::{AccountAction, CredentialValues, ProviderModel, SessionOption};
 use protocol::tristate::Tristate;
 
 use crate::mcp::UniffiMcpServerSpec;
@@ -79,6 +79,38 @@ fn credential_values(writes: Vec<UniffiCredentialWrite>) -> CredentialValues {
             UniffiTristate::Set { value } => Some((w.id, Some(value))),
         })
         .collect()
+}
+
+/// A UniFFI-crossable mirror of [`protocol::common::AccountAction`]. `key`
+/// and `callback_url` are secrets: `Debug` leaves them out.
+#[derive(Clone, uniffi::Enum)]
+pub enum UniffiAccountAction {
+    Key { method: String, key: String, label: Option<String>, answers: std::collections::HashMap<String, String> },
+    SignIn { method: String, label: Option<String>, answers: std::collections::HashMap<String, String> },
+    Finish { attempt: String, callback_url: String },
+    Cancel { attempt: String },
+    Activate { connection: String },
+    Remove { connection: String },
+}
+
+impl std::fmt::Debug for UniffiAccountAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        AccountAction::from(self.clone()).fmt(f)
+    }
+}
+
+impl From<UniffiAccountAction> for AccountAction {
+    fn from(a: UniffiAccountAction) -> Self {
+        let answers = |m: std::collections::HashMap<String, String>| m.into_iter().collect();
+        match a {
+            UniffiAccountAction::Key { method, key, label, answers: a } => AccountAction::Key { method, key, label, answers: answers(a) },
+            UniffiAccountAction::SignIn { method, label, answers: a } => AccountAction::SignIn { method, label, answers: answers(a) },
+            UniffiAccountAction::Finish { attempt, callback_url } => AccountAction::Finish { attempt, callback_url },
+            UniffiAccountAction::Cancel { attempt } => AccountAction::Cancel { attempt },
+            UniffiAccountAction::Activate { connection } => AccountAction::Activate { connection },
+            UniffiAccountAction::Remove { connection } => AccountAction::Remove { connection },
+        }
+    }
 }
 
 /// UniFFI-crossable mirror of [`protocol::common::ProviderModel`] — a plain
@@ -222,6 +254,27 @@ pub enum UniffiIntent {
     /// Ask for the permission rules an agent saved on a machine; the answer
     /// lands in `UniffiMachineSummary.permission_rules`.
     RequestPermissionRules {
+        machine: String,
+        agent: String,
+    },
+    /// Ask for an agent's accounts on a machine — the connected ones, or with
+    /// `all` every one it can connect; the answer lands in
+    /// `UniffiMachineSummary.accounts`.
+    RequestAccounts {
+        machine: String,
+        agent: String,
+        all: bool,
+    },
+    /// Change one account; it is `busy` until the bridge answers, and a
+    /// sign-in shows in the agent's `sign_in`.
+    AccountAction {
+        machine: String,
+        agent: String,
+        account: String,
+        action: UniffiAccountAction,
+    },
+    /// Stop showing the agent's last sign-in.
+    DismissSignIn {
         machine: String,
         agent: String,
     },
@@ -513,6 +566,11 @@ impl TryFrom<UniffiIntent> for Intent {
             }
             UniffiIntent::RequestMcp { machine, agent } => Intent::RequestMcp { machine, agent },
             UniffiIntent::RequestPermissionRules { machine, agent } => Intent::RequestPermissionRules { machine, agent },
+            UniffiIntent::RequestAccounts { machine, agent, all } => Intent::RequestAccounts { machine, agent, all },
+            UniffiIntent::AccountAction { machine, agent, account, action } => {
+                Intent::AccountAction { machine, agent, account, action: action.into() }
+            }
+            UniffiIntent::DismissSignIn { machine, agent } => Intent::DismissSignIn { machine, agent },
             UniffiIntent::RemovePermissionRules { machine, agent, ids } => {
                 Intent::RemovePermissionRules { machine, agent, ids }
             }
@@ -625,6 +683,19 @@ impl TryFrom<UniffiIntent> for Intent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_account_action_never_logs_its_key_or_pasted_address() {
+        for action in [
+            UniffiAccountAction::Key { method: "key".into(), key: "sk-SECRET".into(), label: None, answers: Default::default() },
+            UniffiAccountAction::Finish { attempt: "con_1".into(), callback_url: "http://127.0.0.1:1/cb?code=SECRET".into() },
+        ] {
+            let intent = UniffiIntent::AccountAction { machine: "m".into(), agent: "opencode".into(), account: "a".into(), action };
+            assert!(!format!("{intent:?}").contains("SECRET"));
+            let mapped: Intent = intent.try_into().unwrap();
+            assert!(!format!("{mapped:?}").contains("SECRET"));
+        }
+    }
 
     #[test]
     fn send_input_maps_field_for_field() {

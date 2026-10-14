@@ -1,5 +1,6 @@
 package com.codedeck.plus.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,6 +41,7 @@ import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
+import uniffi.client_ffi.UniffiAccountAction
 import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
@@ -124,6 +126,8 @@ fun ProvidersContent(
     /** The core's base URL rule — a native call, so a snapshot, which cannot
      *  load the core, passes its own. */
     validBaseUrl: (String) -> Boolean = ::isValidProviderBaseUrl,
+    /** Opens straight on a step of connecting an account (for a snapshot). */
+    startAccounts: AccountsStep? = null,
 ) {
     val agent = machine.agents.firstOrNull { it.id == agentId }
     val agentName = agent?.displayName ?: agentId
@@ -138,6 +142,18 @@ fun ProvidersContent(
     var busy by remember(machine.pubkeyHex, agentId) { mutableStateOf(false) }
 
     LaunchedEffect(machine.pubkeyHex) { dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex)) }
+
+    // Accounts: what an agent connects through its own API (a key, a
+    // subscription's sign-in), beside the endpoints of its own profiles.
+    val accountsHere = agent?.supportsAccounts == true
+    val held = machine.accounts.firstOrNull { it.agent == agentId }
+    var step by remember(machine.pubkeyHex, agentId) { mutableStateOf(startAccounts) }
+    LaunchedEffect(machine.pubkeyHex, agentId, accountsHere) {
+        if (accountsHere) dispatch(UniffiIntent.RequestAccounts(machine.pubkeyHex, agentId, all = false))
+    }
+    fun act(account: String, action: UniffiAccountAction) =
+        dispatch(UniffiIntent.AccountAction(machine.pubkeyHex, agentId, account, action))
+    fun dismissSignIn() = dispatch(UniffiIntent.DismissSignIn(machine.pubkeyHex, agentId))
     LaunchedEffect(status) { if (status != null && status.state != "saving") busy = false }
 
     fun write(profileId: String, profile: UniffiProviderProfileWrite?) {
@@ -157,6 +173,36 @@ fun ProvidersContent(
         defaultModel = p.defaultModel,
     )
 
+    // A sign-in under way holds the page until the machine says how it went.
+    val signIn = held?.signIn
+    if (accountsHere && signIn != null) {
+        val name = (held.all.orEmpty() + held.connected).firstOrNull { it.id == signIn.account }?.name ?: signIn.account
+        val cancel = {
+            signIn.attemptId?.let { act(signIn.account, UniffiAccountAction.Cancel(it)) }
+            dismissSignIn()
+        }
+        val done = {
+            dismissSignIn()
+            step = null
+        }
+        // The system Back does what the page's own back does: leaving a
+        // sign-in under way cancels it, rather than leaving it to hold the
+        // page the next time it opens.
+        BackHandler { if (signIn.status == "started") cancel() else done() }
+        SignInPage(
+            accountName = name,
+            signIn = signIn,
+            onFinish = { address -> signIn.attemptId?.let { act(signIn.account, UniffiAccountAction.Finish(it, address)) } },
+            onCancel = cancel,
+            onDone = done,
+            onRetry = {
+                dismissSignIn()
+                step = AccountsStep.Connect(signIn.account)
+            },
+        )
+        return
+    }
+
     val open = editor
     if (open != null) {
         ProviderEditorPage(
@@ -172,13 +218,75 @@ fun ProvidersContent(
         return
     }
 
+    val current = step
+    if (accountsHere && current != null) {
+        BackHandler {
+            step = if (current is AccountsStep.Connect) AccountsStep.Picker else null
+        }
+        when (current) {
+            AccountsStep.Picker -> AccountPickerPage(
+                machine = machine,
+                agentId = agentId,
+                agentName = agentName,
+                held = held,
+                dispatch = dispatch,
+                onCustom = {
+                    step = null
+                    editor = ProviderEditor.New
+                },
+                onPick = { step = AccountsStep.Connect(it) },
+                onBack = { step = null },
+            )
+            is AccountsStep.Connect -> {
+                val account = (held?.all.orEmpty() + held?.connected.orEmpty()).firstOrNull { it.id == current.account }
+                if (account == null) {
+                    LaunchedEffect(current) { step = AccountsStep.Picker }
+                } else {
+                    AccountConnectPage(
+                        machine = machine,
+                        account = account,
+                        agentName = agentName,
+                        onConnect = { action ->
+                            act(account.id, action)
+                            // A key is done here; a sign-in opens its own page.
+                            if (action is UniffiAccountAction.Key) step = null
+                        },
+                        onBack = { step = AccountsStep.Picker },
+                    )
+                }
+            }
+        }
+        return
+    }
+
     Page(
         title = "$agentName providers",
         subtitle = machineLabel(machine.name),
         onBack = onBack,
-        bottomBar = { PrimaryButton("Add a provider", onClick = { editor = ProviderEditor.New }, modifier = Modifier.fillMaxWidth()) },
+        bottomBar = {
+            if (accountsHere) {
+                PrimaryButton("Connect a provider", onClick = { step = AccountsStep.Picker }, modifier = Modifier.fillMaxWidth())
+            } else {
+                PrimaryButton("Add a provider", onClick = { editor = ProviderEditor.New }, modifier = Modifier.fillMaxWidth())
+            }
+        },
     ) {
-        if (own.isEmpty()) {
+        if (accountsHere) ConnectedAccounts(held, agentName, ::act)
+        if (accountsHere && own.isEmpty()) {
+            if (held != null && held.connected.isEmpty() && held.error == null) {
+                Group {
+                    GroupBody {
+                        Text("Nothing connected yet", color = Tokens.Text, fontSize = Tokens.TextLg)
+                        Text(
+                            "Connect a provider $agentName knows with its API key, or sign in to a subscription — " +
+                                "GitHub Copilot, ChatGPT, OpenCode Zen. A gateway of your own works too, as a custom endpoint.",
+                            color = Tokens.TextMuted,
+                            fontSize = Tokens.TextSm,
+                        )
+                    }
+                }
+            }
+        } else if (own.isEmpty()) {
             Group {
                 GroupBody {
                     Text("No providers yet", color = Tokens.Text, fontSize = Tokens.TextLg)
@@ -191,7 +299,10 @@ fun ProvidersContent(
                 }
             }
         } else {
-            Group(footer = agent?.let { providerUse(it) + " Tokens stay on the machine; this phone never stores them." }) {
+            Group(
+                title = if (accountsHere) "Custom endpoints" else null,
+                footer = agent?.let { providerUse(it) + " Tokens stay on the machine; this phone never stores them." },
+            ) {
                 own.forEachIndexed { i, p ->
                     if (i > 0) Divider()
                     ProfileRow(p, startOpen = p.id == openProfile) {

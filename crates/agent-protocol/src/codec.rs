@@ -96,11 +96,14 @@ impl HostMessage {
             | Self::McpServers { .. }
             | Self::SessionMcp { .. }
             | Self::PermissionRules { .. }
+            | Self::Accounts { .. }
+            | Self::AccountSignIn { .. }
             | Self::CredentialChecked { .. }
             | Self::ProviderModels { .. }
             | Self::ProvidersSet { .. } => true,
             Self::SessionEvent { .. }
             | Self::AgentChanged { .. }
+            | Self::AccountSignInEnded { .. }
             | Self::RequestPermission(_)
             | Self::AskQuestion(_)
             | Self::RequestPlanApproval(_) => false,

@@ -542,6 +542,103 @@ fn saved_permission_rules_are_listed_and_revoked_through_the_agent_host() {
     assert_eq!(msgs.iter().filter(|m| matches!(m, BridgeToPhone::PermissionRules(r) if r.error.is_some())).count(), 2, "{msgs:?}");
 }
 
+#[test]
+fn accounts_are_connected_through_the_agent_host_and_a_sign_in_ends_where_it_started() {
+    use agent_protocol::{AccountChange, Frame};
+    use protocol::common::{AccountConnection, AgentAccount, SignInAttempt, SignInStatus};
+    let mut rig = Rig::new();
+    rig.host_up();
+    let connected = || {
+        vec![AgentAccount {
+            id: "nano-gpt".into(),
+            name: "NanoGPT".into(),
+            methods: vec![],
+            connections: vec![AccountConnection {
+                id: "cred_1".into(),
+                label: "work".into(),
+                kind: "key".into(),
+                active: true,
+                removable: true,
+            }],
+        }]
+    };
+
+    // The whole catalogue, to the asking client.
+    rig.send(json!({"v":12,"type":"accounts-request","agent":"alpha","all":true}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListAccounts { agent, all: true } if agent == "alpha"));
+    rig.host_reply(&id, HostMessage::Accounts { accounts: connected() });
+    let phone = rig.phone.pubkey_hex.clone();
+    let published = rig.published();
+    assert!(
+        published.iter().any(|(to, m)| *to == [phone.clone()] && matches!(m, BridgeToPhone::Accounts(a) if a.all && a.accounts.len() == 1)),
+        "{published:?}"
+    );
+
+    // A key reaches the host as a secret and is never echoed.
+    rig.send(json!({"v":12,"type":"account-action","agent":"alpha","account":"nano-gpt",
+        "action":{"kind":"key","method":"key","key":"sk-SECRET"}}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::AccountAction { .. }));
+    assert!(!format!("{msg:?}").contains("sk-SECRET"), "a logged host request hides the key");
+    assert!(matches!(&msg, BridgeMessage::AccountAction { change: AccountChange::Key { key, .. }, .. } if key.expose() == "sk-SECRET"));
+    rig.host_reply(&id, HostMessage::Accounts { accounts: connected() });
+    let msgs = rig.messages();
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Accounts(a) if !a.all && a.error.is_none())));
+    assert!(!format!("{msgs:?}").contains("sk-SECRET"));
+
+    // A sign-in: started, then its end reaches the client that started it.
+    rig.send(json!({"v":12,"type":"account-action","agent":"alpha","account":"opencode",
+        "action":{"kind":"sign-in","method":"device"}}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::AccountAction { change: AccountChange::SignIn { .. }, .. }));
+    let attempt = SignInAttempt {
+        attempt_id: "con_1".into(),
+        url: "https://opencode.ai/console/device?user_code=X".into(),
+        instructions: "Enter code: X".into(),
+        expires_at: 1,
+        paste_back: false,
+    };
+    rig.host_reply(&id, HostMessage::AccountSignIn {
+        status: SignInStatus::Started,
+        attempt_id: "con_1".into(),
+        attempt: Some(attempt),
+        error: None,
+    });
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::AccountSignIn(s) if s.status == SignInStatus::Started && s.attempt.is_some())));
+    rig.input(Input::HostFrame(Box::new(Frame::notification(HostMessage::AccountSignInEnded {
+        agent: "alpha".into(),
+        account: "opencode".into(),
+        attempt_id: "con_1".into(),
+        status: SignInStatus::Complete,
+        error: None,
+    }))));
+    let published = rig.published();
+    assert!(
+        published.iter().any(|(to, m)| *to == [phone.clone()]
+            && matches!(m, BridgeToPhone::AccountSignIn(s) if s.status == SignInStatus::Complete && s.attempt_id.as_deref() == Some("con_1"))),
+        "{published:?}"
+    );
+
+    // Refused before the host: an address that is not on this machine, a
+    // key that is empty, an agent without accounts.
+    rig.send(json!({"v":12,"type":"account-action","agent":"alpha","account":"openai",
+        "action":{"kind":"finish","attempt":"con_2","callbackUrl":"http://127.0.0.1@evil.example/cb"}}));
+    rig.send(json!({"v":12,"type":"account-action","agent":"alpha","account":"openai",
+        "action":{"kind":"key","method":"key","key":"  "}}));
+    rig.send(json!({"v":12,"type":"accounts-request","agent":"beta"}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::AccountAction { .. } | BridgeMessage::ListAccounts { .. })));
+    let msgs = rig.messages();
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::AccountSignIn(s) if s.status == SignInStatus::Failed && s.attempt_id.as_deref() == Some("con_2"))));
+    assert_eq!(msgs.iter().filter(|m| matches!(m, BridgeToPhone::Accounts(a) if a.error.is_some())).count(), 2, "{msgs:?}");
+
+    // A sign-in under way fails when the host stops.
+    rig.send(json!({"v":12,"type":"account-action","agent":"alpha","account":"xai","action":{"kind":"sign-in","method":"device"}}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::AccountAction { .. }));
+    rig.host_reply(&id, HostMessage::AccountSignIn { status: SignInStatus::Started, attempt_id: "con_3".into(), attempt: None, error: None });
+    rig.messages();
+    rig.input(Input::HostDown { reason: "exit 1".into() });
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::AccountSignIn(s)
+        if s.status == SignInStatus::Failed && s.attempt_id.as_deref() == Some("con_3"))));
+}
+
 fn models_error(rig: &mut Rig) -> Option<String> {
     rig.messages().into_iter().find_map(|m| match m {
         BridgeToPhone::Models(x) => Some(x.error.unwrap_or_default()),

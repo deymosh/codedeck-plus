@@ -10,7 +10,7 @@
  * - a request the host sent is settled exactly once — by the bridge's reply,
  *   or with `cancelled` when the host shuts down.
  */
-import type { Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext } from '../sdk/driver';
+import type { AccountManager, Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext } from '../sdk/driver';
 import type { Agents } from './agents';
 import {
   DRIVER_PROTOCOL_VERSION,
@@ -232,6 +232,19 @@ export class AgentHost {
         const { agent, ids } = message.payload;
         return { kind: 'permission-rules', payload: { rules: await this.permissionRules(agent).remove(ids) } };
       }
+      case 'list-accounts': {
+        const { agent, all } = message.payload;
+        return { kind: 'accounts', payload: { accounts: await this.accounts(agent).list(all ?? false) } };
+      }
+      case 'account-action': {
+        const { agent, account, change } = message.payload;
+        const result = await this.accounts(agent).change(account, change, (end) => {
+          if (!this.shuttingDown) this.write(undefined, { kind: 'account-sign-in-ended', payload: { agent, account, ...end } });
+        });
+        return 'accounts' in result
+          ? { kind: 'accounts', payload: { accounts: result.accounts } }
+          : { kind: 'account-sign-in', payload: result.signIn };
+      }
       case 'session-mcp': {
         const session = this.session(message.payload.sessionId);
         if (!session.mcpStatus) throw new Error('this session has no MCP servers to show');
@@ -373,6 +386,12 @@ export class AgentHost {
     const driver = this.driver(agent);
     if (!driver.permissionRules) throw new Error(`${driver.info().displayName} keeps no permission rules`);
     return driver.permissionRules;
+  }
+
+  private accounts(agent: string): AccountManager {
+    const driver = this.driver(agent);
+    if (!driver.accounts) throw new Error(`${driver.info().displayName} has no accounts to connect here`);
+    return driver.accounts;
   }
 
   private session(sessionId: string): DriverSession {

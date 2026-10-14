@@ -94,6 +94,8 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::SessionMcpToggle(_) => "session-mcp-toggle",
         PhoneToBridge::PermissionRulesRequest(_) => "permission-rules-request",
         PhoneToBridge::PermissionRulesRemove(_) => "permission-rules-remove",
+        PhoneToBridge::AccountsRequest(_) => "accounts-request",
+        PhoneToBridge::AccountAction(_) => "account-action",
         PhoneToBridge::SetCredentials(_) => "set-credentials",
         PhoneToBridge::PairRequest(_) => "pair-request",
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
@@ -102,7 +104,7 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::Presence(_) => "presence",
     }
 }
-const P2B_TYPES: usize = 33;
+const P2B_TYPES: usize = 35;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {
@@ -132,13 +134,15 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::McpAck(_) => "mcp-ack",
         BridgeToPhone::SessionMcp(_) => "session-mcp",
         BridgeToPhone::PermissionRules(_) => "permission-rules",
+        BridgeToPhone::Accounts(_) => "accounts",
+        BridgeToPhone::AccountSignIn(_) => "account-sign-in",
         BridgeToPhone::CredentialsAck(_) => "credentials-ack",
         BridgeToPhone::PairAck(_) => "pair-ack",
         BridgeToPhone::ProviderProfiles(_) => "provider-profiles",
         BridgeToPhone::ProviderProfileAck(_) => "provider-profile-ack",
     }
 }
-const B2P_TYPES: usize = 29;
+const B2P_TYPES: usize = 31;
 
 #[test]
 fn corpus_covers_every_message_type() {

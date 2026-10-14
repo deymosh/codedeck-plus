@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::capabilities::BridgeHostKind;
 use super::common::{
     AgentAction, AgentDescriptor, AgentStyle, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
-    PermissionRule, SessionMcpServer,
+    AgentAccount, PermissionRule, SessionMcpServer, SignInAttempt, SignInStatus,
     PartialKind, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     Subagent, UsageData,
 };
@@ -395,6 +395,42 @@ pub struct PermissionRulesMsg {
     pub error: Option<String>,
 }
 
+/// An agent's accounts: the reply to `accounts-request`, and to an
+/// `account-action` that changed one (then only the accounts with a
+/// connection). Sent only to the client that asked. When they could not be
+/// read or changed, `error` says why; `accounts` is then empty, and a client
+/// keeps showing what it had.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountsMsg {
+    pub agent: String,
+    pub accounts: Vec<AgentAccount>,
+    /// Every account the agent can connect, not only the connected ones.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Where a sign-in stands, sent to the client that started it: `started`
+/// with the `attempt` to follow, then once more as it ends. A sign-in that
+/// could not start is `failed` with no `attempt`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSignInMsg {
+    pub agent: String,
+    pub account: String,
+    pub status: SignInStatus,
+    /// The attempt this is about; absent when none started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    /// With `started`: what to do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<SignInAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Reply to `set-credentials`: the resulting status of every credential in
 /// the written scope (`agent`, or the bridge's own when absent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -479,6 +515,8 @@ pub enum BridgeToPhone {
     McpAck(McpAckMsg),
     SessionMcp(SessionMcpMsg),
     PermissionRules(PermissionRulesMsg),
+    Accounts(AccountsMsg),
+    AccountSignIn(AccountSignInMsg),
     CredentialsAck(CredentialsAckMsg),
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
@@ -605,6 +643,16 @@ mod tests {
         rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[
             {"id":"psv_1","project":"/home/me/code","tool":"shell","pattern":"git status *","createdAt":1_792_008_058_637_u64}]}));
         rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[],"error":"OpenCode is not running"}));
+        rt(&json!({"v":12,"type":"accounts","agent":"opencode","all":true,"accounts":[
+            {"id":"github-copilot","name":"GitHub Copilot","methods":[{"id":"device","kind":"sign-in","label":"Login with GitHub Copilot","fields":[
+                {"key":"deploymentType","title":"Select GitHub deployment type","required":true,"options":[{"id":"github.com","label":"GitHub.com"}]},
+                {"key":"enterpriseUrl","title":"GitHub Enterprise URL","required":true,"when":[{"key":"deploymentType","value":"enterprise"}]}]}],
+             "connections":[{"id":"GITHUB_TOKEN","label":"GITHUB_TOKEN","kind":"env"}]},
+            {"id":"nano-gpt","name":"NanoGPT","methods":[{"id":"key","kind":"key"}],"connections":[{"id":"cred_1","label":"work","kind":"key","active":true,"removable":true}]}]}));
+        rt(&json!({"v":12,"type":"accounts","agent":"opencode","accounts":[],"error":"OpenCode is not running"}));
+        rt(&json!({"v":12,"type":"account-sign-in","agent":"opencode","account":"opencode","status":"started","attemptId":"con_1",
+            "attempt":{"attemptId":"con_1","url":"https://opencode.ai/console/device?user_code=WFZW-JRCC","instructions":"Enter code: WFZW-JRCC","expiresAt":1_792_010_428_118_u64}}));
+        rt(&json!({"v":12,"type":"account-sign-in","agent":"opencode","account":"openai","status":"failed","attemptId":"con_2","error":"ChatGPT sign-in did not return a client ID."}));
         rt(&json!({"v":12,"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
         rt(&json!({"v":12,"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));

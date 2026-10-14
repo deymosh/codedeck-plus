@@ -22,6 +22,7 @@ export type SessionOption = G.SessionOption;
 export type McpAction = G.McpAction;
 export type McpServerAdd = G.McpServerAdd;
 export type McpServerSetup = G.McpServerSetup;
+export type AccountChange = G.AccountChange_Serialize;
 
 // What the host sends.
 export type HostFrame = G.Frame_Deserialize<G.HostMessage_Deserialize>;
@@ -59,6 +60,12 @@ export type ContextItem = G.ContextItem;
 export type ContextKind = G.ContextKind;
 export type PermissionRequest = G.PermissionRequest_Deserialize;
 export type PermissionRule = G.PermissionRule;
+export type AgentAccount = G.AgentAccount_Deserialize;
+export type AccountMethod = G.AccountMethod_Deserialize;
+export type AccountField = G.AccountField_Deserialize;
+export type AccountConnection = G.AccountConnection_Deserialize;
+export type SignInAttempt = G.SignInAttempt_Deserialize;
+export type SignInStatus = G.SignInStatus;
 
 /** Version of the driver protocol this host speaks (the frame `v`). */
 export const DRIVER_PROTOCOL_VERSION = 1;

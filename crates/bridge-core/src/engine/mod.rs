@@ -19,6 +19,7 @@
 //! - every card the phone sees is closed by exactly one `resolved` entry;
 //! - secrets are never logged and never sent to a phone.
 
+mod accounts;
 mod host;
 mod mcp;
 mod pairing;
@@ -175,6 +176,9 @@ pub struct Engine {
     /// The client a reply goes to alone: whose command is being handled,
     /// or whose request a host answer completes. Cleared after each input.
     requester: Option<Addressee>,
+    /// Sign-ins the agent host is watching, oldest first, with the client
+    /// each one's end goes to.
+    sign_ins: Vec<accounts::SignIn>,
     /// The last session list's `rev`.
     list_rev: u64,
     /// Store the registry once the current input is handled.
@@ -222,6 +226,7 @@ impl Engine {
             list_dirty: false,
             list_wanted: Vec::new(),
             requester: None,
+            sign_ins: Vec::new(),
             list_rev: 0,
             registry_dirty: false,
             activity_dirty: false,

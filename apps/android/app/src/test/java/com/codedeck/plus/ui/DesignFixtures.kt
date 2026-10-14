@@ -15,7 +15,14 @@ import com.codedeck.plus.ui.transcript.displayEntriesJson
 import com.codedeck.plus.ui.transcript.parseActivity
 import com.codedeck.plus.ui.transcript.parseDisplayEntries
 import kotlinx.serialization.json.jsonObject
+import uniffi.client_ffi.UniffiAccountConnection
+import uniffi.client_ffi.UniffiAccountField
+import uniffi.client_ffi.UniffiAccountMethod
+import uniffi.client_ffi.UniffiAgentAccount
+import uniffi.client_ffi.UniffiAgentAccounts
 import uniffi.client_ffi.UniffiAgentPermissionRules
+import uniffi.client_ffi.UniffiFieldCondition
+import uniffi.client_ffi.UniffiSignIn
 import uniffi.client_ffi.UniffiPermissionRule
 import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiAgentDefaults
@@ -119,7 +126,7 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = false,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = false, supportsAccounts = false,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
         installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null, style = claudeStyle,
     )
@@ -127,7 +134,7 @@ internal object DesignFixtures {
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = true, supportsAccounts = true,
         credentials = emptyList(),
         installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = opencodeStyle,
     )
@@ -135,7 +142,7 @@ internal object DesignFixtures {
     val deepseek = UniffiAgent(
         id = "deepseek-harness", displayName = "DeepSeek Harness",
         modes = emptyList(), efforts = emptyList(), defaultMode = null, defaultEffort = null,
-        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false, supportsPermissionRules = false,
+        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false, supportsPermissionRules = false, supportsAccounts = false,
         credentials = emptyList(),
         installState = "not_installed", removable = false, installError = null, actionBusy = null, actionFailure = null, style = null,
     )
@@ -198,8 +205,77 @@ internal object DesignFixtures {
         marketplaces = null, toggles = false, available = null, error = null, busy = emptyList(), notice = null, failure = null,
     )
 
-    /** Claude Code's MCP servers: remote ones with a token header, a local
-     *  command with an env variable, one being added. */
+    /** GitHub Copilot's sign-in as OpenCode offers it: a choice, then an
+     *  address asked only for GitHub Enterprise. */
+    val copilotSignIn = UniffiAccountMethod(
+        "device", "sign-in", "Login with GitHub Copilot",
+        listOf(
+            UniffiAccountField(
+                "deploymentType", "GitHub deployment", null, required = true,
+                options = listOf(UniffiOptionChoice("github.com", "GitHub.com", "Public"), UniffiOptionChoice("enterprise", "GitHub Enterprise", null)),
+                placeholder = null, defaultValue = null, `when` = emptyList(),
+            ),
+            UniffiAccountField(
+                "enterpriseUrl", "GitHub Enterprise URL", null, required = true, options = emptyList(),
+                placeholder = "company.ghe.com", defaultValue = null,
+                `when` = listOf(UniffiFieldCondition("deploymentType", "enterprise", not = false)),
+            ),
+        ),
+    )
+
+    /** OpenCode's provider accounts: a key in use beside a second one, a
+     *  token from the machine's environment, and part of the catalogue. */
+    val opencodeConnected = listOf(
+        UniffiAgentAccount(
+            "github-copilot", "GitHub Copilot",
+            methods = listOf(copilotSignIn),
+            connections = listOf(UniffiAccountConnection("GITHUB_TOKEN", "GITHUB_TOKEN", "env", active = false, removable = false)),
+        ),
+        UniffiAgentAccount(
+            "openrouter", "OpenRouter",
+            methods = listOf(UniffiAccountMethod("key", "key", null, emptyList())),
+            connections = listOf(
+                UniffiAccountConnection("cred_1", "work", "key", active = true, removable = true),
+                UniffiAccountConnection("cred_2", "personal", "key", active = false, removable = true),
+            ),
+        ),
+    )
+
+    val opencodeAccounts = UniffiAgentAccounts(
+        agent = "opencode",
+        connected = opencodeConnected,
+        all = opencodeConnected + listOf(
+            UniffiAgentAccount("anthropic", "Anthropic", listOf(UniffiAccountMethod("key", "key", null, emptyList())), emptyList()),
+            UniffiAgentAccount("deepseek", "DeepSeek", listOf(UniffiAccountMethod("key", "key", null, emptyList())), emptyList()),
+            UniffiAgentAccount(
+                "openai", "OpenAI",
+                listOf(UniffiAccountMethod("key", "key", null, emptyList()), UniffiAccountMethod("chatgpt-token-sharing", "sign-in", "Sign in with ChatGPT", emptyList())),
+                emptyList(),
+            ),
+            UniffiAgentAccount(
+                "opencode", "OpenCode Console",
+                listOf(UniffiAccountMethod("key", "key", "API key (service account)", emptyList()), UniffiAccountMethod("device", "sign-in", "OpenCode Console account", emptyList())),
+                emptyList(),
+            ),
+        ).sortedBy { it.name },
+        error = null,
+        busy = emptyList(),
+        signIn = null,
+    )
+
+    /** A device sign-in waiting on its code, and a sign-in finished by pasting back. */
+    val deviceSignIn = UniffiSignIn(
+        account = "opencode", status = "started", attemptId = "con_1",
+        url = "https://opencode.ai/console/device?user_code=WFZW-JRCC", instructions = "Enter code: WFZW-JRCC",
+        expiresAt = 1_792_010_428_118u, pasteBack = false, error = null,
+    )
+    val pasteBackSignIn = UniffiSignIn(
+        account = "openai", status = "started", attemptId = "con_2",
+        url = "https://auth.openai.com/api/accounts/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A45493%2Fauth%2Fcallback",
+        instructions = "Complete authorization in your browser. This window will close automatically.",
+        expiresAt = 1_792_010_428_118u, pasteBack = true, error = null,
+    )
+
     /** OpenCode's saved permissions: two projects, one rule being removed. */
     val opencodeRules = UniffiAgentPermissionRules(
         agent = "opencode",
@@ -213,6 +289,8 @@ internal object DesignFixtures {
         busy = listOf("psv_2"),
     )
 
+    /** Claude Code's MCP servers: remote ones with a token header, a local
+     *  command with an env variable, one being added. */
     val claudeMcp = UniffiAgentMcp(
         agent = "claude-code",
         servers = listOf(
@@ -277,7 +355,7 @@ internal object DesignFixtures {
             "home-gateway/OpenCode Go/deepseek-v4.1-flash",
             null,
         )),
-        providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp), permissionRules = listOf(opencodeRules),
+        providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp), permissionRules = listOf(opencodeRules), accounts = listOf(opencodeAccounts),
         directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
         npub = "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvw",

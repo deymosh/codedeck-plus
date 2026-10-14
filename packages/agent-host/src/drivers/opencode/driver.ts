@@ -59,6 +59,7 @@ import { SESSION_COMMANDS, sessionCommand, sessionSlashCommands } from './sessio
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
 import { OpenCodePermissionRules } from './permissionRules';
+import { OpenCodeAccounts } from './accounts';
 import { type Catalog, EMPTY_CATALOG } from './catalog';
 import { NOTHING_SERVED, type Placement, placeProfiles, profileModelGroup, providersFingerprint, type Served, servedBy, serverSetup } from './providers';
 import {
@@ -1427,6 +1428,7 @@ export class OpenCodeDriver implements Driver {
   private readonly sessions = new Set<OpenCodeSession>();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
   readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
+  readonly accounts = new OpenCodeAccounts(() => this.client(), { log: (message) => this.options.log(message) });
   readonly permissionRules: PermissionRuleManager = new OpenCodePermissionRules(() => this.client(), (message) => this.options.log(message));
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
@@ -1614,6 +1616,9 @@ export class OpenCodeDriver implements Driver {
         mcp: true,
         tasks: true,
         permissionRules: true,
+        // Through the server's own API, so a key or a sign-in reaches a
+        // running server without the restart a provider profile costs.
+        accounts: true,
       },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
@@ -1701,6 +1706,7 @@ export class OpenCodeDriver implements Driver {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    this.accounts.close();
     await this.server?.close();
   }
 }

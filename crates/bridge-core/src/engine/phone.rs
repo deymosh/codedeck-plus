@@ -50,6 +50,8 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::SessionMcpToggle(_) => "session-mcp-toggle",
         PhoneToBridge::PermissionRulesRequest(_) => "permission-rules-request",
         PhoneToBridge::PermissionRulesRemove(_) => "permission-rules-remove",
+        PhoneToBridge::AccountsRequest(_) => "accounts-request",
+        PhoneToBridge::AccountAction(_) => "account-action",
         PhoneToBridge::SetCredentials(_) => "set-credentials",
         PhoneToBridge::PairRequest(_) => "pair-request",
         PhoneToBridge::SetProviderProfile(_) => "set-provider-profile",
@@ -148,6 +150,8 @@ impl Engine {
             PhoneToBridge::SessionMcpToggle(m) => self.on_session_mcp_toggle(m),
             PhoneToBridge::PermissionRulesRequest(m) => self.on_permission_rules_request(m.agent, phone),
             PhoneToBridge::PermissionRulesRemove(m) => self.on_permission_rules_remove(m.agent, m.ids, phone),
+            PhoneToBridge::AccountsRequest(m) => self.on_accounts_request(m.agent, m.all, phone),
+            PhoneToBridge::AccountAction(m) => self.on_account_action(m.agent, m.account, m.action, phone),
             PhoneToBridge::SetCredentials(m) => self.on_set_credentials(m, phone),
             PhoneToBridge::PairRequest(m) => self.on_pair_request(m, phone),
             // Handled on arrival.

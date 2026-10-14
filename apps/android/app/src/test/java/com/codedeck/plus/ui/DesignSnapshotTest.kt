@@ -28,6 +28,7 @@ import com.codedeck.plus.ui.screens.NewSessionBody
 import com.codedeck.plus.ui.screens.NotificationsPage
 import com.codedeck.plus.ui.screens.PairingBody
 import com.codedeck.plus.ui.screens.PluginsContent
+import com.codedeck.plus.ui.screens.AccountsStep
 import com.codedeck.plus.ui.screens.ProviderEditor
 import com.codedeck.plus.ui.screens.ProvidersContent
 import com.codedeck.plus.ui.screens.UploadsPage
@@ -305,6 +306,18 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}, startEditing = ProviderEditor.Existing("home-gateway"), validBaseUrl = { true })
     },
     "providers_add" to { ProvidersContent(workstation, "claude-code", status = null, dispatch = {}, onBack = {}, startEditing = ProviderEditor.New, validBaseUrl = { true }) },
+    "accounts_picker" to { ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}, startAccounts = AccountsStep.Picker) },
+    "accounts_connect_copilot" to {
+        ProvidersContent(workstation, "opencode", status = null, dispatch = {}, onBack = {}, startAccounts = AccountsStep.Connect("github-copilot"))
+    },
+    "accounts_sign_in_device" to {
+        val held = DesignFixtures.opencodeAccounts.copy(signIn = DesignFixtures.deviceSignIn)
+        ProvidersContent(workstation.copy(accounts = listOf(held)), "opencode", status = null, dispatch = {}, onBack = {})
+    },
+    "accounts_sign_in_paste_back" to {
+        val held = DesignFixtures.opencodeAccounts.copy(signIn = DesignFixtures.pasteBackSignIn)
+        ProvidersContent(workstation.copy(accounts = listOf(held)), "opencode", status = null, dispatch = {}, onBack = {})
+    },
     "settings_appearance" to { AppearancePage(settings, {}, {}) },
     "settings_notifications" to { NotificationsPage(settings, {}, {}) },
     "settings_connection" to { ConnectionPage(settings, serviceForeground = true, dispatch = {}, onBack = {}) },
@@ -431,6 +444,10 @@ class DesignSnapshotTest {
     @Test fun providers_claude_empty() = paparazzi.page("providers_claude_empty")
     @Test fun providers_edit() = paparazzi.page("providers_edit")
     @Test fun providers_add() = paparazzi.page("providers_add")
+    @Test fun accounts_picker() = paparazzi.page("accounts_picker")
+    @Test fun accounts_connect_copilot() = paparazzi.page("accounts_connect_copilot")
+    @Test fun accounts_sign_in_device() = paparazzi.page("accounts_sign_in_device")
+    @Test fun accounts_sign_in_paste_back() = paparazzi.page("accounts_sign_in_paste_back")
     @Test fun session_options_models() = paparazzi.page("session_options_models")
     @Test fun session_options_mcp() = paparazzi.page("session_options_mcp")
     @Test fun settings_appearance() = paparazzi.page("settings_appearance")

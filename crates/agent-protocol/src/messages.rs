@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 
 use protocol::common::{
-    AgentInstall, AgentStyle, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
+    AccountAction, AgentAccount, AgentInstall, AgentStyle, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
     OptionChoice, OutputEntry, PartialKind, PermissionOption, PermissionRule, PluginAction, PluginMarketplace, ProviderModel,
-    QuestionOption, SessionMcpServer, SessionOption, Subagent, ToolKind, UsageData,
+    QuestionOption, SessionMcpServer, SessionOption, SignInAttempt, SignInStatus, Subagent, ToolKind, UsageData,
 };
 use protocol::events::{ModelEntry, SlashCommand};
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,47 @@ impl From<McpServerSpec> for McpServerAdd {
             McpTransport::Sse { url, headers } => McpServerSetup::Sse { url: Secret::new(url), headers: secrets(headers) },
         };
         Self { name: spec.name, setup }
+    }
+}
+
+// --- accounts ---
+
+/// A change to an agent's account: the phone's `AccountAction`, with the key
+/// and the pasted sign-in address as [`Secret`]s.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum AccountChange {
+    Key {
+        method: String,
+        key: Secret,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        answers: BTreeMap<String, String>,
+    },
+    SignIn {
+        method: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        answers: BTreeMap<String, String>,
+    },
+    Finish { attempt: String, callback_url: Secret },
+    Cancel { attempt: String },
+    Activate { connection: String },
+    Remove { connection: String },
+}
+
+impl From<AccountAction> for AccountChange {
+    fn from(action: AccountAction) -> Self {
+        match action {
+            AccountAction::Key { method, key, label, answers } => Self::Key { method, key: Secret::new(key), label, answers },
+            AccountAction::SignIn { method, label, answers } => Self::SignIn { method, label, answers },
+            AccountAction::Finish { attempt, callback_url } => Self::Finish { attempt, callback_url: Secret::new(callback_url) },
+            AccountAction::Cancel { attempt } => Self::Cancel { attempt },
+            AccountAction::Activate { connection } => Self::Activate { connection },
+            AccountAction::Remove { connection } => Self::Remove { connection },
+        }
     }
 }
 
@@ -457,6 +498,22 @@ pub enum BridgeMessage {
     /// Revoke saved permission rules by id. Reply: `permission-rules`, the
     /// list as it is after, or `error` saying why they were not removed.
     RemovePermissionRules { agent: String, ids: Vec<String> },
+    /// The agent's accounts (agents with `supports.accounts`): those with a
+    /// connection, or with `all` every one it can connect. Reply: `accounts`.
+    ListAccounts {
+        agent: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        all: bool,
+    },
+    /// Change one account. Reply: the connected `accounts` for `key`,
+    /// `activate` and `remove`; `account-sign-in` for `sign-in` (`started`),
+    /// `finish` and `cancel`; or `error` saying why it was not done. A
+    /// sign-in that started ends with an `account-sign-in-ended`.
+    AccountAction {
+        agent: String,
+        account: String,
+        change: AccountChange,
+    },
     /// Check a credential value with its provider. Reply: `credential-checked`.
     CheckCredential {
         agent: String,
@@ -565,6 +622,29 @@ pub enum HostMessage {
     /// Reply to `list-permission-rules` and `remove-permission-rules` (as the
     /// phone wire's `permission-rules`).
     PermissionRules { rules: Vec<PermissionRule> },
+    /// Reply to `list-accounts`, and to an `account-action` that changed one
+    /// (the accounts with a connection).
+    Accounts { accounts: Vec<AgentAccount> },
+    /// Reply to an `account-action` about a sign-in: `started` with the
+    /// `attempt`, or where it stands after `finish` / `cancel`.
+    AccountSignIn {
+        status: SignInStatus,
+        attempt_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<SignInAttempt>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// A notification: a sign-in the bridge started ended — completed,
+    /// failed, expired or cancelled.
+    AccountSignInEnded {
+        agent: String,
+        account: String,
+        attempt_id: String,
+        status: SignInStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// Reply to `check-credential` and `check-provider`; absent `valid` = it
     /// could not be checked.
     CredentialChecked {

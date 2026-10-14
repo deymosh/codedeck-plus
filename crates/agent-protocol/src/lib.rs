@@ -84,6 +84,12 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"17","kind":"session-mcp-toggle","payload":{"sessionId":"s","name":"gh","enabled":false}}));
         bridge_rt(json!({"v":1,"id":"17a","kind":"list-permission-rules","payload":{"agent":"opencode"}}));
         bridge_rt(json!({"v":1,"id":"17b","kind":"remove-permission-rules","payload":{"agent":"opencode","ids":["psv_1"]}}));
+        bridge_rt(json!({"v":1,"id":"17c","kind":"list-accounts","payload":{"agent":"opencode","all":true}}));
+        let key = bridge_rt(json!({"v":1,"id":"17d","kind":"account-action","payload":{"agent":"opencode","account":"nano-gpt",
+            "change":{"kind":"key","method":"key","key":"sk-SECRET","label":"work"}}}));
+        assert!(!format!("{key:?}").contains("sk-SECRET"), "a logged request hides the key");
+        bridge_rt(json!({"v":1,"id":"17e","kind":"account-action","payload":{"agent":"opencode","account":"openai",
+            "change":{"kind":"finish","attempt":"con_1","callbackUrl":"http://127.0.0.1:1/auth/callback?code=c"}}}));
         bridge_rt(json!({"v":1,"id":"10","kind":"check-credential","payload":{"agent":"claude-code","credential":"anthropic_api_key","value":"sk"}}));
         bridge_rt(json!({"v":1,"id":"18","kind":"check-provider","payload":{"agent":"opencode","model":"m1",
             "provider":{"id":"or","label":"OpenRouter","baseUrl":"https://openrouter.ai/api","authToken":"tok","models":[{"id":"m1"}]}}}));
@@ -105,16 +111,16 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true,"permissionRules":false},
+            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true,"permissionRules":false,"accounts":false},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}],
             "install":{"state":"ready"}
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true,"accounts":false},
             "credentials":[],"unavailableReason":"The OpenCode server failed to start","install":{"state":"ready","removable":true}
         },{
             "id":"deepseek-harness","displayName":"DeepSeek Harness","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false,"accounts":false},
             "credentials":[],"install":{"state":"not_installed"}
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
@@ -125,6 +131,11 @@ mod tests {
         host_rt(json!({"v":1,"id":"8","kind":"plugins","payload":{"installed":[{"id":"c@m","name":"c","enabled":true}],"marketplaces":[{"name":"m","source":"o/r"}],"toggles":true}}));
         host_rt(json!({"v":1,"id":"9","kind":"mcp-servers","payload":{"servers":[{"name":"gh","transport":"http","target":"https://x/mcp","headerKeys":["Authorization"],"enabled":true}],"toggles":true}}));
         host_rt(json!({"v":1,"id":"10","kind":"session-mcp","payload":{"servers":[{"name":"gh","status":"needs-auth"}],"toggles":true,"projectWide":true}}));
+        host_rt(json!({"v":1,"id":"10b","kind":"accounts","payload":{"accounts":[{"id":"nano-gpt","name":"NanoGPT",
+            "methods":[{"id":"key","kind":"key"}],"connections":[{"id":"cred_1","label":"work","kind":"key","active":true,"removable":true}]}]}}));
+        host_rt(json!({"v":1,"id":"10c","kind":"account-sign-in","payload":{"status":"started","attemptId":"con_1",
+            "attempt":{"attemptId":"con_1","url":"https://opencode.ai/console/device?user_code=X","instructions":"Enter code: X","expiresAt":1_792_010_428_118_u64}}}));
+        host_rt(json!({"v":1,"kind":"account-sign-in-ended","payload":{"agent":"opencode","account":"opencode","attemptId":"con_1","status":"complete"}}));
         host_rt(json!({"v":1,"id":"10a","kind":"permission-rules","payload":{"rules":[
             {"id":"psv_1","project":"/w","tool":"shell","pattern":"git status *","createdAt":1_792_008_058_637_u64}]}}));
         host_rt(json!({"v":1,"id":"6","kind":"usage","payload":{"usage":{"available":true,"windows":[{"label":"5h","utilization":12.5,"resetsAt":null}],"fetchedAt":"t"}}}));
@@ -150,7 +161,7 @@ mod tests {
         let placeholder = |install: serde_json::Value| {
             json!({"v":1,"kind":"agent-changed","payload":{"agent":{
                 "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false},
+                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false,"accounts":false},
                 "credentials":[],"install":install}}})
         };
         let changed = host_rt(placeholder(json!({"state":"installing"})));
