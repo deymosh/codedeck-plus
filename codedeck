@@ -792,6 +792,13 @@ cmd_live() {
       echo "usage: $0 live <agent> [--prompt TEXT]… [--mode MODE] [--model ID]" >&2
       echo "                     [--effort ID] [--cwd DIR] [--env K=V]… [--timeout SECONDS]" >&2
       echo "                     [--fake-model] [--dump DIR] [--no-sync]" >&2
+      echo "                     [--idles N] [--linger SECONDS]" >&2
+      echo "  --idles   how many 'turn: idle' signals end a turn (default 1); raise it" >&2
+      echo "            when a driver reports the turn over early" >&2
+      echo "  --linger  keep the session open after the last prompt, to see what a" >&2
+      echo "            background sub-agent or a late notification does" >&2
+      echo "  CODEDECK_DEBUG_EVENTS=1 (via --env) logs every raw agent event the" >&2
+      echo "            OpenCode driver received, with the session each names" >&2
       echo "agents: claude-code, opencode, deepseek-harness, fake" >&2
       exit 2
       ;;

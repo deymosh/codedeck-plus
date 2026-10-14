@@ -371,6 +371,13 @@ export class OpenCodeSession implements DriverSession {
    *  sub-agent's kind, and — for one left running in the background — that
    *  it is a task, and whether the user asked it to stop. */
   private readonly children = new Map<string, ChildSession>();
+  /** Every event the stream carried for this session, one line each, when
+   *  `CODEDECK_DEBUG_EVENTS` is set: which event, for which session, and
+   *  whether this session reads it as a sub-agent's child. A live server is
+   *  the only place v2's real event order can be seen (the fixtures are
+   *  written by hand), so turn and reporting bugs are diagnosed from this
+   *  trace — see `./codedeck live opencode --env CODEDECK_DEBUG_EVENTS=1`. */
+  private readonly traceEvents = Boolean(process.env.CODEDECK_DEBUG_EVENTS);
   /** The providers' context limits, fetched on the first step that used
    *  tokens; dropped again when the fetch came back empty, so a server that
    *  was briefly unreachable is asked again. */
@@ -538,6 +545,12 @@ export class OpenCodeSession implements DriverSession {
       if (this.ended) break;
       const data = event.data as { sessionID?: string } | undefined;
       const child = data?.sessionID ? this.children.get(data.sessionID) : undefined;
+      if (this.traceEvents) {
+        const parent = (event.data as { parentID?: string } | undefined)?.parentID;
+        this.ctx.log(
+          `[opencode] ${event.type} sessionID=${String(data?.sessionID)} parentID=${String(parent)} child=${Boolean(child)} main=${sessionId}`,
+        );
+      }
       // Events for other sessions are dropped, except the one that tells this
       // session a sub-agent of its own started.
       if (data?.sessionID && data.sessionID !== sessionId && !child && !this.noteChild(event, sessionId)) continue;
