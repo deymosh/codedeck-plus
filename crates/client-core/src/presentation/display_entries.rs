@@ -362,7 +362,7 @@ pub fn is_hidden_entry(entry: &OutputEntry) -> bool {
 /// The seq is part of it because one request id can carry more than one card
 /// in turn (a peer that asks twice about the same thing, or two asks that
 /// belong to one call). A card is therefore only answered by a resolution
-/// that landed *after* it — see [`answered_at`].
+/// that landed *after* it — see `answered_at`.
 pub fn collect_resolved(entries: &[SeqEntry]) -> HashMap<String, (u64, String)> {
     let mut resolved = HashMap::new();
     for item in entries {
