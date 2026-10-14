@@ -495,6 +495,16 @@ describe('OpenCode background shell commands', () => {
     await ctx.ended();
   });
 
+  it('a shell the server has already forgotten is the outcome that was wanted', async () => {
+    const client = clientWith(shellRun());
+    asMock(client.shell.remove).mockRejectedValue({ reason: 'UnexpectedStatus', cause: { status: 404 } });
+    const { ctx, session } = await running(client);
+    await expect(session.stopTask!('sh_1')).resolves.toBeUndefined();
+    // No exit will come for it, so the stop itself reports the task stopped.
+    expect(tasks(ctx).at(-1)).toMatchObject({ taskId: 'sh_1', status: 'stopped' });
+    await session.end();
+  });
+
   it('a stop that really failed is reported', async () => {
     const client = clientWith(shellRun());
     asMock(client.shell.remove).mockRejectedValue({ name: 'ClientError', message: 'boom' });
@@ -509,6 +519,26 @@ describe('OpenCode background shell commands', () => {
     const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
     await ctx.waitFor((e) => e.type === 'ready');
     await expect(session.stopTask!('sh_nope')).rejects.toThrow(/No such task/);
+    await session.end();
+  });
+
+  it('a sub-agent task the server has forgotten is stopped all the same', async () => {
+    // The call returned while the child still works, so it is a task; by the
+    // time the phone taps Stop, the server no longer knows that session.
+    const client = clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'general', description: 'list files' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'started' }], executed: false } },
+    ]);
+    // The client names a declared not-found error after the server's own tag,
+    // the shape deleteConversation's SessionNotFoundError already arrives in.
+    asMock(client.session.interrupt).mockRejectedValue({ name: 'SessionNotFoundError', message: 'gone' });
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'background_task'));
+    await expect(session.stopTask!('ses_child')).resolves.toBeUndefined();
     await session.end();
   });
 });

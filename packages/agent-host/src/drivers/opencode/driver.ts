@@ -1295,6 +1295,13 @@ export class OpenCodeSession implements DriverSession {
       if (shell) await client.shell.remove({ id: taskId, location: { directory: this.cwd } });
       else await client.session.interrupt({ sessionID: taskId });
     } catch (err) {
+      if (isNotFound(err)) {
+        // A sub-agent's child session reports its own end, but a shell the
+        // server has forgotten will send no exit for this session to read:
+        // report it stopped here, or it would show as running for good.
+        if (shell) this.finishShell({ id: taskId, status: 'killed' });
+        return;
+      }
       throw new Error(`OpenCode could not stop the task: ${formatOpenCodeError(err)}`);
     }
   }
