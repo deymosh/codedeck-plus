@@ -233,6 +233,18 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
 - `wss://` uses rustls (webpki roots), so the core cross-compiles for Android
   without OpenSSL.
 
+### Live text
+
+A reply the agent is still writing arrives as `partial` pieces (see
+[`PROTOCOL.md`](PROTOCOL.md#transcript-entries)). The core keeps one live
+row per part (`stores::live_text`), only for the session on screen with the
+app visible, and tells the host through `CoreEvent::LiveText`, which carries
+the row's whole text: the transcript is not re-read for it. The Android
+screen draws each live row as an agent message after the transcript's rows
+and hides it as soon as an entry naming its `part` is in the list, so the
+row and its entry never show together and nothing moves when one replaces
+the other.
+
 ### Direct link
 
 A bridge can also be reached without the relays (the wire is in
