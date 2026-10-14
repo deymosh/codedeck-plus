@@ -413,6 +413,10 @@ impl<'a> Router<'a> {
                 self.stores.machines.apply_session_mcp(machine, m);
                 r.persist(StoreId::Machines);
             }
+            BridgeToPhone::PermissionRules(m) => {
+                self.stores.machines.apply_permission_rules(machine, m);
+                r.persist(StoreId::Machines);
+            }
             BridgeToPhone::Commands(m) => {
                 self.stores.machines.apply_commands(machine, m);
                 r.persist(StoreId::Machines);

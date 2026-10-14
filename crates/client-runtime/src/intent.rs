@@ -17,7 +17,7 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg,
+    AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     StopTaskMsg,
@@ -333,6 +333,18 @@ pub enum Intent {
         action: McpAction,
         servers: Vec<McpServerSpec>,
         names: Vec<String>,
+    },
+    /// Ask for the permission rules an agent saved on a machine.
+    RequestPermissionRules {
+        machine: String,
+        agent: String,
+    },
+    /// Revoke saved permission rules by id; they are busy until the bridge
+    /// answers with the new list.
+    RemovePermissionRules {
+        machine: String,
+        agent: String,
+        ids: Vec<String>,
     },
     /// Ask for a running session's MCP servers.
     RequestSessionMcp {
@@ -764,6 +776,16 @@ pub fn apply(
             }
             r.persist(StoreId::Machines);
         }
+        Intent::RequestPermissionRules { machine, agent } => {
+            r.send(&machine, PhoneToBridge::PermissionRulesRequest(PermissionRulesRequestMsg { agent }))
+        }
+        Intent::RemovePermissionRules { machine, agent, ids } => {
+            if !ids.is_empty() {
+                stores.machines.permission_rules_remove_sent(&machine, &agent, &ids);
+                r.persist(StoreId::Machines);
+                r.send(&machine, PhoneToBridge::PermissionRulesRemove(PermissionRulesRemoveMsg { agent, ids }));
+            }
+        }
         Intent::RequestSessionMcp { machine, session_id } => r.send(
             &machine,
             PhoneToBridge::SessionMcpRequest(SessionIdMsg { session_id }),
@@ -1118,6 +1140,20 @@ mod tests {
         let out = apply(&mut s, add("https://x/mcp"), &kp, ctx());
         assert!(matches!(&out.sends[..], [Send { msg: PhoneToBridge::McpAction(m), .. }] if m.names == ["gh"]));
         assert_eq!(s.machines.machine("m").unwrap().mcp["claude-code"].busy, ["gh"]);
+    }
+
+    #[tokio::test]
+    async fn a_permission_rule_removal_marks_its_rules_busy_and_an_empty_one_is_not_sent() {
+        let (mut s, kp) = stores().await;
+        s.machines.register_machine("m", "laptop", None, None, &[]);
+        let remove = |ids: Vec<String>| Intent::RemovePermissionRules { machine: "m".into(), agent: "opencode".into(), ids };
+
+        let out = apply(&mut s, remove(vec![]), &kp, ctx());
+        assert!(out.sends.is_empty());
+
+        let out = apply(&mut s, remove(vec!["psv_1".into()]), &kp, ctx());
+        assert!(matches!(&out.sends[..], [Send { msg: PhoneToBridge::PermissionRulesRemove(m), .. }] if m.ids == ["psv_1"]));
+        assert_eq!(s.machines.machine("m").unwrap().permission_rules["opencode"].busy, ["psv_1"]);
     }
 
     #[tokio::test]

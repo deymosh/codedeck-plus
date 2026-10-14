@@ -17,11 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use protocol::capabilities::{BridgeHostKind, PROTOCOL_VERSION};
 use protocol::common::{
-    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo,
+    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, PermissionRule,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
-    AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg,
+    AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PermissionRulesMsg, PluginAckMsg, PluginsMsg,
+    ProviderProfilesMsg,
     SessionListMsg, SessionMcpMsg, SlashCommand,
 };
 
@@ -297,6 +298,10 @@ pub struct MachineView {
     /// MCP servers, by agent id. Never persisted, like `plugins`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp: BTreeMap<String, AgentMcp>,
+    /// Saved permission rules, by agent id. Never persisted, like `plugins`:
+    /// they live on the bridge's machine and are asked for when shown.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub permission_rules: BTreeMap<String, AgentPermissionRules>,
     /// Installs and removals asked of the bridge, by agent id. Never
     /// persisted, like `plugins`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -447,6 +452,21 @@ pub struct AgentMcp {
     pub failure: Option<McpFailure>,
 }
 
+/// One agent's saved permission rules on a machine, as the bridge last
+/// reported them, and the removals asked for and not answered yet. Absent
+/// until the first answer: a page shows it loading.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPermissionRules {
+    pub rules: Vec<PermissionRule>,
+    /// Why the last list or removal failed. The rules held are kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Ids of the rules being removed, not answered yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub busy: Vec<String>,
+}
+
 /// An install or removal of an agent asked of the bridge: in flight until
 /// the bridge takes it up, or refused. The install itself then shows in the
 /// agent's `install`.
@@ -510,6 +530,7 @@ impl MachineView {
             provider_profiles: None,
             plugins: BTreeMap::new(),
             mcp: BTreeMap::new(),
+            permission_rules: BTreeMap::new(),
             agent_actions: BTreeMap::new(),
             session_grant: None,
             session_grant_sent: None,
@@ -539,6 +560,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
             m.provider_profiles = None;
             m.plugins.clear();
             m.mcp.clear();
+            m.permission_rules.clear();
             m.agent_actions.clear();
             m.incompatible = None;
             for s in m.sessions.values_mut() {
@@ -1128,6 +1150,35 @@ impl MachinesState {
                 names: msg.names.clone(),
                 error: msg.error.clone().unwrap_or_else(|| "It could not be done.".into()),
             });
+        });
+    }
+
+    /// A list replaces the held one; a failure keeps it and records why.
+    /// Either way the answer settles every removal in flight: the bridge
+    /// answers each request with exactly one message.
+    pub fn apply_permission_rules(&mut self, machine_pubkey: &str, msg: &PermissionRulesMsg) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.permission_rules.entry(msg.agent.clone()).or_default();
+            a.busy.clear();
+            match &msg.error {
+                Some(error) => a.error = Some(error.clone()),
+                None => {
+                    a.error = None;
+                    a.rules = msg.rules.clone();
+                }
+            }
+        });
+    }
+
+    /// A removal was sent: the rules it names are busy until answered.
+    pub fn permission_rules_remove_sent(&mut self, machine_pubkey: &str, agent: &str, ids: &[String]) {
+        self.with_machine(machine_pubkey, |m| {
+            let a = m.permission_rules.entry(agent.to_string()).or_default();
+            for id in ids {
+                if !a.busy.contains(id) {
+                    a.busy.push(id.clone());
+                }
+            }
         });
     }
 
@@ -1751,6 +1802,40 @@ mod tests {
         assert_eq!(held(&st).failure, None, "a new action clears the last refusal");
         st.apply_agent_ack("pk", &ack(true, None));
         assert_eq!(held(&st), AgentActionState::default());
+    }
+
+    #[test]
+    fn permission_rules_track_removals_keep_their_list_on_errors_and_are_never_persisted() {
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        let rule = |id: &str| PermissionRule {
+            id: id.into(),
+            project: "/w".into(),
+            tool: "shell".into(),
+            pattern: "git status *".into(),
+            created_at: 1,
+        };
+        let msg = |rules: Vec<PermissionRule>, error: Option<&str>| PermissionRulesMsg {
+            agent: "opencode".into(),
+            rules,
+            error: error.map(Into::into),
+        };
+        let held = |st: &MachinesState| st.machine("pk").unwrap().permission_rules["opencode"].clone();
+
+        st.apply_permission_rules("pk", &msg(vec![rule("a"), rule("b")], None));
+        st.permission_rules_remove_sent("pk", "opencode", &["a".to_string()]);
+        assert_eq!(held(&st).busy, ["a"]);
+        // A refused removal keeps the list and says why; nothing stays busy.
+        st.apply_permission_rules("pk", &msg(vec![], Some("database is locked")));
+        assert_eq!(held(&st).rules.len(), 2);
+        assert_eq!(held(&st).error.as_deref(), Some("database is locked"));
+        assert!(held(&st).busy.is_empty());
+        // The list after a removal replaces it and clears the error.
+        st.apply_permission_rules("pk", &msg(vec![rule("b")], None));
+        assert_eq!(held(&st), AgentPermissionRules { rules: vec![rule("b")], error: None, busy: vec![] });
+
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert!(back["pk"].permission_rules.is_empty());
     }
 
     #[test]
