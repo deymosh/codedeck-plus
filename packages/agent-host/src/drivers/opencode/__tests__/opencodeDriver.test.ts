@@ -295,6 +295,56 @@ describe('OpenCode sub-agents', () => {
     expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([]);
   });
 
+  /** What the live 2.0.28 server sends for one `subagent` call the parent
+   *  waits on: the call, the child session it starts, and — before the call
+   *  returns — the child's OWN execution ending. The child ends with
+   *  `session.execution.succeeded`; it never sends the `session.idle` the
+   *  fixtures above use, which is why this order is the one that matters. */
+  const awaitedSubagent = (child: string): V2[] => [
+    { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+    { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'general', description: 'list files' }, executed: false } },
+    { type: 'session.created', data: { sessionID: child, parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+    { type: 'session.execution.started', data: { sessionID: child } },
+    { type: 'session.execution.succeeded', data: { sessionID: child } },
+    { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'done' }], executed: false } },
+  ];
+
+  it("a sub-agent's own execution ending is not the session's turn ending", async () => {
+    const ctx = start(clientWith([
+      { type: 'session.execution.started', data: { sessionID: 'ses_1' } },
+      ...awaitedSubagent('ses_child'),
+      { type: 'session.text.ended', data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, text: 'done' } },
+      { type: 'session.execution.succeeded', data: { sessionID: 'ses_1' } },
+    ]));
+    await ctx.ended();
+    // The turn is the session's own execution: running once, idle at the end
+    // the session itself reports — not at the sub-agent's end in the middle.
+    expect(ctx.events.filter((e) => e.type === 'turn')).toEqual([
+      { type: 'turn', state: 'running' },
+      { type: 'turn', state: 'idle' },
+    ]);
+    // And a sub-agent that finished inside its call is not a task at all.
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([]);
+  });
+
+  it("a sub-agent left running ends its task when its own execution does", async () => {
+    const ctx = start(clientWith([
+      { type: 'session.execution.started', data: { sessionID: 'ses_1' } },
+      // The call returns while the child still works, so it is a task the
+      // phone can stop (the helper's own `tool.success` comes later, so its
+      // first four events are all that is taken here)...
+      ...awaitedSubagent('ses_child').slice(0, 4),
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'started' }], executed: false } },
+      // ... and the child's own execution ending is where that task ends.
+      { type: 'session.execution.succeeded', data: { sessionID: 'ses_child' } },
+    ]));
+    await ctx.ended();
+    expect(ctx.entries().filter((e) => e.entryType === 'background_task')).toEqual([
+      expect.objectContaining({ taskId: 'ses_child', status: 'running' }),
+      expect.objectContaining({ taskId: 'ses_child', status: 'completed' }),
+    ]);
+  });
+
   it("a failing sub-agent ends its own task, not the session's turn", async () => {
     const ctx = start(clientWith([
       { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },

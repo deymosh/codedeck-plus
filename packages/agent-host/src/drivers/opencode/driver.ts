@@ -676,11 +676,25 @@ export class OpenCodeSession implements DriverSession {
           this.markTurnComplete();
           break;
         }
+        // A child's execution ending is that sub-agent's own end, exactly as
+        // its `session.idle` would be: only THIS session's own execution
+        // ending ends its turn. A child's end read as the session's own marks
+        // the turn complete while the parent is still working, and — because
+        // the child is then never recorded as ended — makes the call that
+        // started it a background task the phone shows as running for good.
         case 'session.execution.succeeded': {
+          if (child) {
+            this.childEnded(child, 'completed');
+            break;
+          }
           this.markTurnComplete();
           break;
         }
         case 'session.execution.interrupted': {
+          if (child) {
+            this.childEnded(child, 'stopped');
+            break;
+          }
           this.markTurnComplete();
           break;
         }
@@ -796,8 +810,8 @@ export class OpenCodeSession implements DriverSession {
     const found = this.childOfCall(callId);
     if (!found) return;
     const { id, child } = found;
-    // A child that already went idle ran to completion inside the call: it
-    // was not left running, so there is no task to report.
+    // A child whose execution already ended ran to completion inside the
+    // call: it was not left running, so there is no task to report.
     if (child.background || child.ended) return;
     child.background = true;
     this.deliver({ type: 'task', taskId: id, title: child.title, status: 'running', callId: child.callId });
@@ -808,9 +822,9 @@ export class OpenCodeSession implements DriverSession {
     return child.callId;
   }
 
-  /** A child session went idle or failed: a background sub-agent's task
-   *  ended (stopped, when the user asked for that). */
-  private childEnded(child: ChildSession, status: 'completed' | 'failed'): void {
+  /** A child session ended — its own execution, or a failure: a background
+   *  sub-agent's task ended (stopped, when the user asked for that). */
+  private childEnded(child: ChildSession, status: 'completed' | 'failed' | 'stopped'): void {
     child.ended = true;
     if (!child.background) return;
     child.background = false;
