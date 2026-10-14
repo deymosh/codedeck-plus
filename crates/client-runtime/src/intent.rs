@@ -833,6 +833,9 @@ pub fn apply(
                     .ui
                     .select_session(&machine, session_id.as_deref(), ctx.visible);
             r.ui_changed = true;
+            if let Some(cmd) = session_id.as_deref().and_then(|s| stores.style_request(&machine, s, ctx.now)) {
+                r.send(&machine, cmd);
+            }
         }
         Intent::SetTorEnabled(on) => {
             stores.settings.set_tor_proxy_enabled(on);

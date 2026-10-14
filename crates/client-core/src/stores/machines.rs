@@ -11,7 +11,7 @@
 //! - removal is ONLY via explicit `removedSessions` tombstones;
 //! - the merge is pure — `prev` is never mutated.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,10 +21,11 @@ use protocol::common::{
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
-    AgentAckMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg,
+    AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PluginAckMsg, PluginsMsg, ProviderProfilesMsg,
     SessionListMsg, SessionMcpMsg, SlashCommand,
 };
 
+use super::agent_styles::AgentStyles;
 use super::fetches::Fetches;
 use super::pairing::is_relay_url;
 use super::session_key::SessionGrant;
@@ -613,6 +614,9 @@ pub struct MachinesState {
     /// Per machine, when the newest message read from it was written: a
     /// relay replaying something older says nothing about it now.
     pub read_at: BTreeMap<String, u64>,
+    /// Agents' styles by hash, shared by every machine; persisted under its
+    /// own key.
+    pub agent_styles: AgentStyles,
 }
 
 impl MachinesState {
@@ -624,6 +628,7 @@ impl MachinesState {
             merge_options,
             fetches: Fetches::default(),
             read_at: BTreeMap::new(),
+            agent_styles: AgentStyles::default(),
         }
     }
 
@@ -1163,6 +1168,29 @@ impl MachinesState {
     /// reason) — it must never overwrite a good list. A non-empty answer is
     /// always authoritative and clears any stored reason. Applies only to the
     /// answering agent's entry, and only for a known machine.
+    /// The agent running `session_id` on `machine`, when its bridge names a
+    /// style for it that is not cached yet — what to ask that bridge for.
+    pub fn missing_style(&self, machine_pubkey: &str, session_id: &str) -> Option<String> {
+        let machine = self.machines.get(machine_pubkey)?;
+        let agent = &machine.sessions.get(session_id)?.info.agent;
+        let hash = machine.agent(agent)?.style_hash.as_deref()?;
+        (!self.agent_styles.contains(hash)).then(|| agent.to_string())
+    }
+
+    /// A bridge's answer to `agent-style-request`. Returns whether the cache
+    /// changed.
+    pub fn apply_agent_style(&mut self, msg: &AgentStyleMsg) -> bool {
+        let (Some(hash), Some(style)) = (&msg.style_hash, &msg.style) else {
+            return false;
+        };
+        let named: BTreeSet<String> = self
+            .machines
+            .values()
+            .flat_map(|m| m.agents.iter().filter_map(|a| a.style_hash.clone()))
+            .collect();
+        self.agent_styles.insert(hash, style.clone(), &named)
+    }
+
     pub fn apply_models(&mut self, machine_pubkey: &str, msg: &ModelsMsg) {
         self.with_machine(machine_pubkey, |m| {
             let entry = m.models.entry(msg.agent.clone()).or_default();
@@ -1626,6 +1654,33 @@ mod tests {
         assert!(m.agent("claude-code").is_none());
         assert!(m.agent("opencode").is_some());
         assert!(m.credentials.is_empty());
+    }
+
+    #[test]
+    fn a_style_is_wanted_until_its_hash_is_cached_and_shared_across_machines() {
+        let style = protocol::common::AgentStyle { accent: Some("#D77757".into()), ..Default::default() };
+        let hash = style.hash();
+        let catalog = json!({ "agents": [
+            { "id": "claude-code", "displayName": "Claude Code", "styleHash": hash },
+            { "id": "opencode", "displayName": "OpenCode" },
+        ] });
+        let mut opencode = info("s2");
+        opencode.agent = "opencode".into();
+        let mut st = MachinesState::default();
+        st.apply_session_list("a", &list(&[info("s1"), opencode], catalog.clone()), 10);
+        st.apply_session_list("b", &list(&[info("s3")], catalog), 10);
+
+        assert_eq!(st.missing_style("a", "s1").as_deref(), Some("claude-code"));
+        assert_eq!(st.missing_style("a", "s2"), None, "an agent with no style");
+        assert_eq!(st.missing_style("a", "nope"), None);
+
+        let answer = |hash: Option<String>| AgentStyleMsg { agent: "claude-code".into(), style_hash: hash, style: Some(style.clone()) };
+        assert!(!st.apply_agent_style(&answer(Some("0123456789abcdef".into()))), "not the style's hash");
+        assert!(!st.apply_agent_style(&answer(None)));
+        assert!(st.apply_agent_style(&answer(Some(hash.clone()))));
+        assert_eq!(st.missing_style("a", "s1"), None);
+        assert_eq!(st.missing_style("b", "s3"), None, "the same hash on another bridge");
+        assert_eq!(st.agent_styles.get(&hash), Some(&style));
     }
 
     #[test]

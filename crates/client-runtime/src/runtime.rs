@@ -602,6 +602,7 @@ impl Core {
         self.query(ViewQuery::Machines).await.unwrap_or(MachinesView {
             machines: Default::default(),
             direct_up: Default::default(),
+            agent_styles: Default::default(),
         })
     }
     pub async fn settings_view(&self) -> Option<SettingsView> {
@@ -1705,8 +1706,9 @@ impl Loop {
     }
 
     async fn persist_store(&mut self, id: StoreId) {
-        // What these hold goes in the config backup.
-        if id != StoreId::Outbox {
+        // What these hold goes in the config backup; the style cache is
+        // fetched again whenever it is missing.
+        if !matches!(id, StoreId::Outbox | StoreId::AgentStyles) {
             self.backup_changed();
         }
         let p = Persister::new(self.kv.as_ref());
@@ -1715,6 +1717,7 @@ impl Loop {
                 self.machines_dirty = true;
                 self.schedule_flush();
             }
+            StoreId::AgentStyles => p.save_agent_styles(&self.stores.machines.agent_styles).await,
             StoreId::Outbox => p.save_outbox(&self.stores.outbox).await,
             StoreId::Settings => p.save_settings(&self.stores.settings).await,
             StoreId::QuickPrompts => p.save_quick_prompts(&self.stores.quick_prompts).await,
@@ -2412,7 +2415,7 @@ fn abort(slot: &mut Option<AbortHandle>) {
 
 fn slice_of(id: StoreId) -> SliceId {
     match id {
-        StoreId::Machines => SliceId::Machines,
+        StoreId::Machines | StoreId::AgentStyles => SliceId::Machines,
         StoreId::Outbox => SliceId::Outbox,
         StoreId::Settings => SliceId::Settings,
         StoreId::QuickPrompts => SliceId::QuickPrompts,

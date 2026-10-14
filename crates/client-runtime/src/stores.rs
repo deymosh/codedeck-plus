@@ -19,6 +19,9 @@ use client_core::stores::pending_sessions::PendingSessionsState;
 use client_core::stores::quick_prompts::{
     hydrate_quick_prompts, serialize_quick_prompts, QuickPromptsState, QUICK_PROMPTS_STORAGE_KEY,
 };
+use client_core::stores::fetches::Fetch;
+use protocol::commands::{AgentStyleRequestMsg, PhoneToBridge};
+use client_core::stores::agent_styles::{hydrate_agent_styles, serialize_agent_styles, AgentStyles};
 use client_core::stores::backup::{hydrate_backup_config, serialize_backup_config, BackupConfig, BACKUP_STORAGE_KEY};
 use client_core::stores::settings::{hydrate_settings, serialize_settings, SettingsState};
 
@@ -32,6 +35,8 @@ use crate::ports::{Kv, TranscriptStore};
 pub const MACHINES_KEY: &str = "machines";
 /// The user-deleted session ids and when each was deleted.
 pub const DISMISSED_SESSIONS_KEY: &str = "machines.dismissed";
+/// Agents' styles by hash ([`client_core::stores::agent_styles`]).
+pub const AGENT_STYLES_KEY: &str = "machines.agentStyles";
 pub const OUTBOX_KEY: &str = "outbox";
 pub const SETTINGS_KEY: &str = "settings";
 pub const QUICK_PROMPTS_KEY: &str = QUICK_PROMPTS_STORAGE_KEY;
@@ -89,6 +94,18 @@ pub struct Forgot {
 }
 
 impl CoreStores {
+    /// The `agent-style-request` to send for `session_id` on `machine` while
+    /// it is on screen: its bridge names a style for its agent that is not
+    /// cached, and none is being asked for already. A style is fetched only
+    /// for a session someone looks at, never for the whole catalog.
+    pub fn style_request(&mut self, machine: &str, session_id: &str, now: u64) -> Option<PhoneToBridge> {
+        let agent = self.machines.missing_style(machine, session_id)?;
+        self.machines
+            .fetches
+            .should_request(machine, Fetch::AgentStyle(agent.clone()), now)
+            .then_some(PhoneToBridge::AgentStyleRequest(AgentStyleRequestMsg { agent }))
+    }
+
     /// Forget what the phone keeps about a session that is gone (deleted
     /// here, on another device, or with its machine): its unread dot, the
     /// cards answered in it, its unsent messages and its transcript's
@@ -218,6 +235,7 @@ pub async fn hydrate(
         config.merge_options,
     );
     machines.dismissed_sessions = hydrate_dismissed(kv.get(DISMISSED_SESSIONS_KEY).await.as_deref());
+    machines.agent_styles = hydrate_agent_styles(kv.get(AGENT_STYLES_KEY).await.as_deref());
     let outbox = OutboxState::new(hydrate_outbox(kv.get(OUTBOX_KEY).await.as_deref()));
 
     let last_stored_seen = kv
@@ -273,6 +291,10 @@ impl<'a> Persister<'a> {
         self.kv
             .set(DISMISSED_SESSIONS_KEY, &serialize_dismissed(&s.dismissed_sessions))
             .await;
+    }
+
+    pub async fn save_agent_styles(&self, s: &AgentStyles) {
+        self.kv.set(AGENT_STYLES_KEY, &serialize_agent_styles(s)).await;
     }
 
     pub async fn save_outbox(&self, s: &OutboxState) {

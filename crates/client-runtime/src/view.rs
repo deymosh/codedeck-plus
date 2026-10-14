@@ -23,6 +23,7 @@ use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
 use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast};
+use protocol::common::AgentStyle;
 use serde::Serialize;
 
 use crate::ports::TranscriptStore;
@@ -79,6 +80,8 @@ pub struct MachinesView {
     /// The endpoint each machine's direct link is up on; a machine absent
     /// here is reached through the relays.
     pub direct_up: BTreeMap<String, String>,
+    /// Agents' styles by the hash their catalogs name them with.
+    pub agent_styles: BTreeMap<String, AgentStyle>,
 }
 
 impl MachinesView {
@@ -86,6 +89,7 @@ impl MachinesView {
         Self {
             machines: s.machines.machines.clone(),
             direct_up: BTreeMap::new(),
+            agent_styles: s.machines.agent_styles.iter().map(|(h, st)| (h.clone(), st.clone())).collect(),
         }
     }
 }
