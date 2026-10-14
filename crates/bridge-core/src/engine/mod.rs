@@ -22,6 +22,7 @@
 mod host;
 mod mcp;
 mod pairing;
+mod permission_rules;
 mod phone;
 mod session_keys;
 pub use session_keys::MAX_CLIENTS;

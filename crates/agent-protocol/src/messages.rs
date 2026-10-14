@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use protocol::common::{
     AgentInstall, AgentStyle, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
-    OptionChoice, OutputEntry, PartialKind, PermissionOption, PluginAction, PluginMarketplace, ProviderModel,
+    OptionChoice, OutputEntry, PartialKind, PermissionOption, PermissionRule, PluginAction, PluginMarketplace, ProviderModel,
     QuestionOption, SessionMcpServer, SessionOption, Subagent, ToolKind, UsageData,
 };
 use protocol::events::{ModelEntry, SlashCommand};
@@ -450,6 +450,13 @@ pub enum BridgeMessage {
         name: String,
         enabled: bool,
     },
+    /// The permission rules the agent saved from "always allow" answers
+    /// (agents with `supports.permissionRules`), every project's. Reply:
+    /// `permission-rules`.
+    ListPermissionRules { agent: String },
+    /// Revoke saved permission rules by id. Reply: `permission-rules`, the
+    /// list as it is after, or `error` saying why they were not removed.
+    RemovePermissionRules { agent: String, ids: Vec<String> },
     /// Check a credential value with its provider. Reply: `credential-checked`.
     CheckCredential {
         agent: String,
@@ -555,6 +562,9 @@ pub enum HostMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         project_wide: bool,
     },
+    /// Reply to `list-permission-rules` and `remove-permission-rules` (as the
+    /// phone wire's `permission-rules`).
+    PermissionRules { rules: Vec<PermissionRule> },
     /// Reply to `check-credential` and `check-provider`; absent `valid` = it
     /// could not be checked.
     CredentialChecked {

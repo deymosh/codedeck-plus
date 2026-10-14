@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::capabilities::BridgeHostKind;
 use super::common::{
     AgentAction, AgentDescriptor, AgentStyle, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
-    SessionMcpServer,
+    PermissionRule, SessionMcpServer,
     PartialKind, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     Subagent, UsageData,
 };
@@ -381,6 +381,20 @@ pub struct SessionMcpMsg {
     pub error: Option<String>,
 }
 
+/// The permission rules an agent saved: the reply to
+/// `permission-rules-request` and to `permission-rules-remove`, sent only to
+/// the client that asked. When the rules could not be read or removed,
+/// `error` says why; `rules` is then empty, and a client keeps showing what it
+/// had.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRulesMsg {
+    pub agent: String,
+    pub rules: Vec<PermissionRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Reply to `set-credentials`: the resulting status of every credential in
 /// the written scope (`agent`, or the bridge's own when absent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -464,6 +478,7 @@ pub enum BridgeToPhone {
     McpServers(McpServersMsg),
     McpAck(McpAckMsg),
     SessionMcp(SessionMcpMsg),
+    PermissionRules(PermissionRulesMsg),
     CredentialsAck(CredentialsAckMsg),
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
@@ -587,6 +602,9 @@ mod tests {
             {"name":"github","status":"connected","tools":12},{"name":"x","status":"needs-auth"},
             {"name":"y","status":"failed","error":"exit 1"}],"toggles":true,"projectWide":true}));
         rt(&json!({"v":12,"type":"session-mcp","sessionId":"s","servers":[],"error":"not running"}));
+        rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[
+            {"id":"psv_1","project":"/home/me/code","tool":"shell","pattern":"git status *","createdAt":1_792_008_058_637_u64}]}));
+        rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[],"error":"OpenCode is not running"}));
         rt(&json!({"v":12,"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
         rt(&json!({"v":12,"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));

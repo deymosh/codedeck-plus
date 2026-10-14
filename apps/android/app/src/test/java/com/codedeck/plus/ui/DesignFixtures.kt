@@ -15,6 +15,8 @@ import com.codedeck.plus.ui.transcript.displayEntriesJson
 import com.codedeck.plus.ui.transcript.parseActivity
 import com.codedeck.plus.ui.transcript.parseDisplayEntries
 import kotlinx.serialization.json.jsonObject
+import uniffi.client_ffi.UniffiAgentPermissionRules
+import uniffi.client_ffi.UniffiPermissionRule
 import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiAgentDefaults
 import uniffi.client_ffi.UniffiAgentModels
@@ -117,7 +119,7 @@ internal object DesignFixtures {
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = listOf(UniffiOptionChoice("low", "Low", null), UniffiOptionChoice("high", "High", null)),
         defaultMode = "default", defaultEffort = null,
-        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
+        supportsModels = true, supportsUsage = true, supportsProviders = true, supportsProviderModels = false, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = false,
         credentials = listOf(UniffiCredentialStatus("oauth", "Claude token", present = true, fromEnv = false, valid = true)),
         installState = "ready", removable = false, installError = null, actionBusy = null, actionFailure = null, style = claudeStyle,
     )
@@ -125,7 +127,7 @@ internal object DesignFixtures {
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
         efforts = emptyList(), defaultMode = "build", defaultEffort = null,
-        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true,
+        supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = true,
         credentials = emptyList(),
         installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = opencodeStyle,
     )
@@ -133,7 +135,7 @@ internal object DesignFixtures {
     val deepseek = UniffiAgent(
         id = "deepseek-harness", displayName = "DeepSeek Harness",
         modes = emptyList(), efforts = emptyList(), defaultMode = null, defaultEffort = null,
-        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false,
+        supportsModels = false, supportsUsage = false, supportsProviders = false, supportsProviderModels = false, supportsInterrupt = false, supportsCommands = false, supportsPlugins = false, supportsMcp = false, supportsTasks = false, supportsPermissionRules = false,
         credentials = emptyList(),
         installState = "not_installed", removable = false, installError = null, actionBusy = null, actionFailure = null, style = null,
     )
@@ -198,6 +200,19 @@ internal object DesignFixtures {
 
     /** Claude Code's MCP servers: remote ones with a token header, a local
      *  command with an env variable, one being added. */
+    /** OpenCode's saved permissions: two projects, one rule being removed. */
+    val opencodeRules = UniffiAgentPermissionRules(
+        agent = "opencode",
+        rules = listOf(
+            UniffiPermissionRule("psv_1", "/home/me/code/codedeck-plus", "shell", "git status *", 1_792_008_058_637u),
+            UniffiPermissionRule("psv_2", "/home/me/code/codedeck-plus", "shell", "pnpm test *", 1_792_008_000_000u),
+            UniffiPermissionRule("psv_3", "/home/me/code/codedeck-plus", "edit", "docs/**", 1_791_900_000_000u),
+            UniffiPermissionRule("psv_4", "/home/me/code/notes", "webfetch", "*", 1_791_800_000_000u),
+        ),
+        error = null,
+        busy = listOf("psv_2"),
+    )
+
     val claudeMcp = UniffiAgentMcp(
         agent = "claude-code",
         servers = listOf(
@@ -262,7 +277,7 @@ internal object DesignFixtures {
             "home-gateway/OpenCode Go/deepseek-v4.1-flash",
             null,
         )),
-        providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp),
+        providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp), permissionRules = listOf(opencodeRules),
         directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
         npub = "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvw",

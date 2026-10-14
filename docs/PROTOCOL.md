@@ -454,6 +454,29 @@ Phones also import servers from the JSON other clients use (`{"mcpServers":
 `client_core::mcp_import` turns it into specs, reporting each entry it
 cannot add.
 
+### `permission-rules`
+
+For agents with `supports.permissionRules`, an "always allow" answer on a
+permission card becomes a rule the agent keeps for the project, outliving the
+session that made it: every later session there runs a matching call without
+asking — over the mode the session runs in — until the rule is removed.
+OpenCode keeps them in its database (they survive its restarts). A phone
+lists and revokes them; the bridge keeps no rule state.
+
+- `permission-rules-request {agent}` → `permission-rules {agent, rules[],
+  error?}`, each rule `PermissionRule {id, project, tool, pattern,
+  createdAt}`: the project's directory, the tool in the agent's own name
+  (`shell`, `edit`), the pattern a call must match in the agent's own syntax
+  (`git status *`, `*` for every call), and when it was saved (ms).
+- `permission-rules-remove {agent, ids}` (1–200 ids) → the `permission-rules`
+  after. An id the agent no longer has is skipped, not an error.
+
+Both are answered to the asking client only: the page that asked is the only
+one showing the rules, and nothing else fetches them. When the rules could
+not be read or removed, `rules` is empty and `error` says why; a phone keeps
+showing what it had. Cost: one command and one reply per page opening or
+removal, never sent unasked.
+
 ### Pairing
 
 A pairing window is a time-boxed subscription with **no author filter** — the
@@ -680,6 +703,8 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `mcp-action {agent, action, servers?, names?}` | `mcp-servers {…}` once done, or `error` with the agent's reason |
 | `session-mcp {sessionId}` | `session-mcp {servers, toggles, projectWide}` |
 | `session-mcp-toggle {sessionId, name, enabled}` | `session-mcp {…}` once done, or `error` |
+| `list-permission-rules {agent}` | `permission-rules {rules}`: every project's |
+| `remove-permission-rules {agent, ids}` | `permission-rules {rules}` after, or `error` with the agent's reason |
 | `check-credential {agent, credential, value}` | `credential-checked {valid?}` |
 | `check-provider {agent, provider, model}` | `credential-checked {valid?}`: a provider profile's token, checked on the API `agent` speaks |
 | `list-provider-models {agent, baseUrl, authToken}` | `provider-models {models}` (never empty; each `{id, label?, provider?, contextWindow?}`), read the way `agent` signs in; or `error` with the reason there is none |

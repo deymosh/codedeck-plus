@@ -21,6 +21,7 @@ import type {
   ModelEntry,
   OptionChoice,
   PermissionRequest,
+  PermissionRule,
   PlanOutcome,
   PluginAction,
   PluginMarketplace,
@@ -121,6 +122,17 @@ export interface McpManager {
   act(action: McpAction, servers: McpServerAdd[], names: string[]): Promise<McpState>;
 }
 
+/** For an agent whose catalog entry `supports.permissionRules`: the rules it
+ *  saved from "always allow" answers, which every later session of their
+ *  project obeys until they are removed. */
+export interface PermissionRuleManager {
+  /** Every project's rules. */
+  list(): Promise<PermissionRule[]>;
+  /** Remove the rules with these ids and answer the list as it is after.
+   *  Rejects with the agent's own reason when one could not be removed. */
+  remove(ids: string[]): Promise<PermissionRule[]>;
+}
+
 /** A session's MCP servers. `toggles`: they can be switched in the
  *  session; `projectWide`: a switch applies to every session of the agent
  *  in the same project. */
@@ -173,6 +185,8 @@ export interface Driver {
   readonly plugins?: PluginManager;
   /** Manages the agent's MCP servers, when it supports them. */
   readonly mcp?: McpManager;
+  /** Lists and revokes the agent's saved permission rules, when it keeps any. */
+  readonly permissionRules?: PermissionRuleManager;
   /** Release driver-wide resources (servers it spawned). */
   shutdown?(): Promise<void>;
 }

@@ -58,6 +58,7 @@ export type ContextGroup = G.ContextGroup;
 export type ContextItem = G.ContextItem;
 export type ContextKind = G.ContextKind;
 export type PermissionRequest = G.PermissionRequest_Deserialize;
+export type PermissionRule = G.PermissionRule;
 
 /** Version of the driver protocol this host speaks (the frame `v`). */
 export const DRIVER_PROTOCOL_VERSION = 1;

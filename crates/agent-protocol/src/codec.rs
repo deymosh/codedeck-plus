@@ -95,6 +95,7 @@ impl HostMessage {
             | Self::Plugins { .. }
             | Self::McpServers { .. }
             | Self::SessionMcp { .. }
+            | Self::PermissionRules { .. }
             | Self::CredentialChecked { .. }
             | Self::ProviderModels { .. }
             | Self::ProvidersSet { .. } => true,

@@ -89,6 +89,8 @@ internal sealed interface SettingsPage {
     data class Plugins(val pubkey: String, val agent: String) : SettingsPage
     /** One agent's MCP servers on a machine, opened from the machine's page. */
     data class Mcp(val pubkey: String, val agent: String) : SettingsPage
+    /** One agent's saved permissions on a machine, opened from the machine's page. */
+    data class PermissionRules(val pubkey: String, val agent: String) : SettingsPage
     /** One agent's AI providers on a machine, opened from the machine's page. */
     data class Providers(val pubkey: String, val agent: String) : SettingsPage
     data object Appearance : SettingsPage
@@ -104,6 +106,7 @@ internal sealed interface SettingsPage {
         is Machine -> "machine:$pubkey"
         is Plugins -> "plugins:$pubkey:$agent"
         is Mcp -> "mcp:$pubkey:$agent"
+        is PermissionRules -> "permission-rules:$pubkey:$agent"
         is Providers -> "providers:$pubkey:$agent"
         Appearance -> "appearance"
         Notifications -> "notifications"
@@ -118,7 +121,7 @@ internal sealed interface SettingsPage {
     val depth: Int
         get() = when (this) {
             Hub -> 0
-            is Plugins, is Mcp, is Providers -> 2
+            is Plugins, is Mcp, is PermissionRules, is Providers -> 2
             else -> 1
         }
 
@@ -127,6 +130,7 @@ internal sealed interface SettingsPage {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
             saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("mcp:") -> saved.split(':').let { Mcp(it[1], it.drop(2).joinToString(":")) }
+            saved.startsWith("permission-rules:") -> saved.split(':').let { PermissionRules(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("providers:") -> saved.split(':').let { Providers(it[1], it.drop(2).joinToString(":")) }
             saved == "appearance" -> Appearance
             saved == "notifications" -> Notifications
@@ -190,6 +194,7 @@ fun SettingsScreen(
     val machineOf = when (page) {
         is SettingsPage.Plugins -> page.pubkey
         is SettingsPage.Mcp -> page.pubkey
+        is SettingsPage.PermissionRules -> page.pubkey
         is SettingsPage.Providers -> page.pubkey
         else -> null
     }
@@ -237,11 +242,13 @@ fun SettingsScreen(
                         onOpenProviders = { agent -> open(SettingsPage.Providers(machine.pubkeyHex, agent)) },
                         onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
                         onOpenMcp = { agent -> open(SettingsPage.Mcp(machine.pubkeyHex, agent)) },
+                        onOpenPermissionRules = { agent -> open(SettingsPage.PermissionRules(machine.pubkeyHex, agent)) },
                     )
                 }
             }
             is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
             is SettingsPage.Mcp -> McpScreen(core, page.pubkey, page.agent, onBack = back)
+            is SettingsPage.PermissionRules -> PermissionRulesScreen(core, page.pubkey, page.agent, onBack = back)
             is SettingsPage.Providers -> ProvidersScreen(core, page.pubkey, page.agent, onBack = back)
             SettingsPage.Appearance -> AppearancePage(view, ::dispatch, toHub)
             SettingsPage.Notifications -> NotificationsPage(view, ::dispatch, toHub)

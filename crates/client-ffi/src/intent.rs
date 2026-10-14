@@ -219,6 +219,19 @@ pub enum UniffiIntent {
         servers: Vec<UniffiMcpServerSpec>,
         names: Vec<String>,
     },
+    /// Ask for the permission rules an agent saved on a machine; the answer
+    /// lands in `UniffiMachineSummary.permission_rules`.
+    RequestPermissionRules {
+        machine: String,
+        agent: String,
+    },
+    /// Revoke saved permission rules by id; they are `busy` until the
+    /// bridge answers with the new list.
+    RemovePermissionRules {
+        machine: String,
+        agent: String,
+        ids: Vec<String>,
+    },
     /// Ask for a running session's MCP servers; the answer lands in
     /// `UniffiSessionSummary.mcp`.
     RequestSessionMcp {
@@ -499,6 +512,10 @@ impl TryFrom<UniffiIntent> for Intent {
                 Intent::RequestCommands { machine, session_id }
             }
             UniffiIntent::RequestMcp { machine, agent } => Intent::RequestMcp { machine, agent },
+            UniffiIntent::RequestPermissionRules { machine, agent } => Intent::RequestPermissionRules { machine, agent },
+            UniffiIntent::RemovePermissionRules { machine, agent, ids } => {
+                Intent::RemovePermissionRules { machine, agent, ids }
+            }
             UniffiIntent::McpAction { machine, agent, action, servers, names } => Intent::McpAction {
                 machine,
                 agent,

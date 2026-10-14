@@ -272,6 +272,13 @@ export type AgentSupports = {
 	 *  (`background_task` entries), and `stop-task` stops it.
 	 */
 	tasks?: boolean,
+	/**
+	 *  The agent keeps the "always allow" answers given on permission cards
+	 *  as rules of its own, which outlive the session that made them;
+	 *  `permission-rules-request` / `permission-rules-remove` list and revoke
+	 *  them, for the whole machine.
+	 */
+	permissionRules?: boolean,
 };
 
 /**  A plugin one of the known marketplaces offers and that is not installed. */
@@ -420,6 +427,22 @@ export type BridgeMessage_Deserialize =
 	sessionId: string,
 	name: string,
 	enabled: boolean,
+} } | 
+/**
+ *  The permission rules the agent saved from "always allow" answers
+ *  (agents with `supports.permissionRules`), every project's. Reply:
+ *  `permission-rules`.
+ */
+{ kind: "list-permission-rules"; payload: {
+	agent: string,
+} } | 
+/**
+ *  Revoke saved permission rules by id. Reply: `permission-rules`, the
+ *  list as it is after, or `error` saying why they were not removed.
+ */
+{ kind: "remove-permission-rules"; payload: {
+	agent: string,
+	ids: string[],
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
 { kind: "check-credential"; payload: {
@@ -601,6 +624,22 @@ export type BridgeMessage_Serialize =
 	sessionId: string,
 	name: string,
 	enabled: boolean,
+} } | 
+/**
+ *  The permission rules the agent saved from "always allow" answers
+ *  (agents with `supports.permissionRules`), every project's. Reply:
+ *  `permission-rules`.
+ */
+{ kind: "list-permission-rules"; payload: {
+	agent: string,
+} } | 
+/**
+ *  Revoke saved permission rules by id. Reply: `permission-rules`, the
+ *  list as it is after, or `error` saying why they were not removed.
+ */
+{ kind: "remove-permission-rules"; payload: {
+	agent: string,
+	ids: string[],
 } } | 
 /**  Check a credential value with its provider. Reply: `credential-checked`. */
 { kind: "check-credential"; payload: {
@@ -1045,6 +1084,13 @@ export type HostMessage_Deserialize =
 	projectWide?: boolean,
 } } | 
 /**
+ *  Reply to `list-permission-rules` and `remove-permission-rules` (as the
+ *  phone wire's `permission-rules`).
+ */
+{ kind: "permission-rules"; payload: {
+	rules: PermissionRule[],
+} } | 
+/**
  *  Reply to `check-credential` and `check-provider`; absent `valid` = it
  *  could not be checked.
  */
@@ -1137,6 +1183,13 @@ export type HostMessage_Serialize =
 	servers: SessionMcpServer_Serialize[],
 	toggles?: boolean,
 	projectWide?: boolean,
+} } | 
+/**
+ *  Reply to `list-permission-rules` and `remove-permission-rules` (as the
+ *  phone wire's `permission-rules`).
+ */
+{ kind: "permission-rules"; payload: {
+	rules: PermissionRule[],
 } } | 
 /**
  *  Reply to `check-credential` and `check-provider`; absent `valid` = it
@@ -1445,6 +1498,27 @@ export type PermissionRequest_Serialize = {
 	hook?: string | null,
 	/**  As on the phone wire's `permission_request` entry. */
 	hookPlugin?: string | null,
+};
+
+/**
+ *  One rule an agent saved from an "always allow" answer: every later
+ *  session in `project` runs a call of `tool` matching `pattern` without
+ *  asking, until the rule is removed.
+ */
+export type PermissionRule = {
+	/**  What `permission-rules-remove` names it by. */
+	id: string,
+	/**  The directory of the project it applies in. */
+	project: string,
+	/**  The tool it lets run, in the agent's own name for it (`shell`, `edit`). */
+	tool: string,
+	/**
+	 *  What the call must match, in the agent's own pattern syntax
+	 *  (`git status *`, `src/**`); `*` alone matches every call of the tool.
+	 */
+	pattern: string,
+	/**  When it was saved, milliseconds since the Unix epoch. */
+	createdAt: number,
 };
 
 export type PlanApprovalRequest = PlanApprovalRequest_Serialize | PlanApprovalRequest_Deserialize;
