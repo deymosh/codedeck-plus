@@ -118,6 +118,18 @@ OpenCode retries a provider that fails, waiting longer each time (about a
 minute in all). Each retry shows in the transcript with the provider's
 reason, so a model that is down can be switched rather than waited out.
 
+## "Always allow"
+
+A permission card offers "Always allow "<pattern>" in this project" when
+OpenCode offers to save a rule for the call: the pattern is OpenCode's own
+(`git push *` for `git push origin main`), usually wider than the call.
+Choosing it answers OpenCode's `always`, and OpenCode saves the rule for the
+project in its database. Every later session in that project — whatever its
+mode, Ask included — runs matching calls without asking, and the rule
+survives a restart of the server. The machine's page on the phone lists them
+under Permissions → OpenCode, by project, and removes them (OpenCode then
+asks again).
+
 ## What this does not do
 
 - No automated credential setup — that one `opencode auth login` step (or
