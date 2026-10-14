@@ -82,6 +82,8 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"15","kind":"mcp-action","payload":{"agent":"opencode","action":"remove","names":["gh"]}}));
         bridge_rt(json!({"v":1,"id":"16","kind":"session-mcp","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"17","kind":"session-mcp-toggle","payload":{"sessionId":"s","name":"gh","enabled":false}}));
+        bridge_rt(json!({"v":1,"id":"17a","kind":"list-permission-rules","payload":{"agent":"opencode"}}));
+        bridge_rt(json!({"v":1,"id":"17b","kind":"remove-permission-rules","payload":{"agent":"opencode","ids":["psv_1"]}}));
         bridge_rt(json!({"v":1,"id":"10","kind":"check-credential","payload":{"agent":"claude-code","credential":"anthropic_api_key","value":"sk"}}));
         bridge_rt(json!({"v":1,"id":"18","kind":"check-provider","payload":{"agent":"opencode","model":"m1",
             "provider":{"id":"or","label":"OpenRouter","baseUrl":"https://openrouter.ai/api","authToken":"tok","models":[{"id":"m1"}]}}}));
@@ -103,16 +105,16 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true},
+            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true,"permissionRules":false},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}],
             "install":{"state":"ready"}
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true},
             "credentials":[],"unavailableReason":"The OpenCode server failed to start","install":{"state":"ready","removable":true}
         },{
             "id":"deepseek-harness","displayName":"DeepSeek Harness","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false},
             "credentials":[],"install":{"state":"not_installed"}
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
@@ -123,6 +125,8 @@ mod tests {
         host_rt(json!({"v":1,"id":"8","kind":"plugins","payload":{"installed":[{"id":"c@m","name":"c","enabled":true}],"marketplaces":[{"name":"m","source":"o/r"}],"toggles":true}}));
         host_rt(json!({"v":1,"id":"9","kind":"mcp-servers","payload":{"servers":[{"name":"gh","transport":"http","target":"https://x/mcp","headerKeys":["Authorization"],"enabled":true}],"toggles":true}}));
         host_rt(json!({"v":1,"id":"10","kind":"session-mcp","payload":{"servers":[{"name":"gh","status":"needs-auth"}],"toggles":true,"projectWide":true}}));
+        host_rt(json!({"v":1,"id":"10a","kind":"permission-rules","payload":{"rules":[
+            {"id":"psv_1","project":"/w","tool":"shell","pattern":"git status *","createdAt":1_792_008_058_637_u64}]}}));
         host_rt(json!({"v":1,"id":"6","kind":"usage","payload":{"usage":{"available":true,"windows":[{"label":"5h","utilization":12.5,"resetsAt":null}],"fetchedAt":"t"}}}));
         host_rt(json!({"v":1,"id":"7","kind":"credential-checked","payload":{"valid":false}}));
         host_rt(json!({"v":1,"id":"8","kind":"credential-checked","payload":{}}));
@@ -146,7 +150,7 @@ mod tests {
         let placeholder = |install: serde_json::Value| {
             json!({"v":1,"kind":"agent-changed","payload":{"agent":{
                 "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false},
+                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false},
                 "credentials":[],"install":install}}})
         };
         let changed = host_rt(placeholder(json!({"state":"installing"})));
