@@ -6,7 +6,7 @@ use protocol::commands::{
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
 use protocol::common::{
-    is_valid_provider_base_url, AgentAction, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
+    is_valid_provider_base_url, AgentAction, AgentStyle, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
 };
 use protocol::events::{
     AgentAckMsg, BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
@@ -473,9 +473,12 @@ impl Engine {
     }
 
     /// `agent`'s style, to the client that asked only: the others have
-    /// theirs, or ask when they need it.
+    /// theirs, or ask when they need it. An agent without a style, or not
+    /// known here, is answered with none.
     fn on_agent_style_request(&mut self, agent: String, phone: &str) {
-        self.publish_to(phone, BridgeToPhone::AgentStyle(AgentStyleMsg { agent, style_hash: None, style: None }));
+        let style = self.catalog.get(&agent).and_then(|a| a.style.clone());
+        let style_hash = style.as_ref().map(AgentStyle::hash);
+        self.publish_to(phone, BridgeToPhone::AgentStyle(AgentStyleMsg { agent, style_hash, style }));
     }
 
     /// Why `agent`'s plugins cannot be managed here, if they cannot.

@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use protocol::common::{
-    AgentInstall, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
+    AgentInstall, AgentStyle, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
     OptionChoice, OutputEntry, PartialKind, PermissionOption, PluginAction, PluginMarketplace, ProviderModel,
     QuestionOption, SessionMcpServer, SessionOption, Subagent, ToolKind, UsageData,
 };
@@ -67,6 +67,11 @@ pub struct AgentInfo {
     /// is installed.
     #[serde(default)]
     pub install: AgentInstall,
+    /// How the agent's sessions look on the phone, from the agent's own
+    /// terminal UI. The bridge advertises it by hash and hands it to a
+    /// phone that asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<AgentStyle>,
 }
 
 // --- MCP servers ---
