@@ -213,8 +213,8 @@ pub enum CoreEvent {
     TranscriptAppended { machine: String, session_id: String },
     /// A reply the agent is still writing, in the session on screen: live
     /// row `key`'s whole text now, or `None` once the row is gone (its entry
-    /// landed, or the turn ended). Shown after the transcript's rows; never
-    /// stored.
+    /// landed, or the session stopped running). Shown after the transcript's
+    /// rows; never stored.
     LiveText { machine: String, session_id: String, key: String, text: Option<String> },
     /// The correlated response to `Intent::CreateFolder` — matched by
     /// `request_id` off this stream (no store, no view: nothing to persist or

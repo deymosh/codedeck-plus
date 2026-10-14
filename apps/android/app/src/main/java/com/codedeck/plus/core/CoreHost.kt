@@ -264,8 +264,9 @@ class CoreHost(
      * The replies the agent is still writing in this session, in the order
      * they started, each with its whole text so far: folded from the
      * `LiveText` events, which the core sends only for the session on screen.
-     * Starts empty — a row already growing when the screen opened shows from
-     * its next piece. A row goes when its entry lands or the turn ends.
+     * Starts empty — a row already growing when the screen opened shows, whole,
+     * from its next piece (the core kept it). A row goes when its entry lands
+     * or the session stops running.
      */
     fun liveTextFlow(machine: String, sessionId: String): Flow<List<LiveReply>> {
         var next = 0L

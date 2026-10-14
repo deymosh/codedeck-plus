@@ -168,7 +168,7 @@ of a turn drops any row left over. An agent that does not stream sends no
 `partial` and its entries carry no `part`. Today the drivers stream only the
 main agent's reply: reasoning and a sub-agent's text are shown inside their
 tool group, so the kinds stay on the wire for later but cost nothing now.
-The phone keeps live rows only for the session on screen.
+The phone shows live rows only for the session on screen.
 
 **Cards.** Every `permission_request`, `question` group and `plan_approval` is
 closed by exactly one `resolved` entry with the same `requestId` — answered,

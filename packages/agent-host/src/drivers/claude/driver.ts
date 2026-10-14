@@ -666,8 +666,9 @@ export class ClaudeSession implements DriverSession {
 
   async interrupt(): Promise<void> {
     // The interrupted turn's remaining text is dropped rather than left to
-    // keep arriving; its final entries still carry whatever it produced.
-    this.dropLiveText();
+    // keep arriving. Its parts' keys are kept: the entries it still delivers
+    // name the part they complete, which is what replaces each live row.
+    this.partials.reset();
     await this.handle?.interrupt();
   }
 

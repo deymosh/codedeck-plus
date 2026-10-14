@@ -195,11 +195,12 @@ impl<'a> Router<'a> {
     pub async fn route(&mut self, machine: &str, msg: &BridgeToPhone) -> RouteResult {
         let mut r = RouteResult::default();
         match msg {
-            // Only the session on screen keeps live rows: another one's reply
-            // shows when its entry lands, as before.
+            // Every piece keeps its row whole (in memory only), so a session
+            // opened again mid-reply shows it all at its next piece; only the
+            // session on screen is told.
             BridgeToPhone::Partial(m) => {
-                if self.viewing_session(machine, &m.session_id) {
-                    if let Some(change) = self.stores.live_text.apply(machine, m) {
+                if let Some(change) = self.stores.live_text.apply(machine, m) {
+                    if self.viewing_session(machine, &m.session_id) {
                         r.live_text.push((machine.to_string(), m.session_id.clone(), change));
                     }
                 }
@@ -576,6 +577,12 @@ impl<'a> Router<'a> {
         let unclosed = self.stores.machines.apply_session_list(machine, m, self.now);
         r.persist(StoreId::Machines);
         r.heartbeat = Some((machine.to_string(), self.now));
+        // A session no longer running has no reply being written, however its
+        // turn ended (an error or a stop sends no `turn_complete`).
+        for s in m.sessions.iter().filter(|s| s.state != Some(SessionState::Running)) {
+            let gone = self.stores.live_text.end_turn(machine, &s.id);
+            r.live_text.extend(gone.into_iter().map(|c| (machine.to_string(), s.id.clone(), c)));
+        }
 
         // A deleted session the bridge still lists never got its
         // `close-session` (sent while offline, or past the relays' hour):
@@ -1182,6 +1189,47 @@ mod tests {
             .await;
         assert_eq!(out.persist, vec![StoreId::Outbox]);
         assert_eq!(s.outbox.items["in-1"].state, OutboxItemState::Confirmed);
+    }
+
+    fn live_piece(offset: u64, text: &str) -> BridgeToPhone {
+        BridgeToPhone::Partial(protocol::events::PartialMsg {
+            session_id: "s1".into(),
+            key: "k".into(),
+            entry_type: protocol::common::PartialKind::Text,
+            subagent: None,
+            offset,
+            text: text.into(),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_session_opened_again_mid_reply_shows_the_reply_whole() {
+        let (mut s, ts, kp) = stores().await;
+        s.ui.selected_machine = Some(MACHINE.into());
+        s.ui.selected_session = Some("other".into());
+        {
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+            assert!(r.route(MACHINE, &live_piece(0, "All ")).await.live_text.is_empty());
+        }
+        s.ui.selected_session = Some("s1".into());
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        let shown = r.route(MACHINE, &live_piece(4, "tests")).await.live_text;
+        assert_eq!(shown, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: Some("All tests".into()) })]);
+    }
+
+    #[tokio::test]
+    async fn a_session_that_stops_running_drops_its_live_rows() {
+        let (mut s, ts, kp) = stores().await;
+        s.machines.register_machine(MACHINE, "laptop", None, None, &[]);
+        s.ui.selected_machine = Some(MACHINE.into());
+        s.ui.selected_session = Some("s1".into());
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        r.route(MACHINE, &live_piece(0, "Half a rep")).await;
+        // An error or an interrupt ends the turn with no `turn_complete`.
+        let out = r
+            .route(MACHINE, &BridgeToPhone::Sessions(sessions_msg(vec![info("s1", Some(SessionState::Idle), None)])))
+            .await;
+        assert_eq!(out.live_text, vec![(MACHINE.into(), "s1".into(), LiveChange { key: "k".into(), text: None })]);
     }
 
     #[tokio::test]
