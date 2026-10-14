@@ -563,6 +563,8 @@ impl Engine {
                 self.on_info(session_id, info);
             }
             SessionEvent::Entries { entries } => self.on_entries(session_id, entries),
+            // Not passed on yet: the entry that completes the part still comes.
+            SessionEvent::Partial { .. } => {}
             SessionEvent::Turn { state } => {
                 // The agent may repeat the state it is in; only a change is
                 // worth a new session list.

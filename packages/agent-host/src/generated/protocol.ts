@@ -1237,6 +1237,12 @@ export type OutputEntry_Deserialize = {
 	/**  Set when a sub-agent (not the session's main agent) produced it. */
 	subagent?: Subagent_Deserialize | null,
 	/**
+	 *  The streamed part this entry completes, when the agent streamed it:
+	 *  the `key` its `partial` messages carried. The entry replaces the live
+	 *  row of that key.
+	 */
+	part?: string | null,
+	/**
 	 *  Agent-specific data no client depends on — the one sanctioned escape
 	 *  hatch; anything a client renders belongs in a typed field instead.
 	 */
@@ -1249,11 +1255,20 @@ export type OutputEntry_Serialize = {
 	/**  Set when a sub-agent (not the session's main agent) produced it. */
 	subagent?: Subagent_Serialize | null,
 	/**
+	 *  The streamed part this entry completes, when the agent streamed it:
+	 *  the `key` its `partial` messages carried. The entry replaces the live
+	 *  row of that key.
+	 */
+	part?: string | null,
+	/**
 	 *  Agent-specific data no client depends on — the one sanctioned escape
 	 *  hatch; anything a client renders belongs in a typed field instead.
 	 */
 	agentExtras?: unknown | null,
 } & EntryBody_Serialize;
+
+/**  What a `partial` streams: an assistant reply or the model's reasoning. */
+export type PartialKind = "text" | "thinking";
 
 export type PermissionOption = {
 	id: string,
@@ -1534,7 +1549,7 @@ export type SessionEvent = SessionEvent_Serialize | SessionEvent_Deserialize;
  */
 export type SessionEvent_Deserialize = 
 /**  The agent came up and accepts prompts. Sent once per `start-session`. */
-({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | 
+({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
 /**  Session facts changed. Only the fields that changed are set. */
 ({ type: "info"; 
 /**  The agent's own conversation id — the `resume` target. */
@@ -1553,9 +1568,17 @@ mode?: string | null;
  */
 title?: string | null; contextWindow?: number | null; 
 /**  0–100. */
-contextPercentage?: number | null }) & { entries?: never; error?: never; resumeLost?: never; state?: never } | 
+contextPercentage?: number | null }) & { entries?: never; entryType?: never; error?: never; key?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never } | 
 /**  Transcript entries, in order. The bridge assigns their seqs. */
-({ type: "entries"; entries: OutputEntry_Deserialize[] }) & { contextPercentage?: never; contextWindow?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; title?: never } | 
+({ type: "entries"; entries: OutputEntry_Deserialize[] }) & { contextPercentage?: never; contextWindow?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
+/**
+ *  Text the agent is still writing: part `key` from `offset` on (UTF-16
+ *  code units). The driver coalesces its SDK's deltas and sends at most
+ *  one every 250 ms per part, each with only the text since the last;
+ *  the entry that completes the part carries `part: key`. Never stored or
+ *  numbered.
+ */
+({ type: "partial"; key: string; entryType: PartialKind; subagent?: Subagent_Deserialize | null; offset: number; text: string }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; subagent?: never; text?: never; title?: never } | 
 /**
  *  The session is gone. Absent `error` = it ended normally. The host
  *  forgets the session after sending this.
@@ -1565,7 +1588,7 @@ contextPercentage?: number | null }) & { entries?: never; error?: never; resumeL
  *  The agent could not find the `resume` conversation, so continuing
  *  it is impossible; a new start must be fresh.
  */
-resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never; title?: never };
+resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; state?: never; subagent?: never; text?: never; title?: never };
 
 /**
  *  Something a running session reports. The host translates its agent's own
@@ -1573,7 +1596,7 @@ resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; en
  */
 export type SessionEvent_Serialize = 
 /**  The agent came up and accepts prompts. Sent once per `start-session`. */
-({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | 
+({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
 /**  Session facts changed. Only the fields that changed are set. */
 ({ type: "info"; 
 /**  The agent's own conversation id — the `resume` target. */
@@ -1592,9 +1615,17 @@ mode?: string | null;
  */
 title?: string | null; contextWindow?: number | null; 
 /**  0–100. */
-contextPercentage?: number | null }) & { entries?: never; error?: never; resumeLost?: never; state?: never } | 
+contextPercentage?: number | null }) & { entries?: never; entryType?: never; error?: never; key?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never } | 
 /**  Transcript entries, in order. The bridge assigns their seqs. */
-({ type: "entries"; entries: OutputEntry_Serialize[] }) & { contextPercentage?: never; contextWindow?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; title?: never } | 
+({ type: "entries"; entries: OutputEntry_Serialize[] }) & { contextPercentage?: never; contextWindow?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
+/**
+ *  Text the agent is still writing: part `key` from `offset` on (UTF-16
+ *  code units). The driver coalesces its SDK's deltas and sends at most
+ *  one every 250 ms per part, each with only the text since the last;
+ *  the entry that completes the part carries `part: key`. Never stored or
+ *  numbered.
+ */
+({ type: "partial"; key: string; entryType: PartialKind; subagent?: Subagent_Serialize | null; offset: number; text: string }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; subagent?: never; text?: never; title?: never } | 
 /**
  *  The session is gone. Absent `error` = it ended normally. The host
  *  forgets the session after sending this.
@@ -1604,7 +1635,7 @@ contextPercentage?: number | null }) & { entries?: never; error?: never; resumeL
  *  The agent could not find the `resume` conversation, so continuing
  *  it is impossible; a new start must be fresh.
  */
-resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; mode?: never; model?: never; nativeSessionId?: never; state?: never; title?: never };
+resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; state?: never; subagent?: never; text?: never; title?: never };
 
 /**  One MCP server of a running session. */
 export type SessionMcpServer = SessionMcpServer_Serialize | SessionMcpServer_Deserialize;
