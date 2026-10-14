@@ -160,10 +160,14 @@ a Docker-less host:
                            Point the agent at a local model server instead
                            (tools/fake-model.mjs): no account, no network,
                            and the same replies every run. Each prompt is a
-                           scenario — /tool (a permission card), /question,
-                           /error, /long (a large context) — and anything
-                           else is echoed. --dump DIR writes every request
-                           the agent made, for reading a driver's own input
+                           scenario — /tool (a tool call; a permission card
+                           on OpenCode), /question, /plan-approval, /error,
+                           /long (a long answer, and a context figure that
+                           has moved) — and anything else is echoed.
+                           --dump DIR writes every request the agent made,
+                           for reading what a driver actually sends (on the
+                           Docker engine it is copied back to
+                           dist/live-<agent>-dump/ afterwards)
 
 Android tests and lint (same idea, in the Android container — a subcommand
 maps to its Gradle task; anything else is passed to Gradle as it is):
@@ -794,12 +798,13 @@ cmd_live() {
   esac
   shift
 
-  local sync=1 timeout="$LIVE_DEFAULT_TIMEOUT" probe=() pairs=()
+  local sync=1 timeout="$LIVE_DEFAULT_TIMEOUT" probe=() pairs=() dump=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-sync) sync=0; shift ;;
       --timeout) timeout="$2"; shift 2 ;;
       --env) pairs+=("$2"); shift 2 ;;
+      --dump) dump="$2"; probe+=("$1" "$2"); shift 2 ;;
       *) probe+=("$1"); shift ;;
     esac
   done
@@ -890,6 +895,14 @@ cmd_live() {
   local host_log="dist/live-$agent.log"
   mkdir -p dist
   MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$LIVE_LOG" "$host_log" >/dev/null 2>&1 || true
+  # --dump writes inside the container, which is no use to anyone reading it
+  # on the host — so it comes back beside the log, for the same reason.
+  if [ -n "$dump" ]; then
+    local host_dump="dist/live-$agent-dump"
+    mkdir -p "$host_dump"
+    MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$dump/." "$host_dump/" >/dev/null 2>&1 || true
+    echo "==> dumped requests: $host_dump"
+  fi
   live_report "$code" "$timeout" "$host_log"
   return "$code"
 }

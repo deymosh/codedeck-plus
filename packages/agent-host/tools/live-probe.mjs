@@ -161,7 +161,11 @@ async function main() {
   // model of its own would run a real one, on a real account.
   let fakeModel = null;
   let fakeSession = null;
-  if (args['fake-model']) {
+  if (args['fake-model'] && args.agent === 'fake') {
+    // Nothing to point and no model to name: the fake agent answers from the
+    // prompt itself, and a server behind it would be decoration.
+    say('model: the fake agent runs no model, so --fake-model has nothing to do (it is for claude-code, opencode and deepseek-harness)');
+  } else if (args['fake-model']) {
     fakeModel = await startFakeModel({ log: (line) => say(`model: ${line}`), dump: args.dump ?? null });
     fakeSession = fakeModelSession(args.agent, fakeModel.url);
     if (!fakeSession) say(`!! --fake-model does not know how to point '${args.agent}' at a local endpoint`);
