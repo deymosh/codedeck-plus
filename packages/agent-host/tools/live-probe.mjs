@@ -11,7 +11,8 @@
  * Usage (normally through ./codedeck live, which sets the environment):
  *   node tools/live-probe.mjs --host dist/main.js --agent opencode \
  *     [--prompt TEXT]… [--mode MODE] [--model ID] [--effort ID] [--cwd DIR] \
- *     [--timeout SECONDS] [--log PATH] [--fake-model]
+ *     [--timeout SECONDS] [--log PATH] [--fake-model] [--idles N] \
+ *     [--linger SECONDS]
  *
  * Every frame is echoed as one line (JSON for anything it does not render),
  * so the output is greppable and a tail of --log shows the same thing live.
@@ -38,6 +39,25 @@ const FAKE_MODEL_LABEL = 'Fake model';
 
 /** Flags that stand alone, with no value after them. */
 const FLAGS = new Set(['models', 'fake-model']);
+
+/**
+ * `--idles N` — how many `turn: idle` signals end one turn (default 1).
+ *
+ * Raise it to see past a driver that reports the turn over before it is: the
+ * probe would otherwise send the next `--prompt` (and, at the end of the
+ * run, ask for usage and close the session) while the agent is still
+ * working, which hides the rest of the turn — including whatever ends it.
+ *
+ * `--linger SECONDS` — after the last prompt, keep the session open and keep
+ * printing what it reports for that long (default 0).
+ *
+ * Everything the agent does after a turn is over arrives on the same stream
+ * and would otherwise be lost to the probe's own exit: a sub-agent left
+ * running in the background finishing, the turn its result starts, a retry,
+ * a server restart. It is the only way to see the tail of a flow whose later
+ * events are what a bug is about.
+ */
+
 
 /**
  * What makes one session run the local model server, or null for an agent
@@ -125,7 +145,7 @@ function parseArgs(argv) {
     if (value === undefined || value.startsWith('--')) throw new Error(`${name} needs a value`);
     i += 1;
     if (key === 'prompt') args.prompts.push(value);
-    else if (key === 'timeout') args.timeout = Number(value);
+    else if (key === 'timeout' || key === 'idles' || key === 'linger') args[key] = Number(value);
     else args[key] = value;
   }
   return args;
@@ -505,13 +525,19 @@ async function main() {
     });
     await waitFor('the session to be ready', (value) => value.type === 'ready');
 
+    const idles = Math.max(1, args.idles ?? 1);
     for (const prompt of prompts) {
       say(`> ${prompt}`);
-      const done = waitFor('the turn to end', (value) => value.type === 'turn' && value.state === 'idle');
+      let seen = 0;
+      const done = waitFor('the turn to end', (value) => value.type === 'turn' && value.state === 'idle' && (seen += 1) >= idles);
       await send('prompt', { sessionId, text: prompt });
       await done;
     }
 
+    if (args.linger > 0) {
+      say(`lingering ${args.linger}s to watch for what comes after the turn`);
+      await new Promise((r) => setTimeout(r, args.linger * 1000));
+    }
     const usage = await send('get-usage', { sessionId });
     if (usage.usage?.context) {
       const c = usage.usage.context;

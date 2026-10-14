@@ -371,6 +371,13 @@ export class OpenCodeSession implements DriverSession {
    *  sub-agent's kind, and — for one left running in the background — that
    *  it is a task, and whether the user asked it to stop. */
   private readonly children = new Map<string, ChildSession>();
+  /** Every event the stream carried for this session, one line each, when
+   *  `CODEDECK_DEBUG_EVENTS` is set: which event, for which session, and
+   *  whether this session reads it as a sub-agent's child. A live server is
+   *  the only place v2's real event order can be seen (the fixtures are
+   *  written by hand), so turn and reporting bugs are diagnosed from this
+   *  trace — see `./codedeck live opencode --env CODEDECK_DEBUG_EVENTS=1`. */
+  private readonly traceEvents = Boolean(process.env.CODEDECK_DEBUG_EVENTS);
   /** The providers' context limits, fetched on the first step that used
    *  tokens; dropped again when the fetch came back empty, so a server that
    *  was briefly unreachable is asked again. */
@@ -538,6 +545,12 @@ export class OpenCodeSession implements DriverSession {
       if (this.ended) break;
       const data = event.data as { sessionID?: string } | undefined;
       const child = data?.sessionID ? this.children.get(data.sessionID) : undefined;
+      if (this.traceEvents) {
+        const parent = (event.data as { parentID?: string } | undefined)?.parentID;
+        this.ctx.log(
+          `[opencode] ${event.type} sessionID=${String(data?.sessionID)} parentID=${String(parent)} child=${Boolean(child)} main=${sessionId}`,
+        );
+      }
       // Events for other sessions are dropped, except the one that tells this
       // session a sub-agent of its own started.
       if (data?.sessionID && data.sessionID !== sessionId && !child && !this.noteChild(event, sessionId)) continue;
@@ -557,7 +570,11 @@ export class OpenCodeSession implements DriverSession {
         case 'session.tool.called': {
           const name = this.toolCalls.get(event.data.id)?.name ?? '';
           this.toolCalls.set(event.data.id, { name, input: (event.data.input ?? {}) as Record<string, unknown> });
-          if (name === SUBAGENT_TOOL) this.noteSubagentCall(event.data.id, event.data.input);
+          // Only this session's own calls start children it pairs: a
+          // sub-agent's own sub-agent is announced to that sub-agent, never
+          // to us, so its call would wait here forever and the next child
+          // of ours would be paired with it.
+          if (name === SUBAGENT_TOOL && !child) this.noteSubagentCall(event.data.id, event.data.input);
           this.deliver({
             type: 'tool-start',
             callId: event.data.id,
@@ -663,11 +680,25 @@ export class OpenCodeSession implements DriverSession {
           this.markTurnComplete();
           break;
         }
+        // A child's execution ending is that sub-agent's own end, exactly as
+        // its `session.idle` would be: only THIS session's own execution
+        // ending ends its turn. A child's end read as the session's own marks
+        // the turn complete while the parent is still working, and — because
+        // the child is then never recorded as ended — makes the call that
+        // started it a background task the phone shows as running for good.
         case 'session.execution.succeeded': {
+          if (child) {
+            this.childEnded(child, 'completed');
+            break;
+          }
           this.markTurnComplete();
           break;
         }
         case 'session.execution.interrupted': {
+          if (child) {
+            this.childEnded(child, 'stopped');
+            break;
+          }
           this.markTurnComplete();
           break;
         }
@@ -707,7 +738,11 @@ export class OpenCodeSession implements DriverSession {
           break;
         }
         case 'session.execution.started': {
-          if (child) break;
+          // A sub-agent asked again works again: it has not ended.
+          if (child) {
+            child.ended = false;
+            break;
+          }
           // V2 starts a turn with this, not with a `busy` status: without it
           // the phone would only ever learn a turn had ended.
           this.turnCompleted = false;
@@ -783,8 +818,8 @@ export class OpenCodeSession implements DriverSession {
     const found = this.childOfCall(callId);
     if (!found) return;
     const { id, child } = found;
-    // A child that already went idle ran to completion inside the call: it
-    // was not left running, so there is no task to report.
+    // A child whose execution already ended ran to completion inside the
+    // call: it was not left running, so there is no task to report.
     if (child.background || child.ended) return;
     child.background = true;
     this.deliver({ type: 'task', taskId: id, title: child.title, status: 'running', callId: child.callId });
@@ -795,9 +830,9 @@ export class OpenCodeSession implements DriverSession {
     return child.callId;
   }
 
-  /** A child session went idle or failed: a background sub-agent's task
-   *  ended (stopped, when the user asked for that). */
-  private childEnded(child: ChildSession, status: 'completed' | 'failed'): void {
+  /** A child session ended — its own execution, or a failure: a background
+   *  sub-agent's task ended (stopped, when the user asked for that). */
+  private childEnded(child: ChildSession, status: 'completed' | 'failed' | 'stopped'): void {
     child.ended = true;
     if (!child.background) return;
     child.background = false;
