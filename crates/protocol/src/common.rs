@@ -196,6 +196,21 @@ pub struct AccountField {
     /// What the answer is when none is given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// Asked only when every one of these holds (an enterprise URL, only
+    /// once "Enterprise" is chosen); a field not asked is not required.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<FieldCondition>,
+}
+
+/// A condition on an earlier answer: the field `key` answered `value` — or,
+/// with `not`, anything else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldCondition {
+    pub key: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub not: bool,
 }
 
 /// One access an account has.

@@ -645,7 +645,8 @@ mod tests {
         rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[],"error":"OpenCode is not running"}));
         rt(&json!({"v":12,"type":"accounts","agent":"opencode","all":true,"accounts":[
             {"id":"github-copilot","name":"GitHub Copilot","methods":[{"id":"device","kind":"sign-in","label":"Login with GitHub Copilot","fields":[
-                {"key":"deploymentType","title":"Select GitHub deployment type","required":true,"options":[{"id":"github.com","label":"GitHub.com"}]}]}],
+                {"key":"deploymentType","title":"Select GitHub deployment type","required":true,"options":[{"id":"github.com","label":"GitHub.com"}]},
+                {"key":"enterpriseUrl","title":"GitHub Enterprise URL","required":true,"when":[{"key":"deploymentType","value":"enterprise"}]}]}],
              "connections":[{"id":"GITHUB_TOKEN","label":"GITHUB_TOKEN","kind":"env"}]},
             {"id":"nano-gpt","name":"NanoGPT","methods":[{"id":"key","kind":"key"}],"connections":[{"id":"cred_1","label":"work","kind":"key","active":true,"removable":true}]}]}));
         rt(&json!({"v":12,"type":"accounts","agent":"opencode","accounts":[],"error":"OpenCode is not running"}));
