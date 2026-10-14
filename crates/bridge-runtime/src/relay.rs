@@ -41,7 +41,9 @@ use tokio::sync::{mpsc, oneshot};
 pub fn kind_for(message: &BridgeToPhone) -> (u16, Option<u64>) {
     match message {
         BridgeToPhone::Sessions(_) => (SESSION_LIST_KIND, Some(SESSION_LIST_EXPIRY_SECONDS)),
-        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) => (LIVE_KIND, None),
+        // A partial is the one that must never be stored: it is only text on
+        // its way to the entry that completes it.
+        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) | BridgeToPhone::Partial(_) => (LIVE_KIND, None),
         _ => (RESPONSE_KIND, Some(RESPONSE_EXPIRY_SECONDS)),
     }
 }
@@ -618,6 +620,17 @@ mod tests {
         assert_eq!((tag(&ev, "c"), tag(&ev, "d")), (Some(recipient.as_str()), None));
         let plain = decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &ev.content).unwrap();
         assert_eq!(protocol::decode_bridge_to_phone(&plain).unwrap(), out);
+
+        let partial = BridgeToPhone::Partial(protocol::events::PartialMsg {
+            session_id: "s".into(),
+            key: "k".into(),
+            entry_type: protocol::common::PartialKind::Text,
+            subagent: None,
+            offset: 0,
+            text: "x".into(),
+        });
+        let ev = f.events(&partial, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
+        assert_eq!((ev.kind, tag(&ev, "s"), tag(&ev, "expiration")), (LIVE_KIND, None, None));
 
         let ack = BridgeToPhone::InputAck(protocol::events::InputAckMsg { session_id: "s".into(), input_id: "i".into() });
         let ev = f.events(&ack, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);

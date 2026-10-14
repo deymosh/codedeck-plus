@@ -7,8 +7,8 @@ use super::capabilities::BridgeHostKind;
 use super::common::{
     AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     SessionMcpServer,
-    PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
-    UsageData,
+    PartialKind, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
+    Subagent, UsageData,
 };
 use crate::ranges::SeqRange;
 
@@ -71,6 +71,25 @@ impl OutputMsg {
     pub fn numbered(&self) -> impl Iterator<Item = (u64, &OutputEntry)> {
         self.entries.iter().enumerate().map(move |(i, e)| (self.seq + i as u64, e))
     }
+}
+
+/// Text an agent is still writing: the characters of part `key` from
+/// `offset` on. Ephemeral and unnumbered — it is never stored, and a lost one
+/// only freezes the live row until the entry that completes the part (the one
+/// whose `part` is `key`) arrives with its seq.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialMsg {
+    pub session_id: String,
+    pub key: String,
+    pub entry_type: PartialKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<Subagent>,
+    /// Where `text` starts in the part, in UTF-16 code units — what the
+    /// phone's string length counts.
+    #[specta(type = specta_typescript::Number)]
+    pub offset: u64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -410,6 +429,7 @@ pub struct ProviderProfileAckMsg {
 pub enum BridgeToPhone {
     Sessions(SessionListMsg),
     Output(OutputMsg),
+    Partial(PartialMsg),
     InputAck(InputAckMsg),
     SyncBegin(SyncBeginMsg),
     SyncChunk(SyncChunkMsg),

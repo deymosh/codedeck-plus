@@ -192,6 +192,9 @@ impl<'a> Router<'a> {
     pub async fn route(&mut self, machine: &str, msg: &BridgeToPhone) -> RouteResult {
         let mut r = RouteResult::default();
         match msg {
+            // Live text is not shown yet; the entry that completes the part
+            // still arrives, numbered, as an `output`.
+            BridgeToPhone::Partial(_) => {}
             // --- slice B: the heartbeat + session lifecycle ---
             BridgeToPhone::Sessions(m) => self.on_sessions(machine, m, &mut r).await,
             BridgeToPhone::SessionPending(m) => {
