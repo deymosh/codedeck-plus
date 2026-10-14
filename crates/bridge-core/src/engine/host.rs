@@ -571,6 +571,7 @@ impl Engine {
             SessionEvent::Turn { state } => {
                 // The agent may repeat the state it is in; only a change is
                 // worth a new session list.
+                let now = self.now_iso();
                 if let Some(run) = self.run_mut(session_id) {
                     // A part not completed by the turn's end never will be.
                     if state == TurnState::Idle {
@@ -578,6 +579,7 @@ impl Engine {
                     }
                     if run.turn != state {
                         run.turn = state;
+                        run.turn_started = (state == TurnState::Running).then_some(now);
                         self.list_dirty = true;
                     }
                 }

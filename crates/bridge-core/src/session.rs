@@ -61,6 +61,8 @@ pub(crate) struct Runner {
     pub started: bool,
     pub restarts: u32,
     pub turn: TurnState,
+    /// When the running turn started (ISO 8601); `None` while idle.
+    pub turn_started: Option<String>,
     /// Cards waiting on the user, by request id.
     pub cards: BTreeMap<String, Card>,
     pub card_seq: u64,
@@ -89,6 +91,7 @@ impl Runner {
             started: false,
             restarts: 0,
             turn: TurnState::Idle,
+            turn_started: None,
             cards: BTreeMap::new(),
             card_seq: 0,
             queued: Vec::new(),

@@ -30,7 +30,7 @@ mod settings;
 use std::collections::BTreeMap;
 
 use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES};
-use protocol::common::{OutputEntry, RemoteSessionInfo};
+use protocol::common::{OutputEntry, RemoteSessionInfo, SessionState};
 use protocol::crypto::Keypair;
 use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg};
 
@@ -568,7 +568,12 @@ impl Engine {
             .provider_id
             .as_ref()
             .map(|id| self.profiles.get(id).map_or_else(|| id.clone(), |p| p.label.clone()));
-        session.rec.remote_info(seq_high, session.state(self.stopped), label)
+        let mut info = session.rec.remote_info(seq_high, session.state(self.stopped), label);
+        // Waiting on the user is still the same turn; offline is none.
+        if matches!(info.state, Some(SessionState::Running | SessionState::WaitingPermission | SessionState::WaitingQuestion)) {
+            info.turn_started_at = session.run.as_ref().and_then(|r| r.turn_started.clone());
+        }
+        info
     }
 
     /// The session-list heartbeat: sessions, agents, credentials,
