@@ -363,6 +363,8 @@ impl<'a> Router<'a> {
             }
 
             // --- slice C: machines-slice updates + fire-and-answer acks ---
+            // This client asks for no style yet.
+            BridgeToPhone::AgentStyle(_) => {}
             BridgeToPhone::Models(m) => {
                 self.stores.machines.apply_models(machine, m);
                 self.stores

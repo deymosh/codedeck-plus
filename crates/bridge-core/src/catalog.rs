@@ -83,6 +83,7 @@ impl Catalog {
                 supports: a.supports.clone(),
                 credentials: credentials(a),
                 install: a.install.clone(),
+                style_hash: None,
             })
             .collect()
     }

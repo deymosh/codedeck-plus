@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::capabilities::BridgeHostKind;
 use super::common::{
-    AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
+    AgentAction, AgentDescriptor, AgentStyle, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     SessionMcpServer,
     PartialKind, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     Subagent, UsageData,
@@ -228,6 +228,19 @@ pub struct ModelEntry {
     pub efforts: Vec<OptionChoice>,
 }
 
+/// The answer to `agent-style-request`: the agent's style and the hash its
+/// descriptor names it by, or neither when it has none (or is not known).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStyleMsg {
+    /// Echoes the request's `agent`.
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<AgentStyle>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelsMsg {
@@ -443,6 +456,7 @@ pub enum BridgeToPhone {
     FolderAck(FolderAckMsg),
     Usage(UsageMsg),
     Models(ModelsMsg),
+    AgentStyle(AgentStyleMsg),
     Commands(CommandsMsg),
     Plugins(PluginsMsg),
     PluginAck(PluginAckMsg),
@@ -538,6 +552,20 @@ mod tests {
         rt(&json!({"v":12,"type":"usage","sessionId":"s","usage":{"available":true,"plan":"max","windows":[{"label":"5h","utilization":42.0,"resetsAt":"t"}],"fetchedAt":"t"}}));
         rt(&json!({"v":12,"type":"models","agent":"claude-code","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
         rt(&json!({"v":12,"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
+        rt(&json!({"v":12,"type":"agent-style","agent":"pi"}));
+        let styled = rt(&json!({"v":12,"type":"agent-style","agent":"claude-code","styleHash":"0123456789abcdef","style":{
+            "spinner":{"frames":["·","✢"],"intervalMs":120,"bounce":true},
+            "workingWords":["Brewing"],"workingCounter":true,
+            "toolGlyphs":{"other":"⏺"},"resultMark":"⎿",
+            "userMessage":{"shape":"prompt","mark":">"},
+            "wordmark":["▐▛███▜▌"],"accent":"#D77757"
+        }}));
+        let BridgeToPhone::AgentStyle(m) = styled else { panic!() };
+        assert_eq!(m.style.unwrap().user_message, crate::common::UserMessageStyle::Prompt { mark: ">".into() });
+        // A shape this build does not know is drawn as a bubble.
+        let m = rt(&json!({"v":12,"type":"agent-style","agent":"x","style":{"userMessage":{"shape":"card"}}}));
+        let BridgeToPhone::AgentStyle(m) = m else { panic!() };
+        assert_eq!(m.style.unwrap().user_message, crate::common::UserMessageStyle::Unknown);
         rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
         rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
         rt(&json!({"v":12,"type":"plugins","agent":"claude-code",
