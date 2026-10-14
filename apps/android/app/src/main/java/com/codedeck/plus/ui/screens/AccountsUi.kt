@@ -143,8 +143,12 @@ internal fun AccountPickerPage(
     query: String = "",
 ) {
     var search by remember { mutableStateOf(query) }
-    LaunchedEffect(machine.pubkeyHex, agentId) { dispatch(UniffiIntent.RequestAccounts(machine.pubkeyHex, agentId, all = true)) }
     val all = held?.all
+    // The catalogue is some 25 KB: asked for once. Every connected list
+    // after keeps its connections current (see the store's apply_accounts).
+    LaunchedEffect(machine.pubkeyHex, agentId) {
+        if (all == null) dispatch(UniffiIntent.RequestAccounts(machine.pubkeyHex, agentId, all = true))
+    }
     Page(title = "Connect a provider", subtitle = "$agentName on ${machineLabel(machine.name)}", onBack = onBack, backLabel = "Cancel") {
         Field(search, { search = it }, placeholder = "Search providers")
         if (search.isBlank()) {

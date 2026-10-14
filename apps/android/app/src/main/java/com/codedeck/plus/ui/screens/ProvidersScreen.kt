@@ -177,18 +177,24 @@ fun ProvidersContent(
     val signIn = held?.signIn
     if (accountsHere && signIn != null) {
         val name = (held.all.orEmpty() + held.connected).firstOrNull { it.id == signIn.account }?.name ?: signIn.account
+        val cancel = {
+            signIn.attemptId?.let { act(signIn.account, UniffiAccountAction.Cancel(it)) }
+            dismissSignIn()
+        }
+        val done = {
+            dismissSignIn()
+            step = null
+        }
+        // The system Back does what the page's own back does: leaving a
+        // sign-in under way cancels it, rather than leaving it to hold the
+        // page the next time it opens.
+        BackHandler { if (signIn.status == "started") cancel() else done() }
         SignInPage(
             accountName = name,
             signIn = signIn,
             onFinish = { address -> signIn.attemptId?.let { act(signIn.account, UniffiAccountAction.Finish(it, address)) } },
-            onCancel = {
-                signIn.attemptId?.let { act(signIn.account, UniffiAccountAction.Cancel(it)) }
-                dismissSignIn()
-            },
-            onDone = {
-                dismissSignIn()
-                step = null
-            },
+            onCancel = cancel,
+            onDone = done,
             onRetry = {
                 dismissSignIn()
                 step = AccountsStep.Connect(signIn.account)
