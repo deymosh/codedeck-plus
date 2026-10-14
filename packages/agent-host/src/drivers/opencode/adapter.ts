@@ -24,7 +24,7 @@ import {
   type DiffPayload,
   type TranslateContext,
 } from '../../sdk/transcript';
-import type { DiffLine, OutputEntry, Subagent, TaskStatus } from '../../sdk/types';
+import type { DiffLine, OutputEntry, Subagent, TaskKind, TaskStatus } from '../../sdk/types';
 
 /** The OpenCode session exists server-side and accepts prompts. */
 export interface OpenCodeStarted {
@@ -77,11 +77,13 @@ export interface OpenCodeToolResult {
   subagent?: Subagent;
 }
 
-/** A sub-agent left running in the background changed state; its task id
- *  is its child session's id. */
+/** Work the agent left running in the background changed state — a
+ *  sub-agent (its task id is its child session's id) or a shell command
+ *  (its task id is the server's shell id). */
 export interface OpenCodeTask {
   type: 'task';
   taskId: string;
+  kind: TaskKind;
   title: string;
   status: TaskStatus;
   callId: string;
@@ -197,7 +199,7 @@ export function opencodeEventToEntries(event: OpenCodeEvent, ctx: TranslateConte
       return [{
         entryType: 'background_task',
         taskId: event.taskId,
-        kind: 'agent',
+        kind: event.kind,
         title: event.title,
         status: event.status,
         callId: event.callId,
