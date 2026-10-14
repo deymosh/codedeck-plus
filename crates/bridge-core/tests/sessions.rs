@@ -341,6 +341,51 @@ fn turn_events_drive_the_listed_state() {
     assert_eq!(last_heartbeat(&rig.messages()).sessions[0].state, Some(SessionState::Idle));
 }
 
+#[test]
+fn live_text_passes_on_unnumbered_until_its_entry_or_the_turn_ends() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    rig.take();
+    let partial = |offset: u64, text: &str| SessionEvent::Partial {
+        key: "m:0".into(),
+        entry_type: protocol::common::PartialKind::Text,
+        subagent: None,
+        offset,
+        text: text.into(),
+    };
+    let partials = |msgs: &[BridgeToPhone]| -> Vec<(u64, String)> {
+        msgs.iter()
+            .filter_map(|m| match m {
+                BridgeToPhone::Partial(p) => Some((p.offset, p.text.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+
+    rig.host_event(&s, partial(0, "All tests "));
+    rig.host_event(&s, partial(10, "pass. <!-- session-meta: {} -->"));
+    let msgs = rig.messages();
+    // Nothing numbered or stored, and never the session-meta comment.
+    assert_eq!(partials(&msgs), vec![(0, "All tests ".into()), (10, "pass. ".into())]);
+    assert!(outputs(&msgs).is_empty());
+
+    // The completing entry ends the part: a late piece of it is not passed on.
+    let mut done = protocol::common::OutputEntry::new("t", EntryBody::Text { role: Role::Agent, text: "All tests pass.".into() });
+    done.part = Some("m:0".into());
+    rig.host_event(&s, SessionEvent::Entries { entries: vec![done] });
+    let msgs = rig.messages();
+    assert_eq!(outputs(&msgs)[0].1.part.as_deref(), Some("m:0"));
+
+    // A new part of the same key starts again from nothing, and the end of
+    // the turn drops it.
+    rig.host_event(&s, partial(0, "Next"));
+    assert_eq!(partials(&rig.messages()), vec![(0, "Next".into())]);
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Idle });
+    rig.host_event(&s, partial(4, " more"));
+    assert!(partials(&rig.messages()).is_empty(), "a part the turn ended is not continued");
+}
+
 fn info_native(rig: &mut Rig, s: &str, id: &str) {
     rig.host_event(
         s,

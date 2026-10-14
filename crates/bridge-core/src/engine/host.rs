@@ -18,13 +18,15 @@ use std::collections::BTreeMap;
 
 use agent_protocol::{
     AgentInfo, BridgeMessage, HostFrame, HostMessage, PlanOutcome, QuestionOutcome, QuestionReply, SelectOutcome, SessionEvent,
-    StartSession,
+    StartSession, TurnState,
 };
-use protocol::common::{AgentAction, AgentInstall, EntryBody, NoticeKind, OutputEntry, Role, SessionOption, ToolKind};
+use protocol::common::{
+    AgentAction, AgentInstall, EntryBody, NoticeKind, OutputEntry, PartialKind, Role, SessionOption, Subagent, ToolKind,
+};
 use protocol::common::{McpAction, PluginAction};
 use protocol::events::{
     AgentAckMsg, BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
-    SessionReadyMsg, UsageMsg,
+    PartialMsg, SessionReadyMsg, UsageMsg,
 };
 
 use super::Engine;
@@ -563,12 +565,17 @@ impl Engine {
                 self.on_info(session_id, info);
             }
             SessionEvent::Entries { entries } => self.on_entries(session_id, entries),
-            // Not passed on yet: the entry that completes the part still comes.
-            SessionEvent::Partial { .. } => {}
+            SessionEvent::Partial { key, entry_type, subagent, offset, text } => {
+                self.on_partial(session_id, key, entry_type, subagent, offset, &text);
+            }
             SessionEvent::Turn { state } => {
                 // The agent may repeat the state it is in; only a change is
                 // worth a new session list.
                 if let Some(run) = self.run_mut(session_id) {
+                    // A part not completed by the turn's end never will be.
+                    if state == TurnState::Idle {
+                        run.parts.clear();
+                    }
                     if run.turn != state {
                         run.turn = state;
                         self.list_dirty = true;
@@ -648,6 +655,33 @@ impl Engine {
         }
     }
 
+    /// A piece of a part the agent is still writing: passed on to the phones
+    /// as it comes, ephemeral and unnumbered (see [`crate::live`]).
+    fn on_partial(
+        &mut self,
+        session_id: &str,
+        key: String,
+        entry_type: PartialKind,
+        subagent: Option<Subagent>,
+        offset: u64,
+        text: &str,
+    ) {
+        let Some(run) = self.run_mut(session_id) else { return };
+        if run.phase != Phase::Ready {
+            return;
+        }
+        let part = run.parts.entry(key.clone()).or_default();
+        let Some((offset, text)) = part.admit(offset, text, entry_type == PartialKind::Text) else { return };
+        self.publish_all(BridgeToPhone::Partial(PartialMsg {
+            session_id: session_id.to_string(),
+            key,
+            entry_type,
+            subagent,
+            offset,
+            text,
+        }));
+    }
+
     fn on_entries(&mut self, session_id: &str, entries: Vec<OutputEntry>) {
         let Some(session) = self.sessions.get_mut(session_id) else { return };
         let Some(run) = session.run.as_mut() else { return };
@@ -655,6 +689,9 @@ impl Engine {
         let mut commit_check = false;
         let mut meta_changed = false;
         for mut entry in entries {
+            if let Some(part) = &entry.part {
+                run.parts.remove(part);
+            }
             match &mut entry.body {
                 // The agent echoing a message the bridge already wrote.
                 EntryBody::Text { role: Role::User, text, .. } if run.take_echo(text) => continue,

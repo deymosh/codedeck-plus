@@ -22,6 +22,7 @@ mod catalog;
 mod engine;
 pub mod ingest;
 mod io;
+mod live;
 mod out;
 pub mod pairing;
 pub mod ports;
