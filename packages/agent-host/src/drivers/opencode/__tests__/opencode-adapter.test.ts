@@ -201,8 +201,14 @@ describe('sub-agents and background tasks', () => {
   });
 
   it('reports a background sub-agent as a task', () => {
-    expect(translate({ type: 'task', taskId: 'ses_child', title: 'explore', status: 'running', callId: 'call_1' })).toEqual([
+    expect(translate({ type: 'task', taskId: 'ses_child', kind: 'agent', title: 'explore', status: 'running', callId: 'call_1' })).toEqual([
       expect.objectContaining({ entryType: 'background_task', taskId: 'ses_child', status: 'running', kind: 'agent' }),
+    ]);
+  });
+
+  it('reports a background shell command as a shell task', () => {
+    expect(translate({ type: 'task', taskId: 'sh_1', kind: 'shell', title: 'npm run dev', status: 'completed', callId: 'call_1' })).toEqual([
+      expect.objectContaining({ entryType: 'background_task', taskId: 'sh_1', status: 'completed', kind: 'shell' }),
     ]);
   });
 

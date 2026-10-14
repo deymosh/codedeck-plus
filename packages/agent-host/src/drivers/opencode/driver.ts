@@ -42,11 +42,13 @@ import type {
   SlashCommand,
   StartSession,
   Subagent,
+  TaskStatus,
   UsageData,
 } from '../../sdk/types';
 import {
   opencodeEventToEntries,
   QUESTION_TOOL,
+  SHELL_TOOL,
   toolCallDiffs,
   toolResultText,
   type OpenCodeEvent,
@@ -382,6 +384,13 @@ export class OpenCodeSession implements DriverSession {
    *  sub-agent's kind, and — for one left running in the background — that
    *  it is a task, and whether the user asked it to stop. */
   private readonly children = new Map<string, ChildSession>();
+  /** Background shell commands this session started, by the shell id the
+   *  server gave them — the title a task row shows, the tool call that
+   *  started it, and whether the user asked it to stop. The server names a
+   *  background shell only on this session's own tool result; its later
+   *  `shell.exited` carries no session at all, so the id learned here is
+   *  what ties that exit back to this session's task. */
+  private readonly shells = new Map<string, { title: string; callId: string; stopping: boolean }>();
   /** Every event the stream carried for this session, one line each, when
    *  `CODEDECK_DEBUG_EVENTS` is set: which event, for which session, and
    *  whether this session reads it as a sub-agent's child. A live server is
@@ -460,6 +469,8 @@ export class OpenCodeSession implements DriverSession {
     this.ended = true;
     this.abortController.abort();
     this.partials.reset();
+    // Nothing will report these shells' ends once the stream is gone.
+    this.shells.clear();
     this.ctx.emit({ type: 'ended', ...(error ? { error } : {}) });
   }
 
@@ -628,6 +639,9 @@ export class OpenCodeSession implements DriverSession {
             ...(child ? { subagent: subagentOf(child) } : {}),
           });
           this.finishSubagentCall(event.data.id);
+          // A sub-agent's own background shell belongs to that sub-agent, and
+          // its child session ending is what reports the task.
+          if (!child) this.noteBackgroundShell(event.data.id, event.data.metadata);
           break;
         }
         case 'session.tool.failed': {
@@ -738,6 +752,15 @@ export class OpenCodeSession implements DriverSession {
         case 'session.idle': {
           if (child) this.childEnded(child, 'completed');
           else this.markTurnComplete();
+          break;
+        }
+        // A background shell of this session ended: the server's
+        // `shell.exited` names the shell and its exit, but no session (see
+        // the `shells` field), so it is matched by the id this session learned
+        // when the shell was started. A shell of another session's — or one
+        // already reported — is ignored.
+        case 'shell.exited': {
+          this.finishShell(event.data);
           break;
         }
         case 'session.status': {
@@ -855,7 +878,7 @@ export class OpenCodeSession implements DriverSession {
     // call: it was not left running, so there is no task to report.
     if (child.background || child.ended) return;
     child.background = true;
-    this.deliver({ type: 'task', taskId: id, title: child.title, status: 'running', callId: child.callId });
+    this.deliver({ type: 'task', taskId: id, kind: 'agent', title: child.title, status: 'running', callId: child.callId });
   }
 
   private childIdOf(child: ChildSession): string {
@@ -872,10 +895,53 @@ export class OpenCodeSession implements DriverSession {
     this.deliver({
       type: 'task',
       taskId: this.childIdOf(child),
+      kind: 'agent',
       title: child.title,
       status: child.stopping ? 'stopped' : status,
       callId: child.callId,
     });
+  }
+
+  /**
+   * A `shell` call OpenCode moved to the background, read from its success
+   * result. The result names the shell and reports it still `running`; a
+   * shell that ran to completion carries its output and its exit code
+   * instead, with no shell id — that difference is what tells a background
+   * task apart from a call that already finished inside the turn. The shell
+   * is a server object whose own events (`shell.created`, `shell.exited`)
+   * name no session, so the id learned here is the only thing that ties its
+   * exit back to this session's task.
+   */
+  private noteBackgroundShell(callId: string, metadata: unknown): void {
+    const started = this.toolCalls.get(callId);
+    if (started?.name !== SHELL_TOOL) return;
+    const meta = metadata as { shellID?: unknown; status?: unknown } | undefined;
+    const shellID = typeof meta?.shellID === 'string' ? meta.shellID : '';
+    if (shellID === '' || meta?.status !== 'running' || this.shells.has(shellID)) return;
+    const command = started.input.command;
+    const title = typeof command === 'string' && command !== '' ? command : 'Background command';
+    this.shells.set(shellID, { title, callId, stopping: false });
+    this.deliver({ type: 'task', taskId: shellID, kind: 'shell', title, status: 'running', callId });
+  }
+
+  /**
+   * A background shell of this session ended, out of the server's
+   * `shell.exited` (which names no session — see `shells`). Its exit decides
+   * how it went; a shell the user stopped, or one the server killed, is
+   * reported as stopped rather than failed. A shell this session did not
+   * start is ignored.
+   */
+  private finishShell(data: { id: string; exit?: number; status: string }): void {
+    const shell = this.shells.get(data.id);
+    if (!shell) return;
+    this.shells.delete(data.id);
+    const status: TaskStatus =
+      shell.stopping || data.status === 'killed'
+        ? 'stopped'
+        : data.status === 'timeout' || (data.exit !== undefined && data.exit !== 0)
+          ? 'failed'
+          : 'completed';
+    this.deliver({ type: 'task', taskId: data.id, kind: 'shell', title: shell.title, status, callId: shell.callId });
   }
 
   /** The turn is over: said once, however many of v2's end signals arrive. */
@@ -1206,16 +1272,36 @@ export class OpenCodeSession implements DriverSession {
     }
   }
 
-  /** Stop a sub-agent left running in the background (its task id is its
-   *  child session's id). */
+  /**
+   * Stop a task the phone can see: a sub-agent left running in the
+   * background (its task id is its child session's id), or a background
+   * shell command (its task id is the shell's). Either may already be gone —
+   * the task ended between the phone's tap and this call — and a target the
+   * server no longer knows is the outcome that was wanted, not a failure:
+   * the task's own end, or the lack of one, is what reports it.
+   */
   async stopTask(taskId: string): Promise<void> {
-    const child = this.children.get(taskId);
-    if (!child?.background) throw new Error('No such task is running');
-    child.stopping = true;
+    const shell = this.shells.get(taskId);
+    const child = shell ? undefined : this.children.get(taskId);
+    if (!shell && !child?.background) throw new Error('No such task is running');
+    if (shell) shell.stopping = true;
+    else if (child) child.stopping = true;
     const { client } = await this.ready;
     try {
-      await client.session.interrupt({ sessionID: taskId });
+      // The delete must name the session's own directory: the server scopes
+      // shells by location, and a delete without one drops its record
+      // without ending the process, which would leave the command running
+      // while the phone was told it stopped.
+      if (shell) await client.shell.remove({ id: taskId, location: { directory: this.cwd } });
+      else await client.session.interrupt({ sessionID: taskId });
     } catch (err) {
+      if (isNotFound(err)) {
+        // A sub-agent's child session reports its own end, but a shell the
+        // server has forgotten will send no exit for this session to read:
+        // report it stopped here, or it would show as running for good.
+        if (shell) this.finishShell({ id: taskId, status: 'killed' });
+        return;
+      }
       throw new Error(`OpenCode could not stop the task: ${formatOpenCodeError(err)}`);
     }
   }
@@ -1245,6 +1331,8 @@ export class OpenCodeSession implements DriverSession {
     this.ended = true;
     this.abortController.abort();
     this.partials.reset();
+    // The session is gone from this client: no shell event will arrive for it.
+    this.shells.clear();
     try {
       const { client, session } = await this.ready;
       await client.session.interrupt({ sessionID: session.id });
@@ -1595,10 +1683,11 @@ export class OpenCodeDriver implements Driver {
 }
 
 /** Whether a client error is the server's "no such thing" — 404, or the
- *  declared not-found error it answers a missing session with. */
+ *  declared not-found error it answers a missing session with (whose body's
+ *  `_tag`, e.g. `ShellNotFoundError`, the client sets as the error's name). */
 function isNotFound(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
-  const e = err as { name?: unknown; cause?: { status?: unknown }; reason?: unknown };
+  const e = err as { name?: unknown; cause?: { status?: unknown } };
   if (typeof e.cause?.status === 'number') return e.cause.status === 404;
   return typeof e.name === 'string' && /NotFound/.test(e.name);
 }

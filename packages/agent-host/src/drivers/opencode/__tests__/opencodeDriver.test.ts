@@ -44,6 +44,13 @@ function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeC
       revert: { stage: vi.fn(async () => ({})), clear: vi.fn(async () => undefined), commit: vi.fn(async () => undefined) },
       form: { reply: vi.fn(async () => undefined), cancel: vi.fn(async () => undefined) },
     },
+    shell: {
+      list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })),
+      create: vi.fn(async () => ({ location: { directory: '/tmp' }, data: { id: 'sh_1' } })),
+      get: vi.fn(async () => ({ location: { directory: '/tmp' }, data: { id: 'sh_1' } })),
+      output: vi.fn(async () => ({ location: { directory: '/tmp' }, data: { output: '', cursor: 0, size: 0, truncated: false } })),
+      remove: vi.fn(async () => undefined),
+    },
     permission: { reply: vi.fn(async () => undefined) },
     message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
     command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
@@ -398,6 +405,141 @@ describe('OpenCode sub-agents', () => {
     });
     // The sub-agent's failure is not the session's error.
     expect(ctx.entries().filter((e) => e.entryType === 'error')).toEqual([]);
+  });
+});
+
+describe('OpenCode background shell commands', () => {
+  /** The stream for one shell call: the tool's name, its input, and then the
+   *  result the server sends. A backgrounded shell's result names the shell
+   *  and reports it still running; one that ran inside the call carries its
+   *  output and exit code and no shell id. */
+  const started = { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_sh', name: 'shell' } };
+  const called = (input: Record<string, unknown>) => ({ type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_sh', input, executed: false } });
+  const backgrounded = (metadata: Record<string, unknown>) => ({ type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_sh', content: [{ type: 'text', text: 'Command moved to the background.' }], metadata, executed: false } });
+  const exited = (id: string, exit: number, status: string) => ({ type: 'shell.exited', data: { id, exit, status } });
+  const shellRun = (...tail: V2[]): V2[] => [
+    started,
+    called({ background: true, command: 'sleep 20; echo done' }),
+    backgrounded({ status: 'running', truncated: false, shellID: 'sh_1' }),
+    ...tail,
+  ];
+  const tasks = (ctx: ReturnType<typeof start>) => ctx.entries().filter((e) => e.entryType === 'background_task');
+  /** The recording context and session around `client`, ready to be stopped. */
+  const running = async (client: OpenCodeClient) => {
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'background_task' && x.status === 'running'));
+    return { ctx, session };
+  };
+
+  it('reports a backgrounded command as a task, and its exit as the end', async () => {
+    const ctx = start(clientWith(shellRun(exited('sh_1', 0, 'exited'))));
+    await ctx.ended();
+    expect(tasks(ctx)).toEqual([
+      expect.objectContaining({ taskId: 'sh_1', kind: 'shell', title: 'sleep 20; echo done', status: 'running', callId: 'call_sh' }),
+      expect.objectContaining({ taskId: 'sh_1', kind: 'shell', status: 'completed' }),
+    ]);
+  });
+
+  it('a non-zero exit fails the task', async () => {
+    const ctx = start(clientWith(shellRun(exited('sh_1', 3, 'exited'))));
+    await ctx.ended();
+    expect(tasks(ctx).at(-1)).toMatchObject({ taskId: 'sh_1', status: 'failed' });
+  });
+
+  it('a shell the server killed is stopped, not failed', async () => {
+    const ctx = start(clientWith(shellRun(exited('sh_1', 0, 'killed'))));
+    await ctx.ended();
+    expect(tasks(ctx).at(-1)).toMatchObject({ taskId: 'sh_1', status: 'stopped' });
+  });
+
+  it('ignores an exit for a shell this session did not start', async () => {
+    const ctx = start(clientWith(shellRun(exited('sh_other', 0, 'exited'))));
+    await ctx.ended();
+    // Only the running task: another session's shell exiting is not news here.
+    expect(tasks(ctx)).toEqual([expect.objectContaining({ taskId: 'sh_1', status: 'running' })]);
+  });
+
+  it('a shell that ran to completion inside the call is not a task', async () => {
+    const ctx = start(clientWith([
+      started,
+      called({ command: 'echo hi' }),
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_sh', content: [{ type: 'text', text: 'hi\n' }], metadata: { status: 'completed', truncated: false, exit: 0 }, executed: false } },
+      exited('sh_2', 0, 'exited'),
+    ]));
+    await ctx.ended();
+    expect(tasks(ctx)).toEqual([]);
+  });
+
+  it('stops a background shell through the server, and its exit reports stopped', async () => {
+    // The stream is gated so the test can stop the shell and only then let
+    // the server's exit arrive — what the bridge does when the phone taps Stop.
+    let release: () => void = () => {};
+    const stopped = new Promise<void>((r) => (release = r));
+    async function* stream(): AsyncGenerator<V2> {
+      for (const e of shellRun()) yield e;
+      await stopped;
+      yield exited('sh_1', 0, 'killed');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const client = clientWith([], { event: { subscribe: vi.fn(() => stream()) } });
+    const { ctx, session } = await running(client);
+    await session.stopTask!('sh_1');
+    // The delete names the session's own directory: without it the server
+    // drops its record but leaves the process running.
+    expect(client.shell.remove).toHaveBeenCalledWith({ id: 'sh_1', location: { directory: '/tmp' } });
+    release();
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'background_task' && x.status === 'stopped'));
+    expect(tasks(ctx).at(-1)).toMatchObject({ taskId: 'sh_1', status: 'stopped' });
+    await ctx.ended();
+  });
+
+  it('a shell the server has already forgotten is the outcome that was wanted', async () => {
+    const client = clientWith(shellRun());
+    asMock(client.shell.remove).mockRejectedValue({ reason: 'UnexpectedStatus', cause: { status: 404 } });
+    const { ctx, session } = await running(client);
+    await expect(session.stopTask!('sh_1')).resolves.toBeUndefined();
+    // No exit will come for it, so the stop itself reports the task stopped.
+    expect(tasks(ctx).at(-1)).toMatchObject({ taskId: 'sh_1', status: 'stopped' });
+    await session.end();
+  });
+
+  it('a stop that really failed is reported', async () => {
+    const client = clientWith(shellRun());
+    asMock(client.shell.remove).mockRejectedValue({ name: 'ClientError', message: 'boom' });
+    const { session } = await running(client);
+    await expect(session.stopTask!('sh_1')).rejects.toThrow(/could not stop the task: boom/);
+    await session.end();
+  });
+
+  it('an id that is no task at all is refused', async () => {
+    const client = clientWith([]);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await expect(session.stopTask!('sh_nope')).rejects.toThrow(/No such task/);
+    await session.end();
+  });
+
+  it('a sub-agent task the server has forgotten is stopped all the same', async () => {
+    // The call returned while the child still works, so it is a task; by the
+    // time the phone taps Stop, the server no longer knows that session.
+    const client = clientWith([
+      { type: 'session.tool.input.started', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', name: 'subagent' } },
+      { type: 'session.tool.called', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', input: { agent: 'general', description: 'list files' }, executed: false } },
+      { type: 'session.created', data: { sessionID: 'ses_child', parentID: 'ses_1', projectID: 'p', location: { directory: '/tmp' }, slug: 'child', title: 'Child session' } },
+      { type: 'session.tool.success', data: { sessionID: 'ses_1', assistantMessageID: 'm1', id: 'call_s', content: [{ type: 'text', text: 'started' }], executed: false } },
+    ]);
+    // The client names a declared not-found error after the server's own tag,
+    // the shape deleteConversation's SessionNotFoundError already arrives in.
+    asMock(client.session.interrupt).mockRejectedValue({ name: 'SessionNotFoundError', message: 'gone' });
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'background_task'));
+    await expect(session.stopTask!('ses_child')).resolves.toBeUndefined();
+    await session.end();
   });
 });
 
