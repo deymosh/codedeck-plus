@@ -92,16 +92,31 @@ implement for an external NIP-55 signer). The identity signs every event the
 phone publishes — commands, grants, relay NIP-42 AUTH, Blossom upload auth —
 so a relay or image server allowlist only ever needs that one pubkey. Each
 install also holds a local session key, granted to every bridge that
-advertises `session-keys` (with the pair-request, or once its heartbeat
-shows the capability; at most every 10 minutes while unconfirmed). A key
-lives 89 days; a month before it lapses a fresh one replaces it and is
-granted to every bridge, and the previous key is kept only until each
-bridge confirms the new one. Once a bridge confirms a key (a message it
-encrypted to it), payloads both ways use that key; until then, and whenever
-the bridge speaks to the identity again, the signer encrypts and decrypts.
-The core keeps the keys through a `SessionKeyStore` port (the Keystore on
-Android). See
-[`PROTOCOL.md`](PROTOCOL.md#session-keys).
+advertises `session-keys` or has not been heard from yet (with the
+pair-request; for any other bridge with no key of this install, before
+anything else is sent to it — a restored or fresh install, a bridge that
+lost the key; at most every 10 minutes while unconfirmed). A key lives 89
+days; a month before it lapses a fresh one replaces it and is granted to
+every bridge, and the previous key is kept only until each bridge confirms
+the new one. Once a bridge confirms a key (a message it encrypted to it),
+payloads both ways use that key.
+
+**Grant first** (`runtime/grant.rs`). Until a bridge confirms, nothing else
+goes to it, nor is read from it, with the identity: commands wait (a
+waiting `refresh-sessions` is dropped, since a bridge answers a grant with
+its heartbeat); a copy the bridge wrote to the identity before the grant is
+skipped unread, and one written since is held and dropped once the key is
+confirmed — its heartbeat, session changes and cards come anew under the
+key, the transcript by sync. A bridge holding this install's key that
+writes to the identity has lost it and is granted again at once. Only if a
+bridge does not confirm within 20 s of the grant reaching a relay does what
+waited go on through the signer. So a start, a restore or a pairing costs
+the signer one encrypt and one signature per machine and no decrypt,
+however many sessions the machine holds; without this, the refresh, each
+heartbeat fragment and every chunk of every session's sync was a signer
+request (a NIP-55 signer prompts, then refuses past its rate). The core
+keeps the keys through a `SessionKeyStore` port (the Keystore on Android).
+See [`PROTOCOL.md`](PROTOCOL.md#session-keys).
 
 **Several clients.** One identity may run on any number of devices; a
 bridge knows each by its session key and sends each its own copy, tagged
@@ -114,7 +129,8 @@ when it stops (waiting at most 2 s for it to go out). See
 [`PROTOCOL.md`](PROTOCOL.md#clients-and-copies).
 
 Unprompted by the user, the core asks the identity to sign only: one
-`refresh-sessions` per machine on each (re)connect; the `sync-request`s for
+`refresh-sessions` per machine on each (re)connect (a grant instead, for a
+machine waiting on one); the `sync-request`s for
 sessions with gaps and their `sync-ack`s (held 500 ms, so a sync's chunks
 cost one ack per window rather than one each); one NIP-42 `AUTH` per relay
 connection that challenges; a `presence` per machine after ten quiet

@@ -495,9 +495,14 @@ on relays and image servers only ever see the identity. From the grant on:
   identity, another identity's client, its own) or that a client rotated
   away from is refused.
 
-A phone grants a session key only to a bridge advertising `session-keys`. A
-phone that can decrypt a message from a bridge it granted a key only with
-its identity learns the bridge has no live key for it, and grants again.
+A phone grants a session key to a bridge advertising `session-keys`, or to
+one it has not heard from yet (a bridge that does not honour grants never
+confirms one, and the phone goes on with its identity). A bridge answers a
+grant with its heartbeat, so a phone with no key at a bridge grants before
+sending anything else, and needs nothing the bridge wrote to its identity
+before then. A message a bridge it granted a key copies to its identity
+(the recipient tag says so) tells the phone the bridge has no live key for
+it, and it grants again.
 
 Renewal is rotation: a phone never extends a key's life by granting it
 again. Every grant of a key runs until the same `expiresAt`, the key's own;
