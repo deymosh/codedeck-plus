@@ -608,6 +608,12 @@ pub struct RemoteSessionInfo {
     pub committed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<SessionState>,
+    /// When the turn running now started (ISO 8601, the bridge's clock),
+    /// while one runs — waiting on the user included; absent otherwise. A
+    /// turn need not start with a message from the user (a background
+    /// task's end can start one), so only the bridge can say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<String>,
     /// Highest transcript seq the bridge has persisted for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<specta_typescript::Number>)]

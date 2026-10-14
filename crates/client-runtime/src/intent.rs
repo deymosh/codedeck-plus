@@ -1146,6 +1146,7 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
+                turn_started_at: None,
             },
             0,
         );
@@ -1201,6 +1202,7 @@ mod tests {
                 seq_high: None,
                 provider_id: None,
                 provider_label: None,
+                turn_started_at: None,
             },
             0,
         );

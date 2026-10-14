@@ -84,6 +84,7 @@ impl SessionRecord {
             seq_high: Some(seq_high),
             provider_id: self.provider_id.clone(),
             provider_label,
+            turn_started_at: None,
         }
     }
 }
