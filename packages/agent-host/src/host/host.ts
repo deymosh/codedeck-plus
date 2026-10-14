@@ -10,7 +10,7 @@
  * - a request the host sent is settled exactly once — by the bridge's reply,
  *   or with `cancelled` when the host shuts down.
  */
-import type { Driver, DriverSession, McpManager, PluginManager, SessionContext } from '../sdk/driver';
+import type { Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext } from '../sdk/driver';
 import type { Agents } from './agents';
 import {
   DRIVER_PROTOCOL_VERSION,
@@ -226,6 +226,12 @@ export class AgentHost {
         const { agent, action, servers, names } = message.payload;
         return { kind: 'mcp-servers', payload: await this.mcp(agent).act(action, servers ?? [], names ?? []) };
       }
+      case 'list-permission-rules':
+        return { kind: 'permission-rules', payload: { rules: await this.permissionRules(message.payload.agent).list() } };
+      case 'remove-permission-rules': {
+        const { agent, ids } = message.payload;
+        return { kind: 'permission-rules', payload: { rules: await this.permissionRules(agent).remove(ids) } };
+      }
       case 'session-mcp': {
         const session = this.session(message.payload.sessionId);
         if (!session.mcpStatus) throw new Error('this session has no MCP servers to show');
@@ -361,6 +367,12 @@ export class AgentHost {
     const driver = this.driver(agent);
     if (!driver.mcp) throw new Error(`${driver.info().displayName} has no MCP servers to manage`);
     return driver.mcp;
+  }
+
+  private permissionRules(agent: string): PermissionRuleManager {
+    const driver = this.driver(agent);
+    if (!driver.permissionRules) throw new Error(`${driver.info().displayName} keeps no permission rules`);
+    return driver.permissionRules;
   }
 
   private session(sessionId: string): DriverSession {

@@ -189,6 +189,8 @@ describe('OpenCode permissions', () => {
     const ctx = start(client, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
     await ctx.ended();
     expect(client.permission.reply).toHaveBeenCalledWith({ sessionID: 'ses_1', requestID: 'per_1', decision: 'always' });
+    // The option names the rule OpenCode will save, wider than the call.
+    expect(ctx.permissions[0]!.options.map((o) => o.label)).toContain('Always allow "git push *" in this project');
 
     const without = clientWith([ask({ save: [] })]);
     const none = start(without, {}, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });

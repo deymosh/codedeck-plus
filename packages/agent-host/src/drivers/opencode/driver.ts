@@ -8,7 +8,9 @@
  * its forms (the cards a question becomes) through the bridge.
  *
  * Deliberate limits:
- *  - permission replies are allow/deny only — no "always"/pattern rules;
+ *  - an "always allow" reply is OpenCode's own `always`: a rule it saves for
+ *    the project, which outlives the session and the server — listed and
+ *    revoked through `permissionRules` (permissionRules.ts);
  *  - no subscription usage: OpenCode has no equivalent to ask, and a
  *    fabricated number would be worse than none. Context usage is reported
  *    only for models whose provider declares a context limit;
@@ -22,7 +24,7 @@
  */
 import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
-import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
+import type { Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
 import { opencodeTool } from './tools';
 import { newTranslateContext, type TranslateContext } from '../../sdk/transcript';
@@ -56,6 +58,7 @@ import {
 import { SESSION_COMMANDS, sessionCommand, sessionSlashCommands } from './sessionCommands';
 import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
+import { OpenCodePermissionRules } from './permissionRules';
 import { type Catalog, EMPTY_CATALOG } from './catalog';
 import { NOTHING_SERVED, type Placement, placeProfiles, profileModelGroup, providersFingerprint, type Served, servedBy, serverSetup } from './providers';
 import {
@@ -101,9 +104,14 @@ function permissionRules(mode: string): Array<{ action: string; resource: string
   return [{ action: '*', resource: '*', effect: mode === AUTO_APPROVE_MODE ? 'allow' : 'ask' }];
 }
 
-/** OpenCode's "always": the rule stands for every session of the project
- *  until its server restarts — it is not saved. */
-const PERMISSION_ALLOW_IN_PROJECT: PermissionOption = { ...PERMISSION_ALLOW_ALWAYS, label: 'Always allow in this project' };
+/** OpenCode's "always": it saves a rule for the project that every later
+ *  session obeys, across server restarts, until it is removed. The rule is
+ *  the pattern OpenCode offers with the ask (`echo *` for `echo hi`), often
+ *  wider than the call on the card, so the label names it. */
+function allowInProject(save: readonly string[]): PermissionOption {
+  const what = save.map((pattern) => `"${pattern}"`).join(', ');
+  return { ...PERMISSION_ALLOW_ALWAYS, label: `Always allow ${what} in this project` };
+}
 
 type SessionPermissionAsk = PermissionAsked['data'];
 
@@ -1079,12 +1087,12 @@ export class OpenCodeSession implements DriverSession {
         title: call.title,
         description,
         locations: toolLocations(input),
-        options: ask.save && ask.save.length > 0 ? [PERMISSION_ALLOW, PERMISSION_ALLOW_IN_PROJECT, PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
+        options: ask.save && ask.save.length > 0 ? [PERMISSION_ALLOW, allowInProject(ask.save), PERMISSION_DENY] : [PERMISSION_ALLOW, PERMISSION_DENY],
         ...(child ? { subagent: subagentOf(child) } : {}),
       })
       .then((outcome) => {
         const chosen = outcome.outcome === 'selected' ? outcome.optionId : undefined;
-        reply(chosen === PERMISSION_ALLOW.id ? 'once' : chosen === PERMISSION_ALLOW_IN_PROJECT.id && ask.save?.length ? 'always' : 'reject');
+        reply(chosen === PERMISSION_ALLOW.id ? 'once' : chosen === PERMISSION_ALLOW_ALWAYS.id && ask.save?.length ? 'always' : 'reject');
       })
       .catch(() => reply('reject'));
   }
@@ -1419,6 +1427,7 @@ export class OpenCodeDriver implements Driver {
   private readonly sessions = new Set<OpenCodeSession>();
   readonly plugins: PluginManager = new OpenCodePlugins(() => this.client());
   readonly mcp: McpManager = new OpenCodeMcp(() => this.client());
+  readonly permissionRules: PermissionRuleManager = new OpenCodePermissionRules(() => this.client());
 
   private constructor(private readonly options: OpenCodeDriverOptions) {}
 
@@ -1604,6 +1613,7 @@ export class OpenCodeDriver implements Driver {
         plugins: true,
         mcp: true,
         tasks: true,
+        permissionRules: true,
       },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
