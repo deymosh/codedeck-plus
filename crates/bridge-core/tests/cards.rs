@@ -497,6 +497,51 @@ fn mcp_servers_are_managed_by_the_agent_host_and_never_echo_secrets() {
     assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::SessionMcp(x) if x.session_id == "nope" && x.error.is_some())));
 }
 
+#[test]
+fn saved_permission_rules_are_listed_and_revoked_through_the_agent_host() {
+    use protocol::common::PermissionRule;
+    let mut rig = Rig::new();
+    rig.host_up();
+    let rule = || PermissionRule {
+        id: "psv_1".into(),
+        project: "/w".into(),
+        tool: "shell".into(),
+        pattern: "git status *".into(),
+        created_at: 1_792_008_058_637,
+    };
+
+    rig.send(json!({"v":12,"type":"permission-rules-request","agent":"alpha"}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListPermissionRules { agent } if agent == "alpha"));
+    rig.host_reply(&id, HostMessage::PermissionRules { rules: vec![rule()] });
+    let published = rig.published();
+    let phone = rig.phone.pubkey_hex.clone();
+    assert!(
+        published.iter().any(|(to, m)| *to == [phone.clone()]
+            && matches!(m, BridgeToPhone::PermissionRules(r) if r.rules == [rule()] && r.error.is_none())),
+        "{published:?}"
+    );
+
+    // A removal names each rule once, and is answered with the list after.
+    rig.send(json!({"v":12,"type":"permission-rules-remove","agent":"alpha","ids":["psv_1","psv_1"]}));
+    let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::RemovePermissionRules { .. }));
+    assert!(matches!(msg, BridgeMessage::RemovePermissionRules { ref ids, .. } if *ids == ["psv_1"]), "{msg:?}");
+    rig.host_reply(&id, HostMessage::PermissionRules { rules: vec![] });
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::PermissionRules(r) if r.rules.is_empty() && r.error.is_none())));
+
+    // The agent's refusal reaches the phone as the error.
+    rig.send(json!({"v":12,"type":"permission-rules-remove","agent":"alpha","ids":["psv_9"]}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::RemovePermissionRules { .. }));
+    rig.host_reply(&id, HostMessage::Error { message: "no such rule".into() });
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::PermissionRules(r) if r.error.as_deref() == Some("no such rule"))));
+
+    // Refused before the host: nothing named, an agent that keeps no rules.
+    rig.send(json!({"v":12,"type":"permission-rules-remove","agent":"alpha","ids":[]}));
+    rig.send(json!({"v":12,"type":"permission-rules-request","agent":"beta"}));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::ListPermissionRules { .. } | BridgeMessage::RemovePermissionRules { .. })));
+    let msgs = rig.messages();
+    assert_eq!(msgs.iter().filter(|m| matches!(m, BridgeToPhone::PermissionRules(r) if r.error.is_some())).count(), 2, "{msgs:?}");
+}
+
 fn models_error(rig: &mut Rig) -> Option<String> {
     rig.messages().into_iter().find_map(|m| match m {
         BridgeToPhone::Models(x) => Some(x.error.unwrap_or_default()),

@@ -30,7 +30,7 @@ use protocol::events::{
 };
 
 use super::Engine;
-use crate::io::Effect;
+use crate::io::{Addressee, Effect};
 use crate::out::TimerKind;
 use crate::session::{
     is_slash_command, runs_git_commit, strip_session_meta, title_from, Card, CardKind, Phase, Runner, StartKind,
@@ -57,6 +57,9 @@ pub(crate) enum HostCall {
     McpAction { agent: String, action: McpAction, names: Vec<String> },
     /// A session's MCP status, asked for or answering a toggle.
     SessionMcp { session_id: String },
+    /// An agent's saved permission rules, listed or after a removal, for the
+    /// client that asked.
+    PermissionRules { agent: String, to: Addressee },
     CheckCredential { ticket: u64, agent: String, credential: String, value: agent_protocol::Secret },
     /// A provider profile's token check, for the save waiting on it.
     CheckProvider { ticket: u64 },
@@ -249,6 +252,7 @@ impl Engine {
             HostCall::ListMcp { agent } => self.on_mcp_reply(agent, result),
             HostCall::McpAction { agent, action, names } => self.on_mcp_action_reply(agent, action, names, result),
             HostCall::SessionMcp { session_id } => self.on_session_mcp_reply(session_id, result),
+            HostCall::PermissionRules { agent, to } => self.on_permission_rules_reply(agent, to, result),
             HostCall::CheckCredential { ticket, agent, credential, value } => {
                 let valid = match result {
                     Ok(HostMessage::CredentialChecked { valid }) => valid,
