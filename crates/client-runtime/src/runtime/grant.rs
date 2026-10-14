@@ -152,8 +152,13 @@ impl Loop {
             self.grant_attempts.remove(&machine);
             self.persist_store(StoreId::Machines).await;
         }
+        // Dated by the grant made before this copy arrived: the copy that
+        // shows a bridge lost its key is held, not skipped by the grant it
+        // provokes. With none before, the grant made now dates it.
+        let before = self.stores.machines.session_grant_sent_at(&machine);
         self.grant_if_due(&machine);
-        if self.stores.machines.session_grant_sent_at(&machine).is_some_and(|sent| written < sent) {
+        let since = before.or_else(|| self.stores.machines.session_grant_sent_at(&machine));
+        if since.is_some_and(|sent| written < sent) {
             log::debug!("session key: skipped a message {}... wrote to the identity before the grant", short(&machine));
             return;
         }
