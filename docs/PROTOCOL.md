@@ -148,6 +148,11 @@ shared by every bridge that runs it.
   nothing (the phone keeps what it knew); a refused effort or model confirms
   the value still in force. `option-confirmed` is also sent when the agent
   changes its own mode (it entered plan mode, a plan approval switched it).
+- **`turnStartedAt`:** while a turn runs (waiting on the user included),
+  when it started, as an ISO 8601 time on the bridge's clock; absent
+  otherwise. A turn need not start with the user's message (a background
+  task's end can start one), so the bridge is what says it; a phone shows
+  the time worked from it.
 - **`committed`:** the session's folder got a git commit after the session
   started (the agent's own, caught at once, or one made by hand, caught
   within seconds); a phone shows it as a badge.

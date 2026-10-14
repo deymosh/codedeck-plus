@@ -289,9 +289,14 @@ kind; the user's message takes the agent's shape; an empty session shows
 the wordmark, drawn as quarter-cell blocks on a canvas (a phone's fonts
 draw block elements at widths of their own, which pulls a logo apart). The
 mode the session runs in sits beside the send button, in the mode's colour.
-Two knobs are not drawn yet: `workingCounter` (the phone has no turn timer
-or running token count to show) and `resultMark` (a result has no row of
-its own; it opens in the tool sheet).
+With `workingCounter` the working line adds `(12s · ↓ 1.2k tokens)`, as
+Claude Code's spinner does and on the same terms: the seconds since the
+session's `turnStartedAt`, the tokens estimated as the characters the agent
+wrote since the user's last message over four, and nothing until the turn
+has run more than five seconds with some reply. With `resultMark`, a tool
+group of one finished call adds a line under it after the mark, saying what
+the call came to (the lines a read returned, what a search found, what an
+edit changed, a command's first line of output).
 
 ### Direct link
 
