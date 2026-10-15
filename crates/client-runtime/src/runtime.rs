@@ -2262,20 +2262,26 @@ impl Loop {
                 self.send_watching(machine, None);
             }
         }
-        if let Some((machine, session)) = &desired {
-            self.send_watching(machine, session.clone());
-        }
-        self.watch_sent = desired;
+        // Only what a machine was told counts as sent: one that could not be
+        // (no session key to use right now) is tried again at the next
+        // settle, instead of being taken for told and never retried.
+        let told = match &desired {
+            Some((machine, session)) => self.send_watching(machine, session.clone()),
+            None => true,
+        };
+        self.watch_sent = if told { desired } else { None };
     }
 
     /// One `presence` saying what this client watches, to one machine. Only
     /// a machine that knows this client by its session key is told: a copy
     /// addressed to the identity reaches no client, and so no live text.
-    fn send_watching(&mut self, machine: &str, watching: Option<String>) {
+    /// Returns whether it went out.
+    fn send_watching(&mut self, machine: &str, watching: Option<String>) -> bool {
         if !matches!(self.cipher_for(machine), Cipher::SessionKey(_)) {
-            return;
+            return false;
         }
         self.sign_and_publish(machine.to_string(), PhoneToBridge::Presence(PresenceMsg { away: false, watching }), None, None, true);
+        true
     }
 
     /// Publish a built command, or report why it could not be built. It goes
