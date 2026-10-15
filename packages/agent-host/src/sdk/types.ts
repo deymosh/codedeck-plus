@@ -60,6 +60,8 @@ export type ContextItem = G.ContextItem;
 export type ContextKind = G.ContextKind;
 export type PermissionRequest = G.PermissionRequest_Deserialize;
 export type PermissionRule = G.PermissionRule;
+/** One of an agent's own named configurations a session can run as. */
+export type Persona = G.Persona_Deserialize;
 export type AgentAccount = G.AgentAccount_Deserialize;
 export type AccountMethod = G.AccountMethod_Deserialize;
 export type AccountField = G.AccountField_Deserialize;

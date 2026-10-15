@@ -260,6 +260,17 @@ export class AgentHost {
         const commands = (await this.session(message.payload.sessionId).listCommands?.()) ?? [];
         return { kind: 'commands', payload: { commands } };
       }
+      case 'list-personas': {
+        const { agent, sessionId } = message.payload;
+        if (sessionId !== undefined && sessionId !== null) {
+          const session = this.session(sessionId);
+          if (!session.listPersonas) throw new Error('this session has no personas to list');
+          return { kind: 'personas', payload: { personas: await session.listPersonas() } };
+        }
+        const driver = this.driver(agent);
+        if (!driver.listPersonas) throw new Error(`${driver.info().displayName} has no personas to list`);
+        return { kind: 'personas', payload: { personas: await driver.listPersonas() } };
+      }
       case 'check-credential': {
         const driver = this.driver(message.payload.agent);
         const valid = await driver.checkCredential?.(message.payload.credential, message.payload.value);

@@ -28,6 +28,44 @@ const AGENT_RULES: Record<string, Array<{ action: string; resource: string; effe
   plan: [{ action: '*', resource: '*', effect: 'allow' }, { action: 'edit', resource: '*', effect: 'deny' }, { action: 'edit', resource: '/plans/*', effect: 'allow' }],
 };
 
+/** An agent as v2 lists it. `build` and the custom `review` are the ones a
+ *  session can run as; `plan` is the driver's own Plan mode agent, and the
+ *  subagents and hidden ones are not configurations a session runs as. */
+interface AgentRow {
+  id: string;
+  name: string;
+  mode: 'primary' | 'subagent' | 'all';
+  hidden: boolean;
+  description?: string;
+  color?: string;
+}
+
+const BUILTIN_AGENTS: AgentRow[] = [
+  { id: 'build', name: 'Build', mode: 'primary', hidden: false },
+  { id: 'plan', name: 'Plan', mode: 'primary', hidden: false },
+  { id: 'general', name: 'General', mode: 'subagent', hidden: false },
+  { id: 'explore', name: 'Explore', mode: 'subagent', hidden: false },
+  { id: 'compaction', name: 'Compaction', mode: 'all', hidden: true },
+];
+const ALL_AGENTS: AgentRow[] = [
+  ...BUILTIN_AGENTS,
+  { id: 'review', name: 'review', mode: 'primary', hidden: false, description: 'Reviews code', color: '#E5C07B' },
+];
+
+function agentApi(rows: () => AgentRow[]) {
+  return {
+    get: vi.fn(async ({ agentID }: { agentID: string }) => {
+      const found = rows().find((a) => a.id === agentID);
+      if (!found) throw Object.assign(new Error(`no agent ${agentID}`), { name: 'AgentNotFoundError' });
+      return { location: { directory: '/tmp' }, data: { ...found, request: {}, permissions: AGENT_RULES[agentID] ?? [] } };
+    }),
+    list: vi.fn(async () => ({
+      location: { directory: '/tmp' },
+      data: rows().map((a) => ({ ...a, request: {}, permissions: [] })),
+    })),
+  };
+}
+
 /** A client whose event stream yields `events`, then stays open briefly so
  *  the ask → reply chains settle before the stream ends. */
 function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeClient {
@@ -61,12 +99,8 @@ function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeC
     },
     permission: { reply: vi.fn(async () => undefined) },
     // Each agent's rules: OpenCode's catch-all allow, then what it forbids.
-    agent: {
-      get: vi.fn(async ({ agentID }: { agentID: string }) => ({
-        location: { directory: '/tmp' },
-        data: { id: agentID, name: agentID, mode: 'primary', hidden: false, request: {}, permissions: AGENT_RULES[agentID] ?? [] },
-      })),
-    },
+    agent: agentApi(() => ALL_AGENTS),
+    location: { get: vi.fn(async () => ({ directory: '/tmp' })) },
     message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
     command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
     mcp: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
@@ -97,7 +131,7 @@ describe('OpenCode session lifecycle', () => {
   it('reports its conversation id, becomes ready, and ends normally when the stream closes', async () => {
     const ctx = start(clientWith([]));
     expect(await ctx.ended()).toEqual({ type: 'ended' });
-    expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'ses_1', mode: 'ask' });
+    expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'ses_1', mode: 'ask', persona: 'build' });
     expect(ctx.events.findIndex((e) => e.type === 'ready')).toBeLessThan(ctx.events.findIndex((e) => e.type === 'ended'));
   });
 
@@ -858,6 +892,153 @@ describe('OpenCode modes, models and effort', () => {
     await expect(session.setOption!('model', 'nope')).rejects.toThrow(/not an OpenCode provider\/model id/);
     await expect(session.setOption!('effort', 'nope')).rejects.toThrow(/reasoning level/);
     await session.end();
+  });
+});
+
+describe('OpenCode personas', () => {
+  const notices = (ctx: ReturnType<typeof start>) =>
+    ctx.entries().filter((e) => e.entryType === 'notice').map((e) => (e as { text: string }).text);
+  /** The persona the last `info` said the session runs as. */
+  const infoPersona = (ctx: ReturnType<typeof start>) => {
+    for (const e of [...ctx.events].reverse()) if ('persona' in e) return e.persona;
+    return undefined;
+  };
+
+  it('lists the agents a session can run as, build first', async () => {
+    const client = clientWith([]);
+    const personas = await OpenCodeDriver.withClient(client).listPersonas!();
+    expect(personas.map((p) => p.id)).toEqual(['build', 'review']);
+    expect(personas[1]).toMatchObject({ label: 'review', description: 'Reviews code', color: '#E5C07B' });
+    // `agent.list` alone does not boot the server's own directory, so the
+    // location is asked for first.
+    expect(client.location.get).toHaveBeenCalled();
+  });
+
+  it("a session lists the personas of its own directory", async () => {
+    const client = clientWith([]);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect((await session.listPersonas!()).map((p) => p.id)).toEqual(['build', 'review']);
+    expect(client.agent.list).toHaveBeenCalledWith({ location: { directory: '/tmp' } });
+    await session.end();
+  });
+
+  it("waits a moment for a directory's own agents to load", async () => {
+    let calls = 0;
+    const client = clientWith([], { agent: agentApi(() => (calls++ === 0 ? BUILTIN_AGENTS : ALL_AGENTS)) });
+    const personas = await OpenCodeDriver.withClient(client).listPersonas!();
+    expect(personas.map((p) => p.id)).toEqual(['build', 'review']);
+    expect(calls).toBeGreaterThan(1);
+  });
+
+  it('starts as the persona the phone named', async () => {
+    const client = clientWith([]);
+    const ctx = start(client, { persona: 'review' });
+    await ctx.ended();
+    expect(client.session.switchAgent).toHaveBeenCalledWith({ sessionID: 'ses_1', agent: 'review' });
+    // The rules are stated for the agent actually running, before any prompt.
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [{ action: '*', resource: '*', effect: 'ask' }],
+    });
+    expect(infoPersona(ctx)).toBe('review');
+  });
+
+  it('says so and runs as Build when the named persona does not exist here', async () => {
+    const client = clientWith([]);
+    const ctx = start(client, { persona: 'gone' });
+    await ctx.ended();
+    expect(notices(ctx)).toEqual(["OpenCode has no agent 'gone' here, so this session runs as Build."]);
+    expect(infoPersona(ctx)).toBe('build');
+    expect(client.session.switchAgent).not.toHaveBeenCalled();
+  });
+
+  it('resumes as the agent OpenCode recorded for the session', async () => {
+    const client = clientWith([]);
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', agent: 'review', title: 'T' });
+    const ctx = start(client, { resume: 'ses_1' });
+    await ctx.ended();
+    expect(infoPersona(ctx)).toBe('review');
+    expect(client.session.switchAgent).not.toHaveBeenCalled();
+  });
+
+  it('switches the persona, and refuses one OpenCode does not have here', async () => {
+    const client = clientWith([]);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await session.setOption!('persona', 'review');
+    expect(client.session.switchAgent).toHaveBeenLastCalledWith({ sessionID: 'ses_1', agent: 'review' });
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [{ action: '*', resource: '*', effect: 'ask' }],
+    });
+    await expect(session.setOption!('persona', 'nope')).rejects.toThrow(/has no agent 'nope' here/);
+    await session.end();
+  });
+
+  it('keeps the persona while Plan mode runs its own agent, and uses it after', async () => {
+    const client = clientWith([]);
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', mode: 'plan', persona: 'review' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    // Created on the plan agent: the persona is kept for a real mode.
+    expect(client.session.switchAgent).not.toHaveBeenCalled();
+    expect(client.agent.get).toHaveBeenLastCalledWith({ agentID: 'plan', location: { directory: '/tmp' } });
+    expect(infoPersona(ctx)).toBe('review');
+    await session.setOption!('mode', 'ask');
+    expect(client.session.switchAgent).toHaveBeenLastCalledWith({ sessionID: 'ses_1', agent: 'review' });
+    await session.end();
+  });
+
+  it("falls back to Build when the persona's agent file is removed", async () => {
+    // The stream is gated so the removal arrives while the session runs.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    async function* stream(): AsyncGenerator<V2> {
+      await gate;
+      // The directory is spelled with a trailing slash: still this session's.
+      yield { type: 'agent.updated', location: { directory: '/tmp/' }, data: {} };
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const client = clientWith([], { event: { subscribe: vi.fn(() => stream()) } });
+    const ctx = start(client, { persona: 'review' });
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(infoPersona(ctx)).toBe('review');
+
+    const get = asMock(client.agent.get);
+    const plain = get.getMockImplementation()!;
+    get.mockImplementation(async (input: { agentID: string }) => {
+      if (input.agentID === 'review') throw Object.assign(new Error('gone'), { name: 'AgentNotFoundError' });
+      return plain(input);
+    });
+    release();
+    // The session ends once the stream closes, by which time the queued
+    // switch has been applied.
+    await ctx.ended();
+    expect(notices(ctx)).toEqual(["OpenCode's agent 'review' was removed, so this session runs as Build."]);
+    expect(infoPersona(ctx)).toBe('build');
+    // The rules of the agent now running are restated through the queue.
+    expect(client.session.switchAgent).toHaveBeenLastCalledWith({ sessionID: 'ses_1', agent: 'build' });
+  });
+
+  it("ignores an agent change in another directory", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    async function* stream(): AsyncGenerator<V2> {
+      await gate;
+      yield { type: 'agent.updated', location: { directory: '/elsewhere' }, data: {} };
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const client = clientWith([], { event: { subscribe: vi.fn(() => stream()) } });
+    const ctx = start(client, { persona: 'review' });
+    await ctx.waitFor((e) => e.type === 'ready');
+    const before = asMock(client.session.update).mock.calls.length;
+    release();
+    await ctx.ended();
+    expect(ctx.events.filter((e) => 'persona' in e)).toHaveLength(1);
+    expect(asMock(client.session.update).mock.calls.length).toBe(before);
   });
 });
 

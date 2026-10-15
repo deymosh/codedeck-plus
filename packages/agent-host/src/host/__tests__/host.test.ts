@@ -207,6 +207,43 @@ describe('AgentHost', () => {
     expect(h.reply('c2')).toEqual({ v: 1, id: 'c2', kind: 'credential-checked', payload: {} });
   });
 
+  it('personas are listed for a session or the whole machine', async () => {
+    const h = harness();
+    await h.send('start-session', { sessionId: 's1', agent: 'fake', cwd: '/w' });
+    // A session answers with the personas it can switch to...
+    await h.send('list-personas', { agent: 'fake', sessionId: 's1' }, 'p1');
+    expect(h.reply('p1')).toMatchObject({ kind: 'personas', payload: { personas: [{ id: 'build' }, { id: 'review' }] } });
+    // ...and no session with the machine's, which include a global one.
+    await h.send('list-personas', { agent: 'fake' }, 'p2');
+    expect(h.reply('p2')).toMatchObject({ kind: 'personas', payload: { personas: [{ id: 'build' }, { id: 'review' }, { id: 'global' }] } });
+    // A session that is not running is an error, like every other request.
+    await h.send('list-personas', { agent: 'fake', sessionId: 'nope' }, 'p3');
+    expect(h.reply('p3')).toMatchObject({ kind: 'error', payload: { message: 'no running session nope' } });
+  });
+
+  it('an agent that has no personas says so, for a session and for the machine', async () => {
+    const driver: Driver = {
+      info: () => ({ id: 'plain', displayName: 'Plain', modes: [], efforts: [], supports: {} as AgentInfo['supports'], credentials: [] }),
+      startSession: () => ({
+        prompt: () => {},
+        interrupt: async () => {},
+        setOption: async () => {},
+        getUsage: async () => null,
+        end: async () => {},
+      }),
+      listModels: async () => ({ models: [] }),
+    };
+    const out: Frame[] = [];
+    const host = new AgentHost(Agents.of([driver]), { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
+    const send = (id: string, kind: string, payload: Record<string, unknown>) =>
+      host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
+    await send('m', 'list-personas', { agent: 'plain' });
+    expect(out.find((f) => f.id === 'm')).toMatchObject({ kind: 'error', payload: { message: 'Plain has no personas to list' } });
+    await send('st', 'start-session', { sessionId: 's1', agent: 'plain', cwd: '/w' });
+    await send('s', 'list-personas', { agent: 'plain', sessionId: 's1' });
+    expect(out.find((f) => f.id === 's')).toMatchObject({ kind: 'error', payload: { message: 'this session has no personas to list' } });
+  });
+
   it("plugins are listed and changed through the agent's driver", async () => {
     const h = harness();
     await h.send('list-plugins', { agent: 'fake', available: true }, 'p1');

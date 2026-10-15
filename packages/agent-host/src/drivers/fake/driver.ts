@@ -23,6 +23,7 @@ import type {
   McpServerAdd,
   McpServerInfo,
   OutputEntry,
+  Persona,
   PluginAction,
   SessionOption,
   SlashCommand,
@@ -155,6 +156,15 @@ class FakeSession implements DriverSession {
     ];
   }
 
+  /** The personas this session can run as. `global` is not among them: it is
+   *  one only the whole machine lists. */
+  async listPersonas(): Promise<Persona[]> {
+    return [
+      { id: 'build', label: 'Build' },
+      { id: 'review', label: 'Review' },
+    ];
+  }
+
   async mcpStatus(): Promise<SessionMcpState> {
     return {
       servers: this.mcp.servers
@@ -245,7 +255,8 @@ export class FakeDriver implements Driver {
         { id: 'high', label: 'High' },
       ],
       defaultMode: 'default',
-      supports: { models: true, usage: true, providers: false, interrupt: true, commands: true, plugins: true, mcp: true, tasks: false },
+      defaultPersona: 'build',
+      supports: { models: true, usage: true, providers: false, interrupt: true, commands: true, plugins: true, mcp: true, tasks: false, personas: true },
       credentials: [{ id: 'fake_token', label: 'Fake token', envVar: 'FAKE_AGENT_TOKEN' }],
     };
   }
@@ -260,6 +271,16 @@ export class FakeDriver implements Driver {
       models: [{ id: 'fake-model', label: 'Fake model' }, { id: 'fake-large' }],
       defaultModel: 'fake-model',
     };
+  }
+
+  /** The machine-wide personas: the session's two plus one global agent that
+   *  only the whole machine lists. */
+  async listPersonas(): Promise<Persona[]> {
+    return [
+      { id: 'build', label: 'Build' },
+      { id: 'review', label: 'Review' },
+      { id: 'global', label: 'Global' },
+    ];
   }
 
   async checkCredential(_credential: string, value: string): Promise<boolean | undefined> {
