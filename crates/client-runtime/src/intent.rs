@@ -768,13 +768,13 @@ pub fn apply(
         Intent::PluginAction { machine, agent, action, target } => {
             let target = target.trim().to_string();
             if !target.is_empty() {
-                stores.machines.plugin_action_sent(&machine, &agent, &target);
+                stores.machines.plugin_action_sent(&machine, &agent, action, &target, ctx.now);
                 r.persist(StoreId::Machines);
                 r.send(&machine, PhoneToBridge::PluginAction(PluginActionMsg { agent, action, target }));
             }
         }
         Intent::AgentAction { machine, agent, action } => {
-            stores.machines.agent_action_sent(&machine, &agent, action);
+            stores.machines.agent_action_sent(&machine, &agent, action, ctx.now);
             r.persist(StoreId::Machines);
             r.send(&machine, PhoneToBridge::AgentAction(AgentActionMsg { agent, action }));
         }
@@ -791,7 +791,7 @@ pub fn apply(
                 let ack = McpAckMsg { agent, action, names, success: false, error: Some(error) };
                 stores.machines.apply_mcp_ack(&machine, &ack);
             } else if !names.is_empty() {
-                stores.machines.mcp_action_sent(&machine, &agent, &names);
+                stores.machines.mcp_action_sent(&machine, &agent, action, &names, ctx.now);
                 r.send(&machine, PhoneToBridge::McpAction(McpActionMsg { agent, action, servers, names }));
             }
             r.persist(StoreId::Machines);
@@ -801,7 +801,7 @@ pub fn apply(
         }
         Intent::RemovePermissionRules { machine, agent, ids } => {
             if !ids.is_empty() {
-                stores.machines.permission_rules_remove_sent(&machine, &agent, &ids);
+                stores.machines.permission_rules_remove_sent(&machine, &agent, &ids, ctx.now);
                 r.persist(StoreId::Machines);
                 r.send(&machine, PhoneToBridge::PermissionRulesRemove(PermissionRulesRemoveMsg { agent, ids }));
             }
@@ -811,7 +811,7 @@ pub fn apply(
         }
         Intent::AccountAction { machine, agent, account, action } => {
             let sign_in = matches!(action, AccountAction::SignIn { .. });
-            stores.machines.account_action_sent(&machine, &agent, &account, sign_in);
+            stores.machines.account_action_sent(&machine, &agent, &account, sign_in, ctx.now);
             r.persist(StoreId::Machines);
             r.send(&machine, PhoneToBridge::AccountAction(AccountActionMsg { agent, account, action }));
         }
@@ -824,7 +824,7 @@ pub fn apply(
             PhoneToBridge::SessionMcpRequest(SessionIdMsg { session_id }),
         ),
         Intent::ToggleSessionMcp { machine, session_id, name, enabled } => {
-            stores.machines.session_mcp_toggle_sent(&machine, &session_id, &name);
+            stores.machines.session_mcp_toggle_sent(&machine, &session_id, &name, ctx.now);
             r.persist(StoreId::Machines);
             r.send(
                 &machine,

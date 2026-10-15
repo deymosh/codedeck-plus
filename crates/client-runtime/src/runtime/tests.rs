@@ -2343,6 +2343,69 @@ async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
         .await;
 }
 
+/// A machine-settings change the bridge never answers (the machine is
+/// offline, a relay dropped the command) stops showing as busy after the
+/// phone's own deadline, with the reason, instead of spinning forever.
+#[tokio::test]
+async fn a_machine_settings_change_nobody_answers_stops_being_busy_at_the_deadline() {
+    use client_core::stores::machines::SLOW_SETTINGS_ANSWER_TIMEOUT_MS;
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let start_ms: u64 = 1_000_000;
+            let mut state = client_core::stores::machines::MachinesState::default();
+            state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let clock = Rc::new(FixedClock(RefCell::new(start_ms)));
+            let core = Core::spawn(
+                CoreConfig {
+                    identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                    proxy: None,
+                    tor: false,
+                    reconnect: fast_reconnect(),
+                },
+                CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+                Rc::new(Spy::default()),
+                Rc::clone(&clock) as Rc<dyn Clock>,
+                Rc::new(ZeroEntropy),
+            )
+            .await;
+            core.set_relays(vec![mock.url.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+
+            core.dispatch(Intent::PluginAction {
+                machine: machine.pubkey_hex.clone(),
+                agent: "claude-code".into(),
+                action: protocol::common::PluginAction::Install,
+                target: "b@m".into(),
+            })
+            .await;
+            let busy = |view: MachinesView| view.machines[&machine.pubkey_hex].plugins["claude-code"].busy.clone();
+            assert_eq!(busy(core.machines_view().await), ["b@m".to_string()]);
+
+            // The machine never answers; the phone's clock passes the
+            // deadline and the timer armed for it fires.
+            *clock.0.borrow_mut() += SLOW_SETTINGS_ANSWER_TIMEOUT_MS + 1;
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_millis(SLOW_SETTINGS_ANSWER_TIMEOUT_MS + 1)).await;
+            tokio::time::resume();
+            settle().await;
+
+            let view = core.machines_view().await;
+            let plugins = &view.machines[&machine.pubkey_hex].plugins["claude-code"];
+            assert!(plugins.busy.is_empty(), "the change is given up on");
+            let failure = plugins.failure.as_ref().expect("and says why");
+            assert!(failure.error.contains("did not answer"), "{failure:?}");
+        })
+        .await;
+}
+
 /// A key a month from lapsing is replaced at boot. The bridge on it keeps
 /// using it until it confirms the new one, which it is granted under the
 /// old one; then the old key is gone from the phone's store.
