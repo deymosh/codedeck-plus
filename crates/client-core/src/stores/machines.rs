@@ -1487,22 +1487,22 @@ impl MachinesState {
             }
             Unanswered::Account { agent, account } => {
                 let Some(a) = m.accounts.get_mut(&agent) else { return false };
-                let mut changed = false;
-                if a.busy.contains(&account) {
-                    a.busy.retain(|b| *b != account);
-                    a.error = Some(NO_ANSWER.into());
-                    changed = true;
+                // Any answer about the account clears it from `busy`, so a
+                // busy account is one the machine never answered for.
+                if !a.busy.contains(&account) {
+                    return false;
                 }
-                // A sign-in that never even started (no attempt yet) did not
-                // happen: it is reported failed rather than left hanging.
+                a.busy.retain(|b| *b != account);
+                a.error = Some(NO_ANSWER.into());
+                // A sign-in the machine never took up is reported failed
+                // rather than left waiting for a link that will not come.
                 if let Some(view) = a.sign_in.as_mut() {
                     if view.account == account && view.status == SignInStatus::Started && view.attempt.is_none() {
                         view.status = SignInStatus::Failed;
                         view.error = Some(NO_ANSWER.into());
-                        changed = true;
                     }
                 }
-                changed
+                true
             }
             Unanswered::SessionMcp { session_id, name } => {
                 let Some(held) = m.sessions.get_mut(&session_id).and_then(|s| s.mcp.as_mut()) else {
@@ -2415,6 +2415,31 @@ mod tests {
         let p = &st.machine("pk").unwrap().plugins["claude-code"];
         assert!(p.busy.is_empty());
         assert!(p.failure.is_none());
+    }
+
+    #[test]
+    fn a_sign_in_the_machine_answered_is_not_failed_by_giving_up() {
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        let t = 1_000;
+        st.account_action_sent("pk", "opencode", "b", true, t);
+        // The machine answers, but says nothing yet about what to do.
+        st.apply_account_sign_in(
+            "pk",
+            &AccountSignInMsg {
+                agent: "opencode".into(),
+                account: "b".into(),
+                status: SignInStatus::Started,
+                attempt_id: None,
+                attempt: None,
+                error: None,
+            },
+        );
+
+        assert!(!st.expire_unanswered(t + SETTINGS_ANSWER_TIMEOUT_MS));
+        let a = &st.machine("pk").unwrap().accounts["opencode"];
+        assert_eq!(a.sign_in.as_ref().unwrap().status, SignInStatus::Started);
+        assert!(a.error.is_none());
     }
 
     #[test]
