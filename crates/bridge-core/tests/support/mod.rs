@@ -71,6 +71,17 @@ pub fn gamma() -> AgentInfo {
     }
 }
 
+/// "persona": an agent whose own named configurations a session can run as.
+pub fn persona() -> AgentInfo {
+    AgentInfo {
+        id: "persona".into(),
+        display_name: "Persona".into(),
+        default_persona: Some("build".into()),
+        supports: AgentSupports { models: true, personas: true, ..Default::default() },
+        ..beta()
+    }
+}
+
 /// "delta": its provider profiles add models to its own list.
 pub fn delta() -> AgentInfo {
     AgentInfo {

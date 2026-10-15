@@ -49,6 +49,11 @@ pub struct SessionRecord {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The persona the session runs as (agents with `supports.personas`),
+    /// once its agent has reported one. Absent until then: a requested one
+    /// the agent does not have leaves it on the agent's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
     pub title: Option<String>,
     pub project: String,
     pub created_at: String,
@@ -77,7 +82,7 @@ impl SessionRecord {
             mode: self.mode.clone(),
             effort: self.effort.clone(),
             model: self.model.clone(),
-            persona: None,
+            persona: self.persona.clone(),
             context_window: self.context_window,
             context_percentage: self.context_percentage,
             committed: self.committed.then_some(true),
@@ -198,6 +203,7 @@ mod tests {
             provider_id: None,
             effort: None,
             mode: Some("plan".into()),
+            persona: None,
             title: None,
             project: "app".into(),
             created_at: "t0".into(),
@@ -251,10 +257,12 @@ mod tests {
         let mut rec = record("0123456789ab");
         rec.committed = true;
         rec.provider_id = Some("kimi".into());
+        rec.persona = Some("review".into());
         let info = rec.remote_info(42, SessionState::Running, Some("Kimi".into()));
         assert_eq!(info.slug, "01234567");
         assert_eq!((info.line_count, info.seq_high), (42, Some(42)));
         assert_eq!(info.committed, Some(true));
+        assert_eq!(info.persona.as_deref(), Some("review"));
         assert_eq!(info.state, Some(SessionState::Running));
         assert_eq!(info.provider_label.as_deref(), Some("Kimi"));
         assert_eq!(record("x").remote_info(0, SessionState::Idle, None).committed, None);

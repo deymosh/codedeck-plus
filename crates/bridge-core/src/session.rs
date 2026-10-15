@@ -81,6 +81,11 @@ pub(crate) struct Runner {
     /// Parts being streamed, by key, until the entry that completes each
     /// one arrives or the turn ends.
     pub parts: BTreeMap<String, crate::live::LivePart>,
+    /// The persona a `create-session` asked to start as, until the agent
+    /// has reported the one the session actually runs as. Kept off the
+    /// record: a persona the agent does not have leaves it on its default,
+    /// and only the agent can say which one that is.
+    pub pending_persona: Option<String>,
 }
 
 impl Runner {
@@ -101,6 +106,7 @@ impl Runner {
             agent_titled: false,
             base_head: None,
             parts: BTreeMap::new(),
+            pending_persona: None,
         }
     }
 
