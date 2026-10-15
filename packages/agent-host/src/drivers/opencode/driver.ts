@@ -25,7 +25,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
-import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type PermissionRule, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
+import { OpenCode, type AgentInfo as OpenCodeAgent, type ModelInfo, type OpenCodeClient, type PermissionAsked, type PermissionRule, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
@@ -39,6 +39,7 @@ import type {
   ModelEntry,
   OptionChoice,
   PermissionOption,
+  Persona,
   ProviderBinding,
   QuestionReply,
   QuestionSpec,
@@ -95,6 +96,68 @@ const OPENCODE_MODES = [
 const PLAN_AGENT = 'plan';
 /** The agent every other mode runs. */
 const BUILD_AGENT = 'build';
+
+/** The agents OpenCode ships with. A directory's own agents load a moment
+ *  after it is booted, so a list holding only these may still be missing
+ *  them. */
+const BUILTIN_AGENTS = new Set(['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary']);
+/** How long after a directory was booted its own agents are still loading. */
+const PERSONA_LOAD_MS = 1_000;
+/** How often a list or a lookup is retried while they load. */
+const PERSONA_POLL_MS = 100;
+/** How long a session waits for the persona it was asked for. */
+const PERSONA_WAIT_MS = 2_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Whether an agent OpenCode knows is one a session can run as. `plan` is
+ *  this driver's own Plan mode agent, and a subagent or a hidden one is not
+ *  a configuration a session is run as. */
+export function isPersona(agent: OpenCodeAgent): boolean {
+  return agent.mode !== 'subagent' && !agent.hidden && agent.id !== PLAN_AGENT;
+}
+
+/** OpenCode's agents as the phone's persona list: the selectable ones,
+ *  `build` first, then OpenCode's own order. */
+export function toPersonas(agents: readonly OpenCodeAgent[]): Persona[] {
+  const selectable = agents.filter(isPersona).map((agent) => ({
+    id: agent.id,
+    label: agent.name,
+    ...(agent.description ? { description: agent.description } : {}),
+    ...(agent.color ? { color: agent.color } : {}),
+  }));
+  const build = selectable.filter((p) => p.id === BUILD_AGENT);
+  return [...build, ...selectable.filter((p) => p.id !== BUILD_AGENT)];
+}
+
+/**
+ * The selectable agents OpenCode lists for `location` (its own directory
+ * when none is named, which is the built-ins plus the global agents). A
+ * just-booted directory lists its built-ins at once and its own agents a
+ * moment later, so while only the built-ins are there this keeps asking —
+ * until `waitUntil`, past which a call never waits.
+ */
+async function listSelectablePersonas(
+  client: OpenCodeClient,
+  location: { directory: string } | undefined,
+  waitUntil: number,
+): Promise<Persona[]> {
+  const listed = async (): Promise<OpenCodeAgent[]> => {
+    try {
+      return (await client.agent.list(location ? { location } : undefined)).data;
+    } catch {
+      return [];
+    }
+  };
+  let agents = await listed();
+  while (Date.now() < waitUntil && agents.every((a) => BUILTIN_AGENTS.has(a.id))) {
+    await delay(PERSONA_POLL_MS);
+    agents = await listed();
+  }
+  return toPersonas(agents);
+}
 
 /**
  * The permission rules a session runs under, from its mode and the rules of
@@ -387,6 +450,13 @@ export class OpenCodeSession implements DriverSession {
   private readonly reportUnknownTool: (toolName: string) => void;
   private ended = false;
   private mode: string;
+  /** The persona the session runs as. Plan mode runs OpenCode's own plan
+   *  agent instead, and comes back to this one when it leaves. */
+  private persona: string = BUILD_AGENT;
+  /** When the session became ready. Its directory's own agents are still
+   *  loading for a moment after, so a persona list asked for meanwhile
+   *  waits rather than answering with the built-ins alone. */
+  private personasReadyAt?: number;
   /** The last mode switch still being applied to the server; the next one
    *  waits for it. Never rejects. */
   private agentSwitch: Promise<void> = Promise.resolve();
@@ -537,13 +607,27 @@ export class OpenCodeSession implements DriverSession {
         .then(() => client.server.info())
         .then((info) => info.version, () => undefined);
       const { session, resumeLost } = await this.resolveSession(client, params);
-      // Before any prompt can run: until then the agent's denies are not in
-      // the session's rules.
-      await this.statePermissions(client, session.id, session.agent ?? (this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT));
+      // Before any prompt can run: which persona the session runs as, and
+      // the rules of the agent that is actually running — the persona's
+      // denies must hold from the first tool call, not from the first mode
+      // switch.
+      await this.resolvePersona(client, session, params, resumeLost);
+      // OpenCode runs whatever agent the session recorded: a new one is
+      // created on build (or plan), and a resumed one may still name a
+      // persona whose file has since gone, which would fail its next turn.
+      const running = this.runningAgent();
+      // A session that names none runs the one it was created on, or else
+      // OpenCode's default.
+      const created = !params.resume || resumeLost;
+      const recorded = session.agent ?? (created && this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT);
+      if (recorded !== running) {
+        await client.session.switchAgent({ sessionID: session.id, agent: running }).catch(() => {});
+      }
+      await this.statePermissions(client, session.id, running);
       // The "memory was lost" notice goes ahead of the session's first line.
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
-        this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode });
+        this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode, persona: this.persona });
         this.reportTitle(session.title);
         // The version is said once, when a conversation starts — the model is
         // on the phone's composer. A resumed one said it when it began; one
@@ -553,6 +637,9 @@ export class OpenCodeSession implements DriverSession {
           this.deliver({ type: 'started', ...(v ? { version: v } : {}) });
         }
         this.ctx.emit({ type: 'ready' });
+        // From here the session's directory has been booted, and its own
+        // agents are the ones still loading.
+        this.personasReadyAt = Date.now();
       }
       // Consume the event stream for the rest of this session's life. A clean
       // end (server closed the connection) ends the session normally; a
@@ -603,6 +690,127 @@ export class OpenCodeSession implements DriverSession {
       });
     } catch (err) {
       throw new Error(`OpenCode session.create failed: ${formatOpenCodeError(err)}`);
+    }
+  }
+
+  /** The OpenCode agent the session runs right now: Plan mode runs the plan
+   *  agent, every other mode the persona. */
+  private runningAgent(): string {
+    return this.mode === PLAN_MODE ? PLAN_AGENT : this.persona;
+  }
+
+  /**
+   * Which persona the session runs as, decided before it is ready so every
+   * prompt and every permission rule is stated for it.
+   *
+   * A new session is created on the plan agent in Plan mode and `build`
+   * otherwise; a persona the phone named is waited for — a directory's own
+   * agents load a moment after it was booted — and must be one a session can
+   * run as. A resumed session keeps the agent OpenCode recorded, so a
+   * restart resumes as the session actually ran. Only decides: the caller
+   * switches OpenCode's session to it.
+   */
+  private async resolvePersona(
+    client: OpenCodeClient,
+    session: SessionInfo,
+    params: StartSession,
+    resumeLost: boolean,
+  ): Promise<void> {
+    if (params.resume && !resumeLost && session.agent && (await this.selectableAgent(client, session.agent))) {
+      this.persona = session.agent;
+      return;
+    }
+    const requested = params.persona;
+    if (!requested || requested === BUILD_AGENT) {
+      this.persona = BUILD_AGENT;
+      return;
+    }
+    if (await this.waitForAgent(client, requested)) {
+      // Plan mode keeps its own agent; the persona applies when it leaves.
+      this.persona = requested;
+      return;
+    }
+    this.persona = BUILD_AGENT;
+    this.deliver({
+      type: 'persona-notice',
+      text: `OpenCode has no agent '${requested}' here, so this session runs as Build.`,
+    });
+  }
+
+  /** OpenCode's record of `id` in this session's directory. `found` is false
+   *  when the agent does not exist (yet), which a caller may wait on. */
+  private async agentLookup(client: OpenCodeClient, id: string): Promise<{ found: boolean; persona?: string }> {
+    try {
+      const got = await client.agent.get({ agentID: id, location: { directory: this.cwd } });
+      return { found: true, ...(isPersona(got.data) ? { persona: got.data.id } : {}) };
+    } catch {
+      return { found: false };
+    }
+  }
+
+  /** The agent under `id`, when it is one a session can run as. */
+  private async selectableAgent(client: OpenCodeClient, id: string): Promise<string | undefined> {
+    return (await this.agentLookup(client, id)).persona;
+  }
+
+  /** Wait for a just-booted directory's agents to load, then answer whether
+   *  `id` is one a session can run as. An agent that exists but is not one
+   *  ends the wait at once: it never becomes one. */
+  private async waitForAgent(client: OpenCodeClient, id: string): Promise<boolean> {
+    const deadline = Date.now() + PERSONA_WAIT_MS;
+    for (;;) {
+      const { found, persona } = await this.agentLookup(client, id);
+      if (persona) return true;
+      if (found || Date.now() >= deadline) return false;
+      await delay(PERSONA_POLL_MS);
+    }
+  }
+
+  /**
+   * Apply the agent the session runs as now and state its rules, through the
+   * queue: the host runs a second switch while the first is still talking to
+   * the server, and each queued one reads the mode and persona set last, so
+   * the session ends on the agent and rules of the final one, never a mix.
+   */
+  private queueAgentSwitch(client: OpenCodeClient, session: SessionInfo): Promise<void> {
+    const switched = this.agentSwitch.then(async () => {
+      const agent = this.runningAgent();
+      await client.session.switchAgent({ sessionID: session.id, agent }).catch(() => {});
+      await this.statePermissions(client, session.id, agent);
+    });
+    this.agentSwitch = switched;
+    return switched;
+  }
+
+  /**
+   * A directory's agent files changed: the persona this session runs as may
+   * be gone, and the rules of the agent running may have changed. Anything
+   * for another directory is not this session's news — the directory is
+   * compared resolved, since the server may spell the same one differently.
+   */
+  private async onAgentUpdated(client: OpenCodeClient, directory: string | undefined): Promise<void> {
+    if (this.ended) return;
+    if (directory !== undefined && path.resolve(directory) !== path.resolve(this.cwd)) return;
+    try {
+      const { session } = await this.ready;
+      if (this.ended) return;
+      const removed = this.persona;
+      if (removed !== BUILD_AGENT && !(await this.selectableAgent(client, removed))) {
+        this.persona = BUILD_AGENT;
+        this.deliver({
+          type: 'persona-notice',
+          text: `OpenCode's agent '${removed}' was removed, so this session runs as Build.`,
+        });
+        if (!this.ended) this.ctx.emit({ type: 'info', persona: BUILD_AGENT });
+      }
+      // The agent running now has its rules restated whatever changed: its
+      // own file may be the one that was edited.
+      await this.queueAgentSwitch(client, session);
+    } catch (err) {
+      // Nothing here may escape: this runs off the event stream, where a
+      // rejection has no one to catch it. A session that never came up has
+      // nothing to restate; anything else is worth the log.
+      this.ctx.log(`[opencode] could not restate the session after an agent change: ${formatOpenCodeError(err)}`);
     }
   }
 
@@ -826,6 +1034,13 @@ export class OpenCodeSession implements DriverSession {
         }
         case 'session.renamed': {
           if (!child) this.reportTitle(event.data.title);
+          break;
+        }
+        // A directory's agent files changed: the persona this session runs
+        // as may be gone, and the rules of the agent running may have
+        // changed. Handled off the stream, since it talks to the server.
+        case 'agent.updated': {
+          void this.onAgentUpdated(client, event.location?.directory);
           break;
         }
         case 'permission.asked': {
@@ -1242,6 +1457,14 @@ export class OpenCodeSession implements DriverSession {
     return [...toSlashCommands(commands), ...sessionSlashCommands(new Set(commands.map((c) => c.name)))];
   }
 
+  /** The personas this session can run as: the selectable agents in its
+   *  directory, waiting a moment for the directory's own agents to load
+   *  after the session became ready. */
+  async listPersonas(): Promise<Persona[]> {
+    const { client } = await this.ready;
+    return listSelectablePersonas(client, { directory: this.cwd }, (this.personasReadyAt ?? Date.now()) + PERSONA_LOAD_MS);
+  }
+
   async mcpStatus(): Promise<SessionMcpState> {
     const { client } = await this.ready;
     return openCodeSessionMcp(client, this.cwd);
@@ -1258,19 +1481,23 @@ export class OpenCodeSession implements DriverSession {
         if (!OPENCODE_MODES.some((m) => m.id === value)) throw new Error(`OpenCode has no mode '${value}'`);
         this.mode = value;
         // V2 runs an agent and a permission ruleset for the whole session, so
-        // switching the mode switches both: the plan agent (or OpenCode's own
-        // default), and whether a tool call reaches the phone at all.
+        // switching the mode switches both: the plan agent (or the session's
+        // persona), and whether a tool call reaches the phone at all.
         const { client, session } = await this.ready;
-        // The host runs a second switch while the first is still talking to
-        // the server: queued, each applies the mode set last, so the session
-        // ends on the agent and rules of the final one, never a mix.
-        const switched = this.agentSwitch.then(async () => {
-          const agent = this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT;
-          await client.session.switchAgent({ sessionID: session.id, agent }).catch(() => {});
-          await this.statePermissions(client, session.id, agent);
-        });
-        this.agentSwitch = switched;
-        await switched;
+        await this.queueAgentSwitch(client, session);
+        return;
+      }
+      case 'persona': {
+        // The session runs as the persona outside Plan mode; in Plan mode it
+        // runs OpenCode's plan agent, and comes back to the persona when it
+        // leaves. Either way the persona is what a switch is validated
+        // against, so an agent that is gone is refused before it is set.
+        const { client, session } = await this.ready;
+        const found = await this.selectableAgent(client, value);
+        if (!found) throw new Error(`OpenCode has no agent '${value}' here`);
+        this.persona = found;
+        if (this.mode === PLAN_MODE) return;
+        await this.queueAgentSwitch(client, session);
         return;
       }
       case 'model': {
@@ -1517,6 +1744,9 @@ export class OpenCodeDriver implements Driver {
    *  catalog that placed them (it fills in their models). */
   private placed: Placement[] = [];
   private catalog: Catalog = EMPTY_CATALOG;
+  /** When the server's own directory was first booted, which is when its
+   *  global agents started loading. */
+  private personasBootedAt?: number;
   /** The placements the running server was started with: their
    *  fingerprint, and the providers they made. */
   private served = providersFingerprint([]);
@@ -1713,6 +1943,9 @@ export class OpenCodeDriver implements Driver {
       modes: OPENCODE_MODES,
       efforts: [],
       defaultMode: DEFAULT_MODE,
+      // Every OpenCode session runs as one of its primary agents; `build` is
+      // the one it uses when the phone names none.
+      defaultPersona: BUILD_AGENT,
       // Usage is the session's cost. Provider profiles add models to the
       // server this driver starts; sessions are never bound to one.
       supports: {
@@ -1729,6 +1962,8 @@ export class OpenCodeDriver implements Driver {
         // Through the server's own API, so a key or a sign-in reaches a
         // running server without the restart a provider profile costs.
         accounts: true,
+        // Its own primary agents: the named configurations a session runs as.
+        personas: true,
       },
       credentials: [],
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
@@ -1756,6 +1991,19 @@ export class OpenCodeDriver implements Driver {
    *  it posts chat completions. */
   async checkProvider(provider: ProviderBinding, model: string): Promise<boolean | undefined> {
     return this.options.providerHttp ? checkToken(OPENAI_API, provider, model, this.options.providerHttp.post) : undefined;
+  }
+
+  /** The personas of the whole machine: the selectable agents in the
+   *  server's own directory, which is its built-ins plus every global
+   *  agent. A new session can start as any of them, wherever it runs. */
+  async listPersonas(): Promise<Persona[]> {
+    if (!this.clientPromise) return [];
+    const client = await this.clientPromise;
+    // `agent.list` alone does not boot the server's own directory: ask for
+    // it first, or only the built-ins answer.
+    this.personasBootedAt ??= Date.now();
+    await client.location.get().catch(() => undefined);
+    return listSelectablePersonas(client, undefined, this.personasBootedAt + PERSONA_LOAD_MS);
   }
 
   async listProviderModels(baseUrl: string, token: string): Promise<EndpointModel[]> {

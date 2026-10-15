@@ -34,6 +34,7 @@ pub fn alpha() -> AgentInfo {
         efforts: vec![choice("low"), choice("high")],
         default_mode: Some("ask".into()),
         default_effort: Some("high".into()),
+        default_persona: None,
         supports: AgentSupports { models: true, usage: true, providers: true, interrupt: true, commands: true, plugins: true, mcp: true, tasks: true, permission_rules: true, accounts: true, ..Default::default() },
         credentials: vec![CredentialSpec { id: "alpha_key".into(), label: "Alpha key".into(), env_var: Some("ALPHA_KEY".into()) }],
         unavailable_reason: None,
@@ -51,6 +52,7 @@ pub fn beta() -> AgentInfo {
         efforts: vec![],
         default_mode: Some("ask".into()),
         default_effort: None,
+        default_persona: None,
         supports: AgentSupports { models: true, ..Default::default() },
         credentials: vec![],
         unavailable_reason: None,
@@ -65,6 +67,17 @@ pub fn gamma() -> AgentInfo {
         id: "gamma".into(),
         display_name: "Gamma".into(),
         unavailable_reason: Some("Gamma is not configured on this machine.".into()),
+        ..beta()
+    }
+}
+
+/// "persona": an agent whose own named configurations a session can run as.
+pub fn persona() -> AgentInfo {
+    AgentInfo {
+        id: "persona".into(),
+        display_name: "Persona".into(),
+        default_persona: Some("build".into()),
+        supports: AgentSupports { models: true, personas: true, ..Default::default() },
         ..beta()
     }
 }

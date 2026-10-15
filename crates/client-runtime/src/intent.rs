@@ -17,7 +17,7 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
-    AccountActionMsg, AccountsRequestMsg, AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg,
+    AccountActionMsg, AccountsRequestMsg, AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg, PersonasRequestMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
     StopTaskMsg,
@@ -217,6 +217,7 @@ pub enum Intent {
         mode: String,
         effort: String,
         model: String,
+        persona: String,
     },
 
     // --- session commands ---
@@ -275,6 +276,9 @@ pub enum Intent {
         mode: Option<String>,
         effort: Option<String>,
         model: Option<String>,
+        /// The persona to run as; one the session's directory lacks leaves
+        /// the agent's default (and the session says so).
+        persona: Option<String>,
         provider_id: Option<String>,
     },
     RefreshSessions {
@@ -294,6 +298,13 @@ pub enum Intent {
     RequestCommands {
         machine: String,
         session_id: String,
+    },
+    /// Ask for `agent`'s personas: those `session_id` can switch to, or
+    /// without one those a new session can start as anywhere on the machine.
+    RequestPersonas {
+        machine: String,
+        agent: String,
+        session_id: Option<String>,
     },
     /// Ask for an agent's plugins on a machine; with `available`, also what
     /// its marketplaces offer.
@@ -597,8 +608,8 @@ pub fn apply(
                 r.persist(StoreId::Machines);
             }
         }
-        Intent::SetAgentDefaults { machine, agent, mode, effort, model } => {
-            if stores.machines.set_agent_defaults(&machine, &agent, AgentDefaults { mode, effort, model }) {
+        Intent::SetAgentDefaults { machine, agent, mode, effort, model, persona } => {
+            if stores.machines.set_agent_defaults(&machine, &agent, AgentDefaults { mode, effort, model, persona }) {
                 r.persist(StoreId::Machines);
             }
         }
@@ -717,6 +728,7 @@ pub fn apply(
             mode,
             effort,
             model,
+            persona,
             provider_id,
         } => r.send(
             &machine,
@@ -725,6 +737,7 @@ pub fn apply(
                 mode,
                 effort,
                 model,
+                persona,
                 cwd,
                 create_cwd,
                 provider_id,
@@ -761,6 +774,9 @@ pub fn apply(
                 session_id,
             }),
         ),
+        Intent::RequestPersonas { machine, agent, session_id } => {
+            r.send(&machine, PhoneToBridge::PersonasRequest(PersonasRequestMsg { agent, session_id }))
+        }
         Intent::RequestPlugins { machine, agent, available } => r.send(
             &machine,
             PhoneToBridge::PluginsRequest(PluginsRequestMsg { agent, available }),
@@ -1208,6 +1224,7 @@ mod tests {
                 mode: None,
                 effort: None,
                 model: None,
+                persona: None,
                 context_window: None,
                 context_percentage: None,
                 committed: None,
@@ -1264,6 +1281,7 @@ mod tests {
                 mode: None,
                 effort: None,
                 model: None,
+                persona: None,
                 context_window: None,
                 context_percentage: None,
                 committed: None,
@@ -1609,6 +1627,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn personas_are_asked_for_a_session_or_the_whole_machine() {
+        let (mut s, kp) = stores().await;
+        for session_id in [Some("s1".to_string()), None] {
+            let out = apply(
+                &mut s,
+                Intent::RequestPersonas { machine: "m".into(), agent: "opencode".into(), session_id: session_id.clone() },
+                &kp,
+                ctx(),
+            );
+            assert!(matches!(
+                out.sends.as_slice(),
+                [Send { msg: PhoneToBridge::PersonasRequest(m), .. }] if m.agent == "opencode" && m.session_id == session_id
+            ));
+        }
+    }
+
+    #[tokio::test]
     async fn machine_relays_and_new_session_defaults_are_set_per_machine() {
         let (mut s, kp) = stores().await;
         s.machines.register_machine("m", "laptop", None, None, &["wss://a.example".to_string()]);
@@ -1634,6 +1669,7 @@ mod tests {
                 mode: "build".into(),
                 effort: String::new(),
                 model: "gpt".into(),
+                persona: "review".into(),
             },
             &kp,
             ctx(),
@@ -1642,6 +1678,7 @@ mod tests {
         let m = s.machines.machine("m").unwrap();
         assert_eq!(m.default_agent.as_deref(), Some("opencode"));
         assert_eq!(m.agent_defaults["opencode"].model, "gpt");
+        assert_eq!(m.agent_defaults["opencode"].persona, "review");
     }
 
     #[tokio::test]

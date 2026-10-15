@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use protocol::common::{
     AccountAction, AgentAccount, AgentInstall, AgentStyle, AgentSupports, AvailablePlugin, InstalledPlugin, McpAction, McpServerInfo, McpServerSpec, McpTransport,
-    OptionChoice, OutputEntry, PartialKind, PermissionOption, PermissionRule, PluginAction, PluginMarketplace, ProviderModel,
+    OptionChoice, OutputEntry, PartialKind, PermissionOption, PermissionRule, Persona, PluginAction, PluginMarketplace, ProviderModel,
     QuestionOption, SessionMcpServer, SessionOption, SignInAttempt, SignInStatus, Subagent, ToolKind, UsageData,
 };
 use protocol::events::{ModelEntry, SlashCommand};
@@ -53,6 +53,10 @@ pub struct AgentInfo {
     /// The effort a session runs at when none is chosen; one of `efforts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// The [`Persona`] a session runs as when none is chosen (agents with
+    /// `supports.personas`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_persona: Option<String>,
     #[serde(default)]
     pub supports: AgentSupports,
     #[serde(default)]
@@ -204,6 +208,11 @@ pub struct StartSession {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The persona to run the session as (agents with `supports.personas`).
+    /// One the agent does not have leaves its default, which the session
+    /// then reports in `info.persona`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
     /// The agent's own conversation id to continue (from an earlier
     /// `info.nativeSessionId`); absent = start a fresh conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,6 +261,10 @@ pub enum SessionEvent {
         /// from that message and over the topic it asks the agent for.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// The persona the session runs as, when it changed — chosen, or
+        /// fallen back to the agent's default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persona: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[specta(type = Option<specta_typescript::Number>)]
         context_window: Option<u64>,
@@ -452,6 +465,15 @@ pub enum BridgeMessage {
     /// The slash commands the session understands now (they can change
     /// while it runs: plugins, skills). Reply: `commands`.
     ListCommands { session_id: String },
+    /// The personas of an agent with `supports.personas` (its own named
+    /// configurations a session can run as): those the session `session_id`
+    /// can switch to, or — without a session — those of the whole machine,
+    /// which a new session can start as anywhere. Reply: `personas`.
+    ListPersonas {
+        agent: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
     /// The agent's plugins and marketplaces; with `available`, also what the
     /// marketplaces offer. Reply: `plugins`.
     ListPlugins {
@@ -588,6 +610,9 @@ pub enum HostMessage {
     },
     /// Reply to `list-commands`.
     Commands { commands: Vec<SlashCommand> },
+    /// Reply to `list-personas`. An empty list is a real answer (the agent
+    /// has none here), never an error; the bridge says why when it is empty.
+    Personas { personas: Vec<Persona> },
     /// Reply to `list-plugins` and `plugin-action` (the fields mean what
     /// they mean on the phone wire's `plugins`).
     Plugins {

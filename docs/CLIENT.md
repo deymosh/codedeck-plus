@@ -70,7 +70,7 @@ pair-ack named, editable on the machine's settings page — and the transport
 dials the union of them (plus a pairing candidate's). A command is published
 only to its machine's relays. A phone with nothing paired dials nothing. The
 defaults a new session starts with (the agent, and per agent its mode,
-effort and model) are kept per machine too; everything else in Settings
+effort, model and persona) are kept per machine too; everything else in Settings
 (appearance, notifications, stay connected, Orbot, quick prompts, uploads)
 is the phone's own, with the log viewer and the account last.
 

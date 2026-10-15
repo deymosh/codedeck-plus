@@ -490,7 +490,7 @@ mod tests {
         a.pair("m1", "Work");
         a.machines.set_direct_endpoints("m1", vec!["wss://laptop.tailnet:7447".into()]);
         a.machines.set_default_agent("m1", Some("opencode".into()));
-        a.machines.set_agent_defaults("m1", "claude", AgentDefaults { mode: "plan".into(), effort: String::new(), model: String::new() });
+        a.machines.set_agent_defaults("m1", "claude", AgentDefaults { mode: "plan".into(), ..Default::default() });
         // A heartbeat's worth of data the bridge would send again.
         a.machines.machines.get_mut("m1").unwrap().folders = vec!["repo".into()];
         a.prompts.prompts = vec![QuickPrompt { id: "q".into(), label: "Go".into(), text: "Continue".into() }];

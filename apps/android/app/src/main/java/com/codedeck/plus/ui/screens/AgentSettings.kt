@@ -63,6 +63,7 @@ fun AgentSettingsContent(
         if (agent.supportsAccounts) dispatch(UniffiIntent.RequestAccounts(machine.pubkeyHex, agentId, all = false))
         if (agent.supportsPlugins) dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, agentId, available = false))
         if (agent.supportsMcp) dispatch(UniffiIntent.RequestMcp(machine.pubkeyHex, agentId))
+        if (agent.supportsPersonas) dispatch(UniffiIntent.RequestPersonas(machine.pubkeyHex, agentId, sessionId = null))
     }
     var confirmRemove by remember(machine.pubkeyHex, agentId) { mutableStateOf(false) }
 
@@ -85,7 +86,7 @@ fun AgentSettingsContent(
         }
         if (!ready) return@Page
 
-        if (agent.supportsModels || agent.modes.isNotEmpty() || agent.efforts.isNotEmpty()) {
+        if (agent.supportsModels || agent.supportsPersonas || agent.modes.isNotEmpty() || agent.efforts.isNotEmpty()) {
             Group(title = "New sessions", footer = "What a new session starts with. You can still change it when you start one.") {
                 AgentDefaultsRows(machine, agent, dispatch)
             }
@@ -162,15 +163,21 @@ private fun AgentPagesGroup(
 
 private fun countOf(n: Int, one: String, many: String): String = "$n ${if (n == 1) one else many}"
 
-/** The model, mode and effort a new session of [agent] starts with — each agent has its own. */
+/** The model, agent, mode and effort a new session of [agent] starts with — each agent has its own. */
 @Composable
 private fun GroupScope.AgentDefaultsRows(machine: UniffiMachineSummary, agent: UniffiAgent, dispatch: (UniffiIntent) -> Unit) {
     val current = machine.agentDefaults.firstOrNull { it.agent == agent.id }
     val mode = current?.mode.orEmpty()
     val effort = current?.effort.orEmpty()
     val model = current?.model.orEmpty()
-    fun set(mode: String = current?.mode.orEmpty(), effort: String = current?.effort.orEmpty(), model: String = current?.model.orEmpty()) {
-        dispatch(UniffiIntent.SetAgentDefaults(machine.pubkeyHex, agent.id, mode, effort, model))
+    val persona = current?.persona.orEmpty()
+    fun set(
+        mode: String = current?.mode.orEmpty(),
+        effort: String = current?.effort.orEmpty(),
+        model: String = current?.model.orEmpty(),
+        persona: String = current?.persona.orEmpty(),
+    ) {
+        dispatch(UniffiIntent.SetAgentDefaults(machine.pubkeyHex, agent.id, mode, effort, model, persona))
     }
     val models = machine.models.firstOrNull { it.agent == agent.id }
     val modelList = models?.models.orEmpty()
@@ -188,6 +195,26 @@ private fun GroupScope.AgentDefaultsRows(machine: UniffiMachineSummary, agent: U
                 },
                 selected = model,
                 onSelect = { set(model = it) },
+            )
+        }
+    }
+    if (agent.supportsPersonas) {
+        // The machine-wide ones: a project may add its own, picked in the
+        // session. A persona a session's project lacks starts it as the
+        // default instead, and the session says so.
+        val listed = machine.personas.firstOrNull { it.agent == agent.id }
+        val personas = listed?.personas.orEmpty()
+        if (divide()) Divider()
+        ValueRow("Agent", subtitle = listed?.error?.takeIf { personas.isEmpty() }) {
+            SelectField(
+                options = buildList {
+                    add(PickerOption("", defaultOptionLabel(agent.defaultPersona, personas.map { it.id to it.label })))
+                    addAll(personas.filter { it.id != agent.defaultPersona }.map { PickerOption(it.id, it.label) })
+                    // A kept choice the machine no longer lists stays visible, to see or clear.
+                    if (persona.isNotEmpty() && personas.none { it.id == persona }) add(PickerOption(persona, persona))
+                },
+                selected = persona,
+                onSelect = { set(persona = it) },
             )
         }
     }

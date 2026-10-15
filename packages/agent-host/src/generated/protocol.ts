@@ -195,6 +195,11 @@ export type AgentInfo_Deserialize = {
 	defaultMode?: string | null,
 	/**  The effort a session runs at when none is chosen; one of `efforts`. */
 	defaultEffort?: string | null,
+	/**
+	 *  The [`Persona`] a session runs as when none is chosen (agents with
+	 *  `supports.personas`).
+	 */
+	defaultPersona?: string | null,
 	supports?: AgentSupports,
 	credentials?: CredentialSpec_Deserialize[],
 	/**
@@ -229,6 +234,11 @@ export type AgentInfo_Serialize = {
 	defaultMode?: string | null,
 	/**  The effort a session runs at when none is chosen; one of `efforts`. */
 	defaultEffort?: string | null,
+	/**
+	 *  The [`Persona`] a session runs as when none is chosen (agents with
+	 *  `supports.personas`).
+	 */
+	defaultPersona?: string | null,
 	supports: AgentSupports,
 	credentials: CredentialSpec_Serialize[],
 	/**
@@ -460,6 +470,13 @@ export type AgentSupports = {
 	 *  sign-in to a subscription — without restarting it.
 	 */
 	accounts?: boolean,
+	/**
+	 *  The agent has named configurations of its own a session can run as
+	 *  (OpenCode's primary agents): `personas-request` lists them, the
+	 *  `persona` session option picks one, and `create-session` may name
+	 *  one to start with.
+	 */
+	personas?: boolean,
 };
 
 /**  A plugin one of the known marketplaces offers and that is not installed. */
@@ -558,6 +575,16 @@ export type BridgeMessage_Deserialize =
  */
 { kind: "list-commands"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  The personas of an agent with `supports.personas` (its own named
+ *  configurations a session can run as): those the session `session_id`
+ *  can switch to, or — without a session — those of the whole machine,
+ *  which a new session can start as anywhere. Reply: `personas`.
+ */
+{ kind: "list-personas"; payload: {
+	agent: string,
+	sessionId?: string | null,
 } } | 
 /**
  *  The agent's plugins and marketplaces; with `available`, also what the
@@ -774,6 +801,16 @@ export type BridgeMessage_Serialize =
  */
 { kind: "list-commands"; payload: {
 	sessionId: string,
+} } | 
+/**
+ *  The personas of an agent with `supports.personas` (its own named
+ *  configurations a session can run as): those the session `session_id`
+ *  can switch to, or — without a session — those of the whole machine,
+ *  which a new session can start as anywhere. Reply: `personas`.
+ */
+{ kind: "list-personas"; payload: {
+	agent: string,
+	sessionId?: string | null,
 } } | 
 /**
  *  The agent's plugins and marketplaces; with `available`, also what the
@@ -1297,6 +1334,13 @@ export type HostMessage_Deserialize =
 	commands: SlashCommand_Deserialize[],
 } } | 
 /**
+ *  Reply to `list-personas`. An empty list is a real answer (the agent
+ *  has none here), never an error; the bridge says why when it is empty.
+ */
+{ kind: "personas"; payload: {
+	personas: Persona_Deserialize[],
+} } | 
+/**
  *  Reply to `list-plugins` and `plugin-action` (the fields mean what
  *  they mean on the phone wire's `plugins`).
  */
@@ -1424,6 +1468,13 @@ export type HostMessage_Serialize =
 /**  Reply to `list-commands`. */
 { kind: "commands"; payload: {
 	commands: SlashCommand_Serialize[],
+} } | 
+/**
+ *  Reply to `list-personas`. An empty list is a real answer (the agent
+ *  has none here), never an error; the bridge says why when it is empty.
+ */
+{ kind: "personas"; payload: {
+	personas: Persona_Serialize[],
 } } | 
 /**
  *  Reply to `list-plugins` and `plugin-action` (the fields mean what
@@ -1822,6 +1873,48 @@ export type PermissionRule = {
 	createdAt: number,
 };
 
+/**
+ *  One of an agent's own named configurations a session can run as — who
+ *  runs it (its instructions, model, what it may never do), where the mode
+ *  is how much it may do without asking. Lists are the agent's; ids are
+ *  its own names for them.
+ */
+export type Persona = Persona_Serialize | Persona_Deserialize;
+
+/**
+ *  One of an agent's own named configurations a session can run as — who
+ *  runs it (its instructions, model, what it may never do), where the mode
+ *  is how much it may do without asking. Lists are the agent's; ids are
+ *  its own names for them.
+ */
+export type Persona_Deserialize = {
+	id: string,
+	label: string,
+	description?: string | null,
+	/**
+	 *  `#RRGGBB`, when the agent gives the persona a colour; anything else
+	 *  is the client's to ignore.
+	 */
+	color?: string | null,
+};
+
+/**
+ *  One of an agent's own named configurations a session can run as — who
+ *  runs it (its instructions, model, what it may never do), where the mode
+ *  is how much it may do without asking. Lists are the agent's; ids are
+ *  its own names for them.
+ */
+export type Persona_Serialize = {
+	id: string,
+	label: string,
+	description?: string | null,
+	/**
+	 *  `#RRGGBB`, when the agent gives the persona a colour; anything else
+	 *  is the client's to ignore.
+	 */
+	color?: string | null,
+};
+
 export type PlanApprovalRequest = PlanApprovalRequest_Serialize | PlanApprovalRequest_Deserialize;
 
 export type PlanApprovalRequest_Deserialize = {
@@ -2049,7 +2142,7 @@ export type SessionEvent = SessionEvent_Serialize | SessionEvent_Deserialize;
  */
 export type SessionEvent_Deserialize = 
 /**  The agent came up and accepts prompts. Sent once per `start-session`. */
-({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
+({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
 /**  Session facts changed. Only the fields that changed are set. */
 ({ type: "info"; 
 /**  The agent's own conversation id — the `resume` target. */
@@ -2066,11 +2159,16 @@ mode?: string | null;
  *  after its first message). It wins over the title the bridge takes
  *  from that message and over the topic it asks the agent for.
  */
-title?: string | null; contextWindow?: number | null; 
+title?: string | null; 
+/**
+ *  The persona the session runs as, when it changed — chosen, or
+ *  fallen back to the agent's default.
+ */
+persona?: string | null; contextWindow?: number | null; 
 /**  0–100. */
 contextPercentage?: number | null }) & { entries?: never; entryType?: never; error?: never; key?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never } | 
 /**  Transcript entries, in order. The bridge assigns their seqs. */
-({ type: "entries"; entries: OutputEntry_Deserialize[] }) & { contextPercentage?: never; contextWindow?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
+({ type: "entries"; entries: OutputEntry_Deserialize[] }) & { contextPercentage?: never; contextWindow?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
 /**
  *  Text the agent is still writing: part `key` from `offset` on (UTF-16
  *  code units). The driver coalesces its SDK's deltas and sends at most
@@ -2078,7 +2176,7 @@ contextPercentage?: number | null }) & { entries?: never; entryType?: never; err
  *  the entry that completes the part carries `part: key`. Never stored or
  *  numbered.
  */
-({ type: "partial"; key: string; entryType: PartialKind; subagent?: Subagent_Deserialize | null; offset: number; text: string }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; subagent?: never; text?: never; title?: never } | 
+({ type: "partial"; key: string; entryType: PartialKind; subagent?: Subagent_Deserialize | null; offset: number; text: string }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; persona?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; resumeLost?: never; subagent?: never; text?: never; title?: never } | 
 /**
  *  The session is gone. Absent `error` = it ended normally. The host
  *  forgets the session after sending this.
@@ -2088,7 +2186,7 @@ contextPercentage?: number | null }) & { entries?: never; entryType?: never; err
  *  The agent could not find the `resume` conversation, so continuing
  *  it is impossible; a new start must be fresh.
  */
-resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; state?: never; subagent?: never; text?: never; title?: never };
+resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; state?: never; subagent?: never; text?: never; title?: never };
 
 /**
  *  Something a running session reports. The host translates its agent's own
@@ -2096,7 +2194,7 @@ resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; en
  */
 export type SessionEvent_Serialize = 
 /**  The agent came up and accepts prompts. Sent once per `start-session`. */
-({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
+({ type: "ready" }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
 /**  Session facts changed. Only the fields that changed are set. */
 ({ type: "info"; 
 /**  The agent's own conversation id — the `resume` target. */
@@ -2113,11 +2211,16 @@ mode?: string | null;
  *  after its first message). It wins over the title the bridge takes
  *  from that message and over the topic it asks the agent for.
  */
-title?: string | null; contextWindow?: number | null; 
+title?: string | null; 
+/**
+ *  The persona the session runs as, when it changed — chosen, or
+ *  fallen back to the agent's default.
+ */
+persona?: string | null; contextWindow?: number | null; 
 /**  0–100. */
 contextPercentage?: number | null }) & { entries?: never; entryType?: never; error?: never; key?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never } | 
 /**  Transcript entries, in order. The bridge assigns their seqs. */
-({ type: "entries"; entries: OutputEntry_Serialize[] }) & { contextPercentage?: never; contextWindow?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
+({ type: "entries"; entries: OutputEntry_Serialize[] }) & { contextPercentage?: never; contextWindow?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; resumeLost?: never; state?: never; subagent?: never; text?: never; title?: never } | 
 /**
  *  Text the agent is still writing: part `key` from `offset` on (UTF-16
  *  code units). The driver coalesces its SDK's deltas and sends at most
@@ -2125,7 +2228,7 @@ contextPercentage?: number | null }) & { entries?: never; entryType?: never; err
  *  the entry that completes the part carries `part: key`. Never stored or
  *  numbered.
  */
-({ type: "partial"; key: string; entryType: PartialKind; subagent?: Subagent_Serialize | null; offset: number; text: string }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; resumeLost?: never; subagent?: never; text?: never; title?: never } | 
+({ type: "partial"; key: string; entryType: PartialKind; subagent?: Subagent_Serialize | null; offset: number; text: string }) & { contextPercentage?: never; contextWindow?: never; entries?: never; error?: never; mode?: never; model?: never; nativeSessionId?: never; persona?: never; resumeLost?: never; state?: never; title?: never } | ({ type: "turn"; state: TurnState }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; error?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; resumeLost?: never; subagent?: never; text?: never; title?: never } | 
 /**
  *  The session is gone. Absent `error` = it ended normally. The host
  *  forgets the session after sending this.
@@ -2135,7 +2238,7 @@ contextPercentage?: number | null }) & { entries?: never; entryType?: never; err
  *  The agent could not find the `resume` conversation, so continuing
  *  it is impossible; a new start must be fresh.
  */
-resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; state?: never; subagent?: never; text?: never; title?: never };
+resumeLost?: boolean }) & { contextPercentage?: never; contextWindow?: never; entries?: never; entryType?: never; key?: never; mode?: never; model?: never; nativeSessionId?: never; offset?: never; persona?: never; state?: never; subagent?: never; text?: never; title?: never };
 
 /**  One MCP server of a running session. */
 export type SessionMcpServer = SessionMcpServer_Serialize | SessionMcpServer_Deserialize;
@@ -2162,7 +2265,9 @@ export type SessionMcpServer_Serialize = {
  *  The per-session options `set-option` changes and `option-confirmed`
  *  reports. Values are agent-defined strings (see [`AgentDescriptor`]).
  */
-export type SessionOption = "mode" | "effort" | "model";
+export type SessionOption = "mode" | "effort" | "model" | 
+/**  A [`Persona`] id (agents with `supports.personas`). */
+"persona";
 
 /**
  *  A sign-in under way: open `url` (on any device), and do what
@@ -2282,6 +2387,12 @@ export type StartSession_Deserialize = {
 	effort?: string | null,
 	model?: string | null,
 	/**
+	 *  The persona to run the session as (agents with `supports.personas`).
+	 *  One the agent does not have leaves its default, which the session
+	 *  then reports in `info.persona`.
+	 */
+	persona?: string | null,
+	/**
 	 *  The agent's own conversation id to continue (from an earlier
 	 *  `info.nativeSessionId`); absent = start a fresh conversation.
 	 */
@@ -2307,6 +2418,12 @@ export type StartSession_Serialize = {
 	mode?: string | null,
 	effort?: string | null,
 	model?: string | null,
+	/**
+	 *  The persona to run the session as (agents with `supports.personas`).
+	 *  One the agent does not have leaves its default, which the session
+	 *  then reports in `info.persona`.
+	 */
+	persona?: string | null,
 	/**
 	 *  The agent's own conversation id to continue (from an earlier
 	 *  `info.nativeSessionId`); absent = start a fresh conversation.

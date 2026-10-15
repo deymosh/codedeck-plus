@@ -25,7 +25,7 @@ use protocol::common::{
 };
 use protocol::common::{McpAction, PluginAction};
 use protocol::events::{
-    AgentAckMsg, BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
+    AgentAckMsg, BridgeToPhone, CommandsMsg, ModelsMsg, OptionConfirmedMsg, PersonasMsg, PluginAckMsg, PluginsMsg, SessionFailedMsg,
     PartialMsg, SessionReadyMsg, UsageMsg,
 };
 
@@ -52,6 +52,9 @@ pub(crate) enum HostCall {
     ListModels { agent: String },
     GetUsage { session_id: String },
     ListCommands { session_id: String },
+    /// An agent's personas (agents with `supports.personas`): those a
+    /// session can switch to, or — with no session — the whole machine's.
+    ListPersonas { agent: String, session_id: Option<String> },
     ListPlugins { agent: String },
     PluginAction { agent: String, action: PluginAction, target: String },
     ListMcp { agent: String },
@@ -83,6 +86,7 @@ struct InfoUpdate {
     model: Option<String>,
     mode: Option<String>,
     title: Option<String>,
+    persona: Option<String>,
     context_window: Option<u64>,
     context_percentage: Option<f64>,
 }
@@ -256,6 +260,7 @@ impl Engine {
                 }
             }
             HostCall::ListCommands { session_id } => self.on_commands_reply(session_id, result),
+            HostCall::ListPersonas { agent, session_id } => self.on_personas_reply(agent, session_id, result),
             HostCall::ListPlugins { agent } => self.on_plugins_reply(agent, result),
             HostCall::PluginAction { agent, action, target } => self.on_plugin_action_reply(agent, action, target, result),
             HostCall::ListMcp { agent } => self.on_mcp_reply(agent, result),
@@ -369,6 +374,7 @@ impl Engine {
                     SessionOption::Mode => &mut session.rec.mode,
                     SessionOption::Effort => &mut session.rec.effort,
                     SessionOption::Model => &mut session.rec.model,
+                    SessionOption::Persona => &mut session.rec.persona,
                 };
                 *field = Some(value.clone());
                 self.registry_dirty |= session.listed;
@@ -380,7 +386,7 @@ impl Engine {
                 // A refused mode confirms nothing (the phone keeps what it
                 // knew); effort and model confirm the value still in force.
                 match option {
-                    SessionOption::Mode => None,
+                    SessionOption::Mode | SessionOption::Persona => None,
                     SessionOption::Effort => session.rec.effort.clone(),
                     SessionOption::Model => session.rec.model.clone(),
                 }
@@ -427,6 +433,21 @@ impl Engine {
             log::info!("[Engine] commands-request for {session_id}: {error}");
         }
         self.publish_all(BridgeToPhone::Commands(CommandsMsg { session_id, commands, error }));
+    }
+
+    /// Like `models`, an empty list goes out with the reason.
+    fn on_personas_reply(&mut self, agent: String, session_id: Option<String>, result: Result<HostMessage, String>) {
+        let name = self.catalog.get(&agent).map_or_else(|| agent.clone(), |a| a.display_name.clone());
+        let (personas, error) = match result {
+            Ok(HostMessage::Personas { personas }) if !personas.is_empty() => (personas, None),
+            Ok(HostMessage::Personas { .. }) => (Vec::new(), Some(format!("{name} lists no personas."))),
+            Ok(_) => (Vec::new(), Some(format!("{name} gave no persona list."))),
+            Err(err) => (Vec::new(), Some(format!("Could not list the personas: {err}"))),
+        };
+        if let Some(error) = &error {
+            log::info!("[Engine] personas-request for {agent}: {error}");
+        }
+        self.publish_all(BridgeToPhone::Personas(PersonasMsg { agent, session_id, personas, error }));
     }
 
     fn on_plugins_reply(&mut self, agent: String, result: Result<HostMessage, String>) {
@@ -547,6 +568,10 @@ impl Engine {
             mode: rec.mode.clone(),
             effort: rec.effort.clone(),
             model: rec.model.clone(),
+            // What the agent last reported wins: it is what the session
+            // actually runs as. Until it has said, a create's request is
+            // carried, so a restart before the agent answered resumes on it.
+            persona: rec.persona.clone().or_else(|| run.pending_persona.clone()),
             // A new session starts a fresh conversation; a resumed or
             // restarted one continues the agent's, when it has one.
             resume: match run.start_kind {
@@ -577,8 +602,8 @@ impl Engine {
         }
         match event {
             SessionEvent::Ready {} => self.on_ready(session_id),
-            SessionEvent::Info { native_session_id, model, mode, title, context_window, context_percentage } => {
-                let info = InfoUpdate { native_session_id, model, mode, title, context_window, context_percentage };
+            SessionEvent::Info { native_session_id, model, mode, title, persona, context_window, context_percentage } => {
+                let info = InfoUpdate { native_session_id, model, mode, title, persona, context_window, context_percentage };
                 self.on_info(session_id, info);
             }
             SessionEvent::Entries { entries } => self.on_entries(session_id, entries),
@@ -623,11 +648,11 @@ impl Engine {
         self.list_dirty = true;
         log::info!("[Engine] Session {session_id} ready");
         let info = self.remote_info(&self.sessions[session_id]);
-        self.publish_all(BridgeToPhone::SessionReady(SessionReadyMsg { pending_id: session_id.to_string(), session: info }));
+        self.publish_all(BridgeToPhone::SessionReady(SessionReadyMsg { pending_id: session_id.to_string(), session: Box::new(info) }));
     }
 
     fn on_info(&mut self, session_id: &str, info: InfoUpdate) {
-        let InfoUpdate { native_session_id, model, mode, title, context_window, context_percentage } = info;
+        let InfoUpdate { native_session_id, model, mode, title, persona, context_window, context_percentage } = info;
         let Some(session) = self.sessions.get_mut(session_id) else { return };
         let title = title.and_then(|t| title_from(&t));
         if title.is_some() {
@@ -648,6 +673,8 @@ impl Engine {
         set(&mut rec.title, title);
         let mode_changed = mode.is_some() && rec.mode != mode;
         set(&mut rec.mode, mode.clone());
+        let persona_changed = persona.is_some() && rec.persona != persona;
+        set(&mut rec.persona, persona.clone());
         if context_window.is_some_and(|w| w > 0) && rec.context_window != context_window {
             rec.context_window = context_window;
             changed = true;
@@ -669,6 +696,16 @@ impl Engine {
             self.publish_all(BridgeToPhone::OptionConfirmed(OptionConfirmedMsg {
                 session_id: session_id.to_string(),
                 option: SessionOption::Mode,
+                value,
+            }));
+        }
+        // The agent said which persona it runs as — the one a create asked
+        // for, or its own default when that one does not exist here. A
+        // client that asked for another one learns it this way.
+        if let (true, Some(value)) = (persona_changed, persona) {
+            self.publish_all(BridgeToPhone::OptionConfirmed(OptionConfirmedMsg {
+                session_id: session_id.to_string(),
+                option: SessionOption::Persona,
                 value,
             }));
         }

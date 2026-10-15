@@ -107,6 +107,29 @@ pub struct AgentSupports {
     /// sign-in to a subscription — without restarting it.
     #[serde(default)]
     pub accounts: bool,
+    /// The agent has named configurations of its own a session can run as
+    /// (OpenCode's primary agents): `personas-request` lists them, the
+    /// `persona` session option picks one, and `create-session` may name
+    /// one to start with.
+    #[serde(default)]
+    pub personas: bool,
+}
+
+/// One of an agent's own named configurations a session can run as — who
+/// runs it (its instructions, model, what it may never do), where the mode
+/// is how much it may do without asking. Lists are the agent's; ids are
+/// its own names for them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Persona {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// `#RRGGBB`, when the agent gives the persona a colour; anything else
+    /// is the client's to ignore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// One rule an agent saved from an "always allow" answer: every later
@@ -614,6 +637,10 @@ pub struct AgentDescriptor {
     /// The effort a session runs at when none is chosen; one of `efforts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// The [`Persona`] a session runs as when none is chosen (agents with
+    /// `supports.personas`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_persona: Option<String>,
     #[serde(default)]
     pub supports: AgentSupports,
     /// Credentials this agent can use, with their current status.
@@ -797,6 +824,8 @@ pub enum SessionOption {
     Mode,
     Effort,
     Model,
+    /// A [`Persona`] id (agents with `supports.personas`).
+    Persona,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -819,6 +848,9 @@ pub struct RemoteSessionInfo {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The [`Persona`] the session runs as, once its agent has said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<specta_typescript::Number>)]
     pub context_window: Option<u64>,

@@ -434,6 +434,10 @@ impl<'a> Router<'a> {
                 self.stores.machines.apply_commands(machine, m);
                 r.persist(StoreId::Machines);
             }
+            BridgeToPhone::Personas(m) => {
+                self.stores.machines.apply_personas(machine, m);
+                r.persist(StoreId::Machines);
+            }
             BridgeToPhone::OptionConfirmed(m) => {
                 let value = m.value.clone();
                 let option = m.option;
@@ -443,6 +447,7 @@ impl<'a> Router<'a> {
                         SessionOption::Mode => info.mode = Some(value),
                         SessionOption::Effort => info.effort = Some(value),
                         SessionOption::Model => info.model = Some(value),
+                        SessionOption::Persona => info.persona = Some(value),
                     });
                 r.persist(StoreId::Machines);
             }
@@ -904,6 +909,7 @@ mod tests {
             mode: None,
             effort: None,
             model: None,
+            persona: None,
             context_window: None,
             context_percentage: None,
             committed: None,
@@ -1444,7 +1450,7 @@ mod tests {
                 MACHINE,
                 &BridgeToPhone::SessionReady(SessionReadyMsg {
                     pending_id: "s1".into(),
-                    session: info("s1", Some(SessionState::Idle), None),
+                    session: Box::new(info("s1", Some(SessionState::Idle), None)),
                 }),
             )
             .await;

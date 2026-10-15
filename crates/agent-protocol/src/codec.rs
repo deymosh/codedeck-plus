@@ -92,6 +92,7 @@ impl HostMessage {
             | Self::Models { .. }
             | Self::Usage { .. }
             | Self::Commands { .. }
+            | Self::Personas { .. }
             | Self::Plugins { .. }
             | Self::McpServers { .. }
             | Self::SessionMcp { .. }

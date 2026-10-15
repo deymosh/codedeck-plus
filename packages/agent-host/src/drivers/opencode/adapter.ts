@@ -109,6 +109,14 @@ export interface OpenCodeResumeLost {
   type: 'resume-lost';
 }
 
+/** The persona the session ran as is gone (its agent file was removed), or
+ *  the one it was asked for never existed here: it runs as Build now, which
+ *  the user must not learn only through the session quietly changing. */
+export interface OpenCodePersonaNotice {
+  type: 'persona-notice';
+  text: string;
+}
+
 /** Files the session changed, as OpenCode reports them (`session.diff`, or
  *  the file list of a finished step). */
 export interface OpenCodeDiff {
@@ -134,6 +142,7 @@ export type OpenCodeEvent =
   | OpenCodeError
   | OpenCodeStatus
   | OpenCodeResumeLost
+  | OpenCodePersonaNotice
   | OpenCodeDiff
   | OpenCodeQuestion
   | OpenCodeTask;
@@ -188,6 +197,8 @@ export function opencodeEventToEntries(event: OpenCodeEvent, ctx: TranslateConte
           "OpenCode's session was missing — starting a fresh conversation in the same workspace. The transcript is preserved, but the model does not remember earlier turns.",
         timestamp: ts,
       }];
+    case 'persona-notice':
+      return [{ entryType: 'notice', kind: 'other', text: event.text, timestamp: ts }];
     case 'diff':
       return event.files.flatMap((file) => {
         const diff = toDiffPayload(file);

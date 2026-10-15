@@ -80,6 +80,7 @@ impl Catalog {
                 efforts: a.efforts.clone(),
                 default_mode: a.default_mode.clone(),
                 default_effort: a.default_effort.clone(),
+                default_persona: a.default_persona.clone(),
                 supports: a.supports.clone(),
                 credentials: credentials(a),
                 install: a.install.clone(),

@@ -395,6 +395,7 @@ mod tests {
             mode: None,
             effort: None,
             model: None,
+            persona: None,
             context_window: None,
             context_percentage: None,
             committed: None,

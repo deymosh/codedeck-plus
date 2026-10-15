@@ -20,6 +20,7 @@ fn omega(install: AgentInstall) -> AgentInfo {
         efforts: vec![],
         default_mode: None,
         default_effort: None,
+        default_persona: None,
         supports: AgentSupports::default(),
         credentials: vec![],
         unavailable_reason: None,

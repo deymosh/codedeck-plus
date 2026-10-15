@@ -24,6 +24,7 @@ import type {
   OptionChoice,
   PermissionRequest,
   PermissionRule,
+  Persona,
   PlanOutcome,
   SignInAttempt,
   SignInStatus,
@@ -78,6 +79,10 @@ export interface DriverSession {
    *  catalog entry `supports.commands`. Asked every time the phone wants
    *  them, so a list that changes while the session runs is never stale. */
   listCommands?(): Promise<SlashCommand[]>;
+  /** The personas this session can run as now, for an agent whose catalog
+   *  entry `supports.personas`. Asked every time the phone wants them, so a
+   *  list that changes while the session runs is never stale. */
+  listPersonas?(): Promise<Persona[]>;
   /** The session's MCP servers and where each stands, for an agent whose
    *  catalog entry `supports.mcp`. */
   mcpStatus?(): Promise<SessionMcpState>;
@@ -182,6 +187,9 @@ export interface Driver {
    */
   startSession(params: StartSession, ctx: SessionContext): DriverSession;
   listModels(): Promise<{ models: ModelEntry[]; defaultModel?: string }>;
+  /** The personas of this agent on this machine, for one whose catalog entry
+   *  `supports.personas`: what a new session can start as anywhere. */
+  listPersonas?(): Promise<Persona[]>;
   /** Check a credential value with its provider: true/false, or undefined
    *  when it could not be checked. */
   checkCredential?(credential: string, value: string): Promise<boolean | undefined>;

@@ -189,6 +189,10 @@ pub enum UniffiIntent {
         mode: Option<String>,
         effort: Option<String>,
         model: Option<String>,
+        /// The persona to run as; one the session's directory lacks leaves
+        /// the agent's default.
+        #[uniffi(default = None)]
+        persona: Option<String>,
         provider_id: Option<String>,
     },
     /// Ask the bridge for `agent`'s live model list; the answer lands in the
@@ -208,6 +212,15 @@ pub enum UniffiIntent {
     RequestCommands {
         machine: String,
         session_id: String,
+    },
+    /// Ask for an agent's personas: with `session_id`, those that session can
+    /// switch to (they land in `UniffiSessionSummary.personas`); without, those
+    /// a new session can start as anywhere on the machine
+    /// (`UniffiMachineSummary.personas`).
+    RequestPersonas {
+        machine: String,
+        agent: String,
+        session_id: Option<String>,
     },
     /// Ask for an agent's plugins on a machine (with `available`, also what
     /// its marketplaces offer); the answer lands in
@@ -452,6 +465,7 @@ pub enum UniffiIntent {
         mode: String,
         effort: String,
         model: String,
+        persona: String,
     },
     /// Send a `pair-request` for a scanned/pasted `codedeck://pair` URL.
     BeginPairing {
@@ -532,6 +546,7 @@ impl TryFrom<UniffiIntent> for Intent {
                 mode,
                 effort,
                 model,
+                persona,
                 provider_id,
             } => Intent::CreateSession {
                 machine,
@@ -541,6 +556,7 @@ impl TryFrom<UniffiIntent> for Intent {
                 mode,
                 effort,
                 model,
+                persona,
                 provider_id,
             },
             UniffiIntent::RequestModels { machine, agent } => Intent::RequestModels { machine, agent },
@@ -563,6 +579,9 @@ impl TryFrom<UniffiIntent> for Intent {
             },
             UniffiIntent::RequestCommands { machine, session_id } => {
                 Intent::RequestCommands { machine, session_id }
+            }
+            UniffiIntent::RequestPersonas { machine, agent, session_id } => {
+                Intent::RequestPersonas { machine, agent, session_id }
             }
             UniffiIntent::RequestMcp { machine, agent } => Intent::RequestMcp { machine, agent },
             UniffiIntent::RequestPermissionRules { machine, agent } => Intent::RequestPermissionRules { machine, agent },
@@ -662,8 +681,8 @@ impl TryFrom<UniffiIntent> for Intent {
             }
             UniffiIntent::SetMachineRelays { machine, relays } => Intent::SetMachineRelays { machine, relays },
             UniffiIntent::SetDefaultAgent { machine, agent } => Intent::SetDefaultAgent { machine, agent },
-            UniffiIntent::SetAgentDefaults { machine, agent, mode, effort, model } => {
-                Intent::SetAgentDefaults { machine, agent, mode, effort, model }
+            UniffiIntent::SetAgentDefaults { machine, agent, mode, effort, model, persona } => {
+                Intent::SetAgentDefaults { machine, agent, mode, effort, model, persona }
             }
             UniffiIntent::BeginPairing { url, label } => Intent::BeginPairing { url, label },
             UniffiIntent::BeginManualPairing { npub, token, relays, label } => {

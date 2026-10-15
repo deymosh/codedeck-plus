@@ -31,7 +31,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use client_runtime::client_core::notifications::session_key_of;
 use client_runtime::client_core::stores::machines::{
-    AgentAccounts, AgentActionState, AgentMcp, AgentPermissionRules, AgentPlugins, SessionMcp,
+    AgentAccounts, AgentActionState, AgentMcp, AgentPermissionRules, AgentPlugins, PersonaList, SessionMcp,
 };
 use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
@@ -85,6 +85,10 @@ pub struct UniffiSessionSummary {
     /// Agent-defined mode / effort ids (see the agent's `modes` / `efforts`).
     pub mode: Option<String>,
     pub effort: Option<String>,
+    /// The persona the session runs as (`UniffiPersona.id`), once its agent
+    /// has said.
+    #[uniffi(default = None)]
+    pub persona: Option<String>,
     pub context_percentage: Option<f64>,
     pub context_window: Option<u64>,
     pub committed: Option<bool>,
@@ -102,6 +106,53 @@ pub struct UniffiSessionSummary {
     /// MCP servers — requested via `UniffiIntent::RequestSessionMcp`,
     /// absent until the bridge answers.
     pub mcp: Option<UniffiSessionMcp>,
+    /// The personas the session can switch to — requested via
+    /// `UniffiIntent::RequestPersonas`, absent until the bridge answers.
+    #[uniffi(default = None)]
+    pub personas: Option<UniffiPersonaList>,
+}
+
+/// One of an agent's own configurations a session runs as
+/// (`protocol::common::Persona`).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPersona {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    /// Its colour as ARGB, when the agent gives it a `#RRGGBB` one.
+    pub color: Option<u32>,
+}
+
+/// Personas as an agent last listed them, and why the last request got none
+/// (the list held before is kept).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiPersonaList {
+    pub personas: Vec<UniffiPersona>,
+    pub error: Option<String>,
+}
+
+/// One agent's machine-wide personas: those a new session can start as.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAgentPersonas {
+    pub agent: String,
+    pub personas: Vec<UniffiPersona>,
+    pub error: Option<String>,
+}
+
+fn to_uniffi_personas(list: &PersonaList) -> UniffiPersonaList {
+    UniffiPersonaList {
+        personas: list
+            .personas
+            .iter()
+            .map(|p| UniffiPersona {
+                id: p.id.clone(),
+                label: p.label.clone(),
+                description: p.description.clone(),
+                color: p.color.as_deref().and_then(argb),
+            })
+            .collect(),
+        error: list.error.clone(),
+    }
 }
 
 /// One MCP server of a running session. `status` is the wire's word:
@@ -366,6 +417,9 @@ pub struct UniffiAgent {
     pub default_mode: Option<String>,
     /// The effort a session runs at when none is chosen.
     pub default_effort: Option<String>,
+    /// The persona a session runs as when none is chosen.
+    #[uniffi(default = None)]
+    pub default_persona: Option<String>,
     pub supports_models: bool,
     pub supports_usage: bool,
     pub supports_providers: bool,
@@ -383,6 +437,10 @@ pub struct UniffiAgent {
     /// Provider keys and sign-ins can be connected from the phone
     /// (`RequestAccounts` / `AccountAction`), without restarting the agent.
     pub supports_accounts: bool,
+    /// Sessions can run as one of the agent's own configurations
+    /// (`RequestPersonas`, the `persona` option, `CreateSession.persona`).
+    #[uniffi(default = false)]
+    pub supports_personas: bool,
     pub credentials: Vec<UniffiCredentialStatus>,
     /// `ready` / `not_installed` / `installing` / `failed`; sessions start
     /// only on a `ready` agent.
@@ -517,6 +575,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>, style
         efforts: a.efforts.iter().map(to_uniffi_option_choice).collect(),
         default_mode: a.default_mode.clone(),
         default_effort: a.default_effort.clone(),
+        default_persona: a.default_persona.clone(),
         supports_models: a.supports.models,
         supports_usage: a.supports.usage,
         supports_providers: a.supports.providers,
@@ -527,6 +586,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>, style
         supports_mcp: a.supports.mcp,
         supports_permission_rules: a.supports.permission_rules,
         supports_accounts: a.supports.accounts,
+        supports_personas: a.supports.personas,
         supports_tasks: a.supports.tasks,
         credentials: a.credentials.iter().map(to_uniffi_credential_status).collect(),
         install_state: install_state.into(),
@@ -559,6 +619,10 @@ pub struct UniffiMachineSummary {
     pub plugins: Vec<UniffiAgentPlugins>,
     /// MCP servers, one entry per agent that has answered `RequestMcp`.
     pub mcp: Vec<UniffiAgentMcp>,
+    /// Machine-wide personas, one entry per agent that has answered
+    /// `RequestPersonas` without a session.
+    #[uniffi(default = [])]
+    pub personas: Vec<UniffiAgentPersonas>,
     /// Saved permission rules, one entry per agent that has answered
     /// `RequestPermissionRules`.
     pub permission_rules: Vec<UniffiAgentPermissionRules>,
@@ -968,6 +1032,8 @@ pub struct UniffiAgentDefaults {
     pub mode: String,
     pub effort: String,
     pub model: String,
+    #[uniffi(default = "")]
+    pub persona: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -1003,6 +1069,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                             model: info.model.clone(),
                             mode: info.mode.clone(),
                             effort: info.effort.clone(),
+                            persona: info.persona.clone(),
                             context_percentage: info.context_percentage,
                             context_window: info.context_window,
                             committed: info.committed,
@@ -1022,6 +1089,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                                 error: c.error.clone(),
                             }),
                             mcp: s.mcp.as_ref().map(to_uniffi_session_mcp),
+                            personas: s.personas.as_ref().map(to_uniffi_personas),
                         }
                     })
                     .collect(),
@@ -1066,6 +1134,14 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                     .collect(),
                 plugins: m.plugins.iter().map(|(agent, p)| to_uniffi_agent_plugins(agent, p)).collect(),
                 mcp: m.mcp.iter().map(|(agent, a)| to_uniffi_agent_mcp(agent, a)).collect(),
+                personas: m
+                    .personas
+                    .iter()
+                    .map(|(agent, list)| {
+                        let UniffiPersonaList { personas, error } = to_uniffi_personas(list);
+                        UniffiAgentPersonas { agent: agent.clone(), personas, error }
+                    })
+                    .collect(),
                 permission_rules: m
                     .permission_rules
                     .iter()
@@ -1089,6 +1165,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                         mode: d.mode.clone(),
                         effort: d.effort.clone(),
                         model: d.model.clone(),
+                        persona: d.persona.clone(),
                     })
                     .collect(),
                 update_needed: m

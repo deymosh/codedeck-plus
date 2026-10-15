@@ -10,7 +10,7 @@
  *
  * Usage (normally through ./codedeck live, which sets the environment):
  *   node tools/live-probe.mjs --host dist/main.js --agent opencode \
- *     [--prompt TEXT]… [--mode MODE] [--model ID] [--effort ID] [--cwd DIR] \
+ *     [--prompt TEXT]… [--mode MODE] [--model ID] [--effort ID] [--persona ID] [--cwd DIR] \
  *     [--timeout SECONDS] [--log PATH] [--fake-model] [--idles N] \
  *     [--linger SECONDS]
  *
@@ -391,6 +391,7 @@ async function main() {
         const parts = [];
         if (event.model) parts.push(`model=${event.model}`);
         if (event.mode) parts.push(`mode=${event.mode}`);
+        if (event.persona) parts.push(`persona=${event.persona}`);
         if (event.title) parts.push(`title=${JSON.stringify(event.title)}`);
         if (event.contextWindow != null) parts.push(`window=${event.contextWindow}`);
         if (event.contextPercentage != null) parts.push(`context=${event.contextPercentage}%`);
@@ -528,9 +529,16 @@ async function main() {
       ...(args.mode ? { mode: args.mode } : {}),
       ...(model ? { model } : {}),
       ...(args.effort ? { effort: args.effort } : {}),
+      ...(args.persona ? { persona: args.persona } : {}),
       ...(fakeSession?.provider ? { provider: fakeSession.provider } : {}),
     });
     await waitFor('the session to be ready', (value) => value.type === 'ready');
+    // Who the session can run as, for an agent with personas: the list a
+    // phone shows in the session's options.
+    if (agent.supports?.personas) {
+      const listed = await send('list-personas', { agent: args.agent, sessionId });
+      say(`personas: ${(listed.personas ?? []).map((p) => p.id).join(', ') || '(none)'} (default ${agent.defaultPersona ?? 'unsaid'})`);
+    }
 
     const idles = Math.max(1, args.idles ?? 1);
     for (const prompt of prompts) {

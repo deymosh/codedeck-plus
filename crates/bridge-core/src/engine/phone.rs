@@ -2,7 +2,7 @@
 
 use agent_protocol::{BridgeMessage, PlanOutcome, QuestionReply, SelectOutcome};
 use protocol::commands::{
-    CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PhoneToBridge, PlanResponseMsg,
+    CreateFolderMsg, CreateSessionMsg, InputMsg, PermissionResponseMsg, PersonasRequestMsg, PhoneToBridge, PlanResponseMsg,
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
 use protocol::common::{
@@ -10,7 +10,7 @@ use protocol::common::{
 };
 use protocol::events::{
     AgentAckMsg, BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
-    AgentStyleMsg, CommandsMsg, InputFailedReason, ModelsMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
+    AgentStyleMsg, CommandsMsg, InputFailedReason, ModelsMsg, PersonasMsg, PluginAckMsg, SessionFailedMsg, SessionPendingMsg,
 };
 
 use super::{ConversationDelete, Engine, HostCall};
@@ -41,6 +41,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::ModelsRequest(_) => "models-request",
         PhoneToBridge::AgentStyleRequest(_) => "agent-style-request",
         PhoneToBridge::CommandsRequest(_) => "commands-request",
+        PhoneToBridge::PersonasRequest(_) => "personas-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
         PhoneToBridge::PluginAction(_) => "plugin-action",
         PhoneToBridge::AgentAction(_) => "agent-action",
@@ -141,6 +142,7 @@ impl Engine {
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::AgentStyleRequest(m) => self.on_agent_style_request(m.agent, phone),
             PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
+            PhoneToBridge::PersonasRequest(m) => self.on_personas_request(m),
             PhoneToBridge::PluginsRequest(m) => self.on_plugins_request(m.agent, m.available),
             PhoneToBridge::PluginAction(m) => self.on_plugin_action(m),
             PhoneToBridge::AgentAction(m) => self.on_agent_action(m.agent, m.action),
@@ -262,6 +264,8 @@ impl Engine {
         let refused = match m.option {
             SessionOption::Mode => (!is_mode(agent, &m.value)).then(|| format!("not a {} mode", agent.id)),
             SessionOption::Effort => (!is_effort(agent, &m.value)).then(|| format!("not a {} effort level", agent.id)),
+            // An agent that has no personas has nothing to switch between.
+            SessionOption::Persona => (!agent.supports.personas).then(|| format!("{} has no personas", agent.id)),
             // A session bound to a provider profile may only use that
             // profile's models: any other id would be sent to the provider.
             SessionOption::Model => session.rec.provider_id.as_ref().and_then(|pid| match self.profiles.get(pid) {
@@ -359,6 +363,17 @@ impl Engine {
             }
             known
         });
+        // A persona is only sent to an agent that has them; the session is
+        // not recorded as running one until the agent reports which. An
+        // agent that lacks the requested persona leaves the session on its
+        // default and says so.
+        let persona = m.persona.filter(|p| {
+            let known = agent.supports.personas;
+            if !known {
+                log::info!("[Engine] Create session {session_id}: ignoring persona '{p}' — {} has no personas", agent.id);
+            }
+            known
+        });
         let rec = SessionRecord {
             session_id: session_id.clone(),
             agent: agent.id.clone(),
@@ -372,6 +387,7 @@ impl Engine {
             // with no mode or effort at all.
             effort: effort.or_else(|| agent.default_effort.clone()),
             mode: mode.or_else(|| agent.default_mode.clone()),
+            persona: None,
             title: None,
             created_at: now.clone(),
             last_activity: now,
@@ -379,7 +395,8 @@ impl Engine {
             context_window: None,
             context_percentage: None,
         };
-        let run = Runner::new(Phase::Pending, StartKind::Create, false);
+        let mut run = Runner::new(Phase::Pending, StartKind::Create, false);
+        run.pending_persona = persona;
         self.sessions.insert(session_id.clone(), Session { rec, listed: false, run: Some(run) });
         self.spawn(&session_id);
     }
@@ -575,5 +592,57 @@ impl Engine {
             log::info!("[Engine] commands-request for {session_id}: {error}");
             self.publish_all(BridgeToPhone::Commands(CommandsMsg { session_id, commands: vec![], error: Some(error) }));
         }
+    }
+
+    /// An agent's personas (agents with `supports.personas`): those a
+    /// session can switch to, or — with no session — those of the whole
+    /// machine. Every reason it cannot be answered is a `personas` with an
+    /// empty list and the reason, never silence: a client that hears nothing
+    /// cannot tell it from a lost message.
+    fn on_personas_request(&mut self, m: PersonasRequestMsg) {
+        // Read first: the catalog borrow must end before the host is called.
+        let unusable = match self.catalog.usable(&m.agent) {
+            Err(reason) => Some(reason),
+            Ok(agent) if !agent.supports.personas => Some(format!("{} has no personas.", agent.display_name)),
+            Ok(_) => None,
+        };
+        let error = match unusable {
+            Some(reason) => Some(reason),
+            None => match self.personas_session_error(&m) {
+                Some(reason) => Some(reason),
+                None => {
+                    let call = HostCall::ListPersonas { agent: m.agent.clone(), session_id: m.session_id.clone() };
+                    let message = BridgeMessage::ListPersonas { agent: m.agent.clone(), session_id: m.session_id.clone() };
+                    self.call(call, message)
+                        .is_none()
+                        .then(|| "The agent host is not running — try again in a moment.".to_string())
+                }
+            },
+        };
+        if let Some(error) = error {
+            log::info!("[Engine] personas-request for {}: {error}", m.agent);
+            self.publish_all(BridgeToPhone::Personas(PersonasMsg {
+                agent: m.agent,
+                session_id: m.session_id,
+                personas: vec![],
+                error: Some(error),
+            }));
+        }
+    }
+
+    /// Why the session a `personas-request` named cannot answer, if one was
+    /// named: it must exist, be of that agent, and be running.
+    fn personas_session_error(&self, m: &PersonasRequestMsg) -> Option<String> {
+        let session_id = m.session_id.as_deref()?;
+        let Some(session) = self.sessions.get(session_id) else {
+            return Some("The bridge has no such session.".to_string());
+        };
+        if session.rec.agent != m.agent {
+            return Some(format!("That session does not run on {}.", m.agent));
+        }
+        if !self.is_running(session_id) {
+            return Some("The session is not running — its personas are listed once it is.".to_string());
+        }
+        None
     }
 }
