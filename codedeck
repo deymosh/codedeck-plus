@@ -154,7 +154,7 @@ a Docker-less host:
   live <agent> --models    What the agent offers, and what a session with no
                            model would run — starts nothing, costs nothing
   live <agent> [options]   --mode ask|plan|default, --model ID, --effort ID,
-                           --cwd DIR, --env K=V (agent paths and keys),
+                           --persona ID, --cwd DIR, --env K=V (agent paths and keys),
                            --timeout SECONDS (default 300), --no-sync
                            agents: claude-code, opencode, deepseek-harness,
                            and `fake` for the driver-protocol test agent
