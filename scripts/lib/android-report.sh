@@ -32,7 +32,13 @@ fi
 
 lint=app/build/reports/lint-results-debug.txt
 if [ -f "$lint" ]; then
-  printf '==> lint: %s\n' "$(grep -Eo '[0-9]+ errors?, [0-9]+ warnings?' "$lint" | tail -1)"
+  # A report with findings ends in "N errors, M warnings", with ", K hints"
+  # after it when there are hints; a clean one holds only "No issues found."
+  # and no counts at all, so the verdict falls back to the report's last
+  # non-empty line rather than printing nothing.
+  verdict="$(grep -Eo '[0-9]+ errors?, [0-9]+ warnings?(, [0-9]+ hints?)?' "$lint" | tail -1 || true)"
+  [ -n "$verdict" ] || verdict="$(grep -v '^[[:space:]]*$' "$lint" | tail -1 || true)"
+  printf '==> lint: %s\n' "$verdict"
 fi
 
 exit 0
