@@ -187,6 +187,11 @@ export class FakeHarness {
           return;
         }
         this.resumed.push(params);
+        // A harness that does not advertise resume does not serve it either.
+        if (this.supportsResume !== true) {
+          this.errorReply(id, -32601, 'Method not found: session/resume');
+          return;
+        }
         this.reply(id, { configOptions: this.options });
         return;
       }
