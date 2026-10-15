@@ -872,7 +872,7 @@ cmd_live() {
       echo "            background sub-agent or a late notification does" >&2
       echo "  CODEDECK_DEBUG_EVENTS=1 (via --env) logs every raw agent event the" >&2
       echo "            OpenCode driver received, with the session each names" >&2
-      echo "agents: claude-code, opencode, deepseek-harness, fake" >&2
+      echo "agents: claude-code, opencode, deepseek-harness, qwen-code, fake" >&2
       exit 2
       ;;
   esac

@@ -77,6 +77,10 @@ const FLAGS = new Set(['models', 'fake-model']);
  * profile is a config entry, and the model is `codedeck-fake/fake-model-1`.
  * Its config is the operator's own with this provider added beside it, the
  * same placement the driver gives a profile.
+ *
+ * Qwen Code takes a profile the way the phone hands one over: the driver's
+ * `set-providers` writes it into Qwen Code's own settings, so the probe sends
+ * that frame (see `main`) and names the profile's model.
  */
 function fakeModelSession(agent, url) {
   const provider = {
@@ -90,6 +94,10 @@ function fakeModelSession(agent, url) {
   switch (agent) {
     case 'claude-code':
       return { provider, model: FAKE_MODEL_ID };
+    case 'qwen-code':
+      // Qwen Code's models come from the profiles the bridge hands the driver
+      // (`set-providers`, sent below), not from a session binding.
+      return { providers: [provider], model: FAKE_MODEL_ID };
     case 'deepseek-harness':
       // Bound, so its endpoint is the stub, but no model named: the harness
       // answers an id it does not know with an error entry ("unknown model
@@ -519,6 +527,15 @@ async function main() {
       }
     }
     say(`modes: ${(agent.modes ?? []).map((m) => m.id).join(', ') || '(none)'}`);
+
+    // An agent whose models come from the bridge's provider profiles (Qwen
+    // Code) is handed the local server as one, the way the bridge hands over
+    // a real profile: the driver writes it into the agent's own settings.
+    if (fakeSession?.providers) {
+      const refused = await send('set-providers', { agent: args.agent, providers: fakeSession.providers });
+      const left = refused.refused ?? [];
+      say(`providers: the fake model profile was ${left.length > 0 ? `refused (${left[0].reason})` : 'taken'}`);
+    }
 
     // What the agent offers, and which of it a session with no `--model` runs.
     // Free of charge: this asks the host, and starts nothing.
