@@ -7,7 +7,10 @@
  * `data`, and its client answers values (throwing on failure) rather than
  * `{ data, error }` envelopes — both are what these fakes stand in for.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { OpenCodeClient } from '@opencode/client';
 import { OpenCodeDriver, openCodeContext, pickDefaultModel, reasoningLevels, toFormAnswer, toQuestionSpecs } from '../driver';
 import type { StartSession } from '../../../sdk/types';
@@ -903,5 +906,106 @@ describe('OpenCode session start line', () => {
     const ctx = start(client, { resume: 'ses_1' });
     await ctx.ended();
     expect(statuses(ctx)).toEqual([]);
+  });
+});
+
+describe('an OpenCode server it starts', () => {
+  /** A server that answers from its built-in snapshot until it has fetched
+   *  models.dev, as 2.0.28 does on a first start: the snapshot defaults to a
+   *  retired model, and the fetch begins only once something asks for the
+   *  models. Its data directory already holding the database makes it a
+   *  later start. */
+  function startedServer(events: (state: { asked: boolean }, refresh: () => void) => AsyncGenerator<V2>, { started = false } = {}) {
+    const dataHome = mkdtempSync(path.join(tmpdir(), 'oc-data-'));
+    if (started) {
+      mkdirSync(path.join(dataHome, 'opencode'));
+      writeFileSync(path.join(dataHome, 'opencode', 'opencode.db'), '');
+    }
+    vi.stubEnv('XDG_DATA_HOME', dataHome);
+    let refreshed = false;
+    const state = { asked: false };
+    const model = (modelID: string) => ({ providerID: 'opencode', modelID, name: modelID, enabled: true, status: 'active' });
+    const client = {
+      event: { subscribe: vi.fn(() => events(state, () => void (refreshed = true))) },
+      model: {
+        list: async () => {
+          state.asked = true;
+          return { data: refreshed ? [model('cat-jam-free')] : [model('exo-free')] };
+        },
+        default: async () => ({ data: { providerID: 'opencode', modelID: refreshed ? 'cat-jam-free' : 'exo-free' } }),
+      },
+    } as unknown as OpenCodeClient;
+    const create = (modelsRefreshWaitMs?: number) =>
+      OpenCodeDriver.create({
+        autoStart: true,
+        // Any file stands in for the executable: the start is faked.
+        binaryPath: process.execPath,
+        log: () => {},
+        startServer: async () => ({ url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} }),
+        connect: () => client,
+        ...(modelsRefreshWaitMs !== undefined ? { modelsRefreshWaitMs } : {}),
+      });
+    return { client, create };
+  }
+  const silent = async function* (): AsyncGenerator<V2> {
+    await new Promise(() => {});
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is used, on a first start, once it has refreshed its models — not from its built-in snapshot', async () => {
+    const { create } = startedServer(async function* (state, refresh) {
+      while (!state.asked) await new Promise((r) => setTimeout(r, 5));
+      yield { type: 'model.updated', data: {} };
+      await new Promise((r) => setTimeout(r, 30));
+      refresh();
+      yield { type: 'models-dev.refreshed', data: {} };
+      await new Promise(() => {});
+    });
+    const catalog = await (await create()).listModels();
+    expect(catalog.defaultModel).toBe('opencode/cat-jam-free');
+    expect(catalog.models.map((m) => m.id)).toEqual(['opencode/cat-jam-free']);
+  });
+
+  it('is used with its snapshot when a first start never says it refreshed (models.dev unreachable)', async () => {
+    const { create } = startedServer(silent);
+    const started = Date.now();
+    const catalog = await (await create(50)).listModels();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(45);
+    expect(catalog.defaultModel).toBe('opencode/exo-free');
+  });
+
+  it('is not waited for on a later start, which loads the list it kept', async () => {
+    const { client, create } = startedServer(silent, { started: true });
+    await create();
+    expect(asMock(client.event.subscribe)).not.toHaveBeenCalled();
+  });
+
+  it('is not waited for when the models fetch is switched off', async () => {
+    vi.stubEnv('OPENCODE_DISABLE_MODELS_FETCH', '1');
+    const { client, create } = startedServer(silent);
+    await create();
+    expect(asMock(client.event.subscribe)).not.toHaveBeenCalled();
+  });
+});
+
+describe('an OpenCode server started for the first time that cannot be asked', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is used at once, without an unhandled failure', async () => {
+    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    // No event stream and no models at all: both throw when touched.
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      startServer: async () => ({ url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} }),
+      connect: () => ({}) as OpenCodeClient,
+    });
+    expect((await driver.listModels()).models).toEqual([]);
   });
 });

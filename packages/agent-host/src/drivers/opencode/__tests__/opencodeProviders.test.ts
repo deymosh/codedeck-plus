@@ -3,7 +3,10 @@
  * each, the config the server starts with, the password guarding it, and
  * the restart a changed list takes.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, OpenCodeClient, ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
 import { type Catalog, EMPTY_CATALOG } from '../catalog';
@@ -209,6 +212,17 @@ describe('serverSetup', () => {
 });
 
 describe('an OpenCode driver given provider profiles', () => {
+  // A later start, whatever this machine's own OpenCode data holds: a first
+  // start's wait for its models is not what these are about.
+  beforeEach(() => {
+    const dataHome = mkdtempSync(path.join(tmpdir(), 'oc-data-'));
+    mkdirSync(path.join(dataHome, 'opencode'));
+    writeFileSync(path.join(dataHome, 'opencode', 'opencode.db'), '');
+    vi.stubEnv('XDG_DATA_HOME', dataHome);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   function managed() {
     const starts: StartOpenCodeServerOptions[] = [];
     const closed: number[] = [];
@@ -292,6 +306,9 @@ describe('an OpenCode driver given provider profiles', () => {
         return { url: `http://127.0.0.1:${4100 + n}`, pid: n, exited: new Promise(() => {}), close: async () => {} };
       },
       connect: () => client,
+      // Its stream never says the models were refreshed; waiting for that
+      // is not what this is about.
+      modelsRefreshWaitMs: 0,
     });
     const ctx = recordingContext();
     driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'zen/m1', resume: 'n1' }, ctx);
