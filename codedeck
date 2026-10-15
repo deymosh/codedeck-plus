@@ -540,7 +540,9 @@ linked_worktree_id() {
   local git_dir common
   git_dir="$(cd "$(git rev-parse --git-dir)" && pwd -P)"
   common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
-  [ "$git_dir" != "$common" ] || return 1
+  # Called as a condition, so errexit is off in here: a git or cd that
+  # failed must not make an empty id (and a container named "codedeck-dev-").
+  [ -n "$git_dir" ] && [ -n "$common" ] && [ "$git_dir" != "$common" ] || return 1
   # Docker names take letters, digits, '_', '.' and '-' only.
   printf '%s' "$(basename "$git_dir")" | tr -c 'A-Za-z0-9_.-' '-'
 }
