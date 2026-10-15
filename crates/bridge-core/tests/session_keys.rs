@@ -553,6 +553,22 @@ fn a_client_that_starts_watching_is_caught_up_on_the_whole_part() {
 }
 
 #[test]
+fn a_restarted_session_catches_no_one_up_on_the_turn_it_lost() {
+    let mut rig = Rig::new();
+    let (s1, s2) = two_running_sessions(&mut rig);
+    let late = generate_keypair();
+    grant(&mut rig, &late, NOW_SECS + DAY);
+    watching(&mut rig, &late, Some(&s2));
+    stream(&mut rig, &s1, "p1", 0, "cut off mid");
+    // The agent dies mid-reply and the session restarts: that part will
+    // never be completed.
+    rig.host_event(&s1, SessionEvent::Ended { error: Some("boom".into()), resume_lost: false });
+    rig.take();
+
+    assert!(live_pieces(&watching(&mut rig, &late, Some(&s1))).is_empty(), "no row nothing would end");
+}
+
+#[test]
 fn a_part_past_the_catch_up_cap_is_not_caught_up() {
     let mut rig = Rig::new();
     let (s1, _s2) = two_running_sessions(&mut rig);

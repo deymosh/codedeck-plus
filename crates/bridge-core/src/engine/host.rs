@@ -796,6 +796,10 @@ impl Engine {
         }
         run.restarts += 1;
         run.start_kind = StartKind::Restart;
+        // The interrupted turn's parts will never be completed: kept, a
+        // client that starts watching would be caught up on a row nothing
+        // ends.
+        run.parts.clear();
         let attempt = run.restarts;
         log::info!("[Engine] Restarting session {session_id} (attempt {attempt}/{MAX_RESTARTS})");
         // Anything still waiting on the user belonged to the dead agent.
