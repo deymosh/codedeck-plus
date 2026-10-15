@@ -434,8 +434,10 @@ impl<'a> Router<'a> {
                 self.stores.machines.apply_commands(machine, m);
                 r.persist(StoreId::Machines);
             }
-            // Nothing asks for them yet.
-            BridgeToPhone::Personas(_) => {}
+            BridgeToPhone::Personas(m) => {
+                self.stores.machines.apply_personas(machine, m);
+                r.persist(StoreId::Machines);
+            }
             BridgeToPhone::OptionConfirmed(m) => {
                 let value = m.value.clone();
                 let option = m.option;

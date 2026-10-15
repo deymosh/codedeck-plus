@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 use protocol::capabilities::{BridgeHostKind, PROTOCOL_VERSION};
 use protocol::common::{
     AgentAccount, AgentAction, AgentDescriptor, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo,
-    PermissionRule, SignInAttempt, SignInStatus,
+    PermissionRule, Persona, SignInAttempt, SignInStatus,
     PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionMcpServer, UsageData,
 };
 use protocol::events::{
-    AccountSignInMsg, AccountsMsg, AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PermissionRulesMsg, PluginAckMsg, PluginsMsg,
+    AccountSignInMsg, AccountsMsg, AgentAckMsg, AgentStyleMsg, CommandsMsg, McpAckMsg, McpServersMsg, ModelEntry, ModelsMsg, PermissionRulesMsg, PersonasMsg, PluginAckMsg, PluginsMsg,
     ProviderProfilesMsg,
     SessionListMsg, SessionMcpMsg, SlashCommand,
 };
@@ -156,6 +156,10 @@ pub struct SessionView {
     /// agent last reported them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<SessionMcp>,
+    /// Never persisted, like `commands`: the personas the session can switch
+    /// to, as its agent last listed them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personas: Option<PersonaList>,
 }
 
 /// A running session's MCP servers, and the switches sent and not answered.
@@ -175,6 +179,29 @@ pub struct SessionMcp {
     /// Servers switched and not answered yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub busy: Vec<String>,
+}
+
+/// Personas as an agent last listed them, for a session or for a whole
+/// machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaList {
+    pub personas: Vec<Persona>,
+    /// Why the last request got no list. The list held before is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl PersonaList {
+    /// A list replaces the one held; an empty answer (it always carries the
+    /// reason) keeps the held list and records why.
+    fn apply(held: Option<PersonaList>, msg: &PersonasMsg) -> PersonaList {
+        if msg.personas.is_empty() {
+            PersonaList { personas: held.map(|h| h.personas).unwrap_or_default(), error: msg.error.clone() }
+        } else {
+            PersonaList { personas: msg.personas.clone(), error: None }
+        }
+    }
 }
 
 /// A session's slash commands as its agent last listed them.
@@ -197,6 +224,7 @@ impl SessionView {
             usage: None,
             commands: None,
             mcp: None,
+            personas: None,
         }
     }
 }
@@ -254,6 +282,7 @@ pub fn merge_session_list(
                 usage: prior.and_then(|p| p.usage.clone()),
                 commands: prior.and_then(|p| p.commands.clone()),
                 mcp: prior.and_then(|p| p.mcp.clone()),
+                personas: prior.and_then(|p| p.personas.clone()),
             },
         );
     }
@@ -353,6 +382,10 @@ pub struct MachineView {
     /// MCP servers, by agent id. Never persisted, like `plugins`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp: BTreeMap<String, AgentMcp>,
+    /// The personas a new session can start as anywhere on the machine, by
+    /// agent id. Never persisted, like `plugins`: asked for when shown.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub personas: BTreeMap<String, PersonaList>,
     /// Saved permission rules, by agent id. Never persisted, like `plugins`:
     /// they live on the bridge's machine and are asked for when shown.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -425,9 +458,11 @@ impl Incompatible {
     }
 }
 
-/// The mode / effort / model a new session of one agent starts with, as that
-/// agent's own ids; `""` leaves it to the agent. Applied only while the agent
-/// still offers the id.
+/// The mode / effort / model / persona a new session of one agent starts
+/// with, as that agent's own ids; `""` leaves it to the agent. Applied only
+/// while the agent still offers the id — except the persona, which a
+/// session's directory may add to: the agent itself falls back, and says so,
+/// where it has none by that name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDefaults {
@@ -437,11 +472,13 @@ pub struct AgentDefaults {
     pub effort: String,
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub persona: String,
 }
 
 impl AgentDefaults {
     fn is_empty(&self) -> bool {
-        self.mode.is_empty() && self.effort.is_empty() && self.model.is_empty()
+        self.mode.is_empty() && self.effort.is_empty() && self.model.is_empty() && self.persona.is_empty()
     }
 }
 
@@ -626,6 +663,7 @@ impl MachineView {
             provider_profiles: None,
             plugins: BTreeMap::new(),
             mcp: BTreeMap::new(),
+            personas: BTreeMap::new(),
             permission_rules: BTreeMap::new(),
             accounts: BTreeMap::new(),
             agent_actions: BTreeMap::new(),
@@ -657,6 +695,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
             m.provider_profiles = None;
             m.plugins.clear();
             m.mcp.clear();
+            m.personas.clear();
             m.permission_rules.clear();
             m.accounts.clear();
             m.agent_actions.clear();
@@ -664,6 +703,7 @@ pub fn serialize_machines(machines: &BTreeMap<String, MachineView>) -> String {
             for s in m.sessions.values_mut() {
                 s.commands = None;
                 s.mcp = None;
+                s.personas = None;
             }
             m
         })
@@ -870,6 +910,7 @@ impl MachinesState {
             mode: defaults.mode.trim().to_string(),
             effort: defaults.effort.trim().to_string(),
             model: defaults.model.trim().to_string(),
+            persona: defaults.persona.trim().to_string(),
         };
         self.with_machine(machine_pubkey, |m| {
             if defaults.is_empty() {
@@ -1059,6 +1100,7 @@ impl MachinesState {
                 usage: prior.and_then(|p| p.usage.clone()),
                 commands: prior.and_then(|p| p.commands.clone()),
                 mcp: prior.and_then(|p| p.mcp.clone()),
+                personas: prior.and_then(|p| p.personas.clone()),
             };
             m.sessions.insert(info.id.clone(), view);
         });
@@ -1130,6 +1172,22 @@ impl MachinesState {
         self.with_machine(machine_pubkey, |m| {
             if let Some(s) = m.sessions.get_mut(session_id) {
                 s.usage = Some(usage);
+            }
+        });
+    }
+
+    /// A session's list lands on the session, a machine-wide one on the
+    /// agent's entry.
+    pub fn apply_personas(&mut self, machine_pubkey: &str, msg: &PersonasMsg) {
+        self.with_machine(machine_pubkey, |m| match &msg.session_id {
+            Some(id) => {
+                if let Some(s) = m.sessions.get_mut(id) {
+                    s.personas = Some(PersonaList::apply(s.personas.take(), msg));
+                }
+            }
+            None => {
+                let held = m.personas.remove(&msg.agent);
+                m.personas.insert(msg.agent.clone(), PersonaList::apply(held, msg));
             }
         });
     }
@@ -1691,6 +1749,7 @@ mod tests {
             usage: None,
             commands: None,
             mcp: None,
+            personas: None,
         }
     }
 
@@ -2116,6 +2175,38 @@ mod tests {
         assert_eq!(held(&st).commands, vec![cmd("init")]);
         let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
         assert_eq!(back["pk"].sessions["s1"].commands, None);
+    }
+
+    #[test]
+    fn personas_land_on_their_session_or_the_machine_and_are_never_persisted() {
+        let mut st = MachinesState::default();
+        st.apply_session_list("pk", &list(&[info("s1")], NONE()), 10);
+        let persona = |id: &str| Persona { id: id.into(), label: id.into(), description: None, color: None };
+        let msg = |session: Option<&str>, personas: Vec<Persona>, error: Option<&str>| PersonasMsg {
+            agent: "opencode".into(),
+            session_id: session.map(str::to_string),
+            personas,
+            error: error.map(str::to_string),
+        };
+        let session = |st: &MachinesState| st.machine("pk").unwrap().sessions["s1"].personas.clone().unwrap();
+        let machine = |st: &MachinesState| st.machine("pk").unwrap().personas["opencode"].clone();
+
+        st.apply_personas("pk", &msg(Some("s1"), vec![persona("build"), persona("review")], None));
+        st.apply_personas("pk", &msg(None, vec![persona("build")], None));
+        assert_eq!(session(&st).personas.len(), 2);
+        assert_eq!(machine(&st).personas, vec![persona("build")]);
+        // An empty answer keeps what was held, with the reason.
+        st.apply_personas("pk", &msg(Some("s1"), vec![], Some("not running")));
+        assert_eq!(session(&st), PersonaList { personas: vec![persona("build"), persona("review")], error: Some("not running".into()) });
+        // A session the phone does not know is no machine-wide list.
+        st.apply_personas("pk", &msg(Some("gone"), vec![persona("x")], None));
+        assert_eq!(machine(&st).personas, vec![persona("build")]);
+
+        st.apply_session_list("pk", &list(&[info("s1")], NONE()), 20);
+        assert_eq!(session(&st).personas.len(), 2);
+        let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
+        assert_eq!(back["pk"].sessions["s1"].personas, None);
+        assert!(back["pk"].personas.is_empty());
     }
 
     #[test]
@@ -2777,7 +2868,7 @@ mod tests {
         let mut st = MachinesState::default();
         st.register_machine("pk", "M", None, None, &[]);
         assert!(st.set_default_agent("pk", Some(" opencode ".into())));
-        let d = |mode: &str, model: &str| AgentDefaults { mode: mode.into(), effort: String::new(), model: model.into() };
+        let d = |mode: &str, model: &str| AgentDefaults { mode: mode.into(), model: model.into(), ..Default::default() };
         assert!(st.set_agent_defaults("pk", "claude-code", d("plan", " opus ")));
         assert_eq!(st.machine("pk").unwrap().default_agent.as_deref(), Some("opencode"));
         assert_eq!(st.machine("pk").unwrap().agent_defaults["claude-code"], d("plan", "opus"));
@@ -2788,6 +2879,9 @@ mod tests {
         // All-empty forgets the agent's entry; an empty agent clears the pick.
         assert!(st.set_agent_defaults("pk", "claude-code", AgentDefaults::default()));
         assert!(st.machine("pk").unwrap().agent_defaults.is_empty());
+        // A persona alone is a default worth keeping.
+        assert!(st.set_agent_defaults("pk", "opencode", AgentDefaults { persona: " review ".into(), ..Default::default() }));
+        assert_eq!(st.machine("pk").unwrap().agent_defaults["opencode"].persona, "review");
         assert!(st.set_default_agent("pk", Some("".into())));
         assert_eq!(st.machine("pk").unwrap().default_agent, None);
         assert!(!st.set_default_agent("ghost", None));

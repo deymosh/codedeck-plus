@@ -173,6 +173,7 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
                 mode: None,
                 effort: None,
                 model: None,
+                persona: None,
                 provider_id: None,
             })
             .await;
