@@ -22,6 +22,9 @@
  * OpenCode Zen and the operator's providers, and a session picks one like
  * any other.
  */
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
 import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
@@ -1397,6 +1400,56 @@ export interface OpenCodeDriverOptions {
   /** Seams for tests: how the server is started and connected to. */
   startServer?: (options: StartOpenCodeServerOptions) => Promise<OpenCodeServerHandle>;
   connect?: (config: { baseUrl: string; headers?: Record<string, string> }) => OpenCodeClient;
+  /** How long a server's first start is given to refresh its model list
+   *  (`MODELS_REFRESH_WAIT_MS` by default; 0 does not wait). */
+  modelsRefreshWaitMs?: number;
+}
+
+/** A server's first start on a machine answers from the models snapshot
+ *  built into it until it has fetched models.dev, a few hundred ms later,
+ *  and says so with `models-dev.refreshed`. The snapshot can name retired
+ *  models and even default to one (2.0.28's names `opencode/exo-free`), so
+ *  a session or a model list asked for in that window would get a model
+ *  that no longer runs. Later starts load the list kept from that fetch,
+ *  current from the first answer, and send no such event — so only a first
+ *  start waits. The wait is capped: with models.dev unreachable no event
+ *  comes and the snapshot stays — then it is the best list there is. */
+export const MODELS_REFRESH_WAIT_MS = 3_000;
+
+/** Where the server keeps its database, which holds the models.dev list it
+ *  fetched: its data directory, XDG's on every platform. No database yet
+ *  means a first start. */
+export function openCodeDatabase(env: NodeJS.ProcessEnv = process.env): string {
+  const base = env.XDG_DATA_HOME?.trim() || path.join(homedir(), '.local', 'share');
+  return path.join(base, 'opencode', 'opencode.db');
+}
+
+/** Wait for a just-started server's `models-dev.refreshed`, at most
+ *  `waitMs`. Not when the fetch is switched off, and not past a stream that
+ *  fails: either way there is nothing to wait for. The server loads its
+ *  catalog, and fetches models.dev, only once something asks for it, so the
+ *  wait asks: nothing else would until the wait is over. */
+async function modelsRefreshed(client: OpenCodeClient, env: NodeJS.ProcessEnv, waitMs: number): Promise<void> {
+  const disabled = env.OPENCODE_DISABLE_MODELS_FETCH;
+  if (waitMs <= 0 || (disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')) return;
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refreshed = (async () => {
+    for await (const event of client.event.subscribe({ signal: abort.signal })) {
+      if (event.type === 'models-dev.refreshed') return;
+    }
+  })();
+  // The deadline races the stream rather than relying on the abort to end
+  // it: a pending read is not interrupted by every stream.
+  const deadline = new Promise<void>((resolve) => (timer = setTimeout(resolve, waitMs)));
+  client.model.list().catch(() => {});
+  try {
+    // A stream that could not open, or ended, has nothing more to say.
+    await Promise.race([refreshed.catch(() => {}), deadline]);
+  } finally {
+    clearTimeout(timer);
+    abort.abort();
+  }
 }
 
 /** Why OpenCode cannot run, when it is enabled but unusable. */
@@ -1490,11 +1543,13 @@ export class OpenCodeDriver implements Driver {
     const placed = this.placed;
     const setup = serverSetup(placed, this.catalog, process.env);
     const start = this.options.startServer ?? startOpenCodeServer;
+    const env = { ...process.env, ...setup.env };
+    const firstStart = !existsSync(openCodeDatabase(env));
     let server: OpenCodeServerHandle;
     try {
       server = await start({
         command: bin,
-        env: { ...process.env, ...setup.env },
+        env,
         ...(this.options.port !== undefined ? { port: this.options.port } : {}),
       });
     } catch (err) {
@@ -1509,7 +1564,11 @@ export class OpenCodeDriver implements Driver {
     this.serving = servedBy(placed);
     const added = placed.length > 0 ? `, with ${placed.length} provider profile(s)` : '';
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
-    return this.connect({ baseUrl: server.url, headers: setup.headers });
+    const client = this.connect({ baseUrl: server.url, headers: setup.headers });
+    // Everything waits on this start (the client promise), so nothing reads
+    // the models before they are current.
+    if (firstStart) await modelsRefreshed(client, env, this.options.modelsRefreshWaitMs ?? MODELS_REFRESH_WAIT_MS);
+    return client;
   }
 
   /** Find (or install) `opencode`, start its server and connect — sessions

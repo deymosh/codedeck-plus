@@ -292,6 +292,9 @@ describe('an OpenCode driver given provider profiles', () => {
         return { url: `http://127.0.0.1:${4100 + n}`, pid: n, exited: new Promise(() => {}), close: async () => {} };
       },
       connect: () => client,
+      // Its stream never says the models were refreshed; waiting for that
+      // is not what this is about.
+      modelsRefreshWaitMs: 0,
     });
     const ctx = recordingContext();
     driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', model: 'zen/m1', resume: 'n1' }, ctx);
