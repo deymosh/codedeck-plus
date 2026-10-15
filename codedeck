@@ -132,7 +132,9 @@ the vendored toolchain instead, installed on first use):
 The dev container — one long-lived container with node_modules and the caches
 kept warm, for the loop between checks (editing a driver, running one test
 file, driving a live agent, poking at a crate). The tree is synced into it on
-every command; on a Docker-less Linux host the command runs in this tree:
+every command; on a Docker-less Linux host the command runs in this tree. A
+git worktree gets a container of its own, codedeck-dev-<name>, so checkouts
+do not take turns (the caches stay shared); `live` runs in it too:
   dev [--] <cmd…>          Run <cmd> in it, at the repo root (no <cmd>: a shell)
   dev vitest [args…]       The agent host's test files, run once
   dev --sync-only          Sync the tree and install dependencies, then stop
@@ -517,10 +519,35 @@ run_checks() {
 # a live agent, poking at a crate — wants the opposite: one container that
 # keeps its node_modules and its store, with the working tree kept in step
 # with the host. `./codedeck dev` is that container, and it is the difference
-# between a two-second test run and a two-minute one.
+# between a two-second test run and a two-minute one. There is one per
+# checkout: a git worktree gets its own (see linked_worktree_id).
 DEV_IMAGE=codedeck-workspace
 DEV_CONTAINER=codedeck-dev
 DEV_ROOT=/repo
+
+# A linked git worktree gets a dev container of its own, named after it, so
+# two checkouts can loop at once: one shared container would hold whichever
+# tree synced last, and a command from the other would run against the wrong
+# code. The volumes stay shared, the cargo target included (tens of GB, too
+# much to keep per worktree): dependencies are fingerprinted by package,
+# features and profile, so trees on one Cargo.lock reuse each other's builds;
+# only a workspace crate that differs is rebuilt after the other tree built,
+# and cargo's lock makes two builds at once queue rather than collide. Git
+# keeps each worktree's admin directory name (.git/worktrees/<name>) unique
+# within the repository, which makes it the id; the main checkout keeps the
+# plain name.
+linked_worktree_id() {
+  local git_dir common
+  git_dir="$(cd "$(git rev-parse --git-dir)" && pwd -P)"
+  common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  [ "$git_dir" != "$common" ] || return 1
+  # Docker names take letters, digits, '_', '.' and '-' only.
+  printf '%s' "$(basename "$git_dir")" | tr -c 'A-Za-z0-9_.-' '-'
+}
+if DEV_WORKTREE="$(linked_worktree_id)"; then
+  DEV_CONTAINER="codedeck-dev-$DEV_WORKTREE"
+fi
+
 # Whether the container's install is current. The stamp lives outside the
 # synced tree, which the mirror would otherwise delete.
 DEV_LOCK_STAMP=/root/.codedeck-dev-lock
