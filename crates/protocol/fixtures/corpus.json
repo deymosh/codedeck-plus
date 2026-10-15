@@ -65,7 +65,9 @@
       { "v": 12, "type": "session-key", "sessionKey": { "pubkeyHex": "bb", "bridgePubkeyHex": "cc", "expiresAt": 1800000000 } },
       { "v": 12, "type": "session-key", "sessionKey": { "pubkeyHex": "bd", "bridgePubkeyHex": "cc", "expiresAt": 1800000000, "replaces": "bb" } },
       { "v": 12, "type": "presence" },
-      { "v": 12, "type": "presence", "away": true }
+      { "v": 12, "type": "presence", "away": true },
+      { "v": 12, "type": "presence", "watching": "s1" },
+      { "v": 12, "type": "presence", "watching": null }
     ],
     "rejected": [
       { "v": 13, "type": "input", "sessionId": "s", "text": "from a newer phone" },
@@ -76,6 +78,7 @@
       { "v": 12, "type": "session-key", "sessionKey": { "pubkeyHex": "bb", "expiresAt": 1800000000 } },
       { "v": 12, "type": "session-key" },
       { "v": 12, "type": "presence", "away": "yes" },
+      { "v": 12, "type": "presence", "watching": 7 },
       { "v": 12, "type": "input", "sessionId": "s" },
       { "v": 12, "type": "set-option", "sessionId": "s", "option": "temperature", "value": "1" },
       { "v": 12, "type": "question-response", "sessionId": "s", "requestId": "q", "index": 0, "answer": { "kind": "telepathy" } },
