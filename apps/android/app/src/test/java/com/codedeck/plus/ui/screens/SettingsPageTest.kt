@@ -10,8 +10,11 @@ class SettingsPageTest {
         val pages = listOf(
             SettingsPage.Hub,
             SettingsPage.Machine("ab12"),
+            SettingsPage.Agent("ab12", "opencode"),
             SettingsPage.Plugins("ab12", "claude"),
             SettingsPage.Mcp("ab12", "opencode"),
+            SettingsPage.PermissionRules("ab12", "opencode"),
+            SettingsPage.Providers("ab12", "opencode"),
             SettingsPage.Appearance,
             SettingsPage.Notifications,
             SettingsPage.Connection,
@@ -25,5 +28,6 @@ class SettingsPageTest {
     @Test
     fun anAgentIdWithAColonKeepsItsWholeName() {
         assertEquals(SettingsPage.Mcp("ab12", "custom:agent"), SettingsPage.restore(SettingsPage.Mcp("ab12", "custom:agent").save()))
+        assertEquals(SettingsPage.Agent("ab12", "custom:agent"), SettingsPage.restore(SettingsPage.Agent("ab12", "custom:agent").save()))
     }
 }

@@ -14,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.codedeck.plus.ui.components.Chip
 import com.codedeck.plus.ui.components.Field
@@ -30,7 +29,7 @@ import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiTristate
 
 /** One set of credentials the bridge stores: its own (`agent == null`) or one agent's. */
-private data class CredentialGroup(val agent: String?, val title: String, val credentials: List<UniffiCredentialStatus>)
+private data class CredentialGroup(val agent: String?, val credentials: List<UniffiCredentialStatus>)
 
 /** Whose credentials a [MachineCredentials] block shows: the machine's page
  *  holds the bridge's own, each agent's page that agent's. */
@@ -77,13 +76,11 @@ internal fun MachineCredentials(
     scope: CredentialScope,
 ) {
     val groups = when (scope) {
-        CredentialScope.Bridge -> listOfNotNull(machine.credentials.takeIf { it.isNotEmpty() }?.let { CredentialGroup(null, "Bridge", it) })
+        CredentialScope.Bridge -> listOfNotNull(machine.credentials.takeIf { it.isNotEmpty() }?.let { CredentialGroup(null, it) })
         is CredentialScope.Agent -> machine.agents.filter { it.id == scope.id && it.credentials.isNotEmpty() }
-            .map { CredentialGroup(it.id, it.displayName, it.credentials) }
+            .map { CredentialGroup(it.id, it.credentials) }
     }
     if (groups.isEmpty()) return
-    // A block of one owner's is on that owner's page, which already names it.
-    val named = groups.size > 1
 
     val key = machine.pubkeyHex
     var open by remember(key) { mutableStateOf(false) }
@@ -120,7 +117,6 @@ internal fun MachineCredentials(
         )
         groups.forEach { group ->
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                if (named) Text(group.title, color = Tokens.Text, fontSize = Tokens.TextMd, fontWeight = FontWeight.SemiBold)
                 group.credentials.forEach { cred ->
                     val dk = draftKey(group, cred.id)
                     if (open) {
@@ -166,7 +162,7 @@ internal fun MachineCredentials(
                 }
                 if (open) {
                     PrimaryButton(
-                        if (named) "Save ${group.title}" else "Save",
+                        "Save",
                         onClick = { save(group) },
                         enabled = group.credentials.any { !drafts[draftKey(group, it.id)].isNullOrBlank() },
                         modifier = Modifier.fillMaxWidth(),

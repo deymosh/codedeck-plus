@@ -128,7 +128,9 @@ private fun AgentPagesGroup(
     onOpenMcp: () -> Unit,
     onOpenPermissionRules: () -> Unit,
 ) {
-    val providers = agent.supportsProviders || agent.supportsProviderModels
+    // Accounts are connected on the providers page too: an agent with only
+    // those (OpenCode on a server it does not start) still needs the row.
+    val providers = agent.supportsProviders || agent.supportsProviderModels || agent.supportsAccounts
     if (!providers && !agent.supportsPlugins && !agent.supportsMcp && !agent.supportsPermissionRules) return
     Group {
         var first = true

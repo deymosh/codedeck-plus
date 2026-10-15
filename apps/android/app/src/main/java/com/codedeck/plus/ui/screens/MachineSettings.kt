@@ -33,7 +33,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
@@ -45,23 +44,19 @@ import com.codedeck.plus.ui.components.Dot
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.Group
 import com.codedeck.plus.ui.components.GroupBody
-import com.codedeck.plus.ui.components.GroupScope
 import com.codedeck.plus.ui.components.IconAction
 import com.codedeck.plus.ui.components.NavRow
 import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SecondaryButton
 import com.codedeck.plus.ui.components.SelectField
-import com.codedeck.plus.ui.components.modelPickerOptions
 import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.components.machineLabel
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.launch
-import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiCredentialsAck
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
-import uniffi.client_ffi.UniffiProviderProfileAck
 import uniffi.client_ffi.isRelayUrl
 
 /** Whether the machine is heard from, as a word and its colour. */
