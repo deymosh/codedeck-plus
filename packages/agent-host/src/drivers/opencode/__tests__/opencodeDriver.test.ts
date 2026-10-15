@@ -963,6 +963,18 @@ describe('OpenCode personas', () => {
     expect(client.session.switchAgent).not.toHaveBeenCalled();
   });
 
+  it("moves a resumed session off a persona whose file has gone, so its next turn runs", async () => {
+    // OpenCode still records `gone` on the session; left there, the next
+    // turn fails with "Agent not found" while the phone shows Build.
+    const client = clientWith([]);
+    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', agent: 'gone', title: 'T' });
+    const ctx = start(client, { resume: 'ses_1', persona: 'gone' });
+    await ctx.ended();
+    expect(notices(ctx)).toEqual(["OpenCode has no agent 'gone' here, so this session runs as Build."]);
+    expect(infoPersona(ctx)).toBe('build');
+    expect(client.session.switchAgent).toHaveBeenCalledWith({ sessionID: 'ses_1', agent: 'build' });
+  });
+
   it('switches the persona, and refuses one OpenCode does not have here', async () => {
     const client = clientWith([]);
     const ctx = recordingContext();

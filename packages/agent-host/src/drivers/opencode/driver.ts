@@ -612,7 +612,18 @@ export class OpenCodeSession implements DriverSession {
       // denies must hold from the first tool call, not from the first mode
       // switch.
       await this.resolvePersona(client, session, params, resumeLost);
-      await this.statePermissions(client, session.id, this.runningAgent());
+      // OpenCode runs whatever agent the session recorded: a new one is
+      // created on build (or plan), and a resumed one may still name a
+      // persona whose file has since gone, which would fail its next turn.
+      const running = this.runningAgent();
+      // A session that names none runs the one it was created on, or else
+      // OpenCode's default.
+      const created = !params.resume || resumeLost;
+      const recorded = session.agent ?? (created && this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT);
+      if (recorded !== running) {
+        await client.session.switchAgent({ sessionID: session.id, agent: running }).catch(() => {});
+      }
+      await this.statePermissions(client, session.id, running);
       // The "memory was lost" notice goes ahead of the session's first line.
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
@@ -696,7 +707,8 @@ export class OpenCodeSession implements DriverSession {
    * otherwise; a persona the phone named is waited for — a directory's own
    * agents load a moment after it was booted — and must be one a session can
    * run as. A resumed session keeps the agent OpenCode recorded, so a
-   * restart resumes as the session actually ran.
+   * restart resumes as the session actually ran. Only decides: the caller
+   * switches OpenCode's session to it.
    */
   private async resolvePersona(
     client: OpenCodeClient,
@@ -714,12 +726,8 @@ export class OpenCodeSession implements DriverSession {
       return;
     }
     if (await this.waitForAgent(client, requested)) {
+      // Plan mode keeps its own agent; the persona applies when it leaves.
       this.persona = requested;
-      // The session was created on `build` (or the plan agent). Plan mode
-      // keeps its own agent; the persona applies when it leaves.
-      if (this.mode !== PLAN_MODE) {
-        await client.session.switchAgent({ sessionID: session.id, agent: requested }).catch(() => {});
-      }
       return;
     }
     this.persona = BUILD_AGENT;
