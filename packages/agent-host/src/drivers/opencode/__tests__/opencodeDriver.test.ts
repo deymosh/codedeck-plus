@@ -990,3 +990,22 @@ describe('an OpenCode server it starts', () => {
     expect(asMock(client.event.subscribe)).not.toHaveBeenCalled();
   });
 });
+
+describe('an OpenCode server started for the first time that cannot be asked', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is used at once, without an unhandled failure', async () => {
+    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    // No event stream and no models at all: both throw when touched.
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      startServer: async () => ({ url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} }),
+      connect: () => ({}) as OpenCodeClient,
+    });
+    expect((await driver.listModels()).models).toEqual([]);
+  });
+});

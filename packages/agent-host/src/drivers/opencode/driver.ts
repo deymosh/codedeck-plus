@@ -1434,18 +1434,19 @@ async function modelsRefreshed(client: OpenCodeClient, env: NodeJS.ProcessEnv, w
   if (waitMs <= 0 || (disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')) return;
   const abort = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // A stream that could not open, or ended, has nothing more to say; and
+  // neither it nor the ask may fail the start, so both are settled here.
   const refreshed = (async () => {
     for await (const event of client.event.subscribe({ signal: abort.signal })) {
       if (event.type === 'models-dev.refreshed') return;
     }
-  })();
+  })().catch(() => {});
+  void (async () => client.model.list())().catch(() => {});
   // The deadline races the stream rather than relying on the abort to end
   // it: a pending read is not interrupted by every stream.
   const deadline = new Promise<void>((resolve) => (timer = setTimeout(resolve, waitMs)));
-  client.model.list().catch(() => {});
   try {
-    // A stream that could not open, or ended, has nothing more to say.
-    await Promise.race([refreshed.catch(() => {}), deadline]);
+    await Promise.race([refreshed, deadline]);
   } finally {
     clearTimeout(timer);
     abort.abort();
@@ -1567,7 +1568,11 @@ export class OpenCodeDriver implements Driver {
     const client = this.connect({ baseUrl: server.url, headers: setup.headers });
     // Everything waits on this start (the client promise), so nothing reads
     // the models before they are current.
-    if (firstStart) await modelsRefreshed(client, env, this.options.modelsRefreshWaitMs ?? MODELS_REFRESH_WAIT_MS);
+    if (firstStart) {
+      await modelsRefreshed(client, env, this.options.modelsRefreshWaitMs ?? MODELS_REFRESH_WAIT_MS);
+      // Shut down meanwhile: the server is closed, and this start is over.
+      if (this.stopped) throw new Error('the agent host is shutting down');
+    }
     return client;
   }
 

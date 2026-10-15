@@ -3,7 +3,10 @@
  * each, the config the server starts with, the password guarding it, and
  * the restart a changed list takes.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, OpenCodeClient, ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
 import { type Catalog, EMPTY_CATALOG } from '../catalog';
@@ -209,6 +212,17 @@ describe('serverSetup', () => {
 });
 
 describe('an OpenCode driver given provider profiles', () => {
+  // A later start, whatever this machine's own OpenCode data holds: a first
+  // start's wait for its models is not what these are about.
+  beforeEach(() => {
+    const dataHome = mkdtempSync(path.join(tmpdir(), 'oc-data-'));
+    mkdirSync(path.join(dataHome, 'opencode'));
+    writeFileSync(path.join(dataHome, 'opencode', 'opencode.db'), '');
+    vi.stubEnv('XDG_DATA_HOME', dataHome);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   function managed() {
     const starts: StartOpenCodeServerOptions[] = [];
     const closed: number[] = [];
