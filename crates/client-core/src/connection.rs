@@ -239,6 +239,10 @@ pub fn connection_reducer(
             )
         }
 
+        // The debounce timer's message can already be queued when a resume
+        // cancels the hide: a settle with no hide pending is that late one,
+        // and must not mark a visible app hidden.
+        ConnectionEvent::VisibilitySettled if !state.hidden_pending => no_effects(state.clone()),
         ConnectionEvent::VisibilitySettled => no_effects(ConnectionState {
             visible: false,
             hidden_pending: false,
@@ -514,6 +518,28 @@ mod tests {
             r.effects,
             vec![ConnectionEffect::ScheduleVisibilityCheck { delay_ms: VISIBILITY_DEBOUNCE_MS }]
         );
+    }
+
+    #[test]
+    fn a_settle_that_lands_after_a_resume_leaves_the_app_visible() {
+        // The debounce timer had already queued its message when the app
+        // came back: it arrives after the resume.
+        let r = reduce(
+            connected_state(),
+            &[
+                ConnectionEvent::Visibility { visible: false },
+                ConnectionEvent::Visibility { visible: true },
+                ConnectionEvent::VisibilitySettled,
+            ],
+        );
+        assert!(r.state.visible);
+        assert!(!r.state.hidden_pending);
+    }
+
+    #[test]
+    fn a_settle_while_a_hide_is_pending_hides_the_app() {
+        let r = reduce(connected_state(), &[ConnectionEvent::Visibility { visible: false }, ConnectionEvent::VisibilitySettled]);
+        assert!(!r.state.visible);
     }
 
     #[test]
